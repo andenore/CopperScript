@@ -285,7 +285,7 @@ def test_invalid_external_source_still_has_a_reloadable_scene(tmp_path):
 
 def test_pad_only_keepout_is_checked_before_save(tmp_path):
     s = session(tmp_path)
-    with pytest.raises(SourceEditError, match="copper keepout"):
+    with pytest.raises(SourceEditError, match="R1: pose violates region/keepout"):
         op(s, "prepare_mechanical", kind="copper_keepout", name="ANTENNA", shape="rectangle",
            parameters={"origin": "(5mm,5mm)", "width": "6mm", "height": "6mm", "layers": '"F.Cu"',
                        "block_pads": "true", "block_footprints": "false"}, remove=False)

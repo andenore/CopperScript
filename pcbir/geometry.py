@@ -277,6 +277,18 @@ def shapes_clear(first: RoundedConvexShape, second: RoundedConvexShape,
     return _spines_at_least_squared(first.spine, second.spine, required * required)
 
 
+def shapes_touch_or_overlap(first: RoundedConvexShape, second: RoundedConvexShape) -> bool:
+    """Exact closed-shape contact, including unswept polygon corner crossings.
+
+    Unlike an inclusive zero-distance clearance query, keepout exclusion must
+    detect boundary intersections even when neither polygon's first vertex is
+    inside the other. The spine distance also handles simple concave rings.
+    """
+    if not first.bounds.intersects(second.bounds):
+        return False
+    return shape_distance_squared(first, second) <= (first.radius_nm + second.radius_nm) ** 2
+
+
 def circle_inside_shape(center: Point, radius_nm: int, shape: RoundedConvexShape) -> bool:
     """Contain a complete disk in a convex swept shape, including tangency."""
     if radius_nm < 0:

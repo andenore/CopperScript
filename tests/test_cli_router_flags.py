@@ -141,3 +141,35 @@ def test_unified_critical_feedback_trials_map_onto_the_congestion_loop(tmp_path,
     assert code == 0
     assert data["work_limits"]["congestion_feedback_trials"] == 0
     assert "placement_feedback" not in data and "unified_mapped_flags" not in data["work_limits"]
+
+
+def test_fine_regions_flag_reaches_the_unified_router_and_the_report(tmp_path, capsys):
+    def parsed(*extra):
+        args = cli._parser().parse_args(["route-board", "board.copper", *extra])
+        cli._apply_routing_profile(args, list(extra))
+        return args
+
+    assert parsed().fine_regions == "arrays"
+    assert cli._unified_options(parsed()).fine_regions == "arrays"
+    for mode in ("off", "arrays", "dense"):
+        args = parsed("--fine-regions", mode)
+        assert cli._unified_options(args).fine_regions == mode
+        # A unified-router flag: never reported as ignored, skipped or mapped.
+        assert cli._unified_flag_notes(args) == {"ignored_flags": [], "skipped_stage_flags": [], "mapped_flags": []}
+    assert cli._unified_options(parsed("--router", "legacy", "--fine-regions", "dense")) is None
+
+    source, footprints = _board(tmp_path)
+    code, data = _route(tmp_path, source, footprints, "default-fine-regions")
+    assert code == 0
+    assert data["work_limits"]["fine_regions"] == "arrays"
+    # No ball array: the plan has no patch, and the setup event has no patch fields.
+    block = data["fine_regions"]
+    assert block["mode"] == "arrays" and block["patches"] == [] and block["base_pitch_mm"] == 0.25
+    assert block["total_nodes"] == block["base_nodes"] == block["uniform_nodes_at_finest"]
+    setups = [json.loads(line[len("PROGRESS "):]) for line in capsys.readouterr().out.splitlines()
+              if line.startswith("PROGRESS ") and '"unified_setup"' in line and '"finished"' in line]
+    assert setups and all(set(event["details"]) == {"nets", "grid", "seconds"} for event in setups)
+
+    code, data = _route(tmp_path, source, footprints, "off-fine-regions", "--fine-regions", "off")
+    assert code == 0
+    assert data["work_limits"]["fine_regions"] == "off" and data["fine_regions"] == {"mode": "off"}

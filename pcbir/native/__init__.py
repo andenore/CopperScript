@@ -40,6 +40,9 @@ def astar():
     function.restype = I
     function.argtypes = [I, I, I, P, P, P, P, P, P, P, P, I, P, I, P, D, D,
                          I, I, I, I, I, I, I, I, P, P, I, P, P, P, P, I, P, P, P, I, P, I,
-                         ctypes.POINTER(I), P, I]
+                         ctypes.POINTER(I), P, I,
+                         # Nested lattice block tables (S3): n_blocks, blocks,
+                         # block_of, ux, uy, twins, steps; block_of None = uniform.
+                         I, P, P, P, P, P, P]
     _loaded = function
     return function

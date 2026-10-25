@@ -90,6 +90,60 @@ def test_source_lowers_array_parameters_onto_the_permission():
     assert _lower("rows = 1; columns = 1;").via_in_pad_rules[0].pitch_nm is None
 
 
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_placement_reserves_required_array_against_backside_lands(rotation):
+    from pcbir.physical import BoardSide
+    from pcbir.placement import _legal, PlacementPlannerOptions
+    board = _array_board(rows=3, columns=3, pitch_nm=nm_from_mm("0.8"))
+    owner, resistor, other = board.placements
+    resistor = replace(resistor, position=owner.position, side=BoardSide.BACK,
+                       rotation_degrees=rotation)
+    held = {owner.reference: owner, other.reference: other}
+    assert not _legal(resistor, held, board, PlacementPlannerOptions())
+    # A permission alone does not invent a required array.
+    permission_only = replace(board, via_in_pad_rules=(PadViaInPadRule(EP),))
+    assert _legal(resistor, held, permission_only, PlacementPlannerOptions())
+    clear = replace(resistor, position=Point.mm(15, 15))
+    assert _legal(clear, held, board, PlacementPlannerOptions())
+    # Moving the array owner must also see the held backside component.
+    assert not _legal(owner, {resistor.reference: resistor, other.reference: other},
+                      board, PlacementPlannerOptions())
+
+
+def test_array_collision_retains_the_original_posed_board():
+    from pcbir.physical import BoardSide
+    from pcbir.pad_via_arrays import ViaArrayPlacementError
+    board = _array_board(rows=3, columns=3, pitch_nm=nm_from_mm("0.8"))
+    owner, resistor, other = board.placements
+    board = replace(board, placements=(owner,
+        replace(resistor, position=owner.position, side=BoardSide.BACK), other))
+    with pytest.raises(ViaArrayPlacementError) as error:
+        materialize_via_in_pad_arrays(board)
+    assert error.value.diagnostic_board is board
+    assert error.value.diagnostic_components == ("U1",)
+    assert not board.vias
+
+
+@pytest.mark.parametrize("net", ["GND", "A", None])
+def test_required_array_forbids_same_net_and_unassigned_pad_contact(net):
+    from pcbir.physical import BoardSide
+    from pcbir.placement import _legal, PlacementPlannerOptions
+    board = _array_board(rows=3, columns=3, pitch_nm=nm_from_mm("0.8"))
+    tiny = PhysicalFootprint("tiny", (FootprintPad("1", Point(0, 0), Size.mm(".1", ".1")),),
+                             Size.mm(".2", ".2"))
+    obstacle = Placement("C1", tiny.name, Point.mm("15.8", "10"), side=BoardSide.BACK)
+    board = replace(board, footprints={**board.footprints, tiny.name: tiny},
+        placements=(*board.placements, obstacle),
+        nets=tuple(replace(n, pads=(*n.pads, PadReference("C1", "1"))) if n.name == net else n
+                   for n in board.nets))
+    held = {p.reference: p for p in board.placements if p.reference != "C1"}
+    assert not _legal(obstacle, held, board, PlacementPlannerOptions())
+    if net == "A":
+        # Separate copper, but a foreign land remains too close to the drill.
+        assert not _legal(replace(obstacle, position=Point.mm("16.18", "10")),
+                          held, board, PlacementPlannerOptions())
+
+
 @pytest.mark.parametrize("extra,message", [
     ("rows = 2;", "together"),
     ("columns = 2;", "together"),

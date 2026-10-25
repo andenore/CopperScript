@@ -384,6 +384,7 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
                  surface: CopperLayer, layer: CopperLayer,
                  site_rank: Callable[[tuple[Via, ...]], int | None] | None = None,
                  *, include_outer: bool = False, trace=None, terminal_completion=None,
+                 stats: PairSearchStats | None = None,
                  ) -> tuple[_Transition, ...]:
     if surface is layer:
         # An opposite-face pair may use this terminal's own signal layer as
@@ -422,6 +423,7 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
                   component, width, (transition_spacing(board, first, second)+1)//2,
                   clearance, surface)
     results = []
+    rejections = Counter()
     # Local callers retain short-collar-first fallback. Joint channel search
     # also samples four outer collars beyond an opposite-side pad bank, even
     # when legal short collars exist but lead into isolated routing pockets.
@@ -442,12 +444,14 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
         if trace is not None:
             trace.counts[('short', 'outer', 'local')[family] + '_surface_collars'] += len(wide)
         for collar in wide:
+            rejections['collars'] += 1
             pair = tuple(Via(net, tracks[-1].end, board.rules.default_via_size_nm,
                              board.rules.default_via_drill_nm, *span)
                          for net, tracks in ((first.net, collar.first), (second.net, collar.second)))
             if not _signal_drills_outside_smd(board,pair):
                 if trace is not None:
                     trace.record('signal_drill_in_smd', positions=tuple(v.position for v in pair))
+                rejections['drill_over_smd'] += 1
                 continue
             escaped = replace(board, tracks=(*board.tracks, *collar.first, *collar.second))
             reserved = RoutingClearanceIndex(escaped)
@@ -455,6 +459,7 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
                 if trace is not None:
                     trace.record('signal_via_clearance', positions=tuple(v.position for v in pair),
                         index=RoutingClearanceIndex(escaped), vias=pair)
+                rejections['signal_vias_blocked'] += 1
                 continue
             branches = ((), ())
             def complete_return(returns):
@@ -471,11 +476,13 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
             if returns is None:
                 if trace is not None:
                     trace.record('return_unavailable', positions=tuple(v.position for v in pair))
+                rejections['return_via_blocked'] += 1
                 continue
             # A caller's site rank may drop a transition (``None``) or order it
             # ahead of others; it never admits a site the checks above refused.
             rank = 0 if site_rank is None else site_rank((*pair, *returns))
             if rank is None:
+                rejections['site_rank_rejected'] += 1
                 continue
             escaped = replace(escaped, tracks=(*escaped.tracks, *branches[0], *branches[1]),
                               vias=(*board.vias, *pair, *returns))
@@ -486,11 +493,18 @@ def _transitions(board: PhysicalBoard, first: NetRoutingRule, second: NetRouting
                 trace.counts['middle_layer_collars'] += len(inner_ports)
                 if not inner_ports:
                     trace.record('middle_layer_blocked', positions=tuple(v.position for v in pair))
+            if not inner_ports:
+                rejections['onward_collars_blocked'] += 1
             for inner in inner_ports:
                 results.append(_Transition(replace(inner,
                     first=(*branches[0], *collar.first, *inner.first),
                     second=(*branches[1], *collar.second, *inner.second),
                     preference=collar.preference+inner.preference), pair, returns, rank, bool(family)))
+    if not results and stats is not None:
+        message = (f"{component} {surface.value} to {layer.value}: no exact transition; "
+                   + ', '.join(f'{key}={count}' for key, count in sorted(rejections.items())))
+        stats.terminal_port_rejections = tuple(dict.fromkeys((
+            *stats.terminal_port_rejections, message)))[:4]
     # Preserve orientation diversity, then short collars; domain bound is
     # independent of maze expansion and never mutates previously locked copper.
     ordered = sorted(results, key=lambda t: (t.rank, t.port.preference,
@@ -614,7 +628,7 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
         traces = tuple(_TransitionTrace() for _ in accesses)
         groups = tuple(_transitions(board, first, second, a.pad_position,
             partners[a.pad].pad_position, a.pad.component, surface, layer, site_rank,
-            include_outer=True, trace=trace, terminal_completion=terminal_completion)
+            include_outer=True, stats=stats, trace=trace, terminal_completion=terminal_completion)
             for a, surface, trace in zip(accesses, surfaces, traces))
         for access, surface, group, trace in zip(accesses, surfaces, groups, traces):
             if len(stats.transition_inventory) < 24:
@@ -635,6 +649,14 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
                     first.net, second.net, item.port, width, offset, clearance, layer, pitch_nm))
             return departure_ranks[key]
         total_pairs, combinations = _transition_pairs(groups, departure_rank)
+        if not total_pairs:
+            domains_text = "; ".join(
+                f"{access.pad.component} {surface.value} to {layer.value}: "
+                f"{len(group)} exact transitions, lane orders "
+                f"{','.join(str(sign) for sign in sorted({t.port.sign for t in group})) or 'none'}"
+                for access, surface, group in zip(accesses, surfaces, groups))
+            stats.terminal_port_rejections = tuple(dict.fromkeys((
+                *stats.terminal_port_rejections, domains_text)))[:4]
         stats.port_pairs += total_pairs
         searches_at_entry = stats.searches
         for ordinal,(a,b) in enumerate(combinations[:128],1):
@@ -656,6 +678,12 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
             escaped_index = RoutingClearanceIndex(escaped)
             if not _can_depart(escaped, escaped_index, first.net, second.net,
                                start, width, offset, clearance, layer, pitch_nm):
+                dx, dy = _HEADS[start.heading]
+                ahead = Point(start.center.x_nm+dx*pitch_nm, start.center.y_nm+dy*pitch_nm)
+                normal = _normal(start.heading,offset)
+                stats.reject_launch(escaped_index, (*_tracks(first.net,
+                    (_shift(start.center,normal,start.sign),_shift(ahead,normal,start.sign)),width,layer,escaped_index.breakout),
+                    *_tracks(second.net,(_shift(start.center,normal,-start.sign),_shift(ahead,normal,-start.sign)),width,layer,escaped_index.breakout)))
                 continue
             stats.searches += 1
             candidate = _search(escaped, escaped_index, first.net, second.net,

@@ -184,6 +184,7 @@ def test_local_import_cycle_and_profile_cycle(tmp_path):
 def test_relative_import_escape_rejected(tmp_path):
     inside = tmp_path / "project"
     inside.mkdir()
+    (inside / "copper.mod").write_text("module example.test/isolated\n", encoding="utf-8")
     path = project(inside, board=BOARD.replace('"./mechanics"', '"../outside"'))
     (tmp_path / "outside").mkdir()
     with pytest.raises(CopperScriptError, match="stay inside"):

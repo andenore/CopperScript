@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from functools import partial
@@ -71,7 +72,13 @@ def _stopped_after_placement(placement: PlacementRoutingResult, drc_policy) -> t
 
     from .critical import _fingerprint as critical_fingerprint
     from .detailed import DetailedNetResult, DetailedRoutingMetrics, _fingerprint as detailed_fingerprint
-    board = replace(placement.board, metadata={**placement.board.metadata, "stopped_after": "placement",
+    from .hard_macros import materialize_hard_macros
+    # A placement preview still owns its prescribed immutable copper and via
+    # arrays. Exporting a bare footprint scene would drop that intent. Commit
+    # and validate the complete prefix just as the later routing stage does;
+    # the held placement checkpoint itself remains untouched.
+    board = materialize_hard_macros(placement.board)
+    board = replace(board, metadata={**board.metadata, "stopped_after": "placement",
                                                "detailed_routing": "not_run", "fabrication_ready": "false"})
     global_fp = placement.global_route.routing_fingerprint
     critical = CriticalRoutingResult(CriticalRoutingStatus.WARNING, board, (), (), (), global_fp,
@@ -157,6 +164,8 @@ def run_routing_pipeline(
     global_options = global_options or GlobalRouterOptions()
     detailed_options = detailed_options or DetailedRouterOptions()
     package_access_options = package_access_options or PackageAccessOptions()
+    if package_access_options.guide_replan_options is None:
+        package_access_options = replace(package_access_options, guide_replan_options=global_options)
     if routing_nets is not None:
         if (power_area_options is None or not power_area_options.plane_return_nets
                 or not isinstance(routing_nets, frozenset)
@@ -203,6 +212,8 @@ def run_routing_pipeline(
         emit(on_progress, "ordinary_area", "stopped", reason="stop_after_placement")
         critical, detailed, drc = _stopped_after_placement(placement, drc_policy)
         return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, critical, detailed, drc,
+                                     power_area_options=power_area_options,
+                                     power_area_status="stopped_after_placement" if power_area_options is not None else "disabled",
                                      stopped_after="placement", unified_options=unified_options)
     array_plans, surface_balls = _plan_array_escapes(placement.board, escape_plan_options, on_progress)
     if surface_balls is not None:
@@ -235,6 +246,7 @@ def run_routing_pipeline(
                                        escape_layer_biases=escape_plan.layer_biases)
     access = None
     preparation, preparation_validation = None, None
+    stopped = None
     if power_area_options is not None and power_area_options.plane_return_nets:
         from .power_preparation import prepare_power_distribution
         from .package_access import preflight_prepared_power_access
@@ -263,6 +275,8 @@ def run_routing_pipeline(
             access = preflight_prepared_power_access(placement.board, placement.global_route,
                 preparation, fanout_options, plane_stitch_options,
                 options=package_access_options, on_progress=on_progress, only_nets=routing_nets)
+            if stop_after in {"package-preflight", "package-access"}:
+                stopped = stop_after
         else:
             # Diagnostic critical copper is retained; no rejected power/contact
             # contribution or connectivity flag is promoted into the pipeline.
@@ -271,7 +285,6 @@ def run_routing_pipeline(
                 None, frozenset(), 0)
     reserved = held = None
     held_as_copper = False
-    stopped = None
     if unified_options is not None and getattr(unified_options, "direct", False):
         critical = _direct_critical(placement)
         plane_stitch_options = None
@@ -282,18 +295,18 @@ def run_routing_pipeline(
         if preparation is None:
             access = preflight_package_access(placement.board, placement.global_route,
                                              fanout_options, plane_stitch_options,
-                                             options=access_options, on_progress=on_progress)
-        if stop_after == "package-preflight":
-            stopped = "package-preflight"
+                                             options=access_options, on_progress=on_progress,
+                                             on_checkpoint=on_stage)
+            if stop_after == "package-preflight":
+                stopped = "package-preflight"
         # With fanout enabled, critical failures belong to the same escape-first
         # placement transaction, not a second critical-first controller.
         access_options = replace(access_options,
             maximum_trials=access_options.maximum_trials + critical_feedback_trials)
-        if stopped is None:
-            if preparation is None:
-                access = improve_package_access(access, fanout_options,
-                    options=access_options, placement_options=placement_options,
-                    global_options=global_options, plane_options=plane_stitch_options, on_progress=on_progress)
+        if preparation is None and stopped is None:
+            access = improve_package_access(access, fanout_options,
+                options=access_options, placement_options=placement_options,
+                global_options=global_options, plane_options=plane_stitch_options, on_progress=on_progress)
             if stop_after == "package-access":
                 stopped = "package-access"
         placement = replace(placement, board=access.source, global_route=access.global_route,
@@ -313,7 +326,8 @@ def run_routing_pipeline(
                 detailed, run_physical_drc(detailed.board, policy=drc_policy),
                 fanout=replace(access.fanout, board=access.board), plane_stitch=access.plane_stitch,
                 package_access=access, power_area_plan=preparation.plan if preparation else placement.power_area_plan,
-                power_area_status=(preparation.status if preparation and not preparation.accepted else
+                power_area_status=(f"stopped_after_{stopped}" if stopped is not None else
+                                   preparation.status if preparation and not preparation.accepted else
                                    "package_access_incomplete") if power_area_options is not None else "disabled",
                 power_area_options=power_area_options, power_preparation=preparation,
                 power_native_verifier=power_native_verifier, stopped_after=stopped, unified_options=unified_options)
@@ -323,8 +337,8 @@ def run_routing_pipeline(
     else:
         critical, reserved, held, held_as_copper = _route_critical_stage(
             placement, unified_options=unified_options, unified_fanout=unified_fanout,
-            package_access_options=package_access_options, on_progress=on_progress, on_stage=on_stage,
-            lattice=lattice)
+            package_access_options=package_access_options, plane_stitch_options=plane_stitch_options,
+            on_progress=on_progress, on_stage=on_stage, lattice=lattice)
     critical_feedback = None
     if critical_feedback_trials and access is None and unified_options is None:
         critical_feedback = improve_critical_placement(
@@ -350,7 +364,7 @@ def run_routing_pipeline(
         critical, reserved, held, held_as_copper, access=access, unified_options=unified_options,
         plane_stitch_options=plane_stitch_options, on_progress=on_progress,
         lattice=lattice, array_plans=array_plans, escape_plan_options=escape_plan_options,
-        save_inputs=True)
+        save_inputs_path=getattr(unified_options, "save_inputs_path", None))
     pre_fanout = plane_stitch.board if plane_stitch else critical.board
     power_plan = preparation.plan if preparation else None
     power_status = 'contact_routed_native_pending' if preparation else 'disabled'
@@ -434,8 +448,20 @@ def run_routing_pipeline(
                        if unified_options is not None else 0)
     if feedback_budget and preparation is None and routing_nets is None:
         from .congestion_feedback import FeedbackState, run_placement_feedback
+        # Each trial routes from its own placement, so it must not overwrite
+        # the replay inputs of the run that is kept: trials save beside them,
+        # and only the accepted trial's file replaces them (see below).
+        inputs_path = getattr(unified_options, "save_inputs_path", None)
+        trial_inputs: list[str] = []
 
         def rerun_tail(trial_board, trial_global):
+            if inputs_path:
+                trial_inputs.append(f"{inputs_path}.trial-{len(trial_inputs) + 1}")
+                trial_route = partial(_route_unified_compat,
+                                      replace(unified_options, save_inputs_path=trial_inputs[-1]),
+                                      escape_options=unified_fanout)
+            else:
+                trial_route = route_ordinary
             # Exactly the main path's tail on the unified router, from the
             # trial placement: reservations, critical routing, held copper,
             # islands, dogbones, plane stitch, ordinary routing and closure.
@@ -450,35 +476,50 @@ def run_routing_pipeline(
                 trial_critical, trial_reserved, trial_held, trial_as_copper = _route_critical_stage(
                     trial, unified_options=unified_options, unified_fanout=unified_fanout,
                     package_access_options=package_access_options, on_progress=on_progress, on_stage=None,
-                    lattice=trial_lattice)
+                    plane_stitch_options=plane_stitch_options, lattice=trial_lattice)
             trial_critical, trial_stitch = _complete_critical_stage(
                 trial_critical, trial_reserved, trial_held, trial_as_copper, access=None,
                 unified_options=unified_options, plane_stitch_options=plane_stitch_options,
                 on_progress=on_progress, lattice=trial_lattice, array_plans=trial_plans,
-                escape_plan_options=escape_plan_options)
+                escape_plan_options=escape_plan_options,
+                save_inputs_path=trial_inputs[-1] if inputs_path else None)
             trial_pre = trial_stitch.board if trial_stitch else trial_critical.board
             trial_deferred = (frozenset(deferred_zone_nets(trial_pre))
                               if detailed_options.defer_zone_nets else frozenset())
             trial_critical, trial_stitch, _, trial_pre = _release_escape_masks(
                 trial_reserved, trial_critical, trial_stitch, None, trial_pre)
             trial_detailed, trial_drc, trial_duplicate = _route_ordinary_stage(
-                route_ordinary, trial_pre, trial_global, detailed_options, None,
+                trial_route, trial_pre, trial_global, detailed_options, None,
                 drc_policy=drc_policy, routing_nets=None, on_progress=on_progress)
             return FeedbackState(trial_board, trial_global, trial_critical, trial_detailed, trial_drc,
-                                 trial_deferred, (trial_stitch, trial_duplicate))
+                                 trial_deferred, (trial_stitch, trial_duplicate,
+                                                  trial_inputs[-1] if inputs_path else None))
 
-        placement_feedback = run_placement_feedback(
-            FeedbackState(placement.board, placement.global_route, critical, detailed, drc,
-                          deferred_zones, (plane_stitch, duplicate_stitch)),
-            trials=feedback_budget, movement_nm=detailed_feedback_movement_nm,
-            placement_options=placement_options, global_options=global_options,
-            rerun=rerun_tail, score=_feedback_score, on_progress=on_progress)
-        if placement_feedback.accepted_moves:
-            best = placement_feedback.state
-            placement = replace(placement, board=best.board, global_route=best.global_route,
-                                placement_candidate=placement.placement_candidate + "-congestion")
-            critical, detailed, drc = best.critical, best.detailed, best.drc
-            plane_stitch, duplicate_stitch = best.payload
+        try:
+            placement_feedback = run_placement_feedback(
+                FeedbackState(placement.board, placement.global_route, critical, detailed, drc,
+                              deferred_zones, (plane_stitch, duplicate_stitch, None)),
+                trials=feedback_budget, movement_nm=detailed_feedback_movement_nm,
+                placement_options=placement_options, global_options=global_options,
+                rerun=rerun_tail, score=_feedback_score, on_progress=on_progress)
+            if placement_feedback.accepted_moves:
+                best = placement_feedback.state
+                placement = replace(placement, board=best.board, global_route=best.global_route,
+                                    placement_candidate=placement.placement_candidate + "-congestion")
+                critical, detailed, drc = best.critical, best.detailed, best.drc
+                plane_stitch, duplicate_stitch, accepted_inputs = best.payload
+                if accepted_inputs:
+                    os.replace(accepted_inputs, inputs_path)
+                    # The accepted trial's ball-grid fanout sidecar goes with it.
+                    _replace_sidecar(accepted_inputs + ".bga.json", inputs_path + ".bga.json")
+        finally:
+            for leftover in trial_inputs:
+                # Rejected trials' inputs are not this run's; never leave them behind.
+                for stale in (leftover, leftover + ".bga.json"):
+                    try:
+                        os.remove(stale)
+                    except FileNotFoundError:
+                        pass
     if failed_nets and detailed_feedback_trials and preparation is None and unified_options is None:
         accepted_score = _detailed_score(detailed, drc)
         for trial_board in detailed_failure_trials(
@@ -504,7 +545,10 @@ def run_routing_pipeline(
                 from .hard_macros import materialize_hard_macros
                 trial_critical = replace(critical, board=materialize_hard_macros(trial_board), nets=())
             else:
-                trial_critical = trial_access.critical if trial_access else route_critical_nets(trial_board, trial_global, unified_options=unified_options)
+                trial_critical = trial_access.critical if trial_access else route_critical_nets(
+                    trial_board, trial_global, unified_options=unified_options,
+                    plane_stitch_options=(critical_return_plane_options(trial_board, plane_stitch_options)
+                                          if unified_options is not None else None))
             if trial_critical.status is CriticalRoutingStatus.FAILED:
                 emit(on_progress, "detailed_placement_trial", "finished", index=trials_run,
                      outcome="critical_failed")
@@ -612,6 +656,17 @@ def _direct_critical(placement):
         placement.global_route.routing_fingerprint, placement.global_route.routing_fingerprint)
 
 
+def _replace_sidecar(source: str, target: str) -> None:
+    """Move a saved-input sidecar with its inputs; a missing source removes a stale target."""
+    try:
+        os.replace(source, target)
+    except FileNotFoundError:
+        try:
+            os.remove(target)
+        except FileNotFoundError:
+            pass
+
+
 def _plan_array_escapes(board, escape_plan_options, on_progress):
     """Ball grids: which balls escape on the surface (min-cost flow, escape plan E2).
 
@@ -651,7 +706,7 @@ def _plan_lattice(board, escape_plan_options, surface_balls, on_progress):
 
 
 def _route_critical_stage(placement, *, unified_options, unified_fanout, package_access_options,
-                          on_progress, on_stage, lattice=None):
+                          on_progress, on_stage, plane_stitch_options=None, lattice=None):
     """Escape and bypass reservations, then critical routing, on ``placement``.
 
     Shared by the main path and the congestion feedback rerun (which passes
@@ -677,11 +732,14 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, package
         if reserved is not None and held[3]:
             reserved, held, restored = _revalidate_released_escapes(placement.board, reserved, held)
             emit(on_progress, "ordinary_escapes", "revalidated", **restored)
-    def critical_inputs(escape_keepouts):
+    def critical_inputs(escape_keepouts, previous=None):
         source = replace(placement.board,
             copper_keepouts=(*placement.board.copper_keepouts, *escape_keepouts))
         bypass_accesses, reason = (_bypass_copper_reservations(source, held[0], held[1], held[4])
                                   if held is not None else (None, None))
+        if bypass_accesses is None and previous is not None and previous[1] is not None:
+            from .bypass_reservations import rebind_bypass_keepout_removal
+            bypass_accesses, reason = rebind_bypass_keepout_removal(previous[0], previous[1], source)
         if held is not None and bypass_accesses is None:
             # Unsupported/ambiguous ownership keeps its original conservative
             # reservation. Never drop it or infer semantic authority by net.
@@ -695,13 +753,18 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, package
         return source, bypass_accesses
     source, bypass_accesses = critical_inputs(reserved[2] if reserved else ())
     held_as_copper = bypass_accesses is not None
+    return_options = (critical_return_plane_options(source, plane_stitch_options)
+                      if unified_options is not None else None)
     if on_stage is not None:
         on_stage("critical-inputs", {"board": source, "global_route": placement.global_route,
-                                     "reserved_accesses": bypass_accesses})
+                                     "reserved_accesses": bypass_accesses,
+                                     "plane_stitch_options": return_options})
     pair_limit = (package_access_options.initial_pair_state_limit or None
                   if package_access_options is not None else None)
+    pair_limit = getattr(unified_options, "critical_pair_state_limit", None) or pair_limit
     critical = route_critical_nets(source, placement.global_route,
         reserved_accesses=bypass_accesses, pair_state_limit=pair_limit,
+        plane_stitch_options=return_options,
         on_progress=critical_progress(on_progress), unified_options=unified_options)
     if reserved is not None:
         failed = {name for item in critical.nets if not item.connected for name in item.nets}
@@ -711,16 +774,32 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, package
             # whichever attempt connects more critical nets.
             kept = _release_reservations(placement.board, reserved[2], failed)
             if len(kept) < len(reserved[2]):
-                emit(on_progress, "ordinary_escapes", "released",
-                     nets=sorted(failed), keepouts=len(reserved[2]) - len(kept))
-                retry_source, retry_accesses = critical_inputs(kept)
-                if on_stage is not None:
+                reason = None
+                if getattr(unified_options, "retain_escape_copper", False):
+                    plan = ordinary_escape_retry_plan(reserved, kept)
+                    retry_source, retry_accesses, reason = bind_ordinary_escape_copper(source, bypass_accesses, plan)
+                    emit(on_progress, "ordinary_escape_copper", "bound" if reason is None else "rejected",
+                         reason=reason, nets=sorted({e.net for e in (*plan[0], *plan[1])}),
+                         tracks=len(plan[0]), vias=len(plan[1]))
+                    kept = tuple(k for k in reserved[2] if k not in plan[2])
+                else:
+                    emit(on_progress, "ordinary_escapes", "released",
+                         nets=sorted(failed), keepouts=len(reserved[2]) - len(kept))
+                    retry_source, retry_accesses = critical_inputs(kept, (source, bypass_accesses))
+                # A rejected conversion cannot authorize dropping the exits.
+                # The incumbent remains untouched; no trial runs in this case.
+                if reason is not None:
+                    retry_source = None
+                if retry_source is not None and on_stage is not None:
                     on_stage("critical-retry-inputs", {"board": retry_source,
-                        "global_route": placement.global_route, "reserved_accesses": retry_accesses})
-                retry = route_critical_nets(retry_source, placement.global_route,
+                        "global_route": placement.global_route, "reserved_accesses": retry_accesses,
+                        "plane_stitch_options": return_options})
+                retry = (route_critical_nets(retry_source, placement.global_route,
                     reserved_accesses=retry_accesses, pair_state_limit=pair_limit,
+                    plane_stitch_options=return_options,
                     on_progress=critical_progress(on_progress), unified_options=unified_options)
-                if sum(not item.connected for item in retry.nets) < len(
+                    if retry_source is not None else None)
+                if retry is not None and sum(not item.connected for item in retry.nets) < len(
                         [item for item in critical.nets if not item.connected]):
                     critical = retry
                     reserved = (reserved[0], reserved[1], kept)
@@ -730,11 +809,12 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, package
 
 def _complete_critical_stage(critical, reserved, held, held_as_copper, *, access, unified_options,
                              plane_stitch_options, on_progress, lattice=None, array_plans=None,
-                             escape_plan_options=None, save_inputs=False):
+                             escape_plan_options=None, save_inputs_path=None):
     """Lattice and held bypass copper, decouplers, power islands, BGA dogbones and plane stitch.
 
-    Returns ``(critical, plane_stitch)``. ``save_inputs`` (main path only)
-    writes the fanout copper beside the unified router's saved inputs.
+    Returns ``(critical, plane_stitch)``. ``save_inputs_path`` (the unified
+    router's saved-inputs path of this run or trial) gets the ball-grid
+    fanout copper beside it, in ``PATH.bga.json``, when there is any.
     """
     if lattice is not None:
         # The lattice copper joins the board first (bypasses were planned on it).
@@ -785,11 +865,11 @@ def _complete_critical_stage(critical, reserved, held, held_as_copper, *, access
         bga = plan_bga_fanouts(critical.board, array_plans=array_plans)
         critical = replace(critical, board=bga.board)
         emit(on_progress, "bga_fanout", "finished", **bga.report())
-        if save_inputs and getattr(unified_options, "save_inputs_path", None):
+        if save_inputs_path and (bga.tracks or bga.vias):
             # Beside the router inputs: the fanout copper, so a replay can
             # take it out and fan out again (replay_unified(bga_fanout=...)).
             from .state_codec import save_state
-            save_state(unified_options.save_inputs_path + ".bga.json",
+            save_state(save_inputs_path + ".bga.json",
                        {"tracks": bga.tracks, "vias": bga.vias, "array_flow": array_plans is not None,
                         "escape_plan_options": escape_plan_options},
                        note="bga_fanout output")
@@ -882,6 +962,86 @@ def _unified_profile_review(detailed, global_route, drc):
               else CriticalRoutingStatus.SUCCESS)
     return CriticalRoutingResult(status, board, tuple(results), (), (),
         global_route.routing_fingerprint, detailed.routing_fingerprint)
+
+
+def critical_return_plane_options(board, options):
+    """Prepare declared return contacts before a critical search needs them.
+
+    Respect the caller's early-contact opt-out and pad selection. The critical
+    router owns this freshly generated prefix separately from ordinary escapes.
+    Zone outlines remain intent, not evidence of actual filled connectivity.
+    """
+    if options is None:
+        return None
+    returns = {r.return_via_net for r in board.net_routing_rules
+               if r.kind is not RouteKind.GENERAL and r.require_return_vias}
+    returns &= {zone.net for zone in board.zones}
+    pads = frozenset(p for net in board.nets if net.name in returns for p in net.pads)
+    if options.only_pads is not None:
+        pads &= options.only_pads
+    return replace(options, only_pads=pads) if pads else None
+
+
+def ordinary_escape_retry_plan(planned, kept):
+    """Whole owned escape groups affected by a proposed temporary-mask release."""
+    tracks, vias, masks = planned
+    owners = {**{f"escape-reserve-track-{i}": t.net for i,t in enumerate(tracks)},
+              **{f"escape-reserve-via-{i}": v.net for i,v in enumerate(vias)}}
+    if not set(kept) <= set(masks) or any(k.id not in owners for k in masks):
+        raise ValueError("stale ordinary escape retry ownership")
+    affected = {owners[k.id] for k in masks if k not in kept}
+    return (tuple(t for t in tracks if t.net in affected),
+            tuple(v for v in vias if v.net in affected),
+            tuple(k for k in masks if owners[k.id] in affected))
+
+
+def bind_ordinary_escape_copper(source, bypass, planned):
+    """Atomically replace temporary exit masks by the complete checked plan.
+
+    No individual edge is filtered to obtain admission. Rejected plans keep the
+    incumbent source, masks and bypass witnesses unchanged.
+    """
+    from .hard_macros import macro_source, materialize_hard_macros
+    from .bypass_reservations import rebind_bypass_keepout_removal, verified_bypass_reservations
+    from .drc import DrcSeverity
+    from collections import Counter
+    tracks, vias, masks = planned
+    temporary = {mask.id for mask in masks}
+    if any(mask not in source.copper_keepouts for mask in masks):
+        return source, bypass, "stale ordinary escape masks"
+    clean = replace(source, copper_keepouts=tuple(k for k in source.copper_keepouts if k.id not in temporary))
+    frame = materialize_hard_macros(macro_source(clean))
+    if bypass is not None:
+        rebound, reason = rebind_bypass_keepout_removal(source, bypass, clean)
+        if reason is not None:
+            return source, bypass, reason
+    else:
+        rebound = FanoutResult(frame, {}, (), 0, 0)
+    if (len(set(tracks)) != len(tracks) or len(set(vias)) != len(vias)
+            or Counter(tracks) & Counter(rebound.board.tracks)
+            or Counter(vias) & Counter(rebound.board.vias)):
+        return source, bypass, "ordinary exit plan has duplicate or immutable ownership"
+    rules = {r.net: r for r in frame.net_routing_rules}
+    supply = {z.net for z in frame.zones}
+    supply |= {l.net for l in frame.decoupling_links} | {l.return_net for l in frame.decoupling_links}
+    known = {n.name for n in frame.nets}
+    if any(e.net not in known or e.net in supply or
+           (e.net in rules and rules[e.net].kind is not RouteKind.GENERAL) for e in (*tracks, *vias)):
+        return source, bypass, "ordinary exit plan contains unknown or protected copper"
+    candidate = replace(rebound,
+        board=replace(rebound.board, tracks=(*rebound.board.tracks, *tracks), vias=(*rebound.board.vias, *vias)),
+        created_tracks=(*rebound.created_tracks, *tracks), created_vias=(*rebound.created_vias, *vias),
+        added_track_count=rebound.added_track_count + len(tracks),
+        added_via_count=rebound.added_via_count + len(vias))
+    _, _, reason = verified_bypass_reservations(frame, candidate)
+    if reason is not None:
+        return source, bypass, reason
+    def errors(board):
+        return {f.fingerprint for f in run_physical_drc(board).findings
+                if f.severity is DrcSeverity.ERROR and f.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}}
+    if errors(candidate.board) - errors(frame):
+        return source, bypass, "ordinary escape copper introduces physical violations"
+    return clean, candidate, None
 
 
 def _plan_ordinary_escapes(board, fanout_options, on_progress, *, prefix=((), ())):
@@ -1009,11 +1169,18 @@ def _bypass_copper_reservations(source, tracks, vias, witnesses=()):
     No generated piece is filtered out to manufacture a valid ownership claim.
     """
     from .hard_macros import macro_source, materialize_hard_macros
-    from .bypass_reservations import verified_bypass_reservations
+    from .bypass_reservations import verified_bypass_reservations, restore_bypass_reservation_edges
     frame = materialize_hard_macros(macro_source(source))
     reserved = FanoutResult(replace(frame, tracks=(*frame.tracks, *tracks), vias=(*frame.vias, *vias)),
         {}, (), len(tracks), len(vias), created_tracks=tracks, created_vias=vias,
         decoupling_tracks=tracks, decoupling_vias=vias, decoupling_witnesses=witnesses)
+    # Re-materializing immutable macro/array copper preserves values, but its
+    # source objects are fresh. Restore only unique equal original occurrences,
+    # then run the complete current ownership/context/geometry gate as usual.
+    try:
+        reserved = restore_bypass_reservation_edges(reserved)
+    except ValueError as exc:
+        return None, str(exc)
     _, _, reason = verified_bypass_reservations(frame, reserved)
     return (reserved, None) if reason is None else (None, reason)
 

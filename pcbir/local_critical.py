@@ -4,6 +4,7 @@ This is a small legal-path graph, not a Steiner solver or RF reference-copper
 transplant. Native critical acceptance must still check the complete candidate.
 """
 from itertools import combinations
+from dataclasses import replace
 from math import hypot
 from typing import Iterator
 
@@ -15,9 +16,39 @@ from .surface_path import surface_path, surface_path_between
 from .physical import nm_from_mm
 
 
+def _bounded_surface_maze(board, clearance, net, start, end, width, layer, *,
+                          budget=20_000, detour_nm=nm_from_mm(2), phase_budget=None):
+    """Use either terminal's grid phase within one shared local allowance."""
+    step = nm_from_mm("0.1")
+    if budget <= 0 or detour_nm < 0 or phase_budget is not None and phase_budget <= 0:
+        raise ValueError("local maze computational bounds must be positive")
+    spent = 0
+
+    def observe(phase, event, details):
+        nonlocal spent
+        if phase == "surface_bridge_search" and event == "finished":
+            spent += int(details["expanded_states"])
+
+    path = surface_path_between(board, clearance, net, start, end, width, layer,
+        step_nm=step, maximum_detour_nm=detour_nm,
+        state_budget=min(budget, phase_budget or budget), on_progress=observe)
+    if (path is None and 0 < spent < budget
+            and (phase_budget is not None or (end.x_nm-start.x_nm) % step or (end.y_nm-start.y_nm) % step)):
+        # A legal narrow channel may lie between every point of the first
+        # terminal's grid. The other actual terminal supplies a second phase;
+        # only unused states are available, and every edge keeps exact checks.
+        reverse = surface_path_between(board, clearance, net, end, start, width, layer,
+            step_nm=step, maximum_detour_nm=detour_nm,
+            state_budget=min(budget-spent, phase_budget or budget), on_progress=observe)
+        if reverse is not None:
+            path = tuple(replace(t, start=t.end, end=t.start) for t in reversed(reverse))
+    return path
+
+
 def local_surface_candidates(
     board: PhysicalBoard, rule: NetRoutingRule,
-    *, maze: bool = False,
+    *, maze: bool = False, maze_state_budget: int = 20_000,
+    maze_detour_nm: int = nm_from_mm(2), maze_phase_budget: int | None = None,
 ) -> Iterator[tuple[TrackSegment, ...]]:
     """Yield deterministic, via-free octilinear trees for two to eight lands.
 
@@ -28,8 +59,11 @@ def local_surface_candidates(
     arbitrary-angle shortcuts, component movement or cross-layer guesses occur
     by default. The optional two-terminal, explicitly via-free fallback uses
     the shared exact surface maze with a 20,000-state bound per terminal pair
-    and permitted layer. RF trees require explicit tree topology and zero vias;
-    geometric connectivity does not approve their stubs or RF performance.
+    and permitted layer by default. Explicit computational bounds may reserve
+    part of the allowance for each terminal's grid phase. They never alter
+    copper, via, length or clearance contracts. Multi-terminal critical/RF
+    trees require explicit tree topology and zero vias. Geometric connectivity
+    does not approve RF stubs or performance.
     """
     if rule.kind not in {RouteKind.CRITICAL, RouteKind.CLOCK, RouteKind.RF_FEED}:
         return
@@ -37,6 +71,7 @@ def local_surface_candidates(
     if net is None or not 2 <= len(net.pads) <= 8:
         return
     rf_tree = rule.kind is RouteKind.RF_FEED and rule.topology == "tree" and rule.max_vias == 0
+    critical_tree = rule.kind is RouteKind.CRITICAL and rule.topology == "tree" and rule.max_vias == 0
     if rule.kind in {RouteKind.CLOCK, RouteKind.RF_FEED} and len(net.pads) != 2 and not rf_tree:
         return
     if len(net.pads) > 2 and rule.topology != "tree":
@@ -79,10 +114,10 @@ def local_surface_candidates(
         for first, second in combinations(range(len(terminals)), 2):
             path = surface_path(board, clearance, rule.net, terminals[first], terminals[second],
                                 width, layer, board.tracks)
-            if not octilinear(path) and maze and (len(terminals) == 2 or rf_tree) and rule.max_vias == 0:
-                path = surface_path_between(
+            if not octilinear(path) and maze and (len(terminals) == 2 or rf_tree or critical_tree) and rule.max_vias == 0:
+                path = _bounded_surface_maze(
                     board, clearance, rule.net, terminals[first], terminals[second], width, layer,
-                    step_nm=nm_from_mm("0.1"), maximum_detour_nm=nm_from_mm(2), state_budget=20_000)
+                    budget=maze_state_budget, detour_nm=maze_detour_nm, phase_budget=maze_phase_budget)
             if not octilinear(path):
                 continue
             length = sum(round(hypot(track.end.x_nm - track.start.x_nm,

@@ -23,10 +23,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from heapq import heappop, heappush
-from math import ceil, floor, hypot, sqrt
+from operator import itemgetter
+from math import ceil, hypot
 from time import perf_counter
 from types import MappingProxyType
-from typing import Iterable, Mapping
+from typing import TYPE_CHECKING, Iterable, Mapping
 
 import numpy as np
 
@@ -56,19 +57,26 @@ from .routing import GlobalRoutingResult
 from .routing_clearance import RoutingClearanceIndex
 from .routing_costs import LayerBias
 from .routing_layers import routing_layers, signal_layer_preferences
+from .routing_lattice import MOVES as _MOVES
+from .routing_lattice import NestedLattice, UniformLattice
 from .routing_vias import physical_via_span
+
+if TYPE_CHECKING:
+    from .fine_regions import FineRegionOptions, FineRegionPlan
 
 _FOREIGN = -2  # Obstacle owned by another net, by several nets or by none.
 _FREE = -1
-_SQRT2 = sqrt(2.0)
-# 8 planar moves: (dx, dy, length in pitches).
-_MOVES = ((1, 0, 1.0), (-1, 0, 1.0), (0, 1, 1.0), (0, -1, 1.0),
-          (1, 1, _SQRT2), (1, -1, _SQRT2), (-1, 1, _SQRT2), (-1, -1, _SQRT2))
+
+
+# UnifiedRouterOptions.fine_regions values ("auto" is an alias of "dense").
+FINE_REGION_MODES = ("off", "arrays", "dense")
+# Base pitch of the lattice when pitch_nm is None (and choose_pitch's default).
+DEFAULT_PITCH_NM = nm_from_mm("0.25")
 
 
 @dataclass(frozen=True, slots=True)
 class UnifiedRouterOptions:
-    pitch_nm: int | None = None    # None: 0.25 mm, finer where a ball grid needs it
+    pitch_nm: int | None = None    # None: 0.25 mm (the base pitch; with fine_regions="off" finer where a ball grid needs it)
     maximum_iterations: int = 150
     # Stop negotiating once this many iterations in a row have not improved
     # the best result (0: run to maximum_iterations). Boards that converge
@@ -156,6 +164,9 @@ class UnifiedRouterOptions:
     # Optional diagnostic raster/search window, not a replacement outline or
     # copper keepout. All source geometry and final exact checks remain whole.
     grid_window_nm: tuple[int, int, int, int] | None = None
+    # Optional per-pair state cap for the pipeline's preceding critical stage.
+    # Separate from the ordinary negotiation wall-time limit; None keeps defaults.
+    critical_pair_state_limit: int | None = None
     # Supply islands carved from a spare plane layer before routing
     # (power_islands.py): "auto", a copper layer name, or None.
     power_islands: str | None = None
@@ -189,6 +200,9 @@ class UnifiedRouterOptions:
     escape_net_order: tuple[str, ...] = ()
     escape_layer_biases: tuple[LayerBias, ...] = ()
 
+    # Opt-in: convert only endangered complete ordinary escape groups to real
+    # prefix copper when a critical retry would release their temporary masks.
+    retain_escape_copper: bool = False
     # commit/via options
     # One exact clearance index per route_unified call: commits add accepted
     # copper to it, repair rounds and the pour re-check rip nets out of it
@@ -275,7 +289,24 @@ class UnifiedRouterOptions:
     congestion_tile_nm: int = nm_from_mm("1")
     export_congestion: bool = True
 
+    # -- Multi-resolution lattice (fine_regions.py, routing_lattice.py) -----
+    # "off": one uniform lattice at pitch_nm (or choose_pitch). "arrays"
+    # (default) and "dense": a pitch_nm (or 0.25 mm) base lattice plus fine
+    # patches planned by plan_fine_regions (the choose_pitch rule applied
+    # per package): "arrays" refines full ball arrays only; "dense" also
+    # refines non-array dense packages (QFN, fine-pitch QFP), a measurement
+    # mode. A plan without patches gives the plain uniform base lattice,
+    # which on a board without a full ball array is choose_pitch's lattice.
+    # "auto" (the S2/S3 name) is accepted and stored as "dense".
+    # fine_region_options sets the planner's other knobs; the mode always
+    # decides dense_packages.
+    fine_regions: str = "arrays"
+    fine_region_options: "FineRegionOptions | None" = None   # None: FineRegionOptions()
+
     def __post_init__(self) -> None:
+        limit = self.critical_pair_state_limit
+        if limit is not None and (type(limit) is not int or limit <= 0):
+            raise ValueError("critical pair state limit must be a positive integer or None")
         if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0 or self.maximum_expansions <= 0:
             raise ValueError("unified router pitch, iterations and search states must be positive")
         if any(bias.rate < 0 for bias in self.escape_layer_biases):
@@ -311,6 +342,14 @@ class UnifiedRouterOptions:
         if type(self.congestion_tile_nm) is not int or self.congestion_tile_nm <= 0 or (
                 self.pitch_nm is not None and self.congestion_tile_nm < self.pitch_nm):
             raise ValueError("congestion_tile_nm must be a positive integer of at least one pitch")
+        if self.fine_regions == "auto":
+            object.__setattr__(self, "fine_regions", "dense")
+        if self.fine_regions not in FINE_REGION_MODES:
+            raise ValueError('fine_regions must be "off", "arrays" or "dense"')
+        if self.fine_region_options is not None:
+            from .fine_regions import FineRegionOptions
+            if not isinstance(self.fine_region_options, FineRegionOptions):
+                raise ValueError("fine_region_options must be a FineRegionOptions or None")
 
 
 # ---------------------------------------------------------------------------
@@ -376,59 +415,6 @@ def _polygon_inside(vertices: tuple[Point, ...], px, py):
 # Grid and rasters
 
 
-class _Grid:
-    def __init__(self, board: PhysicalBoard, pitch: int, window=None) -> None:
-        vertices = board.outline.vertices
-        min_x = min(p.x_nm for p in vertices)
-        min_y = min(p.y_nm for p in vertices)
-        max_x = max(p.x_nm for p in vertices)
-        max_y = max(p.y_nm for p in vertices)
-        self.pitch = pitch
-        self.x0 = floor(min_x / pitch) * pitch
-        self.y0 = floor(min_y / pitch) * pitch
-        self.nx = int((max_x - self.x0) // pitch) + 2
-        self.ny = int((max_y - self.y0) // pitch) + 2
-        if window is not None:
-            # Retain the full-board lattice phase. A window only discards
-            # search nodes; it never translates or clips any source object.
-            x0, y0, x1, y1 = window
-            ix0 = -((self.x0 - max(min_x, x0)) // pitch)
-            iy0 = -((self.y0 - max(min_y, y0)) // pitch)
-            ix1 = (min(max_x, x1) - self.x0) // pitch
-            iy1 = (min(max_y, y1) - self.y0) // pitch
-            self.x0 += ix0 * pitch
-            self.y0 += iy0 * pitch
-            self.nx, self.ny = ix1 - ix0 + 1, iy1 - iy0 + 1
-            if self.nx < 2 or self.ny < 2:
-                raise ValueError("grid_window_nm must contain at least two board grid nodes per axis")
-        self.layers = tuple(board.stackup.copper_layers)
-        self.nl = len(self.layers)
-        self.plane = self.nx * self.ny
-        self.size = self.plane * self.nl
-        self.xs = self.x0 + pitch * np.arange(self.nx, dtype=np.float64)
-        self.ys = self.y0 + pitch * np.arange(self.ny, dtype=np.float64)
-
-    def index(self, layer: int, ix: int, iy: int) -> int:
-        return layer * self.plane + iy * self.nx + ix
-
-    def unpack(self, node: int) -> tuple[int, int, int]:
-        layer, rest = divmod(node, self.plane)
-        iy, ix = divmod(rest, self.nx)
-        return layer, ix, iy
-
-    def point(self, node: int) -> Point:
-        _, ix, iy = self.unpack(node)
-        return Point(self.x0 + ix * self.pitch, self.y0 + iy * self.pitch)
-
-    def window(self, min_x: float, min_y: float, max_x: float, max_y: float):
-        """Index slices covering a nanometre box (clipped to the grid)."""
-        ix0 = max(0, int(floor((min_x - self.x0) / self.pitch)))
-        iy0 = max(0, int(floor((min_y - self.y0) / self.pitch)))
-        ix1 = min(self.nx - 1, int(ceil((max_x - self.x0) / self.pitch)))
-        iy1 = min(self.ny - 1, int(ceil((max_y - self.y0) / self.pitch)))
-        return ix0, iy0, ix1, iy1
-
-
 @dataclass(frozen=True, slots=True)
 class _Obstacle:
     owner: int                 # net id, or _FOREIGN for netless obstacles
@@ -442,32 +428,66 @@ class _Obstacle:
     polygon: bool = False      # spine is a simple polygon, not a convex hull
 
 
-class _Rasters:
-    """Lazily built legality rasters keyed by width/clearance class."""
+class _BlockRaster:
+    """Node and cell-centre coordinates and board material of one lattice block."""
 
-    def __init__(self, board: PhysicalBoard, grid: _Grid, obstacles: list[_Obstacle],
-                 holes: list[tuple[int, float, float, float]], margin: int,
+    __slots__ = ("block", "margin", "px", "py", "mx", "my",
+                 "inside_nodes", "inside_cells", "edge_nodes", "edge_cells")
+
+
+class _Rasters:
+    """Lazily built legality rasters keyed by width/clearance class.
+
+    Built block by block (``lattice.blocks``; one block on a uniform
+    lattice), each dense ``(nl, ny, nx)`` with its own pitch and raster
+    margin, then concatenated into the lattice's flat node (and cell, and
+    column) id space. Disabled (shadowed) base nodes and cells of a nested
+    lattice are foreign in every raster.
+    """
+
+    def __init__(self, board: PhysicalBoard, grid, obstacles: list[_Obstacle],
+                 holes: list[tuple[int, float, float, float]], margin,
                  exact_boxes: tuple[tuple[int, int, int, int], ...] = ()) -> None:
         self.board = board
-        self.grid = grid
+        self.lattice = grid
         self.obstacles = obstacles
         self.holes = holes          # (owner, x, y, radius)
-        self.margin = margin
-        # Inside these boxes (x0, y0, x1, y1; ball fields whose grid is aligned
-        # with the balls) obstacles are rasterized exactly, without the margin.
+        margins = list(margin) if isinstance(margin, (tuple, list)) else [margin] * len(grid.blocks)
+        self.margin = margins[0]
+        # Inside these boxes (x0, y0, x1, y1; ball fields whose lattice is
+        # aligned with the balls) obstacles are rasterized exactly, without
+        # the block's margin (escape plan E8, ``ball_field_exact``).
         self.exact_boxes = exact_boxes
         self._track: dict[tuple[int, int], tuple[list[int], list[int]]] = {}
         self._via: dict[tuple[int, int, int, tuple[int, int]], tuple] = {}
-        self.via_mask = None        # (ny, nx) bool: False forbids a new via there
-        g = grid
-        self.px, self.py = np.meshgrid(g.xs, g.ys)                      # node centres
-        self.mx, self.my = np.meshgrid(g.xs + g.pitch / 2, g.ys + g.pitch / 2)  # cell centres
+        # False forbids a new via there: (ny, nx) on a uniform lattice, one
+        # entry per column on a nested one.
+        self.via_mask = None
         outline = board.outline.vertices
         cutouts = [c.vertices for c in board.outline.cutouts]
-        self.inside_nodes = self._material(outline, cutouts, self.px, self.py)
-        self.inside_cells = self._material(outline, cutouts, self.mx, self.my)
-        self.edge_nodes = self._edge_distance(outline, cutouts, self.px, self.py)
-        self.edge_cells = self._edge_distance(outline, cutouts, self.mx, self.my)
+        self.views: list[_BlockRaster] = []
+        for block, block_margin in zip(grid.blocks, margins):
+            view = _BlockRaster()
+            view.block, view.margin = block, block_margin
+            view.px, view.py = np.meshgrid(block.xs, block.ys)                              # node centres
+            view.mx, view.my = np.meshgrid(block.xs + block.pitch / 2, block.ys + block.pitch / 2)  # cell centres
+            view.inside_nodes = self._material(outline, cutouts, view.px, view.py)
+            view.inside_cells = self._material(outline, cutouts, view.mx, view.my)
+            view.edge_nodes = self._edge_distance(outline, cutouts, view.px, view.py)
+            view.edge_cells = self._edge_distance(outline, cutouts, view.mx, view.my)
+            self.views.append(view)
+        first = self.views[0]
+        self.px, self.py, self.mx, self.my = first.px, first.py, first.mx, first.my
+        self.inside_nodes, self.inside_cells = first.inside_nodes, first.inside_cells
+        self.edge_nodes, self.edge_cells = first.edge_nodes, first.edge_cells
+        self.nested = isinstance(grid, NestedLattice)
+
+    def _flatten(self, parts) -> np.ndarray:
+        """Per-block ``(nl, ny, nx)`` owner arrays as one flat node-id array."""
+        if len(parts) == 1:
+            return parts[0].ravel()
+        nl = self.lattice.nl
+        return np.concatenate([part.reshape(nl, -1) for part in parts], axis=1).ravel()
 
     @staticmethod
     def _material(outline, cutouts, px, py):
@@ -498,64 +518,85 @@ class _Rasters:
     def _track_entry(self, width: int, clearance: int):
         key = (width, clearance)
         if key not in self._track:
-            nodes = np.ascontiguousarray(self._build(width / 2, clearance, self.px, self.py,
-                self.inside_nodes, self.edge_nodes, for_via=False, as_array=True).ravel())
-            cells = np.ascontiguousarray(self._build(width / 2, clearance, self.mx, self.my,
-                self.inside_cells, self.edge_cells, for_via=False, as_array=True).ravel())
+            nodes = np.ascontiguousarray(self._flatten(self._build(width / 2, clearance, cells=False,
+                                                                   for_via=False)))
+            cells = np.ascontiguousarray(self._flatten(self._build(width / 2, clearance, cells=True,
+                                                                   for_via=False)))
+            if self.nested:
+                g = self.lattice
+                nodes.reshape(g.nl, g.plane)[:, g.shadowed] = _FOREIGN
+                cells.reshape(g.nl, g.plane)[:, g.shadowed_cells] = _FOREIGN
             self._track[key] = (nodes.tolist(), cells.tolist(), nodes, cells)
         return self._track[key]
 
     def via(self, size: int, drill: int, clearance: int, span=None) -> list[int]:
         """Owner list for a physical via span; drill spacing stays layer independent."""
-        span = span if span is not None else (0, self.grid.nl - 1)
+        span = span if span is not None else (0, self.lattice.nl - 1)
         key = (size, drill, clearance, span)
         if key not in self._via:
-            g = self.grid
+            g = self.lattice
             # Copper spacing, or the drill's hole clearance to copper if larger.
             half = max(size / 2, drill / 2 + self.board.rules.minimum_hole_clearance_nm - clearance)
-            stacked = self._build(half, clearance, self.px, self.py, self.inside_nodes,
-                                  self.edge_nodes, for_via=True, as_array=True,
-                                  via_annulus_half_width=size / 2)
             low, high = span
-            owner = stacked[low].copy()
-            for layer in range(low + 1, high + 1):
-                other = stacked[layer]
-                both = (owner != other)
-                owner = np.where(both & (owner == _FREE), other, owner)
-                owner = np.where(both & (other != _FREE) & (owner != other), _FOREIGN, owner)
             hole_clear = self.board.rules.minimum_hole_clearance_nm
-            for _, x, y, radius in self.holes:
-                reach = drill / 2 + radius + hole_clear + self._margin_at((x,), (y,))
-                ix0, iy0, ix1, iy1 = g.window(x - reach, y - reach, x + reach, y + reach)
-                if ix0 > ix1 or iy0 > iy1:
-                    continue
-                win = np.hypot(self.px[iy0:iy1 + 1, ix0:ix1 + 1] - x,
-                               self.py[iy0:iy1 + 1, ix0:ix1 + 1] - y) < reach
-                owner[iy0:iy1 + 1, ix0:ix1 + 1][win] = _FOREIGN
-            if self.via_mask is not None:
-                owner = np.where(self.via_mask, owner, _FOREIGN)
-            flat = np.ascontiguousarray(owner.ravel().astype(np.int32))
+            owners = []
+            for view, stacked in zip(self.views, self._build(half, clearance, cells=False, for_via=True,
+                                                             via_annulus_half_width=size / 2)):
+                owner = stacked[low].copy()
+                for layer in range(low + 1, high + 1):
+                    other = stacked[layer]
+                    both = (owner != other)
+                    owner = np.where(both & (owner == _FREE), other, owner)
+                    owner = np.where(both & (other != _FREE) & (owner != other), _FOREIGN, owner)
+                for _, x, y, radius in self.holes:
+                    reach = drill / 2 + radius + hole_clear + self._margin_at((x,), (y,), view.margin)
+                    ix0, iy0, ix1, iy1 = view.block.window(x - reach, y - reach, x + reach, y + reach)
+                    if ix0 > ix1 or iy0 > iy1:
+                        continue
+                    win = np.hypot(view.px[iy0:iy1 + 1, ix0:ix1 + 1] - x,
+                                   view.py[iy0:iy1 + 1, ix0:ix1 + 1] - y) < reach
+                    owner[iy0:iy1 + 1, ix0:ix1 + 1][win] = _FOREIGN
+                owners.append(owner)
+            if len(owners) == 1:
+                owner = owners[0]
+                if self.via_mask is not None:
+                    owner = np.where(self.via_mask, owner, _FOREIGN)
+                flat = np.ascontiguousarray(owner.ravel().astype(np.int32))
+            else:
+                owner = np.concatenate([part.ravel() for part in owners])
+                if self.via_mask is not None:
+                    owner = np.where(self.via_mask, owner, _FOREIGN)
+                owner[g.shadowed] = _FOREIGN
+                flat = np.ascontiguousarray(owner.astype(np.int32))
             self._via[key] = (flat.tolist(), flat)
         return self._via[key][0]
 
     def via_array(self, size: int, drill: int, clearance: int, span=None):
-        span = span if span is not None else (0, self.grid.nl - 1)
+        span = span if span is not None else (0, self.lattice.nl - 1)
         self.via(size, drill, clearance, span)
         return self._via[(size, drill, clearance, span)][1]
 
-    def _margin_at(self, xs, ys) -> int:
+    def _margin_at(self, xs, ys, margin) -> int:
         """The raster margin for an obstacle: none when it lies in an exact box."""
         for x0, y0, x1, y1 in self.exact_boxes:
             if x0 <= min(xs) and max(xs) <= x1 and y0 <= min(ys) and max(ys) <= y1:
                 return 0
-        return self.margin
+        return margin
 
-    def _build(self, half_width: float, clearance: int, px, py, inside, edge, *,
-               for_via: bool, as_array: bool = False, via_annulus_half_width=None):
-        g = self.grid
+    def _build(self, half_width: float, clearance: int, *, cells: bool, for_via: bool,
+               via_annulus_half_width=None) -> list[np.ndarray]:
+        """Owner arrays ``(nl, ny, nx)`` per block, at node or cell centres."""
+        return [self._build_block(view, half_width, clearance, cells=cells, for_via=for_via,
+                                  via_annulus_half_width=via_annulus_half_width) for view in self.views]
+
+    def _build_block(self, view: _BlockRaster, half_width: float, clearance: int, *, cells: bool,
+                     for_via: bool, via_annulus_half_width=None) -> np.ndarray:
+        g, block, margin = self.lattice, view.block, view.margin
+        px, py = (view.mx, view.my) if cells else (view.px, view.py)
+        inside, edge = (view.inside_cells, view.edge_cells) if cells else (view.inside_nodes, view.edge_nodes)
         edge_clear = self.board.rules.minimum_clearance_nm
-        legal_material = inside & (edge >= half_width + edge_clear + self.margin)
-        owner = np.full((g.nl, g.ny, g.nx), _FREE, dtype=np.int32)
+        legal_material = inside & (edge >= half_width + edge_clear + margin)
+        owner = np.full((g.nl, block.ny, block.nx), _FREE, dtype=np.int32)
         for layer in range(g.nl):
             owner[layer][~legal_material] = _FOREIGN
         for item in self.obstacles:
@@ -567,9 +608,9 @@ class _Rasters:
                 gap = max(gap, 1)
             xs = [p.x_nm for p in item.spine]
             ys = [p.y_nm for p in item.spine]
-            reach = item.radius + gap + half_width + self._margin_at(xs, ys)
-            ix0, iy0, ix1, iy1 = g.window(min(xs) - reach, min(ys) - reach,
-                                          max(xs) + reach, max(ys) + reach)
+            reach = item.radius + gap + half_width + self._margin_at(xs, ys, margin)
+            ix0, iy0, ix1, iy1 = block.window(min(xs) - reach, min(ys) - reach,
+                                              max(xs) + reach, max(ys) + reach)
             if ix0 > ix1 or iy0 > iy1:
                 continue
             wx = px[iy0:iy1 + 1, ix0:ix1 + 1]
@@ -586,7 +627,7 @@ class _Rasters:
                 # nets. Keep the electrical halo net-aware and its inner
                 # annulus exclusion foreign to everyone, on every layer.
                 annulus = half_width if via_annulus_half_width is None else via_annulus_half_width
-                pad_contact = distance < item.radius + annulus + 1 + self.margin
+                pad_contact = distance < item.radius + annulus + 1 + margin
             for layer in item.layers:
                 window = owner[layer, iy0:iy1 + 1, ix0:ix1 + 1]
                 if owner_id == _FOREIGN:
@@ -598,9 +639,7 @@ class _Rasters:
                 window[clash] = _FOREIGN
                 if pad_contact is not None:
                     window[pad_contact] = _FOREIGN
-        if as_array:
-            return owner
-        return owner.ravel().tolist()
+        return owner
 
 
 # ---------------------------------------------------------------------------
@@ -744,10 +783,33 @@ class _Router:
             for route in guides.routes:
                 if route.connected and (route.segments or route.accesses):
                     self.guides[route.net] = (*self.guides.get(route.net, ()), route)
-        pitch = options.pitch_nm or choose_pitch(board)
+        # The fine-region plan (fine_regions "arrays" or "dense"), else None.
+        # With a plan, its per-package rule replaces choose_pitch and the
+        # base pitch is pitch_nm or 0.25 mm.
+        self.fine_plan = fine_region_plan(board, options)
+        if self.fine_plan is None:
+            pitch = options.pitch_nm or choose_pitch(board)
+        else:
+            pitch = self.fine_plan.base_pitch_nm
+        # ``pitch`` is the base pitch: search costs and route lengths are per
+        # base pitch on every lattice.
         self.pitch = pitch
         self.via_cost = options.via_cost_mm * 1_000_000 / pitch
-        self.grid = _Grid(board, pitch, options.grid_window_nm)
+        # Every node id, point/node conversion, offset and window goes
+        # through this lattice (routing_lattice.Lattice). ``grid`` is the
+        # same object under its former name (tests, tools).
+        if self.fine_plan is not None and self.fine_plan.patches:
+            if options.grid_window_nm is not None:
+                raise ValueError("grid_window_nm is not supported with fine_regions patches "
+                                 f'({", ".join(r for p in self.fine_plan.patches for r in p.references)}); '
+                                 'set fine_regions="off" for a windowed search')
+            self.lattice = self.grid = NestedLattice(board, pitch, self.fine_plan)
+        else:
+            # No patches: the plain uniform lattice. Without a full ball array
+            # choose_pitch(board) is 0.25 mm too, so the copper is exactly
+            # fine_regions="off"'s.
+            self.lattice = self.grid = UniformLattice(board, pitch, options.grid_window_nm)
+        self.nested = isinstance(self.lattice, NestedLattice)
         if options.grid_window_nm is not None:
             from .placement import transformed_local_point
             x0, y0, x1, y1 = options.grid_window_nm
@@ -776,18 +838,23 @@ class _Router:
             self.net_ids.setdefault(net.name, len(self.net_ids))
         obstacles, holes = self._obstacles()
         margin = options.raster_margin_nm if options.raster_margin_nm is not None else pitch // 8
-        self.rasters = _Rasters(board, self.grid, obstacles, holes, margin,
+        if self.nested and options.raster_margin_nm is None:
+            margin = tuple(block.pitch // 8 for block in self.lattice.blocks)
+        self.rasters = _Rasters(board, self.lattice, obstacles, holes, margin,
                                 self._ball_field_boxes() if options.ball_field_exact else ())
         if options.ball_field_via_sites:
             self.rasters.via_mask = self._ball_field_via_mask()
         from .native import astar as native_astar
+        # The C kernel serves both lattices (a nested one through its block
+        # tables); _astar falls back to the Python search when it is absent.
         self.native = native_astar()
-        self.occupancy = _Occupancy(self.grid.size, self.grid.plane, arrays=self.native is not None)
+        self._nested_tables = None
+        self.occupancy = _Occupancy(self.lattice.size, self.lattice.plane, arrays=self.native is not None)
         from array import array
-        self._best = array("d", [1e30]) * self.grid.size
-        self._parent = array("i", [-1]) * self.grid.size
+        self._best = array("d", [1e30]) * self.lattice.size
+        self._parent = array("i", [-1]) * self.lattice.size
         if self.native is not None:
-            size = self.grid.size
+            size = self.lattice.size
             self._n_best = np.full(size, 1e30, dtype=np.float64)
             self._n_parent = np.full(size, -1, dtype=np.int32)
             self._n_flags = np.zeros(size, dtype=np.uint8)
@@ -803,14 +870,14 @@ class _Router:
             # allocated on the first guided search).
             self._n_guide: np.ndarray | None = None
         ranks, headings = signal_layer_preferences(board)
-        g = self.grid
+        g = self.lattice
         self.layer_cost = [options.outer_layer_cost if i in (0, g.nl - 1) else 0.0 for i in range(g.nl)]
         self.heading = [headings.get(layer) for layer in g.layers]
         default_width = board.rules.default_track_width_nm
         self.default_width = default_width
-        # (layer, iy0, iy1, ix0, ix1, cost) windows of seeded ball-field
-        # history: a routing preference, not contention (_congestion_map).
-        self._seeded_history: list[tuple[int, int, int, int, int, float]] = []
+        # (layer, columns, cost) of seeded ball-field history: a routing
+        # preference, not contention (_congestion_map).
+        self._seeded_history: list[tuple[int, np.ndarray, float]] = []
         self._seed_ball_field_cost()
         # A local transaction may own the area copper but not the launch vias
         # or collar witnesses. Such pads attach only at fresh verified ports.
@@ -829,9 +896,14 @@ class _Router:
                 raise ValueError(f"required routing access is stale or invalid: {pad}")
             self.required_accesses[pad] = access
         self.specs = [spec for spec in (self._spec(net) for net in nets) if spec is not None]
+        # Through-via proposals must price foreign tracks on every barrel layer.
+        self._candidate_via_size = max([board.rules.default_via_size_nm, *(s.via_size for s in self.specs)])
+        self._candidate_via_drill = max([board.rules.default_via_drill_nm, *(s.via_drill for s in self.specs)])
+        self._candidate_clearance = max([board.rules.minimum_clearance_nm, *(s.clearance for s in self.specs)])
         self._exit_corridors = self._seed_exit_corridors()
         self.routes: dict[str, _NetRoute] = {}
         self._lead_nodes: dict[tuple, list[int]] = {}
+        self._lead_history: dict[TrackSegment, float] = {}
         self.present = options.present_factor
         self.conflict_age: dict[str, int] = {}
 
@@ -841,16 +913,29 @@ class _Router:
         cost = self.options.ball_field_cost
         if not cost:
             return
-        g = self.grid
+        from .package_patterns import circular_array
+        from .placement import transformed_local_point
+        g = self.lattice
         hist = self.occupancy.history
-        for pose, array, corners in _ball_grids(self.board):
-            ix0, iy0, ix1, iy1 = g.window(min(p.x_nm for p in corners), min(p.y_nm for p in corners),
-                                          max(p.x_nm for p in corners), max(p.y_nm for p in corners))
+        for pose in self.board.placements:
+            try:
+                array = circular_array(self.board, pose.reference)
+            except ValueError:
+                array = None
+            if array is None:
+                continue
+            corners = [transformed_local_point(pose, p.position) for p in self.board.footprints[pose.footprint].pads]
+            bounds = (min(p.x_nm for p in corners), min(p.y_nm for p in corners),
+                      max(p.x_nm for p in corners), max(p.y_nm for p in corners))
             layer = g.layers.index(CopperLayer.FRONT if pose.side.value == "front" else CopperLayer.BACK)
-            self._seeded_history.append((layer, iy0, iy1, ix0, ix1, cost))
-            for iy in range(iy0, iy1 + 1):
-                for ix in range(ix0, ix1 + 1):
-                    hist[g.index(layer, ix, iy)] += cost
+            # Per block, the covering window's live columns (recorded for _congestion_map).
+            for block in g.blocks:
+                columns = block.window_columns(block.window(*bounds))
+                if not columns.size:
+                    continue
+                self._seeded_history.append((layer, columns, cost))
+                for node in (columns + layer * g.plane).tolist():
+                    hist[node] += cost
 
     def _seed_exit_corridors(self) -> dict[str, set[int]]:
         """Surface exits of ball-grid edge balls, reserved for their own nets (escape plan E9).
@@ -867,7 +952,7 @@ class _Router:
         if not cost:
             return {}
         from .placement import transformed_local_point
-        g = self.grid
+        g = self.lattice
         routed = {spec.name for spec in self.specs}
         net_of = {pad: net.name for net in self.board.nets for pad in net.pads}
         corridors: dict[str, set[int]] = {}
@@ -899,13 +984,13 @@ class _Router:
                 for (ax, ay), (bx, by) in zip(points, points[1:]):
                     a = transformed_local_point(pose, Point(int(ax), int(ay)))
                     b = transformed_local_point(pose, Point(int(bx), int(by)))
-                    steps = max(1, int(2 * hypot(b.x_nm - a.x_nm, b.y_nm - a.y_nm) // g.pitch))
+                    steps = max(1, int(2 * hypot(b.x_nm - a.x_nm, b.y_nm - a.y_nm) // g.pitch_nm))
                     for k in range(steps + 1):
                         px = a.x_nm + (b.x_nm - a.x_nm) * k / steps
                         py = a.y_nm + (b.y_nm - a.y_nm) * k / steps
-                        node_x, node_y = round((px - g.x0) / g.pitch), round((py - g.y0) / g.pitch)
-                        if 0 <= node_x < g.nx and 0 <= node_y < g.ny:
-                            nodes.add(g.index(layer, node_x, node_y))
+                        node = g.snap(layer, Point(int(round(px)), int(round(py))))
+                        if node is not None:
+                            nodes.add(node)
         history = self.occupancy.history
         for nodes in corridors.values():
             for node in nodes:
@@ -920,8 +1005,10 @@ class _Router:
         vias is then a row of legal nodes, not lost to the margin.
         """
         boxes = []
+        g = self.lattice
         for pose, array, points in _ball_grids(self.board):
-            if not _aligned(array, points, self.grid.pitch):
+            # The step at the array: its fine patch on a nested lattice.
+            if not _aligned(array, points, g.step_nm(g.nearest(0, points[0]))):
                 continue
             grow = self.options.ball_field_exact_reach_nm or array.pitch_nm
             boxes.append((min(p.x_nm for p in points) - grow, min(p.y_nm for p in points) - grow,
@@ -936,32 +1023,48 @@ class _Router:
         the field closes channels for everyone (the FX10 kit, for example,
         fans out every inner ball to its cell centre).
         """
-        g = self.grid
-        mask = None
-        for pose, array, points in _ball_grids(self.board):
-            if mask is None:
-                mask = np.ones((g.ny, g.nx), dtype=bool)
+        from .package_patterns import circular_array
+        from .placement import transformed_local_point
+        g = self.lattice
+        masks = None
+        for pose in self.board.placements:
+            try:
+                array = circular_array(self.board, pose.reference)
+            except ValueError:
+                array = None
+            if array is None:
+                continue
+            if masks is None:
+                masks = [np.ones((block.ny, block.nx), dtype=bool) for block in g.blocks]
+            pads = self.board.footprints[pose.footprint].pads
+            points = [transformed_local_point(pose, p.position) for p in pads]
             x0 = min(p.x_nm for p in points); x1 = max(p.x_nm for p in points)
             y0 = min(p.y_nm for p in points); y1 = max(p.y_nm for p in points)
-            ix0, iy0, ix1, iy1 = g.window(x0, y0, x1, y1)
-            mask[iy0:iy1 + 1, ix0:ix1 + 1] = False
             # Cell centres: half a pitch off every ball row and column.
-            def centred(values, origin):
+            def centred(values, origin, pitch):
                 cells = (values - origin) / array.pitch_nm - 0.5
-                return np.abs(cells - np.round(cells)) * array.pitch_nm <= g.pitch / 4
-            on_x = centred(np.asarray(g.xs[ix0:ix1 + 1]), x0)
-            on_y = centred(np.asarray(g.ys[iy0:iy1 + 1]), y0)
-            band = self.options.ball_field_band
-            if band:
-                # The outer cell rings stay via-free: the surface escapes of
-                # the edge balls pass there (the FX10 kit keeps rings 0-1 free).
-                def inner(values, origin, count):
-                    cell = np.floor((values - origin) / array.pitch_nm).astype(int)
-                    return (cell >= band) & (cell <= count - 2 - band)
-                on_x &= inner(np.asarray(g.xs[ix0:ix1 + 1]), x0, len(array.xs_nm))
-                on_y &= inner(np.asarray(g.ys[iy0:iy1 + 1]), y0, len(array.ys_nm))
-            mask[iy0:iy1 + 1, ix0:ix1 + 1] |= np.outer(on_y, on_x)
-        return mask
+                return np.abs(cells - np.round(cells)) * array.pitch_nm <= pitch / 4
+            for block, mask in zip(g.blocks, masks):
+                ix0, iy0, ix1, iy1 = block.window(x0, y0, x1, y1)
+                if ix0 > ix1 or iy0 > iy1:
+                    continue
+                mask[iy0:iy1 + 1, ix0:ix1 + 1] = False
+                on_x = centred(np.asarray(block.xs[ix0:ix1 + 1]), x0, block.pitch)
+                on_y = centred(np.asarray(block.ys[iy0:iy1 + 1]), y0, block.pitch)
+                band = self.options.ball_field_band
+                if band:
+                    # The outer cell rings stay via-free: the surface escapes of
+                    # the edge balls pass there (the FX10 kit keeps rings 0-1 free).
+                    def inner(values, origin, count):
+                        cell = np.floor((values - origin) / array.pitch_nm).astype(int)
+                        return (cell >= band) & (cell <= count - 2 - band)
+                    on_x &= inner(np.asarray(block.xs[ix0:ix1 + 1]), x0, len(array.xs_nm))
+                    on_y &= inner(np.asarray(block.ys[iy0:iy1 + 1]), y0, len(array.ys_nm))
+                mask[iy0:iy1 + 1, ix0:ix1 + 1] |= np.outer(on_y, on_x)
+        if masks is None:
+            return None
+        # (ny, nx) on a uniform lattice; one entry per column on a nested one.
+        return masks[0] if len(masks) == 1 else np.concatenate([mask.ravel() for mask in masks])
 
     def _net_id(self, name: str) -> int:
         if name not in self.net_ids:
@@ -970,7 +1073,7 @@ class _Router:
 
     def _obstacles(self):
         index = self.clearance
-        g = self.grid
+        g = self.lattice
         layer_index = {layer: i for i, layer in enumerate(g.layers)}
         obstacles: list[_Obstacle] = []
         for item in index._objects:
@@ -1007,7 +1110,7 @@ class _Router:
         return obstacles, holes
 
     def _spec(self, net) -> _NetSpec | None:
-        board, g = self.board, self.grid
+        board, g = self.board, self.lattice
         rule = self.rules.get(net.name)
         width = rule.width_nm if rule and rule.width_nm else board.rules.default_track_width_nm
         clearance = max(board.rules.minimum_clearance_nm, rule.clearance_nm or 0 if rule else 0)
@@ -1069,9 +1172,11 @@ class _Router:
         for key in ("neck", "neck_mid", "region", "plane"):
             nodes = getattr(spec, key)
             spec.arrays[key] = np.fromiter(nodes, dtype=np.int64, count=len(nodes))
-        xs = [self.grid.unpack(node)[1] for comp in spec.components for node, _, _ in comp]
-        ys = [self.grid.unpack(node)[2] for comp in spec.components for node, _, _ in comp]
-        spec.span = (max(xs) - min(xs) + max(ys) - min(ys)) if xs else 0
+        # Manhattan extent of the attach candidates in pitches (an ordering key).
+        points = [g.point(node) for comp in spec.components for node, _, _ in comp]
+        spec.span = ((max(p.x_nm for p in points) - min(p.x_nm for p in points)
+                      + max(p.y_nm for p in points) - min(p.y_nm for p in points)) // self.pitch
+                     if points else 0)
         return spec
 
     def _plane_via_taps(self, name: str, spec: _NetSpec, planes) -> frozenset[int]:
@@ -1079,38 +1184,38 @@ class _Router:
         already land in its plane: a pad reaches the plane by joining such a
         via on its own layer, without a new via (reference layouts share
         return vias between a ball and its bypass capacitor)."""
-        g = self.grid
+        g = self.lattice
         layers_all = list(g.layers)
         taps = set()
         for via in self.board.vias:
             if via.net != name:
                 continue
-            ix = int(round((via.position.x_nm - g.x0) / g.pitch))
-            iy = int(round((via.position.y_nm - g.y0) / g.pitch))
-            if not (0 <= ix < g.nx and 0 <= iy < g.ny):
+            site = g.snap(0, via.position)
+            if site is None:
                 continue
+            column = g.column(site)
             span = layers_all[layers_all.index(via.from_layer):layers_all.index(via.to_layer) + 1]
             # The plane must surround the via (fill reaches it from all
-            # sides), not just touch it at one raster node. Between a ball
-            # grid's vias nothing is that free, so there (plane_fill_width)
-            # fill touching the via's own pad at two nodes or more counts,
-            # as zone fill connects any via it reaches.
-            reach = max(1, int(round((via.size_nm / 2 + spec.clearance) / g.pitch)) + 1)
-            touch = max(1, int(np.ceil(via.size_nm / 2 / g.pitch)))
+            # sides), not just touch it at one raster node.
+            reach = max(1, int(round((via.size_nm / 2 + spec.clearance) / g.step_nm(site))) + 1)
+            around = ((reach, 0), (-reach, 0), (0, reach), (0, -reach))
+            # Between a ball grid's vias nothing is that free, so there
+            # (plane_fill_width) fill touching the via's own pad at two nodes
+            # or more counts, as zone fill connects any via it reaches.
+            touch = max(1, int(np.ceil(via.size_nm / 2 / g.step_nm(site))))
+            square = tuple((dx, dy) for dx in range(-touch, touch + 1) for dy in range(-touch, touch + 1))
             def surrounded(index):
+                node = g.layer_node(column, index)
                 if self.options.plane_fill_width:
-                    return sum(1 for dx in range(-touch, touch + 1) for dy in range(-touch, touch + 1)
-                               if 0 <= ix + dx < g.nx and 0 <= iy + dy < g.ny
-                               and g.index(index, ix + dx, iy + dy) in planes) >= 2
-                return all(0 <= ix + dx < g.nx and 0 <= iy + dy < g.ny
-                           and g.index(index, ix + dx, iy + dy) in planes
-                           for dx, dy in ((reach, 0), (-reach, 0), (0, reach), (0, -reach)))
+                    return sum(1 for near in g.offset_nodes(node, square).tolist() if near in planes) >= 2
+                ring = g.offset_nodes(node, around)
+                return len(ring) == len(around) and all(node in planes for node in ring.tolist())
             if not any(surrounded(layers_all.index(layer)) for layer in span):
                 continue
             for layer in span:
                 index = layers_all.index(layer)
                 if index in spec.layers:
-                    taps.add(g.index(index, ix, iy))
+                    taps.add(g.layer_node(column, index))
         return frozenset(taps)
 
     def _zone_regions(self, name: str, spec: _NetSpec):
@@ -1122,16 +1227,11 @@ class _Router:
         plane copper are pours that must be joined; pieces on a plane layer
         are fragments (split islands, cut-off plane) joined when possible.
         """
+        if self.nested:
+            return self._zone_regions_nested(name, spec)
         from .plane_estimate import _label
-        g = self.grid
-        if self.options.plane_fill_width:
-            # Zone fill is bound by the board minimum width and clearance,
-            # not by the net's track width: a 0.4 mm rail still fills the
-            # 0.1 mm necks between a ball grid's vias.
-            owner, _ = self.rasters.track(self.board.rules.minimum_track_width_nm,
-                                          self.board.rules.minimum_clearance_nm)
-        else:
-            owner, _ = self.rasters.track(spec.width, spec.clearance)
+        g = self.lattice
+        owner, _ = self.rasters.track(*self._fill_class(spec))
         owner_arr = np.asarray(owner, dtype=np.int32).reshape(g.nl, g.ny, g.nx)
         free = (owner_arr == _FREE) | (owner_arr == spec.nid)
         per_layer: dict[int, np.ndarray] = {}
@@ -1158,7 +1258,7 @@ class _Router:
             for k, label in enumerate(order):
                 if sizes[label] < minimum and k:
                     break
-                found.append(np.flatnonzero(flat == label) + index * g.plane)
+                found.append(g.layer_node(np.flatnonzero(flat == label), index))
             pieces[index] = found
         if not pieces:
             return frozenset(), [], []
@@ -1173,11 +1273,115 @@ class _Router:
             optional.extend(r.tolist() for r in rest)
         return frozenset(planes), islands, optional
 
+    def _label_nested(self, mask: np.ndarray) -> tuple[np.ndarray, int]:
+        """4-connected labels of a per-column mask of a nested lattice.
+
+        Each block is labelled on its own dense raster; labels of portal
+        twins that are both in the mask are then joined (union-find), so a
+        region crossing a patch boundary is one piece. Returns per-column
+        labels (0: outside the mask) and the label count.
+        """
+        from .plane_estimate import _label
+        g = self.lattice
+        labels = np.zeros(g.plane, dtype=np.int64)
+        total = 0
+        for block in g.blocks:
+            start, end = block.column_offset, block.column_offset + block.plane
+            part, count = _label(mask[start:end].reshape(block.ny, block.nx))
+            flat = part.ravel().astype(np.int64)
+            flat[flat > 0] += total
+            labels[start:end] = flat
+            total += count
+        if not total:
+            return labels, 0
+        base, fine = g.portal_pairs
+        a, b = labels[base], labels[fine]
+        join = (a > 0) & (b > 0) & (a != b)
+        parent = list(range(total + 1))
+
+        def find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        for x, y in sorted(set(zip(a[join].tolist(), b[join].tolist()))):
+            rx, ry = find(x), find(y)
+            if rx != ry:
+                parent[max(rx, ry)] = min(rx, ry)
+        roots = np.asarray([find(x) for x in range(total + 1)], dtype=np.int64)
+        _, compact = np.unique(roots, return_inverse=True)
+        compact = compact.reshape(-1)
+        return compact[labels], int(compact.max())
+
+    def _column_weights(self) -> np.ndarray:
+        weights = getattr(self, "_weights_cache", None)
+        if weights is None:
+            weights = self._weights_cache = self.lattice.column_weight()
+        return weights
+
+    def _fill_class(self, spec: _NetSpec) -> tuple[int, int]:
+        """(width, clearance) a zone net's fill is rasterized with.
+
+        Zone fill is bound by the board minimum width and clearance, not by
+        the net's track width (``plane_fill_width``): a 0.4 mm rail still
+        fills the 0.1 mm necks between a ball grid's vias.
+        """
+        if self.options.plane_fill_width:
+            return self.board.rules.minimum_track_width_nm, self.board.rules.minimum_clearance_nm
+        return spec.width, spec.clearance
+
+    def _zone_regions_nested(self, name: str, spec: _NetSpec):
+        """``_zone_regions`` on a nested lattice: pieces labelled per block and
+        joined across portals; piece sizes are areas in base cells."""
+        g = self.lattice
+        plane = g.plane
+        owner = self.rasters.track_arrays(*self._fill_class(spec))[0].reshape(g.nl, plane)
+        free = (owner == _FREE) | (owner == spec.nid)
+        xs, ys = g.column_x.astype(np.float64), g.column_y.astype(np.float64)
+        per_layer: dict[int, np.ndarray] = {}
+        for zone in self.board.zones:
+            if zone.net != name:
+                continue
+            inside = _polygon_inside(zone.outline.outer.vertices, xs, ys)
+            for hole in zone.outline.holes:
+                inside &= ~_polygon_inside(hole.vertices, xs, ys)
+            for layer in zone.layers:
+                index = g.layers.index(layer)
+                mask = inside & free[index]
+                per_layer[index] = per_layer[index] | mask if index in per_layer else mask
+        minimum = max(4, int(self.options.plane_piece_area_nm2 // (g.pitch * g.pitch)))
+        weights = self._column_weights()
+        pieces: dict[int, list[tuple[float, np.ndarray]]] = {}
+        for index, mask in per_layer.items():
+            labels, count = self._label_nested(mask)
+            if not count:
+                continue
+            sizes = np.bincount(labels, weights=weights, minlength=count + 1)
+            order = np.argsort(-sizes[1:], kind="stable") + 1
+            found = []
+            for k, label in enumerate(order):
+                if sizes[label] < minimum and k:
+                    break
+                found.append((float(sizes[label]), np.flatnonzero(labels == label) + index * plane))
+            pieces[index] = found
+        if not pieces:
+            return frozenset(), [], []
+        largest = max(found[0][0] for found in pieces.values())
+        planes, islands, optional = set(), [], []
+        for index, found in pieces.items():
+            (area, first), rest = found[0], found[1:]
+            if area >= largest * self.options.plane_piece_fraction:
+                planes.update(first.tolist())
+            else:
+                islands.append(first.tolist())
+            optional.extend(nodes.tolist() for _, nodes in rest)
+        return frozenset(planes), islands, optional
+
     def _neck_nodes(self, net, spec: _NetSpec, length: int):
         """Breakout-region nodes, and those legal there only at the neck width."""
         from .drc import placed_pad_shape
         from .placement import transformed_local_point
-        g, board = self.grid, self.board
+        g, board = self.lattice, self.board
         main, main_mid = self.rasters.track(spec.width, spec.clearance)
         neck, neck_mid = self.rasters.track(spec.neck_width, spec.neck_clearance)
         nid = spec.nid
@@ -1191,22 +1395,24 @@ class _Router:
                 shape = placed_pad_shape(transformed_local_point(pose, land.position), land, pose)
                 reach = shape.radius_nm + length
                 xs = [p.x_nm for p in shape.spine]; ys = [p.y_nm for p in shape.spine]
-                ix0, iy0, ix1, iy1 = g.window(min(xs) - reach, min(ys) - reach, max(xs) + reach, max(ys) + reach)
-                if ix0 > ix1 or iy0 > iy1:
-                    continue
-                wx = self.rasters.px[iy0:iy1 + 1, ix0:ix1 + 1]
-                wy = self.rasters.py[iy0:iy1 + 1, ix0:ix1 + 1]
-                # Strictly inside, with a small margin for the centreline test.
-                inside = _spine_distance(shape.spine, wx, wy) < reach - g.pitch // 8
-                for jy, jx in zip(*inside.nonzero()):
-                    iy, ix = iy0 + int(jy), ix0 + int(jx)
-                    for layer in spec.layers:
-                        node = g.index(layer, ix, iy)
-                        region.add(node)
-                        if main[node] not in (_FREE, nid) and neck[node] in (_FREE, nid):
-                            nodes.add(node)
-                        if main_mid[node] not in (_FREE, nid) and neck_mid[node] in (_FREE, nid):
-                            cells.add(node)
+                for view in self.rasters.views:
+                    block = view.block
+                    window = block.window(min(xs) - reach, min(ys) - reach, max(xs) + reach, max(ys) + reach)
+                    ix0, iy0, ix1, iy1 = window
+                    if ix0 > ix1 or iy0 > iy1:
+                        continue
+                    wx = view.px[iy0:iy1 + 1, ix0:ix1 + 1]
+                    wy = view.py[iy0:iy1 + 1, ix0:ix1 + 1]
+                    # Strictly inside, with a small margin for the centreline test.
+                    inside = _spine_distance(shape.spine, wx, wy) < reach - block.pitch // 8
+                    for column in block.window_columns(window, inside).tolist():
+                        for layer in spec.layers:
+                            node = g.layer_node(column, layer)
+                            region.add(node)
+                            if main[node] not in (_FREE, nid) and neck[node] in (_FREE, nid):
+                                nodes.add(node)
+                            if main_mid[node] not in (_FREE, nid) and neck_mid[node] in (_FREE, nid):
+                                cells.add(node)
         return frozenset(region), frozenset(nodes), frozenset(cells)
 
     def _components(self, net, spec: _NetSpec):
@@ -1235,7 +1441,7 @@ class _Router:
                 port = ports.get(pad)
                 if port is not None:
                     # A hard macro exposes this pad group only at its port.
-                    layers = tuple(self.grid.layers.index(l) for l in macro_port_layers(board, port))
+                    layers = tuple(self.lattice.layers.index(l) for l in macro_port_layers(board, port))
                     anchors.append((port.position, layers))
                     continue
                 pad_anchors = self._pad_anchors(pad, spec)
@@ -1254,17 +1460,16 @@ class _Router:
             for index, via in enumerate(board.vias):
                 if via.net != net.name or graph.roots.get(f"via:{index}") != root:
                     continue
-                first, last = sorted((self.grid.layers.index(via.from_layer),
-                                      self.grid.layers.index(via.to_layer)))
+                first, last = sorted((self.lattice.layers.index(via.from_layer),
+                                      self.lattice.layers.index(via.to_layer)))
                 layers = tuple(range(first, last + 1))
                 anchors.append((via.position, layers))
-                ix = round((via.position.x_nm - self.grid.x0) / self.grid.pitch)
-                iy = round((via.position.y_nm - self.grid.y0) / self.grid.pitch)
-                if 0 <= ix < self.grid.nx and 0 <= iy < self.grid.ny:
-                    joined.update(self.grid.index(layer, ix, iy) for layer in layers)
+                site = self.lattice.snap(0, via.position)
+                if site is not None:
+                    joined.update(self.lattice.layer_node(self.lattice.column(site), layer) for layer in layers)
             for index, track in enumerate(board.tracks):
                 if track.net == net.name and graph.roots.get(f"track:{index}") == root:
-                    layer = self.grid.layers.index(track.layer)
+                    layer = self.lattice.layers.index(track.layer)
                     anchors.append((track.start, (layer,)))
                     anchors.append((track.end, (layer,)))
             boundary = [ports[pad] for pad in members if pad in ports]
@@ -1272,18 +1477,17 @@ class _Router:
                 # Source-copper reuse must not expose a macro's private vias or
                 # bypass its declared boundary stub. Only the proved ports are
                 # public anchors, even when union/find roots carry pad labels.
-                anchors = [(port.position, tuple(self.grid.layers.index(layer)
+                anchors = [(port.position, tuple(self.lattice.layers.index(layer)
                             for layer in macro_port_layers(board, port))) for port in boundary]
-                public_nodes = {self.grid.index(layer,
-                    round((position.x_nm - self.grid.x0) / self.grid.pitch),
-                    round((position.y_nm - self.grid.y0) / self.grid.pitch))
-                    for position, layers in anchors for layer in layers}
+                # A port off the lattice has no node (it cannot match a joined node).
+                public_nodes = {self.lattice.snap(layer, position)
+                                for position, layers in anchors for layer in layers}
                 joined.intersection_update(public_nodes)
             required = [self.required_accesses[pad] for pad in members if pad in self.required_accesses]
             if required:
                 # Land and existing-copper alternatives would bypass the retained
                 # witness and leave its far end dangling after the dependency rip-up.
-                anchors = [(access.position, (self.grid.layers.index(access.layer),))
+                anchors = [(access.position, (self.lattice.layers.index(access.layer),))
                            for access in required]
             # Existing via taps count only on the actual source barrel span.
             if joined:
@@ -1313,7 +1517,7 @@ class _Router:
         the far side), because pour on its own layer can be walled off again
         by later signal copper."""
         poses = {p.reference: p for p in self.board.placements}
-        return frozenset(self.grid.layers.index(CopperLayer.FRONT if poses[pad.component].side.value == "front"
+        return frozenset(self.lattice.layers.index(CopperLayer.FRONT if poses[pad.component].side.value == "front"
                                                 else CopperLayer.BACK)
                          for pad in pads if pad.component in poses)
 
@@ -1329,9 +1533,9 @@ class _Router:
             position = transformed_local_point(pose, land.position)
             if land.kind is PadKind.SMD:
                 side = CopperLayer.FRONT if pose.side.value == "front" else CopperLayer.BACK
-                layers = (self.grid.layers.index(side),)
+                layers = (self.lattice.layers.index(side),)
             else:
-                layers = tuple(range(self.grid.nl))
+                layers = tuple(range(self.lattice.nl))
             # Outward axis from the package centre, for fine-pitch lead-ins.
             dx, dy = position.x_nm - pose.position.x_nm, position.y_nm - pose.position.y_nm
             outward = None
@@ -1343,28 +1547,25 @@ class _Router:
     def _attach(self, anchors, spec: _NetSpec):
         """Grid nodes reachable from anchors with exact, checked lead-ins."""
         from .pin_escape import checked_access_path
-        g, options = self.grid, self.options
+        g, options = self.lattice, self.options
         owner, _ = self.rasters.track(spec.width, spec.clearance)
         radius = options.attach_radius_nm
         seen: dict[int, tuple[int, tuple[TrackSegment, ...], float]] = {}
         for anchor in anchors:
             position, layers = anchor[0], anchor[1]
             outward = anchor[2] if len(anchor) > 2 else None
-            ix0, iy0, ix1, iy1 = g.window(position.x_nm - radius, position.y_nm - radius,
-                                          position.x_nm + radius, position.y_nm + radius)
-            near = sorted(((hypot(g.x0 + ix * g.pitch - position.x_nm, g.y0 + iy * g.pitch - position.y_nm), ix, iy)
-                           for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1)))
+            near = _nearest_first(g, position, radius)
             for layer in layers:
                 if layer not in spec.layers:
                     continue
                 found = 0
-                for distance, ix, iy in near:
+                for distance, column, x, y in near:
                     if distance > radius or found >= options.attach_candidates:
                         break
-                    node = g.index(layer, ix, iy)
+                    node = g.layer_node(column, layer)
                     if owner[node] not in (_FREE, spec.nid) and node not in spec.neck:
                         continue
-                    target = Point(g.x0 + ix * g.pitch, g.y0 + iy * g.pitch)
+                    target = Point(x, y)
                     path = None
                     if node not in spec.neck:
                         path = checked_access_path(self.board, self.clearance, spec.name, position, target,
@@ -1374,14 +1575,14 @@ class _Router:
                                                    spec.neck_width, g.layers[layer])
                     if path is None:
                         continue
-                    cost = distance / g.pitch
+                    cost = distance / self.pitch
                     if node not in seen or seen[node][2] > cost:
                         seen[node] = (node, tuple(path), cost)
                     found += 1
                 if found < 2 and outward is not None:
                     self._attach_extended(position, outward, layer, spec, owner, seen)
                 if options.local_escape_radius_nm and not self._reaches_open(
-                        [node for node in seen if node // g.plane == layer], spec):
+                        [node for node in seen if g.layer_of(node) == layer], spec):
                     self._attach_local(position, layer, spec, seen, outward)
         return list(seen.values())
 
@@ -1396,8 +1597,10 @@ class _Router:
         clearance = spec.neck_clearance or spec.clearance
         key = (width, clearance)
         cache = self._open_cache
+        if key not in cache and self.nested:
+            cache[key] = self._open_space_nested(width, clearance)
         if key not in cache:
-            g = self.grid
+            g = self.lattice
             owner, _ = self.rasters.track(width, clearance)
             arr = np.asarray(owner, dtype=np.int32).reshape(g.nl, g.ny, g.nx)
             minimum = max(16, int(self.options.open_space_area_nm2 // (g.pitch * g.pitch)))
@@ -1409,9 +1612,28 @@ class _Router:
                 sizes = np.bincount(labels.ravel(), minlength=count + 1)
                 big = sizes >= minimum
                 big[0] = False
-                result[layer * g.plane:(layer + 1) * g.plane] = big[labels.ravel()]
+                result[g.layer_node(0, layer):g.layer_node(0, layer + 1)] = big[labels.ravel()]
             cache[key] = result
         return cache[key]
+
+    def _open_space_nested(self, width: int, clearance: int) -> np.ndarray:
+        """``_open_space`` on a nested lattice: free regions labelled per block,
+        joined across portals, measured as areas in base cells."""
+        g = self.lattice
+        plane = g.plane
+        arr = self.rasters.track_arrays(width, clearance)[0].reshape(g.nl, plane)
+        minimum = max(16, int(self.options.open_space_area_nm2 // (g.pitch * g.pitch)))
+        weights = self._column_weights()
+        result = np.zeros(g.size, dtype=bool)
+        for layer in range(g.nl):
+            labels, count = self._label_nested(arr[layer] == _FREE)
+            if not count:
+                continue
+            sizes = np.bincount(labels, weights=weights, minlength=count + 1)
+            big = sizes >= minimum
+            big[0] = False
+            result[layer * plane:(layer + 1) * plane] = big[labels]
+        return result
 
     def _reaches_open(self, nodes, spec: _NetSpec, limit: int | None = None) -> bool:
         """Whether a short flood from ``nodes`` (through free or own-net cells
@@ -1420,7 +1642,7 @@ class _Router:
             return False
         if limit is None:
             limit = self.options.open_flood_limit
-        g = self.grid
+        g = self.lattice
         open_space = self._open_space(spec)
         owner, _ = self.rasters.track(spec.neck_width or spec.width, spec.neck_clearance or spec.clearance)
         nid = spec.nid
@@ -1429,14 +1651,10 @@ class _Router:
             node = stack.pop()
             if open_space[node]:
                 return True
-            layer, rest = divmod(node, g.plane)
-            y, x = divmod(rest, g.nx)
-            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                if 0 <= x + dx < g.nx and 0 <= y + dy < g.ny:
-                    other = node + dy * g.nx + dx
-                    if other not in visited and owner[other] in (_FREE, nid):
-                        visited.add(other)
-                        stack.append(other)
+            for other, _ in g.neighbours(node, diagonals=False):
+                if other not in visited and owner[other] in (_FREE, nid):
+                    visited.add(other)
+                    stack.append(other)
         return len(visited) >= limit
 
     def _attach_local(self, position, layer, spec, seen, outward=None) -> None:
@@ -1448,35 +1666,37 @@ class _Router:
         nearest grid nodes that lie in open space.
         """
         from .pin_access import local_access_path
-        g, options = self.grid, self.options
+        g, options = self.lattice, self.options
         if self._local_spent >= options.local_escape_limit:
             return
         self._local_spent += 1
         open_space = self._open_space(spec)
         width = spec.neck_width or spec.width
         reach = options.local_escape_radius_nm
-        ix0, iy0, ix1, iy1 = g.window(position.x_nm - reach, position.y_nm - reach,
-                                      position.x_nm + reach, position.y_nm + reach)
         owner, _ = self.rasters.track(spec.width, spec.clearance)
-        def rank(ix, iy):
-            dx, dy = g.x0 + ix * g.pitch - position.x_nm, g.y0 + iy * g.pitch - position.y_nm
+        def rank(item):
+            column, x, y = item
+            dx, dy = x - position.x_nm, y - position.y_nm
             distance = hypot(dx, dy)
             # Targets ahead of the pin (along its outward axis) first: a pin's
             # exit is rarely back across its own package.
             behind = outward is not None and dx * outward[0] + dy * outward[1] < 0
-            return (distance * (2.0 if behind else 1.0), distance, ix, iy)
-        near = sorted(rank(ix, iy) for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1))
+            return (distance * (2.0 if behind else 1.0), distance, column, x, y)
+        # Stable sort of the lattice's x-major cover: ties keep that order.
+        near = sorted(map(rank, g.cover(position.x_nm - reach, position.y_nm - reach,
+                                        position.x_nm + reach, position.y_nm + reach)),
+                      key=lambda item: (item[0], item[1]))
         found = tries = misses = 0
-        for _, distance, ix, iy in near:
+        for _, distance, column, x, y in near:
             # A failed maze is the expensive case; four in a row mean the pin
             # is enclosed beyond this radius (a dense array without a dogbone).
             if distance > reach or found >= 3 or tries >= 12 or misses >= 4:
                 break
-            node = g.index(layer, ix, iy)
+            node = g.layer_node(column, layer)
             if not open_space[node] or owner[node] != _FREE:
                 continue
             tries += 1
-            target = Point(g.x0 + ix * g.pitch, g.y0 + iy * g.pitch)
+            target = Point(x, y)
             path = local_access_path(self.board, self.clearance, spec.name, position, target,
                                      g.layers[layer], width, step_nm=options.local_escape_step_nm,
                                      detour_nm=options.local_escape_detour_nm,
@@ -1485,7 +1705,7 @@ class _Router:
                 misses += 1
                 continue
             misses = 0
-            cost = 2 * distance / g.pitch
+            cost = 2 * distance / self.pitch
             if node not in seen or seen[node][2] > cost:
                 seen[node] = (node, tuple(path), cost)
             found += 1
@@ -1499,7 +1719,7 @@ class _Router:
         if outward is None:
             return
         from .pin_escape import checked_access_path
-        g = self.grid
+        g = self.lattice
         widths = [spec.width] + ([spec.neck_width] if spec.neck_width else [])
         reach = self.options.attach_extension_reach_nm
         for extension in self.options.attach_extension_steps_nm:
@@ -1508,23 +1728,19 @@ class _Router:
                 if not self.clearance.can_track(spec.name, position, corner, width, g.layers[layer]):
                     continue
                 stem = TrackSegment(spec.name, position, corner, width, g.layers[layer])
-                ix0, iy0, ix1, iy1 = g.window(corner.x_nm - reach, corner.y_nm - reach,
-                                              corner.x_nm + reach, corner.y_nm + reach)
-                near = sorted(((hypot(g.x0 + ix * g.pitch - corner.x_nm, g.y0 + iy * g.pitch - corner.y_nm), ix, iy)
-                               for ix in range(ix0, ix1 + 1) for iy in range(iy0, iy1 + 1)))
                 found = 0
-                for distance, ix, iy in near:
+                for distance, column, x, y in _nearest_first(g, corner, reach):
                     if found >= 3:
                         break
-                    node = g.index(layer, ix, iy)
+                    node = g.layer_node(column, layer)
                     if owner[node] not in (_FREE, spec.nid):
                         continue
-                    target = Point(g.x0 + ix * g.pitch, g.y0 + iy * g.pitch)
+                    target = Point(x, y)
                     path = checked_access_path(self.board, self.clearance, spec.name, corner, target,
                                                width, g.layers[layer])
                     if path is None:
                         continue
-                    cost = (extension + distance) / g.pitch
+                    cost = (extension + distance) / self.pitch
                     if node not in seen or seen[node][2] > cost:
                         seen[node] = (node, (stem, *path), cost)
                     found += 1
@@ -1535,11 +1751,11 @@ class _Router:
 
     def _route_plane_net(self, spec: _NetSpec, present: float) -> _NetRoute:
         """Join every pad group (and small pour) of a zone net to its plane."""
-        g = self.grid
+        g = self.lattice
         route = _NetRoute([], [], set(), set(), set(), set(), False, 0.0)
         targets = set(spec.plane)
         missing = 0
-        whole = (0, 0, g.nx - 1, g.ny - 1)
+        whole = g.full_box()
         owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
         via_owner = self.rasters.via(spec.via_size, spec.via_drill, spec.clearance)
         margin = self._margin(spec)
@@ -1566,7 +1782,7 @@ class _Router:
             leads = {node: lead for node, lead, _ in component}
             if excluded is not None:
                 # Explicit copper: the path must end on another layer's plane.
-                allowed = {node for node in targets if node // g.plane not in excluded}
+                allowed = {node for node in targets if g.layer_of(node) not in excluded}
                 found = self._astar(spec, sources, allowed, present, whole, whole,
                                     owner, mid_owner, via_owner)
                 if found is None:
@@ -1577,9 +1793,7 @@ class _Router:
                 route.leads.append(tuple(leads.get(path[0], ())))
                 targets.update(path)
                 continue
-            xs = [g.unpack(n)[1] for n in sources]; ys = [g.unpack(n)[2] for n in sources]
-            box = (max(0, min(xs) - margin), max(0, min(ys) - margin),
-                   min(g.nx - 1, max(xs) + margin), min(g.ny - 1, max(ys) + margin))
+            box = g.grow_box(g.box_of(sources), margin)
             found = self._astar(spec, sources, targets, present, box, whole, owner, mid_owner, via_owner)
             if found is None:
                 found = self._astar(spec, sources, targets, present, whole, whole, owner, mid_owner, via_owner)
@@ -1601,7 +1815,7 @@ class _Router:
     def _route_length_nm(self, route: _NetRoute) -> float:
         leads = sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm)
                     for lead in route.leads for t in lead)
-        return route.length * self.grid.pitch + leads
+        return route.length * self.pitch + leads   # route.length is in (base) pitches
 
     def _route_net(self, spec: _NetSpec, present: float) -> _NetRoute:
         route = self._route_net_budgeted(spec, present)
@@ -1626,15 +1840,32 @@ class _Router:
             # Over the net's via budget: search again with vias priced far
             # higher; a budget overrun stays a failure, not a DRC error.
             factor = spec.via_factor
-            spec.via_factor = factor * self.options.via_overrun_factor
             try:
-                retry = self._route_net_once(spec, present)
+                # Keep negotiating real soft costs before using a discounted
+                # proposal. A single fixed via price can leave several hard-
+                # budget nets repeatedly selecting the same conflicting path.
+                for multiplier in (self.options.via_overrun_factor * step for step in (1, 10, 100, 1000)):
+                    spec.via_factor = factor * multiplier
+                    retry = self._route_net_once(spec, present)
+                    if retry.connected and len(retry.via_xy) < len(route.via_xy):
+                        route = retry
+                    if route.connected and len(route.via_xy) <= spec.via_budget:
+                        break
+                if len(route.via_xy) > spec.via_budget:
+                    spec.via_factor = factor * self.options.via_overrun_factor
+                    # A hard via budget must be able to contest a corridor
+                    # priced out by mutable routes or stale history. Retain all
+                    # source obstacles and return masks; only proposal costs
+                    # change. Normal claims and exact commit remain mandatory.
+                    self._ignore_soft_costs = True
+                    try:
+                        direct = self._route_net_once(spec, 0.0)
+                    finally:
+                        self._ignore_soft_costs = False
+                    if direct.connected and len(direct.via_xy) <= spec.via_budget:
+                        route = direct
             finally:
                 spec.via_factor = factor
-            # An unconnected retry trivially has fewer vias; keep the original
-            # route then, so the failure names the via shortfall.
-            if retry.connected and len(retry.via_xy) <= len(route.via_xy):
-                route = retry
             if len(route.via_xy) > spec.via_budget:
                 route = _NetRoute([], [], set(), set(), set(), set(), False, 0.0,
                                   f"needs {len(route.via_xy)} new vias, max_vias leaves {spec.via_budget}")
@@ -1643,7 +1874,7 @@ class _Router:
     def _route_net_once(self, spec: _NetSpec, present: float) -> _NetRoute:
         if spec.plane:
             return self._route_plane_net(spec, present)
-        g = self.grid
+        g = self.lattice
         components = [c for c in spec.components]
         route = _NetRoute([], [], set(), set(), set(), set(), False, 0.0)
         if len(components) < 2:
@@ -1659,11 +1890,10 @@ class _Router:
         used_leads: dict[tuple[TrackSegment, ...], bool] = {}
         remaining = list(range(1, len(components)))
         # Order targets by distance from the first component.
-        base = g.unpack(next(iter(tree)))
+        base = g.point(next(iter(tree)))
         def dist(ci):
-            node = components[ci][0][0]
-            _, x, y = g.unpack(node)
-            return abs(x - base[1]) + abs(y - base[2])
+            here = g.point(components[ci][0][0])
+            return abs(here.x_nm - base.x_nm) + abs(here.y_nm - base.y_nm)
         remaining.sort(key=dist)
         first_root = True
         while remaining:
@@ -1705,7 +1935,10 @@ class _Router:
         return route
 
     def _finish_route(self, route: _NetRoute, spec: _NetSpec) -> None:
-        g = self.grid
+        if self.nested:
+            self._finish_route_nested(route, spec)
+            return
+        g = self.lattice
         nodes: set[int] = set()
         claims: set[int] = set()
         via_claims: set[int] = set()
@@ -1723,48 +1956,51 @@ class _Router:
                         spec.via_drill / 2 + self.board.rules.minimum_hole_clearance_nm)
         via_radius = (via_reach + self.default_width / 2) / g.pitch
         via_via_radius = (via_reach + spec.via_size / 2) / g.pitch
+        prospective_reach = max(self._candidate_via_size / 2 +
+                                max(spec.clearance, self._candidate_clearance),
+                                self._candidate_via_drill / 2 + self.board.rules.minimum_hole_clearance_nm)
+        track_via_radius = (prospective_reach + spec.width / 2) / g.pitch
         length = 0.0
         # Layer-change sites: one via per xy, spanning every layer the
         # route changes between there (see _site_spans).
         changes: dict[int, tuple[int, int]] = {}
+        layer_of, offset_nodes, delta = g.layer_of, g.offset_nodes, g.delta
         for path in route.paths:
             for a, b in zip(path, path[1:]):
-                la, xa, ya = g.unpack(a)
-                lb, xb, yb = g.unpack(b)
+                la, lb = layer_of(a), layer_of(b)
                 if la != lb:
-                    xy = ya * g.nx + xa
+                    xy = g.column(a)
                     low, high = changes.get(xy, (la, la))
                     changes[xy] = (min(low, la, lb), max(high, la, lb))
                     continue
-                dx, dy = xb - xa, yb - ya
+                dx, dy = delta(a, b)
                 length += hypot(dx, dy)
-                for ox, oy in _segment_offsets_cached(dx, dy, track_radius):
-                    x, y = xa + ox, ya + oy
-                    if 0 <= x < g.nx and 0 <= y < g.ny:
-                        claims.add(la * g.plane + y * g.nx + x)
+                claims.update(offset_nodes(a, _segment_offsets_cached(dx, dy, track_radius)).tolist())
+                # A through via proposed later must keep clear of this track
+                # on every barrel layer: reserve its sites as via claims.
+                via_claims.update(g.offset_columns(g.column(a),
+                                  _segment_offsets_cached(dx, dy, track_via_radius)).tolist())
             nodes.update(path)
             if len(path) == 1:
-                la, xa, ya = g.unpack(path[0])
-                for ox, oy in _disc_offsets_cached(track_radius):
-                    x, y = xa + ox, ya + oy
-                    if 0 <= x < g.nx and 0 <= y < g.ny:
-                        claims.add(la * g.plane + y * g.nx + x)
+                claims.update(offset_nodes(path[0], _disc_offsets_cached(track_radius)).tolist())
         # Lead-ins are off-grid copper: claim around them and treat the
         # nodes along them as path nodes, so they negotiate like paths.
-        layer_of = {layer: i for i, layer in enumerate(g.layers)}
+        index_of = {layer: i for i, layer in enumerate(g.layers)}
         for leads in route.leads:
             for track in leads:
-                layer = layer_of[track.layer]
+                layer = index_of[track.layer]
                 radius_nm = track.width_nm / 2 + spec.clearance + max(self.default_width, track.width_nm) / 2
                 near = g.pitch / 2
-                for node, distance in self._segment_nodes(track.start, track.end, layer, radius_nm):
+                for node, distance in g.segment_nodes(layer, track.start, track.end, radius_nm):
                     claims.add(node)
                     if distance <= near:
                         nodes.add(node)
+                for node, _ in self._segment_nodes(track.start, track.end, layer,
+                                                   prospective_reach + track.width_nm / 2):
+                    via_claims.add(node % g.plane)
         via_xy = set(changes)
         spans = self._site_spans(spec.name, changes)
         for xy in via_xy:
-            yv, xv = divmod(xy, g.nx)
             # A via's copper claims only the layers it spans (all of them for
             # a through via, or where no technology serves the site and the
             # copper falls back to the outer span). Via-to-via spacing below
@@ -1775,70 +2011,181 @@ class _Router:
             else:
                 low, high = sorted((g.layers.index(span[0]), g.layers.index(span[1])))
                 via_layers = range(low, high + 1)
+            layer_node = g.layer_node
             if via_body >= 0.5:
-                for ox, oy in _disc_offsets_cached(via_body):
-                    x, y = xv + ox, yv + oy
-                    if 0 <= x < g.nx and 0 <= y < g.ny:
-                        for layer in via_layers:
-                            body[layer * g.plane + y * g.nx + x] = ("via", xy)
-            for ox, oy in _disc_offsets_cached(via_radius):
-                x, y = xv + ox, yv + oy
-                if 0 <= x < g.nx and 0 <= y < g.ny:
+                for column in g.offset_columns(xy, _disc_offsets_cached(via_body)).tolist():
                     for layer in via_layers:
-                        claims.add(layer * g.plane + y * g.nx + x)
-            for ox, oy in _disc_offsets_cached(via_via_radius):
-                x, y = xv + ox, yv + oy
-                if 0 <= x < g.nx and 0 <= y < g.ny:
-                    via_claims.add(y * g.nx + x)
+                        body[layer_node(column, layer)] = ("via", xy)
+            for column in g.offset_columns(xy, _disc_offsets_cached(via_radius)).tolist():
+                for layer in via_layers:
+                    claims.add(layer_node(column, layer))
+            via_claims.update(g.offset_columns(xy, _disc_offsets_cached(via_via_radius)).tolist())
         route.nodes, route.via_xy = nodes, via_xy
         route.claims, route.via_claims = claims, via_claims
         route.body = {node: owner for node, owner in body.items() if node not in nodes}
         route.length = length
 
+    # Nested-lattice claims: a claim disc (or a step's capsule) that lies
+    # wholly in its node's own block uses that block's offset tables, the
+    # radius scaled by the block's factor; one reaching across a patch
+    # boundary is collected geometrically from every block it overlaps.
+    # Portal twins are claimed together (they are one site).
+
+    def _nested_step_claims(self, a: int, b: int, pa: Point, pb: Point, radius: float):
+        g = self.lattice
+        block = g.blocks[g.block_index(a % g.plane)]
+        r = radius * self.pitch
+        if g.owns(block, min(pa.x_nm, pb.x_nm) - r, min(pa.y_nm, pb.y_nm) - r,
+                  max(pa.x_nm, pb.x_nm) + r, max(pa.y_nm, pb.y_nm) + r):
+            dx, dy = g.delta(a, b)
+            return g.offset_nodes(a, _segment_offsets_cached(dx, dy, radius * block.factor)).tolist()
+        return [node for node, _ in g.segment_nodes(a // g.plane, pa, pb, r)] + [a, b]
+
+    def _nested_disc_columns(self, column: int, radius: float) -> np.ndarray:
+        g = self.lattice
+        block = g.blocks[g.block_index(column)]
+        point = g.column_point(column)
+        r = radius * self.pitch
+        if g.owns(block, point.x_nm - r, point.y_nm - r, point.x_nm + r, point.y_nm + r):
+            return g.offset_columns(column, _disc_offsets_cached(radius * block.factor))
+        return np.union1d(g.columns_within(point, r), [column])
+
+    def _finish_route_nested(self, route: _NetRoute, spec: _NetSpec) -> None:
+        """``_finish_route`` on a nested lattice (lengths in base pitches)."""
+        g = self.lattice
+        plane, pitch = g.plane, self.pitch
+        nodes: set[int] = set()
+        claims: set[int] = set()
+        via_claims: set[int] = set()
+        body: dict = {}
+        via_body = (spec.via_size - self.default_width) / 2 / pitch
+        neighbour = max(self.default_width, spec.width)
+        track_radius = (spec.width / 2 + spec.clearance + neighbour / 2) / pitch
+        via_reach = max(spec.via_size / 2 + spec.clearance,
+                        spec.via_drill / 2 + self.board.rules.minimum_hole_clearance_nm)
+        via_radius = (via_reach + self.default_width / 2) / pitch
+        via_via_radius = (via_reach + spec.via_size / 2) / pitch
+        # As _finish_route: a through via proposed later must keep clear of
+        # this route's tracks on every barrel layer.
+        prospective_reach = max(self._candidate_via_size / 2 + max(spec.clearance, self._candidate_clearance),
+                                self._candidate_via_drill / 2 + self.board.rules.minimum_hole_clearance_nm)
+        track_via_radius = (prospective_reach + spec.width / 2) / pitch
+        length = 0.0
+        changes: dict[int, tuple[int, int]] = {}
+        point = g.point
+        for path in route.paths:
+            moved = False
+            for a, b in zip(path, path[1:]):
+                la, lb = a // plane, b // plane
+                if la != lb:
+                    xy = a % plane
+                    low, high = changes.get(xy, (la, la))
+                    changes[xy] = (min(low, la, lb), max(high, la, lb))
+                    moved = True
+                    continue
+                pa, pb = point(a), point(b)
+                if pa == pb:
+                    continue        # a portal: the twins are one site
+                moved = True
+                length += hypot(pb.x_nm - pa.x_nm, pb.y_nm - pa.y_nm) / pitch
+                claims.update(self._nested_step_claims(a, b, pa, pb, track_radius))
+                via_claims.update(node % plane for node in
+                                  self._nested_step_claims(a, b, pa, pb, track_via_radius))
+            nodes.update(path)
+            if not moved:
+                column = path[0] % plane
+                base = path[0] - column
+                claims.update((self._nested_disc_columns(column, track_radius) + base).tolist())
+        index_of = {layer: i for i, layer in enumerate(g.layers)}
+        for leads in route.leads:
+            for track in leads:
+                layer = index_of[track.layer]
+                radius_nm = track.width_nm / 2 + spec.clearance + max(self.default_width, track.width_nm) / 2
+                for node, distance in g.segment_nodes(layer, track.start, track.end, radius_nm):
+                    claims.add(node)
+                    if distance <= g.step_nm(node) / 2:
+                        nodes.add(node)
+                for node, _ in g.segment_nodes(layer, track.start, track.end,
+                                               prospective_reach + track.width_nm / 2):
+                    via_claims.add(node % plane)
+        via_xy = set(changes)
+        spans = self._site_spans(spec.name, changes)
+        for xy in via_xy:
+            span = spans[xy]
+            if span is None:
+                via_layers = range(g.nl)
+            else:
+                low, high = sorted((g.layers.index(span[0]), g.layers.index(span[1])))
+                via_layers = range(low, high + 1)
+            if via_body >= 0.5:
+                for column in g.columns_with_twins(self._nested_disc_columns(xy, via_body)).tolist():
+                    for layer in via_layers:
+                        body[layer * plane + column] = ("via", xy)
+            for column in self._nested_disc_columns(xy, via_radius).tolist():
+                for layer in via_layers:
+                    claims.add(layer * plane + column)
+            via_claims.update(g.columns_with_twins(self._nested_disc_columns(xy, via_via_radius)).tolist())
+        if via_claims:
+            via_claims = set(g.columns_with_twins(
+                np.fromiter(via_claims, dtype=np.int64, count=len(via_claims))).tolist())
+
+        def closed(values) -> set[int]:
+            return set(g.with_twins(np.fromiter(values, dtype=np.int64, count=len(values))).tolist())
+        nodes, claims = closed(nodes), closed(claims)
+        route.nodes, route.via_xy = nodes, via_xy
+        route.claims, route.via_claims = claims, via_claims
+        route.body = {node: owner for node, owner in body.items() if node not in nodes}
+        route.length = length
+
+    def _routing_history(self):
+        if not getattr(self, "_ignore_soft_costs", False):
+            return self.occupancy.history, self.occupancy.via_history
+        if not hasattr(self, "_zero_history"):
+            if self.occupancy.arrays:
+                self._zero_history = (np.zeros(self.grid.size, dtype=np.float64),
+                                      np.zeros(self.grid.plane, dtype=np.float64))
+            else:
+                self._zero_history = ([0.0] * self.grid.size, [0.0] * self.grid.plane)
+        return self._zero_history
+
     def _lead_penalty(self, lead: tuple[TrackSegment, ...], present: float) -> float:
         """Congestion price of an off-grid lead-in, so attach choices negotiate too."""
-        if not lead:
+        if not lead or getattr(self, "_ignore_soft_costs", False):
             return 0.0
         nodes = self._lead_nodes.get(lead)
         if nodes is None:
-            g = self.grid
+            g = self.lattice
             layer_of = {layer: i for i, layer in enumerate(g.layers)}
             nodes = []
             for track in lead:
-                nodes.extend(node for node, distance in self._segment_nodes(
-                    track.start, track.end, layer_of[track.layer], g.pitch / 2 + 1) )
+                if self.nested:
+                    # Nodes along the lead in their own pitch, each weighted
+                    # by that pitch in base pitches (a price per base pitch).
+                    nodes.extend((node, weight) for node, _, weight in g.segment_nodes_local(
+                        layer_of[track.layer], track.start, track.end, 0.5, 1))
+                    continue
+                nodes.extend(node for node, distance in g.segment_nodes(
+                    layer_of[track.layer], track.start, track.end, g.pitch / 2 + 1))
             self._lead_nodes[lead] = nodes
+        exact = sum(self._lead_history.get(track, 0.0) for track in lead)
         if not nodes:
-            return 0.0
+            return exact
         hist, occ = self.occupancy.history, self.occupancy.occ
+        if self.nested:
+            return float(sum(weight * (hist[n] + present * occ[n]) for n, weight in nodes))
         if not self.occupancy.arrays:
-            return sum(hist[n] + present * occ[n] for n in nodes)
+            return exact + sum(hist[n] + present * occ[n] for n in nodes)
         index = np.asarray(nodes, dtype=np.int64)
-        return float(hist[index].sum() + present * occ[index].sum())
+        return exact + float(hist[index].sum() + present * occ[index].sum())
 
     def _segment_nodes(self, start: Point, end: Point, layer: int, radius_nm: float):
         """(node, distance) for grid nodes strictly within radius of a segment."""
-        g = self.grid
-        ix0, iy0, ix1, iy1 = g.window(min(start.x_nm, end.x_nm) - radius_nm, min(start.y_nm, end.y_nm) - radius_nm,
-                                      max(start.x_nm, end.x_nm) + radius_nm, max(start.y_nm, end.y_nm) + radius_nm)
-        ax, ay, bx, by = start.x_nm, start.y_nm, end.x_nm, end.y_nm
-        dx, dy = bx - ax, by - ay
-        length2 = dx * dx + dy * dy
-        result = []
-        for iy in range(iy0, iy1 + 1):
-            py = g.y0 + iy * g.pitch
-            for ix in range(ix0, ix1 + 1):
-                px = g.x0 + ix * g.pitch
-                t = 0.0 if not length2 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / length2))
-                distance = hypot(px - (ax + t * dx), py - (ay + t * dy))
-                if distance < radius_nm:
-                    result.append((layer * g.plane + iy * g.nx + ix, distance))
-        return result
+        return self.lattice.segment_nodes(layer, start, end, radius_nm)
 
     def _margin(self, spec: _NetSpec) -> int:
         age = self.conflict_age.get(spec.name, 0)
         scale = min(self.options.window_growth_limit, 1 + age // 3)
-        return int(self.options.window_margin_nm * scale // self.grid.pitch)
+        return int(self.options.window_margin_nm * scale // self.lattice.pitch)
 
     def _via_owners(self, spec: _NetSpec, *, as_array=False, span=None):
         """Via proposals for a single-ended net must have existing returns.
@@ -1855,25 +2202,28 @@ class _Router:
         if cached is not None:
             return cached
         from .return_paths import return_span_covers
-        g = self.grid
+        g = self.lattice
         low, high = span if span is not None else (0, g.nl - 1)
-        mask = np.zeros((g.ny, g.nx), dtype=bool)
+        masks = [np.zeros((view.block.ny, view.block.nx), dtype=bool) for view in self.rasters.views]
         limit = rule.maximum_return_via_distance_nm
         for via in self.board.vias:
             if (via.net != rule.return_via_net or via.net == spec.name
                     or not return_span_covers(self.board, via, g.layers[low], g.layers[high])):
                 continue
             x, y = via.position.x_nm, via.position.y_nm
-            x0, y0, x1, y1 = g.window(x-limit, y-limit, x+limit, y+limit)
-            if x0 > x1 or y0 > y1:
-                continue
-            # As with the obstacle raster, numerical membership is a proposal.
-            # Exact integer squared distance is authoritative at commit/DRC.
-            distance = np.hypot(self.rasters.px[y0:y1+1, x0:x1+1]-x,
-                                self.rasters.py[y0:y1+1, x0:x1+1]-y)
-            mask[y0:y1+1, x0:x1+1] |= distance <= limit
+            for view, mask in zip(self.rasters.views, masks):
+                x0, y0, x1, y1 = view.block.window(x-limit, y-limit, x+limit, y+limit)
+                if x0 > x1 or y0 > y1:
+                    continue
+                # As with the obstacle raster, numerical membership is a proposal.
+                # Exact integer squared distance is authoritative at commit/DRC.
+                distance = np.hypot(view.px[y0:y1+1, x0:x1+1]-x, view.py[y0:y1+1, x0:x1+1]-y)
+                mask[y0:y1+1, x0:x1+1] |= distance <= limit
         owners = self.rasters.via_array(spec.via_size, spec.via_drill, spec.clearance, span).copy()
-        owners.reshape((g.ny, g.nx))[~mask] = _FOREIGN
+        if len(masks) == 1:
+            owners.reshape((g.ny, g.nx))[~masks[0]] = _FOREIGN
+        else:
+            owners[~np.concatenate([mask.ravel() for mask in masks])] = _FOREIGN
         spec.arrays[key] = owners
         return owners
 
@@ -1887,7 +2237,7 @@ class _Router:
         if not self.board.stackup.via_technologies:
             return None
         if "via_transitions" not in spec.arrays:
-            g = self.grid
+            g = self.lattice
             owners = {}
             pointers = np.zeros(g.nl * g.nl, dtype=np.uintp)
             for low in spec.layers:
@@ -1934,7 +2284,7 @@ class _Router:
         cache = self.__dict__.setdefault("_escape_bias_cache", {})
         if net in cache:
             return cache[net]
-        g = self.grid
+        g = self.lattice
         extra: dict[int, float] = {}
         for node in self._exit_corridors.get(net, ()):
             extra[node] = extra.get(node, 0.0) - self.options.exit_reservation_cost
@@ -1942,11 +2292,9 @@ class _Router:
             if bias.net != net or bias.layer not in g.layers or not bias.rate:
                 continue
             layer = g.layers.index(bias.layer)
-            ix0, iy0, ix1, iy1 = g.window(bias.area.min_x, bias.area.min_y, bias.area.max_x, bias.area.max_y)
-            for iy in range(iy0, iy1 + 1):
-                for ix in range(ix0, ix1 + 1):
-                    node = g.index(layer, ix, iy)
-                    extra[node] = extra.get(node, 0.0) + bias.rate / 10
+            for node in g.nodes_in(layer, bias.area.min_x, bias.area.min_y,
+                                   bias.area.max_x, bias.area.max_y).tolist():
+                extra[node] = extra.get(node, 0.0) + bias.rate / 10
         if not extra:
             cache[net] = None
         elif self.occupancy.arrays:
@@ -1959,44 +2307,31 @@ class _Router:
 
     def _search_unbiased(self, spec: _NetSpec, sources: Mapping[int, float], targets, present: float,
                          target_extra=None):
-        g, options = self.grid, self.options
+        g, options = self.lattice, self.options
         owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
         via_owner = self._via_owners(spec)
-        occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
-        hist, via_hist = self.occupancy.history, self.occupancy.via_history
-        nid = spec.nid
-        nx, plane = g.nx, g.plane
-        layers = spec.layers
-        layer_cost, heading = self.layer_cost, self.heading
-        wrong = options.wrong_way_cost
-        via_cost = self.via_cost
-        target_xy = [(g.unpack(t)[1], g.unpack(t)[2]) for t in targets]
-        tx0 = min(x for x, _ in target_xy); tx1 = max(x for x, _ in target_xy)
-        ty0 = min(y for _, y in target_xy); ty1 = max(y for _, y in target_xy)
-        src_xy = [g.unpack(s)[1:] for s in sources]
+        # Search windows are inclusive lattice index boxes (target box for the heuristic).
+        tbox = g.box_of(targets)
+        sx0, sy0, sx1, sy1 = g.box_of(sources)
         margin = self._margin(spec)
-        bx0 = max(0, min(tx0, min(x for x, _ in src_xy)) - margin)
-        bx1 = min(nx - 1, max(tx1, max(x for x, _ in src_xy)) + margin)
-        by0 = max(0, min(ty0, min(y for _, y in src_xy)) - margin)
-        by1 = min(g.ny - 1, max(ty1, max(y for _, y in src_xy)) + margin)
+        box = g.grow_box((min(tbox[0], sx0), min(tbox[1], sy0), max(tbox[2], sx1), max(tbox[3], sy1)), margin)
         corridor = self._guide_corridor(spec) if self.guides else None
         if corridor is not None:
             # A guided net's window covers its corridor, so the soft guide
             # cost can be followed where the guide detours.
             cx0, cy0, cx1, cy1 = corridor[2]
-            bx0, by0, bx1, by1 = min(bx0, cx0), min(by0, cy0), max(bx1, cx1), max(by1, cy1)
+            box = (min(box[0], cx0), min(box[1], cy0), max(box[2], cx1), max(box[3], cy1))
+        whole = g.full_box()
         for attempt in range(3):
-            result = self._astar(spec, sources, targets, present, (bx0, by0, bx1, by1),
-                                 (tx0, ty0, tx1, ty1), owner, mid_owner, via_owner, target_extra)
+            result = self._astar(spec, sources, targets, present, box, tbox,
+                                 owner, mid_owner, via_owner, target_extra)
             if result is not None:
                 return result
-            if (bx0, by0, bx1, by1) == (0, 0, nx - 1, g.ny - 1):
+            if box == whole:
                 return None
-            grow = margin * (attempt + 2) * 2
-            bx0, by0 = max(0, bx0 - grow), max(0, by0 - grow)
-            bx1, by1 = min(nx - 1, bx1 + grow), min(g.ny - 1, by1 + grow)
+            box = g.grow_box(box, margin * (attempt + 2) * 2)
             if attempt == 1:
-                bx0, by0, bx1, by1 = 0, 0, nx - 1, g.ny - 1
+                box = whole
         return None
 
     def _astar(self, spec, sources, targets, present, box, tbox, owner, mid_owner, via_owner,
@@ -2010,13 +2345,16 @@ class _Router:
                 result = self._astar_native(spec, sources, targets, present, box, tbox, target_extra)
             if result is not NotImplemented:
                 return result
-        g, options = self.grid, self.options
+        if self.nested:
+            return self._astar_nested(spec, sources, targets, present, box, tbox, owner, mid_owner,
+                                      via_owner, target_extra)
+        g, options = self.lattice, self.options
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
-        hist, via_hist = self.occupancy.history, self.occupancy.via_history
+        hist, via_hist = self._routing_history()
         nid = spec.nid
         neck, neck_mid, region = spec.neck, spec.neck_mid, spec.region
         use_neck = bool(neck or neck_mid)
-        nx, plane = g.nx, g.plane
+        decode, layer_of, bases = g.decoder(), g.layer_of, g.layer_bases()
         bx0, by0, bx1, by1 = box
         tx0, ty0, tx1, ty1 = tbox
         layer_cost, heading = self.layer_cost, self.heading
@@ -2031,10 +2369,9 @@ class _Router:
         target_only = set(spec.target_only)
         INF = 1e30
         for node, cost in sources.items():
-            layer, rest = divmod(node, plane)
+            layer, rest, x, y = decode(node)
             if layer not in allowed:
                 continue
-            y, x = divmod(rest, nx)
             best[node] = cost
             parent[node] = -1
             touched.append(node)
@@ -2044,19 +2381,19 @@ class _Router:
         expansions = 0
         limit = options.maximum_expansions
         found = None
-        # Per layer: move list with heading-adjusted base costs.
+        # Per layer: move list with heading-adjusted base costs, from the
+        # lattice's move deltas (node-id step and diagonal cell step).
+        moves = g.move_deltas()
         move_tables = []
         for layer in range(g.nl):
             head = heading[layer]
             lc = layer_cost[layer]
             table = []
-            for m, (dx, dy, step) in enumerate(_MOVES):
+            for m, (dx, dy, dn, dcell, step) in enumerate(moves):
                 base = step * (1.0 + lc)
                 if head is not None and (head == "h" and dy and not dx or head == "n" and dx and not dy):
                     base += wrong * step
-                cell_dy = 0 if dy > 0 else -1
-                cell_dx = 0 if dx > 0 else -1
-                table.append((dx, dy, dy * nx + dx, base, bool(dx and dy), cell_dy * nx + cell_dx, m, step))
+                table.append((dx, dy, dn, base, bool(dx and dy), dcell, m, step))
             move_tables.append(table)
         # Soft cost terms (see UnifiedRouterOptions.bend_cost/guide_cost);
         # the kernel adds them in the same order.
@@ -2064,7 +2401,7 @@ class _Router:
         if options.bend_cost:
             table = self._turn_table().tolist()
             turns = [table[8 * m:8 * m + 8] for m in range(8)]
-            arrival = {dy * nx + dx: m for m, (dx, dy, _) in enumerate(_MOVES)}
+            arrival = {dn: m for m, (_, _, dn, _, _) in enumerate(moves)}
         corridor = self._guide_corridor(spec) if self.guides else None
         inside = corridor[0] if corridor is not None else None
         guide_cost = options.guide_cost
@@ -2087,8 +2424,7 @@ class _Router:
             expansions += 1
             if expansions > limit:
                 break
-            layer, rest = divmod(node, plane)
-            y, x = divmod(rest, nx)
+            layer, rest, x, y = decode(node)
             here_in_region = use_neck and node in region
             # A node legal only at neck width must not be left towards a node
             # outside the region: that step would be drawn at full width.
@@ -2099,7 +2435,7 @@ class _Router:
             turn = None
             if turns is not None:
                 p = parent[node]
-                if p != -1 and p // plane == layer:
+                if p != -1 and layer_of(p) == layer:
                     turn = turns[arrival[node - p]]
             for dx, dy, dn, base, diagonal, dcell, m, step in move_tables[layer]:
                 x2 = x + dx
@@ -2147,7 +2483,207 @@ class _Router:
                     mask = transitions[0].get((layer, layer2))
                     if mask is None or mask[rest] not in (_FREE, nid):
                         continue
-                n2 = layer2 * plane + rest
+                n2 = bases[layer2] + rest    # the via site's node on layer2
+                if layer2 in target_only and n2 not in targets:
+                    continue
+                o = owner[n2]
+                if o != -1 and o != nid:
+                    continue
+                c = cost + vpen * (1.0 + hist[n2]) * (1.0 + present * occ[n2])
+                if c < best[n2]:
+                    if best[n2] >= INF:
+                        touched.append(n2)
+                    best[n2] = c
+                    parent[n2] = node
+                    push(heap, (c + h, c, n2))
+        result = None
+        if found is not None:
+            path = [found]
+            while parent[path[-1]] != -1:
+                path.append(parent[path[-1]])
+            path.reverse()
+            result = (path, found)
+        for node in touched:
+            best[node] = INF
+        return result
+
+    def _nested_search_tables(self):
+        """Per block and layer, the heading-adjusted move tables of the nested
+        search, and per block the column delta -> move index map."""
+        if self._nested_tables is None:
+            g, options = self.lattice, self.options
+            tables, arrivals = [], []
+            for index in range(len(g.blocks)):
+                moves = g.block_moves(index)
+                per_layer = []
+                for layer in range(g.nl):
+                    head = self.heading[layer]
+                    lc = self.layer_cost[layer]
+                    table = []
+                    for m, (dx, dy, dn, dcell, step) in enumerate(moves):
+                        base = step * (1.0 + lc)
+                        if head is not None and (head == "h" and dy and not dx or head == "n" and dx and not dy):
+                            base += options.wrong_way_cost * step
+                        table.append((dx, dy, dn, base, bool(dx and dy), dcell, m, step))
+                    per_layer.append(table)
+                tables.append(per_layer)
+                arrivals.append({dn: m for m, (_, _, dn, _, _) in enumerate(moves)})
+            self._nested_tables = (tables, arrivals)
+        return self._nested_tables
+
+    def _astar_nested(self, spec, sources, targets, present, box, tbox, owner, mid_owner, via_owner,
+                      target_extra=None):
+        """``_astar`` on a nested lattice in Python (the native kernel's parity reference).
+
+        Planar moves stay within a node's block (lengths and costs per base
+        pitch); a node with a portal twin also moves to it at cost 0 (no
+        heading, turn or guide term). Boxes are base-lattice index boxes; the
+        heuristic is the octile distance in base pitches from the node's
+        point to the target box.
+        """
+        g, options = self.lattice, self.options
+        occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
+        hist, via_hist = self._routing_history()
+        nid = spec.nid
+        neck, neck_mid, region = spec.neck, spec.neck_mid, spec.region
+        use_neck = bool(neck or neck_mid)
+        plane = g.plane
+        bases = g.layer_bases()
+        ux, uy, block_of, twins = g.search_tables()
+        offsets = [block.column_offset for block in g.blocks]
+        widths = [block.nx for block in g.blocks]
+        heights = [block.ny for block in g.blocks]
+        bx0, by0, bx1, by1 = box
+        tx0, ty0, tx1, ty1 = tbox
+        via_cost = self.via_cost * spec.via_factor
+        best, parent = self._best, self._parent
+        touched = []
+        heap: list = []
+        push, pop = heappush, heappop
+        layers = spec.layers
+        allowed = set(layers)
+        target_only = set(spec.target_only)
+        INF = 1e30
+        for node, cost in sources.items():
+            layer, rest = divmod(node, plane)
+            if layer not in allowed:
+                continue
+            best[node] = cost
+            parent[node] = -1
+            touched.append(node)
+            x, y = ux[rest], uy[rest]
+            hx = tx0 - x if x < tx0 else (x - tx1 if x > tx1 else 0.0)
+            hy = ty0 - y if y < ty0 else (y - ty1 if y > ty1 else 0.0)
+            push(heap, (cost + (hx if hx > hy else hy) + 0.41421356 * (hy if hx > hy else hx), cost, node))
+        expansions = 0
+        limit = options.maximum_expansions
+        found = None
+        move_tables, arrivals = self._nested_search_tables()
+        turns = None
+        if options.bend_cost:
+            table = self._turn_table().tolist()
+            turns = [table[8 * m:8 * m + 8] for m in range(8)]
+        corridor = self._guide_corridor(spec) if self.guides else None
+        inside = corridor[0] if corridor is not None else None
+        guide_cost = options.guide_cost
+        transitions = self._via_transitions(spec)
+        while heap:
+            if expansions % 1024 == 0 and self._expired():
+                break
+            f, cost, node = pop(heap)
+            if node < 0:
+                found = -node - 1  # a target, completed with its lead-in price
+                break
+            if cost > best[node]:
+                continue
+            if node in targets:
+                if target_extra is None:
+                    found = node
+                    break
+                extra = target_extra.get(node, 0.0)
+                push(heap, (cost + extra, cost + extra, -node - 1))
+            expansions += 1
+            if expansions > limit:
+                break
+            layer, rest = divmod(node, plane)
+            b = block_of[rest]
+            nxb, nyb = widths[b], heights[b]
+            iy, ix = divmod(rest - offsets[b], nxb)
+            x, y = ux[rest], uy[rest]
+            here_in_region = use_neck and node in region
+            here_neck_only = here_in_region and node in neck
+            only_targets = layer in target_only
+            turn = None
+            if turns is not None:
+                p = parent[node]
+                if p != -1 and p // plane == layer and block_of[p - bases[layer]] == b:
+                    m0 = arrivals[b].get(node - p)
+                    if m0 is not None:
+                        turn = turns[m0]
+            for dx, dy, dn, base, diagonal, dcell, m, step in move_tables[b][layer]:
+                x2 = ix + dx
+                y2 = iy + dy
+                if x2 < 0 or x2 >= nxb or y2 < 0 or y2 >= nyb:
+                    continue
+                r2 = rest + dn
+                u = ux[r2]
+                v = uy[r2]
+                if u < bx0 or u > bx1 or v < by0 or v > by1:
+                    continue
+                n2 = node + dn
+                if only_targets and n2 not in targets:
+                    continue
+                if here_neck_only and n2 not in region:
+                    continue
+                o = owner[n2]
+                if o != -1 and o != nid and not (here_in_region and n2 in neck):
+                    continue
+                if diagonal:
+                    cell = node + dcell
+                    o = mid_owner[cell]
+                    if o != -1 and o != nid and not (here_in_region and n2 in region and cell in neck_mid):
+                        continue
+                c = cost + base * (1.0 + hist[n2]) * (1.0 + present * occ[n2])
+                if turn is not None:
+                    c += turn[m]
+                if inside is not None and n2 not in inside:
+                    c += step * guide_cost
+                if c < best[n2]:
+                    if best[n2] >= INF:
+                        touched.append(n2)
+                    best[n2] = c
+                    parent[n2] = node
+                    hx = tx0 - u if u < tx0 else (u - tx1 if u > tx1 else 0.0)
+                    hy = ty0 - v if v < ty0 else (v - ty1 if v > ty1 else 0.0)
+                    push(heap, (c + (hx if hx > hy else hy) + 0.41421356 * (hy if hx > hy else hx), c, n2))
+            hx = tx0 - x if x < tx0 else (x - tx1 if x > tx1 else 0.0)
+            hy = ty0 - y if y < ty0 else (y - ty1 if y > ty1 else 0.0)
+            h = (hx if hx > hy else hy) + 0.41421356 * (hy if hx > hy else hx)
+            # Portal: the coincident node of the other block, at no cost.
+            t = twins[rest]
+            if t >= 0:
+                n2 = node - rest + t
+                o = owner[n2]
+                if not (only_targets and n2 not in targets) and not (here_neck_only and n2 not in region) \
+                        and (o == -1 or o == nid or (here_in_region and n2 in neck)) and cost < best[n2]:
+                    if best[n2] >= INF:
+                        touched.append(n2)
+                    best[n2] = cost
+                    parent[n2] = node
+                    push(heap, (cost + h, cost, n2))
+            # Layer changes through the selected physical via span.
+            o = via_owner[rest]
+            if transitions is None and o != -1 and o != nid:
+                continue
+            vpen = via_cost * (1.0 + via_hist[rest]) * (1.0 + present * via_occ[rest])
+            for layer2 in layers:
+                if layer2 == layer:
+                    continue
+                if transitions is not None:
+                    mask = transitions[0].get((layer, layer2))
+                    if mask is None or mask[rest] not in (_FREE, nid):
+                        continue
+                n2 = bases[layer2] + rest    # the via site's node on layer2
                 if layer2 in target_only and n2 not in targets:
                     continue
                 o = owner[n2]
@@ -2173,7 +2709,7 @@ class _Router:
 
     def _grow_native_buffers(self) -> bool:
         """Enlarge the kernel's scratch buffers after an overflow (bounded by the grid)."""
-        size = self.grid.size
+        size = self.lattice.size
         if self._n_heap_cap >= 4 * size and self._n_touched_cap >= size and self._n_path_cap >= size:
             return False
         self._n_heap_cap = min(4 * size, self._n_heap_cap * 2)
@@ -2189,11 +2725,12 @@ class _Router:
         if self._expired():
             return None
         import ctypes
-        g = self.grid
+        g = self.lattice
         owner, mid_owner = self.rasters.track_arrays(spec.width, spec.clearance)
         via_owner = self._via_owners(spec, as_array=True)
         transitions = self._via_transitions(spec)
         occupancy = self.occupancy
+        history, via_history = self._routing_history()
         flags, extra = self._n_flags, self._n_extra
         layers = np.asarray([layer | (0x100 if layer in spec.target_only else 0) for layer in spec.layers],
                             dtype=np.int32)
@@ -2226,9 +2763,15 @@ class _Router:
             guide_pointer = self._n_guide.ctypes.data
         touched_count = ctypes.c_int(0)
         P = lambda a: a.ctypes.data
+        # A nested lattice passes its block tables; a uniform one passes none.
+        if self.nested:
+            blocks, block_of, ux, uy, twins, steps = g.kernel_tables()
+            lattice_tables = (len(g.blocks), P(blocks), P(block_of), P(ux), P(uy), P(twins), P(steps))
+        else:
+            lattice_tables = (1, None, None, None, None, None, None)
         length = self.native(
             g.nx, g.ny, g.nl, P(owner), P(mid_owner), P(via_owner),
-            P(occupancy.history), P(occupancy.occ), P(occupancy.via_history), P(occupancy.via_occ),
+            P(history), P(occupancy.occ), P(via_history), P(occupancy.via_occ),
             P(flags), spec.nid, P(layers), len(layers), P(move_base),
             float(present), float(self.via_cost * spec.via_factor),
             *box, *tbox,
@@ -2237,7 +2780,7 @@ class _Router:
             transitions[1].ctypes.data if transitions is not None else None, self.options.maximum_expansions,
             P(self._n_best), P(self._n_parent), P(self._n_heap), self._n_heap_cap,
             P(self._n_touched), self._n_touched_cap, ctypes.byref(touched_count),
-            P(self._n_path), self._n_path_cap)
+            P(self._n_path), self._n_path_cap, *lattice_tables)
         touched = self._n_touched[:touched_count.value]
         self._n_best[touched] = 1e30
         for nodes, bit in marks:
@@ -2255,9 +2798,16 @@ class _Router:
         return path, path[-1]
 
     def _move_base(self, spec) -> np.ndarray:
+        """Heading-adjusted planar move costs for the kernel: [layer][move] on a
+        uniform lattice, [block][layer][move] on a nested one (the costs of
+        ``_nested_search_tables``)."""
         cache = self._move_cache
+        if cache is None and self.nested:
+            tables, _ = self._nested_search_tables()
+            cache = self._move_cache = np.asarray(
+                [move[3] for per_layer in tables for table in per_layer for move in table], dtype=np.float64)
         if cache is None:
-            g, options = self.grid, self.options
+            g, options = self.lattice, self.options
             table = []
             for layer in range(g.nl):
                 head = self.heading[layer]
@@ -2293,15 +2843,12 @@ class _Router:
         routes = self.guides.get(spec.name)
         result = None
         if routes:
-            g = self.grid
+            g = self.lattice
             margin = self.options.guide_margin_nm
             index = {layer: i for i, layer in enumerate(g.layers)}
             parts = []
 
-            def add(layer, ix0, iy0, inside):
-                iy, ix = np.nonzero(inside)
-                parts.append(layer * g.plane + (iy + iy0) * g.nx + (ix + ix0))
-
+            # Window masks over each block's xs/ys slices.
             for route in routes:
                 for segment in route.segments:
                     layer = index.get(segment.layer)
@@ -2309,72 +2856,105 @@ class _Router:
                         continue
                     r = segment.guide_half_width_nm + margin
                     a, b = segment.start, segment.end
-                    ix0, iy0, ix1, iy1 = g.window(min(a.x_nm, b.x_nm) - r, min(a.y_nm, b.y_nm) - r,
-                                                  max(a.x_nm, b.x_nm) + r, max(a.y_nm, b.y_nm) + r)
-                    if ix0 > ix1 or iy0 > iy1:
-                        continue
-                    px = g.xs[ix0:ix1 + 1][None, :]
-                    py = g.ys[iy0:iy1 + 1][:, None]
-                    add(layer, ix0, iy0, _segment_distance(
-                        px, py, float(a.x_nm), float(a.y_nm), float(b.x_nm), float(b.y_nm)) <= r)
+                    for block in g.blocks:
+                        window = block.window(min(a.x_nm, b.x_nm) - r, min(a.y_nm, b.y_nm) - r,
+                                              max(a.x_nm, b.x_nm) + r, max(a.y_nm, b.y_nm) + r)
+                        ix0, iy0, ix1, iy1 = window
+                        if ix0 > ix1 or iy0 > iy1:
+                            continue
+                        px = block.xs[ix0:ix1 + 1][None, :]
+                        py = block.ys[iy0:iy1 + 1][:, None]
+                        parts.append(block.window_columns(window, _segment_distance(
+                            px, py, float(a.x_nm), float(a.y_nm), float(b.x_nm), float(b.y_nm)) <= r)
+                            + layer * g.plane)
                 for access in route.accesses:
                     layer = index.get(access.layer)
                     if layer is None:
                         continue
                     c = access.access_position
-                    ix0, iy0, ix1, iy1 = g.window(c.x_nm - margin, c.y_nm - margin,
-                                                  c.x_nm + margin, c.y_nm + margin)
-                    if ix0 > ix1 or iy0 > iy1:
-                        continue
-                    px = g.xs[ix0:ix1 + 1][None, :]
-                    py = g.ys[iy0:iy1 + 1][:, None]
-                    add(layer, ix0, iy0,
-                        (np.abs(px - c.x_nm) <= margin) & (np.abs(py - c.y_nm) <= margin))
+                    for block in g.blocks:
+                        window = block.window(c.x_nm - margin, c.y_nm - margin, c.x_nm + margin, c.y_nm + margin)
+                        ix0, iy0, ix1, iy1 = window
+                        if ix0 > ix1 or iy0 > iy1:
+                            continue
+                        px = block.xs[ix0:ix1 + 1][None, :]
+                        py = block.ys[iy0:iy1 + 1][:, None]
+                        parts.append(block.window_columns(window,
+                            (np.abs(px - c.x_nm) <= margin) & (np.abs(py - c.y_nm) <= margin)) + layer * g.plane)
             nodes = np.unique(np.concatenate(parts)).astype(np.int64) if parts else np.zeros(0, np.int64)
             if nodes.size:
-                rest = nodes % g.plane
-                xs, ys = rest % g.nx, rest // g.nx
-                box = (int(xs.min()), int(ys.min()), int(xs.max()), int(ys.max()))
-                result = (frozenset(nodes.tolist()), nodes, box)
+                result = (frozenset(nodes.tolist()), nodes, g.box_of(nodes))
         self._guide_cache[spec.name] = result
         return result
 
     # -- negotiation ------------------------------------------------------
 
     def _conflicts(self, routes: Mapping[str, _NetRoute]) -> set[str]:
-        occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
-        bad = set()
-        for name, route in routes.items():
+        """Negotiate actual emitted copper, not overlapping raster envelopes."""
+        self._exact_track_conflicts = {}
+        self._exact_lead_conflicts = {}
+        self._exact_via_conflicts = {}
+        index = RoutingClearanceIndex(self.board)
+        objects, raw_leads = {}, {}
+        specs = {spec.name: spec for spec in self.specs}
+        for name, route in sorted(routes.items()):
             if not route.connected:
                 continue
-            if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.nodes):
-                bad.add(name)
-                continue
-            if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.body):
-                bad.add(name)
-                continue
-            if any(via_occ[xy] - (1 if xy in route.via_claims else 0) > 0 for xy in route.via_xy):
-                bad.add(name)
+            spec = specs[name]
+            for raw in dict.fromkeys(t for lead in route.leads for t in lead):
+                for fragment in self.clearance.breakout.neck_down((raw,)):
+                    raw_leads.setdefault((name, fragment), set()).add(raw)
+            tracks, vias = set(), set()
+            for path, leads in zip(route.paths, route.leads):
+                t, v = self.copper(spec, path, leads)
+                tracks.update(t)
+                vias.update(v)
+            # Sets deduplicate branch joins; geometry order is deterministic.
+            for track in sorted(tracks, key=lambda t: (t.layer.value, t.start.x_nm, t.start.y_nm,
+                                                       t.end.x_nm, t.end.y_nm, t.width_nm)):
+                token = f"proposal-track:{len(objects)}"
+                objects[token] = (name, track)
+                index.add_track(track, locked=False, occurrence=token)
+            for via in sorted(vias, key=lambda v: (v.position.x_nm, v.position.y_nm)):
+                token = f"proposal-via:{len(objects)}"
+                objects[token] = (name, via)
+                index.add_via(via, locked=False, occurrence=token)
+        bad = set()
+        def price(owner, copper):
+            if isinstance(copper, TrackSegment):
+                self._exact_track_conflicts.setdefault(owner, set()).add(copper)
+                self._exact_lead_conflicts.setdefault(owner, set()).update(raw_leads.get((owner, copper), ()))
+            else:
+                # The via's own site on whichever lattice block holds it.
+                self._exact_via_conflicts.setdefault(owner, set()).add(
+                    self.lattice.column(self.lattice.nearest(0, copper.position)))
+        for token, (name, copper) in objects.items():
+            records = (index.track_blocker_records(copper) if isinstance(copper, TrackSegment)
+                       else index.via_blocker_records(copper))
+            for record in records:
+                # Immutable source geometry never becomes a mutable dependency.
+                # It remains checked at exact commit and by independent DRC.
+                if record.immutable or record.occurrence not in objects:
+                    continue
+                owner, other = objects[record.occurrence]
+                bad.update((name, owner))
+                price(name, copper)
+                price(owner, other)
         return bad
 
     def _penalise(self, routes: Mapping[str, _NetRoute], names: Iterable[str]) -> None:
-        occ, hist = self.occupancy.occ, self.occupancy.history
-        via_occ, via_hist = self.occupancy.via_occ, self.occupancy.via_history
+        hist, via_hist = self.occupancy.history, self.occupancy.via_history
         inc = self.options.history_increment
+        layer_of = {layer: i for i, layer in enumerate(self.grid.layers)}
         for name in names:
-            route = routes[name]
-            for node in route.nodes:
-                if occ[node] - (1 if node in route.claims else 0) > 0:
+            for track in self._exact_track_conflicts.get(name, ()):
+                for node, _ in self._segment_nodes(track.start, track.end, layer_of[track.layer],
+                                                   self.grid.pitch / 2 + 1):
                     hist[node] += inc
-            for xy in route.via_xy:
-                if via_occ[xy] - (1 if xy in route.via_claims else 0) > 0:
-                    via_hist[xy] += inc
-            for node, owner in route.body.items():
-                if occ[node] - (1 if node in route.claims else 0) > 0:
-                    if isinstance(owner, tuple):
-                        via_hist[owner[1]] += inc
-                    else:
-                        hist[owner] += inc
+            for xy in self._exact_via_conflicts.get(name, ()):
+                via_hist[xy] += inc
+            for track in self._exact_lead_conflicts.get(name, ()):
+                self._lead_history[track] = self._lead_history.get(track, 0.0) + inc
 
     def _expired(self) -> bool:
         return self.deadline is not None and perf_counter() >= self.deadline
@@ -2476,19 +3056,19 @@ class _Router:
     def _transition_span(self, low: int, high: int):
         key = (low, high)
         if key not in self._via_span_cache:
-            g = self.grid
+            g = self.lattice
             self._via_span_cache[key] = physical_via_span(self.board, g.layers[low], g.layers[high])
         return self._via_span_cache[key]
 
     def _via_sites(self, name: str, paths) -> dict[int, tuple | None]:
         """``_site_spans`` for every layer-change site of ``paths`` (one route)."""
-        plane = self.grid.plane
+        layer_of, column = self.lattice.layer_of, self.lattice.column
         changes: dict[int, tuple[int, int]] = {}
         for path in paths:
             for a, b in zip(path, path[1:]):
-                la, lb = a // plane, b // plane
+                la, lb = layer_of(a), layer_of(b)
                 if la != lb:
-                    xy = a % plane
+                    xy = column(a)
                     low, high = changes.get(xy, (la, la))
                     changes[xy] = (min(low, la, lb), max(high, la, lb))
         return self._site_spans(name, changes)
@@ -2504,7 +3084,7 @@ class _Router:
         (through, blind or buried), then the outer span. None: no declared
         technology serves the site (commit rejects the path).
         """
-        g = self.grid
+        g = self.lattice
         if not self.board.stackup.via_technologies:
             return dict.fromkeys(changes, (g.layers[0], g.layers[-1], None))
         if self._board_via_sites is None:
@@ -2515,7 +3095,7 @@ class _Router:
         order = {layer: i for i, layer in enumerate(g.layers)}
         result: dict[int, tuple | None] = {}
         for xy, (low, high) in changes.items():
-            existing = next((via for via in self._board_via_sites.get((name, g.point(xy)), ())
+            existing = next((via for via in self._board_via_sites.get((name, g.column_point(xy)), ())
                              if via.from_layer in order and via.to_layer in order
                              and min(order[via.from_layer], order[via.to_layer]) <= low
                              and high <= max(order[via.from_layer], order[via.to_layer])), None)
@@ -2533,14 +3113,14 @@ class _Router:
         site its via; by default the sites of this path alone. A site without
         a span gets the outer span here; commit rejects it.
         """
-        g = self.grid
+        g = self.lattice
         if spans is None:
             spans = self._via_sites(spec.name, [path])
         tracks: list[TrackSegment] = list(leads)
         vias: list[Via] = []
         neck, region = spec.neck, spec.region
         def width_of(a: int, b: int) -> int:
-            if a in region and b in region and (a in neck or b in neck or _diagonal_mid(g, a, b) in spec.neck_mid):
+            if a in region and b in region and (a in neck or b in neck or g.diagonal_cell(a, b) in spec.neck_mid):
                 return spec.neck_width
             return spec.width
         if len(path) >= 2:
@@ -2549,17 +3129,20 @@ class _Router:
             direction = None
             run_width = None
             for node in path[1:]:
-                la, xa, ya = g.unpack(prev)
-                lb, xb, yb = g.unpack(node)
+                la, lb = g.layer_of(prev), g.layer_of(node)
                 if la != lb:
                     if run_start != prev:
                         tracks.append(TrackSegment(spec.name, g.point(run_start), g.point(prev),
                                                    run_width, g.layers[la]))
-                    span = spans.get(ya * g.nx + xa) or (g.layers[0], g.layers[-1], None)
+                    span = spans.get(g.column(prev)) or (g.layers[0], g.layers[-1], None)
                     vias.append(Via(spec.name, g.point(prev), spec.via_size, spec.via_drill, *span))
                     run_start, prev, direction, run_width = node, node, None, None
                     continue
-                step = (xb - xa, yb - ya)
+                step = g.delta(prev, node)
+                if step == (0, 0):
+                    # A portal between coincident nodes of two lattice blocks.
+                    prev = node
+                    continue
                 width = width_of(prev, node)
                 if direction is not None and (step != direction or width != run_width):
                     tracks.append(TrackSegment(spec.name, g.point(run_start), g.point(prev),
@@ -2569,7 +3152,7 @@ class _Router:
                 prev = node
             if run_start != prev:
                 tracks.append(TrackSegment(spec.name, g.point(run_start), g.point(prev),
-                                           run_width, g.layers[g.unpack(prev)[0]]))
+                                           run_width, g.layers[g.layer_of(prev)]))
         # A collinear neck can span several overlapping pad regions without
         # belonging wholly to any one of them. Re-cut emitted mutable copper
         # by the exact source regions before the normal exact commit check.
@@ -2588,7 +3171,7 @@ class _Router:
         """
         from .surface_path import _track_inside_board
         index = self.clearance
-        g = self.grid
+        g = self.lattice
         self.rejections: dict[str, list[tuple[Point, str, tuple[str, ...], bool]]] = {}
         accepted: dict[str, tuple[list[TrackSegment], list[Via]]] = {}
         rejected: dict[str, list[Point]] = {}
@@ -2612,7 +3195,7 @@ class _Router:
                 bad: list[Point] = []
                 if unserved:
                     for a, b in zip(path, path[1:]):
-                        if a // g.plane != b // g.plane and a % g.plane in unserved:
+                        if g.layer_of(a) != g.layer_of(b) and g.column(a) in unserved:
                             bad.append(g.point(a))
                             self.rejections.setdefault(name, []).append(
                                 (g.point(a), "via", (), False, "no_via_technology"))
@@ -2664,24 +3247,23 @@ class _Router:
 
     def history_seed(self, other: "_Router") -> None:
         """Carry congestion history over from an earlier router on the same grid."""
-        if other.grid.size == self.grid.size and other.grid.pitch == self.grid.pitch:
+        if other.lattice.signature() == self.lattice.signature():
             self.occupancy.copy_history(other.occupancy)
             self.present = other.present
             self.conflict_age = dict(other.conflict_age)
+            self._lead_history = dict(other._lead_history)
 
     def penalise_points(self, name: str, points: list[Point], amount: float) -> None:
-        g = self.grid
+        g = self.lattice
         hist = self.occupancy.history
         via_hist = self.occupancy.via_history
         for point in points:
-            ix = int(round((point.x_nm - g.x0) / g.pitch))
-            iy = int(round((point.y_nm - g.y0) / g.pitch))
-            for ox, oy in _disc_offsets_cached(2.0):
-                x, y = ix + ox, iy + oy
-                if 0 <= x < g.nx and 0 <= y < g.ny:
-                    via_hist[y * g.nx + x] += amount
-                    for layer in range(g.nl):
-                        hist[layer * g.plane + y * g.nx + x] += amount
+            columns = (g.columns_around(point, _disc_offsets_cached(2.0)) if not self.nested else
+                       np.union1d(g.columns_within(point, 2.0 * self.pitch), [g.nearest(0, point)]))
+            for column in columns.tolist():
+                via_hist[column] += amount
+                for node in g.column_nodes(column):
+                    hist[node] += amount
 
 
 def _open_count(board: PhysicalBoard, nets, accepted, plane_nets, complete) -> tuple[int, int]:
@@ -3021,13 +3603,29 @@ def _rejection_text(router, name: str) -> str:
             f"({where.x_nm / 1e6:.2f},{where.y_nm / 1e6:.2f}) {layer}{reason}{more}")
 
 
-def choose_pitch(board: PhysicalBoard, default_nm: int = nm_from_mm("0.25")) -> int:
+def choose_pitch(board: PhysicalBoard, default_nm: int = DEFAULT_PITCH_NM) -> int:
     """0.25 mm, or the coarsest finer pitch that puts nodes on every ball and
-    on the channel centre lines of each full-grid ball array (BGA)."""
+    on the channel centre lines of each full-grid ball array (BGA).
+
+    Only fine_regions="off" uses it. Each array is judged as placed: every
+    transformed ball and every adjacent-ball midpoint must be a lattice
+    point (``fine_regions.array_alignment``), so a rotated array is not
+    called aligned because its first ball is. An array that no candidate
+    aligns leaves the pitch unchanged.
+    """
+    from .fine_regions import array_alignment
+    from .package_patterns import circular_array
     pitch = default_nm
-    for _, array, points in _ball_grids(board):
-        for candidate in (pitch, pitch // 2, nm_from_mm("0.1"), pitch // 4, nm_from_mm("0.05")):
-            if 0 < candidate <= pitch and _aligned(array, points, candidate):
+    for pose in board.placements:
+        try:
+            array = circular_array(board, pose.reference)
+        except ValueError:
+            array = None
+        if array is None:
+            continue
+        aligned = array_alignment(array, pose)
+        for candidate in (pitch, pitch // 2, pitch // 4, nm_from_mm("0.05")):
+            if candidate > 0 and aligned(candidate):
                 pitch = candidate
                 break
     return pitch
@@ -3060,12 +3658,28 @@ def _aligned(grid, points, pitch: int) -> bool:
     return near(grid.pitch_nm // 2) and all(near(point.x_nm) and near(point.y_nm) for point in points)
 
 
-def _diagonal_mid(g: _Grid, a: int, b: int) -> int:
-    la, xa, ya = g.unpack(a)
-    _, xb, yb = g.unpack(b)
-    if xa == xb or ya == yb:
-        return -1
-    return la * g.plane + min(ya, yb) * g.nx + min(xa, xb)
+def fine_region_plan(board: PhysicalBoard, options: UnifiedRouterOptions) -> "FineRegionPlan | None":
+    """The fine-patch plan the router builds its lattice from; None for "off".
+
+    The base pitch is ``options.pitch_nm`` or 0.25 mm. ``fine_region_options``
+    sets the planner's knobs; the mode sets ``dense_packages``.
+    """
+    if options.fine_regions == "off":
+        return None
+    from .fine_regions import FineRegionOptions, plan_fine_regions
+    planner = replace(options.fine_region_options or FineRegionOptions(),
+                      dense_packages=options.fine_regions == "dense")
+    return plan_fine_regions(board, options.pitch_nm or DEFAULT_PITCH_NM, planner)
+
+
+def _nearest_first(lattice, position: Point, reach: float):
+    """(distance, column, x, y) of the lattice's cover of ``position`` +- ``reach``,
+    nearest first; equal distances keep the cover's x-major order."""
+    near = [(hypot(x - position.x_nm, y - position.y_nm), column, x, y)
+            for column, x, y in lattice.cover(position.x_nm - reach, position.y_nm - reach,
+                                              position.x_nm + reach, position.y_nm + reach)]
+    near.sort(key=itemgetter(0))
+    return near
 
 
 _OFFSET_CACHE: dict = {}
@@ -3133,33 +3747,50 @@ def _congestion_map(router: _Router, failed: Iterable[str], tile_nm: int):
     ``(default width + clearance) / pitch``: default-width tracks that fit
     across the tile, times the tile edge in pitches. Outside board material
     every node is foreign, so capacity is 0 there.
+    Every quantity is gathered per column (via site) and binned by the
+    column's board position, so the map works on any lattice. On a nested
+    lattice each column counts with its area in base cells,
+    ``(step / base pitch) ** 2``: a fine patch neither looks k**2 times
+    roomier nor k**2 times more contended than the same area at the base.
     """
-    g = router.grid
+    g = router.lattice
     occupancy = router.occupancy
-    nl, ny, nx = g.nl, g.ny, g.nx
-    occ = np.asarray(occupancy.occ, dtype=np.int64).reshape(nl, ny, nx)
+    nl, plane = g.nl, g.plane
+    occ = np.asarray(occupancy.occ, dtype=np.int64).reshape(nl, plane)
     node_demand = np.maximum(occ - 1, 0).sum(axis=0).astype(np.float64)
-    node_demand += np.maximum(np.asarray(occupancy.via_occ, dtype=np.int64).reshape(ny, nx) - 1, 0)
+    node_demand += np.maximum(np.asarray(occupancy.via_occ, dtype=np.int64) - 1, 0)
     increment = router.options.history_increment
     if increment > 0:
-        history = np.asarray(occupancy.history, dtype=np.float64).reshape(nl, ny, nx).sum(axis=0)
-        for _, iy0, iy1, ix0, ix1, cost in router._seeded_history:
-            history[iy0:iy1 + 1, ix0:ix1 + 1] -= cost
-        history += np.asarray(occupancy.via_history, dtype=np.float64).reshape(ny, nx)
+        history = np.asarray(occupancy.history, dtype=np.float64).reshape(nl, plane).sum(axis=0)
+        for _, columns, cost in router._seeded_history:
+            history[columns] -= cost
+        history += np.asarray(occupancy.via_history, dtype=np.float64)
         node_demand += np.maximum(history, 0.0) / increment
-    tx = (np.arange(nx, dtype=np.int64) * g.pitch) // tile_nm
-    ty = (np.arange(ny, dtype=np.int64) * g.pitch) // tile_nm
-    tiles_x, tiles_y = int(tx[-1]) + 1, int(ty[-1]) + 1
-    tile_ids = (ty[:, None] * tiles_x + tx[None, :]).ravel()
+    weight = None
+    if isinstance(g, NestedLattice):
+        tx = (g.column_x - g.x0) // tile_nm
+        ty = (g.column_y - g.y0) // tile_nm
+        tiles_x, tiles_y = int(tx.max()) + 1, int(ty.max()) + 1
+        tile_ids = ty * tiles_x + tx
+        weight = g.column_weight()
+        node_demand = node_demand * weight
+    else:
+        tx = (np.arange(g.nx, dtype=np.int64) * g.pitch) // tile_nm
+        ty = (np.arange(g.ny, dtype=np.int64) * g.pitch) // tile_nm
+        tiles_x, tiles_y = int(tx[-1]) + 1, int(ty[-1]) + 1
+        tile_ids = (ty[:, None] * tiles_x + tx[None, :]).ravel()
     count = tiles_x * tiles_y
-    demand = np.bincount(tile_ids, weights=node_demand.ravel(), minlength=count).reshape(tiles_y, tiles_x)
+    demand = np.bincount(tile_ids, weights=node_demand, minlength=count).reshape(tiles_y, tiles_x)
     width, clearance = router.default_width, router.board.rules.minimum_clearance_nm
-    owner = router.rasters.track_arrays(width, clearance)[0].reshape(nl, ny, nx)
+    owner = router.rasters.track_arrays(width, clearance)[0].reshape(nl, plane)
     signal = set(routing_layers(router.board, "", None))
     layers = [i for i, layer in enumerate(g.layers) if layer in signal]
-    free = (owner[layers] == _FREE).sum(axis=0) if layers else np.zeros((ny, nx))
+    free = (owner[layers] == _FREE).sum(axis=0) if layers else np.zeros(plane)
     lane = (width + clearance) / g.pitch
-    capacity = np.bincount(tile_ids, weights=free.ravel() / lane, minlength=count).reshape(tiles_y, tiles_x)
+    lanes = free / lane
+    if weight is not None:
+        lanes = lanes * weight
+    capacity = np.bincount(tile_ids, weights=lanes, minlength=count).reshape(tiles_y, tiles_x)
     from .congestion_feedback import CongestionMap
     return CongestionMap(
         tile_nm=tile_nm, x0_nm=int(g.x0), y0_nm=int(g.y0), nx=tiles_x, ny=tiles_y,
@@ -3295,8 +3926,16 @@ def route_unified(
         shared = _SharedIndex(router.clearance)
     if options.export_congestion and options.congestion_tile_nm < router.pitch:
         raise ValueError("congestion_tile_nm must be at least the router pitch")
-    emit(on_progress, "unified_setup", "finished", nets=len(router.specs),
-         grid=[router.grid.nx, router.grid.ny, router.grid.nl], seconds=round(perf_counter() - started, 2))
+    # The base block's shape; on a nested lattice also the patches and node counts.
+    lattice = router.lattice
+    setup = {"nets": len(router.specs), "grid": [lattice.nx, lattice.ny, lattice.nl]}
+    if router.nested:
+        setup["patches"] = [{"x0": block.x0 / 1e6, "y0": block.y0 / 1e6, "x1": block.x1 / 1e6,
+                             "y1": block.y1 / 1e6, "factor": block.factor, "nodes": block.plane * lattice.nl}
+                            for block in lattice.blocks[1:]]
+        setup["nodes"] = lattice.size
+        setup["uniform_nodes_at_finest"] = router.fine_plan.uniform_nodes_at_finest
+    emit(on_progress, "unified_setup", "finished", **setup, seconds=round(perf_counter() - started, 2))
     routes, conflicts, iterations = router.negotiate(deadline)
     commit_started = perf_counter()
     accepted, rejected, complete = router.commit(routes, conflicts)
@@ -3533,6 +4172,13 @@ def replay_unified(path, on_progress: ProgressCallback | None = None, *,
                              if any(pad.component in only_components for pad in net.pads))
         only_nets = touching if only_nets is None else only_nets | touching
     if only_nets is not None:
+        known = {net.name for net in saved["board"].nets}
+        unknown = only_nets - known
+        if unknown:
+            raise ValueError("unknown replay nets: " + ", ".join(sorted(unknown)))
+        excluded = only_nets - saved["only_nets"] if saved["only_nets"] is not None else set()
+        if excluded:
+            raise ValueError("nets outside saved replay selection: " + ", ".join(sorted(excluded)))
         saved["only_nets"] = only_nets if saved["only_nets"] is None else saved["only_nets"] & only_nets
     if power_islands is not None:
         from .power_islands import auto_power_layer, plan_power_islands
@@ -3549,7 +4195,11 @@ def replay_unified(path, on_progress: ProgressCallback | None = None, *,
     if bga_fanout is not None:
         from .bga_fanout import plan_bga_fanouts
         from .escape_plan import plan_array_escapes
-        fanout = load_state(str(path) + ".bga.json")
+        from pathlib import Path
+        sidecar = Path(str(path) + ".bga.json")
+        # A run without ball-grid fanout copper leaves no sidecar.
+        fanout = (load_state(sidecar) if sidecar.exists()
+                  else {"tracks": (), "vias": (), "array_flow": False, "escape_plan_options": None})
         tracks, vias = set(fanout["tracks"]), set(fanout["vias"])
         board = saved["board"]
         board = replace(board, tracks=tuple(t for t in board.tracks if t not in tracks),

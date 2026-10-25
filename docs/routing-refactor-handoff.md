@@ -144,6 +144,18 @@ All in `pcbir/unified_router.py` unless noted; options are on
    `routeflow.detailed_failure_trials` with their tests, and the legacy-only
    feedback branches in `flow.run_routing_pipeline`. The loop proposes nothing
    on a source that already carries tracks or vias (user-locked copper).
+9. **Multi-resolution lattice (2026-10-25, owner).** The default
+   `--fine-regions arrays` refines only full ball arrays; on CopperProbe that
+   is the FX10 patch on a 0.25 mm base. Measure `--fine-regions dense`
+   on CopperProbe (completion, DRC, nodes, peak memory, time against
+   `arrays`): dense additionally refines the QFN ADC and the crystal-cap
+   neighbourhood, the hotspots of the 2026-10-20 diagnosis, and keeps the
+   FX10 at its `arrays` factor. Running the FX10 at 0.0625 mm (twice the
+   channel resolution between balls) through `--unified-pitch-mm` is a
+   different experiment: that flag sets the base pitch of the whole board.
+   The report's `fine_regions` block lists what each mode refined. Later,
+   separately: derive the base pitch from the board's lanes instead of the
+   fixed 0.25 mm.
 
 ## Merging to main
 

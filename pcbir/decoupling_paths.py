@@ -1,6 +1,8 @@
 """Bounded explicit supply/return joins for opposite-surface decouplers.
 
-Only original straight-track and ordinary plated-through-via edges prove paths.
+Only original straight-track and validated plated-through-via edges prove paths.
+Required source-declared filled/capped arrays can be reused after fresh checks;
+new generated vias remain ordinary through vias.
 Zones, pad groups and component internals are not inferred. A return witness is
 a physical join to a source-declared net terminal, not electrical qualification.
 """
@@ -207,6 +209,32 @@ def _normal_via(board, index, via):
                               via.to_layer, drill_nm=via.drill_nm))
 
 
+def _source_array_owner(board, via):
+    """Recognize only an original occurrence of exact required array geometry."""
+    from .pad_via_arrays import via_in_pad_array_vias, array_rules
+    from .drc import placed_pad_shape
+    from .geometry import circle_inside_shape
+    if (via.finish != "filled-capped" or not any(via is item for item in board.vias)
+            or via not in via_in_pad_array_vias(board)):
+        return None
+    for rule in array_rules(board):
+        pose, pad, node = _land(board, rule.pad)
+        if circle_inside_shape(via.position, via.size_nm // 2,
+                               placed_pad_shape(node.position, pad, pose)):
+            return rule.pad
+    return None
+
+
+def _path_via(board, index, via):
+    """Fresh legality for normal vias or existing source-authorized arrays."""
+    if via.finish == "standard":
+        return _normal_via(board, index, via)
+    owner = _source_array_owner(board, via)
+    return (owner is not None and via_inside_board(board, via.position, via.size_nm)
+            and index.can_via(via.net, via.position, via.size_nm, via.from_layer,
+                via.to_layer, drill_nm=via.drill_nm, allowed_pad=owner))
+
+
 def _on(point, track):
     a,b = track.start,track.end
     return ((point.x_nm-a.x_nm)*(b.y_nm-a.y_nm) == (point.y_nm-a.y_nm)*(b.x_nm-a.x_nm)
@@ -236,7 +264,7 @@ def _path_edges(board, net, index):
 def _cached_path_edges(board_key, index_key, additions, rules, net):
     board, index = board_key.value, index_key.value
     tracks = tuple(t for t in board.tracks if _track_ok(board, index, t, net))
-    vias = tuple(v for v in board.vias if v.net == net and _normal_via(board, index, v))
+    vias = tuple(v for v in board.vias if v.net == net and _path_via(board, index, v))
     return tracks, vias
 
 
@@ -387,7 +415,7 @@ def validate_crosslayer_witness(board, witness, *, index=None):
                     return "witness_track_invalid"
             elif isinstance(edge,Via):
                 if (not any(edge is item for item in board.vias) or edge.net != path.net
-                        or not _normal_via(board,index,edge) or step.start.position != edge.position
+                        or not _path_via(board,index,edge) or step.start.position != edge.position
                         or step.end.position != edge.position or step.start.layer is step.end.layer
                         or step.start.layer not in routing_layers(board,path.net,_rule(board,path.net))
                         or step.end.layer not in routing_layers(board,path.net,_rule(board,path.net))):
@@ -443,7 +471,18 @@ def _existing_launches(board, a, b, net, width, index, options, site_limit):
                                   + (v.position.y_nm-b[2].position.y_nm)**2,
                                   v.position.x_nm, v.position.y_nm))
     for via in islice(sites, site_limit):
-        if not _normal_via(board, index, via):
+        if not _path_via(board, index, via):
+            continue
+        owner = _source_array_owner(board, via)
+        if owner is not None and owner.component == a[0].reference and owner.pad == a[1].number:
+            # Make an explicit legal lead within this exact land. This is new
+            # proposal copper, not an inferred internal join or source edge.
+            if a[2].position == via.position:
+                yield (), via
+            else:
+                for path in checked_access_paths(board, index, net, a[2].position,
+                        via.position, width, a[2].layer):
+                    yield path, via
             continue
         # verified_fanout_path deliberately expands internal-pad groups; this
         # explicit supply/return contract requires the exact source terminal.
@@ -555,10 +594,10 @@ def _inner_connections(board, selected, origin, destination, net, width, options
     for tail, proposed in choices:
         if work.inner_bridges >= 8:
             return
-        endpoint = tail[-1].end
+        endpoint = tail[-1].end if tail else proposed.position
         via = proposed or next((v for v in board.vias if v.net == net and v.position == endpoint), None)
         if (via is None or via.position == selected.position or via.position in seen
-                or not _normal_via(board, index, via)):
+                or not _path_via(board, index, via)):
             continue
         seen.add(via.position)
         work.inner_bridges += 1
@@ -639,9 +678,9 @@ def _connections(board, first, second, net, options, launch_limit, site_limit, *
         diverse=dict.fromkeys(chain.from_iterable(zip(compact,inventory)))
         for path,via in islice(diverse,remaining):
             existing=next((v for v in board.vias if v.net==net and v.position==path[-1].end
-                           and _normal_via(board,index,v)),None)
+                           and _path_via(board,index,v)),None)
             selected=via or existing
-            if selected is not None and _normal_via(board,index,selected):
+            if selected is not None and _path_via(board,index,selected):
                 admitted += 1
                 yield path,selected,False
         if not admitted:

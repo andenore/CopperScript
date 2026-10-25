@@ -40,6 +40,32 @@ def test_source_minimum_is_preserved_when_caller_fallback_is_smaller():
         PlacementPlannerOptions(component_clearance_nm=100000))
 
 
+@pytest.mark.parametrize("gap,separation", [(100000, "1.1"), (0, "1")])
+def test_unrelated_macro_preflight_honors_fixed_member_courtyard_policy(gap, separation):
+    from pcbir.cluster_placement import place_rigid_clusters
+    from pcbir.clusters import footprint_geometry_digest
+    from pcbir.physical import RigidPlacementCluster, RigidPlacementMember, PlacementTarget
+    from pcbir.placement import PlacementAlgorithmError
+    b = scene((gap, gap), separation)
+    fp = b.footprints["unit"]
+    owner = Placement("owner", fp.name, Point.mm(20, 20))
+    cluster = RigidPlacementCluster("unrelated", PlacementTarget("owner"), (
+        RigidPlacementMember("owner", fp.name, footprint_geometry_digest(fp), Point(0, 0)),
+    ), "Synthetic courtyard-policy regression", (0,))
+    rules = tuple(replace(rule, fixed_position=pose.position, fixed_rotation_degrees=0)
+                  for rule, pose in zip(b.placement_rules, b.placements))
+    b = replace(b, placements=(*b.placements, owner), rigid_clusters=(cluster,),
+                placement_rules=(*rules, ComponentPlacementRule("owner",
+                    fixed_position=owner.position, fixed_rotation_degrees=0)))
+    poses = {p.reference: p for p in b.placements}
+    result, _, _ = place_rigid_clusters(b, poses, poses, PlacementPlannerOptions())
+    assert result == poses
+    strict = replace(b, placement_rules=tuple(
+        replace(rule, additional_courtyard_gap_nm=None) for rule in b.placement_rules))
+    with pytest.raises(PlacementAlgorithmError, match="conflicting fixed placements"):
+        place_rigid_clusters(strict, poses, poses, PlacementPlannerOptions())
+
+
 def test_contact_proposals_and_bounded_packer_use_source_pair_gap():
     b=scene()
     a,target=b.placements

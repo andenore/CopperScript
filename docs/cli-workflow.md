@@ -52,9 +52,13 @@ renders one of them; see [routing and placement iteration](llm-workflow.md#routi
 them on its exported PCB. Other open nets in a subset replay's whole-board
 summary are deliberately excluded from those attempted-failure issues. An empty
 replay issue list does not establish complete-board routing or native acceptance.
+Select multiple nets with repeated flags (`--only DATA --only IRQ`). Unknown names
+and names outside the saved selection are rejected; `selected_nets` records the
+actual replay scope.
 For a bounded fine-grid diagnostic, `replay-unified --set pitch_nm=25000
 --set 'grid_window_nm=[1000000,1000000,21000000,21000000]'` limits the raster
-and search to an explicit rectangle in nanometres. Include every attempted
+and search to an explicit rectangle in nanometres (add `--set fine_regions=off`
+on a board whose plan has fine patches; a window is refused with patches). Include every attempted
 terminal. The full-board lattice phase, source outline, obstacles, fixed copper,
 macro/array intent and fresh exact commit checks remain in force. The window
 is a search bound, not a new board outline or permission to discard outside
@@ -68,6 +72,18 @@ capture the actual temporary reservations and can be viewed or passed to
 occurrence, complete-association and geometry admission; it is never accepted
 as arbitrary routed input. Value-only decoding restores original-edge identities
 only for unique exact occurrences, preserving all values and context digests.
+The completed export also saves `final-board.state.json`, including on routing
+failure. It captures final geometry for investigation; it is not a new approval.
+
+`--unified-retain-escape-copper` experimentally converts the ordinary escape
+groups that a failed critical retry would otherwise discard. Every planned edge
+and mask of each affected owner is handled together, including remote endpoints;
+unrelated owners retain their existing temporary reservations. Fresh bypass and
+physical admission are mandatory. Admitted copper remains fixed through critical
+retries and ordinary negotiation. An invalid plan is rejected atomically and
+retains the incumbent masks and witnesses without a release-only fallback.
+Critical replay restores mixed ordinary/bypass prefixes only before the same
+source, ownership, association and physical checks. The default policy is unchanged.
 
 `route-board` uses the unified router by default: unified negotiation after the
 established coupled differential/critical routing and decoupler preparation.
@@ -140,6 +156,27 @@ physical DRC findings, but fails differential/CAN acceptance explicitly because
 unified coupling and return-path verification are not implemented. Independent
 pair paths and a zero-open signal summary do not establish pair qualification.
 
+The unified router searches a multi-resolution lattice. A base lattice covers
+the board, and a fine patch is a rectangle (snapped to the base lattice, with
+a 1.5 mm margin around the package's pads) refined to base pitch ÷ k, where k
+is the coarsest factor that puts nodes on every ball or pin centre and on the
+channel centre lines between them; coarse and fine nodes coincide on the patch
+boundary. `--fine-regions arrays` (the default) refines full ball arrays only;
+`--fine-regions dense` also refines dense non-array packages (QFN, fine-pitch
+QFP) and is for measurement, not a default; `--fine-regions off` routes one
+uniform lattice whose pitch drops for the whole board when a ball array needs
+it. With patches, `--unified-pitch-mm` sets the base pitch (default 0.25 mm)
+and the per-package rule decides the refinement; a board without a full ball
+array routes exactly as with `off`. The report records the mode as
+`work_limits.fine_regions` and the plan as the `fine_regions` block (base and
+finest pitch, node counts, `uniform_nodes_at_finest`, one row per patch with
+its references, reason and factor, and `skipped` packages with the reason,
+including the factor `dense` would give them). When the lattice has patches,
+the `unified_setup` progress event also carries `patches`, `nodes` and
+`uniform_nodes_at_finest`. `replay-unified --set fine_regions=dense` replays a
+saved state with another mode; states saved before the option existed load
+with the default.
+
 ```console
 python -m copperscript issues build/BOARD/runs/STAMP
 python -m copperscript view build/BOARD/runs/STAMP --issue P1 -o build/views/P1.png
@@ -163,7 +200,7 @@ python -m copperscript audit-footprints examples/full_vertical/board.copper --lo
 Compile a valid design to normalized JSON IR:
 
 ```console
-python -m copperscript compile examples/valid_board/board.copper -o board.json
+python -m copperscript compile examples/valid_board/board.copper -o build/board.json
 ```
 
 Source `physical_macro` declarations and their module-owned bindings survive
@@ -180,7 +217,7 @@ existing lock without rewriting it; add `--offline` to require cached inputs.
 Generate a self-contained KiCad 8 schematic:
 
 ```console
-python -m copperscript export-kicad examples/valid_board/board.copper -o valid_board.kicad_sch
+python -m copperscript export-kicad examples/valid_board/board.copper -o build/valid_board.kicad_sch
 ```
 
 Generate a KiCad 8 PCB draft with resolved footprint geometry:
@@ -224,7 +261,7 @@ Produce a deterministic legal placement candidate and a four-gate readiness
 report:
 
 ```console
-python -m copperscript plan-layout examples/valid_board/board.copper --allow-proxy-footprints --candidates 3 -o planned.kicad_pcb --report layout-report.json
+python -m copperscript plan-layout examples/valid_board/board.copper --allow-proxy-footprints --candidates 3 -o build/planned.kicad_pcb --report build/layout-report.json
 ```
 
 The planner estimates global routing congestion but does not generate copper.
@@ -254,7 +291,7 @@ Produce deterministic multilayer global-routing guides after transactional
 placement feedback:
 
 ```console
-python -m copperscript route-global examples/valid_board/board.copper --allow-proxy-footprints -o global-route.json
+python -m copperscript route-global examples/valid_board/board.copper --allow-proxy-footprints -o build/global-route.json
 ```
 
 Global guides reserve corridors, layers, and proposed transitions for ordinary
@@ -265,7 +302,7 @@ Attempt detailed routing and write a native DRC report plus an inspection-only
 KiCad PCB draft:
 
 ```console
-python -m copperscript route-board examples/valid_board/board.copper --allow-proxy-footprints --report route-report.json -o routed-draft.kicad_pcb
+python -m copperscript route-board examples/valid_board/board.copper --allow-proxy-footprints --report build/route-report.json -o build/routed-draft.kicad_pcb
 ```
 
 Detailed signal tracks prefer long straight runs and 45-degree bends. Nets with
@@ -506,3 +543,19 @@ For a search that exhausts the unified router's per-path work bound, use
 wall-time limit. Both are computational settings; source and fabrication rules
 are unchanged. The effective state limit appears in `work_limits` and replay
 inputs. A failed bounded search is not proof that the connection is impossible.
+
+
+### Bounding pair search before unified routing
+
+`route-board --router unified --unified-pair-states 16000` caps expanded
+search states per differential pair in each direct critical-routing attempt,
+including the retry after releasing ordinary escape reservations. It preserves
+the existing exact copper, connectivity and pair-profile checks. Exhaustion is
+reported as an incomplete pair; it never grants ordinary routing permission
+to substitute independent traces for a differential pair.
+
+The default is unchanged when the option is omitted. The separate
+`--unified-time-budget-s` controls ordinary negotiated routing. Neither option
+is a wall-time limit for placement, optional placement-feedback trials or
+native verification. For a bounded source-placement run, use
+`--critical-feedback-trials 0` and retain the final report even on failure.

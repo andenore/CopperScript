@@ -273,11 +273,13 @@ def test_local_plane_escape_rips_up_and_reroutes_successful_signal() -> None:
     assert next(item for item in initial.detailed.nets
                 if item.net == "SIGNAL").connected
     assert not stitch_zone_pads(initial.board, plane_options).complete
+    events = []
     repaired = improve_zone_escapes(
         initial, plane_options, detailed_options=detail_options,
         options=EscapeFeedbackOptions(maximum_trials=0, maximum_local_trials=5),
+        on_progress=lambda *event: events.append(event),
     )
-    assert repaired.plane_stitch.complete
+    assert repaired.plane_stitch.complete, events
     assert repaired.attempts[0].description.startswith("local rip-up G1.1: SIGNAL")
     assert repaired.attempts[0].strategy == "local_dependency"
     assert repaired.attempts[0].repair_nets == ("SIGNAL",)

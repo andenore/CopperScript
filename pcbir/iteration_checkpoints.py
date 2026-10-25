@@ -122,7 +122,8 @@ def write_error_record(report_path: Path, *, board_name: str, error: BaseExcepti
     """Persist a failed run's message and stage, so `copper issues` can show it."""
 
     message = str(error)
-    components = sorted(set(re.findall(r"component '([^']+)'", message)))
+    components = sorted(set(re.findall(r"component '([^']+)'", message))
+                        | set(getattr(error, "diagnostic_components", ())))
     document = {
         "schema": ERROR_SCHEMA, "status": "error", "board": board_name,
         "error_type": type(error).__name__, "message": message[:4000],
@@ -135,5 +136,25 @@ def write_error_record(report_path: Path, *, board_name: str, error: BaseExcepti
     }
     path = report_path.with_name(report_path.stem + ".error.json")
     path.parent.mkdir(parents=True, exist_ok=True)
+    diagnostic_board = getattr(error, "diagnostic_board", None)
+    if diagnostic_board is not None:
+        from .workbench import save_state
+        from .backends.kicad_pcb import KiCadPcbBackend
+        from .backends.kicad_project import write_kicad_project
+        state_path = path.with_name(report_path.stem + ".error.state.json")
+        try:
+            save_state(state_path, diagnostic_board, note="Rejected geometry; not a placement checkpoint or signoff.")
+            document["diagnostic_state"] = state_path.name
+        except Exception as exc:
+            document.setdefault("diagnostic_errors", []).append(f"state: {type(exc).__name__}: {exc}")
+        pcb_path = path.with_name(report_path.stem + ".error.kicad_pcb")
+        try:
+            write_kicad_project(KiCadPcbBackend().generate(diagnostic_board), pcb_path)
+            document["diagnostic_board"] = pcb_path.name
+        except Exception as exc:
+            # A pre-materialization failure may have immutable macro intent
+            # without copper. Retain its exact state and the primary failure;
+            # never drop that intent merely to make a native preview export.
+            document.setdefault("diagnostic_errors", []).append(f"native preview: {type(exc).__name__}: {exc}")
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path

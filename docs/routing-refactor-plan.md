@@ -17,7 +17,7 @@ can route CopperProbe as its hardest current case.
 | CopperProbe (6 layers, 169-ball 0.75 mm BGA, QFN ADC, USB 3 pairs) | 0 opens, 0 exact DRC, native KiCad DRC clean after refill, wall time ≤ 30 min |
 | CopperAssetTracker (recorded 2026-10-11 candidate) | No regression in completion or DRC; time no worse than today |
 | CopperLedRing (2 layers) | No regression in completion or DRC; time no worse than today |
-| `cm4`, `full-vertical`, `nrf52`, `round-led-ring` examples | 100 % completion, exact DRC clean, each ≤ 5 min |
+| `cm4`, `full-vertical`, `nrf52` examples | 100 % completion, exact DRC clean, each ≤ 5 min |
 
 CopperAssetTracker and CopperLedRing must keep working at every merged phase:
 their pinned Make targets either run unchanged or get a matching update in
@@ -177,6 +177,7 @@ the default path imports it (phase P7).
 | `power_islands.py` | Automatic split-plane islands for decoupled rails on a spare plane layer (P3, opt-in `--power-islands`) |
 | `route_summary.py`, `plane_estimate.py`, `bench.py`, `bench/ladder.json` | Pipeline-independent completion summary, raster plane estimate, benchmark ladder (P1) |
 | `congestion_feedback.py` | Routability-driven placement feedback: per-tile congestion map from the unified router's contention (history, overflow, rejection points) combined with a RUDY-style demand estimate; parts on failed nets and hot tiles move down the demand gradient, candidates are screened by the estimate plus `route_global`, and only the best rerun the pipeline tail. Replaces `critical_feedback.py` and `routeflow.detailed_failure_trials` on the unified path (2026-10-24) |
+| `routing_lattice.py`, `fine_regions.py` | Multi-resolution search lattice (option 2 of the 2026-10-25 router review): `routing_lattice.py` puts every node-id, offset and point/node computation of the unified router behind one `Lattice` object (`UniformLattice` today, `NestedLattice` with fine patches at base pitch ÷ k next); `fine_regions.py` plans the patches from footprints whose pad or ball pitch needs them, with the `choose_pitch` alignment rule applied per package instead of to the whole board. Base pitch stays 0.25 mm; its auto-calculation is a later change |
 
 ### Lift (useful parts inside large modules)
 
@@ -248,9 +249,13 @@ evidence bundle.
   - Fields: connections total and routed, opens, exact DRC count by code,
     native DRC (when KiCad is present), vias, track length, wall time per stage,
     peak memory.
-- Ladder: `valid`, `round-led-ring`, `nrf52`, `full-vertical`, `cm4`,
-  CopperLedRing, CopperAssetTracker (pinned commits), CopperProbe. The consumer
-  boards run with their own Makefile route options as the baseline.
+- Ladder: `valid`, CopperLedRing (pinned consumer commit), `nrf52`,
+  `full-vertical`, `cm4`, AssetTracker (pinned commit), CopperProbe.
+  Resolve CopperLedRing as an explicit consumer checkout with its locked
+  dependencies; do not substitute the deprecated `round-led-ring` fixture or
+  assume a sibling directory. Retain its successful pinned build as the
+  comparison baseline and record the compiler revision under test separately.
+  The consumer boards use their own Makefile route options as the baseline.
 - Record baselines from the current pipeline under `bench/baselines/`, and use
   `compare_runs` for regressions.
 - Optional oracle: `backends/specctra.py`, which exports DSN and imports SES, so
@@ -405,6 +410,7 @@ Handoff, open items and the plan for merging to `main`:
 | 2026-10-24 | Default router is unified: `route-board`, `pcbir.bench` and the D3 CI pin default to `--router unified`; `--router legacy` keeps the pre-refactor pipeline | Ladder (default, no `--router`, no KiCad): round-led-ring 51/51, 40 vias, 582.844 mm; nrf52 35/35, 44, 350.563; full-vertical 86/86, 193, 1602.883; cm4 21/21, 61, 587.68; 0 DRC on all. `--router legacy`: cm4 21/21, 84 vias, 646.078 mm, 0 DRC |
 | 2026-10-24 | Owner decisions: `bend_cost` default 0.25 (adopted); legacy-only stages stay behind `--router legacy` for now; direct-mode pair verification deferred | Ladder (unified, bend 0.25, no KiCad): round-led-ring 51/51, 48 vias, 604.833 mm; nrf52 35/35, 42, 345.115; full-vertical 86/86, 189, 1597.398; cm4 21/21, 62, 588.979; 0 DRC on all |
 | 2026-10-24 | Congestion-driven placement feedback (B): one loop on the unified path (`--congestion-feedback-trials N`; `--detailed/--critical-feedback-trials` map onto it, `improve_critical_placement` no longer runs there); router map plus RUDY estimate, each normalised to its 95th percentile; screen to 2, rerun the shared pipeline tail, accept on the whole-board tuple | Ladder (default, no KiCad), with and without `--congestion-feedback-trials 4` (loop idle, no failures): round-led-ring 51/51, 48 vias, 604.833 mm; nrf52 35/35, 42, 345.115; full-vertical 86/86, 189, 1597.398; cm4 21/21, 62, 588.979; 0 DRC; boards byte-identical to `3770a2a`; total 352 s / 333 s (base 372 s). Fixture: one boxed-in net connected by one accepted move |
+| 2026-10-25 | Multi-resolution lattice S4: `--fine-regions arrays` default (fine patches over full ball arrays only); `dense` (also dense non-array packages) for measurement; `off` uniform; `choose_pitch` judges every placed ball | Ladder (default, no KiCad): round-led-ring 51/51, 48 vias, 604.833 mm; nrf52 35/35, 42, 345.115; full-vertical 86/86, 189, 1597.398; cm4 21/21, 62, 588.979; 0 DRC; no patches, boards byte-identical to `--fine-regions off` and to `53c5f6c`. `dense`: round-led-ring 51/51, 50 vias, 616.451 mm, 73.7 s (U1 k=5); nrf52 35/35, 43, 333.132, 21.6 s (U_NRF k=5); full-vertical 86/86, 187, 1596.424, 186.7 s (5 patches); cm4 21/21, 61, 583.967, 14.8 s (2 connectors k=2); 0 DRC. BGA fixture (100 x 80 mm, 6 layers, 5 x 5 at 0.75 mm): `arrays` 0.79 M nodes, 148 MB, 4.1 s; `off` (0.125 mm uniform) 3.09 M, 348 MB, 4.9 s; 25/25, 0 DRC both |
 
 Open items:
 

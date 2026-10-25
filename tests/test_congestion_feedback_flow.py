@@ -89,6 +89,52 @@ def _pose(result, reference):
     return next(p for p in result.placement_and_global.board.placements if p.reference == reference)
 
 
+@pytest.mark.parametrize("accept", [True, False])
+def test_feedback_replay_inputs_follow_selected_run(tmp_path, monkeypatch, accept):
+    from pcbir.unified_router import replay_unified
+    from pcbir.workbench import load_state
+
+    if not accept:
+        monkeypatch.setattr(flow, "_feedback_score", lambda *args: (0,))
+    path = tmp_path / "selected.state.json"
+    result = _run(_boxed_in_board(), placement_feedback_trials=2,
+                  unified_options=UnifiedRouterOptions(time_budget_s=30, save_inputs_path=str(path)))
+    feedback = result.placement_feedback
+    assert feedback.reruns == 2
+    assert bool(feedback.accepted_moves) is accept
+    assert feedback.trials[-1].outcome == "not_improved"
+    saved = load_state(path)
+    assert saved["board"].placements == result.board.placements
+    assert saved["global_route"] == result.placement_and_global.global_route
+    assert saved["options"].save_inputs_path is None
+    replay = replay_unified(path)
+    assert replay.board.placements == result.board.placements
+    assert replay.board.tracks == result.detailed.board.tracks
+    assert replay.board.vias == result.detailed.board.vias
+
+
+def test_feedback_results_round_trip_with_congestion(tmp_path):
+    from pcbir.workbench import save_state, load_state
+    from pcbir.cli import main
+
+    inputs = tmp_path / "inputs.state.json"
+    result = _run(_boxed_in_board(), placement_feedback_trials=2,
+                  unified_options=UnifiedRouterOptions(time_budget_s=30, save_inputs_path=str(inputs)))
+    for name, value in (("detailed", result.detailed), ("pipeline", result)):
+        restored = load_state(save_state(tmp_path / f"{name}.state.json", value))
+        assert restored == value
+        detailed = restored if name == "detailed" else restored.detailed
+        assert detailed.congestion == result.detailed.congestion
+        assert not detailed.congestion.demand.flags.writeable
+        assert not detailed.congestion.capacity.flags.writeable
+        if name == "pipeline":
+            assert restored.placement_feedback.report() == result.placement_feedback.report()
+            assert restored.placement_feedback.initial_congestion == result.placement_feedback.initial_congestion
+    replay_path = tmp_path / "replay.state.json"
+    assert main(["replay-unified", str(inputs), "--save-result", str(replay_path)]) == 0
+    assert load_state(replay_path).congestion is not None
+
+
 def test_loop_moves_the_blocking_part_and_connects_the_net():
     board = _boxed_in_board()
     baseline = _run(board)
@@ -216,3 +262,36 @@ def test_loop_halves_the_step_and_stops_after_two_rounds_without_improvement():
         placement_options=PlacementPlannerOptions(fixed_references=("S1", "S2")),
         global_options=GLOBAL, rerun=rerun, score=flow._feedback_score)
     assert budget.stop_reason == "trial_budget" and budget.reruns == len(calls) == 3
+
+
+def test_saved_replay_inputs_belong_to_the_accepted_placement(tmp_path):
+    from pcbir.workbench import load_state
+    path = tmp_path / "inputs.state.json"
+    result = _run(_boxed_in_board(), placement_feedback_trials=4,
+                  unified_options=UnifiedRouterOptions(time_budget_s=30, save_inputs_path=str(path)))
+    feedback = result.placement_feedback
+    assert feedback.accepted_moves >= 1 and feedback.reruns >= 2, feedback.report()
+    # A trial rerun after the accepted one must not leave its placement here.
+    saved = load_state(path)
+    assert {p.reference: p for p in saved["board"].placements}["B"] == _pose(result, "B")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["inputs.state.json"]
+
+
+def test_rejected_trials_keep_the_original_replay_inputs(tmp_path, monkeypatch):
+    from pcbir.congestion_feedback import run_placement_feedback
+    from pcbir.workbench import load_state
+    import pcbir.congestion_feedback as feedback_module
+    path = tmp_path / "inputs.state.json"
+
+    def reject_everything(state, *, rerun, score, **kwargs):
+        # Every trial reruns the tail and is then judged worse than the incumbent.
+        return run_placement_feedback(state, rerun=rerun, score=lambda *parts: (1 << 60,), **kwargs)
+
+    monkeypatch.setattr(feedback_module, "run_placement_feedback", reject_everything)
+    baseline = _run(_boxed_in_board())
+    result = _run(_boxed_in_board(), placement_feedback_trials=2,
+                  unified_options=UnifiedRouterOptions(time_budget_s=30, save_inputs_path=str(path)))
+    assert result.placement_feedback.reruns >= 1 and not result.placement_feedback.accepted_moves
+    saved = load_state(path)
+    assert {p.reference: p for p in saved["board"].placements}["B"] == _pose(baseline, "B")
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["inputs.state.json"]

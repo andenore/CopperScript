@@ -103,7 +103,10 @@ def _repair_board(connector_centres, walls, obstacle) -> PhysicalBoard:
 # candidate shorts that copper. Routing the middle pair first and the bottom
 # pair after it succeeds. Searches use a bounded state budget (4000) to keep
 # the test fast.
-REPAIRABLE = (("-1.5", "-0.3", "0.9"), ("7.0", "13.0"), ("14", "8.8", "15.5", "10.0"))
+# The earlier 8.8 mm top edge became routable without repair after terminal
+# collars improved. At 8.6 mm the physical bottleneck still requires real
+# rip-up/reordering, so these tests continue exercising acceptance/rollback.
+REPAIRABLE = (("-1.5", "-0.3", "0.9"), ("7.0", "13.0"), ("14", "8.6", "15.5", "10.0"))
 
 
 def test_bundles_are_planned_per_component_pair_kind_and_priority() -> None:

@@ -458,7 +458,7 @@ def test_candidate_bundle_preserves_unreviewed_flags_and_strict_export(tmp_path)
         write_candidate_bom(board, lock, tmp_path / 'candidate')
 
 
-@pytest.mark.parametrize('change', ['missing', 'stale', 'unresolved', 'other_supplier'])
+@pytest.mark.parametrize('change', ['missing', 'stale', 'unresolved'])
 def test_candidate_refuses_bad_selection_identity_without_output(tmp_path, change):
     board = board_fixture()
     lock = reviewed_lock(board)
@@ -468,11 +468,47 @@ def test_candidate_refuses_bad_selection_identity_without_output(tmp_path, chang
         lock = replace(lock, electrical_sha256='0' * 64)
     elif change == 'unresolved':
         lock = snapshot(board)
-    else:
-        lock = replace(lock, selections=tuple(replace(e, supplier='other') for e in lock.selections))
     with pytest.raises(AssemblyError):
         write_candidate_bom(board, lock, tmp_path / 'candidate')
     assert not (tmp_path / 'candidate').exists()
+
+
+def test_mixed_supplier_candidate_keeps_jlc_bom_and_cpl_subset_exact(tmp_path):
+    board = board_fixture()
+    original = reviewed_lock(board)
+    lock = replace(original, selections=(original.selections[0],
+        replace(original.selections[1], supplier='digikey', supplier_part='EXACT-CT-ND')))
+    positions = tmp_path / 'native.csv'
+    positions.write_text('Ref,PosX,PosY,Rot,Side\nR1,1,-2,90,top\nR2,3,-4,180,bottom\n')
+    out = tmp_path / 'candidate'
+    data = write_candidate_bom(board, lock, out, native_positions=positions)
+    assert data['jlcpcb_references'] == ['R1']
+    assert data['other_supplier_references'] == ['R2']
+    for name in ('bom-candidate-NOT-APPROVED.csv', 'cpl-candidate-NOT-APPROVED.csv'):
+        with (out / name).open(newline='') as stream:
+            assert {r['Designator'] for r in csv.DictReader(stream)} == {'R1'}
+    with (out / 'all-suppliers-NOT-APPROVED.csv').open(newline='') as stream:
+        rows = list(csv.DictReader(stream))
+    assert rows[1]['Supplier Part'] == 'EXACT-CT-ND'
+    assert {r['Designator'] for r in rows} == {'R1', 'R2'}
+    with pytest.raises(AssemblyError, match='jlcpcb offers'):
+        write_jlcpcb_bom(board, lock, tmp_path / 'production.csv')
+    missing = tmp_path / 'missing.csv'
+    missing.write_text('Ref,PosX,PosY,Rot,Side\nR1,1,-2,90,top\n')
+    with pytest.raises(AssemblyError, match='candidate CPL rejected'):
+        write_candidate_bom(board, lock, tmp_path / 'incomplete', native_positions=missing)
+
+
+def test_other_supplier_only_candidate_does_not_emit_jlc_files(tmp_path):
+    board = board_fixture()
+    lock = replace(reviewed_lock(board), selections=tuple(
+        replace(e, supplier='lcsc') for e in reviewed_lock(board).selections))
+    out = tmp_path / 'candidate'
+    data = write_candidate_bom(board, lock, out)
+    assert data['jlcpcb_references'] == []
+    assert data['other_supplier_references'] == ['R1', 'R2']
+    assert (out / 'all-suppliers-NOT-APPROVED.csv').is_file()
+    assert not (out / 'bom-candidate-NOT-APPROVED.csv').exists()
 
 
 def test_hierarchical_bom_uses_native_references_without_changing_lock(tmp_path):

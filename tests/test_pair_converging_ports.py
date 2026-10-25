@@ -99,6 +99,32 @@ def test_short_slot_is_not_silently_extended():
     assert not any(p.preference==-1 for p in ports(board,a,z,ref,first,second,layer,lengths=(.5,.75)))
 
 
+def test_staggered_round_rows_admit_a_clear_end_on_channel():
+    from pcbir.physical import PadKind
+    positions=((3,0),(5.03,0),(7.06,0),(4.015,2.54),(6.045,2.54),(8.075,2.54))
+    pads=tuple(FootprintPad(str(i),Point.mm(x,y),Size.mm(1.6,1.6),
+        kind=PadKind.THROUGH_HOLE,shape=PadShape.CIRCLE,drill=Size.mm(.9,.9))
+        for i,(x,y) in enumerate(positions,1))
+    fp=PhysicalFootprint('staggered',pads,Size.mm(18,12))
+    rules=tuple(NetRoutingRule(n,RouteKind.DIFFERENTIAL,differential_partner=other,
+        width_nm=140000,pair_gap_nm=260000,clearance_nm=260000,
+        breakout_length_nm=4000000,breakout_width_nm=100000,breakout_gap_nm=150000,
+        breakout_clearance_nm=90000) for n,other in (('A','B'),('B','A')))
+    board=PhysicalBoard('staggered rows',BoardOutline.rectangle(40,30),{'staggered':fp},
+        (Placement('J','staggered',Point.mm(10,10)),),
+        (PhysicalNet('A',(PadReference('J','1'),)),PhysicalNet('B',(PadReference('J','2'),)),
+         PhysicalNet('OTHER',tuple(PadReference('J',str(i))for i in range(3,7)))),
+        net_routing_rules=rules,rules=DesignRules(minimum_track_width_nm=90000,minimum_clearance_nm=90000))
+    a,z=(transformed_pad_position(board,board.placements[0],str(i)) for i in (1,2))
+    index=RoutingClearanceIndex(board)
+    result=_ports(board,index,'A','B',a,z,'J',140000,200000,260000,CopperLayer.FRONT,
+                  lengths=(3,),allow_local_fallback=False)
+    chosen=[p for p in result if p.preference==-1 and p.heading==0 and p.center.y_nm>a.y_nm]
+    assert chosen, result
+    assert all(_legal(board,index,p.first,p.second,260000) for p in chosen)
+    assert board.tracks==board.vias==()
+
+
 def test_refinement_and_keepouts_cannot_adopt_a_shortcut_through_the_leads():
     board,a,z,ref,first,second,layer=fixture()
     wall=CopperKeepout('closed', (layer,), PolygonWithHoles(PolygonRing(tuple(

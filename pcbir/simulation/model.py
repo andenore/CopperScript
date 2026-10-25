@@ -168,6 +168,7 @@ class SimulationPlan:
     initial_voltages: Mapping[str, Voltage]
     cases: tuple[str, ...]
     assumptions: tuple[str, ...]
+    integration_method: str | None = None
 
     def __post_init__(self):
         for key in ("bindings", "values", "open_boundaries", "initial_voltages"):
@@ -297,7 +298,7 @@ def _analysis(name, raw) -> Analysis:
 
 def parse_plan(raw: dict, *, directory: Path | None = None) -> SimulationPlan:
     data = object_fields(raw, {"schema_version", "name", "circuit", "models", "sources", "loads", "analysis", "analyses", "probes",
-                              "derived_signals", "checks", "plots", "outputs", "initial_state", "values", "cases", "assumptions"}, "plan")
+                              "derived_signals", "checks", "plots", "outputs", "initial_state", "values", "cases", "assumptions", "solver"}, "plan")
     if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
         raise SimulationError("expected schema_version: 1")
     name = identifier(required(data, "name", "plan"), "plan name")
@@ -392,6 +393,13 @@ def parse_plan(raw: dict, *, directory: Path | None = None) -> SimulationPlan:
     if (initial_raw or method == "uic") and any(a.kind != "transient" for a in analyses):
         raise SimulationError("initial voltages/UIC require a transient-only plan")
     initial_voltages = {n: quantity(v, Voltage, "initial node voltage") for n, v in initial_raw.items()}
+    solver = object_fields(data.get("solver", {}), {"integration_method"}, "solver")
+    integration_method = solver.get("integration_method")
+    if "integration_method" in solver:
+        if integration_method not in ("trap", "gear"):
+            raise SimulationError("solver.integration_method must be trap or gear")
+        if not any(a.kind == "transient" for a in analyses):
+            raise SimulationError("integration_method requires a transient analysis")
     cases = data.get("cases", {"nominal": {}})
     if not isinstance(cases, dict) or not cases:
         raise SimulationError("cases must be a nonempty object")
@@ -413,7 +421,7 @@ def parse_plan(raw: dict, *, directory: Path | None = None) -> SimulationPlan:
     return SimulationPlan(name, json.dumps(data, sort_keys=True, indent=2, allow_nan=False), directory, modules, components,
                           all_components, text(required(circuit, "reference_node", "circuit"), "reference_node"), sources, analyses,
                           tuple(probes), tuple(derived), registry, bindings, values, opens, method, initial_voltages,
-                          tuple(sorted(cases)), strings(data.get("assumptions", []), "assumptions"))
+                          tuple(sorted(cases)), strings(data.get("assumptions", []), "assumptions"), integration_method)
 
 
 def load_plan(path: str | Path) -> SimulationPlan:
