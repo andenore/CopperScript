@@ -893,7 +893,12 @@ def _parser() -> argparse.ArgumentParser:
         help="ordinary detailed router: the unified negotiated router (default) or the pre-refactor "
              "pass-based legacy pipeline")
     board_route_parser.add_argument("--unified-pitch-mm", type=Decimal, default=None,
-        help="grid pitch of the unified router (default: 0.25 mm, finer to align with ball grids)")
+        help="grid pitch of the unified router (default: 0.25 mm); the base pitch under fine "
+             "patches with --fine-regions arrays|dense, the whole-board pitch with --fine-regions off "
+             "(default there: 0.25 mm, finer to align with ball grids)")
+    board_route_parser.add_argument("--fine-regions", choices=("off", "arrays", "dense"), default="arrays",
+        help="unified router lattice: fine patches over full ball arrays (arrays, default), also over "
+             "dense non-array packages (dense, for measurement), or one uniform lattice (off)")
     board_route_parser.add_argument("--unified-iterations", type=int, default=150,
         help="maximum negotiation iterations of the unified router; it also stops after 60 "
              "iterations without improvement (default: 150)")
@@ -1177,6 +1182,7 @@ def _unified_options(args):
                                 pre_route_decouplers=not value("unified_no_decouplers") and not direct,
                                 direct=direct,
                                 route_smoothing=not value("no_route_smoothing"),
+                                fine_regions=value("fine_regions"),
                                 save_inputs_path=str(save_inputs) if save_inputs else None)
 
 
@@ -1230,6 +1236,22 @@ def _unified_flag_notes(args) -> dict[str, list[str]] | None:
     # The legacy placement controllers' budgets become the congestion loop's.
     mapped = [flag(name) for name in _UNIFIED_MAPPED_FLAGS if given(name) and getattr(args, name)]
     return {"ignored_flags": ignored, "skipped_stage_flags": skipped, "mapped_flags": mapped}
+
+
+def _fine_region_report(args, board) -> dict | None:
+    """The unified router's fine-patch plan for the final placement (None on the legacy router).
+
+    The plan is a pure function of the outline, stackup, footprints and
+    placements, so it is the one the last unified run built its lattice from.
+    """
+    options = _unified_options(args)
+    if options is None:
+        return None
+    from .unified_router import fine_region_plan
+    plan = fine_region_plan(board, options)
+    if plan is None:
+        return {"mode": "off"}
+    return {"mode": options.fine_regions, **plan.report()}
 
 
 def _congestion_feedback_budget(args) -> int:
@@ -2062,6 +2084,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "routing_profile": args.routing_profile or "custom_defaults",
                 "work_limits": {name: getattr(args, name) for name in (
                     "router", "unified_direct", "unified_iterations", "unified_time_budget_s", "unified_search_states",
+                    "fine_regions",
                     "passes", "search_budget", "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
@@ -2104,6 +2127,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "return_preparation": result.power_preparation.report() if result.power_preparation else None,
                     "return_preservation": final_power_preparation,
                 }
+            fine_regions = _fine_region_report(args, output_board)
+            if fine_regions is not None:
+                report["fine_regions"] = fine_regions
             if result.placement_feedback is not None:
                 # Unified router: congestion-driven placement feedback (trials, moves, hot tiles).
                 report["placement_feedback"] = result.placement_feedback.report()

@@ -27,6 +27,9 @@ from pcbir.physical import PadShape
 from pcbir.unified_router import choose_pitch
 
 BASE = nm_from_mm("0.25")
+# Non-array dense packages are planned only with dense_packages (the router's
+# fine_regions="dense"); ball arrays always qualify.
+DENSE = FineRegionOptions(dense_packages=True)
 
 
 def _ball_array(n: int, pitch: str, name: str | None = None) -> PhysicalFootprint:
@@ -170,7 +173,7 @@ def test_off_lattice_array_falls_back_to_half_the_ball_pitch() -> None:
 
 def test_05_mm_qfn32_gets_a_patch() -> None:
     board = _board((("U2", _qfn32(), 30, 30),))
-    plan = plan_fine_regions(board, BASE)
+    plan = plan_fine_regions(board, BASE, DENSE)
     assert len(plan.patches) == 1
     patch = plan.patches[0]
     # Pins sit 2.4375 mm from the centre: only 0.0625 mm puts nodes on them.
@@ -179,7 +182,7 @@ def test_05_mm_qfn32_gets_a_patch() -> None:
     assert _snapped(patch, board)
     # Pad copper reaches 2.875 mm from the centre; plus the margin, snapped outward.
     assert (patch.x0_nm, patch.x1_nm) == (nm_from_mm("25.5"), nm_from_mm("34.5"))
-    rotated = plan_fine_regions(_board((("U2", _qfn32(), 30, 30, 90),)), BASE)
+    rotated = plan_fine_regions(_board((("U2", _qfn32(), 30, 30, 90),)), BASE, DENSE)
     assert [(p.factor, p.x0_nm, p.y0_nm, p.x1_nm, p.y1_nm) for p in rotated.patches] == \
         [(p.factor, p.x0_nm, p.y0_nm, p.x1_nm, p.y1_nm) for p in plan.patches]
 
@@ -203,7 +206,7 @@ def test_two_packages_03_mm_apart_merge_with_the_larger_factor() -> None:
     # is exactly 0.3 mm from the QFN's (starting at 58 - 2.875 = 55.125 mm).
     bga = _ball_array(13, "0.75")
     board = _board((("U1", bga, "50.15", 40), ("U2", _qfn32(), 58, 40)))
-    plan = plan_fine_regions(board, BASE)
+    plan = plan_fine_regions(board, BASE, DENSE)
     assert len(plan.patches) == 1
     patch = plan.patches[0]
     assert patch.references == ("U1", "U2") and patch.factor == 4
@@ -253,7 +256,7 @@ def test_one_bga_on_a_100_by_80_board_costs_a_third_of_uniform_refinement() -> N
 def test_report_is_json_ready() -> None:
     board = _board((("U1", _ball_array(13, "0.75"), 50, 40), ("U2", _qfn32(), 20, 20),
                     ("U3", _ball_array(9, "1.0"), 80, 60)))
-    report = plan_fine_regions(board, BASE).report()
+    report = plan_fine_regions(board, BASE, DENSE).report()
     assert json.loads(json.dumps(report)) == report
     assert [row["references"] for row in report["patches"]] == [["U1"], ["U2"]]
     assert report["patches"][0]["pitch_mm"] == 0.125 and report["patches"][0]["width_mm"] == 12.5
@@ -281,10 +284,10 @@ def test_plan_is_deterministic_and_independent_of_placement_order() -> None:
     parts = (("U1", _ball_array(13, "0.75"), 50, 40), ("U2", _qfn32(), 20, 20),
              ("U4", _qfn32(), "24.5", 20), ("U3", _ball_array(12, "0.4"), 80, 60))
     board = _board(parts)
-    first = plan_fine_regions(board, BASE)
-    assert first == plan_fine_regions(board, BASE)
+    first = plan_fine_regions(board, BASE, DENSE)
+    assert first == plan_fine_regions(board, BASE, DENSE)
     shuffled = replace(board, placements=tuple(reversed(board.placements)))
-    assert plan_fine_regions(shuffled, BASE) == first
+    assert plan_fine_regions(shuffled, BASE, DENSE) == first
     assert [p.references for p in first.patches] == [("U1",), ("U2", "U4"), ("U3",)]
 
 
@@ -329,3 +332,41 @@ def test_quarter_turn_rotations_keep_exact_alignment() -> None:
         plan = plan_fine_regions(_board((("U1", footprint, 50, 40, Decimal(rotation)),)), BASE)
         assert len(plan.patches) == 1 and plan.patches[0].factor == 2, rotation
         assert "puts nodes on pin centres" in plan.patches[0].reason, rotation
+
+
+def test_default_plans_ball_arrays_only_and_names_the_dense_packages_it_skips() -> None:
+    parts = (("U1", _ball_array(13, "0.75"), 50, 40), ("U2", _qfn32(), 20, 20), ("U3", _qfp32_1mm(), 80, 60))
+    board = _board(parts)
+    arrays = plan_fine_regions(board, BASE)
+    assert FineRegionOptions().dense_packages is False
+    assert [p.references for p in arrays.patches] == [("U1",)]
+    # The QFN is listed with the factor dense would give it; the 1 mm QFP is no candidate.
+    assert arrays.skipped == (("U2", '32 pins at 0.5 mm: would get k=4; dense packages are refined only '
+                                     'with dense_packages (fine_regions="dense")'),)
+    dense = plan_fine_regions(board, BASE, DENSE)
+    assert [(p.references, p.factor) for p in dense.patches] == [(("U1",), 2), (("U2",), 4)]
+    assert dense.patches[0] == arrays.patches[0] and dense.skipped == ()
+    # A board with only dense packages plans nothing by default.
+    qfn_only = plan_fine_regions(_board((("U2", _qfn32(), 20, 20),)), BASE)
+    assert qfn_only.patches == () and qfn_only.total_nodes == qfn_only.base_nodes
+    with pytest.raises(ValueError, match="dense_packages"):
+        FineRegionOptions(dense_packages="yes")
+
+
+def test_choose_pitch_judges_a_45_degree_array_by_every_ball_not_the_first() -> None:
+    # A 0.75 mm array rotated 45 degrees with its first ball on the lattice:
+    # (0.75 // 2) % 0.125 == 0 and that ball is a 0.125 mm lattice point, so
+    # the first-ball test called it aligned at 0.125 mm. Every other ball sits
+    # at an irrational offset: no candidate aligns it and the pitch stays.
+    footprint = _ball_array(9, "0.75")
+    board = _first_ball_on_lattice(footprint, 45)
+    assert choose_pitch(board) == BASE
+    # Listing the pads in another order does not change the verdict.
+    reversed_pads = replace(footprint, pads=tuple(reversed(footprint.pads)))
+    assert choose_pitch(replace(board, footprints={reversed_pads.name: reversed_pads})) == BASE
+    # Quarter turns stay exact: 0.125 mm puts nodes on every ball and channel.
+    from decimal import Decimal
+    for rotation in (0, 90, 180, 270):
+        assert choose_pitch(_board((("U1", footprint, 50, 40, Decimal(rotation)),))) == nm_from_mm("0.125")
+    # The planner agrees: the rotated array gets the fallback patch.
+    assert "fallback" in plan_fine_regions(board, BASE).patches[0].reason

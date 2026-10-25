@@ -54,7 +54,8 @@ summary are deliberately excluded from those attempted-failure issues. An empty
 replay issue list does not establish complete-board routing or native acceptance.
 For a bounded fine-grid diagnostic, `replay-unified --set pitch_nm=25000
 --set 'grid_window_nm=[1000000,1000000,21000000,21000000]'` limits the raster
-and search to an explicit rectangle in nanometres. Include every attempted
+and search to an explicit rectangle in nanometres (add `--set fine_regions=off`
+on a board whose plan has fine patches; a window is refused with patches). Include every attempted
 terminal. The full-board lattice phase, source outline, obstacles, fixed copper,
 macro/array intent and fresh exact commit checks remain in force. The window
 is a search bound, not a new board outline or permission to discard outside
@@ -139,6 +140,27 @@ retains replay inputs. Direct mode reports final profile connectivity and
 physical DRC findings, but fails differential/CAN acceptance explicitly because
 unified coupling and return-path verification are not implemented. Independent
 pair paths and a zero-open signal summary do not establish pair qualification.
+
+The unified router searches a multi-resolution lattice. A base lattice covers
+the board, and a fine patch is a rectangle (snapped to the base lattice, with
+a 1.5 mm margin around the package's pads) refined to base pitch ÷ k, where k
+is the coarsest factor that puts nodes on every ball or pin centre and on the
+channel centre lines between them; coarse and fine nodes coincide on the patch
+boundary. `--fine-regions arrays` (the default) refines full ball arrays only;
+`--fine-regions dense` also refines dense non-array packages (QFN, fine-pitch
+QFP) and is for measurement, not a default; `--fine-regions off` routes one
+uniform lattice whose pitch drops for the whole board when a ball array needs
+it. With patches, `--unified-pitch-mm` sets the base pitch (default 0.25 mm)
+and the per-package rule decides the refinement; a board without a full ball
+array routes exactly as with `off`. The report records the mode as
+`work_limits.fine_regions` and the plan as the `fine_regions` block (base and
+finest pitch, node counts, `uniform_nodes_at_finest`, one row per patch with
+its references, reason and factor, and `skipped` packages with the reason,
+including the factor `dense` would give them). When the lattice has patches,
+the `unified_setup` progress event also carries `patches`, `nodes` and
+`uniform_nodes_at_finest`. `replay-unified --set fine_regions=dense` replays a
+saved state with another mode; states saved before the option existed load
+with the default.
 
 ```console
 python -m copperscript issues build/BOARD/runs/STAMP

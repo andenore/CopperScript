@@ -61,15 +61,21 @@ from .routing_lattice import NestedLattice, UniformLattice
 from .routing_vias import physical_via_span
 
 if TYPE_CHECKING:
-    from .fine_regions import FineRegionOptions
+    from .fine_regions import FineRegionOptions, FineRegionPlan
 
 _FOREIGN = -2  # Obstacle owned by another net, by several nets or by none.
 _FREE = -1
 
 
+# UnifiedRouterOptions.fine_regions values ("auto" is an alias of "dense").
+FINE_REGION_MODES = ("off", "arrays", "dense")
+# Base pitch of the lattice when pitch_nm is None (and choose_pitch's default).
+DEFAULT_PITCH_NM = nm_from_mm("0.25")
+
+
 @dataclass(frozen=True, slots=True)
 class UnifiedRouterOptions:
-    pitch_nm: int | None = None    # None: 0.25 mm, finer where a ball grid needs it
+    pitch_nm: int | None = None    # None: 0.25 mm (the base pitch; with fine_regions="off" finer where a ball grid needs it)
     maximum_iterations: int = 150
     # Stop negotiating once this many iterations in a row have not improved
     # the best result (0: run to maximum_iterations). Boards that converge
@@ -236,12 +242,17 @@ class UnifiedRouterOptions:
     export_congestion: bool = True
 
     # -- Multi-resolution lattice (fine_regions.py, routing_lattice.py) -----
-    # "off": one uniform lattice at pitch_nm (or choose_pitch). "auto": a
-    # 0.25 mm (or pitch_nm) base lattice plus fine patches planned by
-    # plan_fine_regions around packages whose pins need them (the
-    # choose_pitch rule applied per package); without patches the uniform
-    # base. The nested lattice runs the Python search (the C kernel is S3).
-    fine_regions: str = "off"
+    # "off": one uniform lattice at pitch_nm (or choose_pitch). "arrays"
+    # (default) and "dense": a pitch_nm (or 0.25 mm) base lattice plus fine
+    # patches planned by plan_fine_regions (the choose_pitch rule applied
+    # per package): "arrays" refines full ball arrays only; "dense" also
+    # refines non-array dense packages (QFN, fine-pitch QFP), a measurement
+    # mode. A plan without patches gives the plain uniform base lattice,
+    # which on a board without a full ball array is choose_pitch's lattice.
+    # "auto" (the S2/S3 name) is accepted and stored as "dense".
+    # fine_region_options sets the planner's other knobs; the mode always
+    # decides dense_packages.
+    fine_regions: str = "arrays"
     fine_region_options: "FineRegionOptions | None" = None   # None: FineRegionOptions()
 
     def __post_init__(self) -> None:
@@ -278,8 +289,10 @@ class UnifiedRouterOptions:
         if type(self.congestion_tile_nm) is not int or self.congestion_tile_nm <= 0 or (
                 self.pitch_nm is not None and self.congestion_tile_nm < self.pitch_nm):
             raise ValueError("congestion_tile_nm must be a positive integer of at least one pitch")
-        if self.fine_regions not in ("off", "auto"):
-            raise ValueError('fine_regions must be "off" or "auto"')
+        if self.fine_regions == "auto":
+            object.__setattr__(self, "fine_regions", "dense")
+        if self.fine_regions not in FINE_REGION_MODES:
+            raise ValueError('fine_regions must be "off", "arrays" or "dense"')
         if self.fine_region_options is not None:
             from .fine_regions import FineRegionOptions
             if not isinstance(self.fine_region_options, FineRegionOptions):
@@ -705,15 +718,14 @@ class _Router:
             for route in guides.routes:
                 if route.connected and (route.segments or route.accesses):
                     self.guides[route.net] = (*self.guides.get(route.net, ()), route)
-        # The fine-region plan (fine_regions="auto"), else None.
-        self.fine_plan = None
-        if options.fine_regions == "auto":
-            # The per-package rule of plan_fine_regions replaces choose_pitch.
-            from .fine_regions import plan_fine_regions
-            pitch = options.pitch_nm or nm_from_mm("0.25")
-            self.fine_plan = plan_fine_regions(board, pitch, options.fine_region_options)
-        else:
+        # The fine-region plan (fine_regions "arrays" or "dense"), else None.
+        # With a plan, its per-package rule replaces choose_pitch and the
+        # base pitch is pitch_nm or 0.25 mm.
+        self.fine_plan = fine_region_plan(board, options)
+        if self.fine_plan is None:
             pitch = options.pitch_nm or choose_pitch(board)
+        else:
+            pitch = self.fine_plan.base_pitch_nm
         # ``pitch`` is the base pitch: search costs and route lengths are per
         # base pitch on every lattice.
         self.pitch = pitch
@@ -723,9 +735,14 @@ class _Router:
         # same object under its former name (tests, tools).
         if self.fine_plan is not None and self.fine_plan.patches:
             if options.grid_window_nm is not None:
-                raise ValueError("grid_window_nm is not supported with fine_regions")
+                raise ValueError("grid_window_nm is not supported with fine_regions patches "
+                                 f'({", ".join(r for p in self.fine_plan.patches for r in p.references)}); '
+                                 'set fine_regions="off" for a windowed search')
             self.lattice = self.grid = NestedLattice(board, pitch, self.fine_plan)
         else:
+            # No patches: the plain uniform lattice. Without a full ball array
+            # choose_pitch(board) is 0.25 mm too, so the copper is exactly
+            # fine_regions="off"'s.
             self.lattice = self.grid = UniformLattice(board, pitch, options.grid_window_nm)
         self.nested = isinstance(self.lattice, NestedLattice)
         if options.grid_window_nm is not None:
@@ -3215,11 +3232,18 @@ def _rejection_text(router, name: str) -> str:
             f"({where.x_nm / 1e6:.2f},{where.y_nm / 1e6:.2f}) {layer}{reason}{more}")
 
 
-def choose_pitch(board: PhysicalBoard, default_nm: int = nm_from_mm("0.25")) -> int:
+def choose_pitch(board: PhysicalBoard, default_nm: int = DEFAULT_PITCH_NM) -> int:
     """0.25 mm, or the coarsest finer pitch that puts nodes on every ball and
-    on the channel centre lines of each full-grid ball array (BGA)."""
+    on the channel centre lines of each full-grid ball array (BGA).
+
+    Only fine_regions="off" uses it. Each array is judged as placed: every
+    transformed ball and every adjacent-ball midpoint must be a lattice
+    point (``fine_regions.array_alignment``), so a rotated array is not
+    called aligned because its first ball is. An array that no candidate
+    aligns leaves the pitch unchanged.
+    """
+    from .fine_regions import array_alignment
     from .package_patterns import circular_array
-    from .placement import transformed_local_point
     pitch = default_nm
     for pose in board.placements:
         try:
@@ -3228,16 +3252,26 @@ def choose_pitch(board: PhysicalBoard, default_nm: int = nm_from_mm("0.25")) -> 
             array = None
         if array is None:
             continue
-        land = board.footprints[pose.footprint].pads[0]
-        corner = transformed_local_point(pose, land.position)
+        aligned = array_alignment(array, pose)
         for candidate in (pitch, pitch // 2, pitch // 4, nm_from_mm("0.05")):
-            if candidate <= 0:
-                continue
-            if (array.pitch_nm // 2) % candidate == 0 and corner.x_nm % candidate == 0 \
-                    and corner.y_nm % candidate == 0:
+            if candidate > 0 and aligned(candidate):
                 pitch = candidate
                 break
     return pitch
+
+
+def fine_region_plan(board: PhysicalBoard, options: UnifiedRouterOptions) -> "FineRegionPlan | None":
+    """The fine-patch plan the router builds its lattice from; None for "off".
+
+    The base pitch is ``options.pitch_nm`` or 0.25 mm. ``fine_region_options``
+    sets the planner's knobs; the mode sets ``dense_packages``.
+    """
+    if options.fine_regions == "off":
+        return None
+    from .fine_regions import FineRegionOptions, plan_fine_regions
+    planner = replace(options.fine_region_options or FineRegionOptions(),
+                      dense_packages=options.fine_regions == "dense")
+    return plan_fine_regions(board, options.pitch_nm or DEFAULT_PITCH_NM, planner)
 
 
 def _nearest_first(lattice, position: Point, reach: float):
@@ -3481,10 +3515,10 @@ def route_unified(
         shared = _SharedIndex(router.clearance)
     if options.export_congestion and options.congestion_tile_nm < router.pitch:
         raise ValueError("congestion_tile_nm must be at least the router pitch")
-    # The base block's shape; with fine_regions also the patches and node counts.
+    # The base block's shape; on a nested lattice also the patches and node counts.
     lattice = router.lattice
     setup = {"nets": len(router.specs), "grid": [lattice.nx, lattice.ny, lattice.nl]}
-    if router.fine_plan is not None:
+    if router.nested:
         setup["patches"] = [{"x0": block.x0 / 1e6, "y0": block.y0 / 1e6, "x1": block.x1 / 1e6,
                              "y1": block.y1 / 1e6, "factor": block.factor, "nodes": block.plane * lattice.nl}
                             for block in lattice.blocks[1:]]

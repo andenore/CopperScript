@@ -4,15 +4,19 @@ The unified router searches one uniform lattice today, and ``choose_pitch``
 drops the pitch for the whole board when any ball array needs nodes on its
 balls. This module plans the alternative: a coarse base lattice over the board
 plus rectangular fine patches at ``base_pitch // k`` around the packages that
-need them. It is pure planning; nothing routes through it yet (stage S2 builds
-a nested lattice from the plan).
+need them. It is pure planning; ``routing_lattice.NestedLattice`` builds the
+nested lattice from the plan and the unified router searches it
+(``UnifiedRouterOptions.fine_regions``).
 
 Which packages get a patch
     Every placement whose footprint is a full ball array
-    (``package_patterns.circular_array``), and every placement with at least
-    ``minimum_pads`` copper pins (SMD or plated through hole; pads sharing a
-    number are one pin) that each have another pin closer than
-    ``pad_pitch_threshold_nm``, centre to centre.
+    (``package_patterns.circular_array``). With ``dense_packages`` (the
+    router's ``fine_regions="dense"``, a measurement mode, off by default)
+    also every placement with at least ``minimum_pads`` copper pins (SMD or
+    plated through hole; pads sharing a number are one pin) that each have
+    another pin closer than ``pad_pitch_threshold_nm``, centre to centre.
+    Without it such a package is listed in ``skipped`` with the factor it
+    would have had, so a report shows what ``dense`` would add.
 
 Refinement factor (the ``choose_pitch`` rule, applied per package)
     Candidate factors are the integers ``2 <= k <= maximum_factor`` that divide
@@ -21,8 +25,9 @@ Refinement factor (the ``choose_pitch`` rule, applied per package)
     The coarsest factor whose fine pitch ``f`` puts nodes on every ball or pad
     centre and on the channel centre lines between neighbouring pins wins:
 
-    * ball array: ``(array_pitch // 2) % f == 0`` and the first ball's board
-      coordinates are multiples of ``f``, exactly as ``choose_pitch`` tests;
+    * ball array: every placed ball centre and every midpoint of two adjacent
+      balls are multiples of ``f`` (``array_alignment``; ``choose_pitch``
+      applies the same test to the whole board);
     * dense package: every dense pin's pad centre (both axes) and the midpoint
       of every pad pair closer than the threshold are multiples of ``f``.
 
@@ -148,8 +153,13 @@ class FineRegionOptions:
     minimum_area_nm2: int = nm_from_mm(1) * nm_from_mm(1)
     minimum_pads: int = 8
     enabled: bool = True
+    # Refine non-array dense packages (QFN, fine-pitch QFP, ...) too. Ball
+    # arrays always qualify. The router's fine_regions mode sets this.
+    dense_packages: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.dense_packages, bool) or not isinstance(self.enabled, bool):
+            raise ValueError("fine-region enabled and dense_packages must be booleans")
         if self.pad_pitch_threshold_nm <= 0:
             raise ValueError("fine-region pad pitch threshold must be positive")
         if self.margin_nm < 0 or self.merge_gap_nm < 0 or self.minimum_area_nm2 < 0:
@@ -322,6 +332,17 @@ def _array_points(array, pose: Placement) -> tuple[dict[int, Point], tuple[tuple
     return points, tuple(pairs)
 
 
+def array_alignment(array, pose: Placement):
+    """``aligned(fine_nm) -> bool`` for a placed full ball array.
+
+    True when every transformed ball centre and every midpoint of two
+    adjacent balls (the channel centre lines) is a multiple of ``fine_nm``
+    on both axes. ``unified_router.choose_pitch`` and the planner share it.
+    """
+    balls, adjacent = _array_points(array, pose)
+    return lambda fine: _dense_aligned(balls, adjacent, fine)
+
+
 def _dense_aligned(points: dict[int, Point], pairs, fine: int) -> bool:
     if any(p.x_nm % fine or p.y_nm % fine for p in points.values()):
         return False
@@ -353,8 +374,7 @@ def _package_need(board: PhysicalBoard, pose: Placement, base: int, options: Fin
         array = None
     if array is not None:
         spacing = array.pitch_nm
-        balls, adjacent = _array_points(array, pose)
-        aligned = lambda fine: _dense_aligned(balls, adjacent, fine)  # noqa: E731
+        aligned = array_alignment(array, pose)
         kind = f"{len(array.xs_nm)}x{len(array.ys_nm)} ball array at {_mm_text(spacing)}"
     else:
         key = (pose.footprint, options.pad_pitch_threshold_nm)
@@ -377,15 +397,22 @@ def _package_need(board: PhysicalBoard, pose: Placement, base: int, options: Fin
     factors = candidate_factors(base, options.maximum_factor)
     if not factors:
         return None, f"{kind}: no factor up to {options.maximum_factor} divides the base pitch"
+    need = None
     for k in factors:
         if aligned(base // k):
-            return _Need(pose.reference, k, f"{kind}: k={k} puts nodes on pin centres and channel centre lines",
-                         box), None
-    k = next((k for k in factors if 2 * (base // k) <= spacing), factors[-1])
-    return _Need(pose.reference, k, f"{kind}: no exact k up to {options.maximum_factor}; "
-                 f"fallback k={k}, pitch {_mm_text(base // k)} at most half the spacing"
-                 if 2 * (base // k) <= spacing else
-                 f"{kind}: no exact k up to {options.maximum_factor}; fallback to the finest k={k}", box), None
+            need = _Need(pose.reference, k, f"{kind}: k={k} puts nodes on pin centres and channel centre lines",
+                         box)
+            break
+    if need is None:
+        k = next((k for k in factors if 2 * (base // k) <= spacing), factors[-1])
+        need = _Need(pose.reference, k, f"{kind}: no exact k up to {options.maximum_factor}; "
+                     f"fallback k={k}, pitch {_mm_text(base // k)} at most half the spacing"
+                     if 2 * (base // k) <= spacing else
+                     f"{kind}: no exact k up to {options.maximum_factor}; fallback to the finest k={k}", box)
+    if array is None and not options.dense_packages:
+        return None, (f"{kind}: would get k={need.factor}; dense packages are refined only with "
+                      f"dense_packages (fine_regions=\"dense\")")
+    return need, None
 
 
 # ---------------------------------------------------------------------------
@@ -518,6 +545,7 @@ __all__ = [
     "FineRegionOptions",
     "FineRegionPlan",
     "LatticeBounds",
+    "array_alignment",
     "base_lattice_bounds",
     "candidate_factors",
     "plan_fine_regions",
