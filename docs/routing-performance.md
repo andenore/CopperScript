@@ -1,3 +1,63 @@
+## CopperProbe: why the 11 open connections fail (2026-10-25)
+
+Causes of the `--fine-regions arrays` run above (`ea0e23b`, fresh placement),
+from `copper issues`/`copper view`, the native unconnected-item report, the
+`critical-inputs`/`critical-retry-inputs` checkpoints and `replay-critical`.
+Two pairs, six ordinary nets, two plane pads.
+
+- **USB_RX1 pair (J_USB B10/B11 to the FX10 macro ports): pair search budget.**
+  The connector's own pads let the pins depart only to the east and south-east,
+  so the route must loop around the connector as RX2 did on B.Cu; the coarse
+  guide's transition lands on an A-row pad and is rejected before search; the
+  joint pair search spends its 6,000 states in 12 searches and ends 12 mm from
+  the goal. On the real critical inputs, `replay-critical --pair-states 60000`
+  connects it (via search, 145 s); 6,000 does not.
+- **USB_TX1_IC pair (FX10 macro ports to C_USB_TX1M/P): terminal geometry and
+  bypass copper, not budget.** From the bare placement it routes in 130 states;
+  on the critical inputs it fails at 6,000 and 60,000 states and on the retry
+  inputs too. West of the capacitors nothing is reserved, but the pair's launch
+  lanes are laid between the two capacitors (1.5 mm apart, 0.15 mm from each pad
+  edge against 0.29 mm clearance) and the search never tries the six departable
+  ports 1.2 mm west of the pads (4-6 searches, 10 states). At the FX10 end the
+  bypass planner put 10 GND and 10 FX_USB18 B.Cu segments and two GND vias under
+  the macro ports, leaving no via transition, so neither the surface nor the via
+  family has a candidate. TX2_IC, whose capacitors sit on B.Cu, succeeds through
+  the via family at the capacitor end.
+- **ACQ_EN (K7), SWDIO (K9): inner balls without a dogbone.** The ordinary escape
+  plan sited every net (62 nets, 74 vias, 0 pending); bypass planning then
+  released 58 of those reservations for 6 pending bypass links and only 22 were
+  restored (18 nets unrestored, these two and ADC_OVR among them). By the time
+  `plan_bga_fanouts` runs, the cell centres around K7/K9 hold FX_V33, GND and
+  SWCLK vias and it reports 7 balls blocked (G5, K5, K7, K9, C7, E11, F11). The
+  kit gives every inner ball its own via on a regular lattice; the E7 lattice
+  does the same (58 sited, none blocked) but still measured worse on the whole
+  board.
+- **ADC_OVR (E1, outer ring): surface exit sealed.** Outer-ring balls escape on
+  the surface (the kit hooks them outward through the gaps); E1's gap is taken by
+  the ADC bus escapes (ADC_D2/D3/D5/D9/D11, routed first as a bus) and FX_P0/D18
+  bypass copper on B.Cu, and its own escape reservation was among the unrestored.
+- **FB: single-layer, zero-via net cut by a pair.** FB (F.Cu only, max_vias 0,
+  8 mm) runs from PWR/U.5 to two resistors 3.5 mm below; the USB_RX2 pair, routed
+  earlier, crosses that corridor on F.Cu while USB_DM/DP took B.Cu there. Nothing
+  tells the critical router that a planar ordinary net needs the corridor.
+- **FX_XTAL and V33 at FB_XTAL: fixed part enclosed.** FB_XTAL is fixed inside
+  the USB_DM/DP corridor (placement warning W8); the pair wraps around it on F.Cu
+  with GND bypass vias beside it, so pad 2 cannot reach M12 3.7 mm away and pad 1
+  gets no via to the In3 V33 island (plane stitch `still_cut_off`).
+- **GND N4/N6 and FX_V33 at C_FX10_J3: the macro exit fan.** The FX10_USB_ESCAPE
+  macro carries five pairs out of columns M/N on F.Cu; the GND balls between the
+  pairs (N4, N6; also M4-M10 get no lattice site) have no via and no surface
+  exit, and the J3 rail capacitor at the fan's edge stays unconnected. The kit
+  gives these GND balls vias; here the macro would have to.
+
+Generic follow-ups, in order of connections recovered: pair state budget scaled
+to the guide length (RX1); pair launches for two separate capacitors merged in
+front of the pads, and bypass planning keeping the macro ports' transition
+sites free (TX1_IC); the escape-reservation release restoring or re-siting the
+released balls before fanout (K7, K9, E1); planar zero-via ordinary nets
+routed before pairs (FB). Consumer-side: FB_XTAL's fixed position and GND vias
+in the USB escape macro.
+
 ## CopperProbe: `--fine-regions arrays` against `dense` (2026-10-25)
 
 Measured on the escape-planning branch at `ea0e23b` (main `842e643` merged),
