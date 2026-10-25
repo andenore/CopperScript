@@ -1,3 +1,28 @@
+## CopperProbe: `--fine-regions arrays` against `dense` (2026-10-25)
+
+Measured on the escape-planning branch at `ea0e23b` (main `842e643` merged),
+both routes from one fresh placement checkpoint (the earlier In4 checkpoint
+is refused by the merged checkpoint identity), unified router defaults,
+congestion feedback on (it proposed no accepted move in either run).
+
+| Mode | Lattice nodes | Setup | Repair rounds | Total | Open / connections | Signal nets open | Vias | Track | Length/skew warnings |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| `arrays` (default) | 540,030 | 715 s | 1 (not adopted) | 6,720 s | 11 / 237 | 10 | 335 | 2,587 mm | 4 |
+| `dense` | 977,130 | 1,016 s | 2 (one adopted) | 7,792 s | 11 / 237 | 8 | 339 | 2,590 mm | 5 |
+
+`arrays` refines only the FX10 (k=2, 0.125 mm, 45,600 extra nodes). `dense`
+also refines J_USB, PWR/U and U_CC (k=2), U_ADC (k=4, 0.0625 mm, 175,824
+nodes) and U_DRV and U_NEG (k=5, 0.05 mm, 162,960 nodes): 81 % more nodes,
+42 % longer setup and 16 % longer in all. Completion is identical. Both runs
+lose the same critical pairs (USB_TX1 cohort clearance, USB_RX1 guide
+transition at J_USB), FB, FX_XTAL, ACQ_EN and the plane nets GND/V33/D18 in
+copper. `dense` connects ADC_OVR and SWDIO near the refined ADC but loses
+FX_V33 (blocked by FX_VBUS at the exact commit check), and its ADC bus skew is
+6.40 mm against 7.08 mm (limit 5 mm), with ADC_D1 and ADC_D10 instead of ADC_D8
+over the 35 mm limit. Single runs vary by about +-4 nets, so none of these
+differences is established. `dense` stays a measurement mode: on this board it
+costs time for no completion gain.
+
 ## Physical via spans and guide costs through repair (2026-10-24)
 
 Python and native search now choose a legality mask for each layer transition's
