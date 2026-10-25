@@ -58,7 +58,18 @@ on one machine, so their times are inflated against the baseline's.
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `arrays` baseline (`ea0e23b`) | 11 / 237 | 10 | 3 (GND N4/N6, V33 FB_XTAL.1) | 335 | 2,587 mm | 4 | 2 (none adopted) | 6,720 s |
 | A: fixes, original board | 6 / 237 | 5 | 2 (GND N4/N6) | 331 | 2,748 mm | 7 | 3 (one adopted) | 11,874 s |
-| B: fixes, relaxed pins, fresh placement | (running) | | | | | | | |
+| B: fixes, relaxed pins, fresh placement | 8 / 237 | 7 | 2 (GND N4/N6) | 321 | 2,677 mm | 4 | 4 (two adopted) | 14,789 s (2,615 s placing) |
+
+Run B is not comparable net by net (fresh placement; single runs vary by
+about +-4 nets), but it answers the two questions it was run for. The
+relaxed pins did not connect USB_TX1_IC: its launch is free now (the first
+pass exhausts 60,000 states instead of ending after 10) and still no route
+fits beside TX2_IC, so the capacitors were part of the wall, not all of it.
+And the escape-reservation release repeats exactly (58 of 74 released, 20
+restored, 21 still pending after re-siting) with the same three FX10 balls
+losing every launch at the global stage (C4/D3, L11/M10, L3/L5): the cause
+is the planner, not the placement. Its USB_DM/DP skew and RX1 skew are
+within budget on this placement (4 warnings against 7).
 
 Run A connects the USB_RX1 pair (escalated search; 2.19 mm skew warning
 against 0.127 mm), FB, FX_XTAL, ACQ_EN, SWDIO and the V33 pad of FB_XTAL. Of
