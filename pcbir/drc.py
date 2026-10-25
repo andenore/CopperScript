@@ -39,6 +39,7 @@ from .geometry import (
     segment_distance_squared,
     shape_distance_squared,
     shapes_clear,
+    shapes_touch_or_overlap,
 )
 from .placement import placement_solution_is_legal
 from .breakout import BreakoutRegions
@@ -1066,7 +1067,7 @@ def _check_copper_keepouts(
             if not keepout.block_tracks or track.layer not in keepout.layers:
                 continue
             copper = RoundedConvexShape((track.start, track.end), track.width_nm // 2)
-            if not shapes_clear(region, copper):
+            if shapes_touch_or_overlap(region, copper):
                 findings.append(_finding(
                     "DRC-COPPER-KEEPOUT", DrcSeverity.ERROR,
                     f"track {index} enters copper keepout {keepout.id}",
@@ -1079,7 +1080,7 @@ def _check_copper_keepouts(
             ):
                 continue
             copper = RoundedConvexShape((via.position,), via.size_nm // 2)
-            if not shapes_clear(region, copper):
+            if shapes_touch_or_overlap(region, copper):
                 findings.append(_finding(
                     "DRC-COPPER-KEEPOUT", DrcSeverity.ERROR,
                     f"via {index} enters copper keepout {keepout.id}",
@@ -1103,7 +1104,7 @@ def _check_copper_keepouts(
                         continue
                     point = transformed_local_point(placement, pad.position)
                     copper = placed_pad_shape(point, pad, placement)
-                    if not shapes_clear(region, copper):
+                    if shapes_touch_or_overlap(region, copper):
                         findings.append(_finding(
                             "DRC-COPPER-KEEPOUT", DrcSeverity.ERROR,
                             f"pad {placement.reference}.{pad.number} enters copper keepout {keepout.id}",

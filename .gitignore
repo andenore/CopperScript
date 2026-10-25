@@ -1,6 +1,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+# Temporary directories from pytest --basetemp runs.
+/.pytest-*/
 .coverage
 htmlcov/
 
@@ -10,6 +12,8 @@ venv/
 *.egg-info/
 # Generated routing boards, reports and per-run logs.
 /build/
+# Legacy root-level compiler output; new examples write under build/.
+/board.json
 dist/
 
 .idea/

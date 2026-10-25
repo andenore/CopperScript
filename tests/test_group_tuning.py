@@ -16,7 +16,7 @@ from pcbir import (
 )
 from pcbir.critical import _drop_group_steps, _track_length
 from pcbir.critical_group_tuning import GroupTuner, lane_corners
-from pcbir.critical_tuning import MatchTuningUnit, bump_chamfers, match_tuning_line
+from pcbir.critical_tuning import MatchTuningUnit, UnitTuner, bump_chamfers, match_tuning_line
 from pcbir.geometry import segment_distance_squared
 from pcbir.physical import DesignRules
 from pcbir.routing_clearance import RoutingClearanceIndex

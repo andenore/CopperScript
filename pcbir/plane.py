@@ -14,7 +14,7 @@ from types import MappingProxyType
 from typing import Iterator
 
 from .drc import placed_pad_shape
-from .geometry import RoundedConvexShape, shapes_clear
+from .geometry import RoundedConvexShape, shapes_clear, point_segment_distance_squared
 from .physical import (
     BoardSide,
     CopperKeepout,
@@ -84,10 +84,13 @@ class PlaneStitchResult:
     added_track_count: int
     added_via_count: int
     copper_uses: tuple[CopperUse, ...] = ()
+    # Remote pads of explicitly regional routing reservations remain ordinary
+    # feeder obligations. This is not a connected or stitched-pad inventory.
+    explicit_feeder_pads: tuple[PadReference, ...] = ()
 
     @property
     def complete(self) -> bool:
-        """All pads reach a prospective plane contact, not verified zone fill."""
+        """All local targets have prospective contacts; feeders/fill stay open."""
         return not self.pending_pads
 
 
@@ -165,6 +168,7 @@ def stitch_zone_pads(
             for node in preferred_graph.pad_nodes.get(preferred_pad, ()):
                 preferred_roots.setdefault(preferred_graph.roots[node], set()).add(preferred_pad)
     owned_pending = set()
+    explicit_feeders = set()
     for zone in sorted(board.zones, key=lambda item: item.id):
         if (any(layer not in outer_layers for layer in zone.layers)
                 or (options.include_surface_zones and any(layer in outer_layers for layer in zone.layers))):
@@ -186,6 +190,15 @@ def stitch_zone_pads(
                 if item.number == reference.pad and item.kind is PadKind.SMD
             )
             if not lands:
+                continue
+            if (reference not in owned_pads and all(z.reserve_routing for z in reference_zones)
+                    and all(_outside_local_regions(placement, land, reference_zones, options)
+                            for land in lands)):
+                # A small authored thermal/distribution island must not force
+                # a remote pad to reach it inside a local escape search. Keep
+                # the explicit feeder visible for ordinary routing and final
+                # full-net/native checks; never label this pad stitched.
+                explicit_feeders.add(reference)
                 continue
             targets.append(reference)
             if any(PadReference(reference.component, number) in array_pads
@@ -384,8 +397,21 @@ def stitch_zone_pads(
     )
     return PlaneStitchResult(
         routed, tuple(stitched), tuple(pending), len(added_tracks), len(added_vias),
-        tuple(copper_uses),
+        tuple(copper_uses), tuple(sorted(explicit_feeders)),
     )
+
+
+def _outside_local_regions(placement, land, zones, options):
+    position = transformed_local_point(placement, land.position)
+    # Preserve the existing two-stage pad-to-via and via-to-region allowance,
+    # plus a conservative whole-land extent. Near-boundary contacts retain
+    # their original checked search, including blocked/exhausted failures.
+    reach = 2 * options.maximum_radius_nm + max(land.size.width_nm, land.size.height_nm)
+    return all(not _point_in_zone(position, zone.outline) and all(
+        point_segment_distance_squared(position, a, b) > reach * reach
+        for ring in (zone.outline.outer, *zone.outline.holes)
+        for a, b in zip(ring.vertices, (*ring.vertices[1:], ring.vertices[0])))
+        for zone in zones)
 
 
 def _stitch_land(
@@ -428,14 +454,27 @@ def _stitch_land_choices(
                   in options.preferred_ground_pads)
                  or (net != "GND" and any(
                      _point_in_zone(position, zone.outline) for zone in zones)))
-    choices: list[tuple[float, Point, tuple[TrackSegment, ...], Via | None]] = []
+    # A same-surface routing reservation supplies explicit local return intent.
+    # Prefer a checked contact inside it over an equally short contact in the
+    # surrounding plane. In particular this avoids putting a row of ground
+    # drills ahead of interleaved signal lands when the author reserved ground
+    # beneath the package. This is only a ranking of new, legal proposals;
+    # existing owned contacts, arrays and all path/drill gates stay unchanged.
+    radius_squared = options.maximum_radius_nm ** 2
+    local_regions = tuple(zone for zone in zones if preferred and zone.reserve_routing
+        and side in zone.layers and (_point_in_zone(position, zone.outline) or any(
+            point_segment_distance_squared(position, a, b) <= radius_squared
+            for ring in (zone.outline.outer, *zone.outline.holes)
+            for a, b in zip(ring.vertices, (*ring.vertices[1:], ring.vertices[0])))))
+    choices: list[tuple[int, float, Point, tuple[TrackSegment, ...], Via | None]] = []
     best_cost = float("inf")
+    best_region_rank = 1
 
     def remember(path, target, via):
         work.setdefault('contact_targets', {}).setdefault((path, via), target)
 
     def consider(path: tuple[TrackSegment, ...], target: Point, via: Via | None) -> None:
-        nonlocal best_cost
+        nonlocal best_cost, best_region_rank
         remember(path, target, via)
         length = max(
             _surface_route_length(net, side, width, position, target,
@@ -446,8 +485,11 @@ def _stitch_land_choices(
         # A little drilling cost avoids adding a via for negligible shortening.
         cost = length + (nm_from_mm("0.2") if via else 0)
         cost += preferred_via_uses.get(target, 0) * nm_from_mm("0.4")
-        choices.append((cost, target, path, via))
-        best_cost = min(best_cost, cost)
+        region_rank = int(bool(local_regions) and not any(
+            _point_in_zone(target, zone.outline) for zone in local_regions))
+        choices.append((region_rank, cost, target, path, via))
+        if (region_rank, cost) < (best_region_rank, best_cost):
+            best_region_rank, best_cost = region_rank, cost
 
     # Existing fanout and routed vias need not lie on the half-mm grid.
     reusable = sorted(
@@ -522,8 +564,10 @@ def _stitch_land_choices(
         distance_y = abs(candidate.y_nm - position.y_nm)
         # Every possible route costs at least its pad-to-via distance. Once a
         # ring is farther than an existing choice, no later ring can win.
-        if maximum_alternatives == 1 and preferred and choices and max(distance_x, distance_y) > min(
-                nm_from_mm("2"), best_cost):
+        if (maximum_alternatives == 1 and preferred and choices
+                and (not local_regions or best_region_rank == 0)
+                and max(distance_x, distance_y) > min(
+                nm_from_mm("2"), best_cost)):
             if radial:
                 break
             continue
@@ -574,9 +618,16 @@ def _stitch_land_choices(
             return (dx * outward[0] + dy * outward[1]) / span if span else 0.0
 
         ranked = sorted(choices, key=lambda item: (
-            item[0], item[3] is not None, -alignment(item[1]), item[1].x_nm, item[1].y_nm,
+            item[0], item[1], item[4] is not None,
+            # Equal-length departures should follow the physical land's
+            # outward direction, not the global x/y tie break. This keeps
+            # passive return vias away from the opposite signal land and
+            # avoids a rotation-dependent lateral wall of new drills.
+            clearance.terminal_preferences.score(net, side, (position,item[2]))
+                if options.candidate_bias is None else 0,
+            item[2].x_nm, item[2].y_nm,
         ))
-        return tuple(dict.fromkeys((path, via) for _, _, path, via in ranked))[:maximum_alternatives]
+        return tuple(dict.fromkeys((path, via) for _, _, _, path, via in ranked))[:maximum_alternatives]
     if work['exhausted']:
         return ()
     # A dense package may have no legal straight, elbow, or short lateral

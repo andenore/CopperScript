@@ -178,7 +178,7 @@ python -m copperscript audit-footprints examples/full_vertical/board.copper --lo
 Compile a valid design to normalized JSON IR:
 
 ```console
-python -m copperscript compile examples/valid_board/board.copper -o board.json
+python -m copperscript compile examples/valid_board/board.copper -o build/board.json
 ```
 
 Source `physical_macro` declarations and their module-owned bindings survive
@@ -195,7 +195,7 @@ existing lock without rewriting it; add `--offline` to require cached inputs.
 Generate a self-contained KiCad 8 schematic:
 
 ```console
-python -m copperscript export-kicad examples/valid_board/board.copper -o valid_board.kicad_sch
+python -m copperscript export-kicad examples/valid_board/board.copper -o build/valid_board.kicad_sch
 ```
 
 Generate a KiCad 8 PCB draft with resolved footprint geometry:
@@ -239,7 +239,7 @@ Produce a deterministic legal placement candidate and a four-gate readiness
 report:
 
 ```console
-python -m copperscript plan-layout examples/valid_board/board.copper --allow-proxy-footprints --candidates 3 -o planned.kicad_pcb --report layout-report.json
+python -m copperscript plan-layout examples/valid_board/board.copper --allow-proxy-footprints --candidates 3 -o build/planned.kicad_pcb --report build/layout-report.json
 ```
 
 The planner estimates global routing congestion but does not generate copper.
@@ -269,7 +269,7 @@ Produce deterministic multilayer global-routing guides after transactional
 placement feedback:
 
 ```console
-python -m copperscript route-global examples/valid_board/board.copper --allow-proxy-footprints -o global-route.json
+python -m copperscript route-global examples/valid_board/board.copper --allow-proxy-footprints -o build/global-route.json
 ```
 
 Global guides reserve corridors, layers, and proposed transitions for ordinary
@@ -280,7 +280,7 @@ Attempt detailed routing and write a native DRC report plus an inspection-only
 KiCad PCB draft:
 
 ```console
-python -m copperscript route-board examples/valid_board/board.copper --allow-proxy-footprints --report route-report.json -o routed-draft.kicad_pcb
+python -m copperscript route-board examples/valid_board/board.copper --allow-proxy-footprints --report build/route-report.json -o build/routed-draft.kicad_pcb
 ```
 
 Detailed signal tracks prefer long straight runs and 45-degree bends. Nets with

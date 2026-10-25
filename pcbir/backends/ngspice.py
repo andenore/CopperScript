@@ -22,6 +22,8 @@ def generate_deck(circuit: SimulationCircuit, analysis: Analysis) -> str:
     plan = circuit.plan
     lines = ["CopperScript simulation", "* Generated from immutable electrical IR; values in SI units.",
              ".options filetype=ascii reltol=1e-5 abstol=1e-10 vntol=1e-7"]
+    if plan.integration_method is not None:
+        lines.append(f".options method={plan.integration_method}")
     for model in circuit.models:
         lines.append(f'.include "{model.entrypoint}"')
     for i, element in enumerate(circuit.elements, 1):
@@ -69,7 +71,9 @@ def circuit_manifest(circuit: SimulationCircuit) -> dict:
         "sources": source_names(circuit),
         "boundaries": [{"endpoint": e, "net": n, "replacement": r} for e, n, r in circuit.boundaries],
         "models": [json.loads(m.manifest) for m in circuit.models],
-        "numerics": {"reltol": 1e-5, "abstol_A": 1e-10, "vntol_V": 1e-7},
+        "numerics": {"reltol": 1e-5, "abstol_A": 1e-10, "vntol_V": 1e-7,
+                     **({"integration_method": circuit.plan.integration_method}
+                        if circuit.plan.integration_method is not None else {})},
         "assumptions": list(circuit.plan.assumptions),
     }
 

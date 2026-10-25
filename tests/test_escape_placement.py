@@ -76,13 +76,35 @@ def test_spreading_preserves_fixed_mcu_and_moves_sensor_with_its_decoupler():
     source = poses(board)
     opts = options(fixed_references=frozenset({"U_MCU"}))
     assert placement_solution_is_legal(board, source, opts)
-    result, moved = _spread_escape_components(board, source, opts)
+    events = []
+    result, moved = _spread_escape_components(board, source, opts, progress=events.append)
+    assert events and all(event.startswith("escape_unit:") for event in events)
     assert moved and result["U_MCU"] == source["U_MCU"]
     assert placement_solution_is_legal(board, result, opts)
     assert not _escape_model(board, opts).channels(result)
     for axis in ("x_nm", "y_nm"):
         assert (getattr(result["U_SENSOR"].position, axis)-getattr(source["U_SENSOR"].position, axis)
                 == getattr(result["C1"].position, axis)-getattr(source["C1"].position, axis))
+
+
+def test_nonimproving_escape_trials_do_not_repeat_complete_geometry(monkeypatch):
+    import pcbir.placement as engine
+    board = fixture()
+    source = poses(board)
+    opts = options()
+    assert placement_solution_is_legal(board, source, opts)
+    assert _escape_model(board, opts).channels(source)
+    calls = []
+    real = engine.placement_solution_is_legal
+    def counted(*args):
+        calls.append(1)
+        return real(*args)
+    monkeypatch.setattr(engine, "placement_solution_is_legal", counted)
+    monkeypatch.setattr(engine, "_fast_score", lambda *args: (0, 0, 0, 0))
+    monkeypatch.setattr(engine, "_hpwl", lambda *args: 0)
+    result, moved = _spread_escape_components(board, source, opts)
+    assert result == source and moved == 0
+    assert calls == []
 
 
 def test_locked_short_channel_warns_instead_of_rejecting_or_unlocking():
@@ -193,6 +215,56 @@ def test_pair_cache_matches_fresh_models_after_pose_changes_and_reverts():
                 trial, include_clear=include_clear)
     assert len(model._positioned) == len(initial)
     assert len(model._pairs) <= len(initial)*(len(initial)-1)
+
+
+def test_incremental_deficit_matches_full_geometry_through_trials_and_inventory_changes():
+    import random
+    rng = random.Random(41)
+    board = fixture(companion=True)
+    model = EscapeSpacingModel(board)
+    initial = poses(board)
+    current = dict(initial)
+    trials = [dict(current)]
+    for _ in range(40):
+        for ref in rng.sample(sorted(current), k=2):
+            current[ref] = replace(current[ref],
+                position=Point.mm(rng.randrange(20, 40), rng.randrange(20, 40)),
+                rotation_degrees=rng.choice((0, 45, 90, 180)),
+                side=rng.choice((BoardSide.FRONT, BoardSide.BACK)))
+        trials.append(dict(current))
+    trials += [initial, {r:p for r,p in initial.items() if r != 'C1'}, {}, initial]
+    for trial in trials:
+        expected = sum(c.deficit_nm for c in EscapeSpacingModel(board).channels(trial))
+        assert model.deficit_nm(trial) == expected
+        # Full diagnostics may populate pair caches between scoring calls.
+        model.channels(initial, include_clear=True)
+        assert model.deficit_nm(trial) == expected
+    assert len(model._deficit_by_pair) <= len(initial)*(len(initial)-1)//2
+
+
+def test_deficit_single_move_only_revisits_incident_pairs(monkeypatch):
+    board = fixture()
+    template = board.placements[1]
+    placements = tuple(replace(template, reference=f"U{i}", position=Point.mm(i*3, 20))
+                       for i in range(30))
+    board = replace(board, placements=placements, nets=(PhysicalNet("GND", tuple(
+        PadReference(p.reference, pad.number) for p in placements
+        for pad in board.footprints[p.footprint].pads)),))
+    model = EscapeSpacingModel(board)
+    initial = poses(board)
+    model.deficit_nm(initial)
+    calls = []
+    channels = model.channels
+    def observed(p, **kwargs):
+        calls.append(len(p))
+        return channels(p, **kwargs)
+    monkeypatch.setattr(model, "channels", observed)
+    trial = {**initial, "U0": replace(initial["U0"], position=Point.mm(4, 20))}
+    assert model.deficit_nm(trial) == sum(c.deficit_nm for c in EscapeSpacingModel(board).channels(trial))
+    assert calls == [2] * (len(initial) - 1)
+    calls.clear()
+    model.deficit_nm(trial)
+    assert not calls
 
 
 @pytest.mark.parametrize("angle", [0, 45])

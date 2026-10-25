@@ -51,6 +51,24 @@ def test_existing_via_tail_does_not_cross_foreign_reservation_or_radius(blocked,
     assert not any(t.layer is CopperLayer.BACK for t in result.board.tracks)
 
 
+@pytest.mark.parametrize('reserved',(False,True))
+def test_distant_regional_pour_requires_an_explicit_feeder_not_a_local_plane_escape(reserved):
+    from pcbir.drc import explicit_copper_connectivity
+    board=_tail_board()
+    zone=replace(board.zones[0],reserve_routing=reserved,
+        outline=PolygonWithHoles(PolygonRing(tuple(Point.mm(x,y) for x,y in ((18,1),(19,1),(19,11),(18,11))))))
+    board=replace(board,zones=(zone,))
+    pad=PadReference('J1','1')
+    result=stitch_zone_pads(board,PlaneStitchOptions(include_surface_zones=True,only_pads=frozenset({pad})))
+    if reserved:
+        assert pad not in result.pending_pads and pad not in result.stitched_pads
+        assert result.explicit_feeder_pads==(pad,)
+    else:
+        assert pad in result.pending_pads and not result.explicit_feeder_pads
+    assert not explicit_copper_connectivity(result.board).net_connected(next(n for n in board.nets if n.name=='GND'))
+    assert all(t in result.board.tracks for t in board.tracks) and all(v in result.board.vias for v in board.vias)
+
+
 @pytest.mark.parametrize('reserved', [False, True])
 def test_reserved_region_reuses_exit_while_unreserved_keeps_fresh_via_order(reserved):
     board=_tail_board(front_wall=False)

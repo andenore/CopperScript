@@ -69,18 +69,35 @@ copper route-board BOARD --progress --reuse-placement CK/placement.state.json ..
 
 `--stop-after` accepts `placement`, `package-preflight` and `package-access`
 (runs the package-access improvement trials, then stops). The package stops
-need `--router legacy` (the default unified router has no package-access stage)
-and fanout, which is on unless `--no-fanout`. A stopped run writes its report and
+need `--router legacy` and fanout, which is on unless `--no-fanout`; with power-return preparation
+(`--plan-power-areas` and plane-return nets) the preparation replaces those
+trials, so both package stops end after it. A stopped run writes its report and
 draft board, is marked `stopped_after`, skips zone-escape, filled-copper and
 final native verification, and never passes; its open nets read "run stopped
 after ...". `copper issues` shows the stop in its header.
 
 `--checkpoint-dir DIR` saves `DIR/placement.state.json`, keyed on the physical
-board, the placement/global/feedback options and the compiler code. A failed save is reported and the run continues.
+board, the placement/global/feedback/power-area options (plus fanout and
+native settings when power-area support-pattern trials run inside placement)
+and the compiler code. A failed save is reported and the run continues.
 `--reuse-placement` refuses a checkpoint whose board or options differ; a
 compiler change is allowed (that is the point of holding placement fixed) and
 recorded as `placement_reuse.code_changed` in the report. Rerun placement
 before signoff whenever placement code or inputs changed.
+
+The same directory also receives `package-preflight.state.json` or
+`package-access.state.json` when that stage completes. These diagnostic states
+retain the source, ordinary escape ownership and critical/contact results for
+`copper state show`, `copper view` and `pcbir.workbench` experiments. They are
+not accepted by `--reuse-placement`, do not resume the routing pipeline and do
+not establish package acceptance or signoff. A failed save remains visible in
+the report's `checkpoints` field.
+
+It also saves `ordinary-fanout.state.json` immediately after ordinary exits and
+`package-initial-baseline.state.json` / `package-full-baseline.state.json` before
+pattern negotiation in each search tier. These earlier snapshots allow bounded
+experiments while later critical or negotiation work is still running. They
+have the same diagnostic-only status and cannot replace a fresh full build.
 
 When `route-board --report RUN/route-report.json` fails with an error, it
 writes `RUN/route-report.error.json`: error type, message, the components it
@@ -88,6 +105,12 @@ names and, with `--progress`, the stage that was running and those that
 finished. `copper issues RUN` prefers it over an older report in the same
 directory and lists it as `E1` with a window on those components; the next
 successful run removes it.
+
+Rejected geometry is also retained in a state file with a content digest. If native preview
+export is unavailable (for example, a hard macro has not been materialized),
+the primary error and state remain available, with the preview failure in
+`diagnostic_errors`. Issues and views use the exact rejected state without
+discarding immutable macro intent to make a preview.
 
 For scripts, `pcbir.workbench` provides `load_run`, `run_issues`, `view`,
 `scene_from_physical`, `save_state` and `load_state`. State files round-trip

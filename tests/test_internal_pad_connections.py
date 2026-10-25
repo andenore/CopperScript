@@ -246,15 +246,22 @@ def test_fanout_chooses_one_alternate_internal_land_and_verifies_it(monkeypatch)
 
 def test_native_schematic_retains_groups(tmp_path):
     from pcbir import KiCadSchematicBackend
+    from pcbir.backends.kicad_project import write_kicad_schematic
     cli = native_cli()
     manifest = KiCadSchematicBackend().generate(compile_contact_fixture(tmp_path))
     assert manifest.target_version == "10.0"
     source = tmp_path / "contacts.kicad_sch"
-    source.write_text(manifest.artifacts[0].content, encoding="utf-8")
+    write_kicad_schematic(manifest, source)
     netlist = tmp_path / "contacts.xml"
     subprocess.run([cli, "sch", "export", "netlist", "--format", "kicadxml", "-o", str(netlist), str(source)],
                    check=True, capture_output=True)
     assert "jumper_pin_groups" in netlist.read_text(encoding="utf-8")
+    report = tmp_path / "contacts-erc.json"
+    subprocess.run([cli, "sch", "erc", str(source), "--format", "json", "-o", str(report)],
+                   check=True, capture_output=True)
+    violations = [v for sheet in json.loads(report.read_text(encoding="utf-8"))["sheets"]
+                  for v in sheet["violations"]]
+    assert not [v for v in violations if v["type"] in {"lib_symbol_issues", "lib_symbol_mismatch"}]
 
 
 @pytest.mark.parametrize("groups", [(), (InternalPadGroup(("1",)),), (InternalPadGroup(("1", "2")),)])

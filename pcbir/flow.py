@@ -72,7 +72,13 @@ def _stopped_after_placement(placement: PlacementRoutingResult, drc_policy) -> t
 
     from .critical import _fingerprint as critical_fingerprint
     from .detailed import DetailedNetResult, DetailedRoutingMetrics, _fingerprint as detailed_fingerprint
-    board = replace(placement.board, metadata={**placement.board.metadata, "stopped_after": "placement",
+    from .hard_macros import materialize_hard_macros
+    # A placement preview still owns its prescribed immutable copper and via
+    # arrays. Exporting a bare footprint scene would drop that intent. Commit
+    # and validate the complete prefix just as the later routing stage does;
+    # the held placement checkpoint itself remains untouched.
+    board = materialize_hard_macros(placement.board)
+    board = replace(board, metadata={**board.metadata, "stopped_after": "placement",
                                                "detailed_routing": "not_run", "fabrication_ready": "false"})
     global_fp = placement.global_route.routing_fingerprint
     critical = CriticalRoutingResult(CriticalRoutingStatus.WARNING, board, (), (), (), global_fp,
@@ -154,6 +160,8 @@ def run_routing_pipeline(
     global_options = global_options or GlobalRouterOptions()
     detailed_options = detailed_options or DetailedRouterOptions()
     package_access_options = package_access_options or PackageAccessOptions()
+    if package_access_options.guide_replan_options is None:
+        package_access_options = replace(package_access_options, guide_replan_options=global_options)
     if routing_nets is not None:
         if (power_area_options is None or not power_area_options.plane_return_nets
                 or not isinstance(routing_nets, frozenset)
@@ -200,9 +208,12 @@ def run_routing_pipeline(
         emit(on_progress, "ordinary_area", "stopped", reason="stop_after_placement")
         critical, detailed, drc = _stopped_after_placement(placement, drc_policy)
         return RoutingPipelineResult(PhysicalFlowStatus.FAIL, placement, critical, detailed, drc,
+                                     power_area_options=power_area_options,
+                                     power_area_status="stopped_after_placement" if power_area_options is not None else "disabled",
                                      stopped_after="placement", unified_options=unified_options)
     access = None
     preparation, preparation_validation = None, None
+    stopped = None
     if power_area_options is not None and power_area_options.plane_return_nets:
         from .power_preparation import prepare_power_distribution
         from .package_access import preflight_prepared_power_access
@@ -231,6 +242,8 @@ def run_routing_pipeline(
             access = preflight_prepared_power_access(placement.board, placement.global_route,
                 preparation, fanout_options, plane_stitch_options,
                 options=package_access_options, on_progress=on_progress, only_nets=routing_nets)
+            if stop_after in {"package-preflight", "package-access"}:
+                stopped = stop_after
         else:
             # Diagnostic critical copper is retained; no rejected power/contact
             # contribution or connectivity flag is promoted into the pipeline.
@@ -239,7 +252,6 @@ def run_routing_pipeline(
                 None, frozenset(), 0)
     reserved = held = None
     held_as_copper = False
-    stopped = None
     if unified_options is not None and getattr(unified_options, "direct", False):
         critical = _direct_critical(placement)
         plane_stitch_options = None
@@ -250,18 +262,18 @@ def run_routing_pipeline(
         if preparation is None:
             access = preflight_package_access(placement.board, placement.global_route,
                                              fanout_options, plane_stitch_options,
-                                             options=access_options, on_progress=on_progress)
-        if stop_after == "package-preflight":
-            stopped = "package-preflight"
+                                             options=access_options, on_progress=on_progress,
+                                             on_checkpoint=on_stage)
+            if stop_after == "package-preflight":
+                stopped = "package-preflight"
         # With fanout enabled, critical failures belong to the same escape-first
         # placement transaction, not a second critical-first controller.
         access_options = replace(access_options,
             maximum_trials=access_options.maximum_trials + critical_feedback_trials)
-        if stopped is None:
-            if preparation is None:
-                access = improve_package_access(access, fanout_options,
-                    options=access_options, placement_options=placement_options,
-                    global_options=global_options, plane_options=plane_stitch_options, on_progress=on_progress)
+        if preparation is None and stopped is None:
+            access = improve_package_access(access, fanout_options,
+                options=access_options, placement_options=placement_options,
+                global_options=global_options, plane_options=plane_stitch_options, on_progress=on_progress)
             if stop_after == "package-access":
                 stopped = "package-access"
         placement = replace(placement, board=access.source, global_route=access.global_route,
@@ -281,7 +293,8 @@ def run_routing_pipeline(
                 detailed, run_physical_drc(detailed.board, policy=drc_policy),
                 fanout=replace(access.fanout, board=access.board), plane_stitch=access.plane_stitch,
                 package_access=access, power_area_plan=preparation.plan if preparation else placement.power_area_plan,
-                power_area_status=(preparation.status if preparation and not preparation.accepted else
+                power_area_status=(f"stopped_after_{stopped}" if stopped is not None else
+                                   preparation.status if preparation and not preparation.accepted else
                                    "package_access_incomplete") if power_area_options is not None else "disabled",
                 power_area_options=power_area_options, power_preparation=preparation,
                 power_native_verifier=power_native_verifier, stopped_after=stopped, unified_options=unified_options)

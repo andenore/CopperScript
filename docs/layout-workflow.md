@@ -39,8 +39,8 @@ Run it with:
 python -m copperscript plan-layout examples/valid_board/board.copper \
   --allow-proxy-footprints \
   --candidates 3 \
-  -o planned.kicad_pcb \
-  --report layout-report.json
+  -o build/planned.kicad_pcb \
+  --report build/layout-report.json
 ```
 
 Proxy footprints are useful only for exercising the workflow. For meaningful

@@ -7,6 +7,33 @@ from pcbir.placement import placement_solution_is_legal
 
 COMMANDS=("plan-layout","route-global","route-board")
 
+
+@pytest.mark.parametrize('command', COMMANDS)
+def test_explicit_placement_work_budgets_preserve_other_options(command):
+    parser = cli._parser()
+    default = cli._planner_options(parser.parse_args([command, 'board.copper']))
+    bounded = cli._planner_options(parser.parse_args([command, 'board.copper',
+        '--placement-seeds', '1', '--placement-refinement-passes', '0', '--escape-spacing-passes', '0']))
+    assert replace(bounded, seed_count=None, refinement_passes=2, escape_spacing_passes=2) == default
+
+
+@pytest.mark.parametrize('command', COMMANDS)
+@pytest.mark.parametrize('flag,value', [('--placement-seeds','0'), ('--placement-seeds','-1'),
+    ('--placement-seeds','1.5'), ('--placement-refinement-passes','-1'), ('--escape-spacing-passes','-1')])
+def test_invalid_placement_work_budgets_fail_before_source_loading(command, flag, value):
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args([command, 'missing.copper', flag, value])
+
+
+@pytest.mark.parametrize('profile,expected',[('quick',4),('balanced',16),('thorough',64)])
+def test_routing_profiles_bound_decoupler_pose_work_and_respect_override(profile,expected):
+    argv=['route-board','board.copper','--routing-profile',profile]
+    args=cli._parser().parse_args(argv);cli._apply_routing_profile(args,argv)
+    assert cli._planner_options(args).decoupling_placement_trials==expected
+    argv+=['--decoupling-placement-trials','0']
+    args=cli._parser().parse_args(argv);cli._apply_routing_profile(args,argv)
+    assert cli._planner_options(args).decoupling_placement_trials==0
+
 @pytest.mark.parametrize("command",COMMANDS)
 def test_grid_controls_only_the_existing_sampling_parameter(command):
     parser=cli._parser()

@@ -145,3 +145,18 @@ def register_terminal_capacity(board, graph, access_options, expand=None):
                     elif getattr(resources.get(_edge_key(a,b)),'identifier',None)==identifier:
                         del resources[_edge_key(a,b)]
     return replace(graph,via_sites=MappingProxyType(sites),resources=MappingProxyType(resources)),accepted
+
+def terminal_access_failures(generated, registered):
+    """Explain empty terminals without altering candidate admission or routing.
+
+    A missing local escape and a legal escape rejected by shared transition
+    capacity need different repairs. Preserve both counts instead of reporting
+    every failure as a geometric impossibility.
+    """
+    return {
+        key: (len(choices), len(registered.get(key, ())))
+        for key, choices in generated.items()
+        if not registered.get(key)
+    }
+
+

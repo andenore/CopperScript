@@ -32,6 +32,8 @@ the owner prefix and checks the complete candidate against physical/profile gate
   routing, including same-net shortcuts and soft rip-up. Owner lead-ins reach
   external ports outside the regions. Verify actual port/private-pad copper
   continuity, not just equal net names.
+  Missing external ports and incomplete private-pad coverage fail at binding;
+  placement is not required to diagnose these interface errors.
 - Specify fill exclusions separately. Ground-return geometry may be essential:
   generic fill/stitching must not bypass a matching capacitor's prescribed path.
 - Check layer/span/technology compatibility and bind geometry/ownership into

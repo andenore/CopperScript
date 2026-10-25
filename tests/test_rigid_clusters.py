@@ -111,8 +111,10 @@ def test_fixed_pad_distance_fails_before_soft_placement():
         RelativePlacementKind.MAX_DISTANCE,
         (PlacementTarget('U1', '1'), PlacementTarget('J1', '1')),
         distance_nm=nm_from_mm(2)),))
-    with pytest.raises(PlacementPlanningError, match='conflicting fixed placement constraints.*U1 to J1'):
+    with pytest.raises(PlacementPlanningError, match='conflicting fixed placement constraints.*U1 to J1') as caught:
         plan_placement(board, options(fixed_references=frozenset({'U1', 'J1'})))
+    assert caught.value.__cause__.diagnostic_components==('J1','U1')
+    assert caught.value.__cause__.diagnostic_board is not None
 
 
 def test_fixed_nonanchor_member_freezes_complete_cluster():

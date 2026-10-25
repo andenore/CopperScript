@@ -6,7 +6,7 @@ import csv
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 
 from .backends.kicad_pcb import kicad_reference
@@ -336,23 +336,39 @@ def write_candidate_bom(board: Board, lock: AssemblyLock, directory: str | Path,
     diagnostics = check_assembly(board, lock)
     if any(i['code'] != 'REVIEW_REQUIRED' for i in diagnostics['issues']):
         raise AssemblyError("candidate selections are inconsistent or incomplete")
-    ordered = _supplier_assembled(lock, "candidate BOM")
-    # Resolved before the directory exists: a designator collision leaves no output.
     designators = _designators(lock.selections)
-    reference_map = {entry.reference: designators[entry.reference] for entry in ordered}
+    fitted = tuple(e for e in lock.selections if e.populate != "none")
+    ordered = tuple(e for e in fitted if e.populate == "supplier" and e.supplier == "jlcpcb")
+    reference_map = {e.reference: designators[e.reference] for e in fitted}
+    jlc_references = {designators[e.reference] for e in ordered}
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=False)
-    _write_bom_rows(board, ordered, designators, directory / 'bom-candidate-NOT-APPROVED.csv')
+    if ordered:
+        _write_bom_rows(board, ordered, designators, directory / 'bom-candidate-NOT-APPROVED.csv')
+    with (directory / 'all-suppliers-NOT-APPROVED.csv').open('w', encoding='utf-8', newline='') as stream:
+        writer = csv.writer(stream)
+        writer.writerow(('Designator', 'Footprint', 'Manufacturer', 'MPN', 'Supplier',
+                         'Supplier Part', 'Source URL', 'Reviewed'))
+        for entry in sorted(fitted, key=lambda e: e.reference):
+            writer.writerow((reference_map[entry.reference], entry.footprint, entry.manufacturer,
+                             entry.mpn, entry.supplier, entry.supplier_part, entry.source_url,
+                             entry.reviewed))
     diagnostics.update(purpose='human_review_only', qualified_release=False,
                        ordering_approved=False, electrical_sha256=lock.electrical_sha256,
-                       native_reference_map=reference_map)
+                       native_reference_map=reference_map,
+                       jlcpcb_references=sorted(jlc_references),
+                       other_supplier_references=sorted(set(reference_map.values()) - jlc_references))
     if native_positions is not None:
         from .manufacturing_files import ManufacturingFilesError, write_jlcpcb_cpl
         native_positions = Path(native_positions)
         before = hashlib.sha256(native_positions.read_bytes()).hexdigest()
         try:
-            write_jlcpcb_cpl(native_positions, directory / 'cpl-candidate-NOT-APPROVED.csv',
+            # Validate every fitted part, including those assembled separately.
+            write_jlcpcb_cpl(native_positions, directory / 'all-suppliers-positions-NOT-APPROVED.csv',
                              references=set(reference_map.values()))
+            if jlc_references:
+                write_jlcpcb_cpl(native_positions, directory / 'cpl-candidate-NOT-APPROVED.csv',
+                                 references=jlc_references)
         except ManufacturingFilesError as exc:
             raise AssemblyError(f'candidate CPL rejected: {exc}') from exc
         if hashlib.sha256(native_positions.read_bytes()).hexdigest() != before:
@@ -365,6 +381,9 @@ def write_candidate_bom(board: Board, lock: AssemblyLock, directory: str | Path,
         'UNAPPROVED ASSEMBLY REVIEW CANDIDATE\n'
         'Do not submit this bundle as an approved order.\n'
         'Review exact packages/ratings/pin maps, supplier stock and final CPL.\n'
+        'The candidate BOM/CPL contains only explicitly selected jlcpcb offers.\n'
+        'All-suppliers files also include parts needing separate procurement/assembly.\n'
+        'An LCSC catalog identity does not establish JLCPCB assembly eligibility.\n'
         'Selection flags and production BOM gates have not been changed.\n', encoding='utf-8')
     return diagnostics
 

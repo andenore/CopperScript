@@ -14,7 +14,7 @@ from uuid import uuid4
 from typing import Sequence
 
 from .backends import KiCadPcbBackend, KiCadSchematicBackend
-from .backends.kicad_project import write_kicad_project
+from .backends.kicad_project import write_kicad_project, write_kicad_schematic
 from .critical_review import critical_lane_review, lane_review_line
 from .erc import check, has_errors
 from .escape_plan import escape_diagnostics
@@ -417,6 +417,13 @@ def _nonnegative_int(value: str) -> int:
             raise ValueError("must not be negative")
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"expected a nonnegative integer, got {value!r}") from exc
+    return result
+
+
+def _positive_int(value: str) -> int:
+    result = _nonnegative_int(value)
+    if result == 0:
+        raise argparse.ArgumentTypeError(f"expected a positive integer, got {value!r}")
     return result
 
 
@@ -834,6 +841,14 @@ def _parser() -> argparse.ArgumentParser:
             help="bounded joint capacitor-bank placement checks per seed (default: disabled)")
         placement_parser.add_argument("--package-support-trials", type=int, default=0,
             help="bounded via-first BGA/support placement checks per seed (default: disabled)")
+        placement_parser.add_argument("--decoupling-placement-trials", type=_nonnegative_int, default=64,
+            help="copper-access pose trials per capacitor; 0 disables moves, not physical/routing gates (default: 64; routing profiles set a bound)")
+        placement_parser.add_argument("--placement-seeds", type=_positive_int,
+            help="explicit placement seed budget (default: at least two); all accepted seeds require full placement legality")
+        placement_parser.add_argument("--placement-refinement-passes", type=_nonnegative_int, default=2,
+            help="optional detailed placement improvement passes (default: 2; 0 retains the legalized placement)")
+        placement_parser.add_argument("--escape-spacing-passes", type=_nonnegative_int, default=2,
+            help="optional soft escape-spacing improvement passes (default: 2; source clearance and package-access gates remain mandatory)")
     for physical_parser in (pcb_parser, layout_parser, global_route_parser, board_route_parser):
         physical_parser.add_argument("--width-mm", type=float, default=100)
         physical_parser.add_argument("--height-mm", type=float, default=80)
@@ -926,6 +941,8 @@ def _parser() -> argparse.ArgumentParser:
         help="maximum intersecting ordinary escape nets rebuilt in a partial-owner pattern (default: 8; 0 disables; shares pattern trial budget)")
     board_route_parser.add_argument("--package-initial-pair-states", type=_nonnegative_int, default=6000,
         help="initial aggregate pair-search state cap with --fanout (default: 6000; 0 disables staged search; full-budget fallback if incomplete)")
+    board_route_parser.add_argument("--package-full-pair-states", type=_nonnegative_int, default=0,
+        help="aggregate state cap per pair in the full package tier, including fallback (default: 0 retains historical per-search bounds)")
     board_route_parser.add_argument("--package-boundary-step-mm", type=_positive_mm, default="0.5",
         help="coarse boundary-port sampling with --fanout (default: 0.5 mm, locally refined to 0.1 mm)")
     board_route_parser.add_argument("--package-destination-ports", action="store_true",
@@ -1092,7 +1109,7 @@ def _parser() -> argparse.ArgumentParser:
              "skips zone-escape, filled-copper and final native verification; package-* stops need fanout "
              "(on unless --no-fanout)")
     board_route_parser.add_argument("--checkpoint-dir", type=Path,
-        help="write stage checkpoints here (placement.state.json) for a later --reuse-placement")
+        help="write a reusable placement checkpoint and diagnostic package-stage states here")
     board_route_parser.add_argument("--reuse-placement", type=Path,
         help="start from a placement checkpoint; refused when the physical board or placement/global/"
              "feedback options differ; a compiler code change is allowed and recorded in the report")
@@ -1141,20 +1158,24 @@ def _planner_options(args) -> PlacementPlannerOptions:
         escape_transit_lanes=args.escape_transit_lanes,
         power_domain_weight=args.power_domain_weight,
         support_pattern_trials=getattr(args,'support_pattern_trials',0),
-        package_support_trials=getattr(args,'package_support_trials',0))
+        package_support_trials=getattr(args,'package_support_trials',0),
+        decoupling_placement_trials=getattr(args,'decoupling_placement_trials',64),
+        seed_count=getattr(args,'placement_seeds',None),
+        refinement_passes=getattr(args,'placement_refinement_passes',2),
+        escape_spacing_passes=getattr(args,'escape_spacing_passes',2))
 
 
 def _apply_routing_profile(args, argv):
     if args.command != "route-board" or args.routing_profile is None:
         return
     profiles = {
-        "quick": (1, 10000, 2, 4, 2, 2000),
-        "balanced": (2, 30000, 8, 16, 8, 4000),
-        "thorough": (4, 100000, 16, 32, 16, 12000),
+        "quick": (1, 10000, 2, 4, 2, 2000, 4),
+        "balanced": (2, 30000, 8, 16, 8, 4000, 16),
+        "thorough": (4, 100000, 16, 32, 16, 12000, 64),
     }
     flags = {item.split("=", 1)[0] for item in argv if item.startswith("--")}
     names = ("passes", "search_budget", "package_access_trials", "package_placement_probes",
-             "filled_copper_trials", "filled_copper_search_states")
+             "filled_copper_trials", "filled_copper_search_states", "decoupling_placement_trials")
     for name, value in zip(names, profiles[args.routing_profile], strict=True):
         if "--" + name.replace("_", "-") not in flags:
             setattr(args, name, value)
@@ -1793,6 +1814,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     maximum_geometry_candidates=args.fanout_geometry_candidates,
                 ) if args.fanout else None
                 progress = console_progress() if args.progress else None
+                from .iteration_checkpoints import (StageTracker, load_placement_checkpoint, placement_key,
+                                                    save_placement_checkpoint)
+                if progress is not None:
+                    # Remember the open stage so a failure leaves a located record.
+                    stage_tracker = progress = StageTracker(progress)
                 from .power_config import load_power_area_options
                 power_area_options = (load_power_area_options(args.power_area_config, nets=args.power_area_net)
                     if args.plan_power_areas or args.power_area_config or args.power_area_net else None)
@@ -1805,11 +1831,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                         preparation_invocations.append(stage)
                         return verify_filled_planes(candidate, kicad_cli=args.verify_plane_fill,
                             artifact_directory=preparation_directory / f'{len(preparation_invocations):03d}-{stage}')
-                from .iteration_checkpoints import (StageTracker, load_placement_checkpoint, placement_key,
-                                                    save_placement_checkpoint)
-                if progress is not None:
-                    # Remember the open stage so a failure leaves a located record.
-                    stage_tracker = progress = StageTracker(progress)
                 if unified_flag_notes and (unified_flag_notes["ignored_flags"]
                                            or unified_flag_notes["skipped_stage_flags"]):
                     # Advisory: these flags do not reach the unified pipeline.
@@ -1820,8 +1841,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     emit(progress, "router_options", "mapped", router="unified",
                          mapped_flags=unified_flag_notes["mapped_flags"],
                          congestion_feedback_trials=_congestion_feedback_budget(args))
+                # Placement also sees fanout, pair-state and native settings when it runs
+                # support-pattern trials for power areas (flow.run_routing_pipeline).
+                placement_extra = ((fanout_options, args.package_initial_pair_states or None,
+                                    power_native_verifier is not None)
+                                   if power_area_options is not None and placement_options.support_pattern_trials
+                                   else None)
                 checkpoint_key = (placement_key(physical_board, placement_options, router_options,
-                                                feedback_options)
+                                                feedback_options, power_area_options, placement_extra)
                                   if args.checkpoint_dir or args.reuse_placement else None)
                 initial_placement = None
                 if args.reuse_placement:
@@ -1851,6 +1878,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                         else:
                             checkpoints["placement"] = str(path)
                             print(f"Placement checkpoint -> {path}", flush=True)
+                    elif args.checkpoint_dir and name in {"package-preflight", "package-access",
+                            "ordinary-fanout", "package-initial-baseline", "package-full-baseline"}:
+                        from .workbench import save_state
+                        path = args.checkpoint_dir / f"{name}.state.json"
+                        try:
+                            save_state(path, value,
+                                note="Diagnostic package-stage state; not a reusable placement checkpoint or signoff.")
+                        except (OSError, ValueError) as exc:
+                            checkpoints[f"{name}_error"] = f"{type(exc).__name__}: {exc}"[:500]
+                            print(f"Package diagnostic state not saved: {exc}", flush=True)
+                        else:
+                            checkpoints[name] = str(path)
+                            print(f"Package diagnostic state -> {path}", flush=True)
 
                 result = run_routing_pipeline(
                     physical_board,
@@ -1874,6 +1914,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         maximum_pattern_trials=args.package_pattern_trials,
                         maximum_partial_owner_nets=args.package_partial_owner_nets,
                         initial_pair_state_limit=args.package_initial_pair_states,
+                        full_pair_state_limit=args.package_full_pair_states,
                         boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
                             destination_ports=args.package_destination_ports,
                             refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
@@ -1899,6 +1940,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             maximum_pattern_trials=args.package_pattern_trials,
                             maximum_partial_owner_nets=args.package_partial_owner_nets,
                             initial_pair_state_limit=args.package_initial_pair_states,
+                            full_pair_state_limit=args.package_full_pair_states,
                             boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
                                 destination_ports=args.package_destination_ports,
                                 refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
@@ -2033,7 +2075,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         and result.power_area_status == "contact_routed_native_pending"):
                     try:
                         baseline_evidence = verify_filled_planes(power_plan.source_board,
-                            kicad_cli=args.verify_plane_fill, artifact_directory=evidence_directory / "power-area-baseline")
+                            kicad_cli=native_cli, artifact_directory=evidence_directory / "power-area-baseline")
                     except (RuntimeError, ValueError, OSError) as exc:
                         power_observation = {"status": "native_baseline_unavailable", "detail": str(exc)}
                 if power_observation is None:
@@ -2069,7 +2111,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "passes", "search_budget", "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
                     "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
                     "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
-                    "filled_copper_search_states")} | {
+                    "filled_copper_search_states", "decoupling_placement_trials", "placement_seeds",
+                    "placement_refinement_passes", "escape_spacing_passes")} | {
                     "congestion_feedback_trials": _congestion_feedback_budget(args)} | ({
                     "unified_ignored_flags": unified_flag_notes["ignored_flags"],
                     "unified_skipped_stage_flags": unified_flag_notes["skipped_stage_flags"],
@@ -2143,6 +2186,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "pattern_trial_limit": args.package_pattern_trials,
                     "partial_owner_net_limit": args.package_partial_owner_nets,
                     "initial_pair_state_limit": args.package_initial_pair_states,
+                    "full_pair_state_limit": args.package_full_pair_states,
                     "search_tiers": [asdict(tier) for tier in access.search_tiers],
                     "pattern_trials": [{**asdict(trial), "pending_pads": [f"{p.component}.{p.pad}" for p in trial.pending_pads]}
                                        for trial in access.pattern_trials],
@@ -2316,6 +2360,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ],
                     "surface_pending_pads": [
                         f"{item.component}.{item.pad}" for item in stitch.pending_pads
+                    ],
+                    "explicit_feeder_pads": [
+                        f"{item.component}.{item.pad}" for item in stitch.explicit_feeder_pads
                     ],
                     "zone_verified_pads": [
                         f"{item.component}.{item.pad}" for item in plane_verified
@@ -2566,7 +2613,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if artifact_kind == "PCB":
                     write_kicad_project(manifest, output)
                 else:
-                    output.write_text(artifact.content, encoding="utf-8")
+                    write_kicad_schematic(manifest, output)
                 if args.command == "plan-layout" and args.report:
                     from .requirement_verification import verify_requirements
                     from .engineering_report import write_summary, summary_lines

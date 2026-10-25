@@ -75,3 +75,17 @@ def test_local_collar_calls_have_a_finite_shared_allowance(monkeypatch):
     assert not _local_via_ports(board, *rules, Point.mm(5,5), Point.mm(5,6), ref,
                                 CopperLayer.FRONT, CopperLayer.BACK)
     assert 0 < len(calls) <= 32 and sum(calls) <= 32*2400
+
+
+def test_failed_transition_diagnostics_do_not_change_geometry_or_candidates():
+    from pcbir.pair_search import PairSearchStats
+    board, rules, ref = window_board(renamed=True, front_wall=True)
+    stats = PairSearchStats()
+    before = board
+    args = (board, *rules, Point.mm(5,5), Point.mm(5,6), ref,
+            CopperLayer.FRONT, CopperLayer.BACK)
+    assert _transitions(*args, stats=stats) == _transitions(*args) == ()
+    assert len(stats.terminal_port_rejections) == 1
+    assert stats.terminal_port_rejections[0].startswith('LEFT F.Cu to B.Cu: no exact transition;')
+    assert board == before and not board.tracks and not board.vias
+    assert stats.searches == stats.expanded_states == 0

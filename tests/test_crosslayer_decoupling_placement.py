@@ -20,6 +20,20 @@ def back_only(board, *, movable):
         fixed_rotation_degrees=0) for p in board.placements))
 
 
+def test_pose_trial_budget_bounds_a_blocked_crosslayer_search():
+    board,link=fixture()
+    board=back_only(board,movable={link.capacitor.component})
+    board=replace(board,net_routing_rules=tuple(replace(r,max_vias=0)
+        if r.net==link.net else r for r in board.net_routing_rules))
+    poses={p.reference:p for p in board.placements};events=[]
+    generated,moved=improve_decoupling_placement(board,poses,
+        PlacementPlannerOptions(decoupling_placement_trials=3),progress=events.append)
+    trials=[e for e in events if e.startswith('decoupler_trial:')]
+    assert trials and all(int(e.rsplit(':',1)[1])<=3 for e in trials)
+    assert generated==poses and moved==0
+    assert not board.tracks and not board.vias
+
+
 def two_links(renamed=False):
     first,link=fixture(renamed=renamed)
     other,other_link=fixture(renamed=not renamed)
@@ -40,7 +54,11 @@ def test_back_pose_refinement_regenerates_both_paths_preserving_prior_ids(rename
     nets={n.name for n in board.nets}
     verified=_verified_bypass_links(baseline.board,nets,witness_paths=tracks,witness_vias=vias)
     assert verified==frozenset({link,later}) and all(vias.values())
-    generated,moved=improve_decoupling_placement(board,original,PlacementPlannerOptions())
+    events=[]
+    generated,moved=improve_decoupling_placement(board,original,PlacementPlannerOptions(),progress=events.append)
+    assert "decoupler_baseline" in events
+    assert f"decoupler_refine:{link.capacitor.component}" in events
+    assert any(event.startswith(f"decoupler_trial:{link.capacitor.component}:") for event in events)
     assert moved==1 and generated[link.capacitor.component]!=original[link.capacitor.component]
     assert generated[link.capacitor.component].side is BoardSide.BACK
     assert all(generated[ref]==pose for ref,pose in original.items() if ref!=link.capacitor.component)

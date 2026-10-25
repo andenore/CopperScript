@@ -810,6 +810,13 @@ constraint routing(USB_DP) {
 }
 ```
 
+`placement_region` also accepts `polygon_mm = "45,2;65,2;65,17;45,17";`
+instead of `x`, `y`, `width` and `height`. Concave polygons are supported; the
+complete component courtyard must remain inside the region. Rectangle and
+polygon boundary parameters are mutually exclusive. `side = both` preserves
+either board side. A copper zone can reference the same named polygon region;
+nonzero zone inset still requires a rectangular boundary.
+
 Known constraint kinds are `max_distance`, `min_distance`, `courtyard_gap`,
 `placement_region`, `fixed_placement`, `allowed_orientations`, `align`,
 `placement_group`, `keepout`, `routing`, `copper_zone`, `via_in_pad`,

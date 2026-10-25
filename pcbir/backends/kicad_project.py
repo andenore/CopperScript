@@ -15,6 +15,49 @@ def kicad_export_digest(manifest: ArtifactManifest) -> str:
     return sha256(json.dumps(document, separators=(",", ":")).encode()).hexdigest()
 
 
+def write_kicad_schematic(manifest: ArtifactManifest, output: Path) -> tuple[Path, ...]:
+    """Write the schematic and its exact project-local symbol library."""
+    if manifest.backend != "kicad-schematic" or len(manifest.artifacts) != 4:
+        raise ValueError("a complete KiCad schematic artifact manifest is required")
+    output = Path(output)
+    root = output.parent.resolve()
+    destinations = []
+    for index, artifact in enumerate(manifest.artifacts):
+        relative = PurePosixPath(artifact.name)
+        if (len(relative.parts) != 1 or relative.is_absolute()
+                or relative.name in {".", ".."} or "\\" in artifact.name or ":" in artifact.name):
+            raise ValueError(f"unsafe generated artifact path: {artifact.name!r}")
+        if index == 0:
+            path = output
+        elif index == 3:
+            path = output.with_suffix(".kicad_pro")
+        else:
+            path = root / artifact.name
+        if not path.resolve().is_relative_to(root):
+            raise ValueError(f"artifact escapes output directory: {artifact.name!r}")
+        destinations.append(path)
+    if len({str(p.resolve()).casefold() for p in destinations}) != len(destinations):
+        raise ValueError("generated artifact destinations collide")
+    if (not manifest.artifacts[1].name.endswith(".kicad_sym")
+            or manifest.artifacts[2].name != "sym-lib-table"
+            or not manifest.artifacts[3].name.endswith(".kicad_pro")):
+        raise ValueError("schematic export omitted its symbol library or table")
+    for artifact, path in zip(manifest.artifacts[1:3], destinations[1:3], strict=True):
+        if path.exists() and path.read_bytes() != artifact.content.encode("utf-8"):
+            raise FileExistsError(f"refusing to overwrite unrelated {path.name}; export to a separate build directory")
+    for artifact, path in zip(manifest.artifacts, destinations, strict=True):
+        if path.suffix == ".kicad_pro" and path.exists():
+            continue  # Preserve an existing PCB project's rules and settings.
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = artifact.content
+        if path.suffix == ".kicad_pro":
+            project = json.loads(content)
+            project["meta"]["filename"] = path.name
+            content = json.dumps(project, indent=2) + "\n"
+        path.write_bytes(content.encode("utf-8"))
+    return tuple(destinations)
+
+
 def write_kicad_project(manifest: ArtifactManifest, output: Path) -> tuple[Path, ...]:
     """Write PCB, same-stem project, library table and canonical footprints.
 

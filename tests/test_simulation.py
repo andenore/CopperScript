@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from pcbir.backends.ngspice import NgspiceBackend, generate_deck
+from pcbir.backends.ngspice import NgspiceBackend, generate_deck, circuit_manifest
 from pcbir.elaborate import elaborate
 from copperscript.library_data import tiny_library
 from pcbir.loader import load_board
@@ -43,6 +43,38 @@ def plan_data():
     data.pop("plots")
     data.pop("checks")
     return data
+
+
+@pytest.mark.parametrize("method", ["trap", "gear"])
+def test_explicit_integration_method_is_recorded(board, method):
+    data = plan_data()
+    data["analysis"] = {"kind": "transient", "stop": "1 ms", "max_step": "1 us"}
+    data.pop("analyses", None)
+    data.pop("derived_signals", None)
+    data["solver"] = {"integration_method": method}
+    plan = parse_plan(data, directory=EXAMPLES)
+    circuit = select_circuit(board, plan)
+    assert f".options method={method}\n" in generate_deck(circuit, plan.analyses[0])
+    assert circuit_manifest(circuit)["numerics"]["integration_method"] == method
+    assert plan.for_case("nominal").integration_method == method
+
+
+@pytest.mark.parametrize("solver", [
+    {"integration_method": None}, {"integration_method": "gear\n.control"},
+    {"integration_method": []}, {"gmin": "1"},
+])
+def test_solver_options_reject_untyped_or_arbitrary_commands(solver):
+    data = plan_data()
+    data["solver"] = solver
+    with pytest.raises(SimulationError):
+        parse_plan(data, directory=EXAMPLES)
+
+
+def test_default_integration_preserves_deck_and_manifest(board):
+    plan = parse_plan(plan_data(), directory=EXAMPLES)
+    circuit = select_circuit(board, plan)
+    assert ".options method=" not in generate_deck(circuit, plan.analyses[0])
+    assert "integration_method" not in circuit_manifest(circuit)["numerics"]
 
 
 @pytest.fixture(scope="module")

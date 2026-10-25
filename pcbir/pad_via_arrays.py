@@ -224,3 +224,7 @@ def _in_outline(point: Point, outline: PolygonWithHoles) -> bool:
 
 def _mm(value_nm: int) -> str:
     return str(Decimal(value_nm) / Decimal(1_000_000))
+
+
+# Public shared geometry used by incremental placement.
+array_sites = _sites

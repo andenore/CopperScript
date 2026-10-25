@@ -22,8 +22,8 @@ def test_concave_region_lowers_and_legalizes_without_entering_the_excluded_corne
     board=prototype_physicalize(source())
     region=board.regions[0]
     assert region.outline.vertices==tuple(Point.mm(*p.split(',')) for p in POLYGON.split(';'))
-    planned=plan_placement(board,PlacementPlannerOptions(candidate_count=1,
-        refinement_passes=0,escape_spacing_passes=0))
+    planned=plan_placement(board,PlacementPlannerOptions(candidate_count=1,seed_count=1,
+        refinement_passes=0,escape_spacing_passes=0,decoupling_placement_trials=0))
     assert planned.report.metrics.constraint_penalty_nm==0
     from pcbir.placement import _placement_polygon
     for pose in planned.board.placements:
@@ -51,5 +51,5 @@ def test_polygon_and_rectangle_region_modes_are_exclusive():
 def test_fixed_courtyard_cannot_enter_or_cross_the_excluded_corner(x):
     from pcbir.layout import PlacementPlanningError
     board=prototype_physicalize(source('constraint fixed_placement(R1) { x = '+x+' mm; y = 5 mm; }'))
-    with pytest.raises(PlacementPlanningError):
-        plan_placement(board,PlacementPlannerOptions(candidate_count=1,refinement_passes=0))
+    with pytest.raises(PlacementPlanningError,match='fixed component'):
+        plan_placement(board,PlacementPlannerOptions(candidate_count=1,seed_count=1,refinement_passes=0))

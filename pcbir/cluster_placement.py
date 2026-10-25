@@ -8,7 +8,7 @@ from dataclasses import replace
 from decimal import Decimal
 
 from .clusters import cluster_placements, resolved_cluster_keepouts
-from .physical import Point
+from .physical import Point, component_pair_courtyard_gap_nm
 
 
 def place_rigid_clusters(board, targets, original, options):
@@ -16,7 +16,7 @@ def place_rigid_clusters(board, targets, original, options):
         PlacementAlgorithmError, _candidate_positions, _fixed_placements,
         _hpwl, _legal, transformed_local_point, _relative_cluster_order,
         _best_legal_choice, _adjacency, _relative_penalty, _pack_local_components,
-        _placement_polygon, _polygons_too_close,
+        _placement_polygon, _courtyards_too_close,
     )
     from .physical import component_pair_courtyard_gap_nm
 
@@ -32,10 +32,10 @@ def place_rigid_clusters(board, targets, original, options):
     fixed_obstacles = sorted(placed.items())
     for index, (reference, pose) in enumerate(fixed_obstacles):
         for other_reference, other in fixed_obstacles[:index]:
-            gap = component_pair_courtyard_gap_nm(board, other_reference, reference,
-                                                  fallback_nm=options.component_clearance_nm)
-            if pose.side is other.side and _polygons_too_close(
-                    _placement_polygon(board, pose), _placement_polygon(board, other), gap):
+            if pose.side is other.side and _courtyards_too_close(
+                    _placement_polygon(board, pose), _placement_polygon(board, other),
+                    component_pair_courtyard_gap_nm(board, reference, other_reference,
+                        fallback_nm=options.component_clearance_nm)):
                 raise PlacementAlgorithmError(
                     f"conflicting fixed placements {other_reference!r} and {reference!r}: "
                     "courtyard clearance; cluster search cannot relocate either")
