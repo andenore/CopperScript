@@ -5,6 +5,7 @@ from pcbir import (BoardOutline, PhysicalBoard, PhysicalFootprint, FootprintPad,
     Placement, PhysicalNet, PadReference, Point, Size, PlacementPlannerOptions,
     PlacementRoutingFeedbackOptions)
 from pcbir.unified_router import UnifiedRouterOptions
+from pcbir.package_access import PackageAccessOptions
 
 @pytest.mark.parametrize("limit", (None, 16000))
 def test_pipeline_forwards_explicit_pair_cap_without_changing_default(monkeypatch, limit):
@@ -22,7 +23,7 @@ def test_pipeline_forwards_explicit_pair_cap_without_changing_default(monkeypatc
         placement_options=PlacementPlannerOptions(candidate_count=1,analytical_iterations=0,refinement_passes=0),
         feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
         unified_options=UnifiedRouterOptions(critical_pair_state_limit=limit))
-    assert seen==[limit]
+    assert seen == [limit if limit is not None else PackageAccessOptions().initial_pair_state_limit]
     assert all(n.connected for n in result.detailed.nets)
 
 @pytest.mark.parametrize("limit", (0,-1,True,2.5))

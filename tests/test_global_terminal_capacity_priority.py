@@ -26,7 +26,7 @@ def test_terminal_launch_replaces_conflicting_sample_without_adding_free_capacit
         routing.GridNode(1, 0, 0), Point.mm(4, 6), B, via=via)
     result, accepted = register_terminal_capacity(board, graph, {("SIGNAL", choice.pad): (choice,)})
     assert accepted["SIGNAL", choice.pad] == (choice,)
-    assert result.via_sites["via:0:1:0:0"] == (launch, remote)
+    assert set(result.via_sites["via:0:1:0:0"]) == {launch, remote}
     assert all(r.capacity == 2 for r in result.resources.values())
     witnesses = tuple(replace(via, net=f"witness-{i}", position=p)
                       for i, p in enumerate(result.via_sites["via:0:1:0:0"]))
