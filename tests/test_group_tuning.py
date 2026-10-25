@@ -12,7 +12,7 @@ from pcbir import (
     BoardOutline, CopperLayer, CriticalRoutingStatus, FootprintPad, NetMatchGroup, NetRoutingRule, PadReference,
     PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, PrototypePhysicalOptions, RouteKind, Size,
     TrackSegment, TuningStyle, compile_source, nm_from_mm, physical_board_digest, prototype_physicalize,
-    route_critical_nets, route_global, verify_match_groups,
+    route_critical_nets, route_global, run_physical_drc, verify_match_groups,
 )
 from pcbir.critical import _drop_group_steps, _track_length
 from pcbir.critical_group_tuning import GroupTuner, lane_corners
@@ -125,12 +125,16 @@ def test_a_hemmed_bundle_is_bent_as_one_group_while_routing(monkeypatch) -> None
     assert again == result and again.to_json() == result.to_json()
 
     # Independent pair tuning exhausts the narrow room beside LANE_A on
-    # current main. It must report the remaining skew, never claim a pass.
-    # The explicit group above is what makes this hemmed bundle tunable.
+    # current main. It must report the remaining skew, never claim a pass:
+    # the copper stays connected and the miss is a review warning (a
+    # length-match finding is a warning, not a hard DRC error). The explicit
+    # group above is what makes this hemmed bundle tunable.
     alone = route_critical_nets(_group_board(group=None), guides)
     (tuning,) = alone.match_tuning
-    assert tuning.status == "failed" and _hard(alone.board) == {"DRC-LENGTH-MATCH"}
-    assert alone.status is CriticalRoutingStatus.FAILED
+    assert tuning.status == "failed" and not _hard(alone.board)
+    assert {f.code for f in run_physical_drc(alone.board).findings if f.severity.value == "warning"} >= {
+        "DRC-LENGTH-MATCH"}
+    assert alone.status is CriticalRoutingStatus.WARNING
     assert "LANE_A_N/LANE_A_P: insufficient tuning room" in tuning.reason
     assert tuning.skew_after_nm > tuning.max_skew_nm
     (check,) = verify_match_groups(alone.board)
