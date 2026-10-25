@@ -839,6 +839,8 @@ def _parser() -> argparse.ArgumentParser:
              "iterations without improvement (default: 150)")
     board_route_parser.add_argument("--unified-time-budget-s", type=float, default=None,
         help="wall-time budget for the unified router; it returns its best result when exceeded")
+    board_route_parser.add_argument("--unified-pair-states", type=int, default=None,
+        help="per-pair expanded-state cap for the critical stage preceding unified routing")
     board_route_parser.add_argument("--unified-save-inputs", type=Path, default=None, metavar="STATE",
         help="unified router: save its inputs as a state file for replay_unified")
     board_route_parser.add_argument("--unified-no-decouplers", action="store_true",
@@ -1092,6 +1094,7 @@ def _unified_options(args):
     return UnifiedRouterOptions(pitch_nm=nm_from_mm(args.unified_pitch_mm) if args.unified_pitch_mm else None,
                                 maximum_iterations=args.unified_iterations,
                                 time_budget_s=args.unified_time_budget_s,
+                                critical_pair_state_limit=args.unified_pair_states,
                                 power_islands=None if args.power_islands == "off" else args.power_islands,
                                 pre_route_decouplers=not args.unified_no_decouplers,
                                 route_smoothing=not args.no_route_smoothing,

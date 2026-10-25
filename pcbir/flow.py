@@ -103,7 +103,7 @@ def run_routing_pipeline(
     initial_placement: PlacementRoutingResult | None = None,
     on_stage=None,
 ) -> RoutingPipelineResult:
-    """Run steps 4–8 in dependency order and always reach ordinary routing.
+    """Run steps 4Ã¢â‚¬â€œ8 in dependency order and always reach ordinary routing.
 
     An incomplete package access or a rejected power preparation is reported,
     and ordinary routing then works around whatever access exists. With
@@ -283,7 +283,9 @@ def run_routing_pipeline(
         extra = (*(reserved[2] if reserved else ()), *(held[2] if held else ()))
         if extra:
             source = replace(source, copper_keepouts=(*source.copper_keepouts, *extra))
+        pair_limit = getattr(unified_options, "critical_pair_state_limit", None)
         critical = route_critical_nets(source, placement.global_route,
+                                       pair_state_limit=pair_limit,
                                        on_progress=critical_progress(on_progress))
         if reserved is not None:
             failed = {name for item in critical.nets if not item.connected for name in item.nets}
@@ -298,7 +300,8 @@ def run_routing_pipeline(
                     retry = route_critical_nets(
                         replace(placement.board, copper_keepouts=(*placement.board.copper_keepouts, *kept,
                                                                   *(held[2] if held else ()))),
-                        placement.global_route, on_progress=critical_progress(on_progress))
+                        placement.global_route, pair_state_limit=pair_limit,
+                        on_progress=critical_progress(on_progress))
                     if sum(not item.connected for item in retry.nets) < len(
                             [item for item in critical.nets if not item.connected]):
                         critical = retry

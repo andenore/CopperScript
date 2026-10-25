@@ -122,6 +122,9 @@ class UnifiedRouterOptions:
     bga_fanout: bool = True
     raster_margin_nm: int | None = None
     time_budget_s: float | None = None
+    # Optional per-pair state cap for the pipeline's preceding critical stage.
+    # Separate from the ordinary negotiation wall-time limit; None keeps defaults.
+    critical_pair_state_limit: int | None = None
     # Supply islands carved from a spare plane layer before routing
     # (power_islands.py): "auto", a copper layer name, or None.
     power_islands: str | None = None
@@ -141,6 +144,9 @@ class UnifiedRouterOptions:
     escapes_first: bool = True
 
     def __post_init__(self) -> None:
+        limit = self.critical_pair_state_limit
+        if limit is not None and (type(limit) is not int or limit <= 0):
+            raise ValueError("critical pair state limit must be a positive integer or None")
         if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0:
             raise ValueError("unified router pitch and iterations must be positive")
         if self.stall_iterations < 0:
@@ -1016,7 +1022,7 @@ class _Router:
         """Per node: True when it lies in a large connected region of free space.
 
         Labelled per layer on the raster of the narrowest width the net may
-        use (4-connected); "large" is at least 4 mm² of free cells.
+        use (4-connected); "large" is at least 4 mmÃ‚Â² of free cells.
         """
         from .plane_estimate import _label
         width = spec.neck_width or spec.width

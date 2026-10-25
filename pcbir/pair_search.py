@@ -272,7 +272,15 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
            allow_local_fallback: bool = True) -> tuple[_Port, ...]:
     separation = _heading(second, first)
     if separation is None:
-        return ()
+        # Rank existing octilinear collar headings for a staggered contact row.
+        # The contact row is not copper: every emitted segment still passes
+        # the existing exact geometry checks, without coordinate rounding.
+        vx, vy = first.x_nm-second.x_nm, first.y_nm-second.y_nm
+        if not (vx or vy):
+            return ()
+        separation = max(range(8), key=lambda h: (
+            Fraction(max(0, vx*_HEADS[h][0]+vy*_HEADS[h][1])**2,
+                     _HEADS[h][0]**2+_HEADS[h][1]**2), -h))
     middle = Point((first.x_nm + second.x_nm) // 2, (first.y_nm + second.y_nm) // 2)
     placement = next(item for item in board.placements if item.reference == component)
     outward = Point(middle.x_nm - placement.position.x_nm, middle.y_nm - placement.position.y_nm)
