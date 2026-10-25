@@ -177,6 +177,7 @@ the default path imports it (phase P7).
 | `power_islands.py` | Automatic split-plane islands for decoupled rails on a spare plane layer (P3, opt-in `--power-islands`) |
 | `route_summary.py`, `plane_estimate.py`, `bench.py`, `bench/ladder.json` | Pipeline-independent completion summary, raster plane estimate, benchmark ladder (P1) |
 | `congestion_feedback.py` | Routability-driven placement feedback: per-tile congestion map from the unified router's contention (history, overflow, rejection points) combined with a RUDY-style demand estimate; parts on failed nets and hot tiles move down the demand gradient, candidates are screened by the estimate plus `route_global`, and only the best rerun the pipeline tail. Replaces `critical_feedback.py` and `routeflow.detailed_failure_trials` on the unified path (2026-10-24) |
+| `routing_lattice.py`, `fine_regions.py` | Multi-resolution search lattice (option 2 of the 2026-10-25 router review): `routing_lattice.py` puts every node-id, offset and point/node computation of the unified router behind one `Lattice` object (`UniformLattice` today, `NestedLattice` with fine patches at base pitch ÷ k next); `fine_regions.py` plans the patches from footprints whose pad or ball pitch needs them, with the `choose_pitch` alignment rule applied per package instead of to the whole board. Base pitch stays 0.25 mm; its auto-calculation is a later change |
 
 ### Lift (useful parts inside large modules)
 
