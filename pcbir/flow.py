@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from functools import partial
 
 from .critical import CriticalRoutingResult, CriticalRoutingStatus, route_critical_nets
 from .critical_feedback import CriticalPlacementFeedbackResult, improve_critical_placement
@@ -131,7 +133,6 @@ def run_routing_pipeline(
     """
     unified_fanout = None
     if unified_options is not None:
-        from functools import partial
         route_ordinary = partial(_route_unified_compat, unified_options,
                                  escape_options=fanout_options)
         # The unified router owns terminal access itself: no package-access
@@ -394,8 +395,20 @@ def run_routing_pipeline(
                        if unified_options is not None else 0)
     if feedback_budget and preparation is None and routing_nets is None:
         from .congestion_feedback import FeedbackState, run_placement_feedback
+        # Each trial routes from its own placement, so it must not overwrite
+        # the replay inputs of the run that is kept: trials save beside them,
+        # and only the accepted trial's file replaces them (see below).
+        inputs_path = getattr(unified_options, "save_inputs_path", None)
+        trial_inputs: list[str] = []
 
         def rerun_tail(trial_board, trial_global):
+            if inputs_path:
+                trial_inputs.append(f"{inputs_path}.trial-{len(trial_inputs) + 1}")
+                trial_route = partial(_route_unified_compat,
+                                      replace(unified_options, save_inputs_path=trial_inputs[-1]),
+                                      escape_options=unified_fanout)
+            else:
+                trial_route = route_ordinary
             # Exactly the main path's tail on the unified router, from the
             # trial placement: reservations, critical routing, held copper,
             # islands, dogbones, plane stitch, ordinary routing and closure.
@@ -417,23 +430,34 @@ def run_routing_pipeline(
             trial_critical, trial_stitch, _, trial_pre = _release_escape_masks(
                 trial_reserved, trial_critical, trial_stitch, None, trial_pre)
             trial_detailed, trial_drc, trial_duplicate = _route_ordinary_stage(
-                route_ordinary, trial_pre, trial_global, detailed_options, None,
+                trial_route, trial_pre, trial_global, detailed_options, None,
                 drc_policy=drc_policy, routing_nets=None, on_progress=on_progress)
             return FeedbackState(trial_board, trial_global, trial_critical, trial_detailed, trial_drc,
-                                 trial_deferred, (trial_stitch, trial_duplicate))
+                                 trial_deferred, (trial_stitch, trial_duplicate,
+                                                  trial_inputs[-1] if inputs_path else None))
 
-        placement_feedback = run_placement_feedback(
-            FeedbackState(placement.board, placement.global_route, critical, detailed, drc,
-                          deferred_zones, (plane_stitch, duplicate_stitch)),
-            trials=feedback_budget, movement_nm=detailed_feedback_movement_nm,
-            placement_options=placement_options, global_options=global_options,
-            rerun=rerun_tail, score=_feedback_score, on_progress=on_progress)
-        if placement_feedback.accepted_moves:
-            best = placement_feedback.state
-            placement = replace(placement, board=best.board, global_route=best.global_route,
-                                placement_candidate=placement.placement_candidate + "-congestion")
-            critical, detailed, drc = best.critical, best.detailed, best.drc
-            plane_stitch, duplicate_stitch = best.payload
+        try:
+            placement_feedback = run_placement_feedback(
+                FeedbackState(placement.board, placement.global_route, critical, detailed, drc,
+                              deferred_zones, (plane_stitch, duplicate_stitch, None)),
+                trials=feedback_budget, movement_nm=detailed_feedback_movement_nm,
+                placement_options=placement_options, global_options=global_options,
+                rerun=rerun_tail, score=_feedback_score, on_progress=on_progress)
+            if placement_feedback.accepted_moves:
+                best = placement_feedback.state
+                placement = replace(placement, board=best.board, global_route=best.global_route,
+                                    placement_candidate=placement.placement_candidate + "-congestion")
+                critical, detailed, drc = best.critical, best.detailed, best.drc
+                plane_stitch, duplicate_stitch, accepted_inputs = best.payload
+                if accepted_inputs:
+                    os.replace(accepted_inputs, inputs_path)
+        finally:
+            for leftover in trial_inputs:
+                # Rejected trials' inputs are not this run's; never leave them behind.
+                try:
+                    os.remove(leftover)
+                except FileNotFoundError:
+                    pass
     if failed_nets and detailed_feedback_trials and preparation is None and unified_options is None:
         accepted_score = _detailed_score(detailed, drc)
         for trial_board in detailed_failure_trials(
