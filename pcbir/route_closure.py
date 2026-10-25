@@ -39,8 +39,7 @@ def routing_complete_with_fill(
         return True
     if evidence is None or not board.zones:
         return False
-    if (not pipeline.placement_and_global.full_route_certified
-            or pipeline.critical.status is CriticalRoutingStatus.FAILED
+    if (pipeline.critical.status is CriticalRoutingStatus.FAILED
             or pipeline.package_access is not None and not pipeline.package_access.ready
             or pipeline.detailed.metrics.total_conflict_overflow):
         return False
@@ -49,6 +48,19 @@ def routing_complete_with_fill(
     required = {n.name for n in board.nets if len(n.pads) >= 2 and n.name not in zones
                 and (n.name not in rules or rules[n.name].kind is RouteKind.GENERAL)}
     results = {n.net: n for n in pipeline.detailed.nets}
+    if not pipeline.placement_and_global.full_route_certified:
+        # Coarse guide access can fail even when later exact routing succeeds.
+        # Reconcile only named guide failures, with the matched clean native
+        # proof above and successful downstream ownership. Global congestion
+        # and unaccounted-for nets remain failures; do not rewrite the guide.
+        global_route = pipeline.placement_and_global.global_route
+        connected = {n.net for n in pipeline.detailed.nets if n.connected}
+        connected.update(name for item in pipeline.critical.nets if item.connected
+                         for name in item.nets)
+        if (global_route.metrics.total_overflow
+                or any(not route.connected and route.net not in connected | zones
+                       for route in global_route.routes)):
+            return False
     if any(name not in results or not results[name].connected for name in required):
         return False
     # A zone net is the native fill's to prove, and the evidence above did:

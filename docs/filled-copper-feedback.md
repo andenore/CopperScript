@@ -48,6 +48,14 @@ profile is not a total wall-clock timeout or an exhaustive routing search.
 
 ## Evidence before action
 
+Final routing closure may reconcile failed coarse global guides when later
+detailed or critical routing reports those exact nets connected, or the nets
+belong to declared zones, and matched clean native refill proves the final
+board. Global overflow, unresolved downstream signal searches, blocked package
+access and physical geometry findings still reject closure. The original guide
+report and physical DRC token are retained; this does not confer manufacturing
+or electrical qualification.
+
 The native adapter binds source/export digests, KiCad version, exact filled-board
 and report hashes, mapped UUID objects and filled polygon fragments. A zone
 outline is never fill evidence. KiCad may report two fragments with the **same
