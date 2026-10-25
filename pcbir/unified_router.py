@@ -776,8 +776,13 @@ class _Router:
                 raise ValueError(f"required routing access is stale or invalid: {pad}")
             self.required_accesses[pad] = access
         self.specs = [spec for spec in (self._spec(net) for net in nets) if spec is not None]
+        # Through-via proposals must price foreign tracks on every barrel layer.
+        self._candidate_via_size = max([board.rules.default_via_size_nm, *(s.via_size for s in self.specs)])
+        self._candidate_via_drill = max([board.rules.default_via_drill_nm, *(s.via_drill for s in self.specs)])
+        self._candidate_clearance = max([board.rules.minimum_clearance_nm, *(s.clearance for s in self.specs)])
         self.routes: dict[str, _NetRoute] = {}
         self._lead_nodes: dict[tuple, list[int]] = {}
+        self._lead_history: dict[TrackSegment, float] = {}
         self.present = options.present_factor
         self.conflict_age: dict[str, int] = {}
 
@@ -1491,15 +1496,32 @@ class _Router:
             # Over the net's via budget: search again with vias priced far
             # higher; a budget overrun stays a failure, not a DRC error.
             factor = spec.via_factor
-            spec.via_factor = factor * self.options.via_overrun_factor
             try:
-                retry = self._route_net_once(spec, present)
+                # Keep negotiating real soft costs before using a discounted
+                # proposal. A single fixed via price can leave several hard-
+                # budget nets repeatedly selecting the same conflicting path.
+                for multiplier in (self.options.via_overrun_factor * step for step in (1, 10, 100, 1000)):
+                    spec.via_factor = factor * multiplier
+                    retry = self._route_net_once(spec, present)
+                    if retry.connected and len(retry.via_xy) < len(route.via_xy):
+                        route = retry
+                    if route.connected and len(route.via_xy) <= spec.via_budget:
+                        break
+                if len(route.via_xy) > spec.via_budget:
+                    spec.via_factor = factor * 10
+                    # A hard via budget must be able to contest a corridor
+                    # priced out by mutable routes or stale history. Retain all
+                    # source obstacles and return masks; only proposal costs
+                    # change. Normal claims and exact commit remain mandatory.
+                    self._ignore_soft_costs = True
+                    try:
+                        direct = self._route_net_once(spec, 0.0)
+                    finally:
+                        self._ignore_soft_costs = False
+                    if direct.connected and len(direct.via_xy) <= spec.via_budget:
+                        route = direct
             finally:
                 spec.via_factor = factor
-            # An unconnected retry trivially has fewer vias; keep the original
-            # route then, so the failure names the via shortfall.
-            if retry.connected and len(retry.via_xy) <= len(route.via_xy):
-                route = retry
             if len(route.via_xy) > spec.via_budget:
                 route = _NetRoute([], [], set(), set(), set(), set(), False, 0.0,
                                   f"needs {len(route.via_xy)} new vias, max_vias leaves {spec.via_budget}")
@@ -1588,6 +1610,10 @@ class _Router:
                         spec.via_drill / 2 + self.board.rules.minimum_hole_clearance_nm)
         via_radius = (via_reach + self.default_width / 2) / g.pitch
         via_via_radius = (via_reach + spec.via_size / 2) / g.pitch
+        prospective_reach = max(self._candidate_via_size / 2 +
+                                max(spec.clearance, self._candidate_clearance),
+                                self._candidate_via_drill / 2 + self.board.rules.minimum_hole_clearance_nm)
+        track_via_radius = (prospective_reach + spec.width / 2) / g.pitch
         length = 0.0
         # Layer-change sites: one via per xy, spanning every layer the
         # route changes between there (see _site_spans).
@@ -1607,6 +1633,10 @@ class _Router:
                     x, y = xa + ox, ya + oy
                     if 0 <= x < g.nx and 0 <= y < g.ny:
                         claims.add(la * g.plane + y * g.nx + x)
+                for ox, oy in _segment_offsets_cached(dx, dy, track_via_radius):
+                    x, y = xa + ox, ya + oy
+                    if 0 <= x < g.nx and 0 <= y < g.ny:
+                        via_claims.add(y * g.nx + x)
             nodes.update(path)
             if len(path) == 1:
                 la, xa, ya = g.unpack(path[0])
@@ -1626,6 +1656,9 @@ class _Router:
                     claims.add(node)
                     if distance <= near:
                         nodes.add(node)
+                for node, _ in self._segment_nodes(track.start, track.end, layer,
+                                                   prospective_reach + track.width_nm / 2):
+                    via_claims.add(node % g.plane)
         via_xy = set(changes)
         spans = self._site_spans(spec.name, changes)
         for xy in via_xy:
@@ -1660,9 +1693,20 @@ class _Router:
         route.body = {node: owner for node, owner in body.items() if node not in nodes}
         route.length = length
 
+    def _routing_history(self):
+        if not getattr(self, "_ignore_soft_costs", False):
+            return self.occupancy.history, self.occupancy.via_history
+        if not hasattr(self, "_zero_history"):
+            if self.occupancy.arrays:
+                self._zero_history = (np.zeros(self.grid.size, dtype=np.float64),
+                                      np.zeros(self.grid.plane, dtype=np.float64))
+            else:
+                self._zero_history = ([0.0] * self.grid.size, [0.0] * self.grid.plane)
+        return self._zero_history
+
     def _lead_penalty(self, lead: tuple[TrackSegment, ...], present: float) -> float:
         """Congestion price of an off-grid lead-in, so attach choices negotiate too."""
-        if not lead:
+        if not lead or getattr(self, "_ignore_soft_costs", False):
             return 0.0
         nodes = self._lead_nodes.get(lead)
         if nodes is None:
@@ -1673,13 +1717,14 @@ class _Router:
                 nodes.extend(node for node, distance in self._segment_nodes(
                     track.start, track.end, layer_of[track.layer], g.pitch / 2 + 1) )
             self._lead_nodes[lead] = nodes
+        exact = sum(self._lead_history.get(track, 0.0) for track in lead)
         if not nodes:
-            return 0.0
+            return exact
         hist, occ = self.occupancy.history, self.occupancy.occ
         if not self.occupancy.arrays:
-            return sum(hist[n] + present * occ[n] for n in nodes)
+            return exact + sum(hist[n] + present * occ[n] for n in nodes)
         index = np.asarray(nodes, dtype=np.int64)
-        return float(hist[index].sum() + present * occ[index].sum())
+        return exact + float(hist[index].sum() + present * occ[index].sum())
 
     def _segment_nodes(self, start: Point, end: Point, layer: int, radius_nm: float):
         """(node, distance) for grid nodes strictly within radius of a segment."""
@@ -1777,7 +1822,7 @@ class _Router:
         owner, mid_owner = self.rasters.track(spec.width, spec.clearance)
         via_owner = self._via_owners(spec)
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
-        hist, via_hist = self.occupancy.history, self.occupancy.via_history
+        hist, via_hist = self._routing_history()
         nid = spec.nid
         nx, plane = g.nx, g.plane
         layers = spec.layers
@@ -1826,7 +1871,7 @@ class _Router:
                 return result
         g, options = self.grid, self.options
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
-        hist, via_hist = self.occupancy.history, self.occupancy.via_history
+        hist, via_hist = self._routing_history()
         nid = spec.nid
         neck, neck_mid, region = spec.neck, spec.neck_mid, spec.region
         use_neck = bool(neck or neck_mid)
@@ -2008,6 +2053,7 @@ class _Router:
         via_owner = self._via_owners(spec, as_array=True)
         transitions = self._via_transitions(spec)
         occupancy = self.occupancy
+        history, via_history = self._routing_history()
         flags, extra = self._n_flags, self._n_extra
         layers = np.asarray([layer | (0x100 if layer in spec.target_only else 0) for layer in spec.layers],
                             dtype=np.int32)
@@ -2042,7 +2088,7 @@ class _Router:
         P = lambda a: a.ctypes.data
         length = self.native(
             g.nx, g.ny, g.nl, P(owner), P(mid_owner), P(via_owner),
-            P(occupancy.history), P(occupancy.occ), P(occupancy.via_history), P(occupancy.via_occ),
+            P(history), P(occupancy.occ), P(via_history), P(occupancy.via_occ),
             P(flags), spec.nid, P(layers), len(layers), P(move_base),
             float(present), float(self.via_cost * spec.via_factor),
             *box, *tbox,
@@ -2156,39 +2202,71 @@ class _Router:
     # -- negotiation ------------------------------------------------------
 
     def _conflicts(self, routes: Mapping[str, _NetRoute]) -> set[str]:
-        occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
-        bad = set()
-        for name, route in routes.items():
+        """Negotiate actual emitted copper, not overlapping raster envelopes."""
+        self._exact_track_conflicts = {}
+        self._exact_lead_conflicts = {}
+        self._exact_via_conflicts = {}
+        index = RoutingClearanceIndex(self.board)
+        objects, raw_leads = {}, {}
+        specs = {spec.name: spec for spec in self.specs}
+        for name, route in sorted(routes.items()):
             if not route.connected:
                 continue
-            if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.nodes):
-                bad.add(name)
-                continue
-            if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.body):
-                bad.add(name)
-                continue
-            if any(via_occ[xy] - (1 if xy in route.via_claims else 0) > 0 for xy in route.via_xy):
-                bad.add(name)
+            spec = specs[name]
+            for raw in dict.fromkeys(t for lead in route.leads for t in lead):
+                for fragment in self.clearance.breakout.neck_down((raw,)):
+                    raw_leads.setdefault((name, fragment), set()).add(raw)
+            tracks, vias = set(), set()
+            for path, leads in zip(route.paths, route.leads):
+                t, v = self.copper(spec, path, leads)
+                tracks.update(t)
+                vias.update(v)
+            # Sets deduplicate branch joins; geometry order is deterministic.
+            for track in sorted(tracks, key=lambda t: (t.layer.value, t.start.x_nm, t.start.y_nm,
+                                                       t.end.x_nm, t.end.y_nm, t.width_nm)):
+                token = f"proposal-track:{len(objects)}"
+                objects[token] = (name, track)
+                index.add_track(track, locked=False, occurrence=token)
+            for via in sorted(vias, key=lambda v: (v.position.x_nm, v.position.y_nm)):
+                token = f"proposal-via:{len(objects)}"
+                objects[token] = (name, via)
+                index.add_via(via, locked=False, occurrence=token)
+        bad = set()
+        def price(owner, copper):
+            if isinstance(copper, TrackSegment):
+                self._exact_track_conflicts.setdefault(owner, set()).add(copper)
+                self._exact_lead_conflicts.setdefault(owner, set()).update(raw_leads.get((owner, copper), ()))
+            else:
+                x = round((copper.position.x_nm - self.grid.x0) / self.grid.pitch)
+                y = round((copper.position.y_nm - self.grid.y0) / self.grid.pitch)
+                self._exact_via_conflicts.setdefault(owner, set()).add(y * self.grid.nx + x)
+        for token, (name, copper) in objects.items():
+            records = (index.track_blocker_records(copper) if isinstance(copper, TrackSegment)
+                       else index.via_blocker_records(copper))
+            for record in records:
+                # Immutable source geometry never becomes a mutable dependency.
+                # It remains checked at exact commit and by independent DRC.
+                if record.immutable or record.occurrence not in objects:
+                    continue
+                owner, other = objects[record.occurrence]
+                bad.update((name, owner))
+                price(name, copper)
+                price(owner, other)
         return bad
 
     def _penalise(self, routes: Mapping[str, _NetRoute], names: Iterable[str]) -> None:
-        occ, hist = self.occupancy.occ, self.occupancy.history
-        via_occ, via_hist = self.occupancy.via_occ, self.occupancy.via_history
+        hist, via_hist = self.occupancy.history, self.occupancy.via_history
         inc = self.options.history_increment
+        layer_of = {layer: i for i, layer in enumerate(self.grid.layers)}
         for name in names:
-            route = routes[name]
-            for node in route.nodes:
-                if occ[node] - (1 if node in route.claims else 0) > 0:
+            for track in self._exact_track_conflicts.get(name, ()):
+                for node, _ in self._segment_nodes(track.start, track.end, layer_of[track.layer],
+                                                   self.grid.pitch / 2 + 1):
                     hist[node] += inc
-            for xy in route.via_xy:
-                if via_occ[xy] - (1 if xy in route.via_claims else 0) > 0:
-                    via_hist[xy] += inc
-            for node, owner in route.body.items():
-                if occ[node] - (1 if node in route.claims else 0) > 0:
-                    if isinstance(owner, tuple):
-                        via_hist[owner[1]] += inc
-                    else:
-                        hist[owner] += inc
+            for xy in self._exact_via_conflicts.get(name, ()):
+                via_hist[xy] += inc
+            for track in self._exact_lead_conflicts.get(name, ()):
+                self._lead_history[track] = self._lead_history.get(track, 0.0) + inc
 
     def _expired(self) -> bool:
         return self.deadline is not None and perf_counter() >= self.deadline
@@ -2481,6 +2559,7 @@ class _Router:
             self.occupancy.copy_history(other.occupancy)
             self.present = other.present
             self.conflict_age = dict(other.conflict_age)
+            self._lead_history = dict(other._lead_history)
 
     def penalise_points(self, name: str, points: list[Point], amount: float) -> None:
         g = self.grid

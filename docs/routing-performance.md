@@ -109,6 +109,14 @@ matched runtime or pure algorithm attribution is claimed. A 0.125 mm /2000000
 expansion diagnostic leaves three RMII nets open and is not selected. Whole-board
 routing and engineering qualification remain separate.
 
+## Isolated exact-congestion revalidation 429
+
+This branch reapplies the four preserved congestion experiments to commit4ed3d66.
+It is separate from main. Historical results below do not validate this new
+combination. The via-budget-only trial423 regressed the matched consumer control;
+the full combination now requires fresh tests and matched board validation.
+No push, merge or board adoption is implied.
+
 ## Reproducible router review fixes (2026-10-24)
 
 Unified plane contacts now materialize a required pad-to-grid lead before
@@ -158,6 +166,82 @@ remain in progress at integration; results from the excluded congestion compiler
 must not be substituted. The broader experimental-branch Python run394 is also
 incomplete and failing; five failures independently reproduce on upstream main.
 No all-tests, complete CopperBench, or hardware qualification claim is made.
+## Exact tentative copper and through-via congestion (2026-10-24)
+
+Unified negotiation now checks actual emitted tentative tracks and vias through
+one fresh clearance index. Mutable occurrences identify both conflicting owners;
+locked source copper never becomes a rip-up dependency. Emitted breakout widths
+match exact commit. Track, lead and via history prices the actual conflicting
+geometry instead of treating overlapping raster envelopes as proof of a clash.
+
+Through-via proposals also price foreign mutable tracks on every barrel layer,
+including layers the path does not visit. Both grid tracks and off-grid leads
+contribute to that reservation. The largest candidate via and clearance provide
+a conservative cost envelope; exact commit remains the acceptance gate. Required
+arrays, source copper, return coverage, via budgets and native checks are retained.
+
+Control376 exposes a real diagonal track/via clash between raster sample points.
+Control380 exposes a via crossing an internal-layer track while searching only
+front and back. Both Python and native kernels reproduce these cases. The latest
+focused router/lead/via-budget set passes all 54 cases (381; pre-push403 repeats it).
+The tested router file SHA-256 is
+`7b54f4e00ac8321099a4ac7c7b69722d25ad5d6107dcba2164ebad5ecb04dfb0`.
+
+All runs below use the standard pipeline with `--router unified`. Benchmark390
+routes the four examples; independent KiCad refill checks are retained alongside
+each output. Benchmark388 routes both maintained consumers with native verification.
+
+| Board | Signal connections | Native opens | Exact geometry errors | Vias | Track length (mm) | Wall time (s) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Legacy round LED ring | 51/51 | 1 | 0 | 47 | 654.422 | 181.0 |
+| nRF52 | 35/35 | 0 | 0 | 39 | 352.550 | 48.0 |
+| Full vertical | 86/86 | 0 | 0 | 186 | 1605.004 | 219.3 |
+| CM4 | 21/21 | 0 | 0 | 61 | 587.990 | 23.1 |
+| CopperLedRing | 51/51 | 0 | 0 | 37 | 542.624 | 94.7 |
+| CopperAssetTracker | 120/120 | 0 | 0 | 269 | 1995.230 | 1186.0 |
+
+The legacy ring remains incomplete: one GND open after native refill. The matched
+upstream-main control397 has two native opens and two signal opens. Example native
+reports retain footprint-library warnings; the legacy ring also has isolated
+copper and silkscreen warnings. Concurrent workloads make these timings unsuitable
+as a speedup claim. No equivalent legacy-router benchmark pass is asserted.
+
+All supported positive example check/compile targets391, all 22 physical-example
+layout/editor smoke checks395 and all 20 Node editor/LSP tests389 pass. The local
+Python suite394 is incomplete and has reported at least 13 failures. Five plane-
+first assertions also fail on unchanged upstream main `5fce7028` (control402): four
+expect a blocked intermediate result now found ready, and one expects the older
+`plane_first` strategy name instead of `critical_and_plane_first`. Other failures
+remain unclassified. Run384 had an invalid temporary-directory parent and is not
+validation evidence. This is not an all-tests pass, whole-board CopperBench
+closure, or electrical/assembly/CAM/hardware qualification.
+
+## Exact off-grid lead/via interactions and bounded via-price families (2026-10-24)
+
+The earlier half-diagonal lead sampling can mark legal copper as conflicted.
+Control370 demonstrates four false positives across both kernels and mirrored
+placements. Negotiation now retains the original raster centre sampling and
+checks actual emitted lead fragments against tentative full-span vias through a
+fresh clearance index. Only exact mutable lead occurrences receive feedback;
+source copper stays locked. Lead-specific prices and via prices persist across
+repair history. Declared breakout clipping uses the same operation as exact
+commit. No source keepout, return requirement, via limit or acceptance is relaxed.
+
+A connected via-bounded net first tries four bounded via-price multipliers with
+ordinary congestion/history intact. Discounting is retained only as a final
+proposal family. This lets hard-budget nets negotiate with one another instead
+of repeatedly selecting the same cheapest path after erasing their soft costs.
+The valid two-net corridor has a passing unpriced control; frozen6fc36fd fails
+both priced-kernel cases367, while after366 connects both within two vias each
+with zero exact geometry errors. Earlier359-365 used overlapping terminal bodies
+or an unproven narrow corridor and are retained as invalid fixture experiments.
+
+All19 focused cases371 pass, including real collisions, a nearby legal pair,
+mirroring, stale history, occupied corridors and a real impassable wall. Related
+router/return/source/macro/array checks372 pass with four optional skips. Actual
+fresh PHY baseline358 and price-only368 remain incomplete; combined exact replay
+373 and fresh native comparison are pending. Neither diagnostic establishes full
+board, electrical, assembly or production qualification.
 
 ## Reserve required pad-via arrays during placement (2026-10-24)
 
@@ -182,6 +266,44 @@ Actual PHY search350 previously failed during array materialization; corrected
 search353 finds a legal back-side INTSEL location while all other trial poses
 remain fixed. Source regeneration and complete routing/native validation remain
 required before adopting the two-component reference adaptation.
+## Earlier off-grid sampling trial, superseded by exact interactions above
+
+Half-pitch sampling can miss every representative grid node of a short off-grid
+lead near a cell corner. Lead centre sampling and lead congestion pricing now
+cover the half-diagonal distance. Conflict accounting identifies both mutable
+owners of a contested resource; via history also prices a via whose clearance
+region conflicts with the lead. Source raster masks and exact commit remain
+unchanged. This is conservative negotiation accounting, not clearance relaxation.
+
+Both kernels miss the exact via/lead collision in control339. Intermediate340
+exposes only one owner. The complete correction passes both kernels, positive and
+negative offsets, a nearby real collision and separated legal copper (eight
+cases344). Related router, return, ownership and via-budget checks342 pass with
+four optional skips. Actual18-net PHY replay343 and ladder comparison are pending;
+no complete-board or speed result is claimed.
+
+## Via-budget proposals can contest mutable congestion (2026-10-24)
+
+After the existing higher-via-cost retry, a still over-budget proposal gets one
+bounded retry with mutable congestion/history costs discounted. Source geometry,
+layer restrictions, via/return masks, search-state limits and exact commit checks
+remain active. The legal proposal keeps its normal congestion claims so other
+mutable routes can negotiate. Global occupancy/history and per-net via pricing
+are unchanged after the retry. Zero-cost buffers are local and reused by a router;
+the Python and native kernels share the same policy without a native ABI change.
+
+The two-kernel synthetic fixture fails before the correction despite an available
+two-via corridor. Five after cases cover stale history, current occupancy pressure,
+normal corridor claims and a real source wall that remains impassable. The related
+router/return/macro set passes (four optional library/native fixtures skipped).
+The first related run330 failed to create sandbox temporary directories; corrected
+workspace-local temporary run332 passes without any gate changes.
+
+Actual 18-net PHY replay331 reduces four unresolved nets in326 to two, with zero
+exact geometry errors. D3V3 and TXD1 now connect. CRS_DV is blocked by PHY_ADDR;
+RXD1 is blocked by RXD0. The test retains the source, immutable prefix, existing
+return-via constraints and coarse grid. Its 159.7 s versus 186.5 s control is a
+loaded diagnostic observation, not a complete-board speed or closure claim.
 
 ## Preserve macro boundary access during source-copper reuse (2026-10-24)
 
@@ -197,7 +319,10 @@ then connects through the declared free-track port with exact ownership intact.
 An independent KiCad10.0.6 refill reports zero opens or dangling tracks. Related
 macro, source-access and router tests pass. Ladder323 exposed this issue as one
 MODEM_EN dangling stub on the asset tracker despite 120/120 signal connectivity;
-the full native consumer replay is pending and must not be claimed as passing.
+the full native consumer328 now passes with120/120 signals, zero native opens/
+violations,265 vias and1993.925mm in1170.8s. Its ordinary prefix and immutable
+port remain intact. This is consumer routing compatibility, not electrical or
+manufacturing qualification.
 
 ## Preserve signal reservations through plane preparation (2026-10-24)
 
