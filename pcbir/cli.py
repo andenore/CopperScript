@@ -2050,6 +2050,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not result.stopped_after:
                 emit(progress, "final_contacts_native_drc", "finished", decision=output_drc.decision.value)
             filled_feedback = None
+            native_cleanup = None
             try:
                 if native_cli:
                     emit(progress, "independent_kicad", "started")
@@ -2072,10 +2073,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                     output_drc = run_physical_drc(output_board)
                 if plane_verification is not None:
                     from .plane_verify import remove_native_dangling_tracks
+                    prefix = (result.fanout.board if result.fanout else
+                              result.plane_stitch.board if result.plane_stitch else result.critical.board)
+                    native_fixed = fixed | Counter(prefix.tracks)
+                    native_fixed_vias = Counter(physical_board.vias) | Counter(prefix.vias)
+                    native_fixed_vias.update(owned_power_copper(result)[1])
+                    before_cleanup, before_native = output_board, plane_verification
+                    cleanup_diagnostics = []
                     output_board, plane_verification = remove_native_dangling_tracks(
-                        output_board, plane_verification, fixed,
-                        kicad_cli=native_cli,
-                        artifact_directory=evidence_directory / "native-cleanup")
+                        output_board, plane_verification, native_fixed,
+                        protected_vias=native_fixed_vias, kicad_cli=native_cli,
+                        artifact_directory=evidence_directory / "native-cleanup", diagnostics=cleanup_diagnostics)
+                    native_cleanup = {
+                        "status": "accepted" if output_board is not before_cleanup else "unchanged",
+                        "before_digest": before_native.board_digest,
+                        "after_digest": plane_verification.board_digest,
+                        "before_artifact_directory": before_native.artifact_directory,
+                        "after_artifact_directory": plane_verification.artifact_directory,
+                        "removed_track_occurrences": sum((Counter(before_cleanup.tracks)-Counter(output_board.tracks)).values()),
+                        "added_track_occurrences": sum((Counter(output_board.tracks)-Counter(before_cleanup.tracks)).values()),
+                        "removed_via_occurrences": sum((Counter(before_cleanup.vias)-Counter(output_board.vias)).values()),
+                        "diagnostics": cleanup_diagnostics,
+                        "protected_tracks": sum(native_fixed.values()),
+                        "protected_vias": sum(native_fixed_vias.values()),
+                    }
                     if not plane_verification.matches(output_board):
                         raise RuntimeError("native cleanup verification is stale")
                     if output_board is not swept:
@@ -2462,6 +2483,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     report["plane_stitch"]["zone_fill_verified"] = plane_verification.passed
                     report["plane_stitch"]["zone_connectivity_verified"] = (
                         plane_verification.zone_connectivity_verified(output_board))
+            if native_cleanup is not None:
+                report["native_cleanup"] = native_cleanup
             if filled_feedback is not None:
                 report["filled_copper_feedback"] = json.loads(filled_feedback.to_json())
             from .requirement_verification import verify_requirements

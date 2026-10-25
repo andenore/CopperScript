@@ -124,6 +124,24 @@ The standalone API is `improve_filled_copper(pipeline, ..., kicad_cli=...)` with
 `FilledCopperFeedbackOptions`. It verifies fresh inputs itself; it does not accept
 a caller-supplied connected flag or a stale native certificate.
 
+## Final native dead-end cleanup
+
+The final CLI pass can trim a mixed set of ordinary dangling tracks and vias.
+The source, prepared prefix, power owners, macros, critical nets and required
+via arrays stay protected. Existing track-only API callers cannot authorize
+via removal without explicitly supplying via ownership guards. Via cleanup on
+zone nets is unsupported.
+
+Every proposal preserves exact explicit pad partitions. Off-centre land entries
+may anchor a trim only when the complete existing endpoint disk lies inside the
+pad. Grazing or width-only contacts permit a whole-segment removal trial, never
+an invented cut point; any lost pad connection rejects that trial.
+Removing a one-layer via may expose its old launch leg. At most four fresh native
+rounds form one transaction, and only a completely clean matched refill commits.
+Stale evidence, protected exposed legs, unsupported findings or an exhausted bound
+restore the original board and evidence. The route report records cleanup
+digests, removed/replaced occurrence counts, artifact paths and rejection reasons.
+
 ## Repair transaction
 
 Only mapped opens on general distribution-zone nets are eligible. Specialized

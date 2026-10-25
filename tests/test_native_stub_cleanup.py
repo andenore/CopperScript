@@ -82,3 +82,98 @@ def test_critical_net_overhang_is_preserved(native_case,tmp_path):
     checked=verify_filled_planes(critical,kicad_cli=cli,artifact_directory=tmp_path/'critical')
     assert checked.dangling_track_uuids
     assert native_stub_candidate(critical,checked,Counter()) is None
+
+
+@pytest.fixture(scope='module')
+def mixed_native_case(tmp_path_factory):
+    from pcbir import Via, nm_from_mm
+    cli=Path(shutil.which('kicad-cli') or 'C:/Program Files/KiCad/10.0/bin/kicad-cli.exe')
+    if not cli.is_file():
+        pytest.skip('KiCad not installed')
+    base=board()
+    # The branch enters off centre, but its complete endpoint disk is in J3.
+    # Removing the whole branch would disconnect J3; retain its useful section.
+    branch=track((10,4),(10,9))
+    via=Via('S',Point.mm(12,6),nm_from_mm('0.6'),nm_from_mm('0.3'))
+    base=replace(base,placements=(*base.placements,Placement('J3','one-pad',Point.mm('10.1',4))),
+        nets=(replace(base.nets[0],pads=(*base.nets[0].pads,PadReference('J3','1'))),),
+        tracks=(track((3,6),(17,6)),branch),vias=(via,))
+    evidence=verify_filled_planes(base,kicad_cli=cli,
+        artifact_directory=tmp_path_factory.mktemp('mixed-native')/'before')
+    assert {f.type for f in evidence.native_findings}=={'track_dangling','via_dangling'}
+    assert evidence.unconnected_count==0
+    return base,evidence,cli,via
+
+
+def test_mixed_cleanup_preserves_offcentre_land_entry(mixed_native_case,tmp_path):
+    base,evidence,cli,via=mixed_native_case
+    cleaned,checked=remove_native_dangling_tracks(base,evidence,Counter((base.tracks[0],)),
+        protected_vias=Counter(),kicad_cli=cli,artifact_directory=tmp_path/'after')
+    assert checked.passed and checked.matches(cleaned)
+    assert not cleaned.vias
+    assert cleaned.tracks==(base.tracks[0],track((10,4),(10,6)))
+    assert explicit_copper_connectivity(cleaned).net_connected(base.nets[0])
+    assert cleaned.placements==base.placements
+
+
+def test_mixed_cleanup_requires_explicit_via_ownership(mixed_native_case):
+    base,evidence,cli,via=mixed_native_case
+    assert native_stub_candidate(base,evidence,Counter()) is None
+    assert native_stub_candidate(base,evidence,Counter(),protected_vias=Counter((via,))) is None
+    assert native_stub_candidate(base,evidence,Counter((base.tracks[1],)),protected_vias=Counter()) is None
+
+
+def test_mixed_cleanup_rolls_back_on_failed_fresh_native(mixed_native_case,monkeypatch):
+    import pcbir.plane_verify as verification
+    base,evidence,cli,via=mixed_native_case
+    monkeypatch.setattr(verification,'verify_filled_planes',lambda *a,**kw:evidence)
+    cleaned,checked=remove_native_dangling_tracks(base,evidence,Counter(),
+        protected_vias=Counter(),kicad_cli=cli)
+    assert cleaned is base and checked is evidence
+
+
+def test_mixed_cleanup_rejects_grazing_pad_entry(mixed_native_case,tmp_path):
+    base,_,cli,via=mixed_native_case
+    # The existing trace overlaps this pad, but its endpoint disk is not
+    # contained in it; no new off-centre anchor is inferred at a grazing edge.
+    base=replace(base,placements=(*base.placements[:2],replace(base.placements[2],position=Point.mm('10.35',4))))
+    evidence=verify_filled_planes(base,kicad_cli=cli,artifact_directory=tmp_path/'grazing')
+    diagnostics=[]
+    assert native_stub_candidate(base,evidence,Counter(),protected_vias=Counter(),diagnostics=diagnostics) is None
+    assert diagnostics==[{'reason':'changed_explicit_partition','net':'S'}]
+
+
+def test_mixed_cleanup_follows_via_launch_leg_in_one_transaction(mixed_native_case,tmp_path):
+    base,_,cli,via=mixed_native_case
+    base=replace(base,tracks=(*base.tracks,track((12,6),(12,8))),
+                 vias=(replace(via,position=Point.mm(12,8)),))
+    evidence=verify_filled_planes(base,kicad_cli=cli,artifact_directory=tmp_path/'before')
+    cleaned,checked=remove_native_dangling_tracks(base,evidence,Counter((base.tracks[0],)),
+        protected_vias=Counter(),kicad_cli=cli,artifact_directory=tmp_path/'after')
+    assert checked.passed and checked.matches(cleaned)
+    assert cleaned.tracks==(base.tracks[0],track((10,4),(10,6)))
+    assert not cleaned.vias
+    assert (tmp_path/'after'/'round-002'/'drc.json').is_file()
+
+
+def test_mixed_cleanup_rolls_back_if_exposed_leg_is_owned(mixed_native_case,tmp_path):
+    base,_,cli,via=mixed_native_case
+    leg=track((12,6),(12,8))
+    base=replace(base,tracks=(*base.tracks,leg),vias=(replace(via,position=Point.mm(12,8)),))
+    evidence=verify_filled_planes(base,kicad_cli=cli,artifact_directory=tmp_path/'before')
+    cleaned,checked=remove_native_dangling_tracks(base,evidence,Counter((leg,)),
+        protected_vias=Counter(),kicad_cli=cli,artifact_directory=tmp_path/'after')
+    assert cleaned is base and checked is evidence
+
+
+def test_mixed_cleanup_removes_redundant_grazing_branch(mixed_native_case,tmp_path):
+    base,_,cli,via=mixed_native_case
+    retained=track(('10.35',4),('10.35',6))
+    base=replace(base,placements=(*base.placements[:2],replace(base.placements[2],position=Point.mm('10.35',4))),
+                 tracks=(*base.tracks,retained))
+    evidence=verify_filled_planes(base,kicad_cli=cli,artifact_directory=tmp_path/'before')
+    cleaned,checked=remove_native_dangling_tracks(base,evidence,Counter((base.tracks[0],retained)),
+        protected_vias=Counter(),kicad_cli=cli,artifact_directory=tmp_path/'after')
+    assert checked.passed and checked.matches(cleaned)
+    assert cleaned.tracks==(base.tracks[0],retained)
+    assert not cleaned.vias
