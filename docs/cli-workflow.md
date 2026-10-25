@@ -334,8 +334,26 @@ contacts before area routing (the unified router uses `--fanout` only to seed
 its pad escapes); `--no-fanout` explicitly selects the legacy diagnostic flow.
 For difficult boards, `--soft-ripup` (legacy router) and `--maximum-ripup-blockers 4` try bounded transactional rerouting, and
 `--detailed-feedback-trials 4` retries legal placement changes against exact
-routing failures. These experiments do not waive physical DRC. Pass
-`--verify-plane-fill "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"` to
+routing failures (legacy router). These experiments do not waive physical DRC.
+
+Under the unified router, placement feedback is one congestion-driven loop:
+after the first full pass, if nets stay open or critical nets fail, it builds a
+per-tile congestion map (the router's own contention plus a RUDY demand
+estimate, each normalised to its 95th percentile) and moves parts on failed nets
+or hot tiles down the demand gradient. Only the two candidates that the estimate
+and `route_global` rate best rerun the pipeline tail (critical routing,
+plane stitch, ordinary routing, land closure, DRC), and a move is kept only if it
+lowers the whole-board score (hard DRC, opens, critical failures, unrouted nets,
+overflow, length, vias). `--congestion-feedback-trials N` bounds the reruns
+(default 4; 0 disables; a run with no failed nets never reruns); `--detailed-feedback-trials` and `--critical-feedback-trials`
+map onto it, with a budget of `max(N, detailed + critical)`, and the report
+lists them under `work_limits.unified_mapped_flags`. The report's
+`placement_feedback` block lists every trial, the accepted moves and up to 16
+hot tiles. `--router legacy` keeps the two old controllers unchanged.
+(`--placement-feedback-trials` is the older, unrelated budget of global
+placement trials per feedback iteration.)
+
+Pass `--verify-plane-fill "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"` to
 refill a disposable KiCad copy and include authoritative open-net/island
 findings in the report; a zone outline or stitched via alone is not proof of
 connectivity. See [routing research tasks](routing-backlog.md).

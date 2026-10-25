@@ -2,8 +2,8 @@
 
 Iteration scripts used to ship their own codec to keep intermediate solver
 states between runs. This module is the shared one: any frozen dataclass, enum,
-tuple, frozenset, mapping, Decimal or Fraction made of ``pcbir`` types round-trips
-exactly, and the file carries a content digest.
+tuple, frozenset, mapping, Decimal, Fraction or numpy array made of ``pcbir`` types
+round-trips exactly, and the file carries a content digest.
 
 Decoding only constructs dataclasses and enums that are *defined* in ``pcbir``
 modules (looked up by their own module and qualified name, never through other
@@ -14,6 +14,7 @@ not replace a route report, a native check or a lock.
 
 from __future__ import annotations
 
+import base64
 import enum
 import hashlib
 import importlib
@@ -56,6 +57,9 @@ def encode(value: Any) -> Any:
     if isinstance(value, (dict, MappingProxyType)) or isinstance(value, Mapping):
         return {"$map": [[encode(k), encode(v)] for k, v in value.items()],
                 "proxy": isinstance(value, MappingProxyType)}
+    array = _encode_ndarray(value)
+    if array is not None:
+        return array
     raise StateError(f"cannot encode {type(value).__module__}.{type(value).__qualname__}")
 
 
@@ -88,10 +92,63 @@ def decode(value: Any) -> Any:
         return frozenset(decode(item) for item in value["$frozenset"])
     if "$set" in value:
         return {decode(item) for item in value["$set"]}
+    if "$ndarray" in value:
+        return _decode_ndarray(value["$ndarray"])
     if "$map" in value:
         mapping = {decode(k): decode(v) for k, v in value["$map"]}
         return MappingProxyType(mapping) if value.get("proxy") else mapping
     return {key: decode(item) for key, item in value.items()}
+
+
+# Plain numeric dtypes only: object, string and structured arrays could hide
+# arbitrary values, so they are refused like any other unsupported object.
+_NDARRAY_KINDS = "biuf"
+
+
+def _encode_ndarray(value: Any) -> dict | None:
+    """A numpy array or scalar as exact little-endian bytes, or None if not numpy."""
+
+    numpy = _numpy()
+    if numpy is None:
+        return None
+    if isinstance(value, numpy.generic):
+        if value.dtype.kind not in _NDARRAY_KINDS:
+            return None
+        return encode(value.item())
+    if not isinstance(value, numpy.ndarray) or value.dtype.kind not in _NDARRAY_KINDS:
+        return None
+    dtype = value.dtype.newbyteorder("<")  # one byte order for every host
+    data = numpy.ascontiguousarray(value, dtype=dtype).tobytes()
+    return {"$ndarray": {"dtype": dtype.str, "shape": list(value.shape),
+                         "data": base64.b64encode(data).decode("ascii")}}
+
+
+def _decode_ndarray(spec: dict) -> Any:
+    numpy = _numpy()
+    if numpy is None:
+        raise StateError("numpy is required to decode an array")
+    try:
+        dtype = numpy.dtype(spec["dtype"])
+    except (TypeError, ValueError) as error:
+        raise StateError(f"unsupported array dtype {spec['dtype']!r}") from error
+    if dtype.kind not in _NDARRAY_KINDS:
+        raise StateError(f"unsupported array dtype {spec['dtype']!r}")
+    data = base64.b64decode(spec["data"].encode("ascii"), validate=True)
+    shape = tuple(int(size) for size in spec["shape"])
+    count = 1
+    for size in shape:
+        count *= size
+    if len(data) != count * dtype.itemsize:
+        raise StateError("array data does not match its shape and dtype")
+    return numpy.frombuffer(data, dtype=dtype).reshape(shape).copy()
+
+
+def _numpy():
+    try:
+        import numpy
+    except ImportError:  # numpy is a runtime dependency; stay importable without it
+        return None
+    return numpy
 
 
 def save_state(path: str | Path, value: Any, **metadata: Any) -> Path:
