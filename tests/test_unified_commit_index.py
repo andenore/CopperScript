@@ -128,8 +128,15 @@ def test_repair_on_the_shared_index_commits_the_same_copper(monkeypatch, iterati
 
 
 def test_seeded_repair_shares_the_index_only_for_pure_copper_additions():
-    # Eight by eight: the unseeded repair leaves an open, so seeds run.
-    board = _grid_board(8, 2.0)
+    # A spans an impassable wall while B can connect on its left. Keep a
+    # guaranteed open so improved negotiation cannot bypass the seeded path.
+    from pcbir import CopperKeepout, PolygonRing, PolygonWithHoles
+    board = _board({"A": ((3, 10), (17, 10)), "B": ((3, 4), (6, 4))})
+    wall = PolygonWithHoles(PolygonRing(tuple(Point.mm(x, y) for x, y in
+        ((12.8, 0), (13.2, 0), (13.2, 26), (12.8, 26)))))
+    board = replace(board, copper_keepouts=(CopperKeepout(
+        "wall", (FRONT, BACK), wall, block_tracks=True, block_vias=True,
+        block_pads=False, block_zones=False),))
     seen = []
 
     def adds_nothing(partial, names):
@@ -141,6 +148,8 @@ def test_seeded_repair_shares_the_index_only_for_pure_copper_additions():
 
     reference, _ = _run(board, maximum_iterations=1, commit_rounds=3, share_commit_index=False,
                         escape_seeder=adds_nothing)
+    assert reference.board.tracks
+    assert {net.net for net in reference.nets if net.connected} == {"B"}
     for seeder in (adds_nothing, touches_metadata):
         result, _ = _run(board, maximum_iterations=1, commit_rounds=3, escape_seeder=seeder)
         _same_result(reference, result)

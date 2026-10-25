@@ -195,7 +195,7 @@ def pipeline(board, options, verify):
     from pcbir.placement import PlacementPlannerOptions
     from pcbir.routeflow import PlacementRoutingFeedbackOptions
     from pcbir.package_access import PackageAccessOptions
-    return run_routing_pipeline(board,
+    return run_routing_pipeline(board, legacy_gates=True,
         placement_options=PlacementPlannerOptions(refinement_passes=0,
             fixed_references=frozenset(p.reference for p in board.placements)),
         feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
@@ -288,7 +288,7 @@ def test_route_board_native_return_policy_reports_final_certificate(tmp_path):
                                   provenance='Synthetic external fixture source') ])), encoding='utf-8')
     report = tmp_path / 'route.json'
     code = main(['route-board', str(source), '--layers', '4', '--footprint-root', str(tmp_path),
-        '--power-area-config', str(config), '--routing-profile', 'quick', '--package-access-trials', '0',
+        '--router', 'legacy', '--power-area-config', str(config), '--routing-profile', 'quick', '--package-access-trials', '0',
         '--zone-escape-trials', '0', '--zone-local-ripup-trials', '0', '--filled-copper-trials', '0',
         '--verify-plane-fill', cli, '--report', str(report), '-o', str(tmp_path/'draft.kicad_pcb')])
     assert code in (0, 1) and report.is_file()

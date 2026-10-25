@@ -62,4 +62,3 @@ def test_unconnected_plated_pad_obeys_inner_layer_barrier():
                                         drill=Size.mm(".2", ".2")) for p in fp.pads))
     board = replace(board, footprints={**board.footprints, "chip": fp}, nets=(), decoupling_links=())
     assert not _legal(board.placements[0], {}, board, PlacementPlannerOptions())
-

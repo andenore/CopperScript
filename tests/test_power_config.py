@@ -97,7 +97,7 @@ def test_route_board_native_partition_verifies_source_baseline(tmp_path):
             role='source', provenance='Synthetic external test feed')])))
     report = tmp_path/'route.json'
     code = main(['route-board', str(source), '--footprint-root', str(tmp_path), '--routing-profile', 'quick',
-        '--power-area-config', str(config), '--package-access-trials', '0', '--zone-escape-trials', '0',
+        '--router', 'legacy', '--power-area-config', str(config), '--package-access-trials', '0', '--zone-escape-trials', '0',
         '--filled-copper-trials', '0', '--verify-plane-fill', cli,
         '--report', str(report), '-o', str(tmp_path/'draft.kicad_pcb')])
     assert code in (0, 1) and report.is_file()

@@ -158,5 +158,3 @@ def terminal_access_failures(generated, registered):
         for key, choices in generated.items()
         if not registered.get(key)
     }
-
-
