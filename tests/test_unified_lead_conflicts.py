@@ -40,3 +40,25 @@ def test_short_off_grid_lead_reports_a_real_via_clearance_conflict(monkeypatch, 
     router._penalise(routes, conflicts)
     xy = node(front,13,13) % grid.plane
     assert (router.occupancy.via_history[xy] > 0)==close
+
+
+@pytest.mark.parametrize("native",(False,True))
+def test_grid_diagonal_via_collision_is_not_hidden_between_raster_nodes(monkeypatch,native):
+    if not native:
+        import pcbir.native
+        monkeypatch.setattr(pcbir.native,"astar",lambda:None)
+    board=_board({"A":((2,2),(3,2)),"B":((18,18),(19,18))})
+    router=_Router(board,UnifiedRouterOptions(),list(board.nets),None);g=router.grid
+    def node(layer,x,y):
+        return g.index(g.layers.index(layer),round((nm_from_mm(x)-g.x0)/g.pitch),
+                       round((nm_from_mm(y)-g.y0)/g.pitch))
+    f,b=CopperLayer.FRONT,CopperLayer.BACK
+    a=_NetRoute([[node(f,13,13),node(b,13,13)]],[()],set(),set(),set(),set(),True,0.)
+    track=_NetRoute([[node(f,13.5,13.25),node(f,13.25,13.5)]],[()],set(),set(),set(),set(),True,0.)
+    for route,spec in ((a,router.specs[0]),(track,router.specs[1])):
+        router._finish_route(route,spec);router.occupancy.add(route,1)
+    routes={"A":a,"B":track}
+    assert router.commit(routes)[1]  # Exact copper oracle sees the real clash.
+    assert router._conflicts(routes)=={"A","B"}
+    router._penalise(routes,{"A","B"})
+    assert router.occupancy.via_history[node(f,13,13)%g.plane]>0

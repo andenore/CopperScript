@@ -1860,81 +1860,72 @@ class _Router:
 
     # -- negotiation ------------------------------------------------------
 
-    def _lead_via_conflicts(self, routes):
-        """Exact mutable lead/via interactions, without fictitious centre cells."""
-        self._exact_lead_conflicts, self._exact_via_conflicts = {}, {}
-        if not any(route.connected and route.via_xy for route in routes.values()):
-            return set()
-        index, lead_sources = None, {}
+    def _conflicts(self, routes: Mapping[str, _NetRoute]) -> set[str]:
+        """Negotiate actual emitted copper, not overlapping raster envelopes."""
+        self._exact_track_conflicts = {}
+        self._exact_lead_conflicts = {}
+        self._exact_via_conflicts = {}
+        index = RoutingClearanceIndex(self.board)
+        objects, raw_leads = {}, {}
+        specs = {spec.name: spec for spec in self.specs}
         for name, route in sorted(routes.items()):
             if not route.connected:
                 continue
-            for track in dict.fromkeys(t for lead in route.leads for t in lead):
-                if index is None:
-                    index = RoutingClearanceIndex(self.board)
-                # Use exactly the emitted widths, including declared breakout
-                # clipping. Source copper stays immutable in this fresh index.
-                for fragment in self.clearance.breakout.neck_down((track,)):
-                    token = f"proposal-lead:{len(lead_sources)}"
-                    lead_sources[token] = (name, track)
-                    index.add_track(fragment, locked=False, occurrence=token)
-        if index is None:
-            return set()
-        specs = {spec.name: spec for spec in self.specs}
-        bad = set()
-        for name, route in routes.items():
-            if not route.connected:
-                continue
             spec = specs[name]
-            for xy in route.via_xy:
-                via = Via(name, self.grid.point(xy), spec.via_size, spec.via_drill,
-                          self.grid.layers[0], self.grid.layers[-1])
-                for record in index.via_blocker_records(via):
-                    if record.immutable or record.occurrence not in lead_sources:
-                        continue
-                    owner, track = lead_sources[record.occurrence]
-                    bad.update((name, owner))
-                    self._exact_via_conflicts.setdefault(name, set()).add(xy)
-                    self._exact_lead_conflicts.setdefault(owner, set()).add(track)
+            for raw in dict.fromkeys(t for lead in route.leads for t in lead):
+                for fragment in self.clearance.breakout.neck_down((raw,)):
+                    raw_leads.setdefault((name, fragment), set()).add(raw)
+            tracks, vias = set(), set()
+            for path, leads in zip(route.paths, route.leads):
+                t, v = self.copper(spec, path, leads)
+                tracks.update(t)
+                vias.update(v)
+            # Sets deduplicate branch joins; geometry order is deterministic.
+            for track in sorted(tracks, key=lambda t: (t.layer.value, t.start.x_nm, t.start.y_nm,
+                                                       t.end.x_nm, t.end.y_nm, t.width_nm)):
+                token = f"proposal-track:{len(objects)}"
+                objects[token] = (name, track)
+                index.add_track(track, locked=False, occurrence=token)
+            for via in sorted(vias, key=lambda v: (v.position.x_nm, v.position.y_nm)):
+                token = f"proposal-via:{len(objects)}"
+                objects[token] = (name, via)
+                index.add_via(via, locked=False, occurrence=token)
+        bad = set()
+        def price(owner, copper):
+            if isinstance(copper, TrackSegment):
+                self._exact_track_conflicts.setdefault(owner, set()).add(copper)
+                self._exact_lead_conflicts.setdefault(owner, set()).update(raw_leads.get((owner, copper), ()))
+            else:
+                x = round((copper.position.x_nm - self.grid.x0) / self.grid.pitch)
+                y = round((copper.position.y_nm - self.grid.y0) / self.grid.pitch)
+                self._exact_via_conflicts.setdefault(owner, set()).add(y * self.grid.nx + x)
+        for token, (name, copper) in objects.items():
+            records = (index.track_blocker_records(copper) if isinstance(copper, TrackSegment)
+                       else index.via_blocker_records(copper))
+            for record in records:
+                # Immutable source geometry never becomes a mutable dependency.
+                # It remains checked at exact commit and by independent DRC.
+                if record.immutable or record.occurrence not in objects:
+                    continue
+                owner, other = objects[record.occurrence]
+                bad.update((name, owner))
+                price(name, copper)
+                price(owner, other)
         return bad
 
-    def _conflicts(self, routes: Mapping[str, _NetRoute]) -> set[str]:
-        occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
-        bad = set()
-        for name, route in routes.items():
-            if not route.connected:
-                continue
-            if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.nodes):
-                bad.add(name)
-                continue
-            if any(occ[node] - (1 if node in route.claims else 0) > 0 for node in route.body):
-                bad.add(name)
-                continue
-            if any(via_occ[xy] - (1 if xy in route.via_claims else 0) > 0 for xy in route.via_xy):
-                bad.add(name)
-        return bad | self._lead_via_conflicts(routes)
-
     def _penalise(self, routes: Mapping[str, _NetRoute], names: Iterable[str]) -> None:
-        occ, hist = self.occupancy.occ, self.occupancy.history
-        via_occ, via_hist = self.occupancy.via_occ, self.occupancy.via_history
+        hist, via_hist = self.occupancy.history, self.occupancy.via_history
         inc = self.options.history_increment
+        layer_of = {layer: i for i, layer in enumerate(self.grid.layers)}
         for name in names:
-            route = routes[name]
-            for node in route.nodes:
-                if occ[node] - (1 if node in route.claims else 0) > 0:
+            for track in self._exact_track_conflicts.get(name, ()):
+                for node, _ in self._segment_nodes(track.start, track.end, layer_of[track.layer],
+                                                   self.grid.pitch / 2 + 1):
                     hist[node] += inc
-            for xy in route.via_xy:
-                if (xy in self._exact_via_conflicts.get(name, ())
-                        or via_occ[xy] - (1 if xy in route.via_claims else 0) > 0):
-                    via_hist[xy] += inc
+            for xy in self._exact_via_conflicts.get(name, ()):
+                via_hist[xy] += inc
             for track in self._exact_lead_conflicts.get(name, ()):
                 self._lead_history[track] = self._lead_history.get(track, 0.0) + inc
-            for node, owner in route.body.items():
-                if occ[node] - (1 if node in route.claims else 0) > 0:
-                    if isinstance(owner, tuple):
-                        via_hist[owner[1]] += inc
-                    else:
-                        hist[owner] += inc
 
     def negotiate(self, deadline: float | None, only: set[str] | None = None):
         """PathFinder loop. Routes persist on the router between calls."""
