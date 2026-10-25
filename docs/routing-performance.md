@@ -1,3 +1,43 @@
+## Generic fixes for the CopperProbe open connections (2026-10-25)
+
+Each cause in the section below got a generic change on the unified path;
+nothing is board-specific and nothing relaxes a declared rule.
+
+- **Pair search escalation.** A coupled pair that exhausts its bounded tier
+  (`initial_pair_state_limit`, 6,000) without any candidate continues the
+  same search, ports and gates under `critical_pair_state_escalation` times
+  that bound (default 10; the legacy path never escalates). The USB_RX1 pair
+  around J_USB needs about 20,000 states and connects on the real critical
+  inputs at the default setting in 214 s. A pair that connects within its
+  tier never escalates; the result records the bound it ended under.
+- **Planar ordinary nets route in the critical stage.** A general net with
+  one allowed layer and no via budget is promoted after the critical
+  router's guide checks (`route_critical_nets(promote_planar=...)`, on with
+  unified options) and routed before pairs under its own rules; the result
+  board keeps the declared rules and the escape planner leaves these nets
+  alone. CopperProbe's FB and the 21 analog front-end nets route this way.
+- **Macro port halos for the planners.** Beyond each hard-macro port of a
+  net that may change layer, a keepout one clearance past the port, two
+  via pitches outward and one to each side binds the escape and bypass
+  planners only (`_macro_port_halos`), so bypass copper no longer takes the
+  via transition sites of the FX10 USB escapes.
+- **Re-sited escapes.** Escape reservations that bypass planning released
+  and revalidation could not restore are planned again around the bypass
+  copper before critical routing (`_resite_escapes`; reservation ids stay
+  index-stable). On CopperProbe 15 nets, K7 (ACQ_EN) and K9 (SWDIO) among
+  them, get their exits back.
+- **Witnesses verified in the critical context.** The bypass witnesses are
+  admitted on the planning frame (halos, pre-release reservations); they are
+  verified again in the critical router's keepout context so the copper
+  binds as copper, not as all-net keepouts (which blocked USB_DM/DP's collar).
+- **Rip-up for unbundled pairs.** A failed pair that no bundle covers tries
+  the committed pairs sharing a terminal package as rip-up suspects under
+  the bundle repair limit (TX2_IC's route took TX1_IC's collar space).
+
+Bounded CopperProbe runs through the critical stage (fresh placement): the
+critical stage now leaves only USB_TX1_IC open (two pairs before), with FB
+routed and the bypass copper bound as copper. Full-board results follow.
+
 ## CopperProbe: why the 11 open connections fail (2026-10-25)
 
 Causes of the `--fine-regions arrays` run above (`ea0e23b`, fresh placement),
