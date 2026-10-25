@@ -128,6 +128,9 @@ class UnifiedRouterOptions:
     # Optional diagnostic raster/search window, not a replacement outline or
     # copper keepout. All source geometry and final exact checks remain whole.
     grid_window_nm: tuple[int, int, int, int] | None = None
+    # Optional per-pair state cap for the pipeline's preceding critical stage.
+    # Separate from the ordinary negotiation wall-time limit; None keeps defaults.
+    critical_pair_state_limit: int | None = None
     # Supply islands carved from a spare plane layer before routing
     # (power_islands.py): "auto", a copper layer name, or None.
     power_islands: str | None = None
@@ -237,6 +240,9 @@ class UnifiedRouterOptions:
     export_congestion: bool = True
 
     def __post_init__(self) -> None:
+        limit = self.critical_pair_state_limit
+        if limit is not None and (type(limit) is not int or limit <= 0):
+            raise ValueError("critical pair state limit must be a positive integer or None")
         if (self.pitch_nm is not None and self.pitch_nm <= 0) or self.maximum_iterations <= 0 or self.maximum_expansions <= 0:
             raise ValueError("unified router pitch, iterations and search states must be positive")
         if self.stall_iterations < 0:

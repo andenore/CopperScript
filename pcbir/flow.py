@@ -654,6 +654,7 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, package
                                      "plane_stitch_options": return_options})
     pair_limit = (package_access_options.initial_pair_state_limit or None
                   if package_access_options is not None else None)
+    pair_limit = getattr(unified_options, "critical_pair_state_limit", None) or pair_limit
     critical = route_critical_nets(source, placement.global_route,
         reserved_accesses=bypass_accesses, pair_state_limit=pair_limit,
         plane_stitch_options=return_options,

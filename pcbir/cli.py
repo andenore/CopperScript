@@ -918,6 +918,8 @@ def _parser() -> argparse.ArgumentParser:
              "a bounded search failure is not proof that no legal route exists")
     board_route_parser.add_argument("--unified-time-budget-s", type=float, default=None,
         help="wall-time budget for the unified router; it returns its best result when exceeded")
+    board_route_parser.add_argument("--unified-pair-states", type=int, default=None,
+        help="per-pair expanded-state cap for the critical stage preceding unified routing")
     board_route_parser.add_argument("--unified-save-inputs", type=Path, default=None, metavar="STATE",
         help="unified router: save its inputs as a state file for replay_unified")
     board_route_parser.add_argument("--unified-direct", action="store_true",
@@ -1198,6 +1200,7 @@ def _unified_options(args):
                                 maximum_iterations=value("unified_iterations"),
                                 maximum_expansions=value("unified_search_states"),
                                 time_budget_s=value("unified_time_budget_s"),
+        critical_pair_state_limit=value("unified_pair_states"),
                                 power_islands=None if value("power_islands") == "off" else value("power_islands"),
                                 pre_route_decouplers=not value("unified_no_decouplers") and not direct,
                                 direct=direct,

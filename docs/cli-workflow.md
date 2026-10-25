@@ -521,3 +521,19 @@ For a search that exhausts the unified router's per-path work bound, use
 wall-time limit. Both are computational settings; source and fabrication rules
 are unchanged. The effective state limit appears in `work_limits` and replay
 inputs. A failed bounded search is not proof that the connection is impossible.
+
+
+### Bounding pair search before unified routing
+
+`route-board --router unified --unified-pair-states 16000` caps expanded
+search states per differential pair in each direct critical-routing attempt,
+including the retry after releasing ordinary escape reservations. It preserves
+the existing exact copper, connectivity and pair-profile checks. Exhaustion is
+reported as an incomplete pair; it never grants ordinary routing permission
+to substitute independent traces for a differential pair.
+
+The default is unchanged when the option is omitted. The separate
+`--unified-time-budget-s` controls ordinary negotiated routing. Neither option
+is a wall-time limit for placement, optional placement-feedback trials or
+native verification. For a bounded source-placement run, use
+`--critical-feedback-trials 0` and retain the final report even on failure.
