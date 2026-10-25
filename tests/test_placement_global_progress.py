@@ -93,10 +93,10 @@ def test_callback_exception_propagates_before_unstarted_work(monkeypatch):
 def test_routeflow_reports_existing_seed_failure_without_extra_attempts(monkeypatch):
     from test_placement_seed_retry import fixture,options,bounded
     source=fixture();settings=options();original=placement._legalize;calls=[]
-    def legalize(b,targets,poses,o,seed):
+    def legalize(b,targets,poses,o,seed,**kwargs):
         calls.append((seed,o.legalization_candidates,o.exact_repair_candidates,o.exact_repair_limit))
         if seed==0:raise bounded('existing bounded mutable failure',placement._fixed_placements(b,poses,o))
-        return original(b,targets,poses,o,seed)
+        return original(b,targets,poses,o,seed,**kwargs)
     monkeypatch.setattr(placement,'_legalize',legalize)
     plain=routeflow.optimize_placement_for_routing(source,settings);expected=calls[:];calls.clear()
     events=[]
@@ -117,17 +117,17 @@ def test_fatal_fixed_source_placement_keeps_original_error_without_retry_or_fini
         placement_rules=tuple(ComponentPlacementRule(ref,fixed_position=fixed.position,fixed_rotation_degrees=0)
                               for ref in ('ANCHOR','FIRST')))
     before=repr(source);original=placement._legalize;calls=[]
-    def legalize(*args):calls.append(args[-1]);return original(*args)
+    def legalize(*args,**kwargs):calls.append(args[-1]);return original(*args,**kwargs)
     def forbidden(*args,**kwargs):raise AssertionError('global routing must not follow fatal source error')
     monkeypatch.setattr(placement,'_legalize',legalize)
     monkeypatch.setattr(routeflow,'route_global',forbidden)
     with pytest.raises(placement.PlacementAlgorithmError,match='fixed component') as plain:
         routeflow.optimize_placement_for_routing(source,options())
-    assert calls==[0];calls.clear();events=[]
+    assert calls==[];events=[]  # Fully fixed faults fail before seed legalization.
     with pytest.raises(type(plain.value),match='fixed component') as observed:
         routeflow.optimize_placement_for_routing(source,options(),on_progress=lambda *e:events.append(e))
     assert str(observed.value)==str(plain.value) and observed.value.failed_seed_attempts==()
-    assert calls==[0] and repr(source)==before
+    assert calls==[] and repr(source)==before
     assert all(e!='finished' and p!='global_route' for p,e,_ in events)
     assert not any(e=='failed' for p,e,_ in events)
 
@@ -153,6 +153,32 @@ def test_routeflow_keeps_candidate_trials_and_final_certification_in_order(monke
     assert [(d['iteration'],d['trial']) for p,e,d in events if (p,e)==('placement_global_trial','started')]==[(1,1),(1,2)]
     assert len([1 for p,e,d in events if (p,e)==('global_route','started')])==4
     assert events[-1][0:2]==('placement_global_certification','finished')
+
+
+def test_zero_global_feedback_budget_skips_proposals_but_retains_failed_certification(monkeypatch):
+    source = board(); original = routing.route_global; calls = []
+    def overflow(b,o,**kwargs):
+        calls.append(b.name)
+        result = original(b,o,**kwargs)
+        return replace(result, status=routing.GlobalRoutingStatus.OVERFLOW,
+                       metrics=replace(result.metrics,total_overflow=1))
+    def forbidden(*args,**kwargs):
+        raise AssertionError('disabled feedback must not even generate disposable placements')
+    monkeypatch.setattr(routeflow,'route_global',overflow)
+    monkeypatch.setattr(routeflow,'_movement_trials',forbidden)
+    options = placement.PlacementPlannerOptions(candidate_count=1, seed_count=1,
+        analytical_iterations=0, refinement_passes=0, escape_spacing_passes=0)
+    feedback = routeflow.PlacementRoutingFeedbackOptions(maximum_trials_per_iteration=0)
+    result = routeflow.optimize_placement_for_routing(source,options,None,feedback)
+    assert calls == ['progress','progress']  # Initial evaluation and final certification.
+    assert result.accepted_moves == 0 and not result.iterations
+    assert not result.full_route_certified
+
+
+@pytest.mark.parametrize('value',(-1,True,1.5))
+def test_invalid_global_feedback_budget(value):
+    with pytest.raises(ValueError,match='trial budget'):
+        routeflow.PlacementRoutingFeedbackOptions(maximum_trials_per_iteration=value)
 
 
 def test_package_global_trial_forwards_same_callback_and_preserves_result(monkeypatch):

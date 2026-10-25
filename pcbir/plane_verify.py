@@ -291,20 +291,12 @@ def remove_native_dangling_tracks(
             or len(evidence.findings) != len(evidence.dangling_track_uuids)
             or any(not item.startswith("track_dangling:") for item in evidence.findings)):
         return board, evidence
-    from .backends.kicad_pcb import _stable_uuid
-    blocked = {zone.net for zone in board.zones} | {
-        rule.net for rule in board.net_routing_rules if rule.kind is not RouteKind.GENERAL}
-    uuids = set(evidence.dangling_track_uuids)
-    selected = {index for index, track in enumerate(board.tracks)
-                if _stable_uuid(board.name, "segment", str(index)) in uuids}
-    if (len(selected) != len(uuids) or any(
-            board.tracks[index].net in blocked or protected[board.tracks[index]]
-            for index in selected)):
+    from .native_stub_cleanup import native_stub_candidate
+    candidate = native_stub_candidate(board, evidence, protected)
+    if candidate is None:
         return board, evidence
-    candidate = replace(board, tracks=tuple(track for index, track in enumerate(board.tracks)
-                                             if index not in selected))
     checked = verify_filled_planes(candidate, kicad_cli=kicad_cli, artifact_directory=artifact_directory)
-    return (candidate, checked) if checked.passed else (board, evidence)
+    return (candidate, checked) if checked.passed and checked.matches(candidate) else (board, evidence)
 
 
 def remove_native_dangling_copper(

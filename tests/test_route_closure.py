@@ -59,6 +59,53 @@ def test_verified_fill_closes_a_zone_net_whatever_its_router_reported():
         assert not routing_complete_with_fill(pipeline,board,drc,None)
 
 
+def test_native_closure_reconciles_only_downstream_resolved_global_failures():
+    from types import SimpleNamespace
+    from pcbir.routing import route_global, GlobalRouterOptions
+    pipeline,board,drc,evidence = _deferred_plane_fixture()
+    guide = route_global(replace(board,tracks=(),metadata={}), GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
+    guide = replace(guide, routes=tuple(replace(route, connected=False)
+                                      for route in guide.routes))
+    pipeline.placement_and_global = SimpleNamespace(full_route_certified=False,
+                                                    global_route=guide)
+    pipeline.critical.nets = ()
+    assert routing_complete_with_fill(pipeline,board,drc,evidence)
+    assert not routing_complete_with_fill(pipeline,board,drc,None)
+    assert not routing_complete_with_fill(pipeline,board,drc,replace(evidence,export_digest="stale"))
+    pipeline.placement_and_global.global_route = replace(guide,
+        metrics=replace(guide.metrics,total_overflow=1))
+    assert not routing_complete_with_fill(pipeline,board,drc,evidence)
+    pipeline.placement_and_global.global_route = replace(guide,
+        routes=(*guide.routes,replace(guide.routes[0],net="unaccounted")))
+    assert not routing_complete_with_fill(pipeline,board,drc,evidence)
+    pipeline.placement_and_global.global_route = guide
+    pipeline.detailed = replace(pipeline.detailed,nets=tuple(
+        replace(n,connected=False) for n in pipeline.detailed.nets))
+    assert not routing_complete_with_fill(pipeline,board,drc,evidence)
+
+
+def test_native_global_reconciliation_accepts_completed_critical_owner():
+    from types import SimpleNamespace
+    from pcbir.physical import NetRoutingRule, RouteKind
+    from pcbir.routing import route_global
+    from pcbir.drc import physical_board_digest, run_physical_drc
+    from pcbir.backends import KiCadPcbBackend
+    from pcbir.backends.kicad_project import kicad_export_digest
+    pipeline,board,_,evidence = _deferred_plane_fixture()
+    board = replace(board,net_routing_rules=(NetRoutingRule("A",kind=RouteKind.CLOCK),))
+    drc = run_physical_drc(board)
+    evidence = replace(evidence,board_digest=physical_board_digest(board),
+        export_digest=kicad_export_digest(KiCadPcbBackend().generate(board)))
+    guide = route_global(replace(board,tracks=(),metadata={}))
+    guide = replace(guide,routes=tuple(replace(r,connected=False) for r in guide.routes))
+    pipeline.placement_and_global = SimpleNamespace(full_route_certified=False,global_route=guide)
+    pipeline.detailed = replace(pipeline.detailed,nets=tuple(n for n in pipeline.detailed.nets if n.net != "A"))
+    pipeline.critical.nets = (SimpleNamespace(nets=("A",),connected=True),)
+    assert routing_complete_with_fill(pipeline,board,drc,evidence)
+    pipeline.critical.nets = (SimpleNamespace(nets=("A",),connected=False),)
+    assert not routing_complete_with_fill(pipeline,board,drc,evidence)
+
+
 def test_routing_closure_rejects_stale_native_findings_search_failures_and_blocked_preflight():
     from pcbir.drc import DrcFinding,DrcSeverity
     from pcbir.critical import CriticalRoutingStatus

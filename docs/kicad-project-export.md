@@ -85,7 +85,23 @@ Existing importer warnings about omitted user text, 3D models and unsupported
 presentation items remain visible. A generated library that matches the board
 is not proof of equivalence to every feature of the upstream original.
 
-## Coordinate transforms
+## Schematic review exports
+
+`export-kicad` also writes a self-contained symbol library: a content-addressed
+`CopperScript_<digest>.kicad_sym`, `sym-lib-table`, and a same-stem
+`.kicad_pro` alongside the schematic. The embedded and external symbols come
+from the same renderer. KiCad needs the project file to resolve its local
+library table; an existing project is preserved so schematic export cannot
+replace PCB rules or user settings. Different existing library/table contents
+are rejected before writing. Use a fresh export directory when inputs change.
+
+The library identity is based on its complete rendered content. Library-table
+paths use `${KIPRJMOD}` and native tests verify connectivity and symbol-library
+matching after relocation, including paths containing spaces. This resolves
+missing symbol-library diagnostics; it does not suppress electrical ERC,
+footprint-link warnings or the current flat single-sheet layout limitation.
+
+## PCB coordinate transforms
 
 Footprint-owned keepouts remain nested under their owner, but their polygon
 coordinates in a KiCad **board file** must be board coordinates. Export now

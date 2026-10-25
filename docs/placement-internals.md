@@ -33,6 +33,10 @@ the shared placer.
    deficit-derived grid steps into unused material. Recheck complete legality
    and non-increasing coarse congestion before accepting a move. Preserve fixed
    poses and macro rotations. No example references or coordinates in pcbir.
+   Score proposals before complete geometric validation, so non-improving
+   trials do not repeat the full-board checks. Every selected move still
+   receives complete legality validation. Progress identifies the active
+   escape unit during this bounded stage.
 6. Keep joint ordinary/critical/GND package-access preflight before area routing.
    A zero heuristic deficit is not proof that both packages can escape: only
    actual reserved geometry and existing native acceptance gates establish that.
@@ -44,6 +48,11 @@ including already supported 45-degree poses. Profiles are cached within a
 board-bound model; new board/rule snapshots get new models. Keep only the latest
 XY pose/pair result in incremental caches so placement trials do not accumulate
 an unbounded position history.
+
+Cross-component drill checks first compare cached geometric envelopes containing
+the actual lands, drills and courtyard. Distant envelopes skip narrow geometry;
+nearby pairs retain the same checks on both faces. The cache contains geometry,
+not a placement acceptance decision, and includes the exact footprint and pose.
 
 ## Basis and limits
 
@@ -302,7 +311,9 @@ immutable footprint and exact transformed pose geometry, never legality answers.
 
 ## Discarding an exhausted seed
 
-The existing deterministic seed count remains `max(2, candidate_count)`. Only
+The default deterministic seed count remains `max(2, candidate_count)`. An
+explicit positive `seed_count` (`--placement-seeds`) bounds attempts instead.
+Only
 the private typed failure from exhausted mutable legalization/local repair
 discards one attempt and permits the next already planned seed. Each attempt
 builds its own tentative placed map from source/fixed intent and keeps the
@@ -323,7 +334,7 @@ message (earliest seed on a tie). Finite attempts never prove infeasibility.
 
 For a pending movable bypass with no authored side restriction, refinement
 enumerates both board faces even when the target and incumbent are on the
-same face. Ranked side domains are interleaved within the existing 64 legal
+same face. Ranked side domains are interleaved within the configured legal
 pose checks, so one face cannot consume every trial. An already accessible
 incumbent keeps the ordinary ranking preference. Explicit side, fixed pose,
 assembly and macro constraints remain hard; opposite-face admission requires
@@ -335,3 +346,41 @@ associated capacitor is fixed by source/session constraints, rigid membership
 or a required via array. Unrouted-source and macro materialization checks still
 run first. This is a no-move optimization, not bypass-connectivity evidence;
 the standard package-access and native routing gates remain unchanged.
+
+Required exposed-pad via arrays reserve their actual through-via annuli during
+placement, including against opposite-side pads. Moving an array owner checks
+all held neighbors; moving a neighbor checks every held array. Only the declared
+owner land may overlap an annulus, including on the same net. Foreign copper
+and drill clearances also remain binding. This reservation does not place or
+reduce the array: full materialization and native checks still validate every
+site. A failed materialization retains its posed board for `copper issues` and
+`copper view`.
+
+Placement progress identifies decoupler baseline routing, each capacitor's
+refinement and bounded legal-pose trials, and final regeneration. These events
+are telemetry only; witness ownership, rollback and the trial budget are
+unchanged.
+
+`decoupling_placement_trials` bounds copper-access pose trials per capacitor
+(API/default CLI: 64). `--decoupling-placement-trials` exposes this budget;
+the quick, balanced and thorough routing profiles select 4, 16 and 64 unless
+explicitly overridden. Zero disables the optional relocation heuristic after
+fixed macro/array validation. It does not remove source associations or waive
+package access, source distance, routing, DRC or native-fill checks. The budget
+is part of placement-checkpoint identity and appears in routing work limits.
+
+`--placement-refinement-passes` and `--escape-spacing-passes` expose the existing
+optional improvement passes (both default to 2). Zero retains the legalized
+poses without those optimization passes. An explicit seed budget of one with
+both passes zero is a quick feasibility attempt, with fewer opportunities to
+improve routability. Fixed/rigid constraints, legal geometry, relative intent,
+macro/array materialization and later package/routing gates remain binding.
+These settings are part of checkpoint identity and are recorded in work limits;
+use matching settings for checkpoint reuse. A failed small budget is not proof
+that the board is infeasible.
+
+Pad-only copper keepouts use exact closed-shape contact in placement and
+physical DRC. A zero-distance clearance query is not an overlap predicate:
+rectangular corner crossings must be detected even when neither first vertex
+is contained. Concave notches remain usable; no convex-hull substitution or
+epsilon clearance is used.

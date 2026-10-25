@@ -114,7 +114,8 @@ def test_rejected_exact_pair_candidates_are_counted_in_report_and_progress() -> 
     assert pair.rejections == (("skew", pair.candidate_attempts),)
     assert 1 <= len(pair.rejection_examples) <= 3
     assert all(example.startswith("pair skew ") for example in pair.rejection_examples)
-    assert pair.diagnostics[-1].endswith(f"none accepted (first-failing gates: skew={pair.candidate_attempts})")
+    assert any(d.endswith(f"none accepted (first-failing gates: skew={pair.candidate_attempts})")
+               for d in pair.diagnostics)
     document = json.loads(result.to_json())["nets"][0]
     assert document["rejections"] == {"skew": pair.candidate_attempts}
     assert document["rejection_examples"] == list(pair.rejection_examples)

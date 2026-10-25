@@ -56,6 +56,72 @@ def test_tiny_budget_does_not_adopt_partial_connector_ties():
     assert result.board.tracks==board.tracks and result.board.vias==board.vias
 
 
+def support_branch_fixture(distance=1.8):
+    board=fixture()
+    poses=(*board.placements, Placement('R_A','one',Point.mm(5+distance,9.4)),
+           Placement('R_B','one',Point.mm(5+distance,10.6)))
+    nets=tuple(replace(n,pads=(*n.pads,PadReference('R_'+n.name,'1'))) for n in board.nets)
+    return replace(board,placements=poses,nets=nets)
+
+
+@pytest.mark.parametrize('states',[1,20000])
+def test_local_support_branches_preserve_all_contacts_and_atomic_acceptance(states):
+    board=support_branch_fixture()
+    guide=route_global(board)
+    guide=replace(guide,routes=tuple(replace(r,connected=False,accesses=(),segments=(),vias=()) for r in guide.routes))
+    result=route_critical_nets(board,guide,pair_state_limit=states)
+    if states==1:
+        assert not any(r.connected for r in result.nets)
+        assert result.board.tracks==board.tracks and result.board.vias==board.vias
+    else:
+        assert all(r.connected for r in result.nets),result.nets
+        graph=explicit_copper_connectivity(result.board)
+        assert all(graph.net_connected(n) for n in board.nets)
+        findings=run_physical_drc(result.board,policy=PhysicalDrcPolicy(require_completed_detailed_route=False)).findings
+        assert not [f for f in findings if f.severity.value=='error'],findings
+    assert not any(r.connected for r in guide.routes)
+
+
+def test_remote_third_component_is_not_absorbed_as_a_local_contact():
+    board=support_branch_fixture(4)
+    guide=route_global(board)
+    guide=replace(guide,routes=tuple(replace(r,connected=False,accesses=(),segments=(),vias=()) for r in guide.routes))
+    result=route_critical_nets(board,guide)
+    assert not any(r.connected for r in result.nets)
+    assert result.board.tracks==board.tracks and result.board.vias==board.vias
+
+
+def test_joined_anchor_variants_retain_branches_and_original_net_contacts():
+    from pcbir.pair_terminals import prepare_pair_terminals, joined_terminal_variants
+    board=support_branch_fixture()
+    rules=board.net_routing_rules
+    raw={r.net:r for r in route_global(board).routes}
+    routes,a,b,pairs,returns=prepare_pair_terminals(board,*rules,raw)
+    assert a and b and not pairs and not returns
+    held=replace(board,tracks=(*a,*b))
+    variants=joined_terminal_variants(held,*rules,raw,routes)
+    assert len(variants)==2 and variants[0] is routes
+    for rule in rules:
+        original=next(n for n in board.nets if n.name==rule.net)
+        assert {access.pad for access in variants[1][rule.net].accesses} <= set(original.pads)
+        changed=next(access.pad for access in variants[1][rule.net].accesses
+                     if access.pad.component.startswith('R_'))
+        source=next(p for p in original.pads if p.component=='U')
+        graph=explicit_copper_connectivity(held)
+        assert graph.net_connected(PhysicalNet(rule.net,(source,changed)))
+    assert held.nets==board.nets and held.tracks==(*a,*b)
+    assert board.tracks==board.vias==()
+
+
+def test_remote_contacts_never_become_alternate_joined_anchors():
+    from pcbir.pair_terminals import prepare_pair_terminals, joined_terminal_variants
+    board=support_branch_fixture(4)
+    raw={r.net:r for r in route_global(board).routes}
+    routes,a,b,_,_=prepare_pair_terminals(board,*board.net_routing_rules,raw)
+    assert not a and not b
+    assert joined_terminal_variants(board,*board.net_routing_rules,raw,routes)==(routes,)
+
+
 def test_coarse_pair_stubs_retain_checked_source_lead_in_occurrences():
     from pcbir.routing import PinAccess, GridNode, GlobalNetRoute
     from pcbir.physical import TrackSegment

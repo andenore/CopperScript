@@ -17,7 +17,7 @@ can route CopperProbe as its hardest current case.
 | CopperProbe (6 layers, 169-ball 0.75 mm BGA, QFN ADC, USB 3 pairs) | 0 opens, 0 exact DRC, native KiCad DRC clean after refill, wall time ≤ 30 min |
 | CopperAssetTracker (recorded 2026-10-11 candidate) | No regression in completion or DRC; time no worse than today |
 | CopperLedRing (2 layers) | No regression in completion or DRC; time no worse than today |
-| `cm4`, `full-vertical`, `nrf52`, `round-led-ring` examples | 100 % completion, exact DRC clean, each ≤ 5 min |
+| `cm4`, `full-vertical`, `nrf52` examples | 100 % completion, exact DRC clean, each ≤ 5 min |
 
 CopperAssetTracker and CopperLedRing must keep working at every merged phase:
 their pinned Make targets either run unchanged or get a matching update in
@@ -249,9 +249,13 @@ evidence bundle.
   - Fields: connections total and routed, opens, exact DRC count by code,
     native DRC (when KiCad is present), vias, track length, wall time per stage,
     peak memory.
-- Ladder: `valid`, `round-led-ring`, `nrf52`, `full-vertical`, `cm4`,
-  CopperLedRing, CopperAssetTracker (pinned commits), CopperProbe. The consumer
-  boards run with their own Makefile route options as the baseline.
+- Ladder: `valid`, CopperLedRing (pinned consumer commit), `nrf52`,
+  `full-vertical`, `cm4`, AssetTracker (pinned commit), CopperProbe.
+  Resolve CopperLedRing as an explicit consumer checkout with its locked
+  dependencies; do not substitute the deprecated `round-led-ring` fixture or
+  assume a sibling directory. Retain its successful pinned build as the
+  comparison baseline and record the compiler revision under test separately.
+  The consumer boards use their own Makefile route options as the baseline.
 - Record baselines from the current pipeline under `bench/baselines/`, and use
   `compare_runs` for regressions.
 - Optional oracle: `backends/specctra.py`, which exports DSN and imports SES, so

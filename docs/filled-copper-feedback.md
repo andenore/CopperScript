@@ -1,5 +1,14 @@
 # Bounded filled-copper feedback
 
+When a critical retry removes temporary ordinary-escape keepouts, an already
+admitted bypass reservation can be rebound to that exact removal. The original
+source and reservation must pass admission first; every non-keepout source field,
+ordered copper occurrence and generated ownership claim stays unchanged. Supply
+and return paths are derived again from the new geometry and pass full admission.
+Changed poses, rules, copper, added/reordered keepouts or incomplete paths reject
+the rebind. The previous reservation remains intact on failure. This does not
+waive a saved witness's context digest or remove authored constraints.
+
 `route-board` owns placement, package access, ordinary routing, late contacts,
 native refill and bounded native-open repair. No board-specific net/pad repair
 list is needed. CopperLib continues to own reusable parts and physical contracts;
@@ -36,8 +45,21 @@ native-driven repair trials. `--filled-copper-trials 0` runs verification only.
 and dependency-expansion limit also apply. Critical, package-pattern, local
 contact and placement stages retain their separately reported bounds; the
 profile is not a total wall-clock timeout or an exhaustive routing search.
+For bounded package diagnostics, `--package-full-pair-states N` caps the aggregate
+expanded states per differential pair in the full tier, including staged fallback.
+Zero retains the historical bounds. The initial tier has its own existing cap;
+use `--package-pattern-trials 0` for a single capped full tier. Exhaustion remains
+a routing failure and never relaxes geometry or acceptance gates.
 
 ## Evidence before action
+
+Final routing closure may reconcile failed coarse global guides when later
+detailed or critical routing reports those exact nets connected, or the nets
+belong to declared zones, and matched clean native refill proves the final
+board. Global overflow, unresolved downstream signal searches, blocked package
+access and physical geometry findings still reject closure. The original guide
+report and physical DRC token are retained; this does not confer manufacturing
+or electrical qualification.
 
 The native adapter binds source/export digests, KiCad version, exact filled-board
 and report hashes, mapped UUID objects and filled polygon fragments. A zone
@@ -53,6 +75,50 @@ same-stem project and raw `drc.json`. Rejected candidates remain inspectable but
 never replace the incumbent. Existing evidence directories are never overwritten.
 Exact artifact hashes may change with native timestamps; replay compares routing
 geometry, decisions and work bounds, not a fabricated constant native report hash.
+
+### Coarse guides after verified package access
+
+When the original coarse guide failed but critical, local contact and boundary
+gates now pass, the standard pipeline can rebuild that guide from the fixed
+package prefix using the original global-router options. This is a fresh
+capacity search, not a change to an old guide's connected flag. The clean source
+contracts, complete macro/required-array prefix and a fresh physical DRC must
+match. Existing port paths, net identities and via spans are verified again.
+Unknown or missing ports fail closed; no input copper is moved or released.
+
+The public `route_global(source, fixed_prefix=board, reserved_accesses=ports)`
+interface records a `fixed_prefix_digest`. Retained launch vias are reported
+separately from new via proposals and do not create free transition capacity
+for other nets. A checked port may project into a coarse cell using the existing
+`region_only` representation; detailed routing must still reach the actual
+port. A failed rebuild remains failed. Native whole-board connectivity and all
+engineering gates remain mandatory.
+
+An empty global terminal now reports how many local candidates were generated
+and how many survived shared transition-capacity admission. Zero generated
+candidates identifies a bounded local search miss; nonzero generated candidates
+with zero registered candidates identifies capacity rejection. These diagnostics
+do not establish geometric impossibility or change the admission rules.
+
+Global keepouts use their actual polygon for node exclusion and conservative
+polygon projections over each complete coarse edge for lane capacity. Concave
+bays remain available; a thin barrier between grid centers still blocks the
+crossing. Keepout holes remain unsupported by the exact router and do not gain
+an approval from a coarse guide.
+
+Checked terminal via proposals receive capacity before uncommitted sampled
+slots. The sampler then refills only coexisting sites and rebuilds transition
+capacities from the surviving pool. Actual input copper is always present in
+the clearance index and cannot be replaced. Candidate rounds are deterministic
+and bounded; remaining access rejection and overflow stay explicit failures.
+
+Remote pads of explicitly reserved regional pours are reported separately as
+`plane_stitch.explicit_feeder_pads` when they are beyond the conservative local
+contact envelope. They are neither stitched nor connected by this classification.
+Nearby contacts retain their original search and pending failures. Ordinary
+feeder routing and final full-net/native checks must connect the remote pads.
+Unreserved distribution planes and immutable macro contacts keep their prior
+contact obligations.
 
 The standalone API is `improve_filled_copper(pipeline, ..., kicad_cli=...)` with
 `FilledCopperFeedbackOptions`. It verifies fresh inputs itself; it does not accept

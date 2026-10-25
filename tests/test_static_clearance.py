@@ -95,6 +95,23 @@ def test_exact_keepout_tangency_across_bin_boundary(offset, clear):
     assert clear == linear_oracle(index, shape, (CopperLayer.FRONT,), False)
 
 
+@pytest.mark.parametrize("offset,clear", ((0, True), (1, False)))
+@pytest.mark.parametrize("via", (False, True))
+def test_routed_keepout_boundary_agrees_with_physical_drc(offset, clear, via):
+    from pcbir.drc import run_physical_drc
+    from pcbir.physical import PhysicalNet, Via
+    board = board_fixture((rectangle("edge", 2, 0),))
+    point = Point(1_900_000 + offset, 500_000)
+    if via:
+        copper = Via("N", point, 200_000, 100_000, CopperLayer.FRONT, CopperLayer.BACK)
+        board = replace(board, nets=(PhysicalNet("N", ()),), vias=(copper,))
+    else:
+        copper = TrackSegment("N", point, Point(point.x_nm, 600_000), 200_000, CopperLayer.FRONT)
+        board = replace(board, nets=(PhysicalNet("N", ()),), tracks=(copper,))
+    findings = run_physical_drc(board).findings
+    assert (not any(f.code == "DRC-COPPER-KEEPOUT" for f in findings)) is clear
+
+
 @pytest.mark.parametrize("offset,clear", ((-2, True), (-1, True), (0, False), (1, False)))
 def test_macro_one_nm_margin_is_not_lost_at_bin_boundary(monkeypatch, offset, clear):
     region = rectangle("macro", 2, 0)

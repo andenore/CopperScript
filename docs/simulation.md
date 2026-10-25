@@ -92,6 +92,13 @@ AC is a small-signal analysis about the DC bias point. Its normalized excitation
 
 Transient analysis specifies `stop` and the maximum internal `max_step`. Sources accept a finite `ramp` with `from`, `to`, `duration` and optional `delay`, or `pwl` with strictly increasing `[time, value]` points starting at zero. Sources hold their final waveform value after the last point. If DC and a waveform are both specified, their initial values must agree; use separate plans for AC bias and cold-start scenarios that need different operating points.
 
+An optional `"solver": {"integration_method": "gear"}` selects ngspice's Gear
+integration; `"trap"` explicitly selects trapezoidal integration. Omitting the
+field retains the engine default and existing deck bytes. The selection is
+recorded in the resolved plan and numerical manifest. This is a numerical
+diagnostic, not a stability waiver: retain failed runs and compare timestep
+convergence and transient damping before accepting a changed method.
+
 Voltage sources may include `series_resistance`; the generated series element and internal node are recorded in the deck/provenance. Model capacitor ESR as an explicit resistor in the circuit. Loads accept `current_sink`, with `current`, `enable_at` and finite `rise_time`, or explicit DC/PWL settings. Supplies declared in the board are not automatically turned into ideal voltage sources.
 
 Source-current probes default to positive **delivered** current. Voltage, current and derived power are plotted in separate panels with a shared time axis. A `product` of voltage and current produces watts; integrating current or power on the actual nonuniform solver grid gives charge or energy. Initial node voltages are explicit; `method: "uic"` skips the initial operating point only when the plan requests it. Initial-state settings are restricted to transient-only plans.

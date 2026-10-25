@@ -4,6 +4,8 @@
 // Outline, ring poses and ground-pour intent are declared below.
 // CR2032 is primary (not rechargeable). SWD VREF is sense only; no power injection.
 board RoundLedRing {
+    // Keep branding inside the open centre, clear of the circular LED rim.
+    silkscreen { branding { position = (30mm, 27mm); size = 8mm; layout = stacked; } }
     use library "tiny";
     import nordic "github.com/andenore/CopperLib/packages/parts/nordic/nrf52832";
     import keystone "github.com/andenore/CopperLib/packages/parts/keystone/3034";

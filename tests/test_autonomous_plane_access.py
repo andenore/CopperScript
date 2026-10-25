@@ -285,7 +285,7 @@ def critical_contact_trap(*, renamed=False, maximum_length="12"):
 
 @pytest.mark.parametrize("renamed", (False, True))
 @pytest.mark.parametrize("owned", (False, True))
-def test_plane_first_revalidates_critical_ordinary_and_boundary_owners(tmp_path, renamed, owned):
+def test_joint_pattern_revalidates_critical_ordinary_and_boundary_owners(tmp_path, renamed, owned):
     board = critical_contact_trap(renamed=renamed)
     if owned:
         board = with_test_owners(board, tmp_path, required_array=True)
@@ -294,21 +294,25 @@ def test_plane_first_revalidates_critical_ordinary_and_boundary_owners(tmp_path,
     guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
     first = preflight_package_access(board, guides, settings(),
         options=PackageAccessOptions(maximum_trials=0, maximum_pattern_trials=1))
-    assert not first.ready and first.plane_stitch.pending_pads
+    # The current bounded local critical search admits this fixture in the
+    # first joint pattern; a second ordering trial is no longer necessary.
+    assert first.ready and not first.plane_stitch.pending_pads
     events = []
     result = preflight_package_access(board, guides, settings(),
         options=PackageAccessOptions(maximum_trials=0), on_progress=lambda *e: events.append(e))
     assert result.ready and result.boundary.native_accepted
-    assert result.pattern_trials[-1].strategy == "plane_first"
+    assert result.pattern_trials[-1].strategy == "critical_and_plane_first"
     assert result.pattern_trials[-1].outcome == "accepted" and result.pattern_trials[-1].revalidated
-    assert len(result.pattern_trials) == 2
-    assert result.critical.plane_reservation_track_count > 0
-    assert result.critical.plane_reservation_via_count == 1
+    assert len(result.pattern_trials) == 1
+    # This ordering admits ordinary exits before the final plane stitch. Do
+    # not relabel those exits as a plane-first reservation in the report.
+    assert result.critical.plane_reservation_track_count == 0
+    assert result.critical.plane_reservation_via_count == 0
     assert result.critical.reserved_track_count == len(result.fanout.created_tracks)
     assert result.critical.reserved_via_count == len(result.fanout.created_vias)
     report = json.loads(result.critical.to_json())
     assert report["plane_reservation_track_count"] == result.critical.plane_reservation_track_count
-    assert report["plane_reservation_via_count"] == 1
+    assert report["plane_reservation_via_count"] == 0
     timing = "TIMING_X" if renamed else "TIMING"
     rail = "SUPPLY_Z" if renamed else "RAIL"
     assert all(n.connected for n in result.critical.nets)
@@ -325,7 +329,7 @@ def test_plane_first_revalidates_critical_ordinary_and_boundary_owners(tmp_path,
     require_via_in_pad_arrays(result.board, "plane-first all-owner regression")
     assert result.board.placements == board.placements and result.source == board
     assert not result.accepted_moves and not hard_findings(result.board)
-    assert any(p == "package_critical_search" and e == "started" and d["plane_contacts_first"]
+    assert any(p == "package_critical_search" and e == "started" and not d["plane_contacts_first"]
                for p, e, d in events)
     assert not result.board.zone_fills and result.board.metadata["fabrication_ready"] == "false"
 
@@ -354,9 +358,9 @@ def test_pipeline_preserves_plane_first_ownership_through_area_routing():
     board = critical_contact_trap()
     result = owned_pipeline(board)
     assert result.package_access.ready
-    assert result.package_access.pattern_trials[-1].strategy == "plane_first"
+    assert result.package_access.pattern_trials[-1].strategy == "critical_and_plane_first"
     assert next(n for n in result.detailed.nets if n.net == "CLOCK").connected
-    early = tuple(v for v in result.critical.board.vias if v.net == "RAIL")
+    early = tuple(v for v in result.package_access.board.vias if v.net == "RAIL")
     assert early and all(v in result.board.vias for v in early)
     assert not hard_findings(result.board)
 

@@ -237,7 +237,7 @@ def test_guides_survive_placement_worker_without_changing_placement(tmp_path):
     _,digest=asset(tmp_path)
     refs=compile_design_source(source(digest),str(tmp_path/'board.copper')).mechanical.references
     plain=board();guided=replace(plain,mechanical_references=refs)
-    job=PlacementJob(guided,OPTIONS,revision=1,source_revision='guide',timeout_seconds=15)
+    job=PlacementJob(guided,OPTIONS,revision=1,source_revision='guide')
     try:
         info=wait(job)
         assert info['status']=='completed',info

@@ -14,6 +14,8 @@ from pcbir.state_codec import StateError, decode, encode, load_state, save_state
     np.zeros((0, 5), dtype=np.uint8),
     np.arange(6, dtype=">i8").reshape(2, 3),       # big-endian input is stored little-endian
     np.asfortranarray(np.arange(6.0).reshape(2, 3)),
+    np.arange(12, dtype=np.int32).reshape(3, 4)[:, ::2],
+    np.array(2.5),
 ])
 def test_numeric_arrays_round_trip_exactly(array):
     back = decode(encode(array))

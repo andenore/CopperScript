@@ -41,10 +41,11 @@ class PlacementRoutingFeedbackOptions:
             self.maximum_iterations,
             self.initial_movement_nm,
             self.minimum_movement_nm,
-            self.maximum_trials_per_iteration,
             self.stagnation_limit,
         ) <= 0:
             raise ValueError("placement-routing feedback options must be positive")
+        if type(self.maximum_trials_per_iteration) is not int or self.maximum_trials_per_iteration < 0:
+            raise ValueError("placement-routing trial budget must be a nonnegative integer")
         if self.minimum_movement_nm > self.initial_movement_nm:
             raise ValueError("minimum feedback movement exceeds initial movement")
 
@@ -142,6 +143,8 @@ def optimize_placement_for_routing(
     movement = feedback_options.initial_movement_nm
     stagnation = 0
     for iteration in range(1, feedback_options.maximum_iterations + 1):
+        if feedback_options.maximum_trials_per_iteration == 0:
+            break
         if accepted_route.status is GlobalRoutingStatus.SUCCESS and not (power_score(accepted_board) or (0,))[0]:
             break
         current_score = (*power_score(accepted_board), *_route_score(accepted_route))

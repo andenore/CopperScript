@@ -48,6 +48,7 @@ def test_direct_cli_has_no_legacy_contact_or_native_repair_routing(tmp_path, mon
         "--router", "unified", "--unified-direct", "--unified-time-budget-s", "10",
         "--unified-search-states", str(search_states),
         "--unified-save-inputs", str(tmp_path / "inputs.state.json"),
+        "--checkpoint-dir", str(tmp_path / "checkpoint"),
         "--candidates", "1", "--feedback-iterations", "1", "--router-iterations", "1",
         "--verify-plane-fill", str(tmp_path / "missing-kicad.exe"),
         "--report", str(report), "-o", str(tmp_path / "board.kicad_pcb")])
@@ -61,6 +62,10 @@ def test_direct_cli_has_no_legacy_contact_or_native_repair_routing(tmp_path, mon
 
     from pcbir.workbench import load_state
     saved = load_state(tmp_path / "inputs.state.json")
+    final = load_state(tmp_path / "checkpoint" / "final-board.state.json")
+    from pcbir.route_summary import connection_summary
+    from pcbir.drc import run_physical_drc
+    assert connection_summary(final, run_physical_drc(final))["signal"] == data["summary"]["signal"]
     assert saved['options'].maximum_expansions == search_states
     assert data['work_limits']['unified_search_states'] == search_states
     assert (data['summary']['signal']['opens'] == 0) == (search_states > 1)

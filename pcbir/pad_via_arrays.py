@@ -34,6 +34,15 @@ _PITCH_GRID_NM = nm_from_mm("0.01")
 _UNROTATED = SimpleNamespace(rotation_degrees=Decimal(0))
 
 
+class ViaArrayPlacementError(ValueError):
+    """Keep the posed board available for the standard issue/view workflow."""
+
+    def __init__(self, message, board, component):
+        super().__init__(message)
+        self.diagnostic_board = board
+        self.diagnostic_components = (component,)
+
+
 def array_rules(board: PhysicalBoard) -> tuple[PadViaInPadRule, ...]:
     """Permissions that require an array, in deterministic pad order."""
     return tuple(sorted((rule for rule in board.via_in_pad_rules if rule.rows is not None),
@@ -177,9 +186,10 @@ def materialize_via_in_pad_arrays(board: PhysicalBoard) -> PhysicalBoard:
                 else None
             )
             if reason is not None:
-                raise ValueError(
+                raise ViaArrayPlacementError(
                     f"via_in_pad array {rule.pad.component}.{rule.pad.pad}: site row {row} "
-                    f"column {column} at ({_mm(site.x_nm)}, {_mm(site.y_nm)}) mm {reason}")
+                    f"column {column} at ({_mm(site.x_nm)}, {_mm(site.y_nm)}) mm {reason}",
+                    board, rule.pad.component)
             via = Via(net, site, ARRAY_VIA_SIZE_NM, ARRAY_VIA_DRILL_NM, outer[0], outer[1],
                       finish="filled-capped")
             # Later sites, including this array's own, check against it.
@@ -224,3 +234,7 @@ def _in_outline(point: Point, outline: PolygonWithHoles) -> bool:
 
 def _mm(value_nm: int) -> str:
     return str(Decimal(value_nm) / Decimal(1_000_000))
+
+
+# Public shared geometry used by incremental placement.
+array_sites = _sites

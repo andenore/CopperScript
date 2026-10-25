@@ -90,6 +90,24 @@ class Run:
             if self._filled is None:
                 self._filled = scene_from_kicad_pcb(self.filled_board_path)
             return self._filled
+        if self._scene is not None:
+            return self._scene
+        if self._scene is None and self.report_path is not None:
+            document = self.report
+            if str(document.get("schema", "")).startswith("copperscript-route-error"):
+                name = document.get("diagnostic_state")
+                if isinstance(name, str) and name:
+                    state_path = (self.directory / name).resolve()
+                    if state_path.parent != self.directory.resolve():
+                        raise ValueError("diagnostic state must remain inside the run directory")
+                    from .state_codec import load_state
+                    from .scene import scene_from_physical
+                    from .physical import PhysicalBoard
+                    board = load_state(state_path)
+                    if not isinstance(board, PhysicalBoard):
+                        raise ValueError("diagnostic state does not hold a physical board")
+                    self._scene = scene_from_physical(board)
+                    return self._scene
         if self.board_path is None:
             raise FileNotFoundError(f"{self.directory}: no .kicad_pcb board in the run")
         if self._scene is None:
@@ -107,15 +125,14 @@ def load_run(path: str | Path) -> Run:
         return Run(path.parent, None, path, None)
     else:
         directory = path
-        report = next((p for p in (path / "route-report.json", path / "layout-report.json") if p.is_file()), None)
+        report = next((p for p in (path / "route-report.json", path / "layout-report.json", path / "route.json")
+                       if p.is_file()), None)
         if report is None:
             candidates = sorted(p for p in path.glob("*.json") if not p.name.endswith(".summary.json"))
             # A route run also holds other CopperScript records (board.editor-
             # intent.json sorts first); the route or layout report is the run's.
             report = next((p for p in candidates if _schema(p).startswith(
-                ("copperscript-route-board", "copperscript-layout-report"))), None)
-            if report is None:
-                report = next((p for p in candidates if _schema(p).startswith("copperscript-")), None)
+                ("copperscript-route-board", "copperscript-route-error", "copperscript-layout-report"))), None)
     if report is not None and not report.name.endswith(".error.json"):
         # A later run into the same place that failed leaves only an error record.
         error = report.with_name(report.stem + ".error.json")
@@ -153,16 +170,9 @@ def _reported_filled_board(report: Path) -> Path | None:
 def _schema(path: Path) -> str:
     try:
         with path.open(encoding="utf-8") as handle:
-            head = handle.read(4096)
-        start = head.find('"schema"')
-        if start >= 0:
-            return head[start:start + 80].split('"')[3]
-        # Reports are written with sorted keys, so a large one's schema sits
-        # far past the head; read the whole document then.
-        document = json.loads(path.read_text(encoding="utf-8"))
-        schema = document.get("schema") if isinstance(document, dict) else None
-        return schema if isinstance(schema, str) else ""
-    except (OSError, IndexError, ValueError):
+            document = json.load(handle)
+        return str(document.get("schema", "")) if isinstance(document, dict) else ""
+    except (OSError, ValueError):
         return ""
 
 

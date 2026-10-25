@@ -433,7 +433,8 @@ def test_cli_pattern_budget_is_explicit_and_bounded():
 
 
 @pytest.mark.parametrize("case", ("easy", "alternate", "exchange", "full_only", "unavoidable", "rollback"))
-def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
+@pytest.mark.parametrize("full_cap", (0, 27))
+def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case, full_cap):
     # Isolate scheduling/rollback. Other tests above use actual copper/native
     # gates; pair_vias tests exercise limited searches and coupled acceptance.
     board, guides, settings, _ = fixture(critical=True)
@@ -451,7 +452,7 @@ def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
     def critical(source, route, *, reserved_accesses=None, pair_state_limit=None, on_progress=None, retained_critical=None, retained_accesses=None):
         searches.append((pair_state_limit, reserved_accesses))
         connected = (case == "easy" or case in {"alternate", "exchange"} and reserved_accesses is not original
-                     or case == "full_only" and pair_state_limit is None)
+                     or case == "full_only" and pair_state_limit == (full_cap or None))
         # Clean-owner probe can propose a new pattern, including a rejected
         # transaction. Preserve all work in telemetry regardless of selection.
         if reserved_accesses is None and case in {"alternate", "exchange", "rollback"}:
@@ -485,7 +486,8 @@ def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
             return frozenset({"B"}), 0
         return (frozenset() if critical.nets[0].connected else frozenset({"A"}), 0)
     monkeypatch.setattr(access, "_failures", probe_failures)
-    options = access.PackageAccessOptions(maximum_pattern_trials=1, initial_pair_state_limit=12)
+    options = access.PackageAccessOptions(maximum_pattern_trials=1, initial_pair_state_limit=12,
+                                         full_pair_state_limit=full_cap)
     result = access.preflight_package_access(board, guides, settings, options=options,
         on_progress=lambda *event: events.append(event))
     assert result.ready == (case in {"easy", "alternate", "exchange", "full_only"})
@@ -504,7 +506,7 @@ def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
     else:
         # Full fallback retries the original ordinary pattern, not a leaked
         # clean-probe board or an unaccepted candidate's copper.
-        assert next(fan for cap, fan in searches if cap is None) is original
+        assert next(fan for cap, fan in searches if cap == (full_cap or None)) is original
         assert any(phase == "package_search_fallback" for phase, _, _ in events)
     if case == "rollback":
         assert result.fanout.accesses == original.accesses
@@ -514,13 +516,27 @@ def test_staged_scheduler_work_fallback_and_identity_gate(monkeypatch, case):
 
 
 @pytest.mark.parametrize("initial,patterns", ((0, 2), (6000, 0)))
-def test_disabling_staging_retains_one_full_budget_tier(initial, patterns):
+@pytest.mark.parametrize("full", (0, 27))
+def test_disabling_staging_retains_one_full_budget_tier(initial, patterns, full):
     # Pair-free fixtures also use a single full tier, as no pair work is capped.
     board, guides, settings, _ = fixture(critical=True)
     result = access.preflight_package_access(board, guides, settings,
-        options=access.PackageAccessOptions(initial_pair_state_limit=initial, maximum_pattern_trials=patterns))
+        options=access.PackageAccessOptions(initial_pair_state_limit=initial, maximum_pattern_trials=patterns,
+                                           full_pair_state_limit=full))
     assert len(result.search_tiers) == 1 and result.search_tiers[0].name == "full"
-    assert result.search_tiers[0].pair_state_limit is None and result.search_tiers[0].selected
+    assert result.search_tiers[0].pair_state_limit == (full or None) and result.search_tiers[0].selected
+
+
+def test_full_pair_cap_validation_and_cli():
+    from pcbir.cli import _parser
+    parser = _parser()
+    assert parser.parse_args(['route-board', 'board.copper']).package_full_pair_states == 0
+    assert parser.parse_args(['route-board', 'board.copper', '--package-full-pair-states', '17']).package_full_pair_states == 17
+    with pytest.raises(SystemExit):
+        parser.parse_args(['route-board', 'board.copper', '--package-full-pair-states', '-1'])
+    for bad in (-1, 1.5, True):
+        with pytest.raises(ValueError, match='full pair'):
+            access.PackageAccessOptions(full_pair_state_limit=bad)
 
 
 def test_pending_ordinary_exit_can_negotiate_even_when_critical_owner_already_passes(monkeypatch):

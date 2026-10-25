@@ -58,6 +58,46 @@ def test_cap_courtyard_cannot_cover_foreign_hole_even_when_copper_is_clear():
     assert not footprint_holes_clear(board, owner, {pad.reference:pad})
 
 
+def test_distant_drill_pairs_skip_narrow_geometry(monkeypatch):
+    import pcbir.placement_holes as engine
+    board = scene(hole_position=Point.mm(20,20))
+    owner, pad = board.placements
+    def unexpected(*args):
+        pytest.fail("distant envelopes must not enter drill/courtyard checks")
+    monkeypatch.setattr(engine, "_drills_clear_courtyard", unexpected)
+    assert footprint_holes_clear(board, pad, {owner.reference:owner})
+    assert footprint_holes_clear(board, owner, {pad.reference:pad})
+
+
+@pytest.mark.parametrize('angle',(0,90,180,270))
+def test_opposite_face_annulus_obeys_copper_spacing_even_when_drill_is_clear(angle):
+    board=scene(hole_kind=PadKind.THROUGH_HOLE,land_position=Point.mm('10.5',10))
+    owner,pad=board.placements
+    frame=replace(owner,rotation_degrees=angle)
+    pad=replace(pad,position=transformed_local_point(frame,Point.mm('.5',0)),rotation_degrees=angle)
+    board=replace(board,placements=(frame,pad))
+    # Drill edge-to-land clearance is0.3 mm; annulus edge-to-land is0.1 mm.
+    assert not any(f.code=='DRC-HOLE-CLEARANCE' for f in placement_copper_findings(board))
+    assert any(f.code=='DRC-CLEARANCE' for f in placement_copper_findings(board))
+    assert not footprint_holes_clear(board,pad,{frame.reference:frame})
+    assert not footprint_holes_clear(board,frame,{pad.reference:pad})
+    joined=replace(board,nets=(PhysicalNet('JOIN',(PadReference(frame.reference,'H'),PadReference(pad.reference,'1'))),))
+    assert footprint_holes_clear(joined,pad,{frame.reference:frame})
+    # Reusing the identical geometry with a new net partition cannot reuse
+    # the preceding same-net exception.
+    assert not footprint_holes_clear(board,pad,{frame.reference:frame})
+
+
+def test_envelope_includes_pad_outside_small_courtyard():
+    board = scene(land_position=Point.mm(15,10))
+    fp = board.footprints["land"]
+    fp = replace(fp, pads=(replace(fp.pads[0], position=Point.mm(5,0)),))
+    board = replace(board, footprints={**board.footprints, fp.name:fp})
+    owner, pad = board.placements
+    assert not footprint_holes_clear(board, pad, {owner.reference:owner})
+    assert not footprint_holes_clear(board, owner, {pad.reference:pad})
+
+
 @pytest.mark.parametrize("kind", [PadKind.NON_PLATED_THROUGH_HOLE, PadKind.THROUGH_HOLE])
 def test_mutable_hole_owner_uses_accepted_held_pose_not_unaccepted_board_seed(kind):
     board = scene(hole_kind=kind, hole_position=Point.mm(20,20))
