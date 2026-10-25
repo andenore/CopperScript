@@ -716,25 +716,36 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, package
     """
     reserved = held = None
     held_as_copper = False
+    from .critical import promote_planar_nets
+    board = placement.board
+    # Planar ordinary nets route in the critical stage (route_critical_nets
+    # promotes them after its guide checks); the planners leave them alone.
+    planar = promote_planar_nets(board)[1] if unified_options is not None else ()
+    if planar:
+        emit(on_progress, "planar_nets", "promoted", nets=sorted(planar))
+    halos = _macro_port_halos(board) if unified_options is not None else ()
+    prefix = lattice[:2] if lattice else ((), ())
     if (unified_options is not None and unified_fanout is not None
             and getattr(unified_options, "escapes_first", True)):
         # Ordinary pins of crowded packages get escapes planned before the
         # critical router runs; the critical router sees them as keepouts,
         # so it cannot wall those pins in (one exact pass, no gate).
-        reserved = _plan_ordinary_escapes(placement.board, unified_fanout, on_progress,
-                                          prefix=lattice[:2] if lattice else ((), ()))
-    if (unified_options is not None and placement.board.decoupling_links
+        reserved = _plan_ordinary_escapes(board, unified_fanout, on_progress, prefix=prefix, keepouts=halos,
+                                          exclude=planar)
+    if (unified_options is not None and board.decoupling_links
             and getattr(unified_options, "pre_route_decouplers", True)):
         # Bypasses route before critical nets (as package access did), so
         # a critical route cannot take a capacitor's short surface feed.
-        held = _plan_decouplers(placement.board, reserved[2] if reserved else (), on_progress,
-                                prefix=lattice[:2] if lattice else ((), ()))
+        held = _plan_decouplers(board, reserved[2] if reserved else (), on_progress,
+                                prefix=prefix, extra_keepouts=halos)
         if reserved is not None and held[3]:
-            reserved, held, restored = _revalidate_released_escapes(placement.board, reserved, held)
+            reserved, held, restored = _revalidate_released_escapes(board, reserved, held)
             emit(on_progress, "ordinary_escapes", "revalidated", **restored)
+            if restored.get("unrestored_nets") and unified_fanout is not None:
+                reserved = _resite_escapes(board, unified_fanout, reserved, held, prefix, halos,
+                                           frozenset(restored["unrestored_nets"]), on_progress)
     def critical_inputs(escape_keepouts, previous=None):
-        source = replace(placement.board,
-            copper_keepouts=(*placement.board.copper_keepouts, *escape_keepouts))
+        source = replace(board, copper_keepouts=(*board.copper_keepouts, *escape_keepouts))
         bypass_accesses, reason = (_bypass_copper_reservations(source, held[0], held[1], held[4])
                                   if held is not None else (None, None))
         if bypass_accesses is None and previous is not None and previous[1] is not None:
@@ -772,7 +783,7 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, package
             # Critical nets come first: free the reservations around the
             # pads of any critical net they blocked and route again; keep
             # whichever attempt connects more critical nets.
-            kept = _release_reservations(placement.board, reserved[2], failed)
+            kept = _release_reservations(board, reserved[2], failed)
             if len(kept) < len(reserved[2]):
                 reason = None
                 if getattr(unified_options, "retain_escape_copper", False):
@@ -805,6 +816,75 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, package
                     reserved = (reserved[0], reserved[1], kept)
                     held_as_copper = retry_accesses is not None
     return critical, reserved, held, held_as_copper
+
+
+def _macro_port_halos(board):
+    """Keepouts beyond macro ports whose nets may change layer, for the planners.
+
+    A pair leaving a hard macro's port needs a via transition just beyond
+    the port (the FX10 USB escapes). Escape and bypass planning run before
+    critical routing and would put return vias and supply tracks there; the
+    critical router then finds no legal transition. Reference layouts keep
+    the channel beyond a pair's package exit free. The halo covers every
+    copper layer from one clearance past the port, two via pitches outward
+    and one to each side; only the planners see it, never the routers.
+    """
+    from .hard_macros import macro_source, materialize_hard_macros, resolved_macro_geometry
+    from .physical import CopperKeepout, Point, PolygonRing, PolygonWithHoles
+    frame = materialize_hard_macros(macro_source(board))
+    rules = {rule.net: rule for rule in board.net_routing_rules}
+    poses = {pose.reference: pose for pose in board.placements}
+    gap = board.rules.minimum_clearance_nm
+    halos = []
+    for macro in frame.hard_macros:
+        if macro.cluster not in frame.materialized_macros:
+            continue
+        for port in resolved_macro_geometry(frame, macro)[2]:
+            rule = rules.get(port.net)
+            if rule is None or rule.max_vias == 0 or not port.pads:
+                continue
+            centre = poses[min(port.pads).component].position
+            dx, dy = port.position.x_nm - centre.x_nm, port.position.y_nm - centre.y_nm
+            ox, oy = ((1 if dx > 0 else -1), 0) if abs(dx) >= abs(dy) else (0, (1 if dy > 0 else -1))
+            half = (board.rules.default_via_size_nm + gap
+                    + (rule.width_nm or board.rules.default_track_width_nm) + (rule.pair_gap_nm or 0))
+            x0, y0 = port.position.x_nm + ox * gap, port.position.y_nm + oy * gap
+            if ox:
+                xs, ys = sorted((x0, x0 + ox * 2 * half)), (y0 - half, y0 + half)
+            else:
+                xs, ys = (x0 - half, x0 + half), sorted((y0, y0 + oy * 2 * half))
+            ring = PolygonRing((Point(xs[0], ys[0]), Point(xs[1], ys[0]), Point(xs[1], ys[1]), Point(xs[0], ys[1])))
+            halos.append(CopperKeepout(f"port-halo-{len(halos)}", tuple(board.stackup.copper_layers),
+                                       PolygonWithHoles(ring), block_tracks=True, block_vias=True,
+                                       block_zones=False))
+    return tuple(halos)
+
+
+def _resite_escapes(board, fanout_options, reserved, held, prefix, halos, nets, on_progress):
+    """Plan the exits of ``nets`` again around the bypass copper that displaced them.
+
+    Bypass planning releases escape reservations near a blocked bypass and
+    revalidation restores only the groups still legal beside the bypass
+    copper. A ball whose dogbone site that copper took is otherwise left to
+    the fanout stage, which finds its cell centres taken (CopperProbe K7,
+    K9). The new escapes are planned with the bypass copper as prefix and the
+    remaining reservations as keepouts; reservation ids stay index-stable.
+    """
+    from .hard_macros import macro_source, materialize_hard_macros
+    prefix_tracks = (*prefix[0], *held[0])
+    prefix_vias = (*prefix[1], *held[1])
+    again = _plan_ordinary_escapes(board, fanout_options, on_progress, prefix=(prefix_tracks, prefix_vias),
+                                   keepouts=(*reserved[2], *halos), only_nets=nets, event="resited")
+    if again is None:
+        return reserved
+    tracks = (*reserved[0], *again[0])
+    vias = (*reserved[1], *again[1])
+    frame = materialize_hard_macros(macro_source(board))
+    fixed = replace(frame, tracks=(*frame.tracks, *prefix_tracks), vias=(*frame.vias, *prefix_vias))
+    released = {keepout.id for keepout in held[3]}
+    keepouts = tuple(keepout for keepout in _copper_keepouts(board, tracks, vias, "escape-reserve", fixed=fixed)
+                     if keepout.id not in released)
+    return tracks, vias, keepouts
 
 
 def _complete_critical_stage(critical, reserved, held, held_as_copper, *, access, unified_options,
@@ -1044,12 +1124,14 @@ def bind_ordinary_escape_copper(source, bypass, planned):
     return clean, candidate, None
 
 
-def _plan_ordinary_escapes(board, fanout_options, on_progress, *, prefix=((), ())):
+def _plan_ordinary_escapes(board, fanout_options, on_progress, *, prefix=((), ()), keepouts=(),
+                           only_nets=None, exclude=(), event="finished"):
     """Escapes for crowded ordinary pins, and keepouts that reserve them.
 
     Returns (tracks, vias, keepouts) on the macro-materialized frame, or None.
     ``prefix`` (tracks, vias) is planned copper the frame already holds (a
-    via lattice); it is not part of the result.
+    via lattice, bypass copper); it is not part of the result. ``keepouts``
+    bind the planning only. ``only_nets`` limits the nets planned.
     """
     from collections import Counter
     from .fanout import route_fanout
@@ -1062,22 +1144,26 @@ def _plan_ordinary_escapes(board, fanout_options, on_progress, *, prefix=((), ()
     ordinary = frozenset(net.name for net in board.nets
                          if len(net.pads) >= 2 and net.name not in supply
                          and (rules.get(net.name) is None or rules[net.name].kind is RouteKind.GENERAL))
+    if only_nets is not None:
+        ordinary &= frozenset(only_nets)
+    ordinary -= frozenset(exclude)
     if not ordinary:
         return None
     emit(on_progress, "ordinary_escapes", "started", nets=len(ordinary))
     frame = materialize_hard_macros(macro_source(board))
-    frame = replace(frame, tracks=(*frame.tracks, *prefix[0]), vias=(*frame.vias, *prefix[1]))
+    frame = replace(frame, tracks=(*frame.tracks, *prefix[0]), vias=(*frame.vias, *prefix[1]),
+                    copper_keepouts=(*frame.copper_keepouts, *keepouts))
     try:
         escapes = route_fanout(frame, fanout_options, only_nets=ordinary)
     except ValueError as error:
-        emit(on_progress, "ordinary_escapes", "finished", skipped=str(error))
+        emit(on_progress, "ordinary_escapes", event, skipped=str(error))
         return None
     tracks = list((Counter(escapes.board.tracks) - Counter(frame.tracks)).elements())
     vias = list((Counter(escapes.board.vias) - Counter(frame.vias)).elements())
-    keepouts = _copper_keepouts(board, tracks, vias, "escape-reserve", fixed=frame)
-    emit(on_progress, "ordinary_escapes", "finished", vias=len(vias), tracks=len(tracks),
-         pending=len(escapes.pending_pads))
-    return tuple(tracks), tuple(vias), tuple(keepouts)
+    reserved = _copper_keepouts(board, tracks, vias, "escape-reserve", fixed=frame)
+    emit(on_progress, "ordinary_escapes", event, vias=len(vias), tracks=len(tracks),
+         pending=len(escapes.pending_pads), nets=sorted({item.net for item in (*tracks, *vias)}))
+    return tuple(tracks), tuple(vias), tuple(reserved)
 
 
 def _join_reserved_copper(board, tracks, vias, keepouts):
@@ -1185,7 +1271,7 @@ def _bypass_copper_reservations(source, tracks, vias, witnesses=()):
     return (reserved, None) if reason is None else (None, reason)
 
 
-def _plan_decouplers(board, reserved_keepouts, on_progress, *, prefix=((), ())):
+def _plan_decouplers(board, reserved_keepouts, on_progress, *, prefix=((), ()), extra_keepouts=()):
     """Bypass copper routed before critical nets, held as keepouts meanwhile.
 
     The critical router needs a board without ordinary copper, so bypasses are
@@ -1197,8 +1283,10 @@ def _plan_decouplers(board, reserved_keepouts, on_progress, *, prefix=((), ())):
     from .hard_macros import macro_source, materialize_hard_macros
     emit(on_progress, "bypass_reservation", "started", links=len(board.decoupling_links))
     frame = materialize_hard_macros(macro_source(board))
+    # ``extra_keepouts`` (macro port halos) bind every attempt and are never
+    # released for a pending link, unlike the escape reservations.
     frame = replace(frame, tracks=(*frame.tracks, *prefix[0]), vias=(*frame.vias, *prefix[1]),
-                    copper_keepouts=(*frame.copper_keepouts, *reserved_keepouts))
+                    copper_keepouts=(*frame.copper_keepouts, *extra_keepouts, *reserved_keepouts))
     result = route_decouplers(frame)
     released = ()
     pending = frozenset(link for link, _ in result.pending)

@@ -345,6 +345,8 @@ def route_critical_nets(
     only_nets: frozenset[str] | None = None,
     unified_options=None,
     bundle_repair_limit: int = BUNDLE_REPAIR_LIMIT,
+    pair_state_escalation: int | None = None,
+    promote_planar: bool | None = None,
     plan_crossings: bool = True,
     nested_exits: bool = True,
 ) -> CriticalRoutingResult:
@@ -393,6 +395,11 @@ def route_critical_nets(
 
     if retained_accesses is not None and retained_critical is None:
         raise ValueError("retained ordinary prefix requires a critical donor")
+    if pair_state_escalation is None:
+        # The unified router's option; the legacy path keeps the bounded tier.
+        pair_state_escalation = getattr(unified_options, "critical_pair_state_escalation", 1)
+    if pair_state_escalation < 1:
+        raise ValueError("pair state escalation must be at least 1")
     if pair_state_limit is not None and pair_state_limit <= 0:
         raise ValueError("critical pair aggregate state bound must be positive")
     if bundle_repair_limit < 0:
@@ -478,6 +485,14 @@ def route_critical_nets(
     from .drc import explicit_copper_connectivity
     owner_graph = explicit_copper_connectivity(board) if board.materialized_macros else None
     net_by_name = {n.name: n for n in board.nets}
+    original_rules = board.net_routing_rules
+    if promote_planar is None:
+        promote_planar = unified_options is not None
+    if promote_planar:
+        # After the guide checks: the promoted rules serve this stage only and
+        # the result board keeps the declared ones.
+        board, planar = promote_planar_nets(board)
+        rules = {item.net: item for item in board.net_routing_rules}
     jobs = _critical_jobs(board)
     if only_nets is not None:
         unknown = set(only_nets) - {name for _, group in jobs for name in group}
@@ -560,7 +575,7 @@ def route_critical_nets(
             blockers: set[str] = set()
             result, pair_tracks, pair_vias = _route_pair_group(
                 board, rule, partner_rule, routes, rules, tracks, vias, pair_state_limit, blockers,
-                crossings.get(group), nested.get(group), turns,
+                crossings.get(group), nested.get(group), turns, pair_state_escalation=pair_state_escalation,
             )
             # Connected only over its length/skew budget counts as blocked here,
             # but the over-budget route stays the fallback.
@@ -592,7 +607,7 @@ def route_critical_nets(
                     blockers = set()
                     retry = _route_pair_group(
                         board, rule, partner_rule, routes, rules, tracks, vias, pair_state_limit, blockers,
-                        crossings.get(group),
+                        crossings.get(group), pair_state_escalation=pair_state_escalation,
                     )
                     if over_budget and not _within_or_shorter(retry[0], result):
                         # Removing the tuning did not help: keep it and the
@@ -807,6 +822,7 @@ def route_critical_nets(
         tracks=tuple(tracks),
         vias=tuple(vias),
         metadata=MappingProxyType(metadata),
+        net_routing_rules=original_rules,
     )
     fingerprint = _fingerprint(global_route.routing_fingerprint, tracks, vias, results)
     return CriticalRoutingResult(
@@ -858,6 +874,36 @@ def _nested_outcomes(
         else:
             outcomes.append(replace(item, status="fallback"))
     return tuple(outcomes)
+
+
+def promote_planar_nets(board):
+    """Ordinary nets that cannot change layer, routed in the critical stage.
+
+    A general net with one allowed layer and no via budget is planar: once a
+    pair or any other net crosses the corridor between its pins on that
+    layer, nothing can route it (CopperProbe's DC-DC feedback net under the
+    USB_RX2 pair). Such nets route first in the critical stage, under their
+    own width, clearance and length rules, and the board keeps its declared
+    rules afterwards. Nets with a zone or a bypass link stay ordinary.
+    Returns the board with the promoted rules and the promoted net names.
+    """
+    pads = {net.name: len(net.pads) for net in board.nets}
+    excluded = {zone.net for zone in board.zones}
+    excluded |= {link.net for link in board.decoupling_links} | {link.return_net for link in board.decoupling_links}
+    priority = max((rule.priority for rule in board.net_routing_rules if rule.kind is not RouteKind.GENERAL),
+                   default=0) + 1
+    promoted, rules = [], []
+    for rule in board.net_routing_rules:
+        if (rule.kind is RouteKind.GENERAL and rule.max_vias == 0 and len(rule.allowed_layers) == 1
+                and rule.net not in excluded and pads.get(rule.net, 0) >= 2):
+            rules.append(replace(rule, kind=RouteKind.CRITICAL, priority=priority,
+                                 topology="tree" if pads[rule.net] > 2 else rule.topology))
+            promoted.append(rule.net)
+        else:
+            rules.append(rule)
+    if not promoted:
+        return board, ()
+    return replace(board, net_routing_rules=tuple(rules)), tuple(promoted)
 
 
 def _critical_jobs(board: PhysicalBoard) -> list[tuple[NetRoutingRule, tuple[str, ...]]]:
@@ -1413,8 +1459,12 @@ def _route_pair_group(
     tracks: list[TrackSegment], vias: list[Via], pair_state_limit: int | None,
     blockers: set[str] | None = None, crossing: PlannedCrossing | None = None,
     nested: NestedExit | None = None, turns: dict[tuple[str, ...], tuple[int, int]] | None = None,
+    pair_state_escalation: int = 1,
 ) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
     """Route one symmetric pair against the committed ``tracks``/``vias``.
+
+    ``pair_state_escalation`` > 1 continues an exhausted bounded search under
+    ``pair_state_limit`` times that factor before giving up.
 
     The coarse candidate is tried first, then the bounded joint searches.
     ``blockers`` collects the other nets named by spacing findings of every
@@ -1600,32 +1650,57 @@ def _route_pair_group(
                         board, search_board, first, second, routes, candidate,
                         attempt, proposed_tracks, proposed_vias, tracks, vias)
             return attempt, proposed_tracks, proposed_vias, candidate_blockers
-        for searcher in searchers:
-            port_pairs_at_entry = stats.port_pairs
-            active_routes = routes
-            for tier, pitch_nm in enumerate((1_000_000, 500_000, 250_000)):
-                # A limited tier samples both families and all pitches,
-                # rather than spending its entire cap on the first port.
-                # Full-budget standalone calls retain historical bounds.
-                limits = {}
-                if pair_state_limit is not None:
-                    remaining = pair_state_limit - stats.expanded_states
-                    if remaining <= 0:
+        def search_tiers(limit):
+            """Both candidate families over three pitches within ``limit`` states, then
+            the suspended frontiers; a connected candidate within budget ends it."""
+            nonlocal result, pair_tracks, pair_vias
+            for searcher in searchers:
+                port_pairs_at_entry = stats.port_pairs
+                active_routes = routes
+                for tier, pitch_nm in enumerate((1_000_000, 500_000, 250_000)):
+                    # A limited tier samples both families and all pitches,
+                    # rather than spending its entire cap on the first port.
+                    # Full-budget standalone calls retain historical bounds.
+                    limits = {}
+                    if limit is not None:
+                        remaining = limit - stats.expanded_states
+                        if remaining <= 0:
+                            break
+                        slice_size = min(remaining, max(1, limit // (3 * len(searchers))))
+                        limits = {"maximum_total_states": stats.expanded_states + slice_size,
+                                  "maximum_states": max(1, (slice_size + 1) // 2),
+                                  "maximum_searches": 2}
+                    # If no primary portal exists, spend an existing finer tier
+                    # at a different freshly joined source contact. Branch copper
+                    # and original-net acceptance remain unchanged.
+                    if stats.port_pairs == port_pairs_at_entry:
+                        active_routes = variants[min(tier,len(variants)-1)]
+                    for candidate in searcher(
+                        search_board, first, second, active_routes[first.net], active_routes[second.net],
+                        stats=stats, pitch_nm=pitch_nm,
+                        **({"terminal_completion": completion} if completion is not None else {}), **limits,
+                    ):
+                        attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
+                        if _within_budget(attempt):
+                            result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
+                            break
+                        if attempt.connected:
+                            keep(attempt, proposed_tracks, proposed_vias)
+                            rejected.append(_rejection_gate(attempt.warnings))
+                            continue
+                        observe(attempt, found)
+                        rejected.append(_rejection_gate(attempt.diagnostics))
+                    if _within_budget(result):
                         break
-                    slice_size = min(remaining, max(1, pair_state_limit // (3 * len(searchers))))
-                    limits = {"maximum_total_states": stats.expanded_states + slice_size,
-                              "maximum_states": max(1, (slice_size + 1) // 2),
-                              "maximum_searches": 2}
-                # If no primary portal exists, spend an existing finer tier
-                # at a different freshly joined source contact. Branch copper
-                # and original-net acceptance remain unchanged.
-                if stats.port_pairs == port_pairs_at_entry:
-                    active_routes = variants[min(tier,len(variants)-1)]
-                for candidate in searcher(
-                    search_board, first, second, active_routes[first.net], active_routes[second.net],
-                    stats=stats, pitch_nm=pitch_nm,
-                    **({"terminal_completion": completion} if completion is not None else {}), **limits,
-                ):
+                if _within_budget(result):
+                    break
+            if not _within_budget(result) and limit is not None and stats.expanded_states < limit:
+                # Sampling both families/pitches may leave a productive portal's
+                # exact frontier suspended at its slice. Continue that same owned
+                # search with unused aggregate states; no new portal/slot is added.
+                from .pair_search_resume import resume_pair_candidates
+                for candidate in resume_pair_candidates(stats, board=search_board,
+                                                         maximum_total_states=limit):
                     attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
                     if _within_budget(attempt):
                         result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
@@ -1636,27 +1711,16 @@ def _route_pair_group(
                         continue
                     observe(attempt, found)
                     rejected.append(_rejection_gate(attempt.diagnostics))
-                if _within_budget(result):
-                    break
-            if _within_budget(result):
-                break
-        if not _within_budget(result) and pair_state_limit is not None and stats.expanded_states < pair_state_limit:
-            # Sampling both families/pitches may leave a productive portal's
-            # exact frontier suspended at its slice. Continue that same owned
-            # search with unused aggregate states; no new portal/slot is added.
-            from .pair_search_resume import resume_pair_candidates
-            for candidate in resume_pair_candidates(stats, board=search_board,
-                                                     maximum_total_states=pair_state_limit):
-                attempt, proposed_tracks, proposed_vias, found = checked_candidate(candidate)
-                if _within_budget(attempt):
-                    result, pair_tracks, pair_vias = attempt, proposed_tracks, proposed_vias
-                    break
-                if attempt.connected:
-                    keep(attempt, proposed_tracks, proposed_vias)
-                    rejected.append(_rejection_gate(attempt.warnings))
-                    continue
-                observe(attempt, found)
-                rejected.append(_rejection_gate(attempt.diagnostics))
+
+        search_tiers(pair_state_limit)
+        if (not _within_budget(result) and pair_state_limit is not None
+                and stats.expanded_states >= pair_state_limit and pair_state_escalation > 1):
+            # The bounded tier was exhausted without a candidate. A long pair
+            # (around a connector, across the board) needs more states than
+            # the tier's default: continue the same search, same ports and
+            # gates, under an escalated aggregate bound. Nothing is relaxed.
+            pair_state_limit = pair_state_limit * pair_state_escalation
+            search_tiers(pair_state_limit)
         if not _within_budget(result) and fallback is not None and _within_or_shorter(fallback[0], result):
             result, pair_tracks, pair_vias = fallback
         rejections, examples = _rejection_summary(rejected)
