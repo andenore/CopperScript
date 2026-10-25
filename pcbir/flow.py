@@ -744,6 +744,12 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, package
             if restored.get("unrestored_nets") and unified_fanout is not None:
                 reserved = _resite_escapes(board, unified_fanout, reserved, held, prefix, halos,
                                            frozenset(restored["unrestored_nets"]), on_progress)
+        # The witnesses were admitted in the planning context (port halos,
+        # pre-release reservations); the critical router's context has only
+        # the final reservations, so they are verified again there.
+        held, reason = _refresh_bypass_witnesses(board, reserved, held)
+        if reason is not None:
+            emit(on_progress, "bypass_reservation", "witnesses_stale", reason=reason)
     def critical_inputs(escape_keepouts, previous=None):
         source = replace(board, copper_keepouts=(*board.copper_keepouts, *escape_keepouts))
         bypass_accesses, reason = (_bypass_copper_reservations(source, held[0], held[1], held[4])
@@ -858,6 +864,33 @@ def _macro_port_halos(board):
                                        PolygonWithHoles(ring), block_tracks=True, block_vias=True,
                                        block_zones=False))
     return tuple(halos)
+
+
+def _refresh_bypass_witnesses(board, reserved, held):
+    """Verify the admitted bypass witnesses in the keepout context critical routing sees.
+
+    A witness carries the digest of the board it was admitted on, keepouts
+    included. Planning admits them on a frame with the port halos and the
+    pre-release escape reservations; the critical source carries the final
+    reservations only, so each witness is checked again there, exactly as
+    the escape revalidation does. A witness that fails keeps ``held`` as it
+    is (bypass copper then binds as keepouts) and the reason is returned.
+    """
+    from .decoupling_paths import verify_crosslayer_decoupling
+    from .hard_macros import macro_source, materialize_hard_macros
+    from .routing_clearance import RoutingClearanceIndex
+    frame = materialize_hard_macros(macro_source(board))
+    fixed = replace(frame, tracks=(*frame.tracks, *held[0]), vias=(*frame.vias, *held[1]))
+    context = replace(fixed, copper_keepouts=(*board.copper_keepouts, *(reserved[2] if reserved else ())))
+    fresh = RoutingClearanceIndex(context)
+    witnesses = []
+    for witness in held[4]:
+        checked = verify_crosslayer_decoupling(context, witness.link, return_target=witness.return_target,
+                                               index=fresh)
+        if checked.witness is None:
+            return held, checked.reason
+        witnesses.append(checked.witness)
+    return (*held[:4], tuple(witnesses)), None
 
 
 def _resite_escapes(board, fanout_options, reserved, held, prefix, halos, nets, on_progress):
