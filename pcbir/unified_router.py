@@ -762,9 +762,9 @@ class _Router:
         if options.ball_field_via_sites:
             self.rasters.via_mask = self._ball_field_via_mask()
         from .native import astar as native_astar
-        # The C kernel walks one dense (nl, ny, nx) lattice; a nested lattice
-        # uses the Python search until the kernel learns blocks (S3).
-        self.native = None if self.nested else native_astar()
+        # The C kernel serves both lattices (a nested one through its block
+        # tables); _astar falls back to the Python search when it is absent.
+        self.native = native_astar()
         self._nested_tables = None
         self.occupancy = _Occupancy(self.lattice.size, self.lattice.plane, arrays=self.native is not None)
         from array import array
@@ -2042,15 +2042,15 @@ class _Router:
         """A* over the shared grid; arrays are reused across searches."""
         if self._expired():
             return None
-        if self.nested:
-            return self._astar_nested(spec, sources, targets, present, box, tbox, owner, mid_owner,
-                                      via_owner, target_extra)
         if self.native is not None:
             result = self._astar_native(spec, sources, targets, present, box, tbox, target_extra)
             if result is NotImplemented and self._grow_native_buffers():
                 result = self._astar_native(spec, sources, targets, present, box, tbox, target_extra)
             if result is not NotImplemented:
                 return result
+        if self.nested:
+            return self._astar_nested(spec, sources, targets, present, box, tbox, owner, mid_owner,
+                                      via_owner, target_extra)
         g, options = self.lattice, self.options
         occ, via_occ = self.occupancy.occ, self.occupancy.via_occ
         hist, via_hist = self.occupancy.history, self.occupancy.via_history
@@ -2236,7 +2236,7 @@ class _Router:
 
     def _astar_nested(self, spec, sources, targets, present, box, tbox, owner, mid_owner, via_owner,
                       target_extra=None):
-        """``_astar`` on a nested lattice (Python only).
+        """``_astar`` on a nested lattice in Python (the native kernel's parity reference).
 
         Planar moves stay within a node's block (lengths and costs per base
         pitch); a node with a portal twin also moves to it at cost 0 (no
@@ -2465,7 +2465,12 @@ class _Router:
             guide_pointer = self._n_guide.ctypes.data
         touched_count = ctypes.c_int(0)
         P = lambda a: a.ctypes.data
-        # The kernel walks one dense (nl, ny, nx) lattice: uniform lattices only (S3: blocks).
+        # A nested lattice passes its block tables; a uniform one passes none.
+        if self.nested:
+            blocks, block_of, ux, uy, twins, steps = g.kernel_tables()
+            lattice_tables = (len(g.blocks), P(blocks), P(block_of), P(ux), P(uy), P(twins), P(steps))
+        else:
+            lattice_tables = (1, None, None, None, None, None, None)
         length = self.native(
             g.nx, g.ny, g.nl, P(owner), P(mid_owner), P(via_owner),
             P(occupancy.history), P(occupancy.occ), P(occupancy.via_history), P(occupancy.via_occ),
@@ -2477,7 +2482,7 @@ class _Router:
             transitions[1].ctypes.data if transitions is not None else None, self.options.maximum_expansions,
             P(self._n_best), P(self._n_parent), P(self._n_heap), self._n_heap_cap,
             P(self._n_touched), self._n_touched_cap, ctypes.byref(touched_count),
-            P(self._n_path), self._n_path_cap)
+            P(self._n_path), self._n_path_cap, *lattice_tables)
         touched = self._n_touched[:touched_count.value]
         self._n_best[touched] = 1e30
         for nodes, bit in marks:
@@ -2495,7 +2500,14 @@ class _Router:
         return path, path[-1]
 
     def _move_base(self, spec) -> np.ndarray:
+        """Heading-adjusted planar move costs for the kernel: [layer][move] on a
+        uniform lattice, [block][layer][move] on a nested one (the costs of
+        ``_nested_search_tables``)."""
         cache = self._move_cache
+        if cache is None and self.nested:
+            tables, _ = self._nested_search_tables()
+            cache = self._move_cache = np.asarray(
+                [move[3] for per_layer in tables for table in per_layer for move in table], dtype=np.float64)
         if cache is None:
             g, options = self.lattice, self.options
             table = []
@@ -3479,8 +3491,6 @@ def route_unified(
         setup["nodes"] = lattice.size
         setup["uniform_nodes_at_finest"] = router.fine_plan.uniform_nodes_at_finest
     emit(on_progress, "unified_setup", "finished", **setup, seconds=round(perf_counter() - started, 2))
-    if router.nested:
-        emit(on_progress, "unified_setup", "native_kernel", used=False, reason="nested lattice (S3)")
     routes, conflicts, iterations = router.negotiate(deadline)
     commit_started = perf_counter()
     accepted, rejected, complete = router.commit(routes, conflicts)

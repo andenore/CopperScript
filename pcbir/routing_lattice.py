@@ -543,6 +543,7 @@ class NestedLattice:
         self._offsets: dict[tuple[int, int], tuple] = {}
         self._moves = tuple(block.moves() for block in blocks)
         self._search_tables = None
+        self._kernel_tables = None
 
     # -- identity -----------------------------------------------------------
 
@@ -893,3 +894,25 @@ class NestedLattice:
             uy = array("d", ((self.column_y - self.y0) / p).tolist())
             self._search_tables = (ux, uy, array("B", self.block_of.tobytes()), self._twins_list)
         return self._search_tables
+
+    def kernel_tables(self):
+        """The block tables of ``search_tables`` as contiguous numpy arrays for
+        the native kernel: per block (first column, nx, ny) (int32, flat), the
+        block of every column (uint8), x and y of every column in base pitches
+        (float64, the same values as ``search_tables``), the twin column of
+        every column (int32, -1 for none) and per block the 8 move lengths in
+        base pitches (float64, ``block_moves`` order)."""
+        if self._kernel_tables is None:
+            if len(self.blocks) > 256 or self.size >= 2 ** 31:
+                raise ValueError("nested lattice exceeds the native kernel's block or node limits")
+            p = float(self.pitch)
+            blocks = np.asarray([v for block in self.blocks for v in (block.column_offset, block.nx, block.ny)],
+                                dtype=np.int32)
+            steps = np.asarray([move[4] for index in range(len(self.blocks)) for move in self._moves[index]],
+                               dtype=np.float64)
+            self._kernel_tables = (
+                np.ascontiguousarray(blocks), np.ascontiguousarray(self.block_of, dtype=np.uint8),
+                np.ascontiguousarray((self.column_x - self.x0) / p, dtype=np.float64),
+                np.ascontiguousarray((self.column_y - self.y0) / p, dtype=np.float64),
+                np.ascontiguousarray(self.twins, dtype=np.int32), np.ascontiguousarray(steps))
+        return self._kernel_tables

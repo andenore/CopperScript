@@ -130,7 +130,8 @@ def test_bga_routes_completely_on_the_nested_lattice(bga_runs) -> None:
     assert summary["drc"]["errors"] == 0
     setup = _setup_event(events)
     assert len(setup["patches"]) == 1 and setup["patches"][0]["factor"] == 2
-    assert ("unified_setup", "native_kernel", {"used": False, "reason": "nested lattice (S3)"}) in events
+    # S3: the native kernel serves the nested lattice (no fallback event).
+    assert not any(p == "unified_setup" and e == "native_kernel" for p, e, _ in events)
     router = _Router(board, UnifiedRouterOptions(fine_regions="auto"), list(board.nets), None)
     g = router.lattice
     assert isinstance(g, NestedLattice) and setup["nodes"] == g.size
