@@ -14,6 +14,7 @@ from pcbir.physical import (CopperLayer, FootprintPad, NetRoutingRule, PadRefere
     PhysicalNet, Point, RouteKind, Size, TrackSegment, Via)
 from pcbir.placement import transformed_pad_position
 from test_decoupling_crosslayer_paths import fixture
+from test_admitted_bypass_paths import route_outward_fixture
 
 
 def scene(renamed):
@@ -48,7 +49,7 @@ def scene(renamed):
             *(NetRoutingRule(n, RouteKind.DIFFERENTIAL, width_nm=100_000,
                 pair_gap_nm=100_000, differential_partner=partner)
               for n, partner in (pair, tuple(reversed(pair))))))
-    generated = route_fanout(source)
+    generated = route_outward_fixture(source)
     assert not generated.decoupling_pending
     old = generated.decoupling_witnesses[0].supply_path.vias[0]
     other_via = next(v for v in generated.decoupling_vias if v.net == old.net and v is not old)

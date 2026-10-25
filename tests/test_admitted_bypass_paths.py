@@ -36,6 +36,48 @@ def shared_board(*, renamed=False, dual=False, reverse=False):
     return board
 
 
+def route_outward_fixture(board):
+    """Build the ownership fixture with explicit outward, 0.5 mm ray exits.
+
+    These tests need an original path that a later canonical path supersedes.
+    Keep that geometry independent of the production candidate ranking; real
+    clearance, path, budget, admission and DRC checks still construct the result.
+    """
+    import pcbir.decoupling_paths as paths
+    from pcbir.placement import transformed_local_point
+
+    def outward(current, pose, pad, options):
+        start = transformed_local_point(pose, pad.position)
+        dx, dy = start.x_nm-pose.position.x_nm, start.y_nm-pose.position.y_nm
+        if abs(dx) >= abs(dy):
+            dx, dy = (1 if dx >= 0 else -1), 0
+        else:
+            dx, dy = 0, (1 if dy >= 0 else -1)
+        for distance in range(500_000, options.maximum_radius_nm+1, 500_000):
+            yield Point(start.x_nm+dx*distance, start.y_nm+dy*distance)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(paths, '_package_candidates', outward)
+        patch.setattr(paths, '_local_launch_sites', lambda *args: ())
+        patch.setattr(paths, '_two_leg_candidates', lambda *args: ())
+        return route_fanout(board)
+
+
+@pytest.mark.parametrize('renamed', (False, True))
+def test_compact_launch_search_keeps_routable_shared_bypass_alternatives(renamed):
+    source = shared_board(renamed=renamed)
+    result = route_fanout(source)
+    assert not result.decoupling_pending
+    assert len(result.decoupling_witnesses) == 2
+    assert verified_bypass_reservations(source, result)[2] is None
+    assert all(validate_crosslayer_witness(result.board, w) == ''
+               for w in result.decoupling_witnesses)
+    assert result.board.net_routing_rules is source.net_routing_rules
+    assert not [f for f in run_physical_drc(result.board).findings
+                if f.severity.value == 'error'
+                and f.code not in {'DRC-OPEN-NET', 'DRC-ROUTE-INCOMPLETE'}]
+
+
 def edges(witnesses, kind):
     return {id(s.edge) for w in witnesses for p in (w.supply_path,w.return_path)
             for s in p.steps if isinstance(s.edge,kind)}
@@ -44,7 +86,7 @@ def edges(witnesses, kind):
 @pytest.mark.parametrize('renamed',(False,True))
 def test_original_adopted_path_covers_canonical_reselection_without_rerouting(renamed,monkeypatch):
     source=shared_board(renamed=renamed)
-    result=route_fanout(source)
+    result=route_outward_fixture(source)
     assert not result.decoupling_pending and len(result.decoupling_witnesses)==2
     paths,vias={},{}
     assert len(_verified_bypass_links(result.board,{l.net for l in source.decoupling_links},
@@ -181,7 +223,7 @@ def contact_scene(*, shared_return=False):
             *(NetRoutingRule(n,RouteKind.DIFFERENTIAL,width_nm=100000,pair_gap_nm=100000,
                              differential_partner=partner)
               for n,partner in (('PAIR_A','PAIR_B'),('PAIR_B','PAIR_A')))))
-    baseline=route_fanout(board)
+    baseline=route_outward_fixture(board) if shared_return else route_fanout(board)
     assert not baseline.decoupling_pending
     site=baseline.decoupling_witnesses[0].supply_path.vias[0].position
     obstacles=(TrackSegment('PAIR_A',Point(site.x_nm-50000,site.y_nm),Point(site.x_nm+50000,site.y_nm),

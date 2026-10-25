@@ -592,7 +592,13 @@ def _connections(board, first, second, net, options, launch_limit, site_limit, *
                          for t in path if not track_is_contained(t, board.tracks))
             remaining_distance = abs(endpoint.x_nm-b[2].position.x_nm)+abs(endpoint.y_nm-b[2].position.y_nm)
             return length+remaining_distance, length, endpoint.x_nm, endpoint.y_nm
-        for path,via in sorted(dict.fromkeys(fresh),key=compact_score)[:remaining]:
+        # A short launch can face a blocked destination-side tail. Preserve
+        # outward alternatives as well as compact ones: neither ordering may
+        # monopolize the finite slots. Deduplicate before spending a slot.
+        inventory=tuple(dict.fromkeys(fresh))
+        compact=sorted(inventory,key=compact_score)
+        diverse=dict.fromkeys(chain.from_iterable(zip(compact,inventory)))
+        for path,via in islice(diverse,remaining):
             existing=next((v for v in board.vias if v.net==net and v.position==path[-1].end
                            and _normal_via(board,index,v)),None)
             selected=via or existing
