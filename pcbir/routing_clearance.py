@@ -18,6 +18,7 @@ import json
 
 from ._cache import IdentityKey
 from .breakout import BreakoutLand, BreakoutRegions, _nearest_region
+from .breakout import _clearance as _breakout_clearance, _gap as _breakout_gap
 from .drc import non_plated_holes, placed_pad_shape
 from .geometry import Bounds, RoundedConvexShape, shapes_clear
 from .mechanical import shape_in_board
@@ -217,6 +218,8 @@ class RoutingClearanceIndex:
         self._mirror_layers: dict[CopperLayer, int] = {}
         self._mirror_layer_lists: dict[tuple, list[int]] = {}
         self._mirror_pads: dict[PadReference, int] = {}
+        self._mirror_partners: dict[str, list[int]] = {}
+        self._mirror_queries: dict[tuple[str, str | None], tuple] = {}
         self.board = board
         from .terminal_preferences import TerminalPreferences
         self.terminal_preferences = TerminalPreferences(board)
@@ -331,6 +334,8 @@ class RoutingClearanceIndex:
         return identity
 
     def _mirror_layer_list(self, layers) -> list[int]:
+        if type(layers) is not tuple:
+            layers = tuple(layers)
         found = self._mirror_layer_lists.get(layers)
         if found is None:
             codes = self._mirror_layers
@@ -342,9 +347,26 @@ class RoutingClearanceIndex:
         pad = -1
         if item.pad_reference is not None:
             pad = self._mirror_pads.setdefault(item.pad_reference, len(self._mirror_pads))
+        # Its net's side of BreakoutRegions.spacing_nm, at its own land.
+        rule = self.rules.get(item.net)
+        clear = _breakout_clearance(rule, item.breakout_land)
+        gap = _breakout_gap(rule, item.breakout_land) if rule is not None else 0
         mirror.add(slot, self._mirror_net(item.net), self._mirror_layer_list(tuple(item.layers)),
                    _flat_spine(item.shape.spine), item.shape.radius_nm, item.clearance_nm,
-                   self._net_clearance_nm.get(item.net, 0), item.is_pad, pad)
+                   clear, gap, item.is_pad, pad)
+
+    def _mirror_pair_partners(self, net: str) -> list[int]:
+        """Mirror ids of the nets ``BreakoutRegions.pair`` pairs with ``net``."""
+        found = self._mirror_partners.get(net)
+        if found is None:
+            rule = self.rules.get(net)
+            names = {other for other, candidate in self.rules.items()
+                     if candidate.differential_partner == net}
+            if rule is not None and rule.differential_partner is not None:
+                names.add(rule.differential_partner)
+            found = self._mirror_partners[net] = [
+                self._mirror_net(other) for other in sorted(names) if self.breakout.pair(net, other)]
+        return found
 
     def can_track(
         self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer
@@ -489,7 +511,7 @@ class RoutingClearanceIndex:
         if mirror is not None:
             allowed = -1 if allowed_pad is None else self._mirror_pads.get(allowed_pad, -2)
             result = mirror.pad_clear(_flat_spine(shape.spine), shape.radius_nm,
-                                      self._mirror_layer_list(tuple(layers)), allowed,
+                                      self._mirror_layer_list(layers), allowed,
                                       self._max_clearance_nm)
             if result is not None:
                 return result
@@ -1022,16 +1044,25 @@ class RoutingClearanceIndex:
         minimum = self.board.rules.minimum_clearance_nm
         net_clearance = self._net_clearance_nm
         own = net_clearance.get(net, minimum)
+        # The Rust mirror answers the same query exactly when it is built;
+        # None (an i128 overflow) falls through to the Python loop below.
+        mirror = self._mirror
+        if mirror is not None:
+            query = self._mirror_queries.get((net, land))
+            if query is None:
+                rule = self.rules.get(net)
+                query = self._mirror_queries[(net, land)] = (
+                    self._mirror_net(net), _breakout_clearance(rule, land),
+                    _breakout_gap(rule, land) if rule is not None else 0, self._mirror_pair_partners(net))
+            identity, own_clear, own_gap, partners = query
+            result = mirror.clear(identity, _flat_spine(shape.spine), shape.radius_nm,
+                                  self._mirror_layer_list(layers), clearance_floor_nm, minimum,
+                                  own_clear, own_gap, partners, reach, self._max_clearance_nm)
+            if result is not None:
+                return result
         # The broad phase of ``_overlapping_objects`` (nearby_copper), inlined:
         # the same bins and objects, each object once. The answer is a
         # conjunction, so it does not depend on the visiting order.
-        mirror = self._mirror
-        if mirror is not None and not breakout:
-            result = mirror.clear(self._mirror_net(net), _flat_spine(shape.spine), shape.radius_nm,
-                                  self._mirror_layer_list(tuple(layers)), clearance_floor_nm,
-                                  own, reach, self._max_clearance_nm)
-            if result is not None:
-                return result
         size, bins, slots = self.bin_size_nm, self._bins, self._slots
         distance = self._max_clearance_nm
         xs = range((qx0 - distance) // size, (qx1 + distance) // size + 1)

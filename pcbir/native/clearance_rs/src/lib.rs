@@ -2,7 +2,8 @@
 //!
 //! The Python index stays the owner of every object. It mirrors each `_add`,
 //! `_drop_object` and `_compact` here, and asks this module the two hottest
-//! queries: `_clear` (foreign copper clearance) and `pad_copper_clear`.
+//! queries: `_clear` (foreign copper clearance, breakout spacing included)
+//! and `pad_copper_clear`.
 //! Bins, visiting order and every predicate replicate `pcbir.geometry`
 //! exactly with integer arithmetic. A product that would overflow `i128`
 //! returns `None`, and the caller then answers in Python.
@@ -18,7 +19,8 @@ struct Obj {
     spine: Vec<P>,
     radius: i64,
     clearance: i64, // the object's own clearance_nm floor
-    rule: i64,      // net-rule clearance of the object's net, 0 without a rule
+    clear: i64,     // its net's rule clearance at its own breakout land (0 without a rule)
+    gap: i64,       // its net's pair gap at its own breakout land (0 without one)
     is_pad: bool,
     pad: i64, // pad reference id, -1 for none
     bounds: [i64; 4],
@@ -274,10 +276,10 @@ impl ClearanceMirror {
     }
 
     /// Mirror `_add`: the object at Python slot `slot`, in the bins of its bounds.
-    #[pyo3(signature = (slot, net, layers, spine, radius, clearance, rule, is_pad, pad))]
+    #[pyo3(signature = (slot, net, layers, spine, radius, clearance, clear, gap, is_pad, pad))]
     #[allow(clippy::too_many_arguments)]
     fn add(&mut self, slot: usize, net: u32, layers: Vec<u32>, spine: Vec<i64>, radius: i64,
-           clearance: i64, rule: i64, is_pad: bool, pad: i64) -> PyResult<()> {
+           clearance: i64, clear: i64, gap: i64, is_pad: bool, pad: i64) -> PyResult<()> {
         let spine = spine_of(&spine)?;
         let bounds = bounds_of(&spine, radius);
         if self.objects.len() <= slot {
@@ -292,7 +294,7 @@ impl ClearanceMirror {
                 }
             }
         }
-        self.objects[slot] = Some(Obj { net, layers, spine, radius, clearance, rule, is_pad, pad, bounds });
+        self.objects[slot] = Some(Obj { net, layers, spine, radius, clearance, clear, gap, is_pad, pad, bounds });
         Ok(())
     }
 
@@ -326,15 +328,20 @@ impl ClearanceMirror {
         self.objects.iter().filter(|o| o.is_some()).count()
     }
 
-    /// `RoutingClearanceIndex._clear` without breakout regions.
+    /// `RoutingClearanceIndex._clear`.
     ///
-    /// `own` is the query net's rule clearance (board minimum without a rule),
-    /// `reach` bounds every spacing a rule can require, `distance` is the
-    /// index's maximum clearance (the broad-phase expansion). None: overflow.
-    #[pyo3(signature = (net, spine, radius, layers, floor, own, reach, distance))]
+    /// The net-rule spacing is `BreakoutRegions.spacing_nm` (which, without
+    /// breakout rules, equals the plain net-rule clearance): the board
+    /// `minimum`, and each side's clearance at its own land, or each side's
+    /// pair gap when the other net is one of `partners`. `own_clear` and
+    /// `own_gap` are the query's values at its land. `reach` bounds every
+    /// spacing a rule can require, `distance` is the index's maximum
+    /// clearance (the broad-phase expansion). None: overflow.
+    #[pyo3(signature = (net, spine, radius, layers, floor, minimum, own_clear, own_gap, partners, reach, distance))]
     #[allow(clippy::too_many_arguments)]
     fn clear(&mut self, net: u32, spine: Vec<i64>, radius: i64, layers: Vec<u32>, floor: i64,
-             own: i64, reach: i64, distance: i64) -> PyResult<Option<bool>> {
+             minimum: i64, own_clear: i64, own_gap: i64, partners: Vec<u32>, reach: i64,
+             distance: i64) -> PyResult<Option<bool>> {
         let spine = spine_of(&spine)?;
         let b = bounds_of(&spine, radius);
         Ok(self.scan(&layers, &b, distance, |other| {
@@ -346,7 +353,12 @@ impl ClearanceMirror {
                 || b[3] + margin < other.bounds[1] || other.bounds[3] < b[1] - margin {
                 return Some(true);
             }
-            let clearance = own.max(other.rule).max(floor).max(other.clearance);
+            let spacing = if partners.contains(&other.net) {
+                minimum.max(own_gap).max(other.gap)
+            } else {
+                minimum.max(own_clear).max(other.clear)
+            };
+            let clearance = spacing.max(floor).max(other.clearance);
             shapes_clear(&spine, radius, &b, other, clearance)
         }))
     }

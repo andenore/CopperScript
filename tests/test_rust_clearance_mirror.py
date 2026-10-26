@@ -22,7 +22,15 @@ def boards():
     # Without a breakout rule, _clear itself is answered by the mirror.
     plain = replace(with_breakout, net_routing_rules=tuple(
         rule for rule in with_breakout.net_routing_rules if rule.breakout_length_nm is None))
-    return {"breakout": with_breakout, "plain": plain}
+    # C and D as a differential pair with a breakout gap: spacing between
+    # them is the pair gap, at each side's own land.
+    rules = {rule.net: rule for rule in with_breakout.net_routing_rules}
+    paired = replace(with_breakout, net_routing_rules=(
+        replace(rules["C"], differential_partner="D", pair_gap_nm=nm_from_mm("0.2")),
+        replace(rules["D"], differential_partner="C", pair_gap_nm=nm_from_mm("0.2"),
+                breakout_gap_nm=nm_from_mm("0.12")),
+    ))
+    return {"breakout": with_breakout, "plain": plain, "pair": paired}
 
 
 def pair(source):
@@ -58,14 +66,14 @@ def random_queries(native, python, seed: int, count: int = 1500) -> None:
                 == python.pad_copper_clear(shape, layers, allowed_pad=allowed))
 
 
-@pytest.mark.parametrize("name", ["breakout", "plain"])
+@pytest.mark.parametrize("name", ["breakout", "plain", "pair"])
 def test_fresh_index_answers_match(name):
     native, python = pair(boards()[name])
     assert answers(native) == answers(python)
     random_queries(native, python, seed=7)
 
 
-@pytest.mark.parametrize("name", ["breakout", "plain"])
+@pytest.mark.parametrize("name", ["breakout", "plain", "pair"])
 def test_additions_removals_and_compaction_stay_in_step(name, monkeypatch):
     monkeypatch.setattr(RoutingClearanceIndex, "_COMPACT_MIN_DEAD", 3)
     native, python = pair(boards()[name])
