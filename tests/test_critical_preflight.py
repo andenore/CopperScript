@@ -124,6 +124,35 @@ def test_completed_group_checkpoint_retains_metrics_but_not_full_signoff(tmp_pat
     assert data["fabrication_ready"] is False and "critical" not in data
 
 
+def test_cohort_retry_events_are_recorded_as_their_own_finished_group(tmp_path, monkeypatch):
+    import pcbir.critical_preflight as preflight
+    from pcbir.critical import CriticalNetResult
+
+    def retried(*args, on_progress):
+        failed = CriticalNetResult(("CLK",), False, 0, 0, (0,), 0, strategy="unified_critical_cohort")
+        fixed = CriticalNetResult(("CLK",), True, 3, 0, (2000000,), 0,
+                                  strategy="unified_critical_cohort_retry")
+        on_progress("started", ("CLK",), None)
+        on_progress("finished", ("CLK",), failed)
+        on_progress("retry_started", ("CLK",), None)
+        on_progress("retry_finished", ("CLK",), fixed)
+        raise ValueError("interrupted after the retry")
+
+    monkeypatch.setattr(preflight, "route_critical_nets", retried)
+    report = tmp_path / "retry.json"
+    assert main([
+        str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
+        "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
+        "--report", str(report),
+    ]) == 2
+    data = json.loads(report.read_text())
+    assert data["stage"] == "critical_group_complete"
+    first, retry = data["critical_progress"]
+    assert first["state"] == retry["state"] == "finished" and "retry" not in first
+    assert retry["retry"] is True and retry["result"]["strategy"] == "unified_critical_cohort_retry"
+    assert not first["result"]["connected"] and retry["result"]["connected"]
+
+
 def test_preflight_physicalizes_the_mechanical_block(tmp_path, monkeypatch) -> None:
     import pcbir.critical_preflight as preflight
     from pcbir import nm_from_mm

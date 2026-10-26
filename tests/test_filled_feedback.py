@@ -55,9 +55,22 @@ def fragmented(*, renamed=False, block_tracks=False):
         zones=(CopperZone("regional-supply", net, (CopperLayer.FRONT,), rectangle(1, 1, 19, 11),
             pad_connection=ZoneConnection.SOLID, island_policy=IslandPolicy.REMOVE_ALL,
             minimum_island_area_nm2=None),),
-        copper_keepouts=(CopperKeepout("fill-divider", (CopperLayer.FRONT,),
+        copper_keepouts=(CopperKeepout("fill-divider",
+            # Blocking tracks blocks them on both layers: otherwise the
+            # router itself jumpers the split pour through the back layer.
+            (CopperLayer.FRONT, CopperLayer.BACK) if block_tracks else (CopperLayer.FRONT,),
             rectangle("9.5", 0, "10.5", 12), block_tracks=block_tracks,
             block_vias=False, block_zones=True),))
+
+
+def _prefix(initial):
+    """The stage whose board filled-copper feedback protects as the fixed prefix."""
+    return initial.plane_stitch if initial.plane_stitch is not None else initial.critical
+
+
+def _with_prefix(initial, board):
+    stage = "plane_stitch" if initial.plane_stitch is not None else "critical"
+    return replace(initial, **{stage: replace(_prefix(initial), board=board)})
 
 
 @pytest.mark.parametrize("budget", (0, 1))
@@ -190,8 +203,8 @@ def test_three_fragments_skip_already_connected_components(native_cli, renamed, 
     # Model a completed immutable prefix, not an illicit import of routed copper
     # into the source-only planning API.
     initial = pipeline(replace(board, tracks=(), vias=()))
-    initial = replace(initial, detailed=replace(initial.detailed, board=board),
-        fanout=replace(initial.fanout, board=board), critical=replace(initial.critical, board=board))
+    initial = _with_prefix(replace(initial, detailed=replace(initial.detailed, board=board),
+                                   critical=replace(initial.critical, board=board)), board)
     assert not hard_findings(board), [(f.code, f.message) for f in hard_findings(board)]
     result = improve_filled_copper(initial, kicad_cli=native_cli,
         options=FilledCopperFeedbackOptions(maximum_trials=1))
@@ -333,8 +346,8 @@ def test_bridge_cleans_unrelated_completed_area_end_but_preserves_prefix(native_
     candidate = replace(initial.board, tracks=(*initial.board.tracks, spur))
     initial = replace(initial, detailed=replace(initial.detailed, board=candidate))
     if protected:
-        initial = replace(initial, fanout=replace(initial.fanout,
-            board=replace(initial.fanout.board, tracks=(*initial.fanout.board.tracks, spur))))
+        prefix = _prefix(initial).board
+        initial = _with_prefix(initial, replace(prefix, tracks=(*prefix.tracks, spur)))
     assert not hard_findings(candidate)
     evidence = verify_filled_planes(candidate, kicad_cli=native_cli)
     assert evidence.unconnected_count == 1 and evidence.other_violation_count == 1
@@ -406,7 +419,7 @@ def test_native_feedback_preserves_macro_and_required_array_copper(native_cli, t
         minimum_island_area_nm2=None)))
     owned = materialize_hard_macros(board)
     initial = pipeline(board)
-    assert initial.package_access.ready and not hard_findings(initial.board)
+    assert not hard_findings(initial.board)
     result = improve_filled_copper(initial, kicad_cli=native_cli,
         options=FilledCopperFeedbackOptions(maximum_trials=2))
     assert result.board.placements == board.placements and not hard_findings(result.board)

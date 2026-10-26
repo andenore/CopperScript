@@ -20,7 +20,12 @@ from pcbir.flow import run_routing_pipeline
 from pcbir.physical import BoardSide, IslandPolicy, ZoneConnection
 from pcbir.placement import PlacementPlannerOptions
 from pcbir.routeflow import PlacementRoutingFeedbackOptions
+from pcbir.unified_router import UnifiedRouterOptions
 from routing_fixtures import pipeline, rectangle, terminal
+
+# Far too few search expansions for any route: the actual bounded search
+# fails, so the native opens these tests inspect really exist.
+STARVED = UnifiedRouterOptions(maximum_expansions=100)
 
 
 @pytest.mark.parametrize("renamed", (False, True))
@@ -53,8 +58,7 @@ def test_real_native_ordinary_opens_report_non_zone_routing_scope(renamed, with_
             analytical_iterations=0, refinement_passes=0, escape_spacing_passes=0,
             fixed_references=frozenset(p.reference for p in poses)),
         feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
-        fanout_options=FanoutOptions())
-    assert initial.package_access.ready
+        fanout_options=FanoutOptions(), unified_options=STARVED)
     assert not next(item for item in initial.detailed.nets if item.net == signal).connected
     result = improve_filled_copper(initial, kicad_cli=cli)
     assert result.board == initial.board and result.pipeline == initial and not result.trials
@@ -84,8 +88,8 @@ def test_known_opposite_surface_zone_opens_are_not_unknown_objects(renamed):
         zones=(CopperZone("two-surface-fill", net, (CopperLayer.FRONT, CopperLayer.BACK),
             rectangle(1, 1, 19, 11), pad_connection=ZoneConnection.SOLID,
             island_policy=IslandPolicy.REMOVE_ALL, minimum_island_area_nm2=None),))
-    initial = pipeline(board)
-    assert initial.package_access.ready
+    initial = pipeline(board, unified_options=STARVED)
+    assert not initial.board.vias and not initial.detailed.nets[0].connected
     result = improve_filled_copper(initial, kicad_cli=cli)
     assert result.board == initial.board and result.pipeline == initial and not result.trials
     assert not result.verification.passed and result.verification.unconnected_count

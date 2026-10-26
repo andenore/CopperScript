@@ -70,6 +70,32 @@ def test_reused_placement_finishes_and_records_provenance(stopped):
     assert reuse["final_candidate"].startswith(reuse["candidate"])
 
 
+def _with_retired_field(source, target, value):
+    """Rewrite a placement checkpoint as main wrote it before power areas were removed."""
+    import hashlib
+    document = json.loads(source.read_text())
+    document["value"]["fields"]["power_area_plan"] = value
+    body = json.dumps(document["value"], sort_keys=True, separators=(",", ":"))
+    document["content_digest"] = "sha256:" + hashlib.sha256(body.encode()).hexdigest()
+    target.write_text(json.dumps(document))
+    return target
+
+
+def test_checkpoints_from_before_the_legacy_router_removal_still_load(stopped):
+    from pcbir.state_codec import StateError, load_state
+    tmp_path, _, _ = stopped
+    saved = tmp_path / "ck" / "placement.state.json"
+    older = _with_retired_field(saved, tmp_path / "older.state.json", None)
+    assert load_state(older) == load_state(saved)
+    out, result = _route(tmp_path, "r-older", "--reuse-placement", str(older))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Reusing placement" in result.stdout
+    # A non-empty power plan depended on the removed stage: refuse it.
+    planned = _with_retired_field(saved, tmp_path / "planned.state.json", {"$tuple": []})
+    with pytest.raises(StateError, match="power_area_plan"):
+        load_state(planned)
+
+
 def test_reuse_with_other_options_is_refused_with_an_error_record(stopped):
     tmp_path, _, _ = stopped
     out, result = _route(tmp_path, "r3", "--reuse-placement", str(tmp_path / "ck" / "placement.state.json"),

@@ -29,6 +29,19 @@ from typing import Any, Mapping
 STATE_SCHEMA = "copperscript.state/v1"
 _ALLOWED_PREFIX = "pcbir"
 
+# Fields removed with the legacy router (2026-10-26), with the value states
+# saved on the unified path always carried. Older states still load.
+_RETIRED_FIELDS: dict[str, dict[str, Any]] = {
+    "pcbir.routeflow:PlacementRoutingResult": {"power_area_plan": None},
+    "pcbir.fanout:FanoutResult": {"released_exit_retry": None},
+    "pcbir.support_patterns:SupportPlacementResult": {"power_trials": (), "power_preparation": None},
+    "pcbir.flow:RoutingPipelineResult": {
+        "fanout": None, "detailed_feedback_trials": 0, "critical_feedback": None,
+        "package_access": None, "power_area_plan": None, "power_area_status": "disabled",
+        "power_area_options": None, "power_preparation": None,
+        "power_preparation_validation": None, "power_native_verifier": None},
+}
+
 
 class StateError(ValueError):
     pass
@@ -73,10 +86,17 @@ def decode(value: Any) -> Any:
         if not is_dataclass(cls):
             raise StateError(f"{value['$type']} is not a dataclass")
         allowed = {f.name for f in fields(cls) if f.init}
-        unknown = set(value["fields"]) - allowed
+        retired = _RETIRED_FIELDS.get(value["$type"], {})
+        items = {name: decode(item) for name, item in value["fields"].items()}
+        # A field removed with its feature loads only while it still holds the
+        # default it always had on the remaining path; any other value means
+        # the state depended on the removed behaviour.
+        items = {name: item for name, item in items.items()
+                 if not (name not in allowed and name in retired and item == retired[name])}
+        unknown = set(items) - allowed
         if unknown:
             raise StateError(f"{value['$type']} has no init field(s) {sorted(unknown)}")
-        return cls(**{name: decode(item) for name, item in value["fields"].items()})
+        return cls(**items)
     if "$enum" in value:
         cls = _resolve(value["$enum"])
         if not issubclass(cls, enum.Enum):

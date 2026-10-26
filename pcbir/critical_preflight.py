@@ -122,15 +122,21 @@ def main(argv: list[str] | None = None) -> int:
         group_started = {}
 
         def critical_progress(event, nets, result):
+            # Events come in started/finished pairs per group; a cohort owner
+            # rejected by its cohort gets one retry_started/retry_finished pair.
             key = ",".join(nets)
-            if event == "started":
+            started_event = event in {"started", "retry_started"}
+            if started_event:
                 group_started[key] = perf_counter()
-                progress.append({"nets": list(nets), "state": "running"})
+                progress.append({"nets": list(nets), "state": "running",
+                                 **({"retry": True} if event == "retry_started" else {})})
             else:
-                progress[-1].update(state="finished", seconds=perf_counter() - group_started[key],
-                                    result=critical_net_document(result))
+                entry = next(item for item in reversed(progress)
+                             if item["nets"] == list(nets) and item["state"] == "running")
+                entry.update(state="finished", seconds=perf_counter() - group_started[key],
+                             result=critical_net_document(result))
             report["critical_progress"] = progress
-            checkpoint("critical_group_running" if event == "started" else "critical_group_complete")
+            checkpoint("critical_group_running" if started_event else "critical_group_complete")
             print(f"  {key}: {event}", flush=True)
 
         critical = route_critical_nets(placement.board, placement.global_route, on_progress=critical_progress)

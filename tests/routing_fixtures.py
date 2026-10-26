@@ -24,8 +24,8 @@ def hard_findings(board):
         {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"})
 
 
-def pipeline(board, *, movable=(), plane_options=None):
-    return run_routing_pipeline(board,
+def pipeline(board, *, movable=(), plane_options=None, unified_options=None):
+    return run_routing_pipeline(board, unified_options=unified_options,
         placement_options=PlacementPlannerOptions(candidate_count=1,
             analytical_iterations=0, refinement_passes=0, escape_spacing_passes=0,
             fixed_references=frozenset(p.reference for p in board.placements
