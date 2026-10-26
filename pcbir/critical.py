@@ -476,8 +476,12 @@ def route_critical_nets(
         from .plane import stitch_zone_pads
         if global_route.placement_fingerprint != _placement_fingerprint(board):
             raise ValueError("plane-contact critical guides are stale")
+        # The options' keepouts (pair launch corridors beyond macro ports)
+        # bind the stitch only; the pairs route without them.
         plane_reservations = stitch_zone_pads(
-            replace(board, tracks=tuple(tracks), vias=tuple(vias)), plane_stitch_options)
+            replace(board, tracks=tuple(tracks), vias=tuple(vias),
+                    copper_keepouts=(*board.copper_keepouts, *plane_stitch_options.keepouts)),
+            plane_stitch_options)
         tracks, vias = list(plane_reservations.board.tracks), list(plane_reservations.board.vias)
     # A successful generated single may coexist with failed sibling groups.
     # Donor ownership is checked against its original prefix; each candidate is

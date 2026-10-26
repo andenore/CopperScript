@@ -59,8 +59,13 @@ class PlaneStitchOptions:
     # (a via, or a surface path to an already connected same-net pad or via).
     # Used after routing, when a later trace may have walled a pad off.
     require_explicit: bool = False
+    # Keepouts that bind this stitch only, never the board: the launch
+    # corridors beyond macro ports, which a critical pair needs for its own
+    # transition after the stitch has prepared its return contacts.
+    keepouts: tuple[CopperKeepout, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "keepouts", tuple(self.keepouts))
         if self.only_pads is not None:
             object.__setattr__(self, "only_pads", frozenset(self.only_pads))
         if self.preferred_ground_pads is not None:

@@ -64,6 +64,17 @@ nothing is board-specific and nothing relaxes a declared rule.
   by the capacitor pad under it. Both passes now use the stage's options,
   and the late pass reports what it connected and what stays pending with
   the reason (`bypass_completion` `finished`).
+- **The return stitch keeps out of the pair launch corridors.** The ledger
+  and `copper view` on run C's retry pass showed what walls USB_TX1_IC in:
+  not another pair's copper (every rip-up left the launch at 0 states, and
+  without the connector-side TX1 pair the search exhausts even 60,000) but
+  the GND return vias the critical stage prepares before the pairs route
+  (`stitch_zone_pads` on every GND pad of a pair with `require_return_vias`),
+  three of which land 0.9–1.1 mm beyond the TX1_IC ports with their B.Cu
+  stems from the capacitors' GND pads, exactly on the pair's transition
+  sites. The macro port halos (`_macro_port_halos`) now bind that stitch
+  too (`PlaneStitchOptions.keepouts`, through
+  `critical_return_plane_options`); the pairs still route without them.
 
 Bounded CopperProbe runs through the critical stage (fresh placement): the
 critical stage now leaves only USB_TX1_IC open (two pairs before), with FB

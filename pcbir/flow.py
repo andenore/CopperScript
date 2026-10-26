@@ -770,7 +770,7 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, package
         return source, bypass_accesses
     source, bypass_accesses = critical_inputs(reserved[2] if reserved else ())
     held_as_copper = bypass_accesses is not None
-    return_options = (critical_return_plane_options(source, plane_stitch_options)
+    return_options = (critical_return_plane_options(source, plane_stitch_options, halos)
                       if unified_options is not None else None)
     if on_stage is not None:
         on_stage("critical-inputs", {"board": source, "global_route": placement.global_route,
@@ -1093,12 +1093,15 @@ def _unified_profile_review(detailed, global_route, drc):
         global_route.routing_fingerprint, detailed.routing_fingerprint)
 
 
-def critical_return_plane_options(board, options):
+def critical_return_plane_options(board, options, keepouts=()):
     """Prepare declared return contacts before a critical search needs them.
 
     Respect the caller's early-contact opt-out and pad selection. The critical
     router owns this freshly generated prefix separately from ordinary escapes.
     Zone outlines remain intent, not evidence of actual filled connectivity.
+    ``keepouts`` (the macro port halos) bind the stitch only: a return via
+    for one pair must not take the launch corridor of another pair's ports
+    (CopperProbe TX1_IC, walled in by the stitch vias of nearby capacitors).
     """
     if options is None:
         return None
@@ -1108,7 +1111,7 @@ def critical_return_plane_options(board, options):
     pads = frozenset(p for net in board.nets if net.name in returns for p in net.pads)
     if options.only_pads is not None:
         pads &= options.only_pads
-    return replace(options, only_pads=pads) if pads else None
+    return replace(options, only_pads=pads, keepouts=(*options.keepouts, *keepouts)) if pads else None
 
 
 def ordinary_escape_retry_plan(planned, kept):

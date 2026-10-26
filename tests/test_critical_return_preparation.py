@@ -55,6 +55,36 @@ def test_required_returns_are_prepared_before_critical_routing(early, tmp_path):
         assert result.critical.board.copper_keepouts == board.copper_keepouts
 
 
+def test_return_preparation_keeps_out_of_the_pair_launch_corridors():
+    from pcbir.plane import stitch_zone_pads
+    from pcbir.critical import route_critical_nets
+    from pcbir import route_global
+    board=fixture()
+    gnd=[p for p in board.nets if p.name=='GND'][0].pads
+    def rectangle(x0,y0,x1,y1):
+        return PolygonWithHoles(PolygonRing(tuple(Point.mm(x,y) for x,y in ((x0,y0),(x1,y0),(x1,y1),(x0,y1)))))
+    # A corridor west of the first GND pad (at 6,15), where the free stitch
+    # puts its via (5.5,14.5), on every layer: the stitch may not use it.
+    corridor=CopperKeepout('port-halo-0',tuple(board.stackup.copper_layers),rectangle(4,13,5.8,17),
+                           block_tracks=True,block_vias=True,block_zones=False)
+    plain=critical_return_plane_options(board,PlaneStitchOptions())
+    bound=critical_return_plane_options(board,PlaneStitchOptions(),(corridor,))
+    assert plain.keepouts==() and bound.keepouts==(corridor,) and bound.only_pads==plain.only_pads
+    inside=lambda v: 4e6<=v.position.x_nm<=5.8e6 and 13e6<=v.position.y_nm<=17e6
+    near=lambda v: abs(v.position.x_nm-6e6)<=1.5e6 and abs(v.position.y_nm-15e6)<=1.5e6
+    free=stitch_zone_pads(board,plain)
+    assert any(inside(v) for v in free.board.vias if v.net=='GND')
+    kept=stitch_zone_pads(replace(board,copper_keepouts=(*board.copper_keepouts,*bound.keepouts)),bound)
+    assert not any(inside(v) for v in kept.board.vias if v.net=='GND')
+    assert any(near(v) and not inside(v) for v in kept.board.vias if v.net=='GND')
+    # Through the critical stage the keepouts bind the stitch only: the
+    # routed board carries none of them.
+    routed=route_critical_nets(board,route_global(board),plane_stitch_options=bound)
+    assert not any(inside(v) for v in routed.board.vias if v.net=='GND')
+    assert routed.board.copper_keepouts==board.copper_keepouts
+    assert next(n for n in routed.nets if n.nets==('DATA',)).connected
+
+
 def test_return_preparation_respects_requested_pads_and_declared_planes():
     board=fixture()
     assert critical_return_plane_options(board,None) is None
