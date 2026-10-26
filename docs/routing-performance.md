@@ -103,6 +103,17 @@ on one machine, so their times are inflated against the baseline's.
 | A: fixes, original board | 6 / 237 | 5 | 2 (GND N4/N6) | 331 | 2,748 mm | 7 | 3 (one adopted) | 11,874 s |
 | B: fixes, relaxed pins, fresh placement | 8 / 237 | 7 | 2 (GND N4/N6) | 321 | 2,677 mm | 4 | 4 (two adopted) | 14,789 s (2,615 s placing) |
 | C: B plus the bypass swap, B's placement | 7 / 237 | 6 | 2 (GND N4/N6) | 343 | 2,766 mm | 8 | 4 (two adopted) | 9,157 s (alone on the machine) |
+| E: C plus the late bypass pass and the stitch corridors | **6 / 237** | 4 | 2 (GND N4/N6) | 321 | 2,670 mm | 7 | 4 (two adopted) | 9,549 s (with the test suite) |
+
+Run E (`d14d221`, B's placement) is the first full route in which **every
+critical group connects**: USB_TX1_IC on the first pass (3,257 states),
+the retry pass closing ADC_DCO, RX1, RX2 and the connector-side TX1. The
+late bypass pass connects 5 of the 8 links pending at planning; the three
+left (C_FX10_C7, J3, M8) have their bounded supply/return candidates
+exhausted, the balls under their own capacitors. The four open signal nets
+are the detailed router's: ADC_OVR (E1) and SWDIO (K9) "no path to the
+remaining pad group" (the outer-ring exits of E9), ACQ_EN blocked by NEG_FB
+on F.Cu and FX_V33 by ADC_OE/FX_VBUS on In3 at the exact commit check.
 
 Run C (`ed74b95`, same placement as B, so comparable net by net) shows what
 the swap buys and costs. Planning: 0 reservations released (58), 4 bypass
