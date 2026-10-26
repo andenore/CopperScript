@@ -82,6 +82,19 @@ nothing is board-specific and nothing relaxes a declared rule.
   stitch: **every critical group connects**, USB_TX1_IC in 6,982 states
   within its skew budget, and the pass takes 922 s instead of 2,283 s (no
   rip-up attempts needed).
+- **Promised exits are copper for the ordinary stage.** The escapes planned
+  before critical routing were only keepouts: `_release_escape_masks`
+  dropped them before ordinary routing and the unified stage's own fanout
+  found exits again on a board the critical copper, bypasses, plane contacts
+  and BGA dogbones had filled meanwhile. On run E that left ADC_OVR's E1
+  without any exit (its planned dogbone site now under a D18 track, its
+  surface boxed by ADC_D4's and ADC_D9's new stubs), although the planning
+  stage had sited every ball. The planned tracks and vias now join the
+  ordinary board piece by piece, exact-checked
+  (`UnifiedRouterOptions.planned_escapes_as_copper`, on by default; the
+  `ordinary_escapes` `joined` event counts the pieces kept and dropped),
+  and the stage's fanout, run with the same options, reuses them as the
+  pads' accesses instead of planning new ones.
 
 Bounded CopperProbe runs through the critical stage (fresh placement): the
 critical stage now leaves only USB_TX1_IC open (two pairs before), with FB

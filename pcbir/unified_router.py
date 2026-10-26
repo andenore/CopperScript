@@ -207,6 +207,12 @@ class UnifiedRouterOptions:
     # Opt-in: convert only endangered complete ordinary escape groups to real
     # prefix copper when a critical retry would release their temporary masks.
     retain_escape_copper: bool = False
+    # The escapes planned before critical routing (reserved as keepouts while
+    # critical nets route) join the board as the nets' own copper when the
+    # ordinary stage starts, piece by piece and exact-checked, instead of
+    # being dropped for the stage's fanout to find again on a board the
+    # critical copper, bypasses and plane contacts have filled meanwhile.
+    planned_escapes_as_copper: bool = True
     # commit/via options
     # One exact clearance index per route_unified call: commits add accepted
     # copper to it, repair rounds and the pour re-check rip nets out of it

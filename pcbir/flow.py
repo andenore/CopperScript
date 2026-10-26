@@ -431,7 +431,8 @@ def run_routing_pipeline(
         deferred_zones = (frozenset(deferred_zone_nets(pre_detailed))
                           if detailed_options.defer_zone_nets else frozenset())
     critical, plane_stitch, fanout, pre_detailed = _release_escape_masks(
-        reserved, critical, plane_stitch, fanout, pre_detailed)
+        reserved, critical, plane_stitch, fanout, pre_detailed, unified_options=unified_options,
+        on_progress=on_progress)
     detailed, drc, duplicate_stitch = _route_ordinary_stage(
         route_ordinary, pre_detailed, placement.global_route, detailed_options, fanout,
         drc_policy=drc_policy, routing_nets=routing_nets, on_progress=on_progress)
@@ -487,7 +488,8 @@ def run_routing_pipeline(
             trial_deferred = (frozenset(deferred_zone_nets(trial_pre))
                               if detailed_options.defer_zone_nets else frozenset())
             trial_critical, trial_stitch, _, trial_pre = _release_escape_masks(
-                trial_reserved, trial_critical, trial_stitch, None, trial_pre)
+                trial_reserved, trial_critical, trial_stitch, None, trial_pre, unified_options=unified_options,
+                on_progress=on_progress)
             trial_detailed, trial_drc, trial_duplicate = _route_ordinary_stage(
                 trial_route, trial_pre, trial_global, detailed_options, None,
                 drc_policy=drc_policy, routing_nets=None, on_progress=on_progress)
@@ -1009,8 +1011,16 @@ def _complete_critical_stage(critical, reserved, held, held_as_copper, *, access
     return critical, plane_stitch
 
 
-def _release_escape_masks(reserved, critical, plane_stitch, fanout, pre_detailed):
-    """Drop the temporary escape-reservation keepouts before ordinary routing."""
+def _release_escape_masks(reserved, critical, plane_stitch, fanout, pre_detailed, *, unified_options=None,
+                          on_progress=None):
+    """Drop the temporary escape-reservation keepouts before ordinary routing.
+
+    With ``unified_options.planned_escapes_as_copper`` the promised exits
+    join the ordinary stage's board as copper (each piece exact-checked, a
+    piece the preparation steps made illegal is left out and reported):
+    the stage's fanout then keeps them instead of finding exits again on a
+    board that critical copper, bypasses and plane contacts have filled.
+    """
     if reserved is None:
         return critical, plane_stitch, fanout, pre_detailed
     # Keep promised exits through every preparation step, including plane
@@ -1026,6 +1036,13 @@ def _release_escape_masks(reserved, critical, plane_stitch, fanout, pre_detailed
     if fanout is not None:
         fanout = replace(fanout,board=release_masks(fanout.board))
     pre_detailed = release_masks(pre_detailed)
+    if getattr(unified_options, "planned_escapes_as_copper", False) and (reserved[0] or reserved[1]):
+        joined = _join_reserved_copper(pre_detailed, reserved[0], reserved[1], ())
+        kept_tracks = len(joined.tracks) - len(pre_detailed.tracks)
+        kept_vias = len(joined.vias) - len(pre_detailed.vias)
+        emit(on_progress, "ordinary_escapes", "joined", tracks=kept_tracks, vias=kept_vias,
+             dropped_tracks=len(reserved[0]) - kept_tracks, dropped_vias=len(reserved[1]) - kept_vias)
+        pre_detailed = joined
     return critical, plane_stitch, fanout, pre_detailed
 
 
