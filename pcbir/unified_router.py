@@ -838,7 +838,11 @@ class _Router:
                     or verified_routing_access(board, pad, name, access, self.clearance) is None):
                 raise ValueError(f"required routing access is stale or invalid: {pad}")
             self.required_accesses[pad] = access
+        # Exact local-escape segment checks, shared by every pin's mazes while
+        # the specs are built: the clearance index does not change meanwhile.
+        self._segment_cache: dict | None = {}
         self.specs = [spec for spec in (self._spec(net) for net in nets) if spec is not None]
+        self._segment_cache = None
         # Through-via proposals must price foreign tracks on every barrel layer.
         self._candidate_via_size = max([board.rules.default_via_size_nm, *(s.via_size for s in self.specs)])
         self._candidate_via_drill = max([board.rules.default_via_drill_nm, *(s.via_drill for s in self.specs)])
@@ -1539,7 +1543,8 @@ class _Router:
             path = local_access_path(self.board, self.clearance, spec.name, position, target,
                                      g.layers[layer], width, step_nm=options.local_escape_step_nm,
                                      detour_nm=options.local_escape_detour_nm,
-                                     maximum_states=options.local_escape_states)
+                                     maximum_states=options.local_escape_states,
+                                     segment_cache=self._segment_cache)
             if not path:
                 misses += 1
                 continue

@@ -27,13 +27,22 @@ def local_access_path(
     start: Point, end: Point, layer: CopperLayer, width_nm: int,
     *, step_nm: int, detour_nm: int, maximum_states: int = 1200,
     stats: LocalAccessStats | None = None,
+    segment_cache: dict | None = None,
 ) -> tuple[TrackSegment, ...] | None:
-    """Find an exact-clearance, eight-direction path in a bounded local window."""
+    """Find an exact-clearance, eight-direction path in a bounded local window.
+
+    ``segment_cache`` memoises exact segment checks across calls. The caller
+    owns it and must drop it whenever ``clearance`` gains or loses copper.
+    """
+    if segment_cache is not None:
+        legal = _cached_legal_segment(segment_cache)
+    else:
+        legal = _legal_segment
     if start == end:
         if stats is not None:
             stats.outcome = "same_point"
         return ()
-    if _legal_segment(board, clearance, net, start, end, layer, width_nm):
+    if legal(board, clearance, net, start, end, layer, width_nm):
         if stats is not None:
             stats.outcome = "direct"
         return clearance.route_pieces(net, start, end, width_nm, layer)
@@ -68,7 +77,7 @@ def local_access_path(
                 continue
             neighbor = (nx, ny)
             point = Point(xs[nx], ys[ny])
-            if not _legal_segment(board, clearance, net, current, point,
+            if not legal(board, clearance, net, current, point,
                                   layer, width_nm):
                 continue
             candidate_cost = cost + _distance(current, point)
@@ -115,6 +124,17 @@ def _distance(first: Point, second: Point) -> int:
 def _collinear(first: Point, middle: Point, last: Point) -> bool:
     return ((middle.x_nm - first.x_nm) * (last.y_nm - middle.y_nm)
             == (middle.y_nm - first.y_nm) * (last.x_nm - middle.x_nm))
+
+
+def _cached_legal_segment(cache: dict):
+    """``_legal_segment`` memoised in ``cache`` (same board and index state)."""
+    def legal(board, clearance, net, start, end, layer, width_nm):
+        key = (net, layer, width_nm, start, end)
+        result = cache.get(key)
+        if result is None:
+            result = cache[key] = _legal_segment(board, clearance, net, start, end, layer, width_nm)
+        return result
+    return legal
 
 
 def _legal_segment(

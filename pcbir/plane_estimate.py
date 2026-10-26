@@ -18,7 +18,27 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from ._cache import IdentityKey
 from .physical import CopperLayer, PadKind, PhysicalBoard, ZoneConnection, nm_from_mm
+
+# Inside masks of outline, cutout, zone and keepout polygons on one raster.
+# They depend only on the (immutable) vertex tuple and the raster, which the
+# repeated estimates of one routing run share; copper is never cached.
+_MASKS: dict = {}
+_MASK_LIMIT = 16
+
+
+def _inside_mask(vertices, raster, px, py) -> np.ndarray:
+    """Read-only ``_polygon_inside(vertices, px, py)``, memoised per raster."""
+    key = (IdentityKey(vertices), raster)
+    mask = _MASKS.get(key)
+    if mask is None:
+        from .unified_router import _polygon_inside
+        if len(_MASKS) >= _MASK_LIMIT:
+            _MASKS.clear()
+        mask = _MASKS[key] = _polygon_inside(vertices, px, py)
+        mask.flags.writeable = False
+    return mask
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +104,7 @@ def _distance_to_spine(spine, px, py):
 def estimate_plane_connectivity(board: PhysicalBoard, *, pitch_nm: int = nm_from_mm("0.05")) -> PlaneEstimate:
     from .drc import explicit_copper_connectivity, non_plated_holes, placed_pad_shape
     from .placement import transformed_local_point
-    from .unified_router import _polygon_inside, _segment_distance
+    from .unified_router import _segment_distance
 
     zones = tuple(board.zones)
     zone_nets = {zone.net for zone in zones}
@@ -98,9 +118,10 @@ def estimate_plane_connectivity(board: PhysicalBoard, *, pitch_nm: int = nm_from
     xs = x0 + pitch_nm * (np.arange(nx) + 0.5)
     ys = y0 + pitch_nm * (np.arange(ny) + 0.5)
     px, py = np.meshgrid(xs, ys)
-    material = _polygon_inside(vertices, px, py)
+    raster = (x0, y0, nx, ny, pitch_nm)
+    material = _inside_mask(vertices, raster, px, py).copy()
     for cutout in board.outline.cutouts:
-        material &= ~_polygon_inside(cutout.vertices, px, py)
+        material &= ~_inside_mask(cutout.vertices, raster, px, py)
     minimum_clearance = board.rules.minimum_clearance_nm
     half = pitch_nm / 2
     # Cells at least ``minimum_clearance + half`` from every outline edge. A
@@ -185,9 +206,9 @@ def estimate_plane_connectivity(board: PhysicalBoard, *, pitch_nm: int = nm_from
     unfilled = []
     for zone in sorted(zones, key=lambda z: (-z.priority, z.id)):
         clearance = max(zone.clearance_nm or 0, minimum_clearance)
-        outer = _polygon_inside(zone.outline.outer.vertices, px, py)
+        outer = _inside_mask(zone.outline.outer.vertices, raster, px, py).copy()
         for hole in zone.outline.holes:
-            outer &= ~_polygon_inside(hole.vertices, px, py)
+            outer &= ~_inside_mask(hole.vertices, raster, px, py)
         for layer in zone.layers:
             fill = outer & material & edge_ok
             for identity, layers, spine, radius, pad_kind in objects:
@@ -209,11 +230,11 @@ def estimate_plane_connectivity(board: PhysicalBoard, *, pitch_nm: int = nm_from
                         hole.spine, px[j0:j1 + 1, i0:i1 + 1], py[j0:j1 + 1, i0:i1 + 1]) < reach)
             for other in zones:
                 if other.net != zone.net and other.priority > zone.priority and layer in other.layers:
-                    region = _polygon_inside(other.outline.outer.vertices, px, py)
+                    region = _inside_mask(other.outline.outer.vertices, raster, px, py)
                     fill &= ~region
             for keepout in board.copper_keepouts:
                 if keepout.block_zones and layer in keepout.layers:
-                    fill &= ~_polygon_inside(keepout.outline.outer.vertices, px, py)
+                    fill &= ~_inside_mask(keepout.outline.outer.vertices, raster, px, py)
             if not fill.any():
                 unfilled.append(f"{zone.id}@{layer.value}")
                 continue
