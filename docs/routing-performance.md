@@ -63,7 +63,10 @@ nothing is board-specific and nothing relaxes a declared rule.
   detailed router, which routes the rail to the ball itself and is rejected
   by the capacitor pad under it. Both passes now use the stage's options,
   and the late pass reports what it connected and what stays pending with
-  the reason (`bypass_completion` `finished`).
+  the reason (`bypass_completion` `finished`). With the maze launches at
+  planning, CopperProbe's bypass links pending after planning fall from 14
+  (run C) to 8, with two swaps still refused (N13 and M13; D12/E12 with
+  two ADC pins).
 - **The return stitch keeps out of the pair launch corridors.** The ledger
   and `copper view` on run C's retry pass showed what walls USB_TX1_IC in:
   not another pair's copper (every rip-up left the launch at 0 states, and
