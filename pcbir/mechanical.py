@@ -154,9 +154,10 @@ def shape_in_outline(shape: RoundedConvexShape, outline: BoardOutline,
         raise ValueError("mechanical query clearance must be nonnegative")
     required = shape.radius_nm + clearance_nm
     circle = outline.circular_boundary
+    box = shape.bounds  # spine bounds already expanded by radius_nm
     if circle is None and _box_in_interior(
-            outline, min(p.x_nm for p in shape.spine) - required, min(p.y_nm for p in shape.spine) - required,
-            max(p.x_nm for p in shape.spine) + required, max(p.y_nm for p in shape.spine) + required):
+            outline, box.min_x - clearance_nm, box.min_y - clearance_nm,
+            box.max_x + clearance_nm, box.max_y + clearance_nm):
         return all(shapes_clear(shape, RoundedConvexShape(cutout.vertices), max(1, clearance_nm))
                    for cutout in outline.cutouts)
     if circle is not None:

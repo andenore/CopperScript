@@ -10,7 +10,6 @@ from __future__ import annotations
 from heapq import heappop, heappush
 from dataclasses import dataclass
 
-from .geometry import point_in_polygon
 from .physical import CopperLayer, PhysicalBoard, Point, TrackSegment
 from .routing_clearance import RoutingClearanceIndex
 
@@ -28,13 +27,22 @@ def local_access_path(
     start: Point, end: Point, layer: CopperLayer, width_nm: int,
     *, step_nm: int, detour_nm: int, maximum_states: int = 1200,
     stats: LocalAccessStats | None = None,
+    segment_cache: dict | None = None,
 ) -> tuple[TrackSegment, ...] | None:
-    """Find an exact-clearance, eight-direction path in a bounded local window."""
+    """Find an exact-clearance, eight-direction path in a bounded local window.
+
+    ``segment_cache`` memoises exact segment checks across calls. The caller
+    owns it and must drop it whenever ``clearance`` gains or loses copper.
+    """
+    if segment_cache is not None:
+        legal = _cached_legal_segment(segment_cache)
+    else:
+        legal = _legal_segment
     if start == end:
         if stats is not None:
             stats.outcome = "same_point"
         return ()
-    if _legal_segment(board, clearance, net, start, end, layer, width_nm):
+    if legal(board, clearance, net, start, end, layer, width_nm):
         if stats is not None:
             stats.outcome = "direct"
         return clearance.route_pieces(net, start, end, width_nm, layer)
@@ -69,7 +77,7 @@ def local_access_path(
                 continue
             neighbor = (nx, ny)
             point = Point(xs[nx], ys[ny])
-            if not _legal_segment(board, clearance, net, current, point,
+            if not legal(board, clearance, net, current, point,
                                   layer, width_nm):
                 continue
             candidate_cost = cost + _distance(current, point)
@@ -118,6 +126,17 @@ def _collinear(first: Point, middle: Point, last: Point) -> bool:
             == (middle.y_nm - first.y_nm) * (last.x_nm - middle.x_nm))
 
 
+def _cached_legal_segment(cache: dict):
+    """``_legal_segment`` memoised in ``cache`` (same board and index state)."""
+    def legal(board, clearance, net, start, end, layer, width_nm):
+        key = (net, layer, width_nm, start, end)
+        result = cache.get(key)
+        if result is None:
+            result = cache[key] = _legal_segment(board, clearance, net, start, end, layer, width_nm)
+        return result
+    return legal
+
+
 def _legal_segment(
     board: PhysicalBoard, clearance: RoutingClearanceIndex, net: str,
     start: Point, end: Point, layer: CopperLayer, width_nm: int,
@@ -130,8 +149,7 @@ def _legal_segment(
     # obeys the same eight-direction contract as every maze edge.
     if dx and dy and dx != dy:
         return False
-    midpoint = Point((start.x_nm + end.x_nm) // 2,
-                     (start.y_nm + end.y_nm) // 2)
     # An ordinary breakout net may neck down next to its lands (plan R1).
-    return (point_in_polygon(midpoint, board.outline.vertices)
-            and clearance.can_route(net, start, end, width_nm, layer))
+    # can_route keeps the whole capsule inside the outline (shape_in_board),
+    # which implies the midpoint test this function used to run first.
+    return clearance.can_route(net, start, end, width_nm, layer)

@@ -9,7 +9,7 @@ from collections import Counter
 from dataclasses import replace
 
 from .geometry import (RoundedConvexShape, point_on_segment,
-                       shapes_clear)
+                       shapes_clear, circle_inside_shape)
 from .physical import Point, RouteKind
 
 
@@ -29,7 +29,7 @@ def _junctions(a, b, c, d):
     return {p} if point_on_segment(p,a,b) and point_on_segment(p,c,d) else None
 
 
-def native_stub_candidate(board, evidence, protected, *, diagnostics=None):
+def native_stub_candidate(board, evidence, protected, *, protected_vias=None, diagnostics=None):
     """Return an exact copper-subset trial, never acceptance or fill evidence."""
     from .plane_verify import native_object_map
     from .hard_macros import resolved_macro_geometry
@@ -46,23 +46,37 @@ def native_stub_candidate(board, evidence, protected, *, diagnostics=None):
     findings = evidence.native_findings
     if (not evidence.matches(board) or evidence.unconnected_count or evidence.island_count
             or not findings or len(findings)>64 or len(findings) != evidence.other_violation_count
-            or any(f.category != 'violation' or f.type != 'track_dangling' or len(f.items)!=1
+            or any(f.category != 'violation' or f.type not in {'track_dangling', 'via_dangling'} or len(f.items)!=1
                    for f in findings)):
         return reject('native_evidence_not_eligible')
     fixed = protected.copy()
+    # Existing track-only callers cannot implicitly authorize via removal.
+    fixed_vias = Counter(board.vias) if protected_vias is None else protected_vias.copy()
+    from .pad_via_arrays import via_in_pad_array_vias
+    fixed_vias |= Counter(via_in_pad_array_vias(board))
     for macro in board.hard_macros:
         if macro.cluster in board.materialized_macros:
-            fixed |= Counter(resolved_macro_geometry(board,macro)[0])
+            geometry = resolved_macro_geometry(board,macro)
+            fixed |= Counter(geometry[0])
+            fixed_vias |= Counter(geometry[1])
     critical = {r.net for r in board.net_routing_rules if r.kind is not RouteKind.GENERAL}
-    indices = set()
+    indices, via_indices = set(), set()
     for f in findings:
         item=f.items[0]
-        if (objects.get(item.uuid)!=item or item.kind!='segment' or item.index is None
+        kind = 'segment' if f.type == 'track_dangling' else 'via'
+        if (objects.get(item.uuid)!=item or item.kind!=kind or item.index is None
                 or item.net in critical):
             return reject('unbound_or_critical_item', uuid=item.uuid)
-        indices.add(item.index)
-    if len(indices)!=len(findings):
+        (indices if kind == 'segment' else via_indices).add(item.index)
+    if len(indices)+len(via_indices)!=len(findings):
         return reject('duplicate_native_item')
+    for index in sorted(via_indices):
+        via = board.vias[index]
+        if fixed_vias[via]:
+            return reject('protected_via', index=index)
+        # Plane contact semantics are outside this ordinary-via cleanup.
+        if any(zone.net == via.net for zone in board.zones):
+            return reject('declared_zone_via', index=index)
     clearance = RoutingClearanceIndex(board)
     layers = board.stackup.copper_layers
     replacements = {}
@@ -104,8 +118,19 @@ def native_stub_candidate(board, evidence, protected, *, diagnostics=None):
                 continue
             points={p for p in centres.get(land.pad_reference,())
                     if point_on_segment(p,track.start,track.end)}
-            if land.net!=track.net or not points:
+            if land.net == track.net and not points:
+                # Preserve an existing off-centre land entry only when its
+                # entire endpoint disk is inside the pad. Never guess a cut
+                # point at a grazing edge or change the pad-entry geometry.
+                points = {p for p in (track.start, track.end)
+                          if circle_inside_shape(p, (track.width_nm+1)//2, land.shape)}
+            if land.net!=track.net:
                 return reject('off_centre_pad', index=index, pad=str(land.pad_reference))
+            if not points:
+                # A grazing contact has no safe inferred trim point. Trial
+                # removal of the entire segment is allowed only if the exact
+                # pad partitions below and fresh native fill remain unchanged.
+                whole_only = True
             anchors.update(points)
         if whole_only:
             # Do not invent a cut point for a width-only junction. A full
@@ -119,12 +144,13 @@ def native_stub_candidate(board, evidence, protected, *, diagnostics=None):
         ordered=sorted(anchors,key=lambda p:(p.x_nm-track.start.x_nm)*dx+(p.y_nm-track.start.y_nm)*dy)
         replacements[index]=(None if len(ordered)==1 else replace(track,start=ordered[0],end=ordered[-1]))
     candidate=replace(board,tracks=tuple(replacements.get(i,t) for i,t in enumerate(board.tracks)
-                                         if replacements.get(i,t) is not None))
-    if candidate.tracks==board.tracks:
+                                         if replacements.get(i,t) is not None),
+                      vias=tuple(v for i,v in enumerate(board.vias) if i not in via_indices))
+    if candidate.tracks==board.tracks and candidate.vias==board.vias:
         return reject('no_removable_overhang')
     # Preserve every explicit pad partition, including partially plane-connected
     # nets. Fresh native verification separately proves all filled connections.
-    names=frozenset(board.tracks[i].net for i in indices)
+    names=frozenset([board.tracks[i].net for i in indices] + [board.vias[i].net for i in via_indices])
     before=explicit_copper_connectivity(board,only_nets=names)
     after=explicit_copper_connectivity(candidate,only_nets=names)
     for net in board.nets:

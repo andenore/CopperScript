@@ -283,20 +283,27 @@ def verify_filled_planes(
 def remove_native_dangling_tracks(
     board: PhysicalBoard, evidence: PlaneVerification, protected: Counter[TrackSegment],
     *, kicad_cli: Path,
-    artifact_directory: Path | None = None,
+    artifact_directory: Path | None = None, protected_vias: Counter | None = None, diagnostics: list | None = None,
 ) -> tuple[PhysicalBoard, PlaneVerification]:
-    """Drop only KiCad-identified ordinary dead ends when fresh refill proves safe."""
-    if (not evidence.matches(board) or evidence.unconnected_count or evidence.island_count
-            or not evidence.dangling_track_uuids
-            or len(evidence.findings) != len(evidence.dangling_track_uuids)
-            or any(not item.startswith("track_dangling:") for item in evidence.findings)):
-        return board, evidence
+    """Trim native ordinary dead ends; via removal needs explicit ownership guards."""
     from .native_stub_cleanup import native_stub_candidate
-    candidate = native_stub_candidate(board, evidence, protected)
-    if candidate is None:
-        return board, evidence
-    checked = verify_filled_planes(candidate, kicad_cli=kicad_cli, artifact_directory=artifact_directory)
-    return (candidate, checked) if checked.passed and checked.matches(candidate) else (board, evidence)
+    current, checked = board, evidence
+    # Removing a one-layer via may expose its obsolete launch leg. Keep all
+    # rounds inside one transaction: only a fully clean fresh refill commits.
+    for index in range(4):
+        candidate = native_stub_candidate(current, checked, protected,
+                                          protected_vias=protected_vias, diagnostics=diagnostics)
+        if candidate is None:
+            break
+        stage = artifact_directory / f"round-{index+1:03d}" if artifact_directory else None
+        checked = verify_filled_planes(candidate, kicad_cli=kicad_cli, artifact_directory=stage)
+        if not checked.matches(candidate):
+            break
+        if checked.passed:
+            return candidate, checked
+        current = candidate
+    return board, evidence
+
 
 
 def remove_native_dangling_copper(

@@ -22,6 +22,7 @@ from pathlib import Path
 from .run_issues import Run, RunIssue, filter_issues, find_issue, load_run, run_issues  # noqa: F401
 from .scene import Scene, scene_from_kicad_pcb, scene_from_physical  # noqa: F401
 from .state_codec import describe_state, load_state, save_state  # noqa: F401
+from .power_paths import PowerPathWidth, PowerPathWidthResult, check_power_path_widths  # noqa: F401
 from .view import Alignment, ViewRequest, align_reference, layers_in_window, render, window_around  # noqa: F401
 
 

@@ -43,7 +43,18 @@ class RoundedConvexShape:
         object.__setattr__(self, "spine", tuple(self.spine))
         if not self.spine or self.radius_nm < 0:
             raise ValueError("rounded convex shapes require a spine and non-negative radius")
-        object.__setattr__(self, "_bounds", bounds(self.spine).expanded(self.radius_nm))
+        spine, r = self.spine, self.radius_nm
+        if len(spine) == 1:
+            p = spine[0]
+            box = Bounds(p.x_nm - r, p.y_nm - r, p.x_nm + r, p.y_nm + r)
+        elif len(spine) == 2:
+            p, q = spine
+            x0, x1 = (p.x_nm, q.x_nm) if p.x_nm <= q.x_nm else (q.x_nm, p.x_nm)
+            y0, y1 = (p.y_nm, q.y_nm) if p.y_nm <= q.y_nm else (q.y_nm, p.y_nm)
+            box = Bounds(x0 - r, y0 - r, x1 + r, y1 + r)
+        else:
+            box = bounds(spine).expanded(r)
+        object.__setattr__(self, "_bounds", box)
 
     @property
     def bounds(self) -> Bounds:

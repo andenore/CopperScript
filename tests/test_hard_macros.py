@@ -821,3 +821,78 @@ def test_unified_router_uses_declared_macro_port_instead_of_internal_via(tmp_pat
         drc = json.loads(report.read_text())
         assert not drc["unconnected_items"]
         assert not [v for v in drc["violations"] if v["type"] == "track_dangling"], drc["violations"]
+
+
+@pytest.mark.parametrize("native", [False, True])
+def test_unified_branch_taps_host_copper_behind_a_macro_port(tmp_path, monkeypatch, native):
+    # Host copper already joins the port to J1 (as after a partial commit).
+    # The macro limits its own copper to the port, but the host track is
+    # public: J2 must tap it, not retrace it back to the port.
+    from collections import Counter
+    from math import hypot
+    from pcbir.routing import route_global
+    from pcbir.unified_router import route_unified, UnifiedRouterOptions
+    from pcbir.drc import run_physical_drc
+    from pcbir.route_summary import connection_summary
+    from pcbir import nm_from_mm
+    if not native:
+        import pcbir.native
+        monkeypatch.setattr(pcbir.native, "astar", lambda: None)
+    original, _, bind = fixture(tmp_path)
+    externals = (PadReference("J1", "1"), PadReference("J2", "1"))
+    source = replace(original,
+        placements=(*original.placements, Placement("J1", "test", Point.mm(10, 25)),
+                    Placement("J2", "test", Point.mm(13, 20))),
+        nets=(replace(original.nets[0], pads=(*original.nets[0].pads, *externals)),))
+    board = materialize_hard_macros(bind(input_board=source))
+    guides = route_global(board)
+    host = TrackSegment("N", Point.mm(10, 10), Point.mm(10, 25), nm_from_mm("0.2"), CopperLayer.FRONT)
+    board = replace(board, tracks=(*board.tracks, host))
+    result = route_unified(board, guides, UnifiedRouterOptions(maximum_iterations=8, commit_rounds=2))
+    summary = connection_summary(result.board, run_physical_drc(result.board))
+    assert all(n.connected for n in result.nets), result.nets
+    assert summary["signal"]["opens"] == 0
+    assert summary["drc"]["errors"] == 0
+    added = Counter(result.board.tracks) - Counter(board.tracks)
+    length = sum(hypot(t.end.x_nm - t.start.x_nm, t.end.y_nm - t.start.y_nm) for t in added.elements())
+    assert length < nm_from_mm(6), ("J2 retraced the host copper back to the port", added)
+
+
+def test_unified_routes_public_macro_port_to_remote_zone(tmp_path):
+    from pcbir.physical import CopperZone, PolygonRing, PolygonWithHoles, ZoneConnection
+    from pcbir.routing import route_global
+    from pcbir.unified_router import UnifiedRouterOptions, route_unified
+    from pcbir.plane_estimate import estimate_plane_connectivity
+
+    original, _, bind = fixture(tmp_path)
+    external = PadReference('J1', '1')
+    zone = CopperZone('remote-supply', 'N', (CopperLayer.FRONT,),
+        PolygonWithHoles(PolygonRing((Point.mm(2, 8), Point.mm(5, 8),
+                                     Point.mm(5, 12), Point.mm(2, 12)))), pad_connection=ZoneConnection.SOLID)
+    source = replace(original,
+        placements=(*original.placements, Placement('J1', 'test', Point.mm(3, 10))),
+        nets=(replace(original.nets[0], pads=(*original.nets[0].pads, external)),),
+        zones=(zone,))
+    board = materialize_hard_macros(bind(input_board=source))
+    result = route_unified(board, route_global(board),
+        UnifiedRouterOptions(maximum_iterations=8, commit_rounds=2))
+    # A zone elsewhere on this net does not prove a public macro port is fed.
+    # A valid host route may end inside the zone rather than on its other pad.
+    assert estimate_plane_connectivity(board).opens == 1
+    assert estimate_plane_connectivity(result.board).opens == 0
+    assert len(result.board.tracks) > len(board.tracks)
+    assert result.board.tracks[:len(board.tracks)] == board.tracks
+    assert result.board.vias[:len(board.vias)] == board.vias
+    cli = Path("C:/Program Files/KiCad/10.0/bin/kicad-cli.exe")
+    if cli.is_file():
+        from pcbir.backends.kicad_pcb import KiCadPcbBackend
+        from pcbir.backends.kicad_project import write_kicad_project
+        native = tmp_path / "public-port-zone.kicad_pcb"
+        write_kicad_project(KiCadPcbBackend().generate(result.board), native)
+        report = tmp_path / "public-port-zone-drc.json"
+        subprocess.run([str(cli), "pcb", "drc", "--format", "json", "--all-track-errors",
+                        "--refill-zones", "--save-board", "-o", str(report), str(native)],
+                       check=True, capture_output=True)
+        drc = json.loads(report.read_text())
+        assert not drc["unconnected_items"]
+        assert not [v for v in drc["violations"] if v["severity"] == "error" or v["type"] == "track_dangling"]

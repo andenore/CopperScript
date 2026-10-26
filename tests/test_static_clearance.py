@@ -57,15 +57,17 @@ def test_immutable_bounds_computed_once_and_copy_replace_pickle_stay_correct(mon
         calls.append(tuple(points))
         return real(points)
     monkeypatch.setattr(geometry, "bounds", counted)
-    shape = RoundedConvexShape((Point(-5, 2), Point(10, 7)), 3)
-    expected = Bounds(-8, -1, 13, 10)
+    # Point and segment spines take a direct path; a polygon spine still
+    # goes through geometry.bounds, exactly once.
+    shape = RoundedConvexShape((Point(-5, 2), Point(10, 7), Point(0, 9)), 3)
+    expected = Bounds(-8, -1, 13, 12)
     assert all(shape.bounds is shape.bounds and shape.bounds == expected for _ in range(1000))
     assert len(calls) == 1
     assert "_bounds" not in repr(shape)
     for cloned in (copy(shape), deepcopy(shape), pickle.loads(pickle.dumps(shape))):
         assert cloned == shape and hash(cloned) == hash(shape) and cloned.bounds == expected
     changed = replace(shape, radius_nm=4)
-    assert changed.bounds == Bounds(-9, -2, 14, 11) and changed != shape
+    assert changed.bounds == Bounds(-9, -2, 14, 13) and changed != shape
     assert replace(shape, spine=(Point(100, 100),)).bounds == Bounds(97, 97, 103, 103)
 
 
