@@ -47,7 +47,7 @@ def complete_late_bypasses(incumbent, original_pending, options, *, only_nets=No
     Per-link launch/site/proposal limits stay with route_decouplers and its
     public proposer. No source, area, critical, placement or ordinary reroute.
     """
-    if trigger not in {"ordinary_launches", "released_plane_contacts"}:
+    if trigger != "ordinary_launches":
         raise ValueError("unknown late bypass trigger")
     from .decoupling import route_decouplers
     from .decoupling_paths import (_budget_reason, _normal_via, _track_ok,

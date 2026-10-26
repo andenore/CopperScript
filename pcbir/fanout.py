@@ -13,7 +13,6 @@ from typing import Mapping, TYPE_CHECKING
 if TYPE_CHECKING:
     from .decoupling_paths import DecouplingCrossLayerWitness
     from .fanout_bypass_completion import LateBypassCompletionReport
-    from .released_exit_retry import ReleasedExitRetryReport
 
 from .drc import placed_pad_shape, run_physical_drc, physical_board_digest
 from .access_diagnostics import AccessDiagnostics, AccessRecorder
@@ -121,7 +120,6 @@ class FanoutResult:
     decoupling_witnesses: tuple[DecouplingCrossLayerWitness, ...] = ()
     decoupling_pending_links: tuple[tuple[DecouplingLink, str], ...] = ()
     late_bypass: LateBypassCompletionReport | None = None
-    released_exit_retry: ReleasedExitRetryReport | None = None
 
     @property
     def routing_accesses(self) -> Mapping[PadReference, Point | RoutingAccess]:
