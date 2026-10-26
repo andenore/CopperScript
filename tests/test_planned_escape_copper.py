@@ -37,7 +37,17 @@ def test_planned_escapes_join_the_ordinary_board_exact_checked() -> None:
     assert not any(k.id.startswith("escape-reserve") for k in pre.copper_keepouts)
     assert reserved[0][0] in pre.tracks and reserved[1][0] in pre.vias
     assert [d for p, e, d in events if (p, e) == ("ordinary_escapes", "joined")] == [
-        {"tracks": 1, "vias": 1, "dropped_tracks": 0, "dropped_vias": 0, "dropped_nets": []}]
+        {"tracks": 1, "vias": 1, "reused_tracks": 0, "reused_vias": 0, "dropped_tracks": 0, "dropped_vias": 0,
+         "dropped_nets": []}]
+    # A promised via another step already placed on its site is reused: no
+    # second drill at the same point.
+    events, observe = _events()
+    _, _, _, reused = _release_escape_masks(reserved, critical, None, None,
+                                            replace(masked, vias=reserved[1]),
+                                            unified_options=UnifiedRouterOptions(), on_progress=observe)
+    assert reused.vias.count(reserved[1][0]) == 1 and reserved[0][0] in reused.tracks
+    joined = next(d for p, e, d in events if (p, e) == ("ordinary_escapes", "joined"))
+    assert (joined["vias"], joined["reused_vias"], joined["dropped_vias"], joined["tracks"]) == (0, 1, 0, 1)
     # Off: the masks go and the copper stays out, as before.
     _, _, _, plain = _release_escape_masks(reserved, critical, None, None, masked,
                                            unified_options=UnifiedRouterOptions(planned_escapes_as_copper=False))

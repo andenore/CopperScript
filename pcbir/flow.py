@@ -1037,15 +1037,21 @@ def _release_escape_masks(reserved, critical, plane_stitch, fanout, pre_detailed
         fanout = replace(fanout,board=release_masks(fanout.board))
     pre_detailed = release_masks(pre_detailed)
     if getattr(unified_options, "planned_escapes_as_copper", False) and (reserved[0] or reserved[1]):
+        from .track_containment import track_is_contained
         joined = _join_reserved_copper(pre_detailed, reserved[0], reserved[1], ())
         kept_tracks = joined.tracks[len(pre_detailed.tracks):]
         kept_vias = joined.vias[len(pre_detailed.vias):]
-        dropped = sorted({item.net for item in (*reserved[0], *reserved[1])}
-                         - {item.net for item in (*kept_tracks, *kept_vias)}
-                         | {v.net for v in reserved[1] if v not in kept_vias})
+        # A piece the board already held (a dogbone another step placed on
+        # the promised site) is reused, not dropped.
+        present = {(v.net, v.position, v.from_layer, v.to_layer) for v in pre_detailed.vias}
+        reused_vias = [v for v in reserved[1] if (v.net, v.position, v.from_layer, v.to_layer) in present]
+        reused_tracks = [t for t in reserved[0] if track_is_contained(t, pre_detailed.tracks)]
+        dropped_vias = [v for v in reserved[1] if v not in kept_vias and v not in reused_vias]
+        dropped_tracks = [t for t in reserved[0] if t not in kept_tracks and t not in reused_tracks]
         emit(on_progress, "ordinary_escapes", "joined", tracks=len(kept_tracks), vias=len(kept_vias),
-             dropped_tracks=len(reserved[0]) - len(kept_tracks), dropped_vias=len(reserved[1]) - len(kept_vias),
-             dropped_nets=dropped)
+             reused_tracks=len(reused_tracks), reused_vias=len(reused_vias),
+             dropped_tracks=len(dropped_tracks), dropped_vias=len(dropped_vias),
+             dropped_nets=sorted({item.net for item in (*dropped_tracks, *dropped_vias)}))
         pre_detailed = joined
     return critical, plane_stitch, fanout, pre_detailed
 
@@ -1258,15 +1264,22 @@ def _join_reserved_copper(board, tracks, vias, keepouts):
     """
     from .routing_clearance import RoutingClearanceIndex
     temporary = {keepout.id for keepout in keepouts}
+    from .track_containment import track_is_contained
     board = replace(board, copper_keepouts=tuple(k for k in board.copper_keepouts if k.id not in temporary))
     index = RoutingClearanceIndex(board)
     kept_tracks, kept_vias = [], []
+    present = {(v.net, v.position, v.from_layer, v.to_layer) for v in board.vias}
     for via in vias:
+        if (via.net, via.position, via.from_layer, via.to_layer) in present:
+            continue  # The board already holds this exit: reuse it, no second drill.
         if index.can_via(via.net, via.position, via.size_nm, via.from_layer, via.to_layer,
                          drill_nm=via.drill_nm):
             index.add_via(via)
             kept_vias.append(via)
+            present.add((via.net, via.position, via.from_layer, via.to_layer))
     for track in tracks:
+        if track_is_contained(track, board.tracks):
+            continue
         if index.can_track(track.net, track.start, track.end, track.width_nm, track.layer):
             index.add_track(track)
             kept_tracks.append(track)
