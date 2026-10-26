@@ -1267,9 +1267,16 @@ class _Router:
             nodes = graph.pad_nodes.get(pad, ())
             root = graph.roots[nodes[0]] if nodes else f"pad:{pad.component}.{pad.pad}"
             groups.setdefault(root, []).append(pad)
-        from .hard_macros import macro_owned_pads, macro_port_layers, macro_routing_ports
+        from .hard_macros import (macro_owned_pads, macro_port_layers, macro_routing_ports,
+                                  resolved_macro_geometry)
         ports = macro_routing_ports(board, net.name)
         owned = macro_owned_pads(board) if net.name in self.zone_nets else frozenset()
+        macro_tracks, macro_vias = set(), set()
+        for macro in board.hard_macros:
+            if macro.cluster in board.materialized_macros:
+                tracks, vias, *_ = resolved_macro_geometry(board, macro)
+                macro_tracks.update(tracks)
+                macro_vias.update(vias)
         components = []
         separate: list[list] = []
         for root, members in sorted(groups.items(), key=lambda item: str(item[1][0])):
@@ -1300,6 +1307,8 @@ class _Router:
             # a pad label even after source tracks and vias join it. Reuse that
             # group's real copper regardless of the root's spelling.
             joined = set()
+            # Host copper (not a macro's own) is public along its whole length.
+            host_anchors, host_joined, host_tracks = [], set(), []
             for index, via in enumerate(board.vias):
                 if via.net != net.name or graph.roots.get(f"via:{index}") != root:
                     continue
@@ -1308,34 +1317,50 @@ class _Router:
                 layers = tuple(range(first, last + 1))
                 anchors.append((via.position, layers))
                 site = self.lattice.snap(0, via.position)
-                if site is not None:
-                    joined.update(self.lattice.layer_node(self.lattice.column(site), layer) for layer in layers)
+                nodes = () if site is None else tuple(
+                    self.lattice.layer_node(self.lattice.column(site), layer) for layer in layers)
+                joined.update(nodes)
+                if via not in macro_vias:
+                    host_anchors.append((via.position, layers))
+                    host_joined.update(nodes)
             for index, track in enumerate(board.tracks):
                 if track.net == net.name and graph.roots.get(f"track:{index}") == root:
                     layer = self.lattice.layers.index(track.layer)
                     anchors.append((track.start, (layer,)))
                     anchors.append((track.end, (layer,)))
+                    if track not in macro_tracks:
+                        host_anchors += [(track.start, (layer,)), (track.end, (layer,))]
+                        host_tracks.append((track, layer))
             boundary = [ports[pad] for pad in members if pad in ports]
             if boundary:
                 # Source-copper reuse must not expose a macro's private vias or
-                # bypass its declared boundary stub. Only the proved ports are
-                # public anchors, even when union/find roots carry pad labels.
+                # bypass its declared boundary stub. Only the proved ports and
+                # host copper joined to them are public anchors, even when
+                # union/find roots carry pad labels.
                 anchors = [(port.position, tuple(self.lattice.layers.index(layer)
                             for layer in macro_port_layers(board, port))) for port in boundary]
                 # A port off the lattice has no node (it cannot match a joined node).
                 public_nodes = {self.lattice.snap(layer, position)
                                 for position, layers in anchors for layer in layers}
-                joined.intersection_update(public_nodes)
+                joined.intersection_update(public_nodes | host_joined)
+                anchors += host_anchors
             required = [self.required_accesses[pad] for pad in members if pad in self.required_accesses]
             if required:
                 # Land and existing-copper alternatives would bypass the retained
                 # witness and leave its far end dangling after the dependency rip-up.
                 anchors = [(access.position, (self.lattice.layers.index(access.layer),))
                            for access in required]
+                host_tracks = []
             # Existing via taps count only on the actual source barrel span.
             if joined:
                 spec.joined[len(components)] = joined
-            components.append(self._attach(anchors, spec))
+            component = self._attach(anchors, spec)
+            # A later branch taps the group's host tracks anywhere, so it never
+            # retraces them back to a pad, port or track end.
+            taps = self._track_taps(host_tracks, spec)
+            if taps:
+                component = [c for c in component if c[0] not in taps] + [(node, (), 0.0) for node in sorted(taps)]
+            components.append(component)
             spec.anchors.append(tuple(anchor[0] for anchor in anchors))
             if self.explicit_pads and set(members) & self.explicit_pads:
                 spec.explicit[len(components) - 1] = self._explicit_exclusion(members, spec)
@@ -1386,6 +1411,29 @@ class _Router:
                 outward = (1 if dx > 0 else -1, 0) if abs(dx) >= abs(dy) else (0, 1 if dy > 0 else -1)
             result.append((position, layers, outward))
         return result
+
+    def _track_taps(self, tracks, spec: _NetSpec) -> set[int]:
+        """Grid nodes inside existing same-net tracks: copper the net already has."""
+        from .geometry import point_segment_distance_squared
+        g = self.lattice
+        owner, _ = self.rasters.track(spec.width, spec.clearance)
+        taps: set[int] = set()
+        for track, layer in tracks:
+            if layer not in spec.layers:
+                continue
+            start, end = track.start, track.end
+            half = track.width_nm // 2
+            # Samples at half the finest pitch meet every node the track covers.
+            steps = max(1, ceil(2 * hypot(end.x_nm - start.x_nm, end.y_nm - start.y_nm) / g.pitch_nm))
+            for i in range(steps + 1):
+                sample = Point(start.x_nm + (end.x_nm - start.x_nm) * i // steps,
+                               start.y_nm + (end.y_nm - start.y_nm) * i // steps)
+                node = g.nearest(layer, sample)
+                if node in taps or (owner[node] not in (_FREE, spec.nid) and node not in spec.neck):
+                    continue
+                if point_segment_distance_squared(g.point(node), start, end) <= half * half:
+                    taps.add(node)
+        return taps
 
     def _attach(self, anchors, spec: _NetSpec):
         """Grid nodes reachable from anchors with exact, checked lead-ins."""
