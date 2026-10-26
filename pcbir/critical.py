@@ -656,6 +656,7 @@ def route_critical_nets(
                     record, repaired = _bundle_repair(
                         board, routes, rules, pair_state_limit, base_tracks, base_vias, committed,
                         (rule, partner_rule), group, blocker, crossings, nested, turns,
+                        pair_state_escalation=pair_state_escalation,
                     )
                     ledger.append(record)
                     if repaired is not None:
@@ -1953,11 +1954,14 @@ def _bundle_repair(
     blocker: tuple[str, ...], crossings: dict[tuple[str, ...], PlannedCrossing] | None = None,
     nested: dict[tuple[str, ...], NestedExit] | None = None,
     turns: dict[tuple[str, ...], tuple[int, int]] | None = None,
+    pair_state_escalation: int = 1,
 ) -> tuple[BundleRepair, tuple[tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]],
                                tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]] | None]:
     """Rip up ``blocker``, route ``failed`` first, then route ``blocker`` again.
 
-    Both routes use the same coarse/exact candidates and atomic validation as
+    Both routes search under the main pass's bound and escalation (a repair
+    is not a smaller search than the pass that failed), with the same
+    coarse/exact candidates and atomic validation as
     the main pass, against all other committed copper; a group with a planned
     crossing in ``crossings`` or nested exit in ``nested`` keeps its plan.
     Nothing is changed here: the caller commits both results only when both
@@ -1970,7 +1974,8 @@ def _bundle_repair(
     reduced_vias = [*base_vias, *(v for _, _, items in others for v in items)]
     first = _route_pair_group(board, *failed_rules, routes, rules,
                               reduced_tracks, reduced_vias, pair_state_limit,
-                              crossing=crossings.get(failed), nested=nested.get(failed), turns=turns)
+                              crossing=crossings.get(failed), nested=nested.get(failed), turns=turns,
+                              pair_state_escalation=pair_state_escalation)
     if not first[0].connected:
         return BundleRepair(failed, blocker, False,
                             "failed group still has no accepted candidate without the ripped-up copper",
@@ -1978,7 +1983,8 @@ def _bundle_repair(
     second = _route_pair_group(board, rules[blocker[0]], rules[blocker[1]], routes, rules,
                                [*reduced_tracks, *first[1]], [*reduced_vias, *first[2]],
                                pair_state_limit, crossing=crossings.get(blocker),
-                               nested=nested.get(blocker), turns=turns)
+                               nested=nested.get(blocker), turns=turns,
+                               pair_state_escalation=pair_state_escalation)
     if not second[0].connected:
         return BundleRepair(failed, blocker, False,
                             "ripped-up group has no accepted candidate after the failed group",

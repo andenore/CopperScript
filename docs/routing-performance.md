@@ -50,6 +50,11 @@ nothing is board-specific and nothing relaxes a declared rule.
   the link is accepted, and a link that would leave a ball without a site
   stays pending, naming the ball (`bypass_reservation` `finished`: `swapped`,
   `rejected`, `pending_links`).
+- **Repairs search under the pass's escalation.** A rip-up repair routed
+  the failed group and the ripped-up group under the bare bound (6,000
+  states) while the pass that failed had escalated to 60,000; TX1_IC's
+  repair without the TX1 pair exhausted exactly 6,000. `_bundle_repair`
+  now takes the pass's `pair_state_escalation`.
 
 Bounded CopperProbe runs through the critical stage (fresh placement): the
 critical stage now leaves only USB_TX1_IC open (two pairs before), with FB
@@ -70,6 +75,23 @@ on one machine, so their times are inflated against the baseline's.
 | `arrays` baseline (`ea0e23b`) | 11 / 237 | 10 | 3 (GND N4/N6, V33 FB_XTAL.1) | 335 | 2,587 mm | 4 | 2 (none adopted) | 6,720 s |
 | A: fixes, original board | 6 / 237 | 5 | 2 (GND N4/N6) | 331 | 2,748 mm | 7 | 3 (one adopted) | 11,874 s |
 | B: fixes, relaxed pins, fresh placement | 8 / 237 | 7 | 2 (GND N4/N6) | 321 | 2,677 mm | 4 | 4 (two adopted) | 14,789 s (2,615 s placing) |
+| C: B plus the bypass swap, B's placement | 7 / 237 | 6 | 2 (GND N4/N6) | 343 | 2,766 mm | 8 | 4 (two adopted) | 9,157 s (alone on the machine) |
+
+Run C (`ed74b95`, same placement as B, so comparable net by net) shows what
+the swap buys and costs. Planning: 0 reservations released (58), 4 bypass
+links swapped with every taken ball re-sited, 5 links refused because E1,
+N13, K10 or K5 would lose their site, 14 links pending at planning (9).
+Routing: ADC_OVR, ADC_OE and ACQ_EN connect (the balls the release had
+cost), FX_VDDD and SWDIO open instead. FX_VDDD is one of the refused links'
+rails: a pending bypass link gets no later pass, so the detailed router
+routes the rail to the ball itself and is rejected by the capacitor pad
+under it (C_FX10_C7.2 on B.Cu). SWDIO's escape merely chose an eastward
+surface site this time (site choice varies with the prefix). The
+`USB_TX1_IC` rip-up ledger is on the result now: ripping up RX2, TX2_IC or
+DM/DP leaves the launch blocked (0 states each); ripping up the
+connector-side TX1 pair at the coupling capacitors gives it a search that
+exhausts 6,000 states, so that pair's copper at the capacitors is the wall,
+and the repair searched without the main pass's escalation (fixed below).
 
 Run B is not comparable net by net (fresh placement; single runs vary by
 about +-4 nets), but it answers the two questions it was run for. The
