@@ -106,7 +106,7 @@ def test_native_global_reconciliation_accepts_completed_critical_owner():
     assert not routing_complete_with_fill(pipeline,board,drc,evidence)
 
 
-def test_routing_closure_rejects_stale_native_findings_search_failures_and_blocked_preflight():
+def test_routing_closure_rejects_stale_native_findings_and_search_failures():
     from pcbir.drc import DrcFinding,DrcSeverity
     from pcbir.critical import CriticalRoutingStatus
     from types import SimpleNamespace
@@ -115,9 +115,6 @@ def test_routing_closure_rejects_stale_native_findings_search_failures_and_block
                 replace(evidence,passed=False),replace(evidence,unconnected_count=1),
                 replace(evidence,other_violation_count=1),replace(evidence,findings=("short",))):
         assert not routing_complete_with_fill(pipeline,board,drc,bad)
-    pipeline.package_access = SimpleNamespace(ready=False)
-    assert not routing_complete_with_fill(pipeline,board,drc,evidence)
-    pipeline.package_access = None
     pipeline.critical = SimpleNamespace(status=CriticalRoutingStatus.FAILED)
     assert not routing_complete_with_fill(pipeline,board,drc,evidence)
     pipeline.critical = SimpleNamespace(status=CriticalRoutingStatus.SUCCESS)
@@ -181,8 +178,6 @@ def test_default_zone_deferral_does_not_trigger_placement_repair() -> None:
         feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
         detailed_feedback_trials=2,
     )
-    assert pipeline.detailed_feedback_trials == 0
-    assert pipeline.detailed.metrics.unrouted_net_count == 1
-    assert pipeline.detailed.metrics.passes == 1
+    assert pipeline.placement_feedback is None or not pipeline.placement_feedback.trials
 
 

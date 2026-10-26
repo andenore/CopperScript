@@ -10,35 +10,6 @@ from pcbir.physical import CopperLayer, NetRoutingRule, PhysicalNet, Point, Rout
 from test_decoupling_crosslayer_paths import fixture
 
 
-def pair_fixture(*, two=False):
-    board, link = fixture()
-    if two:
-        other, sibling = fixture(renamed=True)
-        board = replace(board,
-            placements=(*board.placements, *(replace(p, position=Point(p.position.x_nm,
-                p.position.y_nm+6_000_000)) for p in other.placements)),
-            nets=(*board.nets, *other.nets), decoupling_links=(link, sibling),
-            net_routing_rules=(*board.net_routing_rules, *other.net_routing_rules))
-    # Synthetic disposable pair pieces exercise ownership; they do not claim
-    # completion of a source-backed differential engineering contract.
-    group = ('PROBE_A', 'PROBE_B')
-    board = replace(board, nets=(*board.nets, *(PhysicalNet(name, ()) for name in group)),
-        net_routing_rules=(*board.net_routing_rules, *(
-        NetRoutingRule(name, RouteKind.DIFFERENTIAL, width_nm=100000,
-            differential_partner=group[1-i], pair_gap_nm=100000, max_vias=0,
-            allowed_layers=(CopperLayer.FRONT,)) for i, name in enumerate(group))))
-    baseline = route_fanout(board)
-    return board, link, baseline, group
-
-
-def contact_at(baseline, group, net):
-    site = next(v.position for v in baseline.decoupling_vias if v.net == net)
-    return (TrackSegment(group[0], Point(site.x_nm-100000, site.y_nm),
-                         Point(site.x_nm+100000, site.y_nm), 100000, CopperLayer.FRONT),
-            TrackSegment(group[1], Point.mm(2, 3), Point.mm('2.2', 3),
-                         100000, CopperLayer.FRONT))
-
-
 @pytest.mark.parametrize('renamed', (False, True))
 def test_real_fanout_complete_crossface_witness_read_only_admission(monkeypatch, renamed):
     board, link = fixture(renamed=renamed)

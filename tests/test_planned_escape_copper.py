@@ -31,7 +31,7 @@ def test_planned_escapes_join_the_ordinary_board_exact_checked() -> None:
     masked = replace(board, copper_keepouts=reserved[2])
     critical = CriticalRoutingResult(CriticalRoutingStatus.SUCCESS, masked, (), (), (), "", "")
     events, observe = _events()
-    _, _, _, pre = _release_escape_masks(reserved, critical, None, None, masked,
+    _, _, pre = _release_escape_masks(reserved, critical, None, masked,
                                          unified_options=UnifiedRouterOptions(), on_progress=observe)
     # The masks are gone and the promised stem and via are the net's copper.
     assert not any(k.id.startswith("escape-reserve") for k in pre.copper_keepouts)
@@ -42,21 +42,21 @@ def test_planned_escapes_join_the_ordinary_board_exact_checked() -> None:
     # A promised via another step already placed on its site is reused: no
     # second drill at the same point.
     events, observe = _events()
-    _, _, _, reused = _release_escape_masks(reserved, critical, None, None,
+    _, _, reused = _release_escape_masks(reserved, critical, None,
                                             replace(masked, vias=reserved[1]),
                                             unified_options=UnifiedRouterOptions(), on_progress=observe)
     assert reused.vias.count(reserved[1][0]) == 1 and reserved[0][0] in reused.tracks
     joined = next(d for p, e, d in events if (p, e) == ("ordinary_escapes", "joined"))
     assert (joined["vias"], joined["reused_vias"], joined["dropped_vias"], joined["tracks"]) == (0, 1, 0, 1)
     # Off: the masks go and the copper stays out, as before.
-    _, _, _, plain = _release_escape_masks(reserved, critical, None, None, masked,
+    _, _, plain = _release_escape_masks(reserved, critical, None, masked,
                                            unified_options=UnifiedRouterOptions(planned_escapes_as_copper=False))
     assert plain.tracks == board.tracks and plain.vias == board.vias
     # A promised via a preparation step has since made illegal is left out
     # and counted; the legal stem still joins.
     crossing = TrackSegment("C", Point.mm(12, 12), Point.mm(14, 12), nm_from_mm("0.2"), CopperLayer.FRONT)
     events, observe = _events()
-    _, _, _, cut = _release_escape_masks(reserved, critical, None, None,
+    _, _, cut = _release_escape_masks(reserved, critical, None,
                                          replace(masked, tracks=(crossing,)),
                                          unified_options=UnifiedRouterOptions(), on_progress=observe)
     assert reserved[1][0] not in cut.vias
@@ -79,7 +79,7 @@ def test_the_ordinary_stage_fanout_reuses_the_joined_planned_escapes() -> None:
     reserved = (tracks, vias, _copper_keepouts(board, tracks, vias, "escape-reserve", fixed=board))
     masked = replace(board, copper_keepouts=reserved[2])
     critical = CriticalRoutingResult(CriticalRoutingStatus.SUCCESS, masked, (), (), (), "", "")
-    _, _, _, pre = _release_escape_masks(reserved, critical, None, None, masked,
+    _, _, pre = _release_escape_masks(reserved, critical, None, masked,
                                          unified_options=UnifiedRouterOptions())
     # The ordinary stage's fanout, with the same options, finds its exits
     # already there: the same accesses, no new copper.

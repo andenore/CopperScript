@@ -212,7 +212,7 @@ def test_pipeline_closes_lands_before_scoring_and_measures_added_copper() -> Non
     # net A, so closure has nothing left to add; scoring still sees them joined.
     assert result.duplicate_pad_stitch.added_track_count == 0
     assert result.duplicate_pad_stitch.already_connected == (PadReference("U1", "1"),)
-    assert result.detailed_feedback_trials == 0
+    assert result.placement_feedback is None or not result.placement_feedback.trials
     assert result.status.value == "pass"
     assert result.detailed.metrics.track_count == len(result.board.tracks)
     from math import hypot

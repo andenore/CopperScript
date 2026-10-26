@@ -1,39 +1,14 @@
 """Real copper geometry, no project-specific repair selectors or search mocks."""
 from dataclasses import replace
-from collections import Counter
 from hashlib import sha256
 import json
 
-import pytest
 
-from pcbir import (
-    BoardOutline,
-    CopperKeepout,
-    CopperLayer,
-    CopperZone,
-    FootprintPad,
-    GlobalRouterOptions,
-    PadReference,
-    PhysicalBoard,
-    PhysicalFootprint,
-    PhysicalNet,
-    Placement,
-    Point,
-    PolygonRing,
-    PolygonWithHoles,
-    Size,
-    Stackup,
-    nm_from_mm,
-    route_global,
-    PlacementPlannerOptions,
-    PlacementRoutingFeedbackOptions,
-)
+from pcbir import (BoardOutline, CopperLayer, CopperZone, FootprintPad, GlobalRouterOptions, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, PolygonRing, PolygonWithHoles, Size, Stackup, nm_from_mm, route_global)
 from pcbir.drc import run_physical_drc
 from pcbir.fanout import FanoutOptions
-from pcbir.flow import run_routing_pipeline
 from pcbir.clusters import footprint_geometry_digest
-from pcbir.hard_macros import bind_hard_macro, materialize_hard_macros, validate_hard_macros
-from pcbir.pad_via_arrays import require_via_in_pad_arrays, via_in_pad_array_vias
+from pcbir.hard_macros import bind_hard_macro
 from pcbir.physical import PadViaInPadRule
 from pcbir.physical import NetRoutingRule, RouteKind
 
@@ -83,45 +58,6 @@ def settings():
 def hard_findings(board):
     return [f for f in run_physical_drc(board).findings if f.severity.value == "error"
             and f.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}]
-
-
-def test_standard_pipeline_preserves_negotiated_contact_through_area_routing():
-    board = constrained_contact_board()
-    result = run_routing_pipeline(board,
-        placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
-            refinement_passes=0, escape_spacing_passes=0,
-            fixed_references=frozenset(p.reference for p in board.placements)),
-        feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
-        global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
-        fanout_options=settings())
-    assert result.package_access.ready
-    assert result.package_access.pattern_trials[0].outcome == "accepted"
-    assert next(n for n in result.detailed.nets if n.net == "CLOCK").connected
-    contacts = result.plane_stitch.board
-    assert all(t in result.board.tracks for t in contacts.tracks if t.net == "RAIL")
-    assert all(v in result.board.vias for v in contacts.vias if v.net == "RAIL")
-    assert not hard_findings(result.board)
-    assert not result.board.zone_fills
-
-
-def test_impossible_contact_stops_area_and_preserves_failure_evidence():
-    board = constrained_contact_board()
-    board = replace(board, copper_keepouts=(CopperKeepout("no-contact-via",
-        board.stackup.copper_layers, board.zones[0].outline,
-        block_tracks=False, block_vias=True, block_zones=False),))
-    result = run_routing_pipeline(board,
-        placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
-            refinement_passes=0, escape_spacing_passes=0,
-            fixed_references=frozenset(p.reference for p in board.placements)),
-        feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
-        global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
-        fanout_options=settings())
-    assert not result.package_access.ready
-    assert result.plane_stitch.pending_pads
-    assert result.detailed.metrics.passes == 0
-    assert result.board.metadata["fabrication_ready"] == "false"
-    assert all(t.outcome != "accepted" for t in result.package_access.pattern_trials)
-    assert result.package_access.source == board
 
 
 def test_cli_reserves_package_access_by_default_with_explicit_opt_out():
@@ -192,92 +128,6 @@ def with_test_owners(board, tmp_path, *, blocking_macro=False, required_array=Fa
     path.write_bytes(raw)
     return bind_hard_macro(board, path, expected_sha256=sha256(raw).hexdigest(), name="protected-owner",
         bindings={"first": "OWNER_A", "second": "OWNER_B"}, net_bindings={"owned": "OWNER_NET"})
-
-
-def owned_pipeline(board, legacy_gates=False):
-    return run_routing_pipeline(board,
-        placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
-            refinement_passes=0, escape_spacing_passes=0,
-            fixed_references=frozenset(p.reference for p in board.placements)),
-        feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
-        global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
-        fanout_options=settings())
-
-
-@pytest.mark.parametrize("required_array", (False, True))
-@pytest.mark.parametrize("renamed", (False, True))
-def test_negotiation_and_area_routing_preserve_exact_owner_copper(tmp_path, required_array, renamed):
-    board = with_test_owners(constrained_contact_board(renamed=renamed), tmp_path,
-                             required_array=required_array)
-    owner = materialize_hard_macros(board)
-    assert not hard_findings(owner)
-    result = owned_pipeline(board)
-    assert result.package_access.ready
-    assert result.package_access.pattern_trials[0].outcome == "accepted"
-    assert result.board.placements == board.placements
-    signal = "DATA_X" if renamed else "CLOCK"
-    assert next(n for n in result.detailed.nets if n.net == signal).connected
-    assert not hard_findings(result.board)
-    assert Counter(owner.tracks) <= Counter(result.board.tracks)
-    assert Counter(owner.vias) <= Counter(result.board.vias)
-    assert result.board.hard_macros == owner.hard_macros
-    validate_hard_macros(result.board)
-    require_via_in_pad_arrays(result.board, "autonomous owner regression")
-    if required_array:
-        arrays = Counter(via_in_pad_array_vias(board))
-        assert sum(arrays.values()) == 4
-        actual = Counter(result.board.vias)
-        assert all(actual[v] == count for v, count in arrays.items())
-        assert all(v.finish == "filled-capped" for v in arrays)
-    assert not result.board.zone_fills
-
-
-def test_immutable_macro_blocking_contact_is_not_evicted(tmp_path):
-    board = with_test_owners(constrained_contact_board(), tmp_path, blocking_macro=True,
-                             required_array=True)
-    owner = materialize_hard_macros(board)
-    assert not hard_findings(owner)
-    result = owned_pipeline(board, legacy_gates=True)
-    assert not result.package_access.ready
-    assert result.plane_stitch.pending_pads
-    assert result.detailed.metrics.passes == 0
-    assert result.package_access.pattern_trials
-    assert all(t.outcome != "accepted" for t in result.package_access.pattern_trials)
-    assert Counter(owner.tracks) <= Counter(result.board.tracks)
-    assert Counter(owner.vias) <= Counter(result.board.vias)
-    arrays = Counter(via_in_pad_array_vias(board))
-    actual = Counter(result.board.vias)
-    assert all(actual[v] == count for v, count in arrays.items())
-    assert result.board.placements == board.placements
-    assert result.board.hard_macros == board.hard_macros
-    assert not hard_findings(result.board)
-    validate_hard_macros(result.board)
-    require_via_in_pad_arrays(result.board, "blocked autonomous owner regression")
-    assert result.package_access.source == board
-    assert result.board.metadata["fabrication_ready"] == "false"
-
-
-def critical_contact_trap(*, renamed=False, maximum_length="12"):
-    board = constrained_contact_board(renamed=renamed)
-    refs = ("ENDPOINT_23", "ENDPOINT_48") if renamed else ("CRIT_A", "CRIT_B")
-    net = "TIMING_X" if renamed else "TIMING"
-    return replace(board, placements=(*board.placements,
-        Placement(refs[0], "terminal", Point.mm(4, 3)),
-        Placement(refs[1], "terminal", Point.mm(4, 10))),
-        nets=(*board.nets, PhysicalNet(net, tuple(PadReference(ref, "1") for ref in refs))),
-        net_routing_rules=(NetRoutingRule(net, RouteKind.CRITICAL, max_vias=0,
-            allowed_layers=(CopperLayer.FRONT,), max_length_nm=nm_from_mm(maximum_length)),))
-
-
-def test_pipeline_preserves_plane_first_ownership_through_area_routing():
-    board = critical_contact_trap()
-    result = owned_pipeline(board)
-    assert result.package_access.ready
-    assert result.package_access.pattern_trials[-1].strategy == "critical_and_plane_first"
-    assert next(n for n in result.detailed.nets if n.net == "CLOCK").connected
-    early = tuple(v for v in result.package_access.board.vias if v.net == "RAIL")
-    assert early and all(v in result.board.vias for v in early)
-    assert not hard_findings(result.board)
 
 
 def test_early_plane_contacts_preserve_specialized_coupled_pair_routing():

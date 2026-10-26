@@ -239,9 +239,9 @@ def test_cause_table_counts_primary_causes_and_marks_kicad_only_failures(tmp_pat
         (tmp_path / name / "result.json").write_text(json.dumps(record))
     table = cause_table(tmp_path)
     assert "| clean |" not in table and "| unscored |" not in table
-    assert "| header | 2 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | P1-U1 crossings 1, move MISO |" in table
-    assert "| kicad | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | KiCad only: no unrouted net |" in table
-    assert "| **Total (primary cause)** | 2 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | |" in table
+    assert "| header | 2 | 1 | 0 | 0 | 1 | 0 | 0 | P1-U1 crossings 1, move MISO |" in table
+    assert "| kicad | 0 | 0 | 0 | 0 | 0 | 0 | 0 | KiCad only: no unrouted net |" in table
+    assert "| **Total (primary cause)** | 2 | 1 | 0 | 0 | 1 | 0 | 0 | |" in table
 
 
 def test_tiers_split_the_summary_and_the_comparison(tmp_path):

@@ -425,13 +425,6 @@ def test_net_without_another_legal_layer_stays_unmoved():
     assert not plan_two_end_escapes(replace(board, net_routing_rules=pinned)).layer_biases
 
 
-def straight_board() -> PhysicalBoard:
-    pad = PhysicalFootprint("one-pad", (FootprintPad("1", Point(0, 0), Size.mm("0.6", "0.6")),), Size.mm(1, 1))
-    return PhysicalBoard("straight", BoardOutline.rectangle(20, 12), {pad.name: pad},
-                         (Placement("J1", pad.name, Point.mm(3, 6)), Placement("J2", pad.name, Point.mm(17, 6))),
-                         (PhysicalNet("SIG", (PadReference("J1", "1"), PadReference("J2", "1"))),))
-
-
 def test_layer_bias_charges_only_track_whose_midpoint_is_in_its_area():
     bias = LayerBias("SIG", CopperLayer.FRONT, Bounds(0, 0, nm_from_mm(10), nm_from_mm(10)), 20)
     # 20 cost units per millimetre: twice the cost of the track itself (10 per mm).

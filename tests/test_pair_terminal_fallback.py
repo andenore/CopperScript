@@ -51,7 +51,7 @@ def test_tiny_budget_does_not_adopt_partial_connector_ties():
     board=fixture(True)
     global_result=route_global(board)
     global_result=replace(global_result,routes=tuple(replace(r,connected=False,accesses=(),segments=(),vias=()) for r in global_result.routes))
-    result=route_critical_nets(board,global_result,pair_state_limit=1)
+    result=route_critical_nets(board,global_result,pair_state_limit=1,pair_state_escalation=1)
     assert not any(r.connected for r in result.nets)
     assert result.board.tracks==board.tracks and result.board.vias==board.vias
 
@@ -69,7 +69,7 @@ def test_local_support_branches_preserve_all_contacts_and_atomic_acceptance(stat
     board=support_branch_fixture()
     guide=route_global(board)
     guide=replace(guide,routes=tuple(replace(r,connected=False,accesses=(),segments=(),vias=()) for r in guide.routes))
-    result=route_critical_nets(board,guide,pair_state_limit=states)
+    result=route_critical_nets(board,guide,pair_state_limit=states,pair_state_escalation=1)
     if states==1:
         assert not any(r.connected for r in result.nets)
         assert result.board.tracks==board.tracks and result.board.vias==board.vias

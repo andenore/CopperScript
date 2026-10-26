@@ -44,7 +44,7 @@ def hard_findings(board):
 
 
 def test_short_surface_clock_uses_existing_local_maze_before_board_wide_search(monkeypatch):
-    import pcbir.detailed as detailed
+    import pcbir.unified_router as unified
     board,guides=fixture(False)
     rule=replace(board.net_routing_rules[0],kind=RouteKind.CLOCK,max_length_nm=nm_from_mm(9))
     wall=CopperKeepout('local wall',(CopperLayer.FRONT,),PolygonWithHoles(PolygonRing((
@@ -52,7 +52,7 @@ def test_short_surface_clock_uses_existing_local_maze_before_board_wide_search(m
     board=replace(board,net_routing_rules=(rule,),copper_keepouts=(wall,))
     def unnecessary(*args,**kwargs):
         pytest.fail('A legal bounded local clock route must not spend the board-wide fallback budget')
-    monkeypatch.setattr(detailed,'route_detailed',unnecessary)
+    monkeypatch.setattr(unified,'route_unified',unnecessary)
     result,tracks,vias=_route_single_exact(board,rule,guides,[],[])
     assert result.connected and result.strategy=='local_surface_maze'
     assert result.lengths_nm[0]<=rule.max_length_nm and tracks and not vias
@@ -60,14 +60,18 @@ def test_short_surface_clock_uses_existing_local_maze_before_board_wide_search(m
     assert board.tracks==board.vias==()
 
 
-def test_fine_surface_repair_does_not_invent_a_connected_global_guide():
+def test_unconnected_guide_skips_local_surface_repair_and_routes_exact_copper():
     board, guides = fixture(False)
     rule = replace(board.net_routing_rules[0], max_length_nm=nm_from_mm(6))
     board = replace(board, net_routing_rules=(rule,))
     guides = replace(guides, routes=(replace(guides.routes[0], connected=False),))
     result, tracks, vias = _route_single_exact(board, rule, guides, [], [])
-    assert not result.connected
-    assert not tracks and not vias
+    # The local surface repair needs a connected guide; the unified fallback
+    # searches the exact board instead and never reports the guide connected.
+    assert result.strategy == "unified_critical"
+    assert not guides.routes[0].connected
+    assert result.connected is bool(tracks)
+    assert not hard_findings(replace(board, tracks=tracks, vias=vias))
 
 
 @pytest.mark.parametrize("offset", ("0.05", "-0.05"))
@@ -311,7 +315,7 @@ def test_a_shorter_exact_tree_replaces_a_multi_terminal_guide_tree(monkeypatch):
     result = route_critical_nets(board, guides)
     (net,) = result.nets
     assert len(next(item for item in board.nets if item.name == "MATCH").pads) >= 3
-    assert net.connected and net.strategy == "exact_single_net"
+    assert net.connected and net.strategy == "unified_critical"
     assert net.lengths_nm[0] < guide.lengths_nm[0] and net.via_count == 0
     assert net.guide_length_nm == guide.lengths_nm[0]
     assert not hard_findings(result.board)

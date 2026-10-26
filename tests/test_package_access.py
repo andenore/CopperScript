@@ -4,10 +4,8 @@ from dataclasses import replace
 import pytest
 
 import pcbir.fanout as fanout
-from pcbir import (BoardOutline, ComponentPlacementRule, CopperLayer, FootprintPad, GlobalRouterOptions, NetRoutingRule, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, RouteKind, Size, nm_from_mm, route_critical_nets, route_global)
+from pcbir import (BoardOutline, ComponentPlacementRule, FootprintPad, GlobalRouterOptions, NetRoutingRule, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, RouteKind, Size, nm_from_mm, route_critical_nets, route_global)
 from pcbir.drc import run_physical_drc
-from pcbir.flow import run_routing_pipeline
-from pcbir.routeflow import FeedbackStatus, PlacementRoutingResult
 
 
 def fixture(critical=False):
@@ -55,45 +53,6 @@ def test_critical_router_rejects_stale_unowned_or_illegal_reservations(defect):
             route_critical_nets(board, guides, reserved_accesses=exits)
 
 
-def test_pipeline_routes_area_only_after_successful_preflight(monkeypatch):
-    board, guides, options, _ = fixture(critical=True)
-    monkeypatch.setattr("pcbir.flow.optimize_placement_for_routing", lambda *_:
-        PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
-    result = run_routing_pipeline(board, fanout_options=options)
-    assert result.package_access.ready and result.detailed.metrics.passes == 1
-    assert result.critical.reserved_track_count > 0
-
-
-def pattern_trap():
-    """An ordinary dogbone blocks a length-constrained critical launch.
-
-    Real radial domains and exact critical routing are used, not a mocked
-    connected flag. There is a legal alternative ordinary via on the other side.
-    """
-    board, _, settings, global_options = fixture(critical=True)
-    package = PhysicalFootprint("two", (
-        FootprintPad("1", Point.mm(0, -1), Size.mm(.3, .3)),
-        FootprintPad("2", Point.mm(0, -.4), Size.mm(.3, .3))), Size.mm(2, 3))
-    board = replace(board, footprints={"two": package, "one": board.footprints["one"]},
-        placements=(board.placements[0], replace(board.placements[1], position=Point.mm(3, 6)),
-                    replace(board.placements[2], position=Point.mm(13, 6.6))),
-        net_routing_rules=(NetRoutingRule("A", RouteKind.CRITICAL, max_vias=0,
-            allowed_layers=(CopperLayer.FRONT,), max_length_nm=nm_from_mm(2)),))
-    return board, route_global(board, global_options), settings
-
-
-@pytest.mark.parametrize("budget", [0, 1])
-def test_pipeline_obeys_pattern_budget_before_starting_area(monkeypatch, budget):
-    board, guides, settings = pattern_trap()
-    monkeypatch.setattr("pcbir.flow.optimize_placement_for_routing", lambda *_:
-        PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
-    result = run_routing_pipeline(board, fanout_options=settings)
-    # Without a pattern trial A stays over its length budget: a warning, not a block.
-    assert result.package_access.ready
-    assert result.package_access.over_budget_critical_nets == (frozenset() if budget else {"A"})
-    assert len(result.package_access.pattern_trials) == budget
-
-
 def test_pre_existing_footprint_finding_does_not_fail_package_reservations():
     from pcbir import PadKind, PadShape
     board, _, options, guides_options = fixture(critical=True)
@@ -114,5 +73,3 @@ def test_pre_existing_footprint_finding_does_not_fail_package_reservations():
     assert result.status.value != "failed" and all(item.connected for item in result.nets)
     # Final verification still reports the footprint's own finding.
     assert "DRC-HOLE-CLEARANCE" in {f.code for f in run_physical_drc(result.board).findings}
-
-

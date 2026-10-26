@@ -6,12 +6,9 @@ import pytest
 import pcbir.fanout as fanout
 from pcbir import (BoardOutline, CopperLayer, DesignRules, FootprintPad, NetRoutingRule, PadReference,
     PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, Size, Stackup, nm_from_mm)
-from pcbir.boundary_access import BoundaryAccessOptions, package_collar
 from pcbir.drc import run_physical_drc
 from pcbir.physical import CopperKeepout, PolygonRing, PolygonWithHoles
-from pcbir.pin_escape import verified_routing_access
 from pcbir.routing import GlobalRouterOptions, GlobalRoutingStatus, route_global
-from pcbir.routing_clearance import RoutingClearanceIndex
 
 PIN = PadReference("U", "1")
 FOUR = (CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2, CopperLayer.BACK)
@@ -46,10 +43,6 @@ def board(**rule):
 
 
 ONE_LAYER = dict(allowed_layers=(CopperLayer.FRONT,))
-# The crystal constraint that left two QFNs with pending pins.
-CRYSTAL = dict(allowed_layers=(CopperLayer.FRONT,), max_vias=0, clearance_nm=nm_from_mm(".3"),
-               breakout_length_nm=nm_from_mm("1"), breakout_clearance_nm=nm_from_mm(".1"))
-NO_VIAS = dict(max_vias=0)
 
 
 def guides(source):
@@ -63,23 +56,6 @@ def guides(source):
 def hard_errors(source):
     return [f for f in run_physical_drc(source).findings if f.severity.value == "error"
             and f.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}]
-
-
-def assert_surface_escape(source, result):
-    access = result.surface_accesses[PIN]
-    assert PIN not in result.accesses and PIN not in result.pending_pads
-    assert result.escaped_pads == {PIN, *result.accesses}
-    assert result.routing_accesses[PIN] == access
-    assert not any(via.net == "X1" for via in result.board.vias)
-    assert access.layer is CopperLayer.FRONT and access.launch_position == Point.mm(10.1, 8.75)
-    assert all(track.layer is CopperLayer.FRONT for track in access.path)
-    assert set(access.path) <= set(result.created_tracks)
-    collar = package_collar(source, "U", BoundaryAccessOptions().collar_margin_nm).bounds
-    assert not (collar.min_x <= access.position.x_nm <= collar.max_x
-                and collar.min_y <= access.position.y_nm <= collar.max_y)
-    clearance = RoutingClearanceIndex(result.board)
-    assert verified_routing_access(result.board, PIN, "X1", access, clearance) == access.path
-    assert not hard_errors(result.board)
 
 
 @pytest.mark.parametrize("layers", [FOUR, (CopperLayer.FRONT, CopperLayer.BACK)])

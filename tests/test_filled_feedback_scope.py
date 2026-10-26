@@ -20,7 +20,7 @@ from pcbir.flow import run_routing_pipeline
 from pcbir.physical import BoardSide, IslandPolicy, ZoneConnection
 from pcbir.placement import PlacementPlannerOptions
 from pcbir.routeflow import PlacementRoutingFeedbackOptions
-from test_autonomous_routing_quality import pipeline, rectangle, terminal
+from routing_fixtures import pipeline, rectangle, terminal
 
 
 @pytest.mark.parametrize("renamed", (False, True))

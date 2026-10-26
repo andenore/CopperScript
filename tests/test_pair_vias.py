@@ -195,7 +195,7 @@ def test_critical_limited_tier_samples_both_families_and_all_pitches(monkeypatch
     monkeypatch.setattr('pcbir.critical.paired_candidates', exhausted)
     monkeypatch.setattr('pcbir.critical.paired_via_candidates', exhausted)
     board = board_fixture()
-    result = route_critical_nets(board, route_global(board), pair_state_limit=60)
+    result = route_critical_nets(board, route_global(board), pair_state_limit=60, pair_state_escalation=1)
     assert budgets == [(pitch, 10) for _ in range(2) for pitch in (1_000_000, 500_000, 250_000)]
     pair = result.nets[0]
     assert not pair.connected and pair.search_states == 60

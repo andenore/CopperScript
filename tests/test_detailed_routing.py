@@ -63,10 +63,3 @@ def test_clearance_index_distinguishes_movable_from_locked_blockers() -> None:
     )
     locked = RoutingClearanceIndex(replace(board, tracks=(crossing,)))
     assert locked.blocking_track_nets(candidate) == (frozenset(), True)
-
-
-def _successes(stats) -> int:
-    return (stats.corridor_successes + stats.widened_corridor_successes
-            + stats.projected_corridor_successes + stats.full_board_successes)
-
-

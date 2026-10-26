@@ -378,15 +378,13 @@ def test_cli_writes_global_routing_guides(tmp_path: Path) -> None:
 
 def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_path: Path) -> None:
     # The report may live in a fresh directory independently of the PCB.
-    # Exercise the default package-access flow without a --fanout opt-in
-    # (package access is a stage of the legacy router).
     report = tmp_path / "new-review" / "reports" / "route-report.json"
     pcb = tmp_path / "route-draft.kicad_pcb"
     result = subprocess.run(
         [
             sys.executable, "-m", "copperscript", "route-board",
-            "examples/valid_board/board.copper", "--allow-proxy-footprints", "--router", "legacy",
-            "--candidates", "1", "--passes", "1", "--pitch-mm", "1",
+            "examples/valid_board/board.copper", "--allow-proxy-footprints",
+            "--candidates", "1", "--pitch-mm", "1",
             "--stitch-zone-pads", "--plane-stitch-step-mm", "0.25",
             "--plane-stitch-radius-mm", "5",
             "--plane-maze-step-mm", "0.025", "--plane-maze-budget", "50000",
@@ -401,42 +399,8 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["schema"] == "copperscript-route-board/v0.1"
     assert "C1.2" in document["plane_stitch"]["preferred_ground_pads"]
     assert document["erc_pass"]
-    assert isinstance(document["fanout"]["pin_access_analysis"], list)
-    assert set(document["fanout"]["assignment"]) == {"pair_checks", "pair_queries", "broad_phase_accepts", "native_accepted", "expanded_pads", "trials"}
-    assert all(set(item) == {"pad", "legal_candidate_count", "selected_candidate_index", "diagnostic", "two_leg_candidate_count", "refined_candidate_count",
-                            "access_diagnostics"}
-               for item in document["fanout"]["pin_access_analysis"])
     assert document["fabrication_ready"] is False
-    # With fanout, critical/access failures share the escape-first controller.
-    assert "critical_placement_feedback" not in document
-    assert document["package_access"]["status"] in {"ready", "blocked"}
-    assert document["package_access"]["stage_order"][0] == "ordinary_package_exits"
-    assert "trials" in document["package_access"]
-    assert document["package_access"]["pattern_trial_limit"] == 2
-    assert document["package_access"]["initial_pair_state_limit"] == 6000
-    assert document["package_access"]["placement_probe_limit"] == 16
-    assert "excludes generated critical copper" in document["package_access"]["placement_probe_scope"]
-    assert document["package_access"]["placement_stop_reason"] in {
-        "ready", "disabled", "trial_budget_exhausted", "no_improvement", "no_legal_unseen_trials"}
-    assert len(document["package_access"]["placement_probes"]) <= 16
-    assert all(isinstance(probe[key], list) and all(isinstance(pad, str) for pad in probe[key])
-               for probe in document["package_access"]["placement_probes"]
-               for key in ("ordinary_pending_pads", "plane_pending_pads", "boundary_pending_pads", "lost_access_pads"))
-    assert len(document["package_access"]["search_tiers"]) >= 1
-    assert any(t["selected"] for t in document["package_access"]["search_tiers"])
-    assert isinstance(document["package_access"]["pattern_trials"], list)
-    boundary = document["package_access"]["boundary"]
-    assert boundary["materialized"] == document["package_access"]["ordinary_area_started"]
-    assert len(boundary["source_digest"]) == 64
-    assert boundary["anchor_count"] == (len(boundary["ports"]) if boundary["materialized"] else 0)
-    assert boundary["added_track_count"] >= 0
-    assert ("reserved before area routing" if boundary["materialized"] else "not committed") in boundary["scope"]
-    assert boundary["status"] in {"ready", "blocked"}
-    assert isinstance(boundary["ports"], list) and isinstance(boundary["pin_analysis"], list)
-    assert "package_boundary_access" in document["package_access"]["stage_order"]
-    if document["package_access"]["status"] == "blocked":
-        assert document["package_access"]["ordinary_area_started"] is False
-        assert document["detailed"]["metrics"]["passes"] == 0
+    assert "critical_placement_feedback" not in document and "package_access" not in document
     assert document["detailed"]["status"] in {"success", "partial"}
     assert document["drc"]["decision"] in {"pass", "fail", "incomplete"}
     assert "signal_track_length_nm" in document["route_geometry"]
@@ -451,15 +415,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert document["plane_stitch"]["maze_state_budget"] == 50_000
     assert document["plane_stitch"]["maximum_radius_nm"] == 5_000_000
     assert document["plane_stitch"]["maximum_contact_radius_nm"] == 0
-    assert "trials" in document["zone_escape_feedback"]
-    assert document["zone_escape_feedback"]["dependency_expansion_limit"] == 2
-    assert document["zone_escape_feedback"]["incremental_placement_enabled"] is True
-    assert all("changed_references" in trial and "rebuilt_zone_nets" in trial
-               for trial in document["zone_escape_feedback"]["trials"])
-    assert all("repair_nets" in trial and "dependency_expansions" in trial and "strategy" in trial
-               for trial in document["zone_escape_feedback"]["trials"])
-    assert all("failed_signals" in trial and "decision" in trial
-               for trial in document["zone_escape_feedback"]["trials"])
+    assert "zone_escape_feedback" not in document
     assert pcb.read_text(encoding="utf-8").startswith("(kicad_pcb")
     assert pcb.with_suffix(".kicad_pro").is_file()
     assert "BOARD ROUTE:" in result.stdout

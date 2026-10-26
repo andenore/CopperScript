@@ -36,7 +36,6 @@ class RunIssue:
     layers: list[str] = field(default_factory=list)
     objects: list[str] = field(default_factory=list)
     points: list[tuple[float, float]] = field(default_factory=list)
-    caused_by: str | None = None
 
     def window(self, margin: float = 1.5, minimum: float = 4.0) -> list[float] | None:
         if not self.points:
@@ -55,14 +54,11 @@ class RunIssue:
     def document(self, *, limit: int = 8) -> dict[str, object]:
         def capped(values):
             return values[:limit] + ([f"+{len(values) - limit} more"] if len(values) > limit else [])
-        result: dict[str, object] = {
+        return {
             "id": self.id, "stage": self.stage, "code": self.code, "title": self.title, "count": self.count,
             "nets": capped(sorted(self.nets)), "layers": sorted(self.layers), "objects": capped(self.objects),
             "window_mm": self.window(), "markers": len(self.points),
         }
-        if self.caused_by:
-            result["caused_by"] = self.caused_by
-        return result
 
 
 @dataclass
@@ -576,9 +572,8 @@ def render_issues(document: dict[str, object]) -> str:
     for issue in document["issues"]:
         window = issue["window_mm"]
         where = (f"[{window[0]:.2f},{window[1]:.2f} .. {window[2]:.2f},{window[3]:.2f}]" if window else "[no position]")
-        cause = f"  <- {issue['caused_by']}" if issue.get("caused_by") else ""
         layers = f" {'/'.join(issue['layers'])}" if issue["layers"] else ""
-        lines.append(f"{issue['id']:<4} {issue['code']:<22} {where}{layers}  {issue['title']}{cause}")
+        lines.append(f"{issue['id']:<4} {issue['code']:<22} {where}{layers}  {issue['title']}")
     if document["omitted"]:
         lines.append(f"... {document['omitted']} more (use --limit)")
     lines.append("View one: copper view RUN --issue ID")

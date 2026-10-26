@@ -9,8 +9,7 @@ from pcbir.decoupling_paths import refresh_crosslayer_witnesses, validate_crossl
 from pcbir.drc import physical_board_digest, run_physical_drc
 from pcbir.fanout import route_fanout
 from pcbir.bypass_links import verified_bypass_links as _verified_bypass_links
-from pcbir.physical import (CopperLayer, FootprintPad, NetRoutingRule, PadReference,
-                            PhysicalNet, Point, RouteKind, Size, TrackSegment)
+from pcbir.physical import FootprintPad, PadReference, Point, Size, TrackSegment
 from test_decoupling_crosslayer_paths import fixture
 
 
@@ -197,38 +196,3 @@ def test_regeneration_ownership_map_includes_exact_original_alternative_via():
     assert len(verified)==2
     assert {id(v) for v in result.decoupling_vias}<={id(v) for vs in vias.values() for v in vs}
     assert {id(t) for t in result.decoupling_tracks}<={id(t) for ts in paths.values() for t in ts}
-
-
-def contact_scene(*, shared_return=False):
-    board=shared_board()
-    if shared_return:
-        # An independent supply cohort borrows P as its declared return. Its
-        # immutable source branch reaches the first cap's P land. The generous
-        # explicit fixture budgets accommodate that deliberately long branch.
-        a,c=board.decoupling_links
-        pose=replace(board.placements[1],reference='INVERSE',position=Point.mm(6,5))
-        other=replace(a,capacitor=PadReference('INVERSE','1'),return_pad=PadReference('INVERSE','2'),
-                      target=PadReference(a.target.component,'G'),net=a.return_net,return_net=a.net)
-        points=((11.5,9),(15,9),(15,3),(5.5,3),(5.5,5))
-        branch=tuple(TrackSegment(a.net,Point.mm(*x),Point.mm(*y),150000,CopperLayer.BACK)
-                     for x,y in zip(points,points[1:]))
-        board=replace(board,tracks=branch,placements=(*board.placements,pose),
-            decoupling_links=(a,other,c),
-            net_routing_rules=tuple(replace(r,max_vias=4,max_length_nm=100_000_000)
-                                    for r in board.net_routing_rules),
-            nets=tuple(replace(n,pads=(*n.pads,other.capacitor if n.name==other.net else other.return_pad))
-                       for n in board.nets))
-    board=replace(board,nets=(*board.nets,PhysicalNet('PAIR_A',()),PhysicalNet('PAIR_B',())),
-        net_routing_rules=(*board.net_routing_rules,
-            *(NetRoutingRule(n,RouteKind.DIFFERENTIAL,width_nm=100000,pair_gap_nm=100000,
-                             differential_partner=partner)
-              for n,partner in (('PAIR_A','PAIR_B'),('PAIR_B','PAIR_A')))))
-    baseline=route_outward_fixture(board) if shared_return else route_fanout(board)
-    assert not baseline.decoupling_pending
-    site=baseline.decoupling_witnesses[0].supply_path.vias[0].position
-    obstacles=(TrackSegment('PAIR_A',Point(site.x_nm-50000,site.y_nm),Point(site.x_nm+50000,site.y_nm),
-                            100000,CopperLayer.FRONT),
-               TrackSegment('PAIR_B',Point.mm(2,2),Point.mm(2.1,2),100000,CopperLayer.FRONT))
-    return board,baseline,obstacles
-
-

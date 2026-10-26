@@ -101,7 +101,7 @@ def test_final_geometry_deltas_are_measured_without_inventing_electrical_limits(
 
 
 @pytest.mark.parametrize("change", ["signal", "critical", "native-open", "hard", "ground",
-                                    "duplicate", "fanout", "access", "overflow", "independent", "coverage"])
+                                    "duplicate", "overflow", "independent", "coverage"])
 def test_faster_regressed_run_never_gets_timing_ratio(tmp_path, change):
     after = report()
     if change == "signal":
@@ -112,11 +112,9 @@ def test_faster_regressed_run_never_gets_timing_ratio(tmp_path, change):
         after["drc"]["findings"].append({"code": "DRC-OPEN-NET", "severity": "error", "nets": ["A"]})
     elif change == "hard":
         after["drc"]["findings"].append({"code": "DRC-CLEARANCE", "severity": "error", "nets": ["A", "B"]})
-    elif change in {"ground", "duplicate", "fanout"}:
-        stage = {"ground": "plane_stitch", "duplicate": "duplicate_pad_stitch", "fanout": "fanout"}[change]
+    elif change in {"ground", "duplicate"}:
+        stage = {"ground": "plane_stitch", "duplicate": "duplicate_pad_stitch"}[change]
         after[stage]["pending_pads"] = ["U1.1"]
-    elif change == "access":
-        after["package_access"]["status"] = "blocked"
     elif change == "overflow":
         after["detailed"]["metrics"]["total_conflict_overflow"] = 1
     elif change == "independent":

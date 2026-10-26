@@ -354,10 +354,9 @@ def test_route_and_preflight_reports_list_each_array(tmp_path):
     sidecar = json.loads((source.parent / "out.via-process.json").read_text())
     assert sorted(via["position_nm"] for via in sidecar["vias"]) == sorted(array["positions_nm"])
     from pcbir.critical_preflight import main
-    for extra in ([], ["--package-access"]):
-        report = source.parent / "preflight.json"
-        assert main([str(source), "--report", str(report), *extra]) in {0, 1}
-        [preflight] = json.loads(report.read_text())["via_in_pad_arrays"]
-        assert preflight["count"] == 9 and preflight["placed"]
+    report = source.parent / "preflight.json"
+    assert main([str(source), "--report", str(report)]) in {0, 1}
+    [preflight] = json.loads(report.read_text())["via_in_pad_arrays"]
+    assert preflight["count"] == 9 and preflight["placed"]
     # A permission alone adds no report section.
     assert "via_in_pad_arrays" not in _route_report(_project(tmp_path / "plain", ""))

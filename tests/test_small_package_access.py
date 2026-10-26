@@ -1,26 +1,7 @@
 from dataclasses import replace
 
-from pcbir import (
-    BoardOutline,
-    CopperLayer,
-    CopperZone,
-    FootprintPad,
-    PadReference,
-    PhysicalBoard,
-    PhysicalFootprint,
-    PhysicalNet,
-    Placement,
-    Point,
-    PolygonRing,
-    PolygonWithHoles,
-    Size,
-    Stackup,
-    TrackSegment,
-    nm_from_mm,
-)
+from pcbir import (BoardOutline, FootprintPad, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, Size, TrackSegment, nm_from_mm)
 from pcbir.fanout import FanoutOptions, route_fanout
-from pcbir.routing import route_global
-from test_package_access import fixture
 
 
 def small_package(pitch=.65):
@@ -51,14 +32,3 @@ def test_default_fanout_does_not_force_two_terminal_passive_vias():
         nets=(PhysicalNet("V3V3", (PadReference("R", "1"), PadReference("R", "2"))),))
     result = route_fanout(passive)
     assert not result.pin_analysis and not result.board.vias
-
-
-def plane_fixture():
-    board, _, fanout, _ = fixture()
-    board = replace(board, stackup=Stackup(copper_layers=(CopperLayer.FRONT, CopperLayer.INTERNAL_1,
-        CopperLayer.INTERNAL_2, CopperLayer.BACK)),
-        zones=(CopperZone("plane", "B", (CopperLayer.INTERNAL_1,),
-                         PolygonWithHoles(PolygonRing(board.outline.vertices))),))
-    return board, route_global(board), fanout
-
-

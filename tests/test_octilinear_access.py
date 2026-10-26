@@ -81,7 +81,7 @@ def test_critical_non_grid_terminals_remain_connected_with_octilinear_copper():
     base = replace(base, net_routing_rules=(rule,))
     result, tracks, vias = _route_single_exact(base, rule, route_global(base), [], [])
     assert result.connected, result.diagnostics
-    assert result.strategy == "exact_single_net"
+    assert result.strategy == "unified_single_net"
     assert all(_heading(t.start, t.end) is not None for t in tracks)
     assert not any(f.code in {"DRC-OPEN-NET", "DRC-SHORT", "DRC-CLEARANCE"}
                    for f in run_physical_drc(replace(base, tracks=tracks, vias=vias)).findings)

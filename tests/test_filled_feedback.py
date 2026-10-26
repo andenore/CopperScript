@@ -30,7 +30,7 @@ from pcbir.routing_clearance import RoutingClearanceIndex
 from pcbir.manufacturing import CommandResult
 from pcbir.physical import BoardSide, IslandPolicy, ZoneConnection
 from pcbir.physical import Via
-from test_autonomous_routing_quality import terminal, rectangle, pipeline, hard_findings
+from routing_fixtures import terminal, rectangle, pipeline, hard_findings
 from test_autonomous_plane_access import with_test_owners
 from pcbir.hard_macros import materialize_hard_macros, validate_hard_macros
 from pcbir.pad_via_arrays import require_via_in_pad_arrays, via_in_pad_array_vias

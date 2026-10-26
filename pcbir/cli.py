@@ -1989,6 +1989,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "filled_copper_trials", "filled_copper_search_states", "decoupling_placement_trials",
                     "placement_seeds", "placement_refinement_passes", "escape_spacing_passes")} | {
                     "congestion_feedback_trials": _congestion_feedback_budget(args),
+                    # Older reports name the router; there is only one now.
+                    "router": "unified",
                     "ignored_flags": unified_flag_notes["ignored_flags"],
                     "mapped_flags": unified_flag_notes["mapped_flags"]},
                 "erc_diagnostics": [str(item) for item in diagnostics],

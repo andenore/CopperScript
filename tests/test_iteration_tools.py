@@ -41,7 +41,6 @@ def run_dir(board, tmp_path_factory):
     nm = lambda p: [round(p[0] * 1e6), round(p[1] * 1e6)]
     report = {
         "schema": "copperscript-route-board/v0.1", "status": "fail", "routing_complete": False,
-        "package_access": {"pending_pads": [f"{first.ref}.{first.pad}"], "failed_critical_nets": []},
         "plane_verification": {"native_findings": [
             {"type": "unconnected_items", "description": "Missing connection between items", "items": [
                 {"kind": "pad", "component": first.ref, "pad": first.pad, "net": "N1", "layers": ["F.Cu"],
@@ -54,7 +53,7 @@ def run_dir(board, tmp_path_factory):
         "drc": {"findings": [{"code": "DRC-OPEN-NET", "severity": "error", "nets": ["N1"], "objects": [],
                               "message": "net 'N1' is not connected"}]},
         "detailed": {"nets": [{"net": n, "connected": False,
-                               "diagnostics": ["area routing blocked: package-access preflight incomplete"]}
+                               "diagnostics": ["search budget exhausted"]}
                               for n in ("N1", "N2", "N3")]},
     }
     (directory / "route-report.json").write_text(json.dumps(report))
@@ -94,20 +93,20 @@ def test_run_issues_group_locate_and_link_causes(run_dir):
     run = load_run(run_dir)
     issues = run_issues(run)
     codes = [i.code for i in issues]
-    assert codes == ["PENDING-PACKAGE-EXIT", "UNCONNECTED_ITEMS", "VIA_DANGLING", "DRC-OPEN-NET", "NET-UNROUTED"]
-    pending = find_issue(issues, "p1")
-    assert pending.window() is not None and pending.objects
+    assert codes == ["UNCONNECTED_ITEMS", "VIA_DANGLING", "DRC-OPEN-NET", "NET-UNROUTED"]
+    native = find_issue(issues, "n1")
+    assert native.window() is not None and native.objects
     routing = find_issue(issues, "R1")
-    assert routing.count == 3 and routing.caused_by == "P1"
+    assert routing.count == 3 and routing.nets == ["N1", "N2", "N3"]
     assert [i.id for i in filter_issues(issues, net="N2")] == ["N2", "R1"]
     text = render_issues(issues_document(run, issues))
-    assert "findings: PENDING-PACKAGE-EXIT 1" in text and "<- P1" in text
+    assert "findings: UNCONNECTED_ITEMS 1" in text and "search budget exhausted" in text
 
 
 def test_balanced_limit_keeps_every_stage_visible(run_dir):
     run = load_run(run_dir)
     document = issues_document(run, run_issues(run), limit=3)
-    assert {item["id"][0] for item in document["issues"]} == {"P", "N", "O"} and document["omitted"] == 2
+    assert {item["id"][0] for item in document["issues"]} == {"N", "O", "R"} and document["omitted"] == 1
 
 
 def test_view_renders_png_and_legend(run_dir, tmp_path):
@@ -307,7 +306,6 @@ def test_estimated_plane_opens_are_located_when_no_native_check_ran(tmp_path, ru
 
 def test_unconnected_global_routes_explain_a_blocked_access_stage(run_dir, tmp_path):
     report = json.loads((run_dir / "route-report.json").read_text())
-    report["package_access"] = {"pending_pads": [], "failed_critical_nets": []}
     report["global"] = {"status": "unreachable", "routes": [
         {"net": "N1", "connected": False, "deferred_to_zone": False,
          "diagnostics": ["no legal bounded local/global access for R1.1"]},
@@ -326,7 +324,6 @@ def test_unconnected_global_routes_explain_a_blocked_access_stage(run_dir, tmp_p
     assert global_issue.code == "GLOBAL-UNROUTED" and global_issue.stage == "global"
     assert global_issue.nets == ["N1", "N2"] and global_issue.objects == ["R1.1"]
     assert "GND" not in global_issue.nets
-    assert find_issue(issues, "R1").caused_by == "G1"
     assert [i.id for i in filter_issues(issues, stage="global")] == ["G1"]
 
 

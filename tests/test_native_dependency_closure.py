@@ -28,7 +28,7 @@ from pcbir.hard_macros import materialize_hard_macros
 from pcbir.pad_via_arrays import via_in_pad_array_vias
 from pcbir.plane_verify import verify_filled_planes, remove_native_dangling_copper
 from pcbir.filled_feedback import _proposals
-from test_autonomous_routing_quality import pipeline, rectangle, terminal
+from routing_fixtures import pipeline, rectangle, terminal
 from test_filled_feedback import fragmented
 from test_autonomous_plane_access import with_test_owners
 
@@ -41,7 +41,7 @@ def native_cli():
     return path
 
 
-def dependency_case(renamed=False, settled_witness=False):
+def dependency_case(renamed=False, settled_witness=False, with_fanout=False):
     source = fragmented(renamed=renamed)
     signal = 'CONTROL_28' if renamed else 'SIGNAL'
     refs = ('DEVICE_A', 'DEVICE_B') if renamed else ('S1', 'S2')
@@ -81,11 +81,12 @@ def dependency_case(renamed=False, settled_witness=False):
         boundary_accesses={PadReference(ref, '1'): RoutingAccess(
             Point.mm(8, y), CopperLayer.BACK, Point.mm(9, y), (witness,))
             for ref, y, witness in zip(refs, (3, 9), witnesses)})
-    original = replace(original, fanout=fanout, detailed=replace(original.detailed, board=routed))
+    original = replace(original, detailed=replace(original.detailed, board=routed))
     bridge = TrackSegment(source.nets[0].name, Point.mm(3, 6), Point.mm(17, 6),
                           nm_from_mm('0.25'), CopperLayer.FRONT)
     fixed = replace(settled, tracks=(*settled.tracks, bridge))
-    return original, fixed, area, area_vias, signal
+    case = original, fixed, area, area_vias, signal
+    return (*case, fanout) if with_fanout else case
 
 
 def test_native_evidence_relative_directory_survives_changed_subprocess_cwd(native_cli, tmp_path, monkeypatch):
@@ -227,12 +228,12 @@ def test_native_opposite_layer_items_use_only_existing_copper_transitions(
 def test_required_unified_ports_survive_replay_and_reject_stale_witnesses(tmp_path):
     from pcbir.unified_router import UnifiedRouterOptions, route_unified, replay_unified
     from pcbir.state_codec import load_state, save_state
-    initial, fixed, _, _, signal = dependency_case()
+    initial, fixed, _, _, signal, fanout = dependency_case(with_fanout=True)
     path = tmp_path / 'required.state.json'
     options = UnifiedRouterOptions(pitch_nm=nm_from_mm('0.25'), maximum_iterations=4,
         commit_rounds=2, time_budget_s=10, save_inputs_path=str(path))
     routed = route_unified(fixed, initial.placement_and_global.global_route, options,
-        only_nets=frozenset({signal}), required_accesses=initial.fanout.boundary_accesses)
+        only_nets=frozenset({signal}), required_accesses=fanout.boundary_accesses)
     replayed = replay_unified(path, save_inputs_path=None)
     assert replayed.board.tracks == routed.board.tracks
     assert replayed.board.vias == routed.board.vias

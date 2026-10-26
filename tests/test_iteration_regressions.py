@@ -78,7 +78,7 @@ def test_filled_view_does_not_substitute_another_trial(tmp_path, damage):
     assert load_run(tmp_path).filled_board_path is None
 
 
-@pytest.mark.parametrize("stage", ["placement", "package-preflight", "package-access"])
+@pytest.mark.parametrize("stage", ["placement"])
 def test_stopped_cli_exports_exact_stage_copper_without_final_processing(tmp_path, stage, monkeypatch):
     import pcbir.cli as cli
     import pcbir.route_cleanup as cleanup
@@ -104,7 +104,7 @@ def test_stopped_cli_exports_exact_stage_copper_without_final_processing(tmp_pat
         completed.append(result)
         # Guards are installed after the selected stage legitimately finishes.
         for name in ("stitch_zone_pads", "stitch_duplicate_pads", "run_physical_drc",
-                     "improve_filled_copper", "verify_filled_planes"):
+                     "improve_filled_copper"):
             monkeypatch.setattr(cli, name, forbidden)
         monkeypatch.setattr(cleanup, "trim_dangling_overhangs", forbidden)
         return result
@@ -114,8 +114,6 @@ def test_stopped_cli_exports_exact_stage_copper_without_final_processing(tmp_pat
     output = tmp_path / "board.kicad_pcb"
     code = cli.main([
         "route-board", str(source), "--allow-proxy-footprints", "--stop-after", stage,
-        # Package stops end the legacy package-access stage; unified has none.
-        *(("--router", "legacy") if stage != "placement" else ()),
         "--candidates", "1", "--checkpoint-dir", str(tmp_path / "checkpoint"),
         "--report", str(report), "-o", str(output), "--verify-plane-fill", "must-not-run",
     ])

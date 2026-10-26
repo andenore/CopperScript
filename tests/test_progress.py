@@ -51,10 +51,8 @@ def test_pipeline_progress_leaves_every_result_and_fingerprint_identical():
     phases = [(phase, event) for phase, event, _ in events]
     assert phases.index(('placement_candidates', 'finished')) < phases.index(('global_graph', 'started'))
     assert phases.index(('placement_global_certification', 'finished')) < phases.index(('placement_global', 'finished'))
-    assert phases.index(('ordinary_package_exits', 'finished')) < phases.index(('ordinary_area', 'started'))
+    assert phases.index(('ordinary_escapes', 'started')) < phases.index(('ordinary_area', 'started'))
     assert phases[-1] == ('land_closure_native_drc', 'finished')
-    assert next(d for p, e, d in events if p == 'package_access' and e == 'finished')['ready']
-    assert ('detailed_net', 'started') in phases
 
 
 def test_real_critical_group_progress_is_forwarded_before_area_routing():

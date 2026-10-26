@@ -23,7 +23,10 @@ def test_shared_route_defaults_auto_select_placement_without_make():
     options = shlex.split(defaults.replace("\\\n", " ").replace("$(ROUTE_CANDIDATES)", "1"))
     args = _parser().parse_args(["route-board", "example.copper", *options])
     assert args.placement_candidate is None
-    assert args.fanout and args.package_pattern_trials == 2
+    assert args.fanout
+    # The shared recipe passes no removed router flag.
+    from pcbir.cli import _unified_flag_notes
+    assert _unified_flag_notes(args)["ignored_flags"] == []
 
 
 def evidence(output):

@@ -3,19 +3,15 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import replace
-from types import MappingProxyType
 
-import pytest
 
-from pcbir import (BoardOutline, CopperLayer, FootprintPad, NetRoutingRule, PadReference, PhysicalBoard,
-                   PhysicalFootprint, PhysicalNet, Placement, Point, RouteKind, Size, TrackSegment, Via,
-                   nm_from_mm, route_global, run_physical_drc)
+from pcbir import (BoardOutline, CopperLayer, FootprintPad, NetRoutingRule, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, RouteKind, Size, TrackSegment, nm_from_mm, route_global, run_physical_drc)
 from pcbir.breakout import BreakoutRegions
 from pcbir.unified_router import UnifiedRouterOptions, route_unified
 from pcbir.drc import explicit_copper_connectivity
-from pcbir.geometry import RoundedConvexShape, point_on_segment, shapes_clear
+from pcbir.geometry import RoundedConvexShape, shapes_clear
 from pcbir.physical import DesignRules
-from pcbir.pin_escape import RoutingAccess, checked_access_path, verified_routing_access
+from pcbir.pin_escape import checked_access_path
 from pcbir.route_cleanup import prune_track_stubs
 from pcbir.route_smoothing import smooth_owned_tracks
 from pcbir.routing_clearance import RoutingClearanceIndex
@@ -78,25 +74,6 @@ def _connected(board: PhysicalBoard) -> bool:
     return all(graph.net_connected(net) for net in board.nets)
 
 
-def _open_ends(board: PhysicalBoard) -> int:
-    """Track ends no other copper continues: not on a centre line, a via or a land."""
-    from pcbir.drc import placed_pad_shape
-    from pcbir.placement import transformed_local_point
-    lands = [placed_pad_shape(transformed_local_point(placement, pad.position), pad, placement)
-             for placement in board.placements for pad in board.footprints[placement.footprint].pads]
-    count = 0
-    for index, track in enumerate(board.tracks):
-        for point in (track.start, track.end):
-            if not (any(number != index and other.layer is track.layer
-                        and point_on_segment(point, other.start, other.end)
-                        for number, other in enumerate(board.tracks))
-                    or any(via.position == point for via in board.vias)
-                    or track.layer is FRONT and any(not shapes_clear(RoundedConvexShape((point,)), land, 1)
-                                                    for land in lands)):
-                count += 1
-    return count
-
-
 # --- search and emission ---------------------------------------------------
 
 def test_a_wide_ordinary_net_reaches_a_fine_pitch_pin_only_by_necking_down() -> None:
@@ -153,18 +130,6 @@ def test_routing_checks_and_emits_each_centreline_as_its_pieces() -> None:
 
 # --- cleanup ---------------------------------------------------------------
 
-def test_smoothing_keeps_necked_chains_inside_and_wide_chains_outside() -> None:
-    board = _board(rotated=True, nets=(("VDD", ("U1.3", "U2.3", "J1.1")),))
-    plain = _route(board, octilinear_search=False)
-    smoothed = _route(board, octilinear_search=False, route_smoothing=True)
-    assert plain.nets[0].connected and smoothed.nets[0].connected
-    assert Counter(smoothed.board.tracks) != Counter(plain.board.tracks)
-    assert smoothed.metrics.total_length_nm <= plain.metrics.total_length_nm
-    for result in (plain, smoothed):
-        assert not _misnecked(board, result.board.tracks)
-        assert {t.width_nm for t in result.board.tracks} == {NARROW, WIDE}
-        assert not _hard_errors(result.board) and _connected(result.board)
-
 
 def test_smoothing_a_necked_staircase_checks_and_emits_its_pieces() -> None:
     board = _board(breakout=True)
@@ -201,73 +166,7 @@ def test_stub_pruning_joins_neck_down_cuts_on_one_centre_line() -> None:
     assert prune_track_stubs(_board(breakout=False), copper) == copper
 
 
-def _escaped(*, boxed: bool = False):
-    """U1.3 has a reserved escape: a necked stub to a launch via and a back witness.
-
-    ``boxed`` fences the pin field and the stub with front keepouts, so the
-    escape is the pin's only exit.
-    """
-    from pcbir.physical import CopperKeepout, PolygonRing, PolygonWithHoles
-
-    def keepout(name, left, top, right, bottom):
-        return CopperKeepout(name, (FRONT,), PolygonWithHoles(PolygonRing((
-            Point.mm(left, top), Point.mm(right, top), Point.mm(right, bottom), Point.mm(left, bottom)))),
-            block_tracks=True, block_vias=True, block_zones=False)
-
-    board = _board()
-    stub = BreakoutRegions(board).split_tracks(
-        (TrackSegment("VDD", Point.mm(10, 8), Point.mm(10, "9.6"), WIDE, FRONT),), WIDE)
-    witness = TrackSegment("VDD", Point.mm(10, "9.6"), Point.mm(10, 11), WIDE, BACK)
-    via = Via("VDD", witness.start, board.rules.default_via_size_nm, board.rules.default_via_drill_nm)
-    keepouts = ((keepout("west", "8.6", 6, "9.2", "10.4"), keepout("east", "10.8", 6, "11.4", "10.4"),
-                 keepout("north", "8.6", 6, "11.4", "7.0"), keepout("south", "8.6", "10.4", "11.4", 11))
-                if boxed else ())
-    board = replace(board, tracks=(*stub, witness), vias=(via,), copper_keepouts=keepouts)
-    access = RoutingAccess(witness.end, BACK, via.position, (witness,))
-    return board, MappingProxyType({U1_3: access}), (*stub, witness), via
-
-
-@pytest.mark.parametrize("boxed", (False, True))
-def test_escape_release_and_cleanup_keep_widths_correct(boxed: bool) -> None:
-    board, accesses, created, via = _escaped(boxed=boxed)
-    assert created[0].width_nm == NARROW and not _hard_errors(board) - {"DRC-OPEN-NET"}
-    # The necked land path verifies as the pin's escape.
-    assert verified_routing_access(board, U1_3, "VDD", accesses[U1_3], RoutingClearanceIndex(board))
-    routed = route_unified(
-        board, route_global(replace(board, tracks=(), vias=())),
-        UnifiedRouterOptions(route_smoothing=True),
-        fanout_accesses=accesses, fanout_created_tracks=created,
-        fanout_created_vias=frozenset({(via.net, via.position)}))
-    assert routed.nets[0].connected, routed.nets[0].diagnostics
-    final = routed.board
-    assert not _misnecked(board, final.tracks)
-    assert not _hard_errors(final) and _connected(final)
-    # Unused escape copper is released without leaving a tail at the cut.
-    assert _open_ends(final) == 0
-    if boxed:
-        assert via in final.vias and set(created[:2]) <= set(final.tracks)
-    else:
-        assert not final.vias and not set(created[2:]) & set(final.tracks)
-
-
 # --- unchanged elsewhere ---------------------------------------------------
-
-def test_nets_without_breakout_properties_route_exactly_as_before(monkeypatch) -> None:
-    board = _board(breakout=False, width=NARROW, rotated=True,
-                   nets=(("VDD", ("U1.3", "U2.3", "J1.1")), ("SIG", ("U1.1", "J2.1"))))
-    options = dict(octilinear_search=False, route_smoothing=True)
-    current = _route(board, **options)
-    assert current.nets[0].connected and current.nets[1].connected
-    # The pre-R1 calls: whole tracks at the profile width.
-    monkeypatch.setattr(RoutingClearanceIndex, "can_route", RoutingClearanceIndex.can_track)
-    monkeypatch.setattr(RoutingClearanceIndex, "route_pieces",
-                        lambda self, *segment: (TrackSegment(*segment),))
-    monkeypatch.setattr(RoutingClearanceIndex, "route_blockers",
-                        lambda self, *segment: self.blocking_track_nets(TrackSegment(*segment)))
-    monkeypatch.setattr(BreakoutRegions, "neck_down", lambda self, tracks: pytest.fail("re-cut"))
-    legacy = _route(board, **options)
-    assert legacy.board.tracks == current.board.tracks and legacy.board.vias == current.board.vias
-    assert legacy.routing_fingerprint == current.routing_fingerprint
 
 
 def test_neck_down_routing_is_deterministic() -> None:

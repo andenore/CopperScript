@@ -108,7 +108,7 @@ def test_plane_pad_escapes_are_reserved_before_detailed_signals() -> None:
     assert result.plane_stitch.added_via_count >= 1
     assert result.detailed.locked_via_count == result.plane_stitch.added_via_count
     assert result.detailed.metrics.routed_net_count == 1
-    assert result.detailed_feedback_trials == 0
+    assert result.placement_feedback is None or not result.placement_feedback.trials
     assert result.board.vias[:result.detailed.locked_via_count] == result.plane_stitch.board.vias
 
 
@@ -123,8 +123,7 @@ def test_direct_unified_routes_clock_without_legacy_bootstrap(monkeypatch):
             max_length_nm=nm_from_mm(18), allowed_layers=(CopperLayer.FRONT,)),))
     def forbidden(*args, **kwargs):
         raise AssertionError("direct unified routing invoked a legacy solver")
-    for name in ("route_critical_nets", "route_detailed", "_plan_decouplers", "_plan_ordinary_escapes",
-                 "improve_critical_placement"):
+    for name in ("route_critical_nets", "_plan_decouplers", "_plan_ordinary_escapes"):
         monkeypatch.setattr(flow_module, name, forbidden)
     result = run_routing_pipeline(board,
         placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0, refinement_passes=0,

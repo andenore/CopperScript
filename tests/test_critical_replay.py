@@ -56,7 +56,6 @@ def test_critical_replay_cli_is_explicitly_diagnostic_and_writes_locatable_repor
 @pytest.mark.parametrize("length_limit", (1000000, 40000000))
 def test_unified_single_fallback_keeps_the_real_source_profile(monkeypatch, kind, length_limit):
     import pcbir.critical as critical
-    import pcbir.detailed as detailed
     from pcbir.critical import _route_single_exact
     from pcbir.unified_router import UnifiedRouterOptions
     board = _pair_board()
@@ -64,9 +63,6 @@ def test_unified_single_fallback_keeps_the_real_source_profile(monkeypatch, kind
         allowed_layers=(CopperLayer.FRONT,), max_vias=0, max_length_nm=length_limit)
     board = replace(board, net_routing_rules=(rule,))
     guides = route_global(board)
-    def forbidden(*args, **kwargs):
-        raise AssertionError("selected unified fallback used the legacy detailed engine")
-    monkeypatch.setattr(detailed, "route_detailed", forbidden)
     # Force the fallback under test; bounded local surface routing is allowed
     # to succeed first in normal operation.
     monkeypatch.setattr(critical, "local_surface_candidates", lambda *a, **kw: ())
@@ -84,16 +80,12 @@ def test_unified_single_fallback_keeps_the_real_source_profile(monkeypatch, kind
 
 
 def test_unified_critical_fallback_connects_every_tree_terminal(monkeypatch):
-    import pcbir.detailed as detailed
     from pcbir.critical import _route_single_exact
     from pcbir.unified_router import UnifiedRouterOptions
     from test_local_critical import fixture, hard_findings
 
     board, guides = fixture(tree=True)
     rule = board.net_routing_rules[0]
-    def forbidden(*args, **kwargs):
-        raise AssertionError("critical tree fell back to the legacy engine")
-    monkeypatch.setattr(detailed, "route_detailed", forbidden)
     result, tracks, vias = _route_single_exact(board, rule, guides, [], [],
         unified_options=UnifiedRouterOptions(time_budget_s=10))
     assert result.connected and result.strategy == "unified_critical"
@@ -183,7 +175,6 @@ def test_critical_cohort_uses_shared_engine_and_preserves_profile(monkeypatch, l
 def test_failed_cohort_owner_retries_without_reopening_accepted_peer(monkeypatch, kind):
     import pcbir.critical as critical
     import pcbir.unified_router as unified
-    import pcbir.detailed as detailed
     from test_local_critical import hard_findings
     board = _single_critical_board()
     board = replace(board, net_routing_rules=tuple(replace(r, kind=kind)
@@ -204,11 +195,8 @@ def test_failed_cohort_owner_retries_without_reopening_accepted_peer(monkeypatch
                 nets=tuple(replace(n, connected=False, track_count=0, length_nm=0)
                     if n.net == "USB_DM" else n for n in result.nets))
         return result
-    def forbidden(*args, **kwargs):
-        raise AssertionError("cohort retry used legacy routing")
     monkeypatch.setattr(unified, "route_unified", bounded_miss)
     monkeypatch.setattr(critical, "local_surface_candidates", lambda *a, **kw: ())
-    monkeypatch.setattr(detailed, "route_detailed", forbidden)
     result = route_critical_nets(board, route_global(board),
         unified_options=unified.UnifiedRouterOptions(time_budget_s=10))
     assert calls == [frozenset({"USB_DM", "USB_DP"}), frozenset({"USB_DM"})]

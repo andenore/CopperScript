@@ -14,23 +14,22 @@ def test_profiles_are_bounded_and_explicit_options_win():
     assert _parser().parse_args(["route-board", "board.copper"]).stitch_surface_zones
     assert not _parser().parse_args(["route-board", "board.copper",
                                     "--no-stitch-surface-zones"]).stitch_surface_zones
-    for name, limits in (("quick", (1,10000,2,4,2,2000)),
-                         ("balanced", (2,30000,8,16,8,4000)),
-                         ("thorough", (4,100000,16,32,16,12000))):
+    for name, limits in (("quick", (2,2000,4)),
+                         ("balanced", (8,4000,16)),
+                         ("thorough", (16,12000,64))):
         argv = ["route-board", "board.copper", "--routing-profile", name]
         args = _parser().parse_args(argv)
         unprofiled = (args.pin_access_step_mm, args.placement_feedback_trials)
         _apply_routing_profile(args, argv)
         assert (args.pin_access_step_mm, args.placement_feedback_trials) == unprofiled
         assert tuple(getattr(args, field) for field in (
-            "passes", "search_budget", "package_access_trials", "package_placement_probes",
-            "filled_copper_trials", "filled_copper_search_states")) == limits
-        argv += ["--package-access-trials=0", "--filled-copper-trials", "0", "--passes", "7"]
+            "filled_copper_trials", "filled_copper_search_states", "decoupling_placement_trials")) == limits
+        argv += ["--filled-copper-trials", "0", "--decoupling-placement-trials=1"]
         args = _parser().parse_args(argv)
         unprofiled = (args.pin_access_step_mm, args.placement_feedback_trials)
         _apply_routing_profile(args, argv)
         assert (args.pin_access_step_mm, args.placement_feedback_trials) == unprofiled
-        assert args.package_access_trials == args.filled_copper_trials == 0 and args.passes == 7
+        assert args.filled_copper_trials == 0 and args.decoupling_placement_trials == 1
 
 
 @pytest.mark.parametrize("missing_tool", (False, True))

@@ -528,7 +528,7 @@ def test_single_ended_critical_net_repairs_stale_guide_with_exact_clearance() ->
                     placements=(*board.placements, Placement("X", "blocker", Point.mm(20, "11.5"))))
     result = route_critical_nets(board, guides)
     assert result.nets[0].connected
-    assert result.nets[0].strategy == "exact_single_net"
+    assert result.nets[0].strategy == "unified_critical"
     assert result.locked_tracks
     assert result.locked_vias == ()
     assert not any(finding.code in {"DRC-SHORT", "DRC-CLEARANCE"}
@@ -555,7 +555,7 @@ def test_later_single_critical_route_cannot_cut_a_reserved_pair() -> None:
     assert tuple(track for track in result.locked_tracks if track.net != "CROSS") == pair.locked_tracks
     assert not any(finding.code in {"DRC-SHORT", "DRC-CLEARANCE"}
                    for finding in run_physical_drc(result.board).findings)
-    assert result.nets[1].strategy == "exact_single_net"
+    assert result.nets[1].strategy == "unified_critical"
 
 
 def test_critical_transition_without_special_technology_is_through_via() -> None:

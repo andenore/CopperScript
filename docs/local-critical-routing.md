@@ -30,7 +30,7 @@ Fresh complete-candidate native DRC still checks every land and previous critica
 group. A connected incumbent is changed only for strictly shorter legal copper;
 an invalid guide may be repaired by a legal local candidate. Failed proposals
 preserve the incumbent, and failed local repair still permits the existing
-bounded single-net maze fallback. No accepted copper is dragged or deleted.
+bounded single-net unified fallback. No accepted copper is dragged or deleted.
 
 Critical reports and fingerprints include `local_candidate_attempts` and
 `guide_length_nm`. The latter measures the original proposed guide copper,
@@ -40,8 +40,8 @@ incumbent. Selected geometry is marked `local_surface_tree`; metrics are
 recomputed from emitted tracks, never inferred from close component placement.
 
 A coarse-guide tree that joins three or more lands and survives the local
-comparison is also compared with the bounded single-net maze
-(`exact_single_net`, the fallback above). The maze tree replaces it only when
+comparison is also compared with the bounded single-net unified search
+(`unified_critical`, the fallback above). The maze tree replaces it only when
 it is valid, strictly shorter and uses no more vias. Clock and RF-feed nets
 keep the guide. On a crystal net joining an IC pin, the crystal and its load
 capacitor, the guide had placed its junction 2 mm past the crystal; the maze

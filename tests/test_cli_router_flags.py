@@ -1,4 +1,4 @@
-"""route-board names the legacy-only flags that a unified-router run (the default) ignores."""
+"""route-board accepts and names the removed router's flags, which no longer apply."""
 import json
 
 import pcbir.cli as cli
@@ -26,10 +26,10 @@ def _board(tmp_path):
     return source, library.parent
 
 
-def _route(tmp_path, source, footprints, name, *extra, router=("--router", "unified")):
+def _route(tmp_path, source, footprints, name, *extra):
     report = tmp_path / f"{name}.json"
     code = cli.main(["route-board", str(source), "--footprint-root", str(footprints),
-        *router, "--unified-time-budget-s", "5",
+        "--unified-time-budget-s", "5",
         "--candidates", "1", "--feedback-iterations", "1", "--router-iterations", "1",
         "--progress", "--report", str(report), *extra])
     return code, json.loads(report.read_text())
@@ -44,8 +44,7 @@ def test_unified_route_board_reports_ignored_legacy_flags(tmp_path, capsys):
     source, footprints = _board(tmp_path)
     code, data = _route(tmp_path, source, footprints, "legacy-flags", "--passes", "7", "--search-budget", "123")
     assert code == 0
-    assert data["work_limits"]["unified_ignored_flags"] == ["--passes", "--search-budget"]
-    assert data["work_limits"]["unified_skipped_stage_flags"] == []
+    assert data["work_limits"]["ignored_flags"] == ["--passes", "--search-budget"]
     events = _router_events(capsys.readouterr().out)
     assert [(e["event"], e["details"]["ignored_flags"]) for e in events] == [
         ("ignored", ["--passes", "--search-budget"])]
@@ -53,50 +52,34 @@ def test_unified_route_board_reports_ignored_legacy_flags(tmp_path, capsys):
     code, data = _route(tmp_path, source, footprints, "unified-only", "--unified-iterations", "20",
                         "--no-route-smoothing")
     assert code == 0
-    assert data["work_limits"]["unified_ignored_flags"] == []
-    assert data["work_limits"]["unified_skipped_stage_flags"] == []
+    assert data["work_limits"]["ignored_flags"] == []
+    assert data["work_limits"]["router"] == "unified"
     assert _router_events(capsys.readouterr().out) == []
 
-    # Without --router, route-board runs (and records) the unified router.
-    code, data = _route(tmp_path, source, footprints, "default-router", router=())
-    assert code == 0
-    assert data["work_limits"]["router"] == "unified"
 
-
-def test_unified_flag_notes_name_skipped_stage_flags_and_respect_scope(tmp_path):
+def test_removed_flags_are_accepted_and_reported_as_ignored():
     def notes(*extra):
         args = cli._parser().parse_args(["route-board", "board.copper", *extra])
         cli._apply_routing_profile(args, list(extra))
         return cli._unified_flag_notes(args)
 
-    assert notes("--router", "legacy", "--passes", "7") is None  # legacy router: every flag applies
-    # The unified router is the default.
-    assert notes("--passes", "7") == {"ignored_flags": ["--passes"], "skipped_stage_flags": [],
-                                     "mapped_flags": []}
-    assert notes("--router", "unified") == {"ignored_flags": [], "skipped_stage_flags": [], "mapped_flags": []}
-    assert notes("--router", "unified", "--fanout", "--no-route-smoothing",
-                 "--layer-preference-cost", "2") == {"ignored_flags": [], "skipped_stage_flags": [],
-                                                       "mapped_flags": []}
-    # Disabling a skipped stage is consistent with skipping it; enabling it is not.
-    assert notes("--router", "unified", "--package-access-trials", "0", "--zone-escape-trials", "2",
-                 "--zone-local-ripup-trials", "0", "--plan-power-areas", "--soft-ripup") == {
-        "ignored_flags": ["--soft-ripup"],
-        "skipped_stage_flags": ["--plan-power-areas", "--zone-escape-trials"], "mapped_flags": []}
+    none = {"ignored_flags": [], "mapped_flags": []}
+    assert notes() == none
+    assert notes("--fanout", "--no-route-smoothing", "--layer-preference-cost", "2") == none
+    assert notes("--passes", "7") == {"ignored_flags": ["--passes"], "mapped_flags": []}
+    # Every removed flag parses, including the old router selection and stage switches.
+    assert notes("--router", "legacy", "--package-access-trials", "0", "--zone-escape-trials", "2",
+                 "--plan-power-areas", "--soft-ripup")["ignored_flags"] == [
+        "--plan-power-areas", "--soft-ripup", "--router", "--package-access-trials", "--zone-escape-trials"]
     # --pitch-mm still sets global local-demand lanes when that cost is enabled.
-    assert notes("--router", "unified", "--pitch-mm", "0.5")["ignored_flags"] == ["--pitch-mm"]
-    assert notes("--router", "unified", "--pitch-mm", "0.5", "--local-demand-cost", "3")["ignored_flags"] == []
-    # Profile budgets that differ from the defaults are reported as well (quick keeps --passes 1).
-    assert notes("--router", "unified", "--routing-profile", "quick") == {
-        "ignored_flags": ["--search-budget"],
-        "skipped_stage_flags": ["--package-access-trials", "--package-placement-probes"], "mapped_flags": []}
-    # The legacy placement controllers' budgets map onto the congestion feedback loop.
-    assert notes("--router", "unified", "--critical-feedback-trials", "2", "--detailed-feedback-trials", "0") == {
-        "ignored_flags": [], "skipped_stage_flags": [], "mapped_flags": ["--critical-feedback-trials"]}
+    assert notes("--pitch-mm", "0.5")["ignored_flags"] == ["--pitch-mm"]
+    assert notes("--pitch-mm", "0.5", "--local-demand-cost", "3")["ignored_flags"] == []
+    # The old placement controllers' budgets map onto the congestion feedback loop.
+    assert notes("--critical-feedback-trials", "2", "--detailed-feedback-trials", "0") == {
+        "ignored_flags": [], "mapped_flags": ["--critical-feedback-trials"]}
     args = cli._parser().parse_args(["route-board", "board.copper", "--critical-feedback-trials", "2",
                                      "--detailed-feedback-trials", "3", "--congestion-feedback-trials", "4"])
     assert cli._congestion_feedback_budget(args) == 5
-    args.router = "legacy"
-    assert cli._congestion_feedback_budget(args) == 0
 
 
 BYPASS_SOURCE = '''board MappedFlags {
@@ -113,19 +96,18 @@ BYPASS_SOURCE = '''board MappedFlags {
 
 
 def test_unified_critical_feedback_trials_map_onto_the_congestion_loop(tmp_path, capsys):
-    # Before the congestion loop, the unified path handed its bypass-reserved
-    # critical board to the legacy critical controller, whose baseline check
-    # stopped the run ("stale or inconsistent" / "cannot rebuild package access").
+    # The critical placement controller is gone; its budget maps onto the
+    # congestion loop instead of stopping the run.
     source = tmp_path / "bypass.copper"
     source.write_text(BYPASS_SOURCE, encoding="utf-8")
     report = tmp_path / "mapped.json"
-    code = cli.main(["route-board", str(source), "--allow-proxy-footprints", "--router", "unified",
+    code = cli.main(["route-board", str(source), "--allow-proxy-footprints",
         "--unified-time-budget-s", "5", "--candidates", "1", "--feedback-iterations", "1",
         "--router-iterations", "1", "--progress", "--critical-feedback-trials", "2", "--report", str(report)])
     assert code == 0
     data = json.loads(report.read_text())
-    assert data["work_limits"]["unified_mapped_flags"] == ["--critical-feedback-trials"]
-    assert data["work_limits"]["unified_ignored_flags"] == []
+    assert data["work_limits"]["mapped_flags"] == ["--critical-feedback-trials"]
+    assert data["work_limits"]["ignored_flags"] == []
     assert data["work_limits"]["congestion_feedback_trials"] == 4  # max(default 4, mapped 2)
     assert "critical_placement_feedback" not in data
     feedback = data["placement_feedback"]
@@ -133,14 +115,6 @@ def test_unified_critical_feedback_trials_map_onto_the_congestion_loop(tmp_path,
     events = _router_events(capsys.readouterr().out)
     assert [(e["event"], e["details"]["mapped_flags"]) for e in events] == [
         ("mapped", ["--critical-feedback-trials"])]
-
-    # The legacy router keeps its own controllers and has no congestion loop.
-    source, footprints = _board(tmp_path)
-    code, data = _route(tmp_path, source, footprints, "legacy-mapped", "--critical-feedback-trials", "2",
-                        router=("--router", "legacy"))
-    assert code == 0
-    assert data["work_limits"]["congestion_feedback_trials"] == 0
-    assert "placement_feedback" not in data and "unified_mapped_flags" not in data["work_limits"]
 
 
 def test_fine_regions_flag_reaches_the_unified_router_and_the_report(tmp_path, capsys):
@@ -155,8 +129,7 @@ def test_fine_regions_flag_reaches_the_unified_router_and_the_report(tmp_path, c
         args = parsed("--fine-regions", mode)
         assert cli._unified_options(args).fine_regions == mode
         # A unified-router flag: never reported as ignored, skipped or mapped.
-        assert cli._unified_flag_notes(args) == {"ignored_flags": [], "skipped_stage_flags": [], "mapped_flags": []}
-    assert cli._unified_options(parsed("--router", "legacy", "--fine-regions", "dense")) is None
+        assert cli._unified_flag_notes(args) == {"ignored_flags": [], "mapped_flags": []}
 
     source, footprints = _board(tmp_path)
     code, data = _route(tmp_path, source, footprints, "default-fine-regions")

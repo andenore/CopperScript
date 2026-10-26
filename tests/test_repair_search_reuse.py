@@ -37,12 +37,6 @@ TELEMETRY = {"search_identity", "search_reuse", "reused_search_seconds",
              "search_seconds", "search_stats"}
 
 
-def _without_search_work(document: str) -> dict:
-    parsed = json.loads(document)
-    parsed.pop("search_work")
-    return parsed
-
-
 def _keepout(name: str, corners: tuple[Point, Point]) -> CopperKeepout:
     (x0, y0), (x1, y1) = ((item.x_nm, item.y_nm) for item in corners)
     return CopperKeepout(name, (CopperLayer.FRONT,), PolygonWithHoles(PolygonRing(
@@ -83,12 +77,6 @@ def _guides(board):
         board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2))).routes}
 
 
-def _without_telemetry(events):
-    return [(phase, event, {key: value for key, value in details.items()
-                            if key not in TELEMETRY})
-            for phase, event, details in events]
-
-
 def test_clearance_index_records_ordered_insertions_with_lock_state() -> None:
     board = _corridor_board()
     track = TrackSegment("SIGNAL", Point.mm(3, 6), Point.mm(17, 6), WIDTH, CopperLayer.FRONT)
@@ -120,5 +108,3 @@ def test_benchmark_counts_reused_attempts_and_treats_the_bound_as_an_interventio
     assert reused["work"]["detailed_net_attempts"] == 2
     assert reused["work"]["reused_detailed_attempts"] == 1
     assert reused["routing_settings"] == plain["routing_settings"]
-
-

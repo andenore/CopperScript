@@ -7,22 +7,6 @@ from pcbir.critical_preflight import main
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_package_access_interruption_keeps_checkpoint(tmp_path, monkeypatch):
-    import pcbir.critical_preflight as preflight
-    def interrupt(*args, on_progress):
-        on_progress("ordinary_package_exits", "started", {})
-        raise ValueError("bounded interruption")
-    monkeypatch.setattr(preflight, "preflight_package_access", interrupt)
-    report = tmp_path / "access.json"
-    assert main([str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
-        "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
-        "--package-access", "--report", str(report)]) == 2
-    data = json.loads(report.read_text())
-    assert data["stage"] == "ordinary_package_exits_started" and not data["complete"]
-    assert not data["fabrication_ready"]
-    assert data["package_access_progress"][0]["elapsed_seconds"] >= 0
-
-
 def test_preflight_binds_scenes_before_placement_and_preserves_owner_copper(tmp_path, monkeypatch):
     import pcbir.critical_preflight as preflight
     from test_hard_macros import fixture
@@ -138,30 +122,6 @@ def test_completed_group_checkpoint_retains_metrics_but_not_full_signoff(tmp_pat
     assert group["result"]["guide_length_nm"] == 5000000
     assert group["result"]["local_candidate_attempts"] == 1
     assert data["fabrication_ready"] is False and "critical" not in data
-
-
-def test_feedback_interruption_retains_baseline_and_proposed_pose(tmp_path, monkeypatch):
-    import pcbir.critical_preflight as preflight
-
-    def interrupt(board, global_route, critical, *, on_trial_started, **kwargs):
-        on_trial_started(1, board.placements[0].reference, board)
-        raise ValueError("trial interrupted before global completion")
-
-    monkeypatch.setattr(preflight, "improve_critical_placement", interrupt)
-    report = tmp_path / "feedback.json"
-    assert main([str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
-          "--layers", "2", "--fab-profile", "generic", "--router-iterations", "1",
-          "--critical-feedback-trials", "1", "--report", str(report)]) == 2
-    data = json.loads(report.read_text())
-    assert data["stage"] == "critical_placement_trial_running" and not data["complete"]
-    assert "critical_baseline" in data and "critical" not in data
-    assert data["critical_placement_running"]["index"] == 1
-    assert data["critical_placement_feedback"] == [] and not data["fabrication_ready"]
-
-
-def test_preflight_rejects_negative_feedback_before_loading(tmp_path):
-    assert main([str(tmp_path / "does-not-exist.copper"), "--critical-feedback-trials", "-1",
-                 "--report", str(tmp_path / "report.json")]) == 2
 
 
 def test_preflight_physicalizes_the_mechanical_block(tmp_path, monkeypatch) -> None:
