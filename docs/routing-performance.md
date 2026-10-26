@@ -55,6 +55,15 @@ nothing is board-specific and nothing relaxes a declared rule.
   states) while the pass that failed had escalated to 60,000; TX1_IC's
   repair without the TX1 pair exhausted exactly 6,000. `_bundle_repair`
   now takes the pass's `pair_state_escalation`.
+- **Bypass links plan and complete with the stage's launch options.** The
+  bypass planner and the late pass after critical routing called
+  `route_decouplers` without the fanout options, so a link whose bounded
+  launches were taken never tried the maze launches `--fanout-maze` enables
+  for escapes; refused and pending links (run C: FX_VDDD's) fell to the
+  detailed router, which routes the rail to the ball itself and is rejected
+  by the capacitor pad under it. Both passes now use the stage's options,
+  and the late pass reports what it connected and what stays pending with
+  the reason (`bypass_completion` `finished`).
 
 Bounded CopperProbe runs through the critical stage (fresh placement): the
 critical stage now leaves only USB_TX1_IC open (two pairs before), with FB

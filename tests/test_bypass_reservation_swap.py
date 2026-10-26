@@ -149,6 +149,39 @@ def test_without_a_fanout_planner_only_the_taken_reservation_is_released(monkeyp
     assert after == ((), (), ())
 
 
+def test_the_late_pass_uses_the_stage_launch_options_and_reports_the_links(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from pcbir import CriticalRoutingStatus
+    from pcbir.critical import CriticalRoutingResult
+    from pcbir.flow import _complete_critical_stage
+    board = _board()
+    critical = CriticalRoutingResult(CriticalRoutingStatus.SUCCESS, board, (), (), (), "", "")
+    options = SimpleNamespace(direct=False, pre_route_decouplers=True, power_islands=None, bga_fanout=False)
+    seen = []
+
+    def fake(board, *, only_links=None, fanout_options=None, **_):
+        seen.append((only_links, fanout_options))
+        if fanout_options is None:
+            return DecouplingRouteResult(board, (), frozenset(), ((LINK, "bounded surface candidates blocked"),),
+                                         accesses=MappingProxyType({}))
+        routed = replace(board, tracks=(*board.tracks, FAR))
+        return DecouplingRouteResult(routed, (FAR,), frozenset({LINK.target, LINK.capacitor}), (),
+                                     accesses=MappingProxyType({}))
+    monkeypatch.setattr(decoupling, "route_decouplers", fake)
+    launch = object()
+    for given, connected, pending in ((launch, ["CAP.1->U.1"], []), (None, [], [
+            {"link": "CAP.1->U.1", "reason": "bounded surface candidates blocked"}])):
+        events, observe = _events()
+        completed, _ = _complete_critical_stage(critical, None, None, False, access=None, unified_options=options,
+                                                plane_stitch_options=None, on_progress=observe,
+                                                fanout_options=given)
+        finished = next(d for p, e, d in events if (p, e) == ("bypass_completion", "finished"))
+        assert finished["connected"] == connected and finished["pending_links"] == pending
+        assert (FAR in completed.board.tracks) == bool(connected)
+    # The late pass routed every link with the stage's options, pending ones included.
+    assert seen == [(None, launch), (None, None)]
+
+
 def test_legal_reservation_nets_judge_the_whole_group_beside_the_bypass_copper() -> None:
     board = _board()
     tracks, vias, _ = _reserved(board)

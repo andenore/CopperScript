@@ -364,7 +364,7 @@ def run_routing_pipeline(
         critical, reserved, held, held_as_copper, access=access, unified_options=unified_options,
         plane_stitch_options=plane_stitch_options, on_progress=on_progress,
         lattice=lattice, array_plans=array_plans, escape_plan_options=escape_plan_options,
-        save_inputs_path=getattr(unified_options, "save_inputs_path", None))
+        save_inputs_path=getattr(unified_options, "save_inputs_path", None), fanout_options=unified_fanout)
     pre_fanout = plane_stitch.board if plane_stitch else critical.board
     power_plan = preparation.plan if preparation else None
     power_status = 'contact_routed_native_pending' if preparation else 'disabled'
@@ -482,7 +482,7 @@ def run_routing_pipeline(
                 unified_options=unified_options, plane_stitch_options=plane_stitch_options,
                 on_progress=on_progress, lattice=trial_lattice, array_plans=trial_plans,
                 escape_plan_options=escape_plan_options,
-                save_inputs_path=trial_inputs[-1] if inputs_path else None)
+                save_inputs_path=trial_inputs[-1] if inputs_path else None, fanout_options=unified_fanout)
             trial_pre = trial_stitch.board if trial_stitch else trial_critical.board
             trial_deferred = (frozenset(deferred_zone_nets(trial_pre))
                               if detailed_options.defer_zone_nets else frozenset())
@@ -922,12 +922,15 @@ def _resite_escapes(board, fanout_options, reserved, held, prefix, halos, nets, 
 
 def _complete_critical_stage(critical, reserved, held, held_as_copper, *, access, unified_options,
                              plane_stitch_options, on_progress, lattice=None, array_plans=None,
-                             escape_plan_options=None, save_inputs_path=None):
+                             escape_plan_options=None, save_inputs_path=None, fanout_options=None):
     """Lattice and held bypass copper, decouplers, power islands, BGA dogbones and plane stitch.
 
     Returns ``(critical, plane_stitch)``. ``save_inputs_path`` (the unified
     router's saved-inputs path of this run or trial) gets the ball-grid
     fanout copper beside it, in ``PATH.bga.json``, when there is any.
+    ``fanout_options`` (the stage's escape options) give the bypass links
+    left pending at planning their late pass with the same launch options
+    (maze launches included) beside the critical copper.
     """
     if lattice is not None:
         # The lattice copper joins the board first (bypasses were planned on it).
@@ -940,9 +943,12 @@ def _complete_critical_stage(critical, reserved, held, held_as_copper, *, access
             and not getattr(unified_options, "direct", False)
             and getattr(unified_options, "pre_route_decouplers", True)):
         from .decoupling import route_decouplers
-        bypass = route_decouplers(critical.board)
+        before = {link for link in critical.board.decoupling_links}
+        emit(on_progress, "bypass_completion", "started", links=len(before))
+        bypass = route_decouplers(critical.board, fanout_options=fanout_options)
         critical = replace(critical, board=bypass.board)
         pending = frozenset(link for link, _ in bypass.pending)
+        reasons = {link: reason for link, reason in bypass.pending}
         if reserved is not None and pending:
             # A bypass the reservations blocked gets them released around its
             # own capacitor and target pad only, then one more attempt.
@@ -953,10 +959,20 @@ def _complete_critical_stage(critical, reserved, held, held_as_copper, *, access
                 temporary = {keepout.id for keepout in reserved[2]} - {keepout.id for keepout in kept}
                 board = critical.board
                 retry = route_decouplers(replace(board, copper_keepouts=tuple(
-                    k for k in board.copper_keepouts if k.id not in temporary)), only_links=pending)
+                    k for k in board.copper_keepouts if k.id not in temporary)), only_links=pending,
+                    fanout_options=fanout_options)
                 if len(retry.pending) < len(pending):
                     critical = replace(critical, board=replace(retry.board,
                                                                copper_keepouts=board.copper_keepouts))
+                    pending = frozenset(link for link, _ in retry.pending)
+                    reasons = {link: reason for link, reason in retry.pending}
+        # The planning event listed the links pending then; the difference is
+        # what the late pass routed beside the critical copper.
+        emit(on_progress, "bypass_completion", "finished", pending=len(pending),
+             connected=sorted(_link_name(link) for link in before - pending
+                              if link.capacitor in bypass.connected_pads),
+             pending_links=[{"link": _link_name(link), "reason": reasons[link]} for link in sorted(
+                 pending, key=_link_name)])
     if unified_options is not None and getattr(unified_options, "power_islands", None):
         from .physical import CopperLayer
         from .power_islands import auto_power_layer, plan_power_islands
@@ -1347,7 +1363,8 @@ def _plan_decouplers(board, reserved, on_progress, *, prefix=((), ()), extra_kee
     # ``extra_keepouts`` (macro port halos) bind every attempt and are never
     # released for a pending link, unlike the escape reservations.
     frame = replace(base, copper_keepouts=(*base.copper_keepouts, *extra_keepouts, *keepouts))
-    result = route_decouplers(frame)
+    # The links plan with the stage's launch options (maze launches included).
+    result = route_decouplers(frame, fanout_options=fanout_options)
     current = result.board
     pending = list(result.pending)
     witnesses = list(result.admitted_path_witnesses)
@@ -1378,7 +1395,7 @@ def _plan_decouplers(board, reserved, on_progress, *, prefix=((), ()), extra_kee
             continue
         retry_frame = replace(current, copper_keepouts=tuple(k for k in current.copper_keepouts
                                                               if k.id not in candidates))
-        retry = route_decouplers(retry_frame, only_links=frozenset({link}))
+        retry = route_decouplers(retry_frame, only_links=frozenset({link}), fanout_options=fanout_options)
         if any(item is link for item, _ in retry.pending):
             continue
         bypass_tracks = tuple((Counter(retry.board.tracks) - Counter(base.tracks)).elements())
