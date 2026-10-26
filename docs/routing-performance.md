@@ -39,6 +39,17 @@ nothing is board-specific and nothing relaxes a declared rule.
   group's search ended without it (states used, bound exhausted or not): a
   launch that is still blocked ends after a handful of states, a budget miss
   exhausts the bound.
+- **Bypass copper takes a ball's site only as a swap.** A bypass link the
+  escape reservations block used to release every reservation within 1.5 mm
+  of its pads, retry all pending links at once and keep the whole release if
+  any link improved: on CopperProbe 58 of 74 reservations went for 8 links,
+  20 came back, 21 balls never got a site again (ADC_OVR, ADC_OE among
+  them). Now each pending link is retried alone with that box lifted as the
+  candidate set; a reservation its copper leaves legal stays bound; the balls
+  whose reservation the copper does take are planned again beside it before
+  the link is accepted, and a link that would leave a ball without a site
+  stays pending, naming the ball (`bypass_reservation` `finished`: `swapped`,
+  `rejected`, `pending_links`).
 
 Bounded CopperProbe runs through the critical stage (fresh placement): the
 critical stage now leaves only USB_TX1_IC open (two pairs before), with FB
@@ -74,21 +85,33 @@ within budget on this placement (4 warnings against 7).
 Run A connects the USB_RX1 pair (escalated search; 2.19 mm skew warning
 against 0.127 mm), FB, FX_XTAL, ACQ_EN, SWDIO and the V33 pad of FB_XTAL. Of
 the baseline's open nets only USB_TX1_IC, ADC_OVR and FX_V33 remain; XTALOUT
-is new. The remaining opens have two causes:
+is new. The remaining opens have three causes:
 
 - **USB_TX1_IC** fails in both critical passes after 10 states each: its
   launch is still blocked, and ripping up USB_TX2_IC did not free it (the
   attempts are now recorded on the result; this run predates that record).
   The capacitors under and beside the macro ports are the remaining wall,
   which run B tests.
-- **ADC_OVR, FX_V33, XTALOUT** have no global route: "shared transition
-  capacity rejected every candidate" at their FX10 balls (C4/D3, L11/M10,
-  L3/L5). The array escapes consume the via transitions those balls need, so
-  the detailed stage never sees them. This is an escape-capacity problem for
-  the planner (reserve a transition per connected ball, as the kit does), not
-  a search budget.
+- **ADC_OVR (E1), XTALOUT (M13): outer-ring balls with every exit taken.**
+  Both are ring-0 balls that the kit exits straight out on the surface. E1's
+  south exit is closed by ADC_D9's own surface escape, which leaves F1 next
+  to it, loops west under E1 and runs north to a via site; M13's four
+  interstitial sites hold FX_GPIO's 0.4 mm track, the D18 plane-stitch via,
+  FX_XTAL's via and a GND stitch. Both nets had a reservation after the
+  escape pass; ADC_OVR's was released for a bypass link and never restored
+  or re-sited (so was ADC_OE's in run B, open there), XTALOUT's was re-sited
+  but the site was gone by the detailed stage. The release is fixed below
+  (swap); the ring-0 surface exits and the other stages' via sites are the
+  escape plan's E9/E7 territory.
+- **FX_V33** is rejected at the exact commit check (blocked by RESREF on
+  In2.Cu); run B loses it with "no path to the remaining pad group".
 - **GND N4/N6** stay inside the `FX10_USB_ESCAPE` macro fan without a via;
-  the macro needs GND vias (consumer).
+  the macro needs GND vias (consumer). The three `GLOBAL-UNROUTED` issues
+  (FX_USB18 at L3, FX_VDDD at L11, GND at C4: "shared transition capacity
+  rejected every candidate") are supply balls whose launch sites lie under
+  their fixed bypass capacitors on B.Cu; they are fed by the bypass copper
+  and planes, and the global stage reports them on the bare board at
+  placement time, before any escape or bypass is planned.
 
 The length/skew warnings grew from 4 to 7 because more nets are connected:
 SENSE (9.87 mm against 4 mm), the DM/DP skew (0.94 mm against 0.5 mm), the

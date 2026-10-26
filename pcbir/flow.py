@@ -736,8 +736,8 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, package
             and getattr(unified_options, "pre_route_decouplers", True)):
         # Bypasses route before critical nets (as package access did), so
         # a critical route cannot take a capacitor's short surface feed.
-        held = _plan_decouplers(board, reserved[2] if reserved else (), on_progress,
-                                prefix=prefix, extra_keepouts=halos)
+        held, reserved = _plan_decouplers(board, reserved, on_progress, prefix=prefix, extra_keepouts=halos,
+                                          fanout_options=unified_fanout)
         if reserved is not None and held[3]:
             reserved, held, restored = _revalidate_released_escapes(board, reserved, held)
             emit(on_progress, "ordinary_escapes", "revalidated", **restored)
@@ -1166,9 +1166,6 @@ def _plan_ordinary_escapes(board, fanout_options, on_progress, *, prefix=((), ()
     via lattice, bypass copper); it is not part of the result. ``keepouts``
     bind the planning only. ``only_nets`` limits the nets planned.
     """
-    from collections import Counter
-    from .fanout import route_fanout
-    from .hard_macros import macro_source, materialize_hard_macros
     rules = {rule.net: rule for rule in board.net_routing_rules}
     # Signal nets only: supply and return nets are decoupled or planes, and
     # leaving them out also keeps the escape generator from routing bypasses.
@@ -1183,20 +1180,34 @@ def _plan_ordinary_escapes(board, fanout_options, on_progress, *, prefix=((), ()
     if not ordinary:
         return None
     emit(on_progress, "ordinary_escapes", "started", nets=len(ordinary))
-    frame = materialize_hard_macros(macro_source(board))
-    frame = replace(frame, tracks=(*frame.tracks, *prefix[0]), vias=(*frame.vias, *prefix[1]),
-                    copper_keepouts=(*frame.copper_keepouts, *keepouts))
     try:
-        escapes = route_fanout(frame, fanout_options, only_nets=ordinary)
+        tracks, vias, reserved, pending = _route_ordinary_escapes(board, fanout_options, ordinary,
+                                                                  prefix=prefix, keepouts=keepouts)
     except ValueError as error:
         emit(on_progress, "ordinary_escapes", event, skipped=str(error))
         return None
-    tracks = list((Counter(escapes.board.tracks) - Counter(frame.tracks)).elements())
-    vias = list((Counter(escapes.board.vias) - Counter(frame.vias)).elements())
-    reserved = _copper_keepouts(board, tracks, vias, "escape-reserve", fixed=frame)
     emit(on_progress, "ordinary_escapes", event, vias=len(vias), tracks=len(tracks),
-         pending=len(escapes.pending_pads), nets=sorted({item.net for item in (*tracks, *vias)}))
-    return tuple(tracks), tuple(vias), tuple(reserved)
+         pending=len(pending), nets=sorted({item.net for item in (*tracks, *vias)}))
+    return tracks, vias, reserved
+
+
+def _route_ordinary_escapes(board, fanout_options, nets, *, prefix=((), ()), keepouts=()):
+    """Escapes of ``nets`` on the macro frame: (tracks, vias, keepouts, pending pads).
+
+    The frame holds ``prefix`` copper and binds ``keepouts``; neither is part
+    of the result. Raises ValueError when the fanout refuses the frame.
+    """
+    from collections import Counter
+    from .fanout import route_fanout
+    from .hard_macros import macro_source, materialize_hard_macros
+    frame = materialize_hard_macros(macro_source(board))
+    frame = replace(frame, tracks=(*frame.tracks, *prefix[0]), vias=(*frame.vias, *prefix[1]),
+                    copper_keepouts=(*frame.copper_keepouts, *keepouts))
+    escapes = route_fanout(frame, fanout_options, only_nets=frozenset(nets))
+    tracks = tuple((Counter(escapes.board.tracks) - Counter(frame.tracks)).elements())
+    vias = tuple((Counter(escapes.board.vias) - Counter(frame.vias)).elements())
+    reserved = _copper_keepouts(board, tracks, vias, "escape-reserve", fixed=frame)
+    return tracks, vias, tuple(reserved), tuple(escapes.pending_pads)
 
 
 def _join_reserved_copper(board, tracks, vias, keepouts):
@@ -1304,45 +1315,161 @@ def _bypass_copper_reservations(source, tracks, vias, witnesses=()):
     return (reserved, None) if reason is None else (None, reason)
 
 
-def _plan_decouplers(board, reserved_keepouts, on_progress, *, prefix=((), ()), extra_keepouts=()):
+def _plan_decouplers(board, reserved, on_progress, *, prefix=((), ()), extra_keepouts=(),
+                     fanout_options=None):
     """Bypass copper routed before critical nets, held as keepouts meanwhile.
 
     The critical router needs a board without ordinary copper, so bypasses are
-    planned on the macro-materialized frame (respecting escape reservations),
-    reserved as keepouts while critical nets route, and added back afterwards.
+    planned on the macro-materialized frame (respecting the escape
+    reservations ``reserved``), reserved as keepouts while critical nets
+    route, and added back afterwards.
+
+    A link the reservations block is tried again, one link at a time, with
+    the reservations within 1.5 mm of its pads lifted. Its copper is accepted
+    as a swap: a reservation the new copper leaves legal stays bound (the
+    lifted box is the candidate set, not the release), and every ball whose
+    reservation the copper does take is planned again beside it before the
+    link is accepted (``fanout_options``). A link whose copper would leave a
+    ball without a site stays pending, naming the ball. Without
+    ``fanout_options`` the reservations the copper takes are released for the
+    caller to restore or re-site.
+
+    Returns ``(held, reserved)``: ``held`` is ``(tracks, vias, keepouts,
+    released, witnesses)`` and ``reserved`` the reservations after the swaps.
     """
     from collections import Counter
     from .decoupling import route_decouplers
     from .hard_macros import macro_source, materialize_hard_macros
     emit(on_progress, "bypass_reservation", "started", links=len(board.decoupling_links))
-    frame = materialize_hard_macros(macro_source(board))
+    tracks0, vias0, keepouts = reserved if reserved is not None else ((), (), ())
+    base = materialize_hard_macros(macro_source(board))
+    base = replace(base, tracks=(*base.tracks, *prefix[0]), vias=(*base.vias, *prefix[1]))
     # ``extra_keepouts`` (macro port halos) bind every attempt and are never
     # released for a pending link, unlike the escape reservations.
-    frame = replace(frame, tracks=(*frame.tracks, *prefix[0]), vias=(*frame.vias, *prefix[1]),
-                    copper_keepouts=(*frame.copper_keepouts, *extra_keepouts, *reserved_keepouts))
+    frame = replace(base, copper_keepouts=(*base.copper_keepouts, *extra_keepouts, *keepouts))
     result = route_decouplers(frame)
-    released = ()
-    pending = frozenset(link for link, _ in result.pending)
-    if pending and reserved_keepouts:
-        # Escape reservations next to a blocked bypass give way to it: free
-        # them around the link's own pads and route just those links again.
-        pads = {pad for link in pending for pad in (link.capacitor, link.target, link.return_pad)}
-        kept = _release_reservations(board, reserved_keepouts, frozenset(), nm_from_mm("1.5"), pads=pads)
-        if len(kept) < len(reserved_keepouts):
-            kept_ids = {k.id for k in kept}
-            retry_frame = replace(result.board, copper_keepouts=tuple(
-                k for k in result.board.copper_keepouts
-                if not k.id.startswith("escape-reserve") or k.id in kept_ids))
-            retry = route_decouplers(retry_frame, only_links=pending)
-            if len(retry.pending) < len(pending):
-                released = tuple(k for k in reserved_keepouts if k.id not in kept_ids)
-                result = retry
-    tracks = list((Counter(result.board.tracks) - Counter(frame.tracks)).elements())
-    vias = list((Counter(result.board.vias) - Counter(frame.vias)).elements())
+    current = result.board
+    pending = list(result.pending)
+    witnesses = list(result.admitted_path_witnesses)
+    res_tracks, res_vias, res_keepouts = list(tracks0), list(vias0), list(keepouts)
+    released, swapped, rejected = [], [], []
+    owners = {}
+
+    def rebuild(fixed_tracks, fixed_vias):
+        """Reservation keepouts of the current escape copper beside all bypass copper."""
+        fixed = replace(base, tracks=(*base.tracks, *fixed_tracks), vias=(*base.vias, *fixed_vias))
+        fresh = _copper_keepouts(board, res_tracks, res_vias, "escape-reserve", fixed=fixed)
+        owners.clear()
+        owners.update({f"escape-reserve-track-{i}": t.net for i, t in enumerate(res_tracks)})
+        owners.update({f"escape-reserve-via-{i}": v.net for i, v in enumerate(res_vias)})
+        return list(fresh)
+
+    if keepouts:
+        rebuild((), ())
+    for link, reason in list(pending):
+        if not res_keepouts:
+            break
+        if reason == "native_plane_return_pending":
+            continue
+        pads = (link.capacitor, link.target, link.return_pad)
+        kept = _release_reservations(board, res_keepouts, frozenset(), nm_from_mm("1.5"), pads=pads)
+        candidates = {k.id for k in res_keepouts} - {k.id for k in kept}
+        if not candidates:
+            continue
+        retry_frame = replace(current, copper_keepouts=tuple(k for k in current.copper_keepouts
+                                                              if k.id not in candidates))
+        retry = route_decouplers(retry_frame, only_links=frozenset({link}))
+        if any(item is link for item, _ in retry.pending):
+            continue
+        bypass_tracks = tuple((Counter(retry.board.tracks) - Counter(base.tracks)).elements())
+        bypass_vias = tuple((Counter(retry.board.vias) - Counter(base.vias)).elements())
+        # Exact ownership: the lifted reservations the new copper leaves legal
+        # stay; only the groups it makes illegal are taken.
+        candidate_nets = {owners[k] for k in candidates if k in owners}
+        legal = _legal_reservation_nets(board, base, bypass_tracks, bypass_vias, res_tracks, res_vias,
+                                        candidate_nets)
+        taken = sorted(candidate_nets - legal)
+        taken_pads = sorted({f"{p.component}.{p.pad}" for net in taken
+                             for p in _reservation_pads(board, net, res_tracks)})
+        if taken and fanout_options is not None:
+            # The swap: every ball the copper takes is planned again beside it.
+            remaining = [k for k in res_keepouts if owners.get(k.id) not in taken]
+            try:
+                again = _route_ordinary_escapes(board, fanout_options, taken,
+                                                prefix=(bypass_tracks, bypass_vias),
+                                                keepouts=(*remaining, *extra_keepouts))
+            except ValueError as error:
+                again = None, None, None, (str(error),)
+            if again[3]:
+                rejected.append({"link": _link_name(link), "balls": taken_pads,
+                                 "pending": [f"{p.component}.{p.pad}" if hasattr(p, "component") else str(p)
+                                             for p in again[3]]})
+                pending = [(item, f"{why}; swap rejected: {', '.join(taken_pads)} would lose their site")
+                           if item is link else (item, why) for item, why in pending]
+                continue
+            res_tracks = [t for t in res_tracks if t.net not in taken] + list(again[0])
+            res_vias = [v for v in res_vias if v.net not in taken] + list(again[1])
+            swapped.append({"link": _link_name(link), "balls": taken_pads})
+        elif taken:
+            released.extend(k for k in res_keepouts if owners.get(k.id) in taken)
+            res_tracks = [t for t in res_tracks if t.net not in taken]
+            res_vias = [v for v in res_vias if v.net not in taken]
+        res_keepouts = rebuild(bypass_tracks, bypass_vias)
+        current = replace(retry.board, copper_keepouts=(*base.copper_keepouts, *extra_keepouts, *res_keepouts))
+        pending = [item for item in pending if item[0] is not link] + [
+            item for item in retry.pending if item[0] is not link]
+        witnesses.extend(retry.admitted_path_witnesses)
+    tracks = list((Counter(current.tracks) - Counter(base.tracks)).elements())
+    vias = list((Counter(current.vias) - Counter(base.vias)).elements())
     emit(on_progress, "bypass_reservation", "finished", tracks=len(tracks), vias=len(vias),
-         pending=len(result.pending), released=len(released))
-    return (tuple(tracks), tuple(vias), _copper_keepouts(board, tracks, vias, "bypass-reserve", fixed=frame),
-            released, result.admitted_path_witnesses)
+         pending=len(pending), released=len(released), swapped=swapped, rejected=rejected,
+         pending_links=[{"link": _link_name(link), "reason": reason} for link, reason in pending])
+    held = (tuple(tracks), tuple(vias), _copper_keepouts(board, tracks, vias, "bypass-reserve", fixed=base),
+            tuple(released), tuple(witnesses))
+    reserved = (tuple(res_tracks), tuple(res_vias), tuple(res_keepouts)) if reserved is not None else None
+    return held, reserved
+
+
+def _link_name(link):
+    return f"{link.capacitor.component}.{link.capacitor.pad}->{link.target.component}.{link.target.pad}"
+
+
+def _reservation_pads(board, net, tracks):
+    """The pads of ``net`` that the reserved escape ``tracks`` leave from."""
+    from .placement import transformed_pad_position
+    poses = {pose.reference: pose for pose in board.placements}
+    ends = {t.start for t in tracks if t.net == net} | {t.end for t in tracks if t.net == net}
+    return [pad for item in board.nets if item.name == net for pad in item.pads
+            if transformed_pad_position(board, poses[pad.component], pad.pad) in ends]
+
+
+def _legal_reservation_nets(board, base, bypass_tracks, bypass_vias, tracks, vias, nets):
+    """The ``nets`` whose complete escape reservation is legal beside the bypass copper.
+
+    The group is judged whole (a legal via with a blocked stem is not legal),
+    and the bypass copper must not cost it a proxy keepout either (a keepout
+    overlapping fixed copper is left out), as the restoration after a release
+    requires.
+    """
+    from .return_paths import existing_returns_permit
+    from .routing_clearance import RoutingClearanceIndex
+    fixed = replace(base, tracks=(*base.tracks, *bypass_tracks), vias=(*base.vias, *bypass_vias))
+    index = RoutingClearanceIndex(fixed)
+    rules = {r.net: r for r in board.net_routing_rules}
+    legal = set()
+    for net in nets:
+        own_tracks = [t for t in tracks if t.net == net]
+        own_vias = [v for v in vias if v.net == net]
+        if not all(index.can_track(t.net, t.start, t.end, t.width_nm, t.layer) for t in own_tracks):
+            continue
+        if not all(index.can_via(v.net, v.position, v.size_nm, v.from_layer, v.to_layer, drill_nm=v.drill_nm)
+                   and existing_returns_permit(fixed, rules.get(v.net), v) for v in own_vias):
+            continue
+        if (len(_copper_keepouts(board, own_tracks, own_vias, "check", fixed=fixed))
+                < len(_copper_keepouts(board, own_tracks, own_vias, "check", fixed=base))):
+            continue
+        legal.add(net)
+    return legal
 
 
 
