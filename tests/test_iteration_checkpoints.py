@@ -102,35 +102,6 @@ def test_stop_after_package_access_reports_the_stop_not_a_block(stopped):
     assert "preflight incomplete" not in json.dumps(report)
 
 
-@pytest.mark.parametrize("stage", ("package-preflight", "package-access"))
-def test_package_stage_diagnostic_retains_source_and_owned_prefix(stopped, stage):
-    from pcbir.workbench import load_state
-    from pcbir.package_access import PackageAccessResult
-    tmp_path, _, _ = stopped
-    checkpoint_dir = tmp_path / (stage + "-states")
-    out, result = _route(tmp_path, stage + "-diagnostic", "--reuse-placement",
-        str(tmp_path / "ck" / "placement.state.json"), "--router", "legacy", "--stop-after", stage,
-        "--checkpoint-dir", str(checkpoint_dir))
-    assert result.returncode == 1, result.stdout + result.stderr
-    report = json.loads((out / "route-report.json").read_text())
-    state_path = checkpoint_dir / f"{stage}.state.json"
-    saved = load_state(state_path)
-    assert isinstance(saved, PackageAccessResult)
-    assert saved.source.placements == saved.board.placements
-    assert saved.critical.board.tracks[:len(saved.fanout.board.tracks)] == saved.fanout.board.tracks
-    assert report["checkpoints"][stage] == str(state_path)
-    from pcbir.fanout import FanoutResult
-    early = load_state(checkpoint_dir / "ordinary-fanout.state.json")
-    baseline = load_state(checkpoint_dir / "package-full-baseline.state.json")
-    assert isinstance(early, FanoutResult) and isinstance(baseline, PackageAccessResult)
-    assert early.board == baseline.fanout.board
-    assert report["checkpoints"]["ordinary-fanout"] == str(checkpoint_dir / "ordinary-fanout.state.json")
-    assert report["stopped_after"] == stage and report["native_verification"] == "skipped_for_stopped_run"
-    # The diagnostic is deliberately not accepted by the placement-resume API.
-    _, rejected = _route(tmp_path, stage + "-not-placement", "--reuse-placement", str(state_path))
-    assert rejected.returncode == 2 and "not a placement checkpoint" in rejected.stdout
-
-
 def test_error_record_replaces_a_stale_report_and_is_cleared_by_success(stopped):
     tmp_path, _, _ = stopped
     checkpoint = str(tmp_path / "ck" / "placement.state.json")

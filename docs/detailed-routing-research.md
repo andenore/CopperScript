@@ -25,9 +25,8 @@ Declared plane intent is not a connection. Detailed routes, actual physical land
 native filled connectivity and independent DRC must agree before closure. Generated
 KiCad projects carry selected board rules; final qualification remains separate.
 
-Use [package access](package-access-first.md), [filled-copper feedback](filled-copper-feedback.md),
-[stub cleanup](route-stub-cleanup.md) and [search policy](routing-search-policy.md)
-for specialized contracts; unresolved algorithm work is in [routing backlog](routing-backlog.md).
+Use [filled-copper feedback](filled-copper-feedback.md) and
+[stub cleanup](route-stub-cleanup.md) for specialized contracts; unresolved algorithm work is in [routing backlog](routing-backlog.md).
 
 Related algorithm references: [KiCad router](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html),
 [TritonRoute](https://vlsicad.ucsd.edu/Publications/Journals/j133.pdf),

@@ -189,23 +189,6 @@ def test_decoupler_placement_respects_earlier_fixed_bypass_corridor():
                for t in result.created_tracks)
 
 
-@pytest.mark.parametrize("zone", [False, True])
-def test_package_preflight_preserves_the_decoupling_prefix(zone):
-    from pcbir.package_access import preflight_package_access, PackageAccessOptions
-    from pcbir.routing import route_global
-    from pcbir.physical import CopperZone
-    board = bypass_board()
-    if zone:
-        board = replace(board, zones=(CopperZone("rail", "P", (CopperLayer.BACK,),
-            PolygonWithHoles(PolygonRing((Point.mm(1, 1), Point.mm(24, 1), Point.mm(24, 24), Point.mm(1, 24))))),))
-    prefix = route_decouplers(board).created_tracks
-    result = preflight_package_access(board, route_global(board), FanoutOptions(),
-                                     options=PackageAccessOptions(maximum_pattern_trials=0))
-    assert all(t in result.board.tracks for t in prefix)
-    assert all(t in result.fanout.created_tracks for t in prefix)
-    assert not result.hard_findings
-
-
 def test_nested_module_decoupling_endpoint_is_qualified():
     from pcbir.elaborate import elaborate, _expand_one, _Template
     body = compile_source(SOURCE)

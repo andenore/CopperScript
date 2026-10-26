@@ -1,13 +1,9 @@
 """Off-ray physical escape sites, exact anchor verification and owned cleanup."""
 from dataclasses import replace
-from pathlib import Path
-import shutil
 import pytest
 
 from pcbir.fanout import FanoutOptions, route_fanout, _two_leg_candidates
 from pcbir.pin_escape import verified_fanout_path
-from pcbir.detailed import DetailedRouterOptions, _prune_fanout_copper, route_detailed
-from pcbir.routing import GlobalRouterOptions, route_global
 from pcbir.routing_clearance import RoutingClearanceIndex
 from pcbir.drc import run_physical_drc
 from pcbir.physical import (BoardOutline, CopperKeepout, CopperLayer, FootprintPad,
@@ -151,63 +147,6 @@ def test_reversed_input_segments_verified_without_rewriting_identity():
     assert path == board.tracks
 
 
-def test_detailed_route_uses_verified_fanout_and_prunes_unused_owned_tail():
-    base = base_board()
-    guide = route_global(base, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    fanout = route_fanout(base, opts())
-    result = route_detailed(fanout.board, guide, DetailedRouterOptions(maximum_passes=1),
-        fanout_accesses=fanout.accesses,
-        fanout_created_tracks=fanout.created_tracks,
-        fanout_created_vias=frozenset((v.net,v.position) for v in fanout.created_vias))
-    assert result.nets[0].connected, result.nets[0].diagnostics
-    # The route branches at the elbow, so retaining the second owned leg would
-    # leave a dead-end stub after its now-unused escape via is removed.
-    assert fanout.created_tracks[0] in result.board.tracks
-    assert fanout.created_tracks[1] not in result.board.tracks
-    assert not any(v in result.board.vias for v in fanout.created_vias)
-    assert run_physical_drc(result.board).findings == ()
-
-
-def test_failed_full_cleanup_removes_owned_two_legs_not_preexisting_duplicates():
-    fanout = route_fanout(base_board(), opts())
-    duplicate = fanout.created_tracks[0]
-    tracks = (duplicate, *fanout.board.tracks)
-    retained, vias = _prune_fanout_copper(fanout.board, tracks, fanout.board.vias,
-        fanout.accesses, frozenset(), frozenset((v.net,v.position) for v in fanout.created_vias), fanout.created_tracks)
-    assert retained == (duplicate,) and not vias
-    unknown_tracks, unknown_vias = _prune_fanout_copper(fanout.board, tracks,
-        fanout.board.vias, fanout.accesses, frozenset(), None)
-    assert unknown_tracks == tracks and unknown_vias == fanout.board.vias
-
-
-def test_failed_subset_preserves_even_explicitly_owned_input_paths():
-    base = base_board()
-    fanout = route_fanout(base, opts())
-    guide = replace(route_global(base, GlobalRouterOptions(tile_size_nm=nm_from_mm(2))),routes=())
-    result = route_detailed(fanout.board, guide, fanout_accesses=fanout.accesses,
-        fanout_created_tracks=fanout.created_tracks,
-        fanout_created_vias=frozenset((v.net,v.position) for v in fanout.created_vias),
-        only_nets=frozenset({"A"}))
-    assert not result.nets[0].connected
-    assert result.board.tracks == fanout.board.tracks and result.board.vias == fanout.board.vias
-
-
-def test_failed_full_route_preserves_checked_two_leg_exit_for_later_repair():
-    base = base_board()
-    fanout = route_fanout(base, opts())
-    guide = replace(route_global(base, GlobalRouterOptions(tile_size_nm=nm_from_mm(2))),routes=())
-    result = route_detailed(fanout.board, guide, fanout_accesses=fanout.accesses,
-        fanout_created_tracks=fanout.created_tracks,
-        fanout_created_vias=frozenset((v.net,v.position) for v in fanout.created_vias))
-    assert not result.nets[0].connected
-    assert result.board.tracks == fanout.board.tracks
-    assert result.board.vias == fanout.board.vias
-    assert result.board.metadata['detailed_routing'] == 'partial'
-    assert any(f.code == 'DRC-OPEN-NET' for f in run_physical_drc(result.board).findings)
-    unknown = route_detailed(fanout.board, guide, fanout_accesses=fanout.accesses)
-    assert unknown.board.tracks == fanout.board.tracks and unknown.board.vias == fanout.board.vias
-
-
 def test_existing_two_leg_escape_reused_without_new_ownership_or_duplicates():
     initial = route_fanout(base_board(), opts())
     repeated = route_fanout(initial.board, opts())
@@ -217,20 +156,3 @@ def test_existing_two_leg_escape_reused_without_new_ownership_or_duplicates():
     assert repeated.added_track_count == repeated.added_via_count == 0
 
 
-def test_installed_kicad_accepts_routed_two_leg_escape():
-    from pcbir.plane_verify import verify_filled_planes
-    executable = shutil.which("kicad-cli")
-    if executable is None:
-        installed = Path("C:/Program Files/KiCad/10.0/bin/kicad-cli.exe")
-        if not installed.is_file():
-            pytest.skip("KiCad CLI not installed")
-        executable = str(installed)
-    base = base_board()
-    guide = route_global(base, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    fanout = route_fanout(base, opts())
-    detailed = route_detailed(fanout.board, guide, DetailedRouterOptions(maximum_passes=1),
-        fanout_accesses=fanout.accesses, fanout_created_tracks=fanout.created_tracks,
-        fanout_created_vias=frozenset((v.net,v.position) for v in fanout.created_vias))
-    assert detailed.nets[0].connected
-    evidence = verify_filled_planes(detailed.board, kicad_cli=Path(executable))
-    assert evidence.passed, evidence.findings

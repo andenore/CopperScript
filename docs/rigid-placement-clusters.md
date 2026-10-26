@@ -137,7 +137,7 @@ manufacturer assembly approval.
    bounded whole-macro refinement accepts only legal lower-cost trials without
    increased relative-rule penalty or estimated congestion overflow. Dense-package
    spreading includes every rigid companion and retains complete legality checks.
-4. Global, detailed and zone-escape placement feedback expand a proposed member
+4. Global and congestion-driven placement feedback expand a proposed member
    move to its complete unit, then apply fixed-member and whole-board legality.
    Existing pipeline route/DRC/connectivity rollback gates still apply. Nothing
    moves beneath accepted copper; copper is rebuilt for placement trials.

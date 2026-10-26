@@ -40,7 +40,6 @@ def routing_complete_with_fill(
     if evidence is None or not board.zones:
         return False
     if (pipeline.critical.status is CriticalRoutingStatus.FAILED
-            or pipeline.package_access is not None and not pipeline.package_access.ready
             or pipeline.detailed.metrics.total_conflict_overflow):
         return False
     zones = {z.net for z in board.zones}
@@ -64,8 +63,7 @@ def routing_complete_with_fill(
     if any(name not in results or not results[name].connected for name in required):
         return False
     # A zone net is the native fill's to prove, and the evidence above did:
-    # the router's own verdict on it (deferred by the legacy router, or not
-    # explicitly joined by the unified one) does not decide.
+    # the router's own verdict on it (not explicitly joined) does not decide.
     if any(not n.connected and n.net not in zones for n in pipeline.detailed.nets):
         return False
     for finding in drc.findings:

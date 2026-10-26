@@ -169,29 +169,6 @@ def test_standard_pipeline_keeps_whole_bypass_prefix_and_emits_replayable_input(
     assert Counter(held.board.tracks)<=Counter(replay.board.tracks)
 
 
-def test_standard_critical_stage_honors_its_existing_pair_state_bound():
-    from pcbir.flow import run_routing_pipeline
-    from pcbir.placement import PlacementPlannerOptions
-    from pcbir.routeflow import PlacementRoutingFeedbackOptions
-    from pcbir.package_access import PackageAccessOptions
-    from pcbir.unified_router import UnifiedRouterOptions
-    from test_local_pair_branches import support_fixture
-    source=support_fixture()
-    result=run_routing_pipeline(source,
-        placement_options=PlacementPlannerOptions(candidate_count=1,analytical_iterations=0,refinement_passes=0,
-            fixed_references=tuple(p.reference for p in source.placements)),
-        feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
-        package_access_options=PackageAccessOptions(initial_pair_state_limit=1),
-        unified_options=UnifiedRouterOptions(time_budget_s=2,maximum_iterations=1))
-    group=result.critical.nets[0]
-    # The configured probe bound is used, not the default 6000; an exhausted
-    # tier continues once under the unified escalation factor (10 x 1) and the
-    # result records the bound it ended under.
-    escalation=UnifiedRouterOptions().critical_pair_state_escalation
-    assert group.pair_state_limit==escalation and group.search_states<=escalation
-    assert not group.connected and len(group.local_preparation.pending_contacts)==2
-
-
 def test_rematerialized_required_array_keeps_exact_bypass_witness():
     from test_decoupling_source_arrays import array_fixture
     from pcbir import route_critical_nets

@@ -3,11 +3,11 @@
 ``copper summarize`` says *what* failed. This module adds *where*: every issue
 gets a stable id (``N1``, ``P1`` ...), its nets, layers, objects and a window in
 millimetres that ``copper view RUN --issue ID`` draws. Repeated findings with
-one cause are grouped (e.g. 69 nets "blocked: package-access preflight
-incomplete" become one issue) so an agent reads one line per cause.
+one cause are grouped (e.g. 69 nets with one routing diagnostic become one
+issue) so an agent reads one line per cause.
 
 Positions come from the report itself (native findings) or from the run's
-board geometry (pads of pending exits and open nets). Grouping is a reading
+board geometry (pads of open nets). Grouping is a reading
 aid; the full report and its gates are unchanged and remain authoritative.
 """
 
@@ -276,26 +276,7 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
                          f"{report.get('error_type', 'Error')} in {stage}: {str(report.get('message', ''))[:300]}",
                          objects=components, points=points)]
 
-    access = _section(report, "package_access")
-    pending = [str(p) for p in _items(access.get("pending_pads"))]
-    access_id = None
-    pending_nets: set[str] = set()
-    if pending:
-        pads_of = lambda ref_pad: _pad_points(scene, str(ref_pad))
-        for index, pads in enumerate(_clusters([str(p) for p in pending], pads_of, cluster_mm), 1):
-            components = sorted({pad.rpartition(".")[0] for pad in pads})
-            title = (f"{len(pads)} pad(s) without a verified package exit: "
-                     + ", ".join(components[:4]) + (f" +{len(components) - 4}" if len(components) > 4 else ""))
-            issue = RunIssue(f"P{index}", "access", "PENDING-PACKAGE-EXIT", title, len(pads), objects=pads,
-                             points=[p for pad in pads for p in pads_of(pad)])
-            issue.nets = sorted({pad.net for ref_pad in pads for pad in _pads(scene, ref_pad) if pad.net})
-            pending_nets.update(issue.nets)
-            issues.append(issue)
-        count = len(issues)
-        access_id = "P1" if count == 1 else f"P1..P{count}"
-    # Package access also requires a successful global route. Report nets the
-    # global router left unconnected, grouped by reason; they explain a blocked
-    # access stage when no exit is pending.
+    # Nets the global router left unconnected, grouped by reason.
     unrouted_global: dict[str, list[str]] = defaultdict(list)
     for route in _items(_section(report, "global").get("routes")):
         if isinstance(route, dict) and route.get("connected") is False and not route.get("deferred_to_zone"):
@@ -311,14 +292,6 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
                                f"{len(nets)} net(s) without a global route: {reason}", len(nets),
                                nets=sorted(nets), objects=pads, points=points))
         global_ids.append(f"G{index}")
-    if access_id is None and global_ids:
-        access_id = global_ids[0] if len(global_ids) == 1 else f"G1..G{len(global_ids)}"
-    failed_critical = [str(n) for n in _items(access.get("failed_critical_nets"))]
-    if failed_critical:
-        issues.append(RunIssue("C1", "critical", "CRITICAL-BLOCKED",
-                               f"{len(failed_critical)} critical net(s) blocked at package access",
-                               len(failed_critical), nets=failed_critical,
-                               points=_net_points(scene, failed_critical), caused_by=access_id))
 
     native = _section(report, "plane_verification")
     groups: dict[tuple, list[dict]] = defaultdict(list)
@@ -368,11 +341,9 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
                         for net in f.get("nets") or ()})
     if open_nets:
         # One line for all nets open by exact copper; `copper view RUN --net NET` shows each.
-        # Linked to pending exits only when some open net has a pending pad.
         issues.append(RunIssue("O1", "physical", "DRC-OPEN-NET",
                                f"{len(open_nets)} net(s) not connected by exact copper", len(open_nets),
-                               nets=open_nets,
-                               caused_by=access_id if pending_nets & set(open_nets) else None))
+                               nets=open_nets))
     other = [f for f in drc if f.get("severity") == "error" and f.get("code") not in {"DRC-OPEN-NET",
                                                                                          "DRC-ROUTE-INCOMPLETE"}]
     for index, finding in enumerate(other, 1):
@@ -426,10 +397,8 @@ def run_issues(run: Run, *, cluster_mm: float = 3.0) -> list[RunIssue]:
             reason = "; ".join(net.get("diagnostics") or []) or "not connected"
             reasons[reason].append(net.get("net", "?"))
     for index, (reason, nets) in enumerate(sorted(reasons.items(), key=lambda kv: -len(kv[1])), 1):
-        caused = access_id if access_id and "package-access" in reason else None
         issues.append(RunIssue(f"R{index}", "routing", "NET-UNROUTED", f"{len(nets)} net(s): {reason}",
-                               len(nets), nets=nets, points=_net_points(scene, nets) if len(nets) <= 6 else [],
-                               caused_by=caused))
+                               len(nets), nets=nets, points=_net_points(scene, nets) if len(nets) <= 6 else []))
     if not native.get("native_findings"):
         # Without a native fill check, the raster plane estimate is the only plane evidence.
         estimated = _section(_section(report, "summary"), "plane").get("estimated_open_pads")

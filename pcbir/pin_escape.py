@@ -30,10 +30,6 @@ class RoutingAccess:
             raise ValueError("routing access requires an explicit path")
 
 
-def access_position(access: Point | RoutingAccess) -> Point:
-    return access.position if isinstance(access, RoutingAccess) else access
-
-
 def launch_position(access: Point | RoutingAccess) -> Point:
     return access.launch_position if isinstance(access, RoutingAccess) else access
 

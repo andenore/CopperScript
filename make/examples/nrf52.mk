@@ -3,6 +3,4 @@ BOARD_NAME ?= nrf52-coin-cell
 LAYERS ?= 6
 FAB_PROFILE ?= jlcpcb-six-layer
 PHYSICAL_ARGS += --width-mm 50 --height-mm 40
-ROUTE_ARGS ?= --pitch-mm 0.5 --passes 2 --search-budget 20000 --soft-ripup \
- --fanout --package-access-trials 0 --zone-escape-trials 0 --zone-local-ripup-trials 0 \
- --constrained-pins-first --progressive-guides --plane-contact-radius-mm 5 --early-plane-stitch --progress
+ROUTE_ARGS ?= --pitch-mm 0.5 --fanout --plane-contact-radius-mm 5 --early-plane-stitch --progress

@@ -11,7 +11,6 @@ from .backends import (
     PhysicalBackend,
     write_kicad_project,
 )
-from .any_angle import route_any_angle
 from .compiler import compile_file, compile_source, compile_design_file, compile_design_source
 from .design import Design, MechanicalDesign, MechanicalConnectorBinding
 from .silkscreen import ArtworkMaterial, SilkscreenDesign, SilkscreenBranding, SilkscreenText, SilkscreenGraphic
@@ -24,32 +23,12 @@ from .critical import (
     CriticalRoutingStatus,
     route_critical_nets,
 )
-from .critical_feedback import (
-    CriticalPlacementFeedbackResult,
-    CriticalPlacementTrial,
-    improve_critical_placement,
-)
-from .package_access import (PackageAccessOptions, PackageAccessResult, PackageAccessTrial, PackagePatternTrial,
-                             PackageSearchTier, PackagePlacementProbe, PackagePlacementConstraint,
-                             preflight_package_access, improve_package_access)
-from .boundary_access import (BoundaryAccessOptions, BoundaryAccessResult, BoundaryPort,
-                              PackageCollar, analyze_boundary_access, reserve_boundary_access)
 from .pin_escape import RoutingAccess
 from .support_patterns import (SupportPatternOptions, SupportPattern, SupportPlacementResult,
                                support_pattern_candidates, improve_support_placement)
 from .filled_feedback import (FilledCopperFeedbackOptions, FilledCopperFeedbackResult,
                               FilledCopperTrial, improve_filled_copper)
-from .detailed import (
-    DetailedNetResult,
-    DetailedNode,
-    DetailedRouterOptions,
-    DetailedRoutingMetrics,
-    DetailedSearchPolicy,
-    DetailedSearchStats,
-    DetailedRoutingResult,
-    DetailedRoutingStatus,
-    route_detailed,
-)
+from .detailed import DetailedNetResult, DetailedRoutingMetrics, DetailedRoutingResult, DetailedRoutingStatus
 from .drc import (
     DrcBreakoutRelaxation,
     DrcHoleClearanceRelaxation,
@@ -82,10 +61,6 @@ from .signal_integrity import (
 from .elaborate import elaborate
 from .footprints import FootprintResolutionError, FootprintResolver
 from .flow import PhysicalFlowStatus, RoutingPipelineResult, run_routing_pipeline
-from .escape_feedback import (
-    EscapeFeedbackAttempt, EscapeFeedbackOptions, EscapeFeedbackResult,
-    improve_zone_escapes,
-)
 from .plane import PlaneStitchOptions, PlaneStitchResult, stitch_zone_pads
 from .pad_stitch import DuplicatePadStitchResult, stitch_duplicate_pads
 from .geometry import (
@@ -175,7 +150,6 @@ from .quantities import (
 from .power import analyze_power_states
 from .modes import active_bonded_pads, effective_modes
 from .process_drc import FabricationAssemblyProfile, ProcessCapability, ProcessDrcReport, ProcessFinding, ProcessGateStatus, run_process_drc
-from .shove import CleanupResult, ShoveResult, cleanup_acute_angles, shove_bundle, shove_track, shove_via
 from .importers import (
     FootprintImportResult,
     KiCadModImportError,
@@ -317,9 +291,6 @@ __all__ = [
     "Design", "MechanicalDesign", "MechanicalConnectorBinding", "MechanicalProfileDefinition",
     "MechanicalProfileInstance", "MechanicalFeatureSource", "compile_design_file", "compile_design_source",
     "InternalPadGroup",
-    "CriticalPlacementFeedbackResult",
-    "CriticalPlacementTrial",
-    "improve_critical_placement",
     "AlignmentAxis",
     "AnalysisStatus",
     "Artifact",
@@ -365,18 +336,13 @@ __all__ = [
     "CopperZone",
     "CopperScriptError",
     "CriticalNetResult",
-    "CleanupResult",
     "CriticalRoutingResult",
     "CriticalRoutingStatus",
     "DetailedNetResult",
-    "DetailedSearchStats",
-    "DetailedNode",
-    "DetailedRouterOptions",
     "PlaneStitchOptions",
     "PlaneStitchResult",
     "DuplicatePadStitchResult",
     "DetailedRoutingMetrics",
-    "DetailedSearchPolicy",
     "DetailedRoutingResult",
     "DetailedRoutingStatus",
     "DrcBreakoutRelaxation",
@@ -554,12 +520,10 @@ __all__ = [
     "ZoneConnection",
     "ZoneFillMode",
     "ZoneFillResult",
-    "ShoveResult",
     "Current",
     "Frequency",
     "Impedance",
     "check",
-    "cleanup_acute_angles",
     "creepage_screen",
     "dc_net_voltage_drop",
     "dc_trace_resistance",
@@ -632,42 +596,18 @@ __all__ = [
     "optimize_placement_for_routing",
     "route_global",
     "route_critical_nets",
-    "PackageAccessOptions",
-    "BoundaryAccessOptions",
-    "BoundaryAccessResult",
-    "BoundaryPort",
-    "PackageCollar",
-    "analyze_boundary_access",
-    "reserve_boundary_access",
     "RoutingAccess",
-    "PackageAccessResult",
-    "PackageAccessTrial",
-    "PackagePatternTrial",
-    "PackageSearchTier",
-    "PackagePlacementProbe",
     "FilledCopperFeedbackOptions",
     "FilledCopperFeedbackResult",
     "FilledCopperTrial",
     "improve_filled_copper",
-    "PackagePlacementConstraint",
-    "preflight_package_access",
-    "improve_package_access",
-    "route_any_angle",
-    "route_detailed",
     "segment_distance_squared",
     "segments_intersect",
-    "shove_track",
-    "shove_bundle",
-    "shove_via",
     "point_in_polygon",
     "run_physical_drc",
     "run_incremental_physical_drc",
     "run_process_drc",
     "run_routing_pipeline",
-    "EscapeFeedbackAttempt",
-    "EscapeFeedbackOptions",
-    "EscapeFeedbackResult",
-    "improve_zone_escapes",
     "stitch_zone_pads",
     "stitch_duplicate_pads",
     "verify_cam_directory",

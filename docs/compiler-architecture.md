@@ -46,12 +46,11 @@ Key modules:
   moves, atomic rollback, stagnation control, and fresh-route certification.
 - `pcbir.critical` — profile-driven locked copper for critical, differential,
   clock, CAN, RF-feed, power, and length/via-constrained routes.
-- `pcbir.detailed` — guide-aware deterministic general routing with legal pad
-  escape, exact foreign-copper clearance, locked critical copper, and bounded
-  whole-pass rerouting. See [detailed-routing research](detailed-routing-research.md).
-- `pcbir.geometry`, `pcbir.any_angle`, and `pcbir.shove` — shared exact integer
-  predicates, deterministic visibility walkaround, and atomic recursive line
-  shove with fail-safe rollback.
+- `pcbir.unified_router` — negotiated-congestion (PathFinder) ordinary routing
+  on a shared multilayer lattice with legal pad access, exact foreign-copper
+  clearance and locked critical copper; `pcbir.detailed` holds its result
+  types. See [detailed-routing research](detailed-routing-research.md).
+- `pcbir.geometry` — shared exact integer predicates.
 - `pcbir.drc` — fail-closed exact-copper checks, explicit coverage, scoped
   waivers, and content-bound physical signoff tokens.
 - `pcbir.flow` — compatible global/critical/detailed routing and DRC

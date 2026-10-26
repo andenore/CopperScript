@@ -7,10 +7,25 @@ import subprocess
 
 import pytest
 
-from pcbir import (ArtworkMaterial, BoardOutline, BoardSide, CopperLayer, DetailedRouterOptions,
-    GlobalRouterOptions, PhysicalFootprint, FootprintPad, PhysicalNet, Placement, Point, Size,
-    PadReference, PlacementPlannerOptions, PlacementRoutingFeedbackOptions, run_routing_pipeline,
-    compile_design_source, compile_source)
+from pcbir import (
+    ArtworkMaterial,
+    BoardOutline,
+    BoardSide,
+    CopperLayer,
+    GlobalRouterOptions,
+    PhysicalFootprint,
+    FootprintPad,
+    PhysicalNet,
+    Placement,
+    Point,
+    Size,
+    PadReference,
+    PlacementPlannerOptions,
+    PlacementRoutingFeedbackOptions,
+    run_routing_pipeline,
+    compile_design_source,
+    compile_source,
+)
 from pcbir.backends.kicad_pcb import KiCadPcbBackend
 from pcbir.drc import DrcCompleteness, physical_board_digest, run_physical_drc
 from pcbir.physical import CopperPolygon, DesignRules, MechanicalHole, PolygonRing, TrackSegment
@@ -195,8 +210,7 @@ def test_standard_pipeline_routes_around_copper_artwork_without_moving_it():
     result = run_routing_pipeline(value,
         placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0, refinement_passes=0),
         global_options=GlobalRouterOptions(tile_size_nm=2_000_000),
-        feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
-        detailed_options=DetailedRouterOptions(pitch_nm=500_000))
+        feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1))
     assert result.board.tracks
     assert result.board.silkscreen == value.silkscreen
     assert not any(f.code == "DRC-COPPER-KEEPOUT" for f in result.drc.findings)

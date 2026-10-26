@@ -10,11 +10,7 @@ import pytest
 from pcbir.fanout import FanoutOptions, route_fanout
 from pcbir.plane_verify import verify_filled_planes
 from pcbir.route_closure import reconcile_zone_lands
-from pcbir.detailed import DetailedRouterOptions, route_detailed
 from pcbir.manufacturing import CommandResult
-from pcbir.routing import GlobalRouterOptions, route_global
-from pcbir.routeflow import detailed_failure_trials
-from pcbir.placement import PlacementPlannerOptions
 from pcbir.routing_clearance import RoutingClearanceIndex
 from pcbir.drc import run_physical_drc
 from pcbir.physical import (
@@ -67,22 +63,6 @@ def test_native_via_pad_overlap_rejects_entire_fanout_proposal(monkeypatch) -> N
     assert result.pending_pads
 
 
-def test_detailed_router_uses_fanout_via_as_access() -> None:
-    board = _dense_board()
-    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    fanout = route_fanout(board)
-    routed = route_detailed(fanout.board, guide,
-                            DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"),
-                                                  maximum_passes=2),
-                            fanout_accesses=fanout.accesses,
-                            fanout_created_vias=frozenset((v.net, v.position) for v in fanout.created_vias),
-                            fanout_created_tracks=fanout.created_tracks)
-    assert routed.metrics.routed_net_count == 1
-    assert routed.locked_via_count == 1
-    assert routed.board.tracks[0] == fanout.board.tracks[0]
-    assert not routed.board.vias  # The front-only route does not need a drill.
-
-
 def test_same_net_fanout_drills_respect_hole_spacing() -> None:
     board = _dense_board()
     board = replace(board, nets=(PhysicalNet("SIGNAL", (
@@ -120,47 +100,6 @@ def test_adjacent_same_net_pads_share_a_verified_straight_launch() -> None:
     assert not any(proper_same_net_crossing(a, b) for a in result.created_tracks for b in result.created_tracks)
 
 
-def test_fanout_reuses_existing_matching_via() -> None:
-    board = _dense_board()
-    initial = route_fanout(board)
-    seeded = replace(board, vias=(initial.board.vias[0],))
-    result = route_fanout(seeded)
-    assert result.added_track_count == 1
-    assert result.added_via_count == 0
-    assert len(result.board.vias) == 1
-    assert result.accesses[PadReference("U1", "1")] == seeded.vias[0].position
-    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    routed = route_detailed(
-        result.board, guide, DetailedRouterOptions(pitch_nm=nm_from_mm("0.5")),
-        fanout_accesses=result.accesses,
-        fanout_created_vias=frozenset((item.net, item.position)
-                                    for item in result.created_vias),
-    )
-    assert seeded.vias[0] in routed.board.vias
-
-
-def test_dogbone_that_reaches_a_land_is_trimmed_when_its_via_is_pruned() -> None:
-    # U.1's dogbone runs straight through J1's land to its launch via, so the
-    # net is complete on the surface and the via is pruned as unused. The
-    # stub must not keep running past J1 to where the via was.
-    from pcbir.physical import TrackSegment
-    package = PhysicalFootprint("package", (FootprintPad("1", Point(0, 0), Size.mm(.3, .3)),), Size.mm(4, 4))
-    one = PhysicalFootprint("one", (FootprintPad("1", Point(0, 0), Size.mm(.6, .6)),), Size.mm(1, 1))
-    board = PhysicalBoard("overhang", BoardOutline.rectangle(20, 16), {"package": package, "one": one},
-        (Placement("U", "package", Point.mm(10, 8)), Placement("J1", "one", Point.mm(11, 8))),
-        (PhysicalNet("A", (PadReference("U", "1"), PadReference("J1", "1"))),))
-    width = board.rules.default_track_width_nm
-    stub = TrackSegment("A", Point.mm(10, 8), Point.mm(12, 8), width, CopperLayer.FRONT)
-    via = Via("A", Point.mm(12, 8), board.rules.default_via_size_nm, board.rules.default_via_drill_nm)
-    routed = route_detailed(
-        replace(board, tracks=(stub,), vias=(via,)), route_global(board),
-        DetailedRouterOptions(pitch_nm=nm_from_mm("0.5")),
-        fanout_accesses={PadReference("U", "1"): via.position}, fanout_created_tracks=(stub,),
-        fanout_created_vias=frozenset({(via.net, via.position)}))
-    assert routed.board.vias == ()
-    assert routed.board.tracks == (replace(stub, end=Point.mm(11, 8)),)
-
-
 def test_same_net_drill_collision_is_rejected_by_router_and_native_drc() -> None:
     board = _dense_board()
     via = Via("SIGNAL", Point.mm(4, 4), nm_from_mm("0.8"), nm_from_mm("0.4"),
@@ -192,30 +131,6 @@ def test_via_near_plated_pad_drill_is_checked_without_invalid_pad_copy() -> None
     )
     assert any(item.code == "DRC-DRILL-SPACING"
                for item in run_physical_drc(board).findings)
-
-
-def test_detailed_router_rejects_forged_fanout_anchor() -> None:
-    board = _dense_board()
-    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    result = route_detailed(
-        board, guide, DetailedRouterOptions(maximum_passes=1),
-        fanout_accesses={PadReference("U1", "1"): Point.mm(6, 8)},
-    )
-    assert result.metrics.unrouted_net_count == 1
-    assert "unverified fanout anchor" in result.nets[0].diagnostics[0]
-
-
-def test_detailed_failure_trials_respect_fixed_parts_and_existing_copper() -> None:
-    board = _dense_board()
-    fixed = PlacementPlannerOptions(fixed_references=("U1",))
-    trials = detailed_failure_trials(board, frozenset({"SIGNAL"}), fixed,
-                                     nm_from_mm("0.5"), 4)
-    assert trials
-    assert all(trial.placements[0] == board.placements[0] for trial in trials)
-    assert all(trial.placements[1] != board.placements[1] for trial in trials)
-    with_copper = replace(board, tracks=(route_fanout(board).board.tracks[0],))
-    assert detailed_failure_trials(with_copper, frozenset({"SIGNAL"}), fixed,
-                                   nm_from_mm("0.5"), 4) == ()
 
 
 def test_fanout_reports_unavailable_layer_without_mutating_board() -> None:
@@ -329,26 +244,6 @@ def test_installed_kicad_can_verify_a_filled_connected_plane() -> None:
     incomplete = verify_filled_planes(restricted, kicad_cli=Path(executable))
     assert not incomplete.passed
     assert incomplete.unconnected_count > 0
-
-
-def test_installed_kicad_accepts_pruned_fanout_route() -> None:
-    executable = shutil.which("kicad-cli")
-    if executable is None:
-        installed = Path("C:/Program Files/KiCad/10.0/bin/kicad-cli.exe")
-        if not installed.is_file():
-            pytest.skip("KiCad CLI not installed")
-        executable = str(installed)
-    board = _dense_board()
-    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    fanout = route_fanout(board)
-    detailed = route_detailed(
-        fanout.board, guide, DetailedRouterOptions(pitch_nm=nm_from_mm("0.5")),
-        fanout_accesses=fanout.accesses,
-        fanout_created_vias=frozenset((v.net, v.position) for v in fanout.created_vias),
-        fanout_created_tracks=fanout.created_tracks,
-    )
-    evidence = verify_filled_planes(detailed.board, kicad_cli=Path(executable))
-    assert evidence.passed, evidence.findings
 
 
 def test_native_two_sided_pour_large_land_needs_real_layer_bridge() -> None:

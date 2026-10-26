@@ -216,29 +216,6 @@ def test_permission_without_array_is_unchanged():
     assert stitch_zone_pads(permitted).board.vias == stitch_zone_pads(board).board.vias
 
 
-def test_array_is_the_rebuildable_prefix_and_the_pad_contact():
-    source = _array_board(rows=3, columns=3)
-    board = materialize_hard_macros(source)
-    assert len(board.vias) == 9 and materialize_hard_macros(board) is board
-    assert macro_source(board) == replace(source, metadata=board.metadata)
-    assert materialize_hard_macros(macro_source(board)) == board
-    only_ep = replace(board, nets=(PhysicalNet("GND", (EP,)), *board.nets[1:]))
-    stitched = stitch_zone_pads(only_ep)
-    assert stitched.stitched_pads == (EP,) and not stitched.pending_pads
-    assert stitched.added_track_count == stitched.added_via_count == 0
-    # An unrouted caller still gets the array, never a second contact.
-    assert stitch_zone_pads(replace(source, nets=only_ep.nets)).board.vias == board.vias
-    with pytest.raises(ValueError, match="only partly present"):
-        materialize_via_in_pad_arrays(replace(board, vias=board.vias[:4]))
-    from pcbir.detailed import route_detailed
-    from pcbir.fanout import route_fanout
-    from pcbir.routing import route_global
-    with pytest.raises(ValueError, match="place required via-in-pad arrays before package escape"):
-        route_fanout(source)
-    with pytest.raises(ValueError, match="before detailed routing"):
-        route_detailed(source, route_global(source))
-
-
 def _blocked(board: PhysicalBoard, message: str) -> None:
     with pytest.raises(ValueError, match=message):
         materialize_via_in_pad_arrays(board)
@@ -269,49 +246,6 @@ def test_any_failed_site_rejects_the_whole_array_by_name():
                            *board.nets[1:])),
              corner + " touches another land")
     assert not board.vias
-
-
-def test_routing_treats_the_array_as_fixed_copper():
-    from pcbir import (DetailedRouterOptions, GlobalRouterOptions, PlaneStitchOptions,
-                       PlacementPlannerOptions, run_routing_pipeline)
-    from pcbir.fanout import FanoutOptions
-    board = _array_board(rows=3, columns=3)
-    # C runs between the resistors, straight across the package footprint.
-    board = replace(board, nets=(board.nets[0], board.nets[2],
-        PhysicalNet("C", (PadReference("R1", "2"), PadReference("R2", "2")))))
-    result = run_routing_pipeline(
-        board,
-        placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
-            refinement_passes=0, fixed_references=frozenset({"U1", "R1", "R2"})),
-        global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2), maximum_iterations=2),
-        detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm("0.25"), defer_zone_nets=True),
-        fanout_options=FanoutOptions())
-    arrays = materialize_via_in_pad_arrays(board).vias
-    assert result.package_access is not None and result.package_access.ready
-    assert all(item.connected for item in result.detailed.nets if item.net != "GND")
-    assert result.board.vias[:len(arrays)] == arrays
-    assert result.board.metadata["via_in_pad_count"] == "9"
-    assert not _hard(result.board)
-    # It threads between the array's rows on an inner layer, clear of every drill.
-    assert any(track.net == "C" and track.layer is not CopperLayer.FRONT
-               and min(track.start.x_nm, track.end.x_nm) < nm_from_mm(15) < max(track.start.x_nm, track.end.x_nm)
-               and abs(track.start.y_nm - nm_from_mm(10)) < nm_from_mm("1.55")
-               for track in result.board.tracks)
-    # The array is the pad's only contact: stitching it alone adds nothing.
-    alone = stitch_zone_pads(result.board, PlaneStitchOptions(only_pads=frozenset({EP})))
-    assert alone.stitched_pads == (EP,) and alone.added_via_count == alone.added_track_count == 0
-    final = stitch_zone_pads(result.board)
-    assert not final.pending_pads and not _hard(final.board)
-    in_land = [via for via in final.board.vias
-               if max(abs(via.position.x_nm - nm_from_mm(15)),
-                      abs(via.position.y_nm - nm_from_mm(10))) <= nm_from_mm("1.55")]
-    assert in_land == list(arrays)
-    executable = shutil.which("kicad-cli")
-    if executable is None:
-        pytest.skip("KiCad CLI not installed")
-    from pcbir.plane_verify import verify_filled_planes
-    evidence = verify_filled_planes(final.board, kicad_cli=Path(executable))
-    assert evidence.passed, evidence.findings
 
 
 def test_hard_macro_pad_array_is_committed_with_owner_copper(tmp_path):

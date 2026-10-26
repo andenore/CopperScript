@@ -1761,24 +1761,14 @@ Native open/route-completeness findings and fabrication gates remain unchanged.
 Duplicate-land `added_track_count` counts final-stage additions;
 `pipeline_added_track_count` records additions in the selected pipeline closure.
 
-45-degree search/shortcut rays follow physical coordinates, not distorted
-index-space diagonals. Narrow concave outline crossings and actual track
-keepouts block them; off-ray blocked coordinates and via-only keepouts do not.
-Width/clearance checks remain mandatory. Ray and search-local physical-span via
-caches do not change geometry rules. Ray caches contain only static obstacles;
-no copper-clearance result is reused after changing the clearance index.
-
 ### Routing search costs
 
 `route-board --layer-preference-cost` and `--direction-preference-cost` are
 soft physical-search rates per millimetre, not electrical properties or hard
-layer restrictions. Global search uses half the selected detailed rates.
-Both searches use a baseline distance rate of 10 cost units/mm; via and bend
-events have separate fixed costs. Changing grid pitch or inserting pad-access
-coordinates does not change the cost of an identical straight run. Physical
-45-degree successors can cross inserted axis splits, subject to blocked-grid
-and exact copper clearance checks. This does not guarantee that every route
-will be octilinear: short pad accesses and orthogonal-budget fallbacks remain.
+layer restrictions. The global guide search uses half the selected rates on top
+of a baseline distance rate of 10 cost units/mm; via and bend events have
+separate fixed costs. The unified router prices its own lattice through the
+`--unified-*` options.
 
 Opt-in `--layer-assignment-passes N` (default 0) relabels ordinary
 via-bounded guide runs onto another permitted signal layer after global
@@ -1786,15 +1776,8 @@ negotiation when that avoids forced same-layer crossings (priced as one via
 pair each) or, with `--local-demand-cost` (per mm at a full edge, counted in
 `--pitch-mm` lanes), a crowded channel. Tile paths and via counts do not
 change; planes, explicit layers and critical/paired/power guides are fixed.
-Opt-in `--guide-escape-mm` lets the detailed corridor change layer next to a
-reserved fixed-layer terminal. Accepted ordinary copper is straightened by
-default; `--no-route-smoothing` keeps it as searched. Smoothing never moves
-vias, reserved or immutable copper. With `--fanout`, a reserved boundary port is
-one terminal of its pin, beside the pin's surface access and its launch via;
-afterwards, escape copper the net does not need is removed transactionally
-(CS-163; `--no-escape-terminals` keeps port-only terminals and all escape
-copper). Opt-in `--package-destination-ports` prefers boundary ports facing
-each pin's nearest terminal on another component.
+Accepted ordinary copper is straightened by default; `--no-route-smoothing`
+keeps it as searched. Smoothing never moves vias, reserved or immutable copper.
 
 ## KiCad schematic export
 

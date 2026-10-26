@@ -43,35 +43,6 @@ def hard_findings(board):
             if f.code != "DRC-ROUTE-INCOMPLETE" and f.code not in ROUTING_BUDGET_WARNING_CODES]
 
 
-def test_length_bounded_surface_repair_uses_fine_geometric_search(monkeypatch):
-    import pcbir.detailed as detailed
-    import pcbir.critical as critical
-    board, guides = fixture(False)
-    rule = replace(board.net_routing_rules[0], max_length_nm=nm_from_mm(6))
-    board = replace(board, net_routing_rules=(rule,))
-    original = detailed.route_detailed
-    seen = []
-
-    def capture(search_board, global_route, options, **kwargs):
-        seen.append(options)
-        assert global_route.routes[0].connected == guides.routes[0].connected
-        assert not global_route.routes[0].segments
-        assert guides.routes[0].segments
-        assert search_board.net_routing_rules[0].max_length_nm == nm_from_mm(6)
-        assert search_board.net_routing_rules[0].max_vias == 0
-        return original(search_board, global_route, options, **kwargs)
-
-    monkeypatch.setattr(detailed, "route_detailed", capture)
-    # Exercise the board-wide fallback independently of the preceding bounded
-    # local-corridor search.
-    monkeypatch.setattr(critical,"local_surface_candidates",lambda *args,**kwargs:iter(()))
-    result, tracks, vias = _route_single_exact(board, rule, guides, [], [])
-    assert result.connected and tracks and not vias
-    assert seen[0].pitch_nm == seen[0].minimum_repair_pitch_nm
-    assert seen[0].layer_preference_cost == seen[0].direction_preference_cost == 0
-    assert result.lengths_nm[0] <= rule.max_length_nm
-
-
 def test_short_surface_clock_uses_existing_local_maze_before_board_wide_search(monkeypatch):
     import pcbir.detailed as detailed
     board,guides=fixture(False)

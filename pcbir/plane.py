@@ -688,69 +688,6 @@ def _stitch_land_choices(
     return (tail,) if tail is not None else ()
 
 
-@dataclass(frozen=True, slots=True)
-class PlaneContactProposals:
-    snapshot: str
-    choices: tuple
-    site_queries: int
-    stop_reason: str
-    # Actual proposer targets, parallel to choices. In particular a reused
-    # plated transition remains named even if all lead-in copper already
-    # existed and the proposal contains no new tracks or via.
-    targets: tuple = ()
-
-
-def propose_plane_contacts(board, reference, options=None, *, maximum_alternatives=8,
-                           maximum_sites=128):
-    """Enumerate one land's prospective contacts without mutating its board.
-
-    Uses the normal stitcher's exact annulus/drill/path and process predicates.
-    The finite pool is not native continuity evidence. Macro/array contacts and
-    multi-land aliases remain held for their existing producers.
-    """
-    from .drc import physical_board_digest
-    from .hard_macros import macro_owned_pads
-    from .pad_via_arrays import array_rules, require_via_in_pad_arrays
-    if any(type(v) is not int or v <= 0 for v in (maximum_alternatives, maximum_sites)):
-        raise ValueError('positive contact alternative and site bounds required')
-    require_via_in_pad_arrays(board, 'contact alternatives')
-    digest = physical_board_digest(board)
-    def finish(choices=(), work=None, reason=''):
-        work = work or {'sites': 0, 'exhausted': False}
-        targets = tuple(work.get('contact_targets', {}).get((path,via),
-            via.position if via is not None else None) for path,via in choices)
-        return PlaneContactProposals(digest, tuple(choices), work['sites'], reason or (
-            'site_budget_exhausted' if work['exhausted'] else 'finite_pool_generated' if choices else 'no_contact_candidate'), targets)
-    if reference in macro_owned_pads(board) or reference in {r.pad for r in array_rules(board)}:
-        return finish(reason='protected_contact')
-    pose = next((p for p in board.placements if p.reference == reference.component), None)
-    net = next((n.name for n in board.nets if reference in n.pads), None)
-    lands = tuple(p for p in board.footprints[pose.footprint].pads if p.number == reference.pad) if pose else ()
-    if not net or len(lands) != 1 or lands[0].kind is not PadKind.SMD:
-        return finish(reason='unsupported_contact_terminal')
-    options = options or PlaneStitchOptions()
-    side = CopperLayer.FRONT if pose.side is BoardSide.FRONT else CopperLayer.BACK
-    outer = (board.stackup.copper_layers[0], board.stackup.copper_layers[-1])
-    zones = [z for z in board.zones if z.net == net and any(l is not side for l in z.layers)
-             and (options.include_surface_zones or any(l not in outer for l in z.layers))]
-    if not zones:
-        return finish(reason='no_declared_contact_zone')
-    allowed = {r.pad for r in board.via_in_pad_rules}
-    options = replace(options, ground_via_in_pad=reference in allowed,
-        preferred_ground_pads=options.preferred_ground_pads if options.preferred_ground_pads is not None
-        else frozenset({reference}))
-    rule = next((r for r in board.net_routing_rules if r.net == net), None)
-    width = max(rule.width_nm if rule and rule.width_nm is not None else 0,
-                options.escape_width_nm or board.rules.default_track_width_nm)
-    work = {'sites': 0, 'exhausted': False}
-    choices = _stitch_land_choices(board, RoutingClearanceIndex(board), net, zones, lands[0], pose,
-        transformed_local_point(pose, lands[0].position), side, width,
-        board.rules.default_via_size_nm, board.rules.default_via_drill_nm, outer, options,
-        board.tracks, board.vias, {}, maximum_alternatives=maximum_alternatives,
-        maximum_sites=maximum_sites, work=work)
-    return finish(choices, work)
-
-
 def _surface_route_length(
     net: str, layer: CopperLayer, width: int, start: Point, end: Point,
     tracks: tuple[TrackSegment, ...],

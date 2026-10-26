@@ -73,8 +73,6 @@ class SupportPlacementResult:
     frontier: tuple = ()
     reservation_report: object = None
     limits: object = None
-    power_trials: tuple = ()
-    power_preparation: object = None
 
     def report(self):
         return dict(status=self.status,source_digest=self.source_digest,
@@ -88,10 +86,7 @@ class SupportPlacementResult:
             selected=[dict(family=p.family,members=[q.reference for q in p.poses],
                            parameters=p.parameters) for p in self.selected],
             trials=self.trials,frontier=self.frontier,
-            limits=self.limits,reservation_report=self.reservation_report,power_trials=self.power_trials,
-            power_native_acceptance=bool(self.power_preparation and self.power_preparation.accepted),
-            power_scope=self.power_preparation.contact_snapshot.selected_nets
-                if self.power_preparation and self.power_preparation.contact_snapshot else (),
+            limits=self.limits,reservation_report=self.reservation_report,
             unobserved_associations=len(self.board.decoupling_links)-(len(self.scope) if self.routing_passes else 0),
             unobserved_phases=['distribution_area_acceptance','native_board_acceptance','electrical_loop_assessment'],
             electrical_assessment='route_length_via_count_and_envelope_proxies_only')
@@ -439,10 +434,16 @@ def _score(board,links,verified):
     return (len(links)-len(verified),length,len(vias),area)
 
 
+def _ordinary_scope(board):
+    """Nets that are neither power domains, zone nets nor specialised (non-general) routes."""
+    from .physical import RouteKind
+    protected = {d.net for d in board.power_domains} | {z.net for z in board.zones}
+    protected.update(r.net for r in board.net_routing_rules if r.kind is not RouteKind.GENERAL)
+    return frozenset(n.name for n in board.nets if n.name not in protected)
+
+
 def improve_support_placement(board,placements,placement_options,*,options=None,fanout_options=None,
-                              only_links=None,reserved_tracks=(),reserved_vias=(),ports=(),
-                              power_area_options=None,power_native_verifier=None,on_progress=None,
-                              global_router_options=None,pair_state_limit=None,on_power_trial=None):
+                              only_links=None,reserved_tracks=(),reserved_vias=(),ports=()):
     """Joint finite bank search; return unrouted poses and separate proof copper.
 
     Caller reservations are fixed actual copper, freshly checked with all ports.
@@ -453,9 +454,8 @@ def improve_support_placement(board,placements,placement_options,*,options=None,
     from .hard_macros import materialize_hard_macros
     from .placement import placement_solution_is_legal,_legal
     from .fanout import FanoutOptions,route_fanout
-    from .joint_preparation import ordinary_preparation_scope
     from .copper_reservations import reserve_copper_scene
-    from .package_access import _verified_bypass_links
+    from .bypass_links import verified_bypass_links
     from .escape_assignment import _finite_assignment,_BudgetExceeded
     options=options or SupportPatternOptions();fanout_options=fanout_options or FanoutOptions()
     if board.tracks or board.vias or board.zone_fills:raise ValueError('support placement requires unrouted unfilled source')
@@ -467,18 +467,13 @@ def improve_support_placement(board,placements,placement_options,*,options=None,
     source=replace(board,placements=tuple(placements[p.reference] for p in board.placements))
     if not placement_solution_is_legal(board,placements,placement_options):raise ValueError('legal source poses required')
     digest=physical_board_digest(source);scope=tuple(l for l in source.decoupling_links if only_links is None or l in only_links)
-    if power_area_options is not None:
-        power_nets=set(power_area_options.nets or (d.net for d in source.power_domains))
-        if only_links is not None and any(l.net not in power_nets for l in scope):
-            raise ValueError('support scope must belong to selected power domains')
-        scope=tuple(l for l in scope if l.net in power_nets)
     membership={p:n.name for n in source.nets for p in n.pads}
     if any(membership.get(l.target)!=l.net or membership.get(l.capacitor)!=l.net
            or membership.get(l.return_pad)!=l.return_net for l in scope):
         raise ValueError('source bypass pad/net associations required')
     protected=_protected_members(source,placements,placement_options)
     groups=_groups(source,frozenset(scope),protected,options);work={'poses':0,'states':0,'pairs':0,'checks':0,'routes':0}
-    trials=[];power_trials=[];baseline_verified=frozenset();ports=tuple(ports);best=None;frontier=[]
+    trials=[];baseline_verified=frozenset();ports=tuple(ports);best=None;frontier=[]
     reservation_report=dict(origin='provided' if reserved_tracks or reserved_vias or ports else 'not_run',
                             tracks=len(reserved_tracks),vias=len(reserved_vias))
     def finish(status):
@@ -488,26 +483,16 @@ def improve_support_placement(board,placements,placement_options,*,options=None,
             verified=tuple(l for l in scope if l in baseline_verified),pose_probes=work['poses'],
             search_states=work['states'],pair_checks=work['pairs'],complete_checks=work['checks'],
             routing_passes=work['routes'],frontier=tuple(frontier),reservation_report=reservation_report,
-            power_trials=tuple(power_trials),limits={**{n:getattr(options,n) for n in options.__dataclass_fields__},
+            limits={**{n:getattr(options,n) for n in options.__dataclass_fields__},
                     'routing_passes':options.maximum_complete_checks+2,
-                    'power_preparations':options.maximum_complete_checks+2 if power_area_options is not None else 0,
                     'per_link_launches':8,'per_connection_sites':64,'per_link_complete_proposals':64})
     if not groups:return finish('fixed_or_unsupported' if scope else 'not_requested')
-    if power_area_options is not None and power_native_verifier is None:
-        return finish('native_tool_required')
-    if power_area_options is not None and (reserved_tracks or reserved_vias or ports
-            or power_area_options.reserved_tracks or power_area_options.reserved_vias):
-        # The combined stage starts before ordinary/contact ownership freezes.
-        # Do not pass foreign pre-routed copper through macro_source or silently
-        # discard an external reservation. The normal preparation creates and
-        # validates its own early ordinary scene for each clean pose trial.
-        return finish('external_support_reservations_unsupported')
     base=materialize_hard_macros(source)
     if any(v.net in {n for l in scope for n in (l.net,l.return_net)} for v in (*reserved_tracks,*reserved_vias)):
         raise ValueError('ordinary reservation overlaps support producer net')
-    if power_area_options is None and not reserved_tracks and not reserved_vias and not ports:
+    if not reserved_tracks and not reserved_vias and not ports:
         excluded={n for l in source.decoupling_links for n in (l.net,l.return_net)}
-        ordinary=ordinary_preparation_scope(base)-excluded
+        ordinary=_ordinary_scope(base)-excluded
         if ordinary:
             fanout=route_fanout(base,replace(fanout_options,prefer_surface_escapes=True,
                 surface_preference_depth=1,surface_fallback=True),only_nets=ordinary)
@@ -527,43 +512,17 @@ def improve_support_placement(board,placements,placement_options,*,options=None,
     if not _port_paths(initial.board,ports):raise ValueError('fresh ordinary reservation witnesses required')
     hard=_hard(initial.board)
     def route_trial(scene):
-        # Rebuild contacts AND areas for this complete pose assignment through
-        # the normal preparation transaction. No old support copper, filled
-        # evidence or candidate plan is carried across a placement change.
+        # Route the supports for this complete pose assignment afresh. No old
+        # support copper or candidate plan is carried across a placement change.
         work['routes']+=1
-        if power_area_options is None:
-            return _route(scene,scope,fanout_options,options),None
-        from .power_preparation import prepare_power_distribution
-        from .routing import route_global
-        settings=replace(fanout_options,plane_return_nets=frozenset(power_area_options.plane_return_nets))
-        number=work['routes']
-        prep=prepare_power_distribution(scene,route_global(scene,global_router_options),power_area_options,settings,
-            native_verifier=lambda b,stage:power_native_verifier(b,f'support-{number}-{stage}'),
-            on_progress=on_progress,pair_state_limit=pair_state_limit)
-        power_trials.append(dict(attempt=number,source_digest=physical_board_digest(scene),
-            status=prep.status,plan=prep.plan.report() if prep.plan else None,
-            observation=prep.observation,native_trials=prep.native_trials,
-            critical=[dict(nets=r.nets,connected=r.connected,diagnostics=r.diagnostics) for r in prep.critical.nets]))
-        if on_power_trial is not None:on_power_trial(number,prep)
-        return prep.board,prep
-    def completed(routed,prep):
+        return _route(scene,scope,fanout_options,options)
+    def completed(routed):
         local=_paths(routed,scope,options.maximum_path_states)
-        native=frozenset()
-        if prep is not None and prep.accepted and prep.evidence and prep.evidence.matches(routed):
-            from .decoupling_fill import assess_decoupling_fill
-            native=frozenset(a.link for a in assess_decoupling_fill(routed,prep.evidence)
-                             if a.status=='connected' and a.link in scope)
-        return local,frozenset(local)|native
-    def score_trial(routed,local,complete,prep):
-        score=_score(routed,scope,local)
-        if power_area_options is None:return score
-        # Complete physical supply/return continuity takes priority. Native
-        # continuity is separate from the local-path and electrical proxies.
-        return (len(scope)-len(complete),int(not prep.accepted),*score[1:])
-    baseline,baseline_power=route_trial(initial.board)
-    baseline_verified=_verified_bypass_links(baseline,{l.net for l in scope})&frozenset(scope)
-    baseline_local,baseline_complete=completed(baseline,baseline_power)
-    baseline_score=score_trial(baseline,baseline_local,baseline_complete,baseline_power)
+        return local,frozenset(local)
+    baseline=route_trial(initial.board)
+    baseline_verified=verified_bypass_links(baseline,{l.net for l in scope})&frozenset(scope)
+    baseline_local,baseline_complete=completed(baseline)
+    baseline_score=_score(baseline,scope,baseline_local)
     # Spend the finite group allowance on unresolved associations first, not
     # merely the earliest source declarations on an already working rail.
     groups=tuple(sorted(groups,key=lambda ls:(-sum(l not in baseline_complete for l in ls),
@@ -615,43 +574,26 @@ def improve_support_placement(board,placements,placement_options,*,options=None,
         new=materialize_hard_macros(replace(source,placements=tuple(poses[p.reference] for p in source.placements)))
         scene=reserve_copper_scene(new,reserved_tracks,reserved_vias)
         if _hard(scene.board)-hard or not _port_paths(scene.board,ports):trial['status']='reserved_exit_or_copper_blocked';return False
-        routed,power=route_trial(scene.board)
-        if power is not None and not power.accepted:
-            trial.update(status='power_preparation_rejected',power_status=power.status);return False
-        verified=_verified_bypass_links(routed,{l.net for l in scope})&frozenset(scope)
-        local,complete_links=completed(routed,power)
+        routed=route_trial(scene.board)
+        verified=verified_bypass_links(routed,{l.net for l in scope})&frozenset(scope)
+        local,complete_links=completed(routed)
         required={l for l in scope if l.capacitor.component in moved}
         if (not baseline_verified<=verified or not set(baseline_local)<=set(local)
                 or not baseline_complete<=complete_links or not required<=complete_links):
             trial['status']='supply_or_return_unresolved';return False
         if _hard(routed)-hard or not _port_paths(routed,ports):trial['status']='combined_geometry_rejected';return False
-        score=score_trial(routed,local,complete_links,power);trial.update(status='verified_geometry',score=score)
+        score=_score(routed,scope,local);trial.update(status='verified_geometry',score=score)
         if score>=baseline_score:return False
         if best is None or score<best[0]:best=(score,poses,selected,
-            scene.extract(routed) if power is None else None,routed,tuple(complete_links))
+            scene.extract(routed),routed,tuple(complete_links))
         if not any(all(x<=y for x,y in zip(row['score'],score)) for row in frontier):
             frontier=[row for row in frontier if not all(x<=y for x,y in zip(score,row['score']))]
             frontier.append(dict(score=score,families=trial['families']));frontier=sorted(frontier,key=lambda row:row['score'])[:options.frontier_size]
         return False  # Continue within the SAME global work budget to keep a frontier.
     try:
-        if power_area_options is None:
-            _finite_assignment({g:tuple(range(len(values))) for g,values in domains.items()},{},
-                preferred={g:0 for g in domains},rank={g:g for g in domains},compatible=compatible,
-                consume_state=consume,accept_complete=complete)
-        else:
-            # Native checks are expensive. Sample whole-bank preferences instead
-            # of spending every check on variants of only the final DFS group.
-            # Rejected combinations, states and pair checks survive every pass.
-            seen=set()
-            def sample(assignment):
-                identity=tuple(sorted(assignment.items()))
-                if identity in seen or all(i==0 for _,i in identity):return False
-                seen.add(identity);complete(assignment);return True
-            for variant in range(1,options.maximum_complete_checks+1):
-                found=_finite_assignment({g:tuple(range(len(values))) for g,values in domains.items()},{},
-                    preferred={g:variant%len(domains[g]) for g in domains},rank={g:g for g in domains},
-                    compatible=compatible,consume_state=consume,accept_complete=sample)
-                if found is None:break
+        _finite_assignment({g:tuple(range(len(values))) for g,values in domains.items()},{},
+            preferred={g:0 for g in domains},rank={g:g for g in domains},compatible=compatible,
+            consume_state=consume,accept_complete=complete)
         status='finite_pattern_pool_unresolved'
         if work['checks']>=options.maximum_complete_checks:status='complete_check_budget'
     except _BudgetExceeded as error:status=str(error)
@@ -661,14 +603,13 @@ def improve_support_placement(board,placements,placement_options,*,options=None,
     # paths or stored connectivity flags authorize the returned pose result.
     final=replace(source,placements=tuple(poses[p.reference] for p in source.placements))
     fresh=reserve_copper_scene(materialize_hard_macros(final),reserved_tracks,reserved_vias)
-    regenerated,power=route_trial(fresh.board)
-    local,proved=completed(regenerated,power)
-    verified=_verified_bypass_links(regenerated,{l.net for l in scope})&frozenset(scope)
-    if (power is not None and not power.accepted or not baseline_verified<=verified
+    regenerated=route_trial(fresh.board)
+    local,proved=completed(regenerated)
+    verified=verified_bypass_links(regenerated,{l.net for l in scope})&frozenset(scope)
+    if (not baseline_verified<=verified
             or not set(baseline_local)<=set(local) or not set(complete_links)<=set(proved)
             or _hard(regenerated)-hard or not _port_paths(regenerated,ports)):
         trials.append(dict(status='final_regeneration_rejected'));return finish('final_regeneration_rejected')
     result=finish('geometry_improved')
-    return replace(result,board=final,proposal=fresh.extract(regenerated) if power is None else None,signal_scene=regenerated,
-        selected=selected,verified=tuple(l for l in scope if l in proved),routing_passes=work['routes'],
-        power_preparation=power)
+    return replace(result,board=final,proposal=fresh.extract(regenerated),signal_scene=regenerated,
+        selected=selected,verified=tuple(l for l in scope if l in proved),routing_passes=work['routes'])

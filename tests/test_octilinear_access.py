@@ -2,14 +2,9 @@ from dataclasses import replace
 
 import pytest
 
-from pcbir import (BoardOutline, CopperKeepout, CopperLayer,
-    FootprintPad, NetRoutingRule, PadReference, PhysicalBoard, PhysicalFootprint,
-    PhysicalNet, Placement, Point, PolygonRing, PolygonWithHoles, RouteKind, Size,
-    TrackSegment, nm_from_mm, route_global, run_physical_drc)
-from pcbir.detailed import _access_path
+from pcbir import (BoardOutline, CopperLayer, FootprintPad, NetRoutingRule, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, RouteKind, Size, nm_from_mm, route_global, run_physical_drc)
 from pcbir.critical import _route_single_exact
 from pcbir.pair_search import _goal_paths, _heading, _lane_paths, _normal
-from pcbir.routing_clearance import RoutingClearanceIndex
 
 
 def board():
@@ -17,66 +12,6 @@ def board():
     return PhysicalBoard("Access", BoardOutline.rectangle(20, 15), {fp.name: fp},
         (Placement("J1", fp.name, Point.mm(3.3, 2.5)), Placement("J2", fp.name, Point.mm(14.2, 10.7))),
         (PhysicalNet("RF", (PadReference("J1", "1"), PadReference("J2", "1"))),))
-
-
-@pytest.mark.parametrize("end", [(5, 3), (3, 5), (1, 3), (3, 1), (5, 1), (1, 5), (1, 1), (5, 5), (3, 3)])
-def test_access_preserves_exact_terminal_and_checks_octilinear_legs(end):
-    base = board()
-    start, finish = Point.mm(3, 3), Point.mm(*end)
-    tracks = _access_path(base, RoutingClearanceIndex(base), "RF", start, finish,
-                          nm_from_mm(.18), CopperLayer.FRONT)
-    assert tracks is not None
-    assert all(_heading(t.start, t.end) is not None for t in tracks)
-    if tracks:
-        assert tracks[0].start == start and tracks[-1].end == finish
-        assert all(a.end == b.start for a, b in zip(tracks, tracks[1:]))
-    assert tracks == _access_path(base, RoutingClearanceIndex(base), "RF", start, finish,
-                                  nm_from_mm(.18), CopperLayer.FRONT)
-
-
-def test_access_tries_alternative_leg_order_not_just_direct_chord():
-    base = board()
-    obstacle = TrackSegment("OTHER", Point.mm(3.5, 3.45), Point.mm(3.5, 3.55),
-                            nm_from_mm(.1), CopperLayer.FRONT)
-    base = replace(base, tracks=(obstacle,), nets=(*base.nets, PhysicalNet("OTHER", ())))
-    index = RoutingClearanceIndex(base)
-    tracks = _access_path(base, index, "RF", Point.mm(3, 3), Point.mm(5, 4),
-                          nm_from_mm(.18), CopperLayer.FRONT)
-    assert tracks and tracks[0].end == Point.mm(4, 3)
-    assert all(index.can_track(t.net, t.start, t.end, t.width_nm, t.layer) for t in tracks)
-
-
-def test_access_tentative_conflicts_never_bypass_locked_geometry_or_board_edge():
-    base = board()
-    wall = TrackSegment("OTHER", Point.mm(4, 1), Point.mm(4, 6), nm_from_mm(.2), CopperLayer.FRONT)
-    base = replace(base, tracks=(wall,), nets=(*base.nets, PhysicalNet("OTHER", ())))
-    args = ("RF", Point.mm(3, 3), Point.mm(5, 4), nm_from_mm(.18), CopperLayer.FRONT)
-    assert _access_path(base, RoutingClearanceIndex(base), *args) is None
-    removable = RoutingClearanceIndex(replace(base, tracks=()))
-    removable.add_track(wall, locked=False)
-    assert _access_path(base, removable, *args, True)
-    locked = RoutingClearanceIndex(replace(base, tracks=()))
-    locked.add_track(wall, locked=True)
-    assert _access_path(base, locked, *args, True) is None
-    assert _access_path(base, RoutingClearanceIndex(base), "RF", Point.mm(.02, 3), Point.mm(2, 4),
-                        nm_from_mm(.18), CopperLayer.FRONT, True) is None
-
-
-def test_access_does_not_cross_keepouts_even_in_tentative_ripup():
-    base = board()
-    base = replace(base, copper_keepouts=(CopperKeepout("wall", (CopperLayer.FRONT,),
-        PolygonWithHoles(PolygonRing(tuple(Point.mm(*p) for p in ((3.9, 1), (4.1, 1), (4.1, 6), (3.9, 6))))),),))
-    assert _access_path(base, RoutingClearanceIndex(base), "RF", Point.mm(3, 3), Point.mm(5, 4),
-                        nm_from_mm(.18), CopperLayer.FRONT, True) is None
-
-
-def test_access_does_not_fall_back_to_an_oblique_chord(monkeypatch):
-    base = board()
-    index = RoutingClearanceIndex(base)
-    start, end = Point.mm(3, 3), Point.mm(5, 4)
-    monkeypatch.setattr(index, "can_track", lambda net, a, b, width, layer: (a, b) == (start, end))
-    assert index.can_track("RF", start, end, nm_from_mm(.18), CopperLayer.FRONT)
-    assert _access_path(base, index, "RF", start, end, nm_from_mm(.18), CopperLayer.FRONT) is None
 
 
 def test_exactly_consumed_miter_edge_rejects_joint_construction():

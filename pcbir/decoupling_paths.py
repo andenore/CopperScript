@@ -493,7 +493,6 @@ def _existing_launches(board, a, b, net, width, index, options, site_limit):
             yield path, via
 
 
-
 def _local_launch_sites(board, placement, pad, options, site_limit, *, clearance=None, net=None):
     """Nearest members of the original analytic inventory, within its site cap.
 
@@ -880,27 +879,3 @@ def propose_crosslayer_decoupling(board, link, *, fanout_options=None,
                                 supply_path=existing.supply_path,return_path=existing.return_path)
 
 
-@dataclass(frozen=True, slots=True)
-class DecouplingAlternatives:
-    snapshot: str
-    choices: tuple[DecouplingPathResult, ...]
-    attempted: int
-    stop_reason: str
-
-
-def propose_crosslayer_alternatives(board, link, *, maximum_alternatives=8, **options):
-    """Collect complete alternatives in ONE existing bounded supply/return search.
-
-    Launch, site, local-path and complete-proposal work is shared across all
-    results. Every result retains the source association and fresh exact
-    supply/return witnesses. This does not release or adopt any input copper.
-    """
-    if type(maximum_alternatives) is not int or maximum_alternatives <= 0:
-        raise ValueError('positive bypass alternative bound required')
-    pool = dict(limit=maximum_alternatives, choices=[], seen=set(), attempted=0)
-    terminal = propose_crosslayer_decoupling(board, link, _proposal_pool=pool, **options)
-    choices = tuple(pool['choices'])
-    if not choices and terminal.witness is not None:
-        choices = (terminal,)
-    return DecouplingAlternatives(physical_board_digest(board), choices, pool['attempted'],
-        'alternative_budget_reached' if len(choices) >= maximum_alternatives else terminal.reason or 'existing_witness')

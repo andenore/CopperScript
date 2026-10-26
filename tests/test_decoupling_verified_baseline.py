@@ -4,7 +4,7 @@ from dataclasses import replace
 import pytest
 
 from pcbir.decoupling import improve_decoupling_placement, route_decouplers
-from pcbir.package_access import _verified_bypass_links
+from pcbir.bypass_links import verified_bypass_links as _verified_bypass_links
 from pcbir.physical import (BoardSide, ComponentPlacementRule, DecouplingLink,
                            PadReference, PhysicalNet, Placement, Point, NetRoutingRule,
                            FootprintPad, Size)

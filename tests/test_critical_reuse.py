@@ -11,7 +11,7 @@ from pcbir.fanout import route_fanout
 from pcbir.critical import CriticalRoutingStatus, _fingerprint
 from pcbir.critical_reuse import prepare_single_critical_reuse, validate_single_critical_reuse
 from pcbir.drc import explicit_copper_connectivity
-from pcbir.package_access import _verified_bypass_links
+from pcbir.bypass_links import verified_bypass_links as _verified_bypass_links
 
 
 @pytest.fixture(scope="module")

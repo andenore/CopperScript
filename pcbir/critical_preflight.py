@@ -8,7 +8,6 @@ routing so a later interrupted critical search retains useful evidence.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -20,19 +19,15 @@ from .backends.kicad_project import write_kicad_project
 from .critical import (CriticalRoutingStatus, critical_lane_table, critical_net_document,
                        route_critical_nets)
 from .critical_bundles import crossing_line, nested_exit_line
-from .critical_feedback import improve_critical_placement
 from .critical_review import critical_lane_review, lane_review_line
 from .critical_tuning import match_tuning_line
 from .drc import run_physical_drc
 from .erc import check, has_errors
 from .footprints import FootprintResolver
-from .fanout import FanoutOptions
 from .hard_macros import apply_hard_macro_scene
 from .loader import BoardLoadError, load_design
-from .physical import PadReference, nm_from_mm
-from .package_access import preflight_package_access
+from .physical import nm_from_mm
 from .pad_via_arrays import via_in_pad_array_report
-from .plane import PlaneStitchOptions
 from .physicalize import PrototypePhysicalOptions, prototype_physicalize, resolved_physicalize
 from .placement import PlacementPlannerOptions
 from .placement_templates import apply_placement_templates
@@ -54,14 +49,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--placement-templates", type=Path)
     parser.add_argument("--hard-macro", type=Path, action="append", default=[])
     parser.add_argument("--feedback-iterations", type=int, default=1)
-    parser.add_argument("--critical-feedback-trials", type=int, default=0)
-    parser.add_argument("--package-access", action="store_true",
-                        help="also verify ordinary package exits and plane contacts before area routing")
-    parser.add_argument("--stitch-surface-zones", action="store_true")
-    parser.add_argument("--plane-contact-radius-mm", default="0")
-    parser.add_argument("--prefer-local-ground", action=argparse.BooleanOptionalAction,
-                        default=True)
-    parser.add_argument("--prefer-local-ground-pad", action="append", default=[], metavar="REF.PAD")
     parser.add_argument("--router-iterations", type=int, default=5)
     parser.add_argument("--tile-size-mm", default="5")
     parser.add_argument("--report", type=Path, required=True)
@@ -82,12 +69,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"CRITICAL PREFLIGHT: {stage}", flush=True)
 
     try:
-        if args.critical_feedback_trials < 0:
-            raise ValueError("critical placement feedback trial count cannot be negative")
-        if args.package_access and args.critical_feedback_trials:
-            raise ValueError("package-access preflight cannot use critical-only placement feedback")
-        if not args.package_access and (args.stitch_surface_zones or args.plane_contact_radius_mm != "0"):
-            raise ValueError("plane-contact options require --package-access")
         started = perf_counter()
         # The full design, not just its electrical IR: the mechanical block
         # carries the outline, holes, rules, edges and stack-up.
@@ -110,18 +91,6 @@ def main(argv: list[str] | None = None) -> int:
             board = apply_placement_templates(board, args.placement_templates)
         for scene in args.hard_macro:
             board = apply_hard_macro_scene(board, scene, locked=args.locked, offline=args.offline)
-        ground_pads = {
-            pad for net in board.nets if net.name == "GND" for pad in net.pads
-        }
-        preferred_ground_pads: set[PadReference] = (
-            set(ground_pads) if args.prefer_local_ground else set()
-        )
-        for value in args.prefer_local_ground_pad:
-            reference, separator, number = value.rpartition(".")
-            pad = PadReference(reference, number)
-            if not separator or pad not in ground_pads:
-                raise ValueError(f"preferred ground pad {value!r} is not a GND pad")
-            preferred_ground_pads.add(pad)
         report.update(source=str(args.board.resolve()),
                       source_sha256=sha256(args.board.read_bytes()).hexdigest())
         if args.placement_templates:
@@ -164,63 +133,9 @@ def main(argv: list[str] | None = None) -> int:
             checkpoint("critical_group_running" if event == "started" else "critical_group_complete")
             print(f"  {key}: {event}", flush=True)
 
-        access = None
-        if args.package_access:
-            def access_progress(phase, event, details):
-                progress.append({"phase": phase, "event": event,
-                                 "elapsed_seconds": round(perf_counter() - started, 3), **details})
-                report["package_access_progress"] = progress
-                checkpoint(f"{phase}_{event}")
-            access = preflight_package_access(
-                placement.board, placement.global_route, FanoutOptions(),
-                PlaneStitchOptions(
-                    maximum_contact_radius_nm=nm_from_mm(args.plane_contact_radius_mm),
-                    include_surface_zones=args.stitch_surface_zones,
-                    preferred_ground_pads=frozenset(preferred_ground_pads)),
-                on_progress=access_progress,
-            )
-            critical = access.critical
-            report["package_access"] = {
-                "ready": access.ready,
-                "pending_pads": [f"{pad.component}.{pad.pad}" for pad in sorted(access.pending_pads)],
-                "failed_critical_nets": sorted(access.failed_critical_nets),
-                "hard_findings": access.hard_findings,
-                "search_tiers": [asdict(tier) for tier in access.search_tiers],
-                "plane_contacts": len(access.plane_stitch.stitched_pads) if access.plane_stitch else 0,
-                "surface_zones": args.stitch_surface_zones,
-                "maximum_contact_radius_nm": nm_from_mm(args.plane_contact_radius_mm),
-                "preferred_ground_pads": [f"{pad.component}.{pad.pad}"
-                                          for pad in sorted(preferred_ground_pads)],
-            }
-        else:
-            critical = route_critical_nets(placement.board, placement.global_route, on_progress=critical_progress)
-        if args.critical_feedback_trials:
-            report["critical_baseline"] = json.loads(critical.to_json())
-            report["critical_placement_feedback"] = []
-            def trial_started(index, reference, trial_board):
-                pose = next(pose for pose in trial_board.placements if pose.reference == reference)
-                report["critical_placement_running"] = {
-                    "index": index, "reference": reference, "rotation_degrees": str(pose.rotation_degrees),
-                    "position_nm": [pose.position.x_nm, pose.position.y_nm],
-                }
-                checkpoint("critical_placement_trial_running")
-            def trial_progress(trial):
-                report["critical_placement_feedback"].append(asdict(trial))
-                report.pop("critical_placement_running", None)
-                checkpoint("critical_placement_trial_complete")
-            repaired = improve_critical_placement(
-                placement.board, placement.global_route, critical,
-                maximum_trials=args.critical_feedback_trials,
-                placement_options=PlacementPlannerOptions(candidate_count=args.candidates),
-                global_options=global_options, on_trial_started=trial_started,
-                on_trial=trial_progress, on_progress=critical_progress,
-            )
-            critical = repaired.critical
-            report.update(critical_placement_accepted_moves=repaired.accepted_moves,
-                          global_route=json.loads(repaired.global_route.to_json()),
-                          global_route_certified=repaired.global_route.status.value == "success")
-        timings["package_access" if args.package_access else "critical"] = perf_counter() - started
-        result_board = access.board if access is not None else critical.board
+        critical = route_critical_nets(placement.board, placement.global_route, on_progress=critical_progress)
+        timings["critical"] = perf_counter() - started
+        result_board = critical.board
         lane_review = critical_lane_review(critical.board, critical.nets, critical.match_tuning)
         report.update(complete=True, critical=json.loads(critical.to_json()),
                       critical_lane_review=lane_review,
@@ -228,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
         via_arrays = via_in_pad_array_report(result_board)
         if via_arrays:
             report["via_in_pad_arrays"] = via_arrays
-        checkpoint("package_access_complete" if args.package_access else "critical_complete")
+        checkpoint("critical_complete")
         if args.output:
             manifest = KiCadPcbBackend().generate(result_board)
             write_kicad_project(manifest, args.output)
@@ -254,8 +169,6 @@ def main(argv: list[str] | None = None) -> int:
             print(match_tuning_line(tuning))
         if lane_review["nets"]:
             print(lane_review_line(lane_review))
-        if access is not None:
-            return 0 if access.ready else 1
         return 0 if report["global_route_certified"] and critical.status is not CriticalRoutingStatus.FAILED else 1
     except (BoardLoadError, ValueError, OSError) as exc:
         if args.debug:

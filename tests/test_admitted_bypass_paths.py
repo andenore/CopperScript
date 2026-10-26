@@ -7,8 +7,8 @@ from pcbir.bypass_reservations import verified_bypass_reservations
 from pcbir.decoupling import route_decouplers
 from pcbir.decoupling_paths import refresh_crosslayer_witnesses, validate_crosslayer_witness
 from pcbir.drc import physical_board_digest, run_physical_drc
-from pcbir.fanout import FanoutOptions, route_fanout
-from pcbir.package_access import _partial_ordinary_pattern, _verified_bypass_links
+from pcbir.fanout import route_fanout
+from pcbir.bypass_links import verified_bypass_links as _verified_bypass_links
 from pcbir.physical import (CopperLayer, FootprintPad, NetRoutingRule, PadReference,
                             PhysicalNet, Point, RouteKind, Size, TrackSegment)
 from test_decoupling_crosslayer_paths import fixture
@@ -232,65 +232,3 @@ def contact_scene(*, shared_return=False):
     return board,baseline,obstacles
 
 
-@pytest.mark.parametrize('operator',('partial','contact'))
-def test_old_moving_cohort_path_shared_by_unselected_return_is_held_without_trial(monkeypatch,operator):
-    import pcbir.contact_owner_regeneration as contact
-    import pcbir.package_access as access
-    board,baseline,obstacles=contact_scene(shared_return=True)
-    old=baseline.decoupling_witnesses[0].supply_path.vias[0]
-    unselected=baseline.decoupling_witnesses[1]
-    assert unselected.link.net!=old.net and any(v is old for v in unselected.return_path.vias)
-    # The moving P cohort's current canonical paths no longer select this via.
-    paths,vias={},{}
-    _verified_bypass_links(baseline.board,{old.net},witness_paths=paths,witness_vias=vias)
-    assert all(v is not old for ps in vias.values() for v in ps)
-    before=baseline.board
-    def forbidden(*args,**kwargs):raise AssertionError('shared unselected owner must not be released')
-    monkeypatch.setattr(access,'route_fanout',forbidden)
-    monkeypatch.setattr(contact,'route_fanout',forbidden)
-    if operator=='partial':
-        answer=_partial_ordinary_pattern(baseline,board,replace(board,tracks=(*board.tracks,*obstacles)),
-                                         FanoutOptions(),8,True)
-        assert answer[0] is None and answer[-1]=='protected_ordinary_owner'
-    else:
-        assert contact.regenerate_contact_owners(board,baseline,('PAIR_A','PAIR_B'),obstacles,(),
-                   FanoutOptions(),maximum_owner_nets=8) is None
-    assert baseline.board is before and verified_bypass_reservations(board,baseline)[2] is None
-
-
-@pytest.mark.parametrize('operator',('partial','contact'))
-@pytest.mark.parametrize('corrupt',(False,True))
-def test_selected_rebuild_merges_new_originals_or_rolls_back_completely(monkeypatch,operator,corrupt):
-    import pcbir.contact_owner_regeneration as contact
-    import pcbir.package_access as access
-    board,baseline,obstacles=contact_scene()
-    before=baseline.board
-    calls=[]
-    real=route_fanout
-    def rebuild(*args,**kwargs):
-        result=real(*args,**kwargs);calls.append(result)
-        if corrupt:
-            # Keep complete canonical paths and all ordinary geometry, but
-            # corrupt the exact ORIGINAL source context being returned.
-            records=tuple(replace(w,context_digest='stale') for w in result.decoupling_witnesses)
-            return replace(result,decoupling_witnesses=records)
-        return result
-    monkeypatch.setattr(access,'route_fanout',rebuild)
-    monkeypatch.setattr(contact,'route_fanout',rebuild)
-    if operator=='partial':
-        answer=_partial_ordinary_pattern(baseline,board,replace(board,tracks=(*board.tracks,*obstacles)),
-                                         FanoutOptions(),8,True)
-        proposed=answer[0]
-    else:
-        proposed=contact.regenerate_contact_owners(board,baseline,('PAIR_A','PAIR_B'),obstacles,(),
-                   FanoutOptions(),maximum_owner_nets=8)
-    assert len(calls)==1
-    if corrupt:
-        assert proposed is None
-    else:
-        assert proposed is not None and len(proposed.decoupling_witnesses)==2
-        assert verified_bypass_reservations(board,proposed)[2] is None
-        assert all(validate_crosslayer_witness(proposed.board,w)=='' for w in proposed.decoupling_witnesses)
-        assert baseline.escaped_pads<=proposed.escaped_pads
-        assert all(t not in proposed.board.tracks for t in obstacles)
-    assert baseline.board is before and verified_bypass_reservations(board,baseline)[2] is None

@@ -3,27 +3,6 @@ from collections import Counter
 from dataclasses import dataclass, fields, replace
 
 
-def reserved_copper_additions(base, scene):
-    """Exact occurrence difference, allowing a reordered temporary scene.
-
-    Contact replacement can rebase the power prefix ahead of ordinary copper.
-    Value membership would lose repeated occurrences; a missing source
-    occurrence instead invalidates the reservation.
-    """
-    additions = []
-    for original, values in ((base.tracks,scene.tracks),(base.vias,scene.vias)):
-        if Counter(original)-Counter(values):
-            raise ValueError('reservation lost a source copper occurrence')
-        remaining = Counter(values)-Counter(original)
-        result = []
-        for value in values:
-            if remaining[value]:
-                result.append(value)
-                remaining[value] -= 1
-        additions.append(tuple(result))
-    return tuple(additions)
-
-
 @dataclass(frozen=True)
 class ReservedCopperScene:
     base: object

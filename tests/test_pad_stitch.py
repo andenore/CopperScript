@@ -7,9 +7,17 @@ from pcbir import (
     stitch_duplicate_pads,
 )
 from dataclasses import replace
-from pcbir import (TrackSegment, Via, PadKind, NetRoutingRule, RouteKind, nm_from_mm,
-                   run_routing_pipeline, PlacementPlannerOptions,
-                   PlacementRoutingFeedbackOptions, DetailedRouterOptions)
+from pcbir import (
+    TrackSegment,
+    Via,
+    PadKind,
+    NetRoutingRule,
+    RouteKind,
+    nm_from_mm,
+    run_routing_pipeline,
+    PlacementPlannerOptions,
+    PlacementRoutingFeedbackOptions,
+)
 
 
 def _board(*, blocking_middle: bool) -> PhysicalBoard:
@@ -198,7 +206,6 @@ def test_pipeline_closes_lands_before_scoring_and_measures_added_copper() -> Non
             candidate_count=1, analytical_iterations=0, refinement_passes=0,
             fixed_references=frozenset({"U1", "J1"})),
         feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
-        detailed_options=DetailedRouterOptions(maximum_passes=1),
         detailed_feedback_trials=2,
     )
     # The detailed router now routes U1.1's separate lands as terminals of

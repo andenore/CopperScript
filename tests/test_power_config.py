@@ -1,38 +1,5 @@
 import json
 import pytest
-from pcbir.power_config import load_power_area_options
-
-
-def test_exact_config_external_boundary_and_work_limits(tmp_path):
-    path = tmp_path/'power.json'
-    path.write_text(json.dumps(dict(schema='copperscript-power-area/v0.1', nets=['RETURN'], search_states=512, maximum_native_trials=3,
-        joint_contact_trials=2, area_contact_trials=3, reserve_ordinary_before_contacts=True,
-        external_boundaries=[dict(net='RETURN', terminal=dict(component='J1', pad='1'),
-                                  role='return', provenance='Connector ground terminal')],
-        allowed_layers=['In1.Cu'])))
-    options = load_power_area_options(path)
-    assert options.search_states == 512 and options.external_boundaries[0].terminal.component == 'J1'
-    assert options.allowed_layers[0].value == 'In1.Cu'
-    assert options.maximum_native_trials == 3
-    assert options.joint_contact_trials == 2
-    assert options.area_contact_trials == 3
-    assert options.reserve_ordinary_before_contacts
-
-
-@pytest.mark.parametrize('data', ([1], {'schema': 'wrong'}, {'schema': 'copperscript-power-area/v0.1', 'ignored_typo': 1},
-    {'schema': 'copperscript-power-area/v0.1', 'search_states': 1.5},
-    {'schema': 'copperscript-power-area/v0.1', 'maximum_native_trials': 0},
-    {'schema': 'copperscript-power-area/v0.1', 'maximum_native_trials': True},
-    {'schema': 'copperscript-power-area/v0.1', 'joint_contact_trials': -1},
-    {'schema': 'copperscript-power-area/v0.1', 'joint_contact_trials': True},
-    {'schema': 'copperscript-power-area/v0.1', 'area_contact_trials': -1},
-    {'schema': 'copperscript-power-area/v0.1', 'area_contact_trials': True},
-    {'schema': 'copperscript-power-area/v0.1', 'reserve_ordinary_before_contacts': 1}))
-def test_bad_config_is_not_silently_ignored(tmp_path, data):
-    path = tmp_path/'power.json'
-    path.write_text(json.dumps(data))
-    with pytest.raises(ValueError):
-        load_power_area_options(path)
 
 
 def test_route_board_cli_reports_opt_in_plan_and_missing_native_tool(tmp_path):

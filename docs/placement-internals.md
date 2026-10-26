@@ -160,49 +160,9 @@ allowance; each pass retains the existing per-link proposer bounds. A rejected
 trial retains no generated copper or moved pose. Reports expose work, family
 parameters, unobserved scope/phases and `native_acceptance: false`.
 
-Normal package/contact preparation, distribution-area planning and fresh native
-gates still follow. This local placement result does not prove onward area
-access, global routability, high-frequency loop quality or board qualification.
-Reference rationale and remaining consumer gates are in the
-[pattern research and implementation plan](power-area-planning-plan.md#pattern-based-support-placement-research-2026-10-17).
-
-### Joint support, contact and power-area trials
-
-When `route-board` enables both support-pattern trials and power-area planning,
-the placement search now runs the normal native-backed power preparation on
-each complete pose assignment. The caller's global routing settings, fanout
-settings and pair-state bound are forwarded. Critical routes, ordinary exits,
-local contacts, returns and area alternatives are regenerated from that trial's
-clean source; previous filled evidence and generated contacts are not reused.
-The source inventory, pin associations, fixed/rigid poses, macros and required
-arrays remain binding. A missing native verifier is reported as
-`native_tool_required`, with no moved pose.
-
-This mode starts before contact/ordinary ownership freezes. Caller-supplied
-pre-routed reservations are currently reported as
-`external_support_reservations_unsupported`; they are neither discarded nor
-passed through the clean-source macro boundary. The normal preparation instead
-creates its own early ordinary reservations when configured. Existing local
-supply/return witnesses must survive; plane-assisted continuity additionally
-requires the ordinary preparation's fresh native gates. Native continuity
-does not replace high-frequency loop qualification.
-
-All group preferences vary together within the existing complete-check cap;
-the expensive native checks are not all spent changing only the final DFS
-group. Rejected assignments, pair checks and search-state counters survive
-between samples. There are at most `maximum_complete_checks + 2` full power
-preparations, including baseline and mandatory final regeneration. Each uses
-the configured preparation bounds; these are nested bounds, not one shared
-maze allowance across different placements. Failure of the final regeneration
-rolls back every moved pose.
-
-The result still returns unrouted source poses. `power_trials` records the
-source digest, critical results, area/contact plan and native outcome of each
-preparation. `power_preparation` retains the final scoped native evidence and
-`signal_scene` its exact board; `proposal` is absent in this mode. Whole-board
-`native_acceptance` remains false. `power_native_acceptance` describes only
-the selected power scope. Standard downstream preparation runs again on the
-selected placement before routing admission.
+Routing and fresh native gates still follow. This local placement result does
+not prove onward area access, global routability, high-frequency loop quality or
+board qualification.
 
 ## Inline differential-pair components
 

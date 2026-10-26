@@ -4,12 +4,19 @@ import shutil
 
 import pytest
 
-from pcbir import (BoardOutline, CopperLayer, CopperZone, DetailedRouterOptions,
-                   PadReference, PhysicalBoard, PhysicalNet, Placement, Point)
+from pcbir import (
+    BoardOutline,
+    CopperLayer,
+    CopperZone,
+    PadReference,
+    PhysicalBoard,
+    PhysicalNet,
+    Placement,
+    Point,
+)
 from pcbir.fanout import FanoutOptions
 from pcbir.filled_feedback import improve_filled_copper
 from pcbir.flow import run_routing_pipeline
-from pcbir.package_access import PackageAccessOptions
 from pcbir.physical import BoardSide, IslandPolicy, ZoneConnection
 from pcbir.placement import PlacementPlannerOptions
 from pcbir.routeflow import PlacementRoutingFeedbackOptions
@@ -46,9 +53,7 @@ def test_real_native_ordinary_opens_report_non_zone_routing_scope(renamed, with_
             analytical_iterations=0, refinement_passes=0, escape_spacing_passes=0,
             fixed_references=frozenset(p.reference for p in poses)),
         feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
-        fanout_options=FanoutOptions(),
-        package_access_options=PackageAccessOptions(maximum_trials=0),
-        detailed_options=DetailedRouterOptions(maximum_passes=1, maximum_search_states=1))
+        fanout_options=FanoutOptions())
     assert initial.package_access.ready
     assert not next(item for item in initial.detailed.nets if item.net == signal).connected
     result = improve_filled_copper(initial, kicad_cli=cli)

@@ -1,12 +1,8 @@
 """Off-grid local routes must remain usable as exact physical package exits."""
-from dataclasses import replace
-import pytest
 from pcbir.physical import (BoardOutline,BoardSide,CopperLayer,DesignRules,FootprintPad,PadReference,
     PhysicalBoard,PhysicalFootprint,PhysicalNet,Placement,Point,Size,Via)
 from pcbir.pin_access import local_access_path
-from pcbir.pin_escape import verified_fanout_path
 from pcbir.routing_clearance import RoutingClearanceIndex
-from pcbir.contact_owner_regeneration import _hard_findings
 
 def scene(obstacle=False,back=False,renamed=False,rotation=0):
     net,ref=('OTHER_RAIL','RENAMED') if renamed else ('SIGNAL','LAND')
@@ -27,24 +23,6 @@ def scene(obstacle=False,back=False,renamed=False,rotation=0):
         rules=DesignRules(minimum_clearance_nm=100000,minimum_track_width_nm=100000,default_track_width_nm=150000),vias=(via,))
     return board,PadReference(ref,'1'),net,start,end,layer
 
-@pytest.mark.parametrize('obstacle',(False,True))
-@pytest.mark.parametrize('back',(False,True))
-@pytest.mark.parametrize('renamed',(False,True))
-@pytest.mark.parametrize('rotation',(0,90,180,270))
-def test_off_grid_actual_local_path_materializes_as_verified_package_exit(obstacle,back,renamed,rotation):
-    board,pad,net,start,end,layer=scene(obstacle,back,renamed,rotation)
-    index=RoutingClearanceIndex(board)
-    route=local_access_path(board,index,net,start,end,layer,150000,step_nm=100000,detour_nm=1500000,maximum_states=4000)
-    assert route is not None
-    assert route[0].start==start and route[-1].end==end
-    assert all(a.end==b.start for a,b in zip(route,route[1:]))
-    candidate=replace(board,tracks=route)
-    # Use the unchanged downstream verifier, not a copy of the new predicate.
-    verified=verified_fanout_path(candidate,pad,net,end,RoutingClearanceIndex(candidate))
-    assert verified is not None
-    assert all(any(t is old for old in route) for t in verified)
-    assert not _hard_findings(candidate)
-    assert board.tracks==() and candidate.vias is board.vias
 
 def test_existing_straight_shortcut_still_needs_one_clearance_query():
     board,pad,net,start,end,layer=scene()

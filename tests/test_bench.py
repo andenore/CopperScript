@@ -204,25 +204,22 @@ def test_versus_compares_two_runs_on_every_measure():
 def test_unrouted_nets_get_a_primary_cause_class():
     from pcbir.bench import unrouted_causes
     record = {
-        "unrouted_nets": ["CE", "MISO", "PWR", "SIG", "LOST", "ODD"],
+        "unrouted_nets": ["CE", "MISO", "SIG", "LOST", "ODD"],
         "unrouted_details": {
             "CE": ["detailed search cannot reach P1.6",
                    "search: 4 calls, 0 out of budget, 4 no path, 900 states"],
             "MISO": ["search: 3 calls, 3 out of budget, 0 no path, 60000 states"],
-            "PWR": ["area routing blocked: package-access preflight incomplete"],
             "SIG": ["search: 2 calls, 2 out of budget, 0 no path, 40000 states"],
             "ODD": ["rip-up limit reached"],
         },
         "escape_causes": {"CE": ["two_end_crossing"], "MISO": ["two_end_crossing"]},
-        "package_pending_nets": ["LOST"],
     }
     assert unrouted_causes(record) == {
         "CE": ["two_end_crossing", "no_path"], "MISO": ["two_end_crossing", "search_budget"],
-        "PWR": ["package_access"], "SIG": ["search_budget"], "LOST": ["package_access", "unlocated"],
-        "ODD": ["other"]}
-    # An escape cause outranks the pending exit it explains.
+        "SIG": ["search_budget"], "LOST": ["unlocated"], "ODD": ["other"]}
+    # An escape cause outranks the router's own diagnostics.
     record["escape_causes"]["LOST"] = ["channel_overflow"]
-    assert unrouted_causes(record)["LOST"] == ["channel_overflow", "package_access", "unlocated"]
+    assert unrouted_causes(record)["LOST"] == ["channel_overflow", "unlocated"]
 
 
 def test_cause_table_counts_primary_causes_and_marks_kicad_only_failures(tmp_path):

@@ -17,7 +17,6 @@ from pcbir.clusters import (
 from pcbir.placement import resolved_copper_keepouts, transformed_pad_position
 from pcbir.drc import physical_board_digest, run_physical_drc
 from pcbir.backends.kicad_pcb import KiCadPcbBackend
-from pcbir.routeflow import detailed_failure_trials
 from pcbir.physical import PadReference, PhysicalNet, TrackSegment, nm_from_mm
 
 
@@ -210,18 +209,6 @@ def test_complete_cluster_trial_rejects_internal_collision():
     board = replace(board, rigid_clusters=(bad,))
     with pytest.raises(PlacementPlanningError, match="rigid cluster"):
         plan_placement(board, options())
-
-
-def test_feedback_trials_preserve_units_and_never_move_under_copper():
-    board = fixture_board()
-    board = replace(board, nets=(PhysicalNet("RF", (PadReference("L1", "1"), PadReference("J1", "1"))),))
-    trials = detailed_failure_trials(board, frozenset({"RF"}), options(), nm_from_mm(1), 8)
-    assert trials
-    assert all(cluster_placement_matches(item, mapping(item)) for item in trials)
-    assert any(mapping(item)["U1"] != mapping(board)["U1"] for item in trials)
-    assert not detailed_failure_trials(replace(board, tracks=(TrackSegment(
-        "RF", Point.mm(1, 1), Point.mm(2, 1), nm_from_mm(0.2), CopperLayer.FRONT),)),
-        ("RF",), options(), nm_from_mm(1), 4)
 
 
 def test_cluster_keepouts_affect_route_clearance_not_unrelated_layers():

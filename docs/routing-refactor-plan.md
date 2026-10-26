@@ -1,8 +1,9 @@
 # Routing refactor plan
 
 Status: accepted 2026-10-19 (decisions in section 6). Owner: andenore. This plan supersedes the
-routing parts of `TODO.md`, `docs/routing-backlog.md` and
-`docs/power-area-planning-plan.md` while it is active. Where they conflict,
+routing parts of `TODO.md` and `docs/routing-backlog.md` while it is active
+(the former `docs/power-area-planning-plan.md` was removed with the legacy
+router on 2026-10-26). Where they conflict,
 this document wins.
 
 ## 1. Goal
@@ -371,10 +372,24 @@ evidence bundle.
 
 ### P7 · Retire and simplify (≈1 week)
 
+Status 2026-10-26: the legacy router (`--router legacy`, `route_detailed`) and
+every stage reachable only through it are deleted with their tests and docs:
+the package-access, power-preparation/area-planning, zone-escape,
+critical-placement-feedback, joint-preparation, incremental-placement and
+contact-regeneration modules, `shove.py`, `any_angle.py`, `copper_branches.py`
+and most of `copper_ownership.py`. Modules on the retire list that the unified
+pipeline still calls (`released_exit_retry.py`, `bypass_reservations.py`,
+`fanout_bypass_completion.py`, `critical_preflight.py`, `critical_reuse.py`,
+`local_critical.py`, `pair_search_resume.py`, `pair_tuning_spans.py`) remain,
+with unreachable definitions removed; `verified_bypass_links` moved to
+`bypass_links.py`. Removed `route-board` flags stay accepted, hidden and
+ignored so pinned consumer targets keep running. The option-profile cut and the
+docs collapse below are still open.
+
 - Delete the retire list and its tests, and `--legacy-pipeline`.
 - Cut `route-board` options to a short profile set: `quick`, `balanced`,
   `thorough`, plus time budget, layers and fab profile.
-- Collapse `docs/power-area-planning-plan.md`, `routing-backlog.md` and the
+- Collapse `routing-backlog.md` and the
   routing TODO items into a single `docs/routing.md` that describes the
   shipped design.
 - **Accept when:** the ladder is unchanged and the test suite is green.

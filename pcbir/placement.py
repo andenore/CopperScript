@@ -252,8 +252,7 @@ class CorridorReservation:
 def generate_placement_candidates(
     board: PhysicalBoard,
     options: PlacementPlannerOptions | None = None,
-    *, progress=None, power_area_options=None, power_native_verifier=None,
-    global_router_options=None, fanout_options=None, pair_state_limit=None,
+    *, progress=None,
 ) -> tuple[PlacementCandidate, ...]:
     """Return a deterministic Pareto frontier of legal placement candidates."""
 
@@ -385,11 +384,7 @@ def generate_placement_candidates(
                 progress('support_patterns', seed, seeds)
             support_source = replace(board, placements=tuple(refined[p.reference] for p in board.placements))
             support = improve_support_placement(support_source, refined, phase_options,
-                options=SupportPatternOptions(maximum_complete_checks=options.support_pattern_trials),
-                **(dict(power_area_options=power_area_options,power_native_verifier=power_native_verifier,
-                        global_router_options=global_router_options,fanout_options=fanout_options,
-                        pair_state_limit=pair_state_limit)
-                   if power_area_options is not None else {}))
+                options=SupportPatternOptions(maximum_complete_checks=options.support_pattern_trials))
             support_report = support.report()
             updated = {p.reference:p for p in support.board.placements}
             moves += sum(updated[r] != p for r,p in refined.items())

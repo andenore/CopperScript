@@ -71,7 +71,6 @@ class PlacementRoutingResult:
     iterations: tuple[FeedbackIteration, ...]
     accepted_moves: int
     full_route_certified: bool
-    power_area_plan: object | None = None
     package_patterns: tuple = ()
 
 
@@ -80,8 +79,7 @@ def optimize_placement_for_routing(
     placement_options: PlacementPlannerOptions | None = None,
     router_options: GlobalRouterOptions | None = None,
     feedback_options: PlacementRoutingFeedbackOptions | None = None,
-    *, on_progress: ProgressCallback | None = None, power_area_options=None, power_native_verifier=None,
-    fanout_options=None, pair_state_limit=None,
+    *, on_progress: ProgressCallback | None = None,
 ) -> PlacementRoutingResult:
     """Place, fully global-route, and transactionally relieve congestion."""
 
@@ -92,32 +90,11 @@ def optimize_placement_for_routing(
     )
     progress_kwargs = {"on_progress": on_progress} if on_progress is not None else {}
     candidates = generate_placement_candidates(board, placement_options,
-        **(dict(power_area_options=power_area_options,power_native_verifier=power_native_verifier,
-                global_router_options=router_options,fanout_options=fanout_options,pair_state_limit=pair_state_limit)
-           if power_area_options is not None and placement_options.support_pattern_trials else {}),
         **({"progress": placement_progress(on_progress)} if on_progress is not None else {}))
     evaluated = [
         _evaluate_candidate(board, candidate, router_options, **progress_kwargs)
         for candidate in candidates
     ]
-    # Provisional geometry is evaluated on each complete legal placement, never
-    # installed in the mutable source. Discarding a trial discards its plan too.
-    plans = {}
-    def power_plan(placed):
-        if power_area_options is None:
-            return None
-        from .hard_macros import materialize_hard_macros
-        from .power_geometry import plan_power_areas
-        key = id(placed)
-        if key not in plans:
-            plans[key] = (placed, plan_power_areas(materialize_hard_macros(placed), power_area_options,
-                                                  on_progress=on_progress))
-        return plans[key][1]
-    def power_score(placed):
-        plan = power_plan(placed)
-        return plan.score[:2] if plan is not None else ()
-    for _, placed, _ in evaluated:
-        power_plan(placed)
     if feedback_options.preferred_candidate_id is not None:
         selected = [item for item in evaluated
                     if item[0].candidate_id == feedback_options.preferred_candidate_id]
@@ -132,7 +109,6 @@ def optimize_placement_for_routing(
         candidate, accepted_board, accepted_route = min(
             evaluated,
             key=lambda item: (
-                *power_score(item[1]),
                 *_route_score(item[2]),
                 *item[0].metrics.quality_vector,
                 item[0].seed,
@@ -145,9 +121,9 @@ def optimize_placement_for_routing(
     for iteration in range(1, feedback_options.maximum_iterations + 1):
         if feedback_options.maximum_trials_per_iteration == 0:
             break
-        if accepted_route.status is GlobalRoutingStatus.SUCCESS and not (power_score(accepted_board) or (0,))[0]:
+        if accepted_route.status is GlobalRoutingStatus.SUCCESS:
             break
-        current_score = (*power_score(accepted_board), *_route_score(accepted_route))
+        current_score = _route_score(accepted_route)
         best_trial: tuple[tuple[int, ...], PhysicalBoard, GlobalRoutingResult] | None = None
         trials = 0
         for trial_board in _movement_trials(
@@ -155,16 +131,13 @@ def optimize_placement_for_routing(
             accepted_route,
             placement_options,
             movement,
-            **({"extra_nets": frozenset(o.net for o in power_plan(accepted_board).obligations
-                if o.net not in {c.allocation.domain for c in power_plan(accepted_board).selected})
-                } if power_area_options is not None else {}),
         ):
             emit(on_progress, "placement_global_trial", "started", iteration=iteration, trial=trials + 1)
             trial_route = route_global(trial_board, router_options, **progress_kwargs)
             emit(on_progress, "placement_global_trial", "finished", iteration=iteration, trial=trials + 1,
                  global_status=trial_route.status.value)
             trials += 1
-            score = (*power_score(trial_board), *_route_score(trial_route))
+            score = _route_score(trial_route)
             if score < current_score and (
                 best_trial is None
                 or (score, trial_route.routing_fingerprint)
@@ -210,7 +183,6 @@ def optimize_placement_for_routing(
         tuple(records),
         accepted_moves,
         full_route_certified,
-        power_plan(accepted_board),
         candidate.statistics.package_patterns,
     )
 
@@ -330,45 +302,3 @@ def _directions_away_from_hotspots(
     )
 
 
-def detailed_failure_trials(
-    board: PhysicalBoard,
-    failed_nets: frozenset[str],
-    placement_options: PlacementPlannerOptions,
-    movement_nm: int,
-    maximum_trials: int,
-) -> tuple[PhysicalBoard, ...]:
-    """Legal, deterministic perturbations around exact-routing failures."""
-
-    if movement_nm <= 0 or maximum_trials < 0:
-        raise ValueError("detailed feedback movement/trial bounds are invalid")
-    if board.tracks or board.vias:
-        return ()  # Never move a component under accepted copper.
-    fixed = set(placement_options.fixed_references) | {
-        rule.reference for rule in board.placement_rules
-        if rule.fixed_position is not None
-    }
-    affected = sorted({
-        pad.component for net in board.nets if net.name in failed_nets
-        for pad in net.pads
-    } - fixed)
-    placements = {item.reference: item for item in board.placements}
-    trials: list[PhysicalBoard] = []
-    for reference in affected:
-        current = placements[reference]
-        for dx, dy in ((movement_nm, 0), (-movement_nm, 0),
-                       (0, movement_nm), (0, -movement_nm)):
-            moved = replace(current, position=Point(
-                current.position.x_nm + dx, current.position.y_nm + dy,
-            ))
-            try:
-                candidate = move_placement_unit(board, placements, reference, moved)
-            except ValueError:
-                continue
-            if not placement_solution_is_legal(board, candidate, placement_options):
-                continue
-            trials.append(replace(board, placements=tuple(
-                candidate[item.reference] for item in board.placements
-            )))
-            if len(trials) >= maximum_trials:
-                return tuple(trials)
-    return tuple(trials)

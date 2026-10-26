@@ -13,9 +13,6 @@ on:
       limit:
         description: Route only the first N boards of each tier (0 = all)
         default: '0'
-      router:
-        description: Ordinary router to measure (empty = the pinned router in routing-benchmark.json)
-        default: ''
   push:
     branches: ['claude/**']
     paths:
@@ -39,7 +36,6 @@ jobs:
       shards: ${{ steps.plan.outputs.shards }}
       shard_count: ${{ steps.plan.outputs.shard_count }}
       board_seconds: ${{ steps.plan.outputs.board_seconds }}
-      router: ${{ steps.plan.outputs.router }}
     defaults:
       run:
         shell: bash
@@ -51,12 +47,9 @@ jobs:
       - name: Read benchmark pins
         id: plan
         run: |
-          python3 - "${{ github.event.inputs.limit || '0' }}" "${{ github.event.inputs.router || '' }}" <<'PY' >> "$GITHUB_OUTPUT"
+          python3 - "${{ github.event.inputs.limit || '0' }}" <<'PY' >> "$GITHUB_OUTPUT"
           import json, sys
           pins = json.load(open("CopperScript/.github/routing-benchmark.json"))
-          router = sys.argv[2] or pins.get("router", "unified")
-          assert router in ("legacy", "unified"), router
-          print("router=" + router)
           for key in ("pcbworld_repository", "pcbworld_ref", "pcbench_repository", "pcbench_ref",
                       "kicad_ppa", "kicad_series", "split", "board_seconds"):
               print(f"{key}={pins[key]}")
@@ -199,7 +192,6 @@ jobs:
             if [ $((index % shards)) = "${{ matrix.shard }}" ]; then
               timeout --kill-after=30 "${{ needs.prepare.outputs.board_seconds }}" \
                 python -m pcbir.bench route "$dir/processed_v9_guide_v3.kicad_pcb" --out "../results/$id" \
-                  --router "${{ needs.prepare.outputs.router }}" \
                 "${route_args[@]}" > "../results-$id.log" 2>&1 || echo "$id exited $?"
               tail -n 1 "../results-$id.log"
               mkdir -p "../results/$id" && mv "../results-$id.log" "../results/$id/route.log"
@@ -278,7 +270,7 @@ jobs:
       - name: Summarize
         run: |
           {
-            echo "## CopperScript (${{ needs.prepare.outputs.router }} router) on PCBWorld D3 boards"
+            echo "## CopperScript on PCBWorld D3 boards"
             python -m pcbir.bench summarize ../results --markdown --tiers ../boards/tiers.json
             echo "### Unrouted nets by cause"
             python -m pcbir.bench causes ../results

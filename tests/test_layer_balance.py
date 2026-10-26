@@ -1,15 +1,7 @@
 from dataclasses import replace
 
-from pcbir import (
-    BoardOutline, CopperKeepout, CopperLayer, CopperZone, DetailedRouterOptions, FootprintPad,
-    GlobalRouterOptions, NetRoutingRule, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet,
-    Placement, Point, PolygonRing, PolygonWithHoles, RouteKind, Size, Stackup, TrackSegment,
-    nm_from_mm, route_global,
-)
+from pcbir import (BoardOutline, CopperKeepout, CopperLayer, CopperZone, FootprintPad, GlobalRouterOptions, NetRoutingRule, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, PolygonRing, PolygonWithHoles, RouteKind, Size, Stackup, nm_from_mm, route_global)
 from pcbir.cli import _parser
-from pcbir.detailed import DetailedNode, _build_grid, _search_once
-from pcbir.routing import GlobalNetRoute, GlobalRouteSegment
-from pcbir.routing_clearance import RoutingClearanceIndex
 
 SIX = (CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2,
        CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4, CopperLayer.BACK)
@@ -113,38 +105,6 @@ def test_local_demand_spreads_a_parallel_bundle_across_signal_layers():
     assert len(inner(spread)) > 1 and CopperLayer.INTERNAL_1 not in inner(spread)
     assert topology(spread) == topology(plain)
     assert spread.metrics.total_overflow <= plain.metrics.total_overflow
-
-
-def test_corridor_escape_lets_a_fixed_layer_terminal_reach_its_guide_layer():
-    # A foreign In4.Cu track forbids a through via exactly at the start.
-    blocker = TrackSegment("A1", Point.mm(5, 0.5), Point.mm(5, 29.5), nm_from_mm("0.2"), CopperLayer.INTERNAL_4)
-    board = replace(crossing_board(), tracks=(blocker,))
-    options = DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"), maximum_search_states=20_000)
-    grid = _build_grid(board, options, ())
-    node = lambda layer, x, y: DetailedNode(SIX.index(layer), grid.xs.index(nm_from_mm(x)),
-                                            grid.ys.index(nm_from_mm(y)))
-    start, target = node(CopperLayer.INTERNAL_2, 5, 15), node(CopperLayer.INTERNAL_2, 35, 15)
-    guide = GlobalNetRoute("B", True, (), (GlobalRouteSegment(
-        "B", CopperLayer.INTERNAL_3, Point.mm(5, 15), Point.mm(35, 15), nm_from_mm("1"), "guide"),), (), 0)
-    allowed = tuple(layer for layer in SIX if layer is not CopperLayer.INTERNAL_1)
-    clearance = RoutingClearanceIndex(board)
-
-    def search(escape):
-        return _search_once(grid, {start}, frozenset({target}), allowed, guide, {}, {}, clearance, "B",
-                            nm_from_mm("0.2"), replace(options, guide_escape_nm=escape),
-                            corridor_only=True, state_budget=20_000, guide_margin_nm=nm_from_mm("0.5"),
-                            allow_movable_conflicts=False, forbidden_via_positions=frozenset())
-
-    assert search(0) is None
-    found = search(nm_from_mm("1"))
-    assert found is not None
-    path, _, _ = found
-    planar = [a for a, b, _ in path if a.layer_index == b.layer_index]
-    assert sum(a.layer_index == SIX.index(CopperLayer.INTERNAL_3) for a in planar) > len(planar) // 2
-    # Layer changes stay beside the terminals; the run itself follows the guide.
-    assert all(abs(grid.xs[a.x_index] - grid.xs[start.x_index]) <= nm_from_mm("1")
-               or abs(grid.xs[a.x_index] - grid.xs[target.x_index]) <= nm_from_mm("1")
-               for a in planar if a.layer_index == start.layer_index)
 
 
 def test_board_router_enables_smoothing_and_keeps_layer_balance_opt_in():

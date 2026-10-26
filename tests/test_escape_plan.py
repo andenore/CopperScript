@@ -366,7 +366,6 @@ def test_cluster_reports_carry_field_summaries():
 
 from dataclasses import replace  # noqa: E402
 
-from pcbir.detailed import DetailedRouterOptions, route_detailed  # noqa: E402
 from pcbir.escape_plan import plan_two_end_escapes  # noqa: E402
 from pcbir.geometry import Bounds  # noqa: E402
 from pcbir.routing import GlobalRouterOptions, route_global  # noqa: E402
@@ -426,13 +425,6 @@ def test_net_without_another_legal_layer_stays_unmoved():
     assert not plan_two_end_escapes(replace(board, net_routing_rules=pinned)).layer_biases
 
 
-def test_plan_bounds_must_not_be_negative():
-    with pytest.raises(ValueError):
-        plan_two_end_escapes(two_rows({1: 2, 2: 1}), EscapePlanOptions(layer_bias_rate=-1))
-    with pytest.raises(ValueError):
-        DetailedRouterOptions(escape_layer_biases=(LayerBias("N", CopperLayer.FRONT, Bounds(0, 0, 1, 1), -1),))
-
-
 def straight_board() -> PhysicalBoard:
     pad = PhysicalFootprint("one-pad", (FootprintPad("1", Point(0, 0), Size.mm("0.6", "0.6")),), Size.mm(1, 1))
     return PhysicalBoard("straight", BoardOutline.rectangle(20, 12), {pad.name: pad},
@@ -448,41 +440,6 @@ def test_layer_bias_charges_only_track_whose_midpoint_is_in_its_area():
     assert bias.cost(Point.mm(9, 1), Point.mm(10, 1)) > 0 and bias.cost(Point.mm(10, 1), Point.mm(12, 1)) == 0
 
 
-def test_layer_bias_moves_a_net_to_its_planned_layer_inside_the_corridor():
-    board = straight_board()
-    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    options = DetailedRouterOptions(pitch_nm=nm_from_mm(1), maximum_passes=1)
-    plain = route_detailed(board, guide, options)
-    assert plain.board.vias == () and {track.layer for track in plain.board.tracks} == {CopperLayer.FRONT}
-    corridor = Bounds(nm_from_mm(6), 0, nm_from_mm(14), nm_from_mm(12))
-    planned = route_detailed(board, guide, replace(options, escape_layer_biases=(
-        LayerBias("SIG", CopperLayer.FRONT, corridor, 200),)))
-    assert planned.nets[0].connected and len(planned.board.vias) == 2
-    assert all(track.layer is CopperLayer.BACK for track in planned.board.tracks
-               if corridor.min_x < (track.start.x_nm + track.end.x_nm) // 2 < corridor.max_x)
-    # Another net's bias changes nothing.
-    other = route_detailed(board, guide, replace(options, escape_layer_biases=(
-        LayerBias("OTHER", CopperLayer.FRONT, corridor, 200),)))
-    assert other.board.tracks == plain.board.tracks
-
-
-def test_planned_nets_route_first_in_the_first_two_passes():
-    board = two_rows({1: 1, 2: 2, 3: 3, 4: 4})
-    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    seen: list[tuple[int, str]] = []
-
-    def progress(stage, status, fields):
-        if stage == "detailed_net" and status == "started":
-            seen.append((fields["pass_index"], fields["net"]))
-
-    route_detailed(board, guide, DetailedRouterOptions(pitch_nm=nm_from_mm(1), maximum_passes=2,
-                                                       escape_net_order=("N3", "N1")), on_progress=progress)
-    assert seen and {index for index, _net in seen} <= {1, 2}
-    for pass_index in {index for index, _net in seen}:
-        names = [net for index, net in seen if index == pass_index]
-        assert names[:2] == ["N3", "N1"] and sorted(names[2:]) == ["N2", "N4"]
-
-
 def test_fanout_keeps_planned_surface_pins_off_dogbone_vias():
     from pcbir.fanout import FanoutOptions, route_fanout
     board = two_rows({1: 1, 2: 2, 3: 3, 4: 4})
@@ -495,52 +452,6 @@ def test_fanout_keeps_planned_surface_pins_off_dogbone_vias():
 
 
 # --------------------------------------------------------------------------- pipeline (E4)
-
-@pytest.mark.parametrize("router", ("legacy", "unified"))
-def test_pipeline_gives_the_plan_to_escapes_and_router(router, monkeypatch):
-    import pcbir.fanout as fanout_module
-    import pcbir.flow as flow
-    import pcbir.unified_router as unified_module
-    from pcbir.fanout import FanoutOptions
-    from pcbir.routeflow import FeedbackStatus, PlacementRoutingResult
-    from pcbir.unified_router import UnifiedRouterOptions
-    board = two_rows({1: 2, 2: 1, 3: 3, 4: 4})
-    seen = {}
-    original_fanout = fanout_module.route_fanout
-
-    def fanout_spy(board, options=None, **kwargs):
-        seen.setdefault("surface_pads", set()).update(options.surface_pads if options else ())
-        return original_fanout(board, options, **kwargs)
-
-    import pcbir.package_access as package_access
-    monkeypatch.setattr(fanout_module, "route_fanout", fanout_spy)
-    monkeypatch.setattr(package_access, "route_fanout", fanout_spy)
-    if router == "legacy":
-        original = flow.route_detailed
-
-        def detailed_spy(board, guide, options, **kwargs):
-            seen["order"], seen["biases"] = options.escape_net_order, options.escape_layer_biases
-            return original(board, guide, options, **kwargs)
-
-        monkeypatch.setattr(flow, "route_detailed", detailed_spy)
-    else:
-        original = unified_module.route_unified
-
-        def unified_spy(board, guide, options, **kwargs):
-            seen["order"], seen["biases"] = options.escape_net_order, options.escape_layer_biases
-            return original(board, guide, options, **kwargs)
-
-        monkeypatch.setattr(unified_module, "route_unified", unified_spy)
-    fixed = PlacementRoutingResult(FeedbackStatus.PASS, board, route_global(board, GlobalRouterOptions()),
-                                   "imported", (), 0, False)
-    plan = plan_two_end_escapes(board)
-    flow.run_routing_pipeline(
-        board, initial_placement=fixed, fanout_options=FanoutOptions(),
-        detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm(1), maximum_passes=1),
-        escape_plan_options=EscapePlanOptions(two_end_order=True),
-        **({"unified_options": UnifiedRouterOptions(maximum_iterations=2)} if router == "unified" else {}))
-    assert seen["order"] == plan.net_order and seen["biases"] == plan.layer_biases
-    assert plan.surface_pads and plan.surface_pads <= seen["surface_pads"]
 
 
 # --------------------------------------------------------------------------- array escape (E2)

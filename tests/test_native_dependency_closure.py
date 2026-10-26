@@ -6,10 +6,20 @@ import shutil
 
 import pytest
 
-from pcbir import (BoardOutline, CopperKeepout, CopperLayer, CopperZone,
-                   DetailedRouterOptions, PadReference, PhysicalBoard, PhysicalNet,
-                   Placement, Point, TrackSegment, Via, nm_from_mm)
-from pcbir.escape_feedback import EscapeFeedbackOptions, _reroute_local_dependencies
+from pcbir import (
+    BoardOutline,
+    CopperKeepout,
+    CopperLayer,
+    CopperZone,
+    PadReference,
+    PhysicalBoard,
+    PhysicalNet,
+    Placement,
+    Point,
+    TrackSegment,
+    Via,
+    nm_from_mm,
+)
 from pcbir.fanout import FanoutResult
 from pcbir.filled_feedback import FilledCopperFeedbackOptions, improve_filled_copper
 from pcbir.pin_escape import RoutingAccess
@@ -78,31 +88,6 @@ def dependency_case(renamed=False, settled_witness=False):
     return original, fixed, area, area_vias, signal
 
 
-@pytest.mark.parametrize('unified', (False, True))
-@pytest.mark.parametrize('renamed', (False, True))
-@pytest.mark.parametrize('settled_witness', (False, True))
-def test_dependency_reroute_keeps_reserved_vias_multilayer_connected(native_cli, renamed, settled_witness, unified):
-    initial, fixed, area, area_vias, signal = dependency_case(renamed, settled_witness)
-    if unified:
-        from pcbir.unified_router import UnifiedRouterOptions
-        initial = replace(initial, unified_options=UnifiedRouterOptions(
-            pitch_nm=nm_from_mm('0.25'), maximum_iterations=4, commit_rounds=2,
-            time_budget_s=10))
-    before = verify_filled_planes(initial.board, kicad_cli=native_cli)
-    assert before.unconnected_count == 1 and before.other_violation_count == 0, before.findings
-    repair = _reroute_local_dependencies(initial, fixed, area, area_vias,
-        frozenset({signal}), frozenset({signal}),
-        DetailedRouterOptions(pitch_nm=nm_from_mm('0.5'), maximum_passes=1,
-                              maximum_search_states=20000, escape_terminals=True),
-        EscapeFeedbackOptions())
-    assert repair is not None
-    board = repair[0]
-    assert Counter(fixed.tracks) <= Counter(board.tracks)
-    assert Counter(fixed.vias) <= Counter(board.vias)
-    checked = verify_filled_planes(board, kicad_cli=native_cli)
-    assert checked.passed, checked.findings
-
-
 def test_native_evidence_relative_directory_survives_changed_subprocess_cwd(native_cli, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     initial, fixed, _, _, _ = dependency_case()
@@ -112,22 +97,6 @@ def test_native_evidence_relative_directory_survives_changed_subprocess_cwd(nati
     assert checked.other_violation_count == 0
     assert Path(checked.artifact_directory) == tmp_path / 'review/native'
     assert (tmp_path / 'review/native/drc.json').is_file()
-
-
-@pytest.mark.parametrize('renamed', (False, True))
-def test_retained_witness_regeneration_cannot_cross_a_new_reserved_owner(renamed):
-    initial, fixed, area, area_vias, signal = dependency_case(renamed, settled_witness=True)
-    blocked = replace(fixed, tracks=(*fixed.tracks,
-        TrackSegment(initial.board.nets[0].name, Point.mm('8.5', 2), Point.mm('8.5', 4),
-                     nm_from_mm('0.25'), CopperLayer.BACK)))
-    before_tracks, before_vias = blocked.tracks, blocked.vias
-    repair = _reroute_local_dependencies(initial, blocked, area, area_vias,
-        frozenset({signal}), frozenset({signal}),
-        DetailedRouterOptions(pitch_nm=nm_from_mm('0.5'), maximum_passes=1,
-                              maximum_search_states=20000, escape_terminals=True),
-        EscapeFeedbackOptions())
-    assert repair is None
-    assert blocked.tracks == before_tracks and blocked.vias == before_vias
 
 
 @pytest.mark.parametrize('renamed', (False, True))
@@ -253,30 +222,6 @@ def test_native_opposite_layer_items_use_only_existing_copper_transitions(
         assert not tuple(_proposals(initial.board, before, 64))
         assert result.board == initial.board and not result.trials
         assert result.stop_reason == 'no_eligible_surface_bridge'
-
-
-def test_unified_dependency_uses_verified_ports_without_overwriting_main_inputs(tmp_path, monkeypatch):
-    import pcbir.escape_feedback as feedback
-    from pcbir.unified_router import UnifiedRouterOptions
-    initial, fixed, area, area_vias, signal = dependency_case()
-    replay = tmp_path / "main-inputs.state.json"
-    replay.write_text("main run input must survive")
-    options = UnifiedRouterOptions(pitch_nm=nm_from_mm('0.25'), maximum_iterations=4,
-        commit_rounds=2, time_budget_s=10, save_inputs_path=str(replay))
-    initial = replace(initial, unified_options=options)
-    def legacy_forbidden(*args, **kwargs):
-        raise AssertionError("unified transaction called the legacy router")
-    monkeypatch.setattr(feedback, 'route_detailed', legacy_forbidden)
-    events = []
-    repaired = _reroute_local_dependencies(initial, fixed, area, area_vias,
-        frozenset({signal}), frozenset({signal}),
-        DetailedRouterOptions(escape_terminals=True), EscapeFeedbackOptions(),
-        on_progress=lambda phase, event, data: events.append((phase, event, data)))
-    assert repaired is not None
-    assert repaired[1].board.metadata['detailed_router'] == 'unified'
-    assert replay.read_text() == "main run input must survive"
-    assert any(phase == 'zone_subset_search' and event == 'started' and data['router'] == 'unified'
-               for phase, event, data in events)
 
 
 def test_required_unified_ports_survive_replay_and_reject_stale_witnesses(tmp_path):

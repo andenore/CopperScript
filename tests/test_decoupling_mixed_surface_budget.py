@@ -10,7 +10,7 @@ from pcbir.decoupling import route_decouplers
 from pcbir.decoupling_paths import validate_crosslayer_witness
 from pcbir.drc import physical_board_digest, run_physical_drc
 from pcbir.fanout import route_fanout
-from pcbir.package_access import _verified_bypass_links
+from pcbir.bypass_links import verified_bypass_links as _verified_bypass_links
 from pcbir.physical import BoardSide, CopperLayer, PadReference, Placement, Point
 from test_decoupling_crosslayer_paths import fixture
 

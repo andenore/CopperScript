@@ -71,15 +71,6 @@ def summarize_report(report, *, issue_limit=8, report_path=None, report_digest=N
                 (f"Locate it with `copper issues RUN --net {nets[0]}`; see it with `copper view RUN --net {nets[0]}`."
                  if nets else "List located physical issues with `copper issues RUN --stage physical`."),
                 measurements=[{"actual_nm": finding.get("measured_nm"), "limit_nm": finding.get("required_nm")}])
-    access = report.get("package_access", {})
-    if access.get("status") == "blocked":
-        issue("access", "PACKAGE-ACCESS", ",".join(access.get("pending_pads", [])),
-              access.get("placement_stop_reason") or "Package access remains incomplete.",
-              "See the pending pads with `copper issues RUN --stage access` and `copper view RUN --issue P1` "
-              "(add --reference/--align for the manufacturer layout); search exhaustion is not an impossibility proof.")
-    for row in report.get("fanout", {}).get("decoupling_pending", []):
-        issue("decoupling", "SURFACE-BYPASS", row.get("capacitor"), row.get("reason", ""),
-              "Inspect the actual protected land, capacitor pose and blocking copper.")
     for row in report.get("detailed", {}).get("nets", []):
         if not row.get("connected") and row.get("net") not in report.get("route_geometry", {}).get("zone_nets_deferred", []):
             issue("routing", "ORDINARY-OPEN", row.get("net"), "Ordinary net is incomplete.",

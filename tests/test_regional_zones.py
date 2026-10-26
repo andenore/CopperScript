@@ -220,24 +220,6 @@ def test_reservation_validates_rotated_macro_copper_before_acceptance(tmp_path, 
     assert materialize_hard_macros(owner_region).materialized_macros
 
 
-def test_global_and_detailed_routing_detour_around_reserved_region():
-    from pcbir import route_global, route_detailed, GlobalRouterOptions, DetailedRouterOptions, nm_from_mm
-    from pcbir.geometry import RoundedConvexShape
-    from pcbir.zone_geometry import ZoneRoutingReservations
-    physical = _reserved_board()
-    global_route = route_global(physical, GlobalRouterOptions(tile_size_nm=nm_from_mm(2), maximum_iterations=2))
-    route = next(r for r in global_route.routes if r.net == "SIGNAL")
-    assert route.connected
-    reservations = ZoneRoutingReservations(physical)
-    for segment in route.segments:
-        assert reservations.can_area("SIGNAL", RoundedConvexShape((segment.start, segment.end), nm_from_mm(.125)), segment.layer)
-    detailed = route_detailed(physical, global_route, DetailedRouterOptions(pitch_nm=nm_from_mm(.5),
-                              enable_soft_ripup=True, route_smoothing=True))
-    assert next(r for r in detailed.nets if r.net == "SIGNAL").connected
-    assert all(reservations.can_area(t.net, RoundedConvexShape((t.start, t.end), t.width_nm // 2), t.layer)
-               for t in detailed.board.tracks)
-
-
 @pytest.mark.parametrize("sever", [False, True])
 def test_native_fill_connects_surface_region_around_foreign_through_via_and_detects_severing(tmp_path, sever):
     import json

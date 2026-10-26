@@ -9,25 +9,16 @@ import shutil
 
 import pytest
 
-from pcbir import (BoardOutline, CopperKeepout, CopperLayer, CopperZone,
-    DetailedRouterOptions, FootprintPad, GlobalRouterOptions, PadReference,
-    PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, PolygonRing,
-    PolygonWithHoles, Size, Stackup, nm_from_mm, route_detailed, route_global)
+from pcbir import (BoardOutline, CopperKeepout, CopperLayer, CopperZone, FootprintPad, GlobalRouterOptions, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, PolygonRing, PolygonWithHoles, Size, Stackup, nm_from_mm)
 from pcbir.decoupling import route_decouplers
 from pcbir.drc import explicit_copper_connectivity, run_physical_drc
 from pcbir.fanout import FanoutOptions
 from pcbir.flow import run_routing_pipeline
-from pcbir.package_access import PackageAccessOptions
-from pcbir.physical import DecouplingLink, IslandPolicy, ZoneConnection
+from pcbir.physical import DecouplingLink
 from pcbir.placement import PlacementPlannerOptions, transformed_pad_position
-from pcbir.plane import PlaneStitchOptions, stitch_zone_pads
-from pcbir.plane_verify import verify_filled_planes
-from pcbir.filled_feedback import improve_filled_copper, FilledCopperFeedbackOptions
-from pcbir.route_closure import reconcile_zone_lands, routing_complete_with_fill
+from pcbir.filled_feedback import FilledCopperFeedbackOptions
 from pcbir.route_quality import proper_same_net_crossing
 from pcbir.routeflow import PlacementRoutingFeedbackOptions
-from pcbir.routing_clearance import RoutingClearanceIndex
-from pcbir.surface_path import surface_path_between
 
 
 def terminal():
@@ -47,7 +38,7 @@ def hard_findings(board):
 
 
 def pipeline(board, *, movable=(), defer_zones=True, plane_options=None, legacy_gates=False):
-    return run_routing_pipeline(board, legacy_gates=legacy_gates,
+    return run_routing_pipeline(board,
         placement_options=PlacementPlannerOptions(candidate_count=1,
             analytical_iterations=0, refinement_passes=0, escape_spacing_passes=0,
             fixed_references=frozenset(p.reference for p in board.placements
@@ -56,10 +47,7 @@ def pipeline(board, *, movable=(), defer_zones=True, plane_options=None, legacy_
         global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
         fanout_options=FanoutOptions(minimum_component_pads=2,
             maximum_neighbor_distance_nm=nm_from_mm(3), two_leg_escapes=False),
-        package_access_options=PackageAccessOptions(maximum_trials=0),
-        plane_stitch_options=plane_options,
-        detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"),
-            maximum_passes=1, defer_zone_nets=defer_zones))
+        plane_stitch_options=plane_options)
 
 
 @pytest.fixture
@@ -69,70 +57,6 @@ def native_cli():
     if not executable.is_file():
         pytest.skip("KiCad CLI not installed; fragmented-fill proof requires native refill")
     return executable
-
-
-@pytest.mark.parametrize("renamed", (False, True))
-def test_native_fragmented_pour_cannot_be_approved_by_prospective_contacts(native_cli, renamed, tmp_path):
-    land = terminal()
-    net = "SUPPLY_Z" if renamed else "RAIL"
-    refs = ("CONNECTOR_9", "LOAD_4") if renamed else ("INPUT", "OUTPUT")
-    pads = tuple(PadReference(ref, "1") for ref in refs)
-    # Both lands are inside the SAME source zone, but a fill-only exclusion
-    # divides its actual copper. Ordinary tracks may legally bridge that gap.
-    board = PhysicalBoard("fragmented-pour", BoardOutline.rectangle(20, 12),
-        {land.name: land}, tuple(Placement(ref, land.name, Point.mm(x, 6))
-            for ref, x in zip(refs, (3, 17))), (PhysicalNet(net, pads),),
-        zones=(CopperZone("split-supply", net, (CopperLayer.FRONT,),
-            rectangle(1, 1, 19, 11), pad_connection=ZoneConnection.SOLID,
-            island_policy=IslandPolicy.REMOVE_ALL, minimum_island_area_nm2=None),),
-        copper_keepouts=(CopperKeepout("fill-divider", (CopperLayer.FRONT,),
-            rectangle("9.5", 0, "10.5", 12), block_tracks=False,
-            block_vias=False, block_zones=True),))
-    prospective = stitch_zone_pads(board, PlaneStitchOptions(include_surface_zones=True))
-    assert prospective.complete and not prospective.board.zone_fills
-    assert not prospective.added_track_count and not prospective.added_via_count
-    deferred = pipeline(board, plane_options=PlaneStitchOptions(include_surface_zones=True))
-    assert deferred.package_access.ready
-    evidence = verify_filled_planes(deferred.board, kicad_cli=native_cli)
-    assert not evidence.passed and evidence.unconnected_count > 0
-    assert not routing_complete_with_fill(deferred, deferred.board, deferred.drc, evidence)
-    assert reconcile_zone_lands(deferred.board, pads, evidence) == (pads, ())
-    assert not hard_findings(deferred.board)
-
-    # Capture a current integration limitation: the global router defers zone
-    # nets, so switching only the detailed flag cannot produce a repair guide.
-    routed = route_detailed(board, route_global(board), DetailedRouterOptions(
-        pitch_nm=nm_from_mm("0.5"), maximum_passes=1, defer_zone_nets=False))
-    assert not routed.nets[0].connected
-    assert "missing connected global guide" in routed.nets[0].diagnostics
-    # A real legal bridge exists using the shared exact-clearance surface
-    # search. Selecting/committing it from native failures is a later item;
-    # this control neither edits source-zone intent nor supplies fake evidence.
-    bridge = surface_path_between(board, RoutingClearanceIndex(board), net,
-        board.placements[0].position, board.placements[1].position,
-        board.rules.default_track_width_nm, CopperLayer.FRONT)
-    assert bridge
-    candidate = replace(board, tracks=bridge)
-    assert explicit_copper_connectivity(candidate).net_connected(board.nets[0])
-    assert candidate.zones == board.zones and candidate.copper_keepouts == board.copper_keepouts
-    assert not evidence.matches(candidate)
-    checked = verify_filled_planes(candidate, kicad_cli=native_cli)
-    assert checked.passed, checked.findings
-    assert reconcile_zone_lands(candidate, pads, checked) == ((), pads)
-    assert not candidate.zone_fills  # No fabricated fill proof in physical IR.
-    repaired = improve_filled_copper(deferred, kicad_cli=native_cli,
-                                    artifact_directory=tmp_path / "native-evidence")
-    assert repaired.stop_reason == "verified", repaired.to_json()
-    assert repaired.verification.passed and repaired.verification.matches(repaired.board)
-    assert repaired.trials and repaired.trials[0].outcome == "accepted"
-    assert repaired.trials[0].expanded_states > 0
-    assert repaired.board.zones == board.zones and repaired.board.copper_keepouts == board.copper_keepouts
-    assert repaired.board.placements == board.placements and not hard_findings(repaired.board)
-    replay = improve_filled_copper(deferred, kicad_cli=native_cli)
-    assert repaired.board == replay.board
-    assert [t.outcome for t in repaired.trials] == [t.outcome for t in replay.trials]
-    for entry in (repaired.verification, repaired.trials[0].verification):
-        assert Path(entry.artifact_directory).is_dir()
 
 
 def adjacent_board(rotation, renamed):

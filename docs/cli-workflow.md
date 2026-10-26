@@ -85,13 +85,13 @@ retains the incumbent masks and witnesses without a release-only fallback.
 Critical replay restores mixed ordinary/bypass prefixes only before the same
 source, ownership, association and physical checks. The default policy is unchanged.
 
-`route-board` uses the unified router by default: unified negotiation after the
-established coupled differential/critical routing and decoupler preparation.
-`--router legacy` selects the pre-refactor pipeline instead, with pass-based
-ordinary routing, package-access search, power preparation, the late
-zone-escape repair and scoped routing. Pair routing,
+`route-board` routes ordinary nets with the unified negotiated router, after the
+established coupled differential/critical routing and decoupler preparation. It
+is the only ordinary router: the pre-refactor pass-based pipeline (`--router
+legacy`, with package-access search, power preparation and area planning, and
+the late zone-escape repair) was removed on 2026-10-26. Pair routing,
 skew tuning and return-path checks remain available in this standard pipeline.
-Clock fallback uses the selected unified engine with the original clock profile;
+Clock fallback uses the unified engine with the original clock profile;
 each clock is bounded to 60 seconds, 16 iterations and two commit rounds (or the
 smaller caller bounds). Complete-group matching and exact acceptance still apply.
 At equal explicit priority, coupled differential/CAN groups route before
@@ -100,34 +100,31 @@ single trace can obstruct it. An explicitly higher priority still takes
 precedence; no extra search or rip-up allowance is created.
 
 The unified router's own controls are the `--unified-*` flags and
-`--no-route-smoothing` (which reaches either router); `--fanout` options seed
-its pad escapes and repair rounds. It ignores the legacy ordinary-router
-flags, which apply only with `--router legacy`: `--pitch-mm` (unless
-`--local-demand-cost` is above 0), `--passes`, `--search-budget`, `--minimum-repair-pitch-mm`, `--heuristic-weight`,
-`--soft-ripup`, `--constrained-pins-first`, `--progressive-guides`,
-`--guide-distance-heuristic`, `--repair-budget-multiplier`,
-`--search-reuse-entries`, `--guide-escape-mm` and `--no-escape-terminals`.
-It also skips package-access search (`--package-*` flags and the
-`--legacy-gates` stop), power preparation and area planning
-(`--plan-power-areas`, `--power-area-net`, `--power-area-config`) and the late
-zone-escape repair (`--zone-escape-trials`, `--zone-local-ripup-trials`,
-`--zone-escape-movement-mm`, `--no-incremental-placement-repair`);
-`--stop-after package-preflight|package-access` is refused. The CLI plane
-post-stitch (`stitch_zone_pads`, then `repair_cut_off_plane_pads`) still runs
-unless `--unified-direct`. When any of these flags is given with a non-default
-value, `route-board` emits one `router_options` / `ignored` progress event and
-lists them in the report's `work_limits.unified_ignored_flags` and
-`work_limits.unified_skipped_stage_flags`; routing is unchanged.
-`bench/ladder.json` and the shared `make/board.mk` `ROUTE_ARGS` pass legacy
-flags, so their default runs report them as ignored; a router comparison adds
-only `--router legacy`.
+`--no-route-smoothing`; `--fanout` options seed its pad escapes and repair
+rounds. `--pitch-mm` applies only when `--local-demand-cost` is above 0.
+The removed router's flags stay accepted and hidden so pinned command lines
+keep running: `--router`, `--passes`, `--search-budget`,
+`--minimum-repair-pitch-mm`, `--heuristic-weight`, `--soft-ripup`,
+`--constrained-pins-first`, `--progressive-guides`, `--guide-distance-heuristic`,
+`--repair-budget-multiplier`, `--search-reuse-entries`, `--guide-escape-mm`,
+`--no-escape-terminals`, `--defer-zone-nets`, `--legacy-gates`,
+`--package-access-trials`, `--package-placement-probes`, `--package-pattern-trials`,
+`--package-partial-owner-nets`, `--package-full-pair-states`,
+`--package-boundary-step-mm`, `--package-destination-ports`,
+`--package-access-movement-mm`, `--plan-power-areas`, `--power-area-net`,
+`--power-area-config`, `--zone-escape-trials`, `--zone-local-ripup-trials`,
+`--zone-escape-movement-mm` and `--no-incremental-placement-repair`. They have
+no effect. When any is given, `route-board` emits one `router_options` /
+`ignored` progress event and lists them in the report's
+`work_limits.ignored_flags`; routing is unchanged. `--stop-after` accepts only
+`placement`. The CLI plane post-stitch (`stitch_zone_pads`, then
+`repair_cut_off_plane_pads`) still runs unless `--unified-direct`.
 
 `replay-critical STATE --only NET --report RUN/route-report.json -o RUN/board.kicad_pcb`
 isolates critical routing from a placement checkpoint or source-only saved input.
 Selecting one differential member selects its whole existing group. All source
 rules remain active; arbitrary routed input copper is rejected. `--pair-states`
-bounds aggregate pair search (default 6000), and `--clock-router legacy|unified`
-selects the clock fallback for comparison. Failed groups have located `C` issues;
+bounds aggregate pair search (default 6000). Failed groups have located `C` issues;
 pair reports include a bounded port inventory with headings and departure probes.
 The transition inventory distinguishes native plated-layer contacts from generated
 signal-via launches and exposes which terminal has no legal transition candidates.
@@ -143,12 +140,12 @@ This diagnostic does not rerun placement, bypass preparation or native checks,
 and never establishes full-board or current-source acceptance.
 
 `route-board --unified-direct` sends ordinary and profiled
-nets to unified negotiation from source-fixed copper. It skips the legacy
+nets to unified negotiation from source-fixed copper. It skips the standard
 critical, bypass, preliminary escape and late plane-contact routing stages;
-immutable macro copper and required via arrays still materialize. Legacy escape
+immutable macro copper and required via arrays still materialize. Escape
 seeding and native bridge repair are also disabled, even after a partial result.
-Native refill/DRC still runs, and any needed repair must re-enter unified routing. Without `--unified-direct`, the current
-unified flow retains its legacy bootstrap. `--unified-time-budget-s 1800`
+Native refill/DRC still runs, and any needed repair must re-enter unified routing. Without `--unified-direct`, the
+unified flow keeps those bootstrap stages. `--unified-time-budget-s 1800`
 bounds negotiation starting at the unified stage; placement/global planning
 and final native verification are separate. `--unified-save-inputs STATE`
 retains replay inputs. Direct mode reports final profile connectivity and
@@ -179,7 +176,7 @@ with the default.
 
 ```console
 python -m copperscript issues build/BOARD/runs/STAMP
-python -m copperscript view build/BOARD/runs/STAMP --issue P1 -o build/views/P1.png
+python -m copperscript view build/BOARD/runs/STAMP --issue R1 -o build/views/R1.png
 python -m copperscript state show build/trials/candidate.state.json
 ```
 
@@ -312,25 +309,14 @@ fill remains provisional until KiCad refills the zones and verifies physical
 connectivity. A net named GND without a declared zone receives no implicit
 plane.
 
-With `--router legacy`, if a zone pad remains inaccessible, the router first
-tries a bounded local rip-up: it reserves a legal plane escape, identifies the ordinary nets that
-block it, and reroutes only those nets. If that fails, escape feedback tries
-alternative via exits and legal local placement changes from a clean placement.
-Use `--zone-local-ripup-trials 0 --zone-escape-trials 0` to disable both, or
-adjust `--zone-escape-movement-mm` for the placement step. These trials never
-move components under existing copper. Soft plane-aware layer costs and
+Soft plane-aware global layer costs and
 alternating inner-layer directions can be tuned with
 `--layer-preference-cost` and `--direction-preference-cost` (zero disables
 either preference); they do not override explicit layer restrictions or DRC.
 Accepted ordinary copper is straightened unless `--no-route-smoothing` is
-given. Opt-in `--layer-assignment-passes`, `--local-demand-cost` and
-`--guide-escape-mm` move ordinary guide runs away from same-layer crossings and
-full channels; see the [layer-balance review](routing-backlog.md).
-A reserved package escape is one terminal of its pin, beside the pin's own
-surface access and its launch via on every layer; escape copper the finished
-route does not need is removed (`--no-escape-terminals` restores port-only
-terminals). Opt-in `--package-destination-ports` turns boundary ports toward
-each pin's nearest other terminal.
+given. Opt-in `--layer-assignment-passes` and `--local-demand-cost` move ordinary
+guide runs away from same-layer crossings and full channels; see the
+[layer-balance review](routing-backlog.md).
 For intentional diagonal placement, add a
 `constraint allowed_orientations(U1) { values = "0,45,90"; }`; unconstrained
 parts retain 0/90/180/270-degree candidates.
@@ -341,24 +327,19 @@ Use `--progress` for flushed phase/group/trial events during long runs; the
 shared Make routing workflow enables this automatically and saves them in
 `routing.log`. Full ground-feedback trials can each rebuild the routing.
 Progress is not completion or signoff evidence; see [routing progress](routing-progress.md).
-With `--router legacy`, `--pitch-mm`, `--passes`, and `--search-budget` bound
-detailed-routing work (the unified router uses `--unified-search-states` and
-`--unified-time-budget-s`); exhausting the search budget is reported per net
-rather than silently accepting an unfinished path.
+`--unified-search-states` and `--unified-time-budget-s` bound ordinary routing
+work; an exhausted budget is reported per net rather than silently accepting an
+unfinished path.
 The report's `critical_lane_review` section reviews the exported copper of every
 critical net: track lengths, layers and vias, pair and `length_match` skew,
 spacing to other copper inside and outside breakout regions, coupled length to
 other pairs and bends. `route-board` and `python -m pcbir.critical_preflight`
 (for its critical copper) print it as one `CRITICAL LANES:` line; see the
 [language reference](language-reference.md#critical-routing-and-qualification).
-With `--router legacy`, `route-board` plans package exits and compatible plane
-contacts before area routing (the unified router uses `--fanout` only to seed
-its pad escapes); `--no-fanout` explicitly selects the legacy diagnostic flow.
-For difficult boards, `--soft-ripup` (legacy router) and `--maximum-ripup-blockers 4` try bounded transactional rerouting, and
-`--detailed-feedback-trials 4` retries legal placement changes against exact
-routing failures (legacy router). These experiments do not waive physical DRC.
+`--fanout` seeds the unified router's pad escapes; `--no-fanout` routes without
+them. These options do not waive physical DRC.
 
-Under the unified router, placement feedback is one congestion-driven loop:
+Placement feedback is one congestion-driven loop:
 after the first full pass, if nets stay open or critical nets fail, it builds a
 per-tile congestion map (the router's own contention plus a RUDY demand
 estimate, each normalised to its 95th percentile) and moves parts on failed nets
@@ -369,9 +350,9 @@ lowers the whole-board score (hard DRC, opens, critical failures, unrouted nets,
 overflow, length, vias). `--congestion-feedback-trials N` bounds the reruns
 (default 4; 0 disables; a run with no failed nets never reruns); `--detailed-feedback-trials` and `--critical-feedback-trials`
 map onto it, with a budget of `max(N, detailed + critical)`, and the report
-lists them under `work_limits.unified_mapped_flags`. The report's
+lists them under `work_limits.mapped_flags`. The report's
 `placement_feedback` block lists every trial, the accepted moves and up to 16
-hot tiles. `--router legacy` keeps the two old controllers unchanged.
+hot tiles.
 (`--placement-feedback-trials` is the older, unrelated budget of global
 placement trials per feedback iteration.)
 
@@ -461,17 +442,8 @@ speed comparisons (phase events are still saved). See
 [profiling and optimization assessment](routing-performance.md) for details,
 current evidence and the prioritized optimization work list.
 The detailed [optimization todos](routing-optimization-todo.md) track implementation.
-Package preflight can now negotiate alternate ordinary/critical/selected-ground
-escape patterns before placement repair. The default is at most two proposals;
-use `EXTRA_ROUTE_ARGS="--package-pattern-trials 0"` for a baseline comparison.
-Every accepted pattern preserves prior exits and passes fresh owner/native
-checks; this does not certify onward area routing. See
-[package-access design and remaining work](package-access-first.md).
-Local repair now supports bounded blocker-cone expansion; use
+Filled-copper repair supports bounded blocker-cone expansion; use
 `EXTRA_ROUTE_ARGS="--zone-dependency-expansions 0"` to compare without that extension.
-Small noncritical placement moves also try bounded incremental repair. Use
-`EXTRA_ROUTE_ARGS=--no-incremental-placement-repair` to compare against full placement reroutes;
-unsupported moves always retain that fallback.
 Inspect a run without changing it using `uv run --no-sync python -m pcbir.routing_benchmark summarize "build/full-vertical/runs/<run-id>"`.
 The [performance guide](routing-performance.md) explains guarded before/after comparisons.
 
@@ -547,7 +519,7 @@ inputs. A failed bounded search is not proof that the connection is impossible.
 
 ### Bounding pair search before unified routing
 
-`route-board --router unified --unified-pair-states 16000` caps expanded
+`route-board --unified-pair-states 16000` caps expanded
 search states per differential pair in each direct critical-routing attempt,
 including the retry after releasing ordinary escape reservations. It preserves
 the existing exact copper, connectivity and pair-profile checks. Exhaustion is

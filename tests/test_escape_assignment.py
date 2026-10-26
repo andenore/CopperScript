@@ -1,7 +1,5 @@
 """Conflict-graph exactness and bounded compatible allocation/rollback."""
 from dataclasses import replace
-from pathlib import Path
-import shutil
 
 import pytest
 import pcbir.fanout as fanout
@@ -262,19 +260,3 @@ def test_conflict_driven_cluster_growth_repairs_a_three_pin_chain():
     assert failed == incumbent and "pin budget" in limited.trials[0].diagnostic
 
 
-def test_installed_kicad_accepts_joint_escape_route(monkeypatch):
-    from pcbir.detailed import DetailedRouterOptions, route_detailed
-    from pcbir.routing import GlobalRouterOptions, route_global
-    from pcbir.plane_verify import verify_filled_planes
-    cli = shutil.which("kicad-cli") or "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"
-    if not Path(cli).is_file():
-        pytest.skip("KiCad not installed")
-    base = board()
-    monkeypatch.setattr(fanout,"_candidates",trap_candidates)
-    joint = fanout.route_fanout(base,opts(two_leg_escapes=False))
-    result = route_detailed(joint.board,route_global(base,GlobalRouterOptions()),DetailedRouterOptions(),
-        fanout_accesses=joint.accesses,fanout_created_tracks=joint.created_tracks,
-        fanout_created_vias=frozenset((v.net,v.position) for v in joint.created_vias))
-    assert all(n.connected for n in result.nets)
-    evidence = verify_filled_planes(result.board,kicad_cli=Path(cli))
-    assert evidence.passed,evidence.findings

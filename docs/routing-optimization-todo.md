@@ -32,7 +32,7 @@ Require current profiles and exact-output/quality comparisons before optimizatio
 - [ ] Benchmark each change and run tangency, rotated-pad, drill and full-span-via tests.
 
 - [x] Record guide expansions, budget exhaustion, no-path failures and target-set sizes
-  (`DetailedSearchStats`; see [search policy](routing-search-policy.md#search-work-counters)).
+  (`DetailedSearchStats`).
 
 - [x] ~~Add cheap feasible-port/layer reachability screening before costly repairs.~~
   Measured and rejected (2026-10-20, full-vertical, 321 failed A* calls): a

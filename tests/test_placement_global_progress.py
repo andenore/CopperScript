@@ -181,31 +181,6 @@ def test_invalid_global_feedback_budget(value):
         routeflow.PlacementRoutingFeedbackOptions(maximum_trials_per_iteration=value)
 
 
-def test_package_global_trial_forwards_same_callback_and_preserves_result(monkeypatch):
-    import pcbir.fanout as fanout
-    import pcbir.package_access as access
-    from test_package_access import fixture
-    from pcbir.physical import Point
-    source,guides,settings,router=fixture()
-    settings=replace(settings,surface_fallback=False);original=fanout._candidates
-    def choices(position,center,options):
-        return () if center==Point.mm(5,7) else original(position,center,options)
-    monkeypatch.setattr(fanout,'_candidates',choices)
-    baseline=access.preflight_package_access(source,guides,settings)
-    options=access.PackageAccessOptions(maximum_trials=1,maximum_placement_probes=0)
-    plain=access.improve_package_access(baseline,settings,options=options,global_options=router)
-    calls=[];real=access.route_global;events=[]
-    callback=lambda *e:events.append(e)
-    def global_trial(*args,**kwargs):
-        calls.append(kwargs.get('on_progress'));return real(*args,**kwargs)
-    monkeypatch.setattr(access,'route_global',global_trial)
-    observed=access.improve_package_access(baseline,settings,options=options,global_options=router,on_progress=callback)
-    assert observed==plain and calls==[callback] and observed.accepted_moves==1
-    phases=[(p,e) for p,e,_ in events]
-    assert phases.index(('package_access_trial','started')) < phases.index(('global_iteration','started'))
-    assert phases.index(('global_route','finished')) < phases.index(('package_access_trial','finished'))
-
-
 def test_nested_progress_aggregation_keeps_one_pipeline_count_and_inclusive_spans(tmp_path):
     from pcbir import routing_benchmark as benchmark
     from pcbir.progress import emit

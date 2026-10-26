@@ -15,8 +15,7 @@ Legality works in two layers:
   and via that is written. A net that fails it is not written; its offending
   nodes are penalised and it is retried.
 
-The result is a :class:`DetailedRoutingResult`, so the pipeline can use this
-router in place of :func:`pcbir.detailed.route_detailed`.
+The result is a :class:`pcbir.detailed.DetailedRoutingResult`.
 """
 
 from __future__ import annotations
@@ -127,7 +126,7 @@ class UnifiedRouterOptions:
     # commit check rejected a path (0 disables).
     rejection_marker_cost: float = 0.0
     # Straighten this call's accepted copper afterwards with the ownership-safe
-    # pass the legacy router uses (route_smoothing.smooth_owned_tracks): grid
+    # pass (route_smoothing.smooth_owned_tracks): grid
     # search has no turn cost, so equal-length staircases of 45-degree jogs
     # survive. Existing board copper is never an input. On PCBWorld D3-A it
     # cuts bends by 38% with completion, DRC and vias unchanged.
@@ -193,7 +192,7 @@ class UnifiedRouterOptions:
     # Route decoupling capacitors with the dedicated decoupler router before
     # the unified router (their copper is then fixed).
     pre_route_decouplers: bool = True
-    # One negotiation from source-fixed copper; no legacy critical/bypass bootstrap.
+    # One negotiation from source-fixed copper; no critical/bypass bootstrap.
     direct: bool = False
     # Escape crowded ordinary pins (fanout.route_fanout) before critical routing.
     escapes_first: bool = True
@@ -1473,8 +1472,8 @@ class _Router:
                 pad_anchors = self._pad_anchors(pad, spec)
                 # Lands sharing a number are one pin, but KiCad needs copper
                 # between them unless the part declares them internally joined
-                # (internal_pad_groups): each separate land is its own terminal,
-                # as in the legacy router (plan 3.4).
+                # (internal_pad_groups): each separate land is its own terminal
+                # (plan 3.4).
                 for piece in self._separate_land_pieces(pad):
                     separate.append([anchor for anchor in pad_anchors if anchor[0] in piece])
                     pad_anchors = [anchor for anchor in pad_anchors if anchor[0] not in piece]
@@ -2902,9 +2901,9 @@ class _Router:
     def _guide_corridor(self, spec: _NetSpec):
         """The net's global-route corridor as grid nodes (set, int64 array, xy box), or None.
 
-        Matches the legacy corridor (detailed._inside_guide): guide segments
-        on their own layer within guide_half_width_nm + guide_margin_nm, and
-        pin accesses within the margin square on their layer.
+        Guide segments on their own layer within guide_half_width_nm +
+        guide_margin_nm, and pin accesses within the margin square on their
+        layer.
         """
         if spec.name in self._guide_cache:
             return self._guide_cache[spec.name]
@@ -3892,7 +3891,6 @@ def route_unified(
     transactions. Pad and fixed-copper alternatives cannot bypass these ports.
     Stale witnesses fail instead of being silently treated as ordinary pads.
 
-    Signature-compatible with :func:`pcbir.detailed.route_detailed`.
     Existing copper is fixed; zone nets are deferred to fill.
     ``fanout_accesses``, ``fanout_created_vias`` and ``fanout_created_tracks``
     are only recorded in the replay state. A ``fanout_accesses`` entry that is

@@ -4,17 +4,13 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-import pcbir.detailed as detailed_module
 from pcbir.cli import main, _parser
-from pcbir.detailed import DetailedRouterOptions, route_detailed
 from pcbir.flow import run_routing_pipeline
 from pcbir.fanout import FanoutOptions
 from pcbir.physical import (BoardOutline, FootprintPad, PadReference, PhysicalBoard,
     PhysicalFootprint, PhysicalNet, Placement, Point, Size, NetRoutingRule, RouteKind)
 from pcbir.placement import PlacementPlannerOptions
 from pcbir.progress import console_progress, critical_progress, emit
-from pcbir.routing import route_global
 
 
 def board():
@@ -59,90 +55,6 @@ def test_pipeline_progress_leaves_every_result_and_fingerprint_identical():
     assert phases[-1] == ('land_closure_native_drc', 'finished')
     assert next(d for p, e, d in events if p == 'package_access' and e == 'finished')['ready']
     assert ('detailed_net', 'started') in phases
-
-
-def test_progress_does_not_report_area_started_when_package_gate_blocks(monkeypatch):
-    import pcbir.package_access as access
-    from dataclasses import replace
-    real = access.route_fanout
-    def pending(source, settings):
-        result = real(source, settings)
-        return replace(result, pending_pads=(PadReference('J1', '1'),))
-    monkeypatch.setattr(access, 'route_fanout', pending)
-    events = []
-    result = run_routing_pipeline(board(), legacy_gates=True,
-        placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0, refinement_passes=0),
-        fanout_options=FanoutOptions(), package_access_options=access.PackageAccessOptions(maximum_trials=0),
-        on_progress=lambda phase, event, details: events.append((phase, event, details)))
-    assert result.detailed.metrics.passes == 0
-    assert ('ordinary_area', 'blocked') in [(p, e) for p, e, _ in events]
-    assert ('ordinary_area', 'started') not in [(p, e) for p, e, _ in events]
-    assert not any(p == 'detailed_net' for p, _, _ in events)
-
-
-def test_net_progress_starts_before_grid_and_preserves_exact_result(monkeypatch):
-    source = board()
-    guide = route_global(source)
-    options = DetailedRouterOptions(maximum_passes=1)
-    plain = route_detailed(source, guide, options)
-    events = []
-    original_grid = detailed_module._build_grid
-    def checked_grid(*args, **kwargs):
-        assert events[-1][0:2] == ('detailed_net', 'started')
-        return original_grid(*args, **kwargs)
-    monkeypatch.setattr(detailed_module, '_build_grid', checked_grid)
-    observed = route_detailed(source, guide, options,
-        on_progress=lambda p, e, d: events.append((p, e, d)))
-    assert observed == plain and observed.to_json() == plain.to_json()
-    assert [(p, e) for p, e, _ in events] == [
-        ('detailed_pass', 'started'), ('detailed_net', 'started'),
-        ('detailed_net', 'finished'), ('detailed_pass', 'finished')]
-    start, finish = events[1][2], events[2][2]
-    assert start['net'] == finish['net'] == 'SIGNAL'
-    assert start['net_index'] == start['net_count'] == start['pass_index'] == 1
-    assert start['maximum_search_states'] == options.maximum_search_states
-    assert finish['connected'] and finish['track_count'] == observed.nets[0].track_count
-    assert 'fabrication_ready' not in finish
-
-
-def test_failed_and_discarded_repair_attempts_are_observed_without_extra_searches(monkeypatch):
-    source = board()
-    guide = route_global(source)
-    options = DetailedRouterOptions(maximum_passes=3, maximum_search_states=11,
-        repair_budget_multiplier=3, enable_soft_ripup=True)
-    searches = []
-    def failed(*args, **kwargs):
-        searches.append((args[2], args[9], kwargs.get('allow_movable_conflicts')))
-        return detailed_module._failed(args[2], 'search budget exhausted')
-    monkeypatch.setattr(detailed_module, '_route_net', failed)
-    plain = route_detailed(source, guide, options)
-    plain_searches = searches[:]
-    searches.clear()
-    events = []
-    observed = route_detailed(source, guide, options,
-        on_progress=lambda p, e, d: events.append((p, e, d)))
-    assert observed == plain and searches == plain_searches
-    starts = [d for p, e, d in events if (p, e) == ('detailed_net', 'started')]
-    finishes = [d for p, e, d in events if (p, e) == ('detailed_net', 'finished')]
-    assert [d['stage'] for d in starts] == [
-        'pass', 'pass', 'failed_first', 'soft_merge', 'soft_ripup', 'final_retry']
-    assert len(finishes) == len(starts) and not any(d['connected'] for d in finishes)
-    assert [d['maximum_search_states'] for d in starts] == [11] * 5 + [33]
-    assert [d['allow_movable_conflicts'] for d in starts] == [False] * 3 + [True, True, False]
-    assert next(d for p, e, d in events if (p, e) == ('detailed_repair', 'finished'))['selected'] is False
-
-
-def test_interrupted_grid_build_does_not_invent_a_finished_net(monkeypatch):
-    source = board()
-    guide = route_global(source)
-    events = []
-    def interrupted(*args, **kwargs):
-        raise KeyboardInterrupt
-    monkeypatch.setattr(detailed_module, '_build_grid', interrupted)
-    with pytest.raises(KeyboardInterrupt):
-        route_detailed(source, guide, on_progress=lambda p, e, d: events.append((p, e, d)))
-    assert [(p, e) for p, e, _ in events] == [
-        ('detailed_pass', 'started'), ('detailed_net', 'started')]
 
 
 def test_real_critical_group_progress_is_forwarded_before_area_routing():

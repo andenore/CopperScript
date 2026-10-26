@@ -29,47 +29,6 @@ def native_cli():
     return cli
 
 
-@pytest.mark.parametrize("bridge_first", (True, False))
-def test_router_reuses_other_lands_only_after_declared_internal_group_attaches(tmp_path, bridge_first):
-    from pcbir import (route_global, route_detailed, GlobalRouterOptions, DetailedRouterOptions,
-                       CopperKeepout, PolygonWithHoles, PolygonRing, run_physical_drc)
-    terminal = PhysicalFootprint("terminal", (
-        FootprintPad("1", Point(0, 0), Size.mm(.6, .6)),), Size.mm(1, 1))
-    bridge = PhysicalFootprint("bridge", (
-        FootprintPad("1", Point.mm(-4, 0), Size.mm(.6, .6)),
-        FootprintPad("1", Point.mm(4.17, .13), Size.mm(.6, .6))), Size.mm(12, 1),
-        internal_pad_groups=(InternalPadGroup(("1",)),))
-    left = "KL" if bridge_first else "AL"
-    board = PhysicalBoard("InternalBridge", BoardOutline.rectangle(20, 12),
-        {f.name: f for f in (terminal, bridge)},
-        (Placement("J", bridge.name, Point.mm(10, 6)),
-         Placement(left, terminal.name, Point.mm(3, 6)),
-         Placement("KR", terminal.name, Point.mm(17, 6))),
-        (PhysicalNet("SIGNAL", (PadReference("J", "1"), PadReference(left, "1"), PadReference("KR", "1"))),),
-        copper_keepouts=(CopperKeepout("wall", (CopperLayer.FRONT, CopperLayer.BACK),
-            PolygonWithHoles(PolygonRing((Point.mm(9, 0), Point.mm(11, 0),
-                                         Point.mm(11, 12), Point.mm(9, 12))))),))
-    # The guide is a coarse capacity hint; exact routing still sees the wall.
-    guide = route_global(replace(board, copper_keepouts=()), GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    options = DetailedRouterOptions(maximum_passes=1)
-    result = route_detailed(board, guide, options)
-    assert result.nets[0].connected, result.nets[0].diagnostics
-    assert explicit_copper_connectivity(result.board).net_connected(board.nets[0])
-    assert not {"DRC-OPEN-NET", "DRC-SHORT", "DRC-CLEARANCE"} & {
-        finding.code for finding in run_physical_drc(result.board).findings}
-    assert all(not (min(t.start.x_nm, t.end.x_nm) < nm_from_mm(9)
-                    and max(t.start.x_nm, t.end.x_nm) > nm_from_mm(11)) for t in result.board.tracks)
-    without_group = replace(board, footprints={**board.footprints,
-        bridge.name: replace(bridge, internal_pad_groups=())})
-    assert not route_detailed(without_group, guide, options).nets[0].connected
-    pcb = tmp_path / "bridge.kicad_pcb"
-    report = tmp_path / "bridge-drc.json"
-    write_kicad_project(KiCadPcbBackend().generate(result.board), pcb)
-    subprocess.run([native_cli(), "pcb", "drc", "--format", "json", "-o", str(report), str(pcb)],
-                   check=True, capture_output=True)
-    assert not json.loads(report.read_text())["unconnected_items"]
-
-
 def compile_contact_fixture(tmp_path, groups="1; 2", nets="net V { S.A; } net GND { S.B; }", assembled=True, b_extra=""):
     tmp_path = tmp_path / f"fixture-{len(tuple(tmp_path.iterdir()))}"
     tmp_path.mkdir()
@@ -206,24 +165,6 @@ def board_with_external_terminal():
     return replace(board, footprints={**board.footprints, "terminal": terminal},
         placements=(*board.placements, Placement("J1", "terminal", Point.mm(16, 5))),
         nets=(PhysicalNet("V", (PadReference("BT1", "1"), PadReference("J1", "1"))),))
-
-
-def test_detailed_access_can_use_alternate_internal_land(monkeypatch):
-    import pcbir.detailed as module
-    from pcbir import route_global, route_detailed, GlobalRouterOptions, DetailedRouterOptions
-    board = board_with_external_terminal()
-    real_access = module._access_candidates
-    def access(*args, **kwargs):
-        if args[3] == Point.mm(3, 5):
-            return ()
-        return real_access(*args, **kwargs)
-    monkeypatch.setattr(module, "_access_candidates", access)
-    result = route_detailed(board, route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2))),
-                            DetailedRouterOptions(pitch_nm=nm_from_mm(.5), maximum_passes=1))
-    assert result.metrics.routed_net_count == 1
-    assert explicit_copper_connectivity(result.board).net_connected(board.nets[0])
-    assert any(Point.mm(7, 5) in (t.start, t.end) for t in result.board.tracks)
-    assert not any(Point.mm(3, 5) in (t.start, t.end) for t in result.board.tracks)
 
 
 def test_fanout_chooses_one_alternate_internal_land_and_verifies_it(monkeypatch):

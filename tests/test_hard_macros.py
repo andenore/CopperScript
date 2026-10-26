@@ -452,28 +452,6 @@ def test_macro_filled_via_finish_requires_scoped_permission_and_containment(tmp_
         bind_ground(qualified)
 
 
-def test_general_router_connects_only_external_port_and_preserves_owner(tmp_path):
-    original,_,bind=fixture(tmp_path)
-    board=bind(input_board=replace(original,
-        placements=(*original.placements,Placement("J1","test",Point.mm(7,12))),
-        nets=(replace(original.nets[0],pads=(*original.nets[0].pads,PadReference("J1","1"))),)))
-    from pcbir.routing import route_global,GlobalRouterOptions
-    from pcbir.detailed import route_detailed,DetailedRouterOptions
-    from pcbir.drc import run_physical_drc,PhysicalDrcPolicy
-    guides=route_global(board,GlobalRouterOptions(maximum_iterations=2,tile_size_nm=1000000))
-    with pytest.raises(ValueError,match="materialize"): route_detailed(board,guides)
-    board=materialize_hard_macros(board)
-    routed=route_detailed(board,guides,DetailedRouterOptions(maximum_passes=1,maximum_search_states=20000))
-    assert routed.nets[0].connected, routed.nets[0].diagnostics
-    assert routed.board.tracks[:len(board.tracks)]==board.tracks
-    assert routed.locked_track_count==len(board.tracks)
-    assert not run_physical_drc(routed.board,policy=PhysicalDrcPolicy(False)).findings
-    # A second pass doesn't build a parallel replacement network.
-    again=route_detailed(routed.board,guides,DetailedRouterOptions(maximum_passes=1))
-    assert again.board.tracks==routed.board.tracks
-    assert again.metrics.track_count==0
-
-
 def test_full_pipeline_preserves_macro_geometry(tmp_path):
     _,_,bind=fixture(tmp_path)
     from pcbir.flow import run_routing_pipeline
@@ -507,39 +485,6 @@ def test_free_via_port_is_proved_and_exposed_as_routing_terminal(tmp_path):
     port = macro_routing_ports(board,"N")[pads[0]]
     assert port.position == Point.mm(9,10)
     assert macro_port_layers(board,port) == (CopperLayer.FRONT,CopperLayer.BACK)
-
-
-@pytest.mark.parametrize("via_port", [False, True])
-@pytest.mark.parametrize("rotation", [0,45])
-def test_complete_pipeline_routes_external_free_ports_without_replacing_owner(tmp_path, via_port, rotation):
-    original, asset, bind = fixture(tmp_path)
-    asset["tracks"].append(dict(net="signal",width_nm=200000,layer="F.Cu",
-        points=[{"pad":["chip","1"]},[-1000000,0]]))
-    asset["ports"][0]["point"] = [-1000000,0]
-    if via_port:
-        asset["vias"] = [dict(net="signal",position_nm=[-1000000,0],size_nm=600000,
-            drill_nm=300000,from_layer="F.Cu",to_layer="B.Cu",technology=None)]
-        asset["ports"][0]["layer"] = "B.Cu"
-    from pcbir.physical import ComponentPlacementRule
-    input_board = replace(original,
-        placements=(*original.placements, Placement("J1","test",Point.mm(7,12))),
-        placement_rules=(ComponentPlacementRule("U1",allowed_orientations=(0,45),fixed_position=Point.mm(10,10),fixed_rotation_degrees=rotation),
-                         ComponentPlacementRule("J1",fixed_position=Point.mm(7,12),fixed_rotation_degrees=0)),
-        nets=(replace(original.nets[0],pads=(*original.nets[0].pads,PadReference("J1","1"))),))
-    source = bind(input_board=input_board)
-    poses = {p.reference:p for p in source.placements}
-    poses.update(cluster_placements(source,source.rigid_clusters[0],replace(poses["U1"],rotation_degrees=rotation)))
-    source = replace(source,placements=tuple(poses.values()))
-    owner = materialize_hard_macros(source)
-    from pcbir.flow import run_routing_pipeline
-    from pcbir.fanout import FanoutOptions
-    from pcbir.detailed import DetailedRouterOptions
-    result = run_routing_pipeline(source, fanout_options=FanoutOptions(),
-        detailed_options=DetailedRouterOptions(maximum_search_states=20000))
-    assert result.status.value == "pass", result.detailed.nets
-    assert result.board.tracks[:len(owner.tracks)] == owner.tracks
-    assert result.board.vias[:len(owner.vias)] == owner.vias
-    assert result.board.nets == source.nets
 
 
 @pytest.mark.parametrize("limit,over", [(3000000,False),(1000000,True)])

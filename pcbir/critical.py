@@ -397,13 +397,18 @@ def route_critical_nets(
     cannot be brought within the limit keeps its copper and fails the stage.
     In both passes the units of a ``tuning_group`` are first bent together
     as one bundle (``_tune_group``, plan R14), then topped up one by one.
+
+    ``unified_options`` (default ``UnifiedRouterOptions()``) configure the
+    unified router that single-ended critical and clock nets negotiate in.
     """
+    if unified_options is None:
+        from .unified_router import UnifiedRouterOptions
+        unified_options = UnifiedRouterOptions()
 
     if retained_accesses is not None and retained_critical is None:
         raise ValueError("retained ordinary prefix requires a critical donor")
     if pair_state_escalation is None:
-        # The unified router's option; the legacy path keeps the bounded tier.
-        pair_state_escalation = getattr(unified_options, "critical_pair_state_escalation", 1)
+        pair_state_escalation = unified_options.critical_pair_state_escalation
     if pair_state_escalation < 1:
         raise ValueError("pair state escalation must be at least 1")
     if pair_state_limit is not None and pair_state_limit <= 0:
@@ -497,7 +502,7 @@ def route_critical_nets(
     net_by_name = {n.name: n for n in board.nets}
     original_rules = board.net_routing_rules
     if promote_planar is None:
-        promote_planar = unified_options is not None
+        promote_planar = True
     if promote_planar:
         # After the guide checks: the promoted rules serve this stage only and
         # the result board keeps the declared ones.
@@ -683,7 +688,7 @@ def route_critical_nets(
             # Cohorts are contiguous in the existing job order. Do not move
             # coupled jobs or independently retained verified copper. Priority
             # remains a source cost within the selected engine, not a lock.
-            if (unified_options is not None and rule.kind in {RouteKind.CRITICAL, RouteKind.CLOCK}
+            if (rule.kind in {RouteKind.CRITICAL, RouteKind.CLOCK}
                     and rule.net not in cohort_candidates and rule.net not in retained_by_net):
                 cohort = []
                 for peer, peer_group in jobs[job_index:]:
@@ -786,27 +791,26 @@ def route_critical_nets(
     # A bounded cohort can reject one owner while committing its peers. Give
     # that empty owner one exact retry after all accepted jobs are present.
     # Never reopen a pair, discard partial copper, or reuse a corrupt proposal.
-    if unified_options is not None:
-        for position, (group, owned_tracks, owned_vias) in enumerate(committed):
-            incumbent = results[result_index[group]]
-            if (len(group) != 1 or incumbent.connected or owned_tracks or owned_vias
-                    or incumbent.strategy != "unified_critical_cohort"):
-                continue
-            rule = rules[group[0]]
-            if rule.kind not in {RouteKind.CRITICAL, RouteKind.CLOCK}:
-                continue
-            if on_progress:
-                on_progress("retry_started", group, None)
-            candidate, extra_tracks, extra_vias = _route_single_exact(
-                board, rule, global_route, tracks, vias, unified_options=unified_options)
-            if candidate.connected:
-                candidate = replace(candidate, strategy="unified_critical_cohort_retry")
-                committed[position] = (group, tuple(extra_tracks), tuple(extra_vias))
-                results[result_index[group]] = candidate
-                tracks.extend(extra_tracks)
-                vias.extend(extra_vias)
-            if on_progress:
-                on_progress("retry_finished", group, candidate)
+    for position, (group, owned_tracks, owned_vias) in enumerate(committed):
+        incumbent = results[result_index[group]]
+        if (len(group) != 1 or incumbent.connected or owned_tracks or owned_vias
+                or incumbent.strategy != "unified_critical_cohort"):
+            continue
+        rule = rules[group[0]]
+        if rule.kind not in {RouteKind.CRITICAL, RouteKind.CLOCK}:
+            continue
+        if on_progress:
+            on_progress("retry_started", group, None)
+        candidate, extra_tracks, extra_vias = _route_single_exact(
+            board, rule, global_route, tracks, vias, unified_options=unified_options)
+        if candidate.connected:
+            candidate = replace(candidate, strategy="unified_critical_cohort_retry")
+            committed[position] = (group, tuple(extra_tracks), tuple(extra_vias))
+            results[result_index[group]] = candidate
+            tracks.extend(extra_tracks)
+            vias.extend(extra_vias)
+        if on_progress:
+            on_progress("retry_finished", group, candidate)
 
     match_tuning = _tune_match_groups(board, rules, base_tracks, base_vias, committed, results, result_index,
                                       early, routed, group_failures)
@@ -2188,13 +2192,11 @@ def _route_single_exact(
     board: PhysicalBoard, rule: NetRoutingRule, global_route: GlobalRoutingResult,
     committed_tracks: list[TrackSegment], committed_vias: list[Via], *, unified_options=None,
 ) -> tuple[CriticalNetResult, tuple[TrackSegment, ...], tuple[Via, ...]]:
-    """Bounded single-net repair against immutable earlier critical copper."""
-    from .detailed import DetailedRouterOptions, route_detailed
+    """Bounded single-net repair against immutable earlier critical copper.
 
-    options = DetailedRouterOptions(
-        maximum_passes=2, maximum_search_states=20_000,
-        progressive_guides=True, constrained_pins_first=True,
-    )
+    The net routes alone in the unified router (direct mode, with its source
+    profile), bounded independently of later negotiation.
+    """
     connected_guide = any(item.net==rule.net and item.connected for item in global_route.routes)
     def local_repair():
         owner_board=replace(board,tracks=tuple(committed_tracks),vias=tuple(committed_vias))
@@ -2230,13 +2232,6 @@ def _route_single_exact(
         if early is not None and _within_budget(early[0]):
             return early
     if rule.max_length_nm is not None and rule.max_vias == 0:
-        # A bounded surface route has no layer-assignment tradeoff. Coarse
-        # maze detours and preferred-heading penalties can consume its entire
-        # length allowance, so search at the existing minimum repair pitch
-        # with geometric costs. Keep every electrical and clearance rule.
-        options = replace(options, pitch_nm=options.minimum_repair_pitch_nm,
-                          layer_preference_cost=0, direction_preference_cost=0,
-                          route_smoothing=True)
         # Guides are capacity proposals, not mandatory local geometry. Their
         # strong deviation penalty otherwise chooses a legal but over-budget
         # detour even on the fine grid. Preserve the real guide's availability
@@ -2253,21 +2248,19 @@ def _route_single_exact(
             for item in board.net_routing_rules
         ),
     )
-    if rule.kind in {RouteKind.CLOCK, RouteKind.CRITICAL} and unified_options is not None:
-        from .unified_router import route_unified
-        # Single-ended critical access uses the selected engine with the actual
-        # source profile. Bound each fallback independently of later negotiation.
-        single_options = replace(unified_options, direct=True, save_inputs_path=None,
-            maximum_iterations=min(16, unified_options.maximum_iterations),
-            time_budget_s=min(60.0, unified_options.time_budget_s or 60.0),
-            commit_rounds=min(2, unified_options.commit_rounds),
-            pre_route_decouplers=False, escapes_first=False)
-        detailed = route_unified(replace(search_board, net_routing_rules=board.net_routing_rules),
-            global_route, single_options, only_nets=frozenset({rule.net}))
-        strategy = "unified_clock" if rule.kind is RouteKind.CLOCK else "unified_critical"
-    else:
-        detailed = route_detailed(search_board, global_route, options, only_nets=frozenset({rule.net}))
-        strategy = "exact_single_net"
+    from .unified_router import UnifiedRouterOptions, route_unified
+    # Single-ended critical access uses the unified router with the actual
+    # source profile. Bound each fallback independently of later negotiation.
+    unified_options = unified_options or UnifiedRouterOptions()
+    single_options = replace(unified_options, direct=True, save_inputs_path=None,
+        maximum_iterations=min(16, unified_options.maximum_iterations),
+        time_budget_s=min(60.0, unified_options.time_budget_s or 60.0),
+        commit_rounds=min(2, unified_options.commit_rounds),
+        pre_route_decouplers=False, escapes_first=False)
+    detailed = route_unified(replace(search_board, net_routing_rules=board.net_routing_rules),
+        global_route, single_options, only_nets=frozenset({rule.net}))
+    strategy = {RouteKind.CLOCK: "unified_clock", RouteKind.CRITICAL: "unified_critical"}.get(
+        rule.kind, "unified_single_net")
     tracks = detailed.board.tracks[len(committed_tracks):]
     vias = detailed.board.vias[len(committed_vias):]
     net = next((item for item in detailed.nets if item.net == rule.net), None)

@@ -3,7 +3,7 @@
 Usage::
 
     copper bench bench/ladder.json --out build/bench/<name>
-    copper bench bench/ladder.json --only valid,cm4 --baseline bench/baselines/legacy.json
+    copper bench bench/ladder.json --only valid,cm4 --baseline bench/baselines/main.json
 
 The ladder file lists boards with their project directory, source file and
 ``route-board`` options. Project paths are relative to the ladder file, and

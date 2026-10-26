@@ -1,11 +1,24 @@
 from dataclasses import replace
 
-from pcbir import (BoardOutline, CopperLayer, CopperZone, FootprintPad, PadReference,
-    PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, PolygonRing,
-    PolygonWithHoles, Size, Stackup, DetailedRouterOptions, TrackSegment, nm_from_mm)
+from pcbir import (
+    BoardOutline,
+    CopperLayer,
+    CopperZone,
+    FootprintPad,
+    PadReference,
+    PhysicalBoard,
+    PhysicalFootprint,
+    PhysicalNet,
+    Placement,
+    Point,
+    PolygonRing,
+    PolygonWithHoles,
+    Size,
+    Stackup,
+    TrackSegment,
+    nm_from_mm,
+)
 from pcbir.fanout import FanoutOptions, route_fanout
-from pcbir.package_access import PackageAccessOptions, preflight_package_access
-from pcbir.plane import PlaneStitchOptions
 from pcbir.routing import route_global
 from test_package_access import fixture
 
@@ -49,31 +62,3 @@ def plane_fixture():
     return board, route_global(board), fanout
 
 
-def test_plane_contacts_are_reserved_by_default_and_opt_out_is_explicit():
-    board, guides, settings = plane_fixture()
-    result = preflight_package_access(board, guides, settings)
-    assert result.ready and result.plane_stitch.complete
-    assert set(result.plane_stitch.stitched_pads) == {PadReference("U", "2"), PadReference("JB", "1")}
-    late = preflight_package_access(board, guides, settings,
-                                    options=PackageAccessOptions(reserve_plane_contacts=False))
-    assert late.plane_stitch is None
-    selected = preflight_package_access(board, guides, settings,
-        plane_options=PlaneStitchOptions(only_pads=frozenset({PadReference("U", "2")})))
-    assert selected.plane_stitch.stitched_pads == (PadReference("U", "2"),)
-
-
-def test_plane_failure_blocks_area_search_instead_of_publishing_partial_access(monkeypatch):
-    import pcbir.flow as flow
-    import pcbir.package_access as access
-    from pcbir.plane import PlaneStitchResult
-    from pcbir.routeflow import FeedbackStatus, PlacementRoutingResult
-    board, guides, settings = plane_fixture()
-    monkeypatch.setattr(flow, "optimize_placement_for_routing", lambda *_:
-        PlacementRoutingResult(FeedbackStatus.PASS, board, guides, "fixture", (), 0, True))
-    monkeypatch.setattr(access, "stitch_zone_pads", lambda source, options:
-        PlaneStitchResult(source, (), (PadReference("U", "2"),), 0, 0))
-    monkeypatch.setattr(flow, "route_detailed", lambda *args, **kwargs:
-                        (_ for _ in ()).throw(AssertionError("area search must be gated")))
-    result = flow.run_routing_pipeline(board, legacy_gates=True, fanout_options=settings,
-        package_access_options=PackageAccessOptions(maximum_trials=0, maximum_pattern_trials=0))
-    assert not result.package_access.ready and result.detailed.metrics.passes == 0

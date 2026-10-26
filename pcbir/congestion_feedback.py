@@ -649,8 +649,8 @@ def feedback_map(board: PhysicalBoard, router_map: CongestionMap | None, *,
     """The loop's map: the router's contention plus the RUDY estimate on its lattice.
 
     Both are normalised (:func:`combine_normalised`, weight 1.0 by default).
-    Without a router map (legacy router, export disabled) the estimate is
-    used alone, on its own lattice.
+    Without a router map (congestion export disabled) the estimate is used
+    alone, on its own lattice.
     """
     if router_map is None:
         return estimate_demand(board, int(tile_nm or DEFAULT_TILE_NM))

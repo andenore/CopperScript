@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 from pcbir.fanout import route_fanout
 from pcbir.bypass_reservations import verified_bypass_reservations
-from pcbir.package_access import _verified_bypass_links
+from pcbir.bypass_links import verified_bypass_links as _verified_bypass_links
 from pcbir.physical import FootprintPad, PadReference, Point, Size
 from test_decoupling_crosslayer_paths import fixture
 

@@ -3,13 +3,11 @@ from dataclasses import replace
 
 import pytest
 
-import pcbir.detailed as detail
 import pcbir.fanout as fanout
 from pcbir import (BoardOutline, CopperLayer, DesignRules, FootprintPad, NetRoutingRule, PadReference,
     PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, Size, Stackup, nm_from_mm)
-from pcbir.boundary_access import BoundaryAccessOptions, package_collar, reserve_boundary_access
+from pcbir.boundary_access import BoundaryAccessOptions, package_collar
 from pcbir.drc import run_physical_drc
-from pcbir.package_access import preflight_package_access
 from pcbir.physical import CopperKeepout, PolygonRing, PolygonWithHoles
 from pcbir.pin_escape import verified_routing_access
 from pcbir.routing import GlobalRouterOptions, GlobalRoutingStatus, route_global
@@ -84,36 +82,6 @@ def assert_surface_escape(source, result):
     assert not hard_errors(result.board)
 
 
-@pytest.mark.parametrize("rule", [ONE_LAYER, CRYSTAL, NO_VIAS], ids=["one_layer", "crystal", "max_vias_0"])
-def test_pin_of_a_net_that_cannot_change_layer_escapes_on_its_surface(rule):
-    source = board(**rule)
-    result = fanout.route_fanout(source)
-    assert_surface_escape(source, result)
-    # Its neighbours keep their dogbones.
-    assert set(result.accesses) == {PadReference("U", str(pin)) for pin in range(2, 8)}
-    assert {via.net for via in result.created_vias} == {f"N{pin}" for pin in range(2, 8)}
-    access = preflight_package_access(source, guides(source), fanout.FanoutOptions())
-    assert access.ready and not access.pending_pads
-    assert_surface_escape(source, access.fanout)
-    assert PIN not in {port.pad for port in access.boundary.ports}
-    owned = reserve_boundary_access(access.board, access.fanout, access.boundary)
-    assert owned.routing_accesses[PIN] == access.fanout.surface_accesses[PIN]
-    assert set(owned.boundary_accesses) == set(result.accesses)
-
-
-def test_surface_escape_is_a_detailed_routing_terminal_on_its_layer():
-    source = board(**CRYSTAL)
-    result = fanout.route_fanout(source)
-    routed = detail.route_detailed(result.board, guides(source),
-        detail.DetailedRouterOptions(pitch_nm=nm_from_mm(".25"), maximum_passes=2, escape_terminals=True),
-        fanout_accesses=result.routing_accesses, fanout_created_tracks=result.created_tracks,
-        fanout_created_vias=frozenset((via.net, via.position) for via in result.created_vias))
-    assert all(net.connected for net in routed.nets)
-    assert {track.layer for track in routed.board.tracks if track.net == "X1"} == {CopperLayer.FRONT}
-    assert not any(via.net == "X1" for via in routed.board.vias)
-    assert not hard_errors(routed.board)
-
-
 @pytest.mark.parametrize("layers", [FOUR, (CopperLayer.FRONT, CopperLayer.BACK)])
 def test_nets_that_may_change_layer_keep_their_dogbones(monkeypatch, layers):
     source = board(allowed_layers=layers)
@@ -123,16 +91,6 @@ def test_nets_that_may_change_layer_keep_their_dogbones(monkeypatch, layers):
     assert result.routing_accesses == result.accesses
     monkeypatch.setattr(fanout, "_surface_layer", lambda *args: None)
     assert fanout.route_fanout(source) == result
-
-
-def test_surface_escapes_are_deterministic():
-    source = board(**CRYSTAL)
-    first, second = fanout.route_fanout(source), fanout.route_fanout(source)
-    assert first == second and first.surface_accesses == second.surface_accesses
-    global_result = guides(source)
-    one = preflight_package_access(source, global_result, fanout.FanoutOptions())
-    two = preflight_package_access(source, global_result, fanout.FanoutOptions())
-    assert one.fanout == two.fanout and one.boundary == two.boundary and one.board == two.board
 
 
 def test_blocked_surface_pin_stays_pending_without_a_via():

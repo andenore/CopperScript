@@ -7,12 +7,11 @@ from types import MappingProxyType
 
 import pytest
 
-import pcbir.detailed as detail
 from pcbir import (BoardOutline, CopperLayer, FootprintPad, NetRoutingRule, PadReference, PhysicalBoard,
                    PhysicalFootprint, PhysicalNet, Placement, Point, RouteKind, Size, TrackSegment, Via,
                    nm_from_mm, route_global, run_physical_drc)
 from pcbir.breakout import BreakoutRegions
-from pcbir.detailed import DetailedRouterOptions, route_detailed
+from pcbir.unified_router import UnifiedRouterOptions, route_unified
 from pcbir.drc import explicit_copper_connectivity
 from pcbir.geometry import RoundedConvexShape, point_on_segment, shapes_clear
 from pcbir.physical import DesignRules
@@ -59,8 +58,7 @@ def _board(*, breakout: bool = True, width: int = WIDE, rotated: bool = False,
 
 
 def _route(board: PhysicalBoard, **options):
-    settings = dict(pitch_nm=nm_from_mm("0.5"), maximum_passes=2) | options
-    return route_detailed(board, route_global(board), DetailedRouterOptions(**settings))
+    return route_unified(board, route_global(board), UnifiedRouterOptions(**options))
 
 
 def _misnecked(board: PhysicalBoard, tracks) -> list[TrackSegment]:
@@ -153,29 +151,6 @@ def test_routing_checks_and_emits_each_centreline_as_its_pieces() -> None:
     assert BreakoutRegions(critical).declared == {"VDD"} and not BreakoutRegions(critical).ordinary
 
 
-def test_merging_keeps_necked_copper_inside_one_region() -> None:
-    board = _board(nets=(("VDD", ("U1.3", "U1.4", "J1.1")),))
-    regions = BreakoutRegions(board)
-    p, j, q = Point.mm("9.65", "9.25"), Point.mm("10.2", "9.25"), Point.mm("10.75", "9.25")
-    assert regions.region("VDD", (p, j)) == "pad:U1.3:2" and regions.region("VDD", (j, q)) == "pad:U1.4:3"
-    assert regions.region("VDD", (p, q)) is None
-    first, second = (TrackSegment("VDD", a, b, NARROW, FRONT) for a, b in ((p, j), (j, q)))
-    # Joined, the run would be outside every region at the breakout width.
-    assert detail._merge_collinear_tracks((first, second)) == (TrackSegment("VDD", p, q, NARROW, FRONT),)
-    assert detail._merge_collinear_tracks((first, second), regions) == (first, second)
-    near = TrackSegment("VDD", Point.mm("9.8", "9.25"), j, NARROW, FRONT)
-    shorter = TrackSegment("VDD", near.start, p, NARROW, FRONT)
-    assert detail._merge_collinear_tracks((shorter, near), regions) == (
-        TrackSegment("VDD", p, j, NARROW, FRONT),)
-    # Re-cut, the run is necked in two overlapping regions; copper outside
-    # every region gets its profile width back.
-    cut = Point(nm_from_mm("10.384602"), p.y_nm)
-    assert regions.neck_down((TrackSegment("VDD", p, q, NARROW, FRONT),)) == (
-        TrackSegment("VDD", p, cut, NARROW, FRONT), TrackSegment("VDD", cut, q, NARROW, FRONT))
-    away = TrackSegment("VDD", Point.mm("9.65", 11), Point.mm("10.75", 11), NARROW, FRONT)
-    assert regions.neck_down((away,)) == (replace(away, width_nm=WIDE),)
-
-
 # --- cleanup ---------------------------------------------------------------
 
 def test_smoothing_keeps_necked_chains_inside_and_wide_chains_outside() -> None:
@@ -258,10 +233,9 @@ def test_escape_release_and_cleanup_keep_widths_correct(boxed: bool) -> None:
     assert created[0].width_nm == NARROW and not _hard_errors(board) - {"DRC-OPEN-NET"}
     # The necked land path verifies as the pin's escape.
     assert verified_routing_access(board, U1_3, "VDD", accesses[U1_3], RoutingClearanceIndex(board))
-    routed = route_detailed(
+    routed = route_unified(
         board, route_global(replace(board, tracks=(), vias=())),
-        DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"), maximum_passes=2, escape_terminals=True,
-                              route_smoothing=True),
+        UnifiedRouterOptions(route_smoothing=True),
         fanout_accesses=accesses, fanout_created_tracks=created,
         fanout_created_vias=frozenset({(via.net, via.position)}))
     assert routed.nets[0].connected, routed.nets[0].diagnostics
@@ -274,30 +248,6 @@ def test_escape_release_and_cleanup_keep_widths_correct(boxed: bool) -> None:
         assert via in final.vias and set(created[:2]) <= set(final.tracks)
     else:
         assert not final.vias and not set(created[2:]) & set(final.tracks)
-
-
-def test_re_cutting_pruned_copper_is_transactional() -> None:
-    board = _board()
-    breakout = BreakoutRegions(board)
-    lead = breakout.split_tracks(
-        (TrackSegment("VDD", Point.mm(10, 8), Point.mm(10, 11), WIDE, FRONT),
-         TrackSegment("VDD", Point.mm(10, 11), Point.mm(14, 11), WIDE, FRONT)), WIDE)
-    # A wide remnant ending at J1 stays wide, even after region re-cutting.
-    centred = (*lead, TrackSegment("VDD", Point.mm(14, 11), Point.mm(14, 14), WIDE, FRONT))
-    immutable, mutable = detail._neck_down_changed(board, [], centred, (), breakout)
-    assert not immutable and not _misnecked(board, mutable) and len(mutable) == len(centred) + 1
-    assert _connected(replace(board, tracks=mutable))
-    assert mutable[-1].width_nm == WIDE
-    # One that touches J1 only through its full width also keeps its contact.
-    grazing = (*lead, TrackSegment("VDD", Point.mm(14, 11), Point.mm(14, "13.25"), WIDE, FRONT))
-    assert _connected(replace(board, tracks=grazing))
-    assert _connected(replace(board, tracks=breakout.neck_down(grazing)))
-    fixed_result, kept = detail._neck_down_changed(board, [], grazing, (), breakout)
-    assert not fixed_result and _connected(replace(board, tracks=kept))
-    assert all(t.width_nm == WIDE for t in kept if t.start.x_nm == nm_from_mm(14))
-    # Input copper is never re-cut.
-    fixed = [TrackSegment("VDD", Point.mm(14, 11), Point.mm(14, 14), WIDE, FRONT)]
-    assert detail._neck_down_changed(replace(board, tracks=tuple(fixed)), fixed, (), (), breakout) == (fixed, ())
 
 
 # --- unchanged elsewhere ---------------------------------------------------

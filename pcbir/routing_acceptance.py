@@ -91,9 +91,7 @@ def route_case(board):
     from .flow import run_routing_pipeline
     from .placement import PlacementPlannerOptions
     from .routing import GlobalRouterOptions
-    from .detailed import DetailedRouterOptions
     from .fanout import FanoutOptions
-    from .package_access import PackageAccessOptions
     from .routeflow import PlacementRoutingFeedbackOptions
     return run_routing_pipeline(board,
         placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
@@ -101,10 +99,7 @@ def route_case(board):
             fixed_references=frozenset(p.reference for p in board.placements)),
         global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
         feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
-        detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"), maximum_passes=2,
-            maximum_search_states=10_000, defer_zone_nets=False),
-        fanout_options=FanoutOptions(minimum_component_pads=2, two_leg_escapes=False),
-        package_access_options=PackageAccessOptions(maximum_trials=0))
+        fanout_options=FanoutOptions(minimum_component_pads=2, two_leg_escapes=False))
 
 
 def assess_case(case, result, quality):

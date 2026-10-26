@@ -15,16 +15,14 @@ Usage: python -m pcbir.bench route BOARD.kicad_pcb --out DIR
        python -m pcbir.bench summarize RESULTS_ROOT
        python -m pcbir.bench causes RESULTS_ROOT    (unrouted nets per cause class)
        python -m pcbir.bench run BOARDS --out RESULTS --kicad-cli kicad-cli --pcbnew-python python
-       python -m pcbir.bench versus LEGACY/baseline.json UNIFIED/baseline.json --names legacy unified
+       python -m pcbir.bench versus BEFORE/baseline.json AFTER/baseline.json --names before after
 
 ``run`` is the local benchmark: it routes and scores every prepared board in
 BOARDS (``BOARDS/<id>/processed_v9_guide_v3.kicad_pcb`` with its
 ``.kicad_pro``, as the CI's ``bench-boards`` artifact holds them) in parallel,
 each in its own process under a time limit, and writes per-board records,
 ``summary.md``, ``baseline.json`` and ``record.txt`` like the CI run.
-``route`` and ``run`` use the unified router by default, as
-``copper route-board`` does; ``--router legacy`` routes with the pre-refactor
-pass-based router for comparison.
+``route`` and ``run`` use the unified router, as ``copper route-board`` does.
 """
 from __future__ import annotations
 
@@ -50,12 +48,9 @@ _ROUTING_TAGS = ("segment", "arc", "via")
 
 # --------------------------------------------------------------------------- routing
 
-def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20_000,
-                     passes: int = 2, pitch_mm: str = "1", router: str = "unified",
-                     unified: dict | None = None,
+def route_board_file(board_path: Path, out_dir: Path, *, unified: dict | None = None,
                      escape_plan: bool = False, array_flow: bool = False, bus_layers: bool = False) -> dict:
     """Import, route with fixed placement, write the routed board and a result record."""
-    from .detailed import DetailedRouterOptions
     from .fanout import FanoutOptions
     from .flow import run_routing_pipeline
     from .importers.kicad_pcb import load_kicad_pcb
@@ -65,7 +60,7 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
 
     out_dir.mkdir(parents=True, exist_ok=True)
     record: dict = {"schema": RESULT_SCHEMA, "board": out_dir.name, "source": str(board_path),
-                    "status": "incomplete", "router": router}
+                    "status": "incomplete", "router": "unified"}
     if unified:
         record["unified_options"] = dict(unified)
     _save(out_dir, record)  # a run killed by its time limit stays "incomplete"
@@ -92,14 +87,9 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
             board,
             initial_placement=fixed,
             global_options=global_options,
-            detailed_options=DetailedRouterOptions(
-                pitch_nm=nm_from_mm(pitch_mm), maximum_passes=passes, maximum_search_states=search_budget,
-                enable_soft_ripup=True, constrained_pins_first=True, progressive_guides=True,
-                enclosure_repair_radius_nm=nm_from_mm(8), enclosure_repair_orders=16,
-                repair_budget_multiplier=10, defer_zone_nets=bool(board.zones), enclosure_repair_nets=12),
             fanout_options=FanoutOptions(),
             plane_stitch_options=PlaneStitchOptions(maximum_contact_radius_nm=nm_from_mm(5)) if board.zones else None,
-            **({"unified_options": _unified_options(unified)} if router == "unified" else {}),
+            unified_options=_unified_options(unified),
             **({"escape_plan_options": EscapePlanOptions(two_end_order=escape_plan or bus_layers,
                                                          bus_layers=bus_layers, array_flow=array_flow)}
                if escape_plan or array_flow or bus_layers else {}),
@@ -126,7 +116,6 @@ def route_board_file(board_path: Path, out_dir: Path, *, search_budget: int = 20
                           for item in detailed.nets if not item.connected} if detailed else {},
         escape_causes={net: causes for net, causes in escape.net_causes().items()
                        if detailed and net in {item.net for item in detailed.nets if not item.connected}},
-        package_pending_nets=_pending_nets(board, result.package_access),
         moved_placements=sum(1 for a, b in zip(sorted(board.placements, key=lambda p: p.reference),
                                                sorted(routed.placements, key=lambda p: p.reference))
                              if (a.position, a.rotation_degrees, a.side) != (b.position, b.rotation_degrees, b.side)),
@@ -161,15 +150,6 @@ def _track_box(track):
                   max(track.start.x_nm, track.end.x_nm), max(track.start.y_nm, track.end.y_nm))
 
 
-def _pending_nets(board, access) -> list[str]:
-    """Nets with a pad whose package exit stayed pending."""
-    if access is None:
-        return []
-    pads = {*access.fanout.pending_pads, *(access.boundary.pending_pads if access.boundary else ()),
-            *(access.plane_stitch.pending_pads if access.plane_stitch else ())}
-    return sorted({net.name for net in board.nets if pads.intersection(net.pads)})
-
-
 def _escape_summary(escape) -> dict:
     """Escape diagnostics compact enough for a result record: only what is loaded or crossing."""
     report = escape.report()
@@ -179,10 +159,10 @@ def _escape_summary(escape) -> dict:
 
 
 # Cause classes of an unrouted net, most specific first. Escape classes come
-# from the placed board's escape diagnostics and rank first: a pending package
-# exit or a failed search is usually their symptom. The others come from the
-# router's own diagnostics; ``unlocated`` means the router gave none.
-CAUSE_CLASSES = ("two_end_crossing", "channel_overflow", "package_access", "search_budget", "no_path",
+# from the placed board's escape diagnostics and rank first: a failed search is
+# usually their symptom. The others come from the router's own diagnostics;
+# ``unlocated`` means the router gave none.
+CAUSE_CLASSES = ("two_end_crossing", "channel_overflow", "search_budget", "no_path",
                  "other", "unlocated")
 
 
@@ -192,15 +172,12 @@ _SEARCH_NOTE = re.compile(r"^search: \d+ calls, (\d+) out of budget, (\d+) no pa
 def unrouted_causes(record: dict) -> dict[str, list[str]]:
     """Every unrouted net's cause classes, primary first (see ``CAUSE_CLASSES``)."""
     escape = record.get("escape_causes") or {}
-    pending = set(record.get("package_pending_nets") or ())
     causes = {}
     for net in record.get("unrouted_nets") or ():
         details = (record.get("unrouted_details") or {}).get(net) or []
         notes = [line for line in details if not _SEARCH_NOTE.match(line)]
         text = " ".join(notes).lower()
         tags = set(escape.get(net) or ())
-        if net in pending or "package-access" in text or "package access" in text:
-            tags.add("package_access")
         for line in details:
             if match := _SEARCH_NOTE.match(line):
                 if int(match.group(1)):
@@ -310,21 +287,6 @@ def _stage_summary(result) -> dict:
                                             if not item.connected},
                      "critical": result.critical.status.value,
                      "detailed": result.detailed.status.value}
-    access = result.package_access
-    if access is not None:
-        boundary = access.boundary
-        summary["package_access"] = {
-            "ready": access.ready,
-            "fanout_pending": [f"{item.component}.{item.pad}" for item in access.fanout.pending_pads][:12],
-            "plane_pending": [f"{item.component}.{item.pad}" for item in access.plane_stitch.pending_pads][:12]
-            if access.plane_stitch else [],
-            "hard_findings": access.hard_findings,
-            "failed_critical_nets": sorted(access.failed_critical_nets),
-            "stop_reason": access.placement_stop_reason,
-            "native_accepted": boundary.native_accepted if boundary else None,
-            "pending_pads": [f"{item.component}.{item.pad}" for item in boundary.pending_pads][:12]
-            if boundary else [],
-        }
     return summary
 
 
@@ -534,7 +496,7 @@ def score_drc_report(report: dict) -> dict:
 
 # --------------------------------------------------------------------------- local runs
 
-def run_boards(boards: Path, out_root: Path, *, router: str = "unified", unified_set=(), workers: int = 4,
+def run_boards(boards: Path, out_root: Path, *, unified_set=(), workers: int = 4,
                board_seconds: int = 1200, kicad_cli: str | None = None, pcbnew_python: str | None = None,
                only: tuple[str, ...] = (), limit: int = 0, python: str = sys.executable,
                progress=print) -> dict:
@@ -562,14 +524,14 @@ def run_boards(boards: Path, out_root: Path, *, router: str = "unified", unified
         out = out_root / board_dir.name
         out.mkdir()
         command = [python, "-m", "pcbir.bench", "route", str(board_dir / PREPARED_NAME), "--out", str(out),
-                   "--router", router, *(arg for item in unified_set for arg in ("--set", item))]
+                   *(arg for item in unified_set for arg in ("--set", item))]
         with (out / "route.log").open("w", encoding="utf-8") as log:
             try:
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, timeout=board_seconds, check=False)
             except subprocess.TimeoutExpired:
                 log.write(f"\nkilled after {board_seconds} s\n")
         if not (out / "result.json").is_file():
-            _save(out, {"schema": RESULT_SCHEMA, "board": board_dir.name, "status": "missing", "router": router})
+            _save(out, {"schema": RESULT_SCHEMA, "board": board_dir.name, "status": "missing", "router": "unified"})
         record = json.loads((out / "result.json").read_text(encoding="utf-8"))
         if kicad_cli:
             record = score_result(out, kicad_cli, pcbnew_python=pcbnew_python)
@@ -579,11 +541,11 @@ def run_boards(boards: Path, out_root: Path, *, router: str = "unified", unified
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         list(pool.map(one, candidates))
-    baseline = {**baseline_records(out_root), "source": f"local {router} run of {boards}"}
+    baseline = {**baseline_records(out_root), "source": f"local unified run of {boards}"}
     (out_root / "baseline.json").write_text(json.dumps(baseline, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     (out_root / "record.txt").write_text(record_text(baseline), encoding="utf-8")
     summary = summarize(out_root)
-    (out_root / "summary.md").write_text(f"## CopperScript ({router} router), local run\n\n" + summary_table(summary)
+    (out_root / "summary.md").write_text("## CopperScript (unified router), local run\n\n" + summary_table(summary)
                                          + "\n" + board_table(out_root), encoding="utf-8")
     return summary
 
@@ -940,15 +902,12 @@ def main(argv: list[str] | None = None) -> int:
     route = commands.add_parser("route")
     route.add_argument("board", type=Path)
     route.add_argument("--out", type=Path, required=True)
-    route.add_argument("--search-budget", type=int, default=20_000)
     route.add_argument("--bus-layers", action="store_true",
                        help="spread crossing bundles over successive layers (escape planning E5)")
     route.add_argument("--array-flow", action="store_true",
                        help="choose ball-grid surface escapes by min-cost flow (escape planning E2)")
     route.add_argument("--escape-plan", action="store_true",
                        help="give the ordinary router a two-end escape plan (escape planning E3)")
-    route.add_argument("--router", choices=("legacy", "unified"), default="unified",
-                       help="ordinary detailed router, as copper route-board --router (default: unified)")
     route.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE", dest="unified_set",
                        help="UnifiedRouterOptions override for the unified router (repeatable)")
     reference = commands.add_parser("reference")
@@ -979,8 +938,6 @@ def main(argv: list[str] | None = None) -> int:
     run = commands.add_parser("run", help="route and score every prepared board in a directory (local benchmark)")
     run.add_argument("boards", type=Path, help="directory of <id>/processed_v9_guide_v3.kicad_pcb boards")
     run.add_argument("--out", type=Path, required=True, help="new, empty results directory")
-    run.add_argument("--router", choices=("legacy", "unified"), default="unified",
-                     help="ordinary detailed router, as copper route-board --router (default: unified)")
     run.add_argument("--set", action="append", default=[], metavar="OPTION=VALUE", dest="unified_set",
                      help="UnifiedRouterOptions override for the unified router (repeatable)")
     run.add_argument("--workers", type=int, default=4)
@@ -1008,7 +965,7 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(f"BENCH ERROR: {exc}")
             return 2
-        record = route_board_file(args.board, args.out, search_budget=args.search_budget, router=args.router,
+        record = route_board_file(args.board, args.out,
                                   unified=unified, escape_plan=args.escape_plan, array_flow=args.array_flow,
                                   bus_layers=args.bus_layers)
     elif args.command == "reference":
@@ -1027,7 +984,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if lost else 0
     elif args.command == "run":
         try:
-            summary = run_boards(args.boards, args.out, router=args.router, unified_set=tuple(args.unified_set),
+            summary = run_boards(args.boards, args.out, unified_set=tuple(args.unified_set),
                                  workers=args.workers,
                                  board_seconds=args.board_seconds, kicad_cli=args.kicad_cli,
                                  pcbnew_python=args.pcbnew_python, only=tuple(args.only), limit=args.limit)

@@ -157,9 +157,9 @@ def route_fanout(
     from .decoupling import route_decouplers
     bypass = route_decouplers(board, only_nets=only_nets, fanout_options=options)
     board = bypass.board
-    from .package_access import _verified_bypass_links
+    from .bypass_links import verified_bypass_links
     bypass_nets = {link.net for link in board.decoupling_links}
-    protected_bypasses = _verified_bypass_links(board, bypass_nets) if bypass_nets else frozenset()
+    protected_bypasses = verified_bypass_links(board, bypass_nets) if bypass_nets else frozenset()
     clearance = RoutingClearanceIndex(board)
     net_by_pad = {pad: net.name for net in board.nets for pad in net.pads
                   if len(net.pads) >= 2}
@@ -409,7 +409,7 @@ def route_fanout(
     def failed_gate(findings, candidate):
         from .decoupling_paths import refresh_crosslayer_witnesses
         return (any(sum(item.code == code for item in findings) > before_count[code] for code in fatal)
-                or (bool(protected_bypasses) and not protected_bypasses <= _verified_bypass_links(candidate, bypass_nets))
+                or (bool(protected_bypasses) and not protected_bypasses <= verified_bypass_links(candidate, bypass_nets))
                 or bool(refresh_crosslayer_witnesses(candidate,bypass.admitted_path_witnesses)[1]))
     # Pairwise assignment is a proposal, not a substitute for exact whole-board
     # materialization/native acceptance. A failed improvement retains greedy.

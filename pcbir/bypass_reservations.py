@@ -113,10 +113,10 @@ def verified_bypass_reservations(
     nets = frozenset(link.net for link in source.decoupling_links)
     # Share the exact fresh association predicate, including complete return
     # paths for opposite-face links. Net names and flags grant no exemptions.
-    from .package_access import _verified_bypass_links
-    original = _verified_bypass_links(source, nets)
+    from .bypass_links import verified_bypass_links
+    original = verified_bypass_links(source, nets)
     paths, via_paths = {}, {}
-    current = _verified_bypass_links(reserved.board, nets,
+    current = verified_bypass_links(reserved.board, nets,
                                      witness_paths=paths, witness_vias=via_paths)
     if not original <= current:
         return reject("ordinary reservations obstruct a verified source bypass association")

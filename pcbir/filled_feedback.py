@@ -13,10 +13,9 @@ from itertools import chain, product
 import json
 from pathlib import Path
 
-from .detailed import DetailedRouterOptions
+from .dependency_reroute import (merge_local_detail, reroute_local_dependencies, unaffected_copper,
+                                 with_preserved_area)
 from .drc import physical_board_digest, run_physical_drc
-from .escape_feedback import (EscapeFeedbackOptions, _merge_local_detail,
-    _reroute_local_dependencies, _with_preserved_area, _unaffected_copper)
 from .flow import RoutingPipelineResult
 from .manufacturing import CommandRunner
 from .physical import CopperLayer, PhysicalBoard, Point, RouteKind, nm_from_mm
@@ -266,7 +265,6 @@ def _rejection_context(board, evidence, net, dependency_nets):
 def improve_filled_copper(
     initial: RoutingPipelineResult, board: PhysicalBoard | None = None, *,
     kicad_cli: Path, options: FilledCopperFeedbackOptions | None = None,
-    detailed_options: DetailedRouterOptions | None = None,
     artifact_directory: Path | None = None, runner: CommandRunner | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> FilledCopperFeedbackResult:
@@ -277,7 +275,6 @@ def improve_filled_copper(
     non-library violations is mandatory. Partial progress is not signoff.
     """
     options = options or FilledCopperFeedbackOptions()
-    detailed_options = detailed_options or DetailedRouterOptions()
     board = board or initial.board
     if board.placements != initial.board.placements or replace(
             board, tracks=initial.board.tracks, vias=initial.board.vias,
@@ -303,8 +300,6 @@ def improve_filled_copper(
         return tool_failure(exc)
     if evidence.passed:
         return FilledCopperFeedbackResult(board, initial, evidence, "verified")
-    if initial.package_access is not None and not initial.package_access.ready:
-        return FilledCopperFeedbackResult(board, initial, evidence, "package_access_blocked")
     if _hard_findings(board):
         return FilledCopperFeedbackResult(board, initial, evidence, "physical_violations")
     if evidence.island_count:
@@ -327,13 +322,8 @@ def improve_filled_copper(
             diagnostic="Known native opens remain outside general zone-bridge scope; inspect ordinary/critical routing failures.")
     eligible = frozenset(item.net for item in initial.detailed.nets
                          if item.connected and item.net not in zone_nets | specialized)
-    prefix = (initial.fanout.board if initial.fanout else
-              initial.plane_stitch.board if initial.plane_stitch else initial.critical.board)
+    prefix = initial.plane_stitch.board if initial.plane_stitch else initial.critical.board
     protected_tracks, protected_vias = Counter(prefix.tracks), Counter(prefix.vias)
-    from .power_geometry import owned_power_copper
-    power_tracks, power_vias = owned_power_copper(initial)
-    protected_tracks.update(power_tracks)
-    protected_vias.update(power_vias)
     def partition(objects, protected):
         fixed, mutable = [], []
         remaining = protected.copy()
@@ -409,17 +399,16 @@ def improve_filled_copper(
                     outcome = "ineligible_or_oversized_blocker_set"
                 else:
                     reserved = replace(fixed, tracks=(*fixed.tracks, *bridge))
-                    repaired = _reroute_local_dependencies(pipeline, reserved, mutable_tracks, mutable_vias,
-                        displaced, eligible, detailed_options, EscapeFeedbackOptions(
-                            maximum_local_blockers=options.maximum_blockers,
-                            maximum_dependency_expansions=options.maximum_dependency_expansions),
+                    repaired = reroute_local_dependencies(pipeline, reserved, mutable_tracks, mutable_vias,
+                        displaced, eligible, maximum_local_blockers=options.maximum_blockers,
+                        maximum_dependency_expansions=options.maximum_dependency_expansions,
                         on_progress=observe)
                     outcome = "dependency_reroute_failed"
                     if repaired is not None:
                         candidate, reroute, displaced, expansions = repaired
-                        expected = _with_preserved_area(reserved, mutable_tracks, mutable_vias, displaced)
+                        expected = with_preserved_area(reserved, mutable_tracks, mutable_vias, displaced)
                         digest = physical_board_digest(candidate)
-                        if (_unaffected_copper(candidate, displaced) != _unaffected_copper(expected, displaced)
+                        if (unaffected_copper(candidate, displaced) != unaffected_copper(expected, displaced)
                                 or Counter(reserved.tracks)-Counter(candidate.tracks)
                                 or Counter(reserved.vias)-Counter(candidate.vias)):
                             outcome = "ownership_changed"
@@ -480,7 +469,7 @@ def improve_filled_copper(
                  net=net, outcome=outcome, displaced_nets=list(record.displaced_nets),
                  cleanup_removed_tracks=cleaned_tracks, cleanup_removed_vias=cleaned_vias)
             if outcome == "accepted":
-                merged = _merge_local_detail(pipeline, candidate, reroute, displaced)
+                merged = merge_local_detail(pipeline, candidate, reroute, displaced)
                 # Closure must not alter geometry after this native certificate.
                 if merged.board.tracks != candidate.tracks or merged.board.vias != candidate.vias:
                     records[-1] = replace(record, outcome="closure_changed_verified_geometry")

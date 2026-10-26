@@ -199,8 +199,8 @@ An `EscapePlan` carries what the routers use:
 | Field | Used by | Effect |
 |---|---|---|
 | `surface_pads` | Fanout (`FanoutOptions.surface_pads`), for the ordinary path and the unified router's escape reservations | A kept net's surface pin tries a checked surface escape before a dogbone via, so the bundle's channel is not walled by vias; a moved net keeps its dogbone, which is its layer change |
-| `net_order` | Detailed router (`DetailedRouterOptions.escape_net_order`); unified router (`UnifiedRouterOptions.escape_net_order`) | Planned nets route first: in passes 1 and 2 of the detailed router, and in the unified router's negotiation order. Moved nets, then kept nets from the outside of the bundle in, then unmoved nets |
-| `layer_biases` | Detailed router (`DetailedRouterOptions.escape_layer_biases`); unified router (`UnifiedRouterOptions.escape_layer_biases`) | Inside the corridor a moved net pays `layer_bias_rate` per mm on any layer but its own (detailed router: added to the planar edge cost; unified router: `rate/10` added to those nodes' history while that net searches). In the detailed router a moved net's corridor searches also cover every allowed layer, not only its global guide's |
+| `net_order` | Unified router (`UnifiedRouterOptions.escape_net_order`) | Planned nets route first in the unified router's negotiation order. Moved nets, then kept nets from the outside of the bundle in, then unmoved nets |
+| `layer_biases` | Unified router (`UnifiedRouterOptions.escape_layer_biases`) | Inside the corridor a moved net pays `layer_bias_rate` per mm on any layer but its own: `rate/10` is added to those nodes' history while that net searches |
 
 `layer_bias_rate` is 20 by default. A weaker bias leaves a moved net on the
 planar layer, where it takes the gap a kept net needs: with rates 0, 5 and
@@ -284,14 +284,12 @@ corridor.
 ## Cause classes of unrouted nets
 
 `pcbir.bench.unrouted_causes` gives each unrouted net its classes, primary
-first. Escape classes come first: a pending package exit or a failed search is
-usually their symptom.
+first. Escape classes come first: a failed search is usually their symptom.
 
 | Class | Source |
 |---|---|
 | `two_end_crossing` | Escape diagnostics: the net is in a bundle whose two ends' orders disagree |
 | `channel_overflow` | Escape diagnostics: the net's inner pin is in an overflowing pad field |
-| `package_access` | A pad of the net has a pending package exit, or the router blames package access |
 | `search_budget` | The detailed search ran out of budget |
 | `no_path` | The detailed search found no path |
 | `other` | A router diagnostic that fits none of the above |

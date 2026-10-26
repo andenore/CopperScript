@@ -6,7 +6,7 @@ nothing is board-specific and nothing relaxes a declared rule.
 - **Pair search escalation.** A coupled pair that exhausts its bounded tier
   (`initial_pair_state_limit`, 6,000) without any candidate continues the
   same search, ports and gates under `critical_pair_state_escalation` times
-  that bound (default 10; the legacy path never escalates). The USB_RX1 pair
+  that bound (default 10). The USB_RX1 pair
   around J_USB needs about 20,000 states and connects on the real critical
   inputs at the default setting in 214 s. A pair that connects within its
   tier never escalates; the result records the bound it ended under.
@@ -1091,13 +1091,13 @@ Snapshot the working `pcbir` sources before an intervention, retaining the
   --output build/performance-research-20261012/isolated-results.json
 ```
 
-`--only macro|construction|placement|maze` isolates a research area. The runner
+`--only macro|construction|placement` isolates a research area. The runner
 loads selected baseline functions against the current unchanged helpers/types,
 so each comparison isolates that intervention. It checks exact return values,
 alternates method order, warms up once, and records five unprofiled samples,
-medians, Python/platform information and source hashes. It also checks 64 maze
-equivalence cases with different grids, congestion, guide-layer projection,
-movable obstacles, forbidden vias and budget exhaustion. This is a developer
+medians, Python/platform information and source hashes. (The maze and grid
+suites measured the removed detailed router and were dropped with it on
+2026-10-26; the results below are historical.) This is a developer
 diagnostic, not a timing threshold or manufacturing qualification.
 
 | Target | Methods tried | Selected method and correctness boundary |
@@ -1271,21 +1271,6 @@ manufacturing signoff claim. Ignored diagnostic reports are in
 `build/package-access-timing-{unpruned,pruned}-20261009.json`.
 
 ## Profiling future runs
-
-Package preflight now negotiates ordinary escape patterns after a bounded
-initial pair-search tier (default 6,000 aggregate expanded states per pair/pass),
-before committing to historical full-budget searches. If incomplete, it retries
-the original pattern at full budget. `--package-initial-pair-states 0` provides
-the comparison/disable mode; `--package-pattern-trials 0` also disables staging.
-Pass these through the generic build wrapper after `--`. Reports include
-`package_access.search_tiers` with all actual probe/revalidation work and the
-selected tier. A limited failure is not evidence that no legal route exists.
-The read-only run summary includes `critical_expanded_states` across completed
-groups, including discarded pattern/probe work, plus tier/fallback details. Do
-not add tier totals to the group totals again. The comparison helper allows the
-staging knob as an explicit intervention, while preserving other budget,
-quality, provenance and uninstrumented-timing checks.
-See [the plan and acceptance criteria](routing-performance.md).
 
 The complete workflow now enables standard-library `cProfile` function profiling
 and streamed phase events by default; no additional dependency is required:

@@ -176,28 +176,6 @@ def test_loop_with_no_failures_records_an_idle_outcome():
     assert free.placement_feedback.trials == () and free.placement_feedback.accepted_moves == 0
 
 
-def test_legacy_router_keeps_the_critical_controller_and_unified_maps_it(monkeypatch):
-    board = _boxed_in_board()
-    calls = []
-    original = flow.improve_critical_placement
-
-    def spy(*args, **kwargs):
-        calls.append(kwargs.get("maximum_trials"))
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(flow, "improve_critical_placement", spy)
-    legacy = _run(board, unified_options=None, critical_feedback_trials=1)
-    assert calls == [1]
-    assert legacy.placement_feedback is None and legacy.critical_feedback is not None
-
-    calls.clear()
-    unified = _run(board, critical_feedback_trials=1)
-    assert calls == []
-    assert unified.critical_feedback is None
-    assert unified.placement_feedback is not None
-    assert unified.placement_feedback.reruns <= 1
-
-
 def test_negative_budget_is_rejected():
     with pytest.raises(ValueError):
         _run(_boxed_in_board(), placement_feedback_trials=-1)

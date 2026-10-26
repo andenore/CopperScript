@@ -14,7 +14,6 @@ from time import perf_counter
 
 from pcbir.backends.kicad_pcb import KiCadPcbBackend
 from pcbir.backends.kicad_project import write_kicad_project
-from pcbir.detailed import DetailedRouterOptions, route_detailed
 from pcbir.drc import run_physical_drc
 from pcbir.physical import (
     BoardCutout, BoardOutline, FootprintLayer, FootprintLine, FootprintPad,
@@ -22,6 +21,7 @@ from pcbir.physical import (
     Placement, Point, Size, nm_from_mm,
 )
 from pcbir.routing import GlobalRouterOptions, route_global
+from pcbir.unified_router import route_unified
 
 
 def build_mechanical_example() -> PhysicalBoard:
@@ -61,8 +61,7 @@ def main(argv: list[str] | None = None) -> int:
                                    GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
     global_seconds = perf_counter() - started
     started = perf_counter()
-    result = profile.runcall(route_detailed, board, global_result,
-                            DetailedRouterOptions(maximum_passes=2))
+    result = profile.runcall(route_unified, board, global_result)
     detailed_seconds = perf_counter() - started
     profile.dump_stats(str(args.output_dir / "routing.prof"))
     report = run_physical_drc(result.board)

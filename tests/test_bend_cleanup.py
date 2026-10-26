@@ -1,12 +1,7 @@
 from dataclasses import replace
 from math import hypot
 
-from pcbir import (
-    BoardOutline, CopperLayer, CopperZone, DetailedRouterOptions, FootprintPad, GlobalRouterOptions,
-    PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, PolygonRing,
-    PolygonWithHoles, Size, TrackSegment, Via, nm_from_mm, route_detailed, route_global,
-    run_physical_drc,
-)
+from pcbir import (BoardOutline, CopperLayer, CopperZone, FootprintPad, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, PolygonRing, PolygonWithHoles, Size, TrackSegment, Via, nm_from_mm, run_physical_drc)
 from pcbir.drc import explicit_copper_connectivity
 from pcbir.geometry import RoundedConvexShape
 from pcbir.route_smoothing import smooth_owned_tracks, turn_score
@@ -122,14 +117,3 @@ def test_straight_and_45_degree_routes_and_zone_nets_are_unchanged():
     assert smooth(zoned, owned) == owned
 
 
-def test_detailed_router_smoothing_option_keeps_connectivity_and_never_lengthens():
-    base = board((3, 3), (17, 9))
-    guides = route_global(base, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    options = DetailedRouterOptions(pitch_nm=nm_from_mm(".5"), maximum_search_states=20_000)
-    plain = route_detailed(base, guides, options)
-    smoothed = route_detailed(base, guides, replace(options, route_smoothing=True))
-    assert smoothed.metrics.unrouted_net_count == plain.metrics.unrouted_net_count == 0
-    assert smoothed.metrics.total_length_nm <= plain.metrics.total_length_nm
-    assert sharp_turns(smoothed.board.tracks) <= sharp_turns(plain.board.tracks)
-    assert clean(base, smoothed.board.tracks) == []
-    assert route_detailed(base, guides, replace(options, route_smoothing=True)).board == smoothed.board

@@ -11,10 +11,8 @@ from __future__ import annotations
 import argparse
 import ast
 from contextlib import contextmanager
-from dataclasses import replace
 from functools import lru_cache
 from hashlib import sha256
-import inspect
 import json
 from pathlib import Path
 import random
@@ -23,14 +21,13 @@ import statistics
 import tempfile
 from time import perf_counter
 
-import pcbir.detailed as detailed
 import pcbir.drc as drc
 import pcbir.hard_macros as macros
 import pcbir.placement as placement
 import pcbir.surface_path as surface
 from pcbir.backends import kicad_pcb as backend
-from pcbir import (BoardOutline, BoardSide, CopperLayer, CopperZone, DetailedRouterOptions,
-                   CopperKeepout, FootprintPad, PadReference, PadShape, PadViaInPadRule,
+from pcbir import (BoardOutline, BoardSide, CopperLayer, CopperZone,
+                   FootprintPad, PadReference, PadShape, PadViaInPadRule,
                    PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, PolygonRing,
                    PolygonWithHoles, Size, Stackup, TrackSegment, Via)
 from pcbir.clusters import footprint_geometry_digest
@@ -209,142 +206,11 @@ def placement_cases(board, old_namespace, baseline_path):
     return results
 
 
-def maze_cases(old_namespace, baseline_path):
-    text = baseline_path.read_text(encoding="utf-8-sig")
-    source = ast.get_source_segment(text, next(n for n in ast.parse(text).body
-        if isinstance(n, ast.FunctionDef) and n.name == "_search_once"))
-    source = source.replace("    serial = 0", "    congestion_cache = {}\n    serial = 0", 1)
-    start = source.index("            congestion = sum(")
-    stop = source.index("            outside =", start)
-    block = source[start:stop]
-    replacement = "            congestion = congestion_cache.get(edge)\n            if congestion is None:\n"
-    replacement += "\n".join("    " + line for line in block.rstrip().splitlines()) + "\n"
-    replacement += "                congestion_cache[edge] = congestion\n"
-    source = source[:start] + replacement + source[stop:]
-    namespace = vars(detailed).copy()
-    exec(compile(source, "<congestion-only-experiment>", "exec"), namespace)
-    # Keep queue ordering and predecessor nodes unchanged; try integer edge
-    # and best-cost keys independently of a much broader graph rewrite.
-    packed = inspect.getsource(detailed._search_once)
-    if "    def node_id(" in packed:
-        start = packed.index("    rows, columns =")
-        stop = packed.index("    serial = 0", start)
-        packed = packed[:start] + packed[stop:]
-        packed = packed.replace('        best[node_id(start), ""] = 0', "        best[state] = 0", 1)
-        packed = packed.replace("        identifier = node_id(node)\n"
-            "        if cost != best.get((identifier, direction)):", "        if cost != best.get(state):", 1)
-        packed = packed.replace("            neighbor_id = node_id(neighbor)\n"
-            "            edge = (identifier, neighbor_id) if identifier < neighbor_id else (neighbor_id, identifier)",
-            "            edge = _edge_key(node, neighbor)", 1)
-        packed = packed.replace("best.get((neighbor_id, next_direction), 1 << 60)", "best.get(candidate, 1 << 60)", 1)
-        packed = packed.replace("            best[neighbor_id, next_direction] = candidate_cost",
-                                "            best[candidate] = candidate_cost", 1)
-    cost_namespace = vars(detailed).copy()
-    exec(compile(packed, "<edge-cost-only-experiment>", "exec"), cost_namespace)
-    packed = packed.replace("    serial = 0", "    rows, columns = len(grid.ys), len(grid.xs)\n"
-        "    def node_id(node):\n"
-        "        return (node.layer_index * columns + node.x_index) * rows + node.y_index\n"
-        "    serial = 0", 1)
-    packed = packed.replace("        best[state] = 0", "        best[node_id(start), \"\"] = 0", 1)
-    packed = packed.replace("        if cost != best.get(state):", "        identifier = node_id(node)\n"
-        "        if cost != best.get((identifier, direction)):", 1)
-    packed = packed.replace("            edge = _edge_key(node, neighbor)",
-        "            neighbor_id = node_id(neighbor)\n"
-        "            edge = (identifier, neighbor_id) if identifier < neighbor_id else (neighbor_id, identifier)", 1)
-    packed = packed.replace("best.get(candidate, 1 << 60)", "best.get((neighbor_id, next_direction), 1 << 60)", 1)
-    packed = packed.replace("            best[candidate] = candidate_cost", "            best[neighbor_id, next_direction] = candidate_cost", 1)
-    packed_namespace = vars(detailed).copy()
-    exec(compile(packed, "<packed-key-experiment>", "exec"), packed_namespace)
-    methods = {"baseline": old_namespace["_search_once"],
-               "congestion-only": namespace["_search_once"], "symmetric-edge-cost": cost_namespace["_search_once"],
-               "edge-cost-and-integer-keys": packed_namespace["_search_once"]}
-    board = PhysicalBoard("maze-fixture", BoardOutline.rectangle(20, 16), {}, (),
-                          (PhysicalNet("S", ()), PhysicalNet("X", ())))
-    wall = TrackSegment("X", Point.mm(10, 2), Point.mm(10, 14), 250000, CopperLayer.FRONT)
-    board = replace(board, tracks=(wall,))
-    from pcbir.routing import GlobalNetRoute, GlobalRouteSegment
-    guide = GlobalNetRoute("S", True, (), (GlobalRouteSegment("S", CopperLayer.FRONT,
-        Point.mm(2, 8), Point.mm(18, 8), 1000000, "guide"),), (), 16000000)
-    results = []
-    for octilinear in (False, True):
-        options = DetailedRouterOptions(pitch_nm=500000, octilinear_search=octilinear,
-                                        layer_preference_cost=10, direction_preference_cost=4)
-        usage = {f"node:F.Cu:{x}:8000000": 1 for x in range(4000000, 8000001, 500000)}
-        history = {f"node:B.Cu:{x}:8000000": 2 for x in range(11000000, 14000001, 500000)}
-        def run(function):
-            # Fresh grid/index each time: no cross-method warmed query caches.
-            grid = detailed._build_grid(board, options, ())
-            start = detailed.DetailedNode(0, grid.xs.index(2000000), grid.ys.index(8000000))
-            target = detailed.DetailedNode(0, grid.xs.index(18000000), grid.ys.index(8000000))
-            return function(grid, {start}, frozenset((target,)), grid.layers, guide, usage, history,
-                RoutingClearanceIndex(board), "S", 250000, options, corridor_only=False,
-                state_budget=30000, guide_margin_nm=500000, allow_movable_conflicts=False,
-                forbidden_via_positions=frozenset())
-        results.append(compare(f"maze-{'octilinear' if octilinear else 'orthogonal'}", {
-            name: lambda f=f: run(f) for name, f in methods.items()}))
-    # Untimed equivalence matrix exercises directional guide transitions,
-    # mutable-obstacle policy, bounded failures, different grids and costs.
-    checks = 0
-    for pitch in (500000, 700000):
-        for mode in range(8):
-            options = DetailedRouterOptions(pitch_nm=pitch, octilinear_search=bool(mode % 2),
-                via_cost=1 + mode, guide_escape_nm=2000000,
-                allow_guide_deviation=mode != 4, layer_preference_cost=mode,
-                direction_preference_cost=mode % 3, bend_cost=mode % 4)
-            def checked(function):
-                bb = replace(board, tracks=()) if mode in (5, 6) else board
-                grid = detailed._build_grid(bb, options, ())
-                start = detailed.DetailedNode(0, 3, 4)
-                target = detailed.DetailedNode(mode % 2, len(grid.xs) - 4, len(grid.ys) - 5)
-                clear = RoutingClearanceIndex(bb)
-                if mode in (5, 6):
-                    clear.add_track(wall)
-                try:
-                    return function(grid, {start}, frozenset((target,)), grid.layers, guide,
-                        usage, history, clear, "S", 250000, options,
-                        corridor_only=mode in (2, 3), state_budget=7 if mode == 7 else 30000,
-                        guide_margin_nm=500000, allow_movable_conflicts=mode == 5,
-                        project_guide_layers=mode in (1, 3),
-                        forbidden_via_positions=frozenset((grid.point(start),)) if mode == 6 else frozenset())
-                except detailed._SearchBudgetExceeded:
-                    return "budget-exceeded"
-            expected = checked(methods["baseline"])
-            for name, function in methods.items():
-                assert checked(function) == expected, (pitch, mode, name)
-                checks += 1
-    print(json.dumps({"maze_equivalence_checks": checks}), flush=True)
-    for result in results:
-        result["equivalence_matrix_checks"] = checks
-    return results
-
-
-
-def grid_cases(old_grid):
-    # Many small reservations on a fine grid, as produced by generic escape
-    # and bypass preparation. Dimensions and names are synthetic.
-    layers = (CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2,
-              CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4, CopperLayer.BACK)
-    keepouts = []
-    for i in range(120):
-        x, y = 2 + (i % 20) * 3, 2 + (i // 20) * 7
-        polygon = PolygonWithHoles(PolygonRing((Point.mm(x, y), Point.mm(x + 1, y),
-            Point.mm(x + 1.5, y + 1), Point.mm(x + 0.5, y + 1))))
-        span = layers if i % 3 == 0 else (layers[i % len(layers)],)
-        keepouts.append(CopperKeepout(f"reservation-{i}", span, polygon))
-    board = PhysicalBoard("grid-window-fixture", BoardOutline.rectangle(80, 60), {}, (), (),
-                          stackup=Stackup(layers), copper_keepouts=tuple(keepouts))
-    xs = tuple(sorted({*range(0, 80000001, 250000), 5012345}))
-    ys = tuple(sorted({*range(0, 60000001, 250000), 7890123}))
-    return [compare("blocked-node-windows", {
-        "baseline": lambda: tuple(sorted(old_grid(board, xs, ys))),
-        "bounded-windows": lambda: tuple(sorted(detailed._blocked_nodes(board, xs, ys))),
-    })]
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline-dir", required=True, type=Path)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--only", choices=("macro", "construction", "placement", "maze", "grid"))
+    parser.add_argument("--only", choices=("macro", "construction", "placement"))
     args = parser.parse_args()
     root = args.baseline_dir / "pcbir"
     old_macro = old_functions(macros, root / "hard_macros.py", ("_validate_macro_via_permissions",))
@@ -352,7 +218,6 @@ def main():
     old_backend = old_functions(backend, root / "backends/kicad_pcb.py",
                                ("_render_library_footprint", "_footprint_lines", "_copper_keepout_lines"))
     old_placement = old_functions(placement, root / "placement.py", ("_lands_meet_macro_copper", "_legal", "_placement_polygon"))
-    old_maze = old_functions(detailed, root / "detailed.py", ("_search_once", "_blocked_nodes"))
     output = {"schema": "copperscript-hotspot-benchmark/v1", "instrumented": False,
               "python": platform.python_version(), "platform": platform.platform(),
               "baseline_hashes": {str(p.relative_to(root)): sha256(p.read_bytes()).hexdigest()
@@ -365,9 +230,7 @@ def main():
         for name, suite in (("macro", lambda: validation_cases(board, old_macro["_validate_macro_via_permissions"])),
             ("construction", lambda: construction_cases(board, old_surface["surface_path"],
                     old_backend["_render_library_footprint"], old_macro["_validate_macro_via_permissions"]),
-            ), ("placement", lambda: placement_cases(board, old_placement, root / "placement.py")),
-            ("maze", lambda: maze_cases(old_maze, root / "detailed.py")),
-            ("grid", lambda: grid_cases(old_maze["_blocked_nodes"]))):
+            ), ("placement", lambda: placement_cases(board, old_placement, root / "placement.py"))):
             if args.only and args.only != name:
                 continue
             output["cases"].extend(suite())

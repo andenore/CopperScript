@@ -93,20 +93,16 @@ The workflow runs on pushes to `claude/**` branches that touch `pcbir/` or
 the benchmark files, so router changes are measured too, and on manual
 dispatch.
 
-## Router choice
+## Comparing runs
 
-`router` in `.github/routing-benchmark.json` names the ordinary router the
-benchmark measures (`legacy` or `unified`, as `route-board --router`). It is
-`unified`, the `route-board` and `pcbir.bench` default since 2026-10-24; a
-manual dispatch may set the `router` input to `legacy` for comparison. The
-committed baseline belongs to the pinned router, so a run of the other router
-fails the lost-board check by design. The current baseline was still recorded
-with `legacy`, so unified runs may fail that check until it is re-recorded
-from a unified run's "Benchmark baseline record" (above). The per-board record
+The benchmark measures the unified router, the only ordinary router since
+2026-10-26. The committed baseline was recorded with the removed legacy
+router, so runs may fail the lost-board check until it is re-recorded from a
+unified run's "Benchmark baseline record" (above). The per-board record
 also carries routable nets and routing seconds. To compare two runs on every recorded measure, save
 both runs' "Benchmark baseline record" annotations (or use two local
 `baseline.json` files) and run
-`python -m pcbir.bench versus FIRST SECOND --names legacy unified`. It reports
+`python -m pcbir.bench versus FIRST SECOND --names before after`. It reports
 clean boards, fully routed boards, net completion, unrouted nets, KiCad errors,
 unconnected items, vias, length and bends on boards clean in both, bends per 100 mm, routing time
 (total, median, slowest) and failed runs, plus per-board better/equal/worse
@@ -119,8 +115,7 @@ counts and the boards clean with only one of the two.
 board in `BOARDS` (`BOARDS/<id>/processed_v9_guide_v3.kicad_pcb` with its
 `.kicad_pro`, the layout of the CI's `bench-boards` artifact: download it
 from any benchmark run). Each board routes in its own process under
-`--board-seconds` (default 1200, as CI) with the unified router; add
-`--router legacy` for the pre-refactor router. `RESULTS` must be new or empty; the
+`--board-seconds` (default 1200, as CI) with the unified router. `RESULTS` must be new or empty; the
 run writes per-board records, `summary.md`, `baseline.json` and `record.txt`.
 `--only` (board ids or number prefixes) and `--limit` select a subset; `--set OPTION=VALUE` (repeatable) overrides a `UnifiedRouterOptions` field of the unified router, so an option is measured before it becomes a default. On
 Windows, KiCad's own interpreter (`KiCad/10.0/bin/python.exe`) imports

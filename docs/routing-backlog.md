@@ -2,9 +2,8 @@
 
 This list tracks remaining algorithm scope, not past board failures. Verify an
 implementation gap against current code and targeted cases before starting it.
-Current contracts are [package access](package-access-first.md),
-[boundary access](package-boundary-access.md), [filled-copper feedback](filled-copper-feedback.md)
-and [placement](placement-internals.md). Board qualification stays in consumers.
+Current contracts are [filled-copper feedback](filled-copper-feedback.md),
+[escape planning](escape-planning.md) and [placement](placement-internals.md). Board qualification stays in consumers.
 
 ## Access and incremental ownership
 
@@ -29,7 +28,7 @@ and [placement](placement-internals.md). Board qualification stays in consumers.
 - [ ] Extend exact same-net crossing preferences from package escapes to ordinary
   area topology while allowing intentional shared trunks and T junctions.
 - [x] Add bounded joint placement selection for mutually blocked decouplers using
-  [parameterized support patterns and complete contact/escape checks](power-area-planning-plan.md#pattern-based-support-placement-research-2026-10-17).
+  parameterized support patterns and complete contact/escape checks.
   Opt-in `--support-pattern-trials` retains fixed intent, complete local
   supply/return witnesses and ordinary reservations. Optimize support/contact
   envelopes, not just component bodies. Native/PDN qualification remains separate.
@@ -64,21 +63,14 @@ and [placement](placement-internals.md). Board qualification stays in consumers.
 
 ## Separate power/ground copper-area planning stage
 
-Implementation sequence, subset trials and promotion gates are specified in the
-[power area planning implementation plan](power-area-planning-plan.md). Start
-with the consumer-owned single-domain baseline before expanding to the FX10 bank
-or launching a new full-board comparison.
+The earlier opt-in stage (joint physical area proposals during placement,
+distribution/contact copper after package-boundary reservation, native continuity
+and explicit-model DC mesh screening) ran only with the legacy router and was
+removed with it on 2026-10-26. A unified-router stage has not been designed yet;
+start with a consumer-owned single-domain baseline before expanding to the FX10
+bank or launching a new full-board comparison.
 
-The opt-in standard pipeline now evaluates joint physical area proposals during
-placement, adds bounded distribution/contact copper after package-boundary
-reservation, and reports native continuity plus explicit-model DC mesh refinement.
-Source/filter provenance, external return boundaries, exact ownership and local
-associations remain separate contracts. Single- and two-domain CopperProbe
-experiments, the USB power-bank partition and ADC supply with retained clock
-copper pass scoped native continuity. Active bank/USB coexistence and full-board promotion remain
-unfinished. See the plan for precise tested scope and remaining gates.
-
-- [x] Add an explicit bounded planning stage that couples placement and routing
+- [ ] Add an explicit bounded planning stage that couples placement and routing
   through proposed power and ground areas. Run initial domain planning after
   coarse placement and before package access/detail routing, and feed infeasible
   pad access and corridor conflicts back to placement.

@@ -25,8 +25,11 @@ from pcbir import (
     nm_from_mm,
     route_critical_nets,
     route_global,
-    TrackSegment, CopperKeepout, PolygonRing, PolygonWithHoles,
-    DetailedRouterOptions, route_detailed, run_physical_drc,
+    TrackSegment,
+    CopperKeepout,
+    PolygonRing,
+    PolygonWithHoles,
+    run_physical_drc,
 )
 from pcbir.critical import (_route_pair, _track_length, _tune_pair, _validate_candidate,
                             _coupled_length)
@@ -510,21 +513,6 @@ def test_joint_search_does_not_invent_copper_behind_a_tapered_port() -> None:
     routed = replace(escaped, tracks=(*escaped.tracks, *candidate[0], *candidate[1]))
     assert not any(f.code in {"DRC-SHORT", "DRC-CLEARANCE", "DRC-OPEN-NET"}
                    for f in run_physical_drc(routed).findings)
-
-
-def test_subset_repair_cannot_reroute_or_prune_a_locked_pair() -> None:
-    board = _pair_board()
-    guides = route_global(board)
-    critical = route_critical_nets(board, guides)
-    assert critical.nets[0].connected
-    repaired = route_detailed(
-        critical.board, guides, DetailedRouterOptions(maximum_passes=1),
-        only_nets=frozenset({"USB_DP", "USB_DM"}),
-        fanout_accesses={PadReference("J1", "1"): Point.mm(6, 12)},
-    )
-    assert repaired.nets == ()
-    assert repaired.board.tracks == critical.locked_tracks
-    assert repaired.board.vias == critical.locked_vias
 
 
 def test_single_ended_critical_net_repairs_stale_guide_with_exact_clearance() -> None:

@@ -98,8 +98,9 @@ def test_slot_is_excluded_from_every_material_routing_and_copper_gate():
 
 @pytest.fixture(scope='module')
 def routed():
-    from pcbir import route_global,GlobalRouterOptions,route_detailed,DetailedRouterOptions
-    b=board();result=route_detailed(b,route_global(b,GlobalRouterOptions(tile_size_nm=2000000)),DetailedRouterOptions(maximum_passes=2))
+    from pcbir import route_global,GlobalRouterOptions
+    from pcbir.unified_router import route_unified
+    b=board();result=route_unified(b,route_global(b,GlobalRouterOptions(tile_size_nm=2000000)))
     assert result.status.value=='success'
     assert not run_physical_drc(result.board).findings
     return result.board

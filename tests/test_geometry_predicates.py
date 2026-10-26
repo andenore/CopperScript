@@ -1,7 +1,6 @@
 """Fraction-free decisions must match the retained exact distance oracle."""
 from fractions import Fraction
 from random import Random
-import sys
 
 import pytest
 
@@ -151,36 +150,3 @@ def test_invalid_distance_thresholds_are_rejected(numerator, denominator):
         geometry.segment_distance_at_least(a, a, a, a, numerator, denominator=denominator)
 
 
-@pytest.mark.parametrize("kind", ("open", "detour", "blocked"))
-def test_selected_routes_and_drc_match_rational_clearance_oracle(monkeypatch, kind):
-    from dataclasses import replace
-    from pcbir import (BoardOutline, CopperKeepout, CopperLayer, DetailedRouterOptions,
-        DetailedRoutingStatus, GlobalRouterOptions, NetRoutingRule, Point, PolygonRing,
-        PolygonWithHoles, nm_from_mm, route_detailed, route_global, run_physical_drc)
-    from test_detailed_routing import _board
-
-    board = _board()
-    if kind != "open":
-        bottom, top = (4, 8) if kind == "detour" else (0, 12)
-        obstacle = CopperKeepout("locked-obstacle", (CopperLayer.FRONT,), PolygonWithHoles(
-            PolygonRing((Point.mm(8, bottom), Point.mm(12, bottom),
-                         Point.mm(12, top), Point.mm(8, top)))))
-        board = replace(board, copper_keepouts=(obstacle,), net_routing_rules=(
-            NetRoutingRule("SIGNAL", allowed_layers=(CopperLayer.FRONT,), max_vias=0),))
-    options = DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"), maximum_passes=1,
-                                    maximum_search_states=3000)
-    guide = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    optimized = route_detailed(board, guide, options)
-    optimized_drc = run_physical_drc(optimized.board)
-    predicate = geometry.shapes_clear
-    with monkeypatch.context() as context:
-        # Replace imported aliases as well as locally imported shape predicates.
-        for module_name, module in tuple(sys.modules.items()):
-            if module_name.startswith("pcbir") and getattr(module, "shapes_clear", None) is predicate:
-                context.setattr(module, "shapes_clear", _shape_oracle)
-        reference = route_detailed(board, guide, options)
-        reference_drc = run_physical_drc(reference.board)
-    assert optimized == reference
-    assert optimized.to_json() == reference.to_json()
-    assert optimized_drc.to_json() == reference_drc.to_json()
-    assert optimized.status is (DetailedRoutingStatus.PARTIAL if kind == "blocked" else DetailedRoutingStatus.SUCCESS)

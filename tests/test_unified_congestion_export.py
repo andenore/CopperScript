@@ -106,13 +106,6 @@ def test_export_off_leaves_no_map_and_identical_copper() -> None:
     assert off == on  # the map is telemetry, not part of the compared result
 
 
-def test_legacy_router_has_no_congestion_map() -> None:
-    from pcbir.detailed import route_detailed
-    board = _board({"A": ((3, 10), (17, 10))})
-    global_route = route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
-    assert route_detailed(board, global_route).congestion is None
-
-
 def test_utilisation_is_finite_without_capacity() -> None:
     congestion = _crossing_route()[0].congestion
     utilisation = congestion.utilisation()

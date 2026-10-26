@@ -148,7 +148,7 @@ def main(argv=None):
         if args.route:
             from pcbir.fanout import FanoutOptions, route_fanout
             from pcbir.routing import GlobalRouterOptions, route_global
-            from pcbir.detailed import DetailedRouterOptions, route_detailed
+            from pcbir.unified_router import route_unified
             print("Planning global guides (5 mm access radius around the battery contact)...", flush=True)
             global_route = profiler.runcall(route_global, board,
                 GlobalRouterOptions(tile_size_nm=nm_from_mm(5), maximum_iterations=6,
@@ -161,9 +161,7 @@ def main(argv=None):
             fanout = profiler.runcall(route_fanout, board, FanoutOptions(maximum_radius_nm=nm_from_mm(5)))
             profiler.dump_stats(args.output_dir / "profile.pstats")
             print(f"Pending package escapes: {len(fanout.pending_pads)}; attempting detailed signals...", flush=True)
-            result = profiler.runcall(route_detailed, fanout.board, global_route,
-                DetailedRouterOptions(maximum_passes=3, constrained_pins_first=True,
-                                      enable_soft_ripup=True, progressive_guides=True),
+            result = profiler.runcall(route_unified, fanout.board, global_route,
                 fanout_accesses=fanout.accesses,
                 fanout_created_vias=frozenset((v.net, v.position) for v in fanout.created_vias),
                 fanout_created_tracks=fanout.created_tracks)

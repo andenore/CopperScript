@@ -6,15 +6,31 @@ import json
 
 import pytest
 
-from pcbir import (BoardOutline, CopperKeepout, CopperLayer, CopperZone, FootprintPad,
-    GlobalRouterOptions, PadReference, PhysicalBoard, PhysicalFootprint,
-    PhysicalNet, Placement, Point, PolygonRing, PolygonWithHoles, Size,
-    Stackup, nm_from_mm, route_global, DetailedRouterOptions,
-    PlacementPlannerOptions, PlacementRoutingFeedbackOptions)
+from pcbir import (
+    BoardOutline,
+    CopperKeepout,
+    CopperLayer,
+    CopperZone,
+    FootprintPad,
+    GlobalRouterOptions,
+    PadReference,
+    PhysicalBoard,
+    PhysicalFootprint,
+    PhysicalNet,
+    Placement,
+    Point,
+    PolygonRing,
+    PolygonWithHoles,
+    Size,
+    Stackup,
+    nm_from_mm,
+    route_global,
+    PlacementPlannerOptions,
+    PlacementRoutingFeedbackOptions,
+)
 from pcbir.drc import run_physical_drc
 from pcbir.fanout import FanoutOptions
 from pcbir.flow import run_routing_pipeline
-from pcbir.package_access import PackageAccessOptions, preflight_package_access
 from pcbir.clusters import footprint_geometry_digest
 from pcbir.hard_macros import bind_hard_macro, materialize_hard_macros, validate_hard_macros
 from pcbir.pad_via_arrays import require_via_in_pad_arrays, via_in_pad_array_vias
@@ -69,32 +85,6 @@ def hard_findings(board):
             and f.code not in {"DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"}]
 
 
-@pytest.mark.parametrize("rotation", (0, 90, 180, 270))
-@pytest.mark.parametrize("renamed", (False, True))
-def test_scarce_plane_access_negotiated_without_board_selectors(rotation, renamed):
-    board = constrained_contact_board(rotation, renamed)
-    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    baseline = preflight_package_access(board, guides, settings(),
-        options=PackageAccessOptions(maximum_pattern_trials=0))
-    if rotation == 0:
-        assert baseline.plane_stitch.pending_pads
-    events = []
-    result = preflight_package_access(board, guides, settings(),
-        on_progress=lambda *event: events.append(event))
-    assert result.ready
-    assert result.source == board
-    assert result.board.placements == board.placements
-    if baseline.pending_pads:
-        assert result.pattern_trials[0].outcome == "accepted"
-        assert result.pattern_trials[0].revalidated
-        assert any(p == "package_pattern_trial" and e == "finished"
-                   and d["outcome"] == "accepted" for p, e, d in events)
-    assert not hard_findings(result.board)
-    assert not result.board.zone_fills
-    assert result.board.metadata["fabrication_ready"] == "false"
-    assert result == preflight_package_access(board, guides, settings())
-
-
 def test_standard_pipeline_preserves_negotiated_contact_through_area_routing():
     board = constrained_contact_board()
     result = run_routing_pipeline(board,
@@ -103,9 +93,7 @@ def test_standard_pipeline_preserves_negotiated_contact_through_area_routing():
             fixed_references=frozenset(p.reference for p in board.placements)),
         feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
         global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
-        fanout_options=settings(), package_access_options=PackageAccessOptions(maximum_trials=0),
-        detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"),
-            maximum_passes=1, defer_zone_nets=True))
+        fanout_options=settings())
     assert result.package_access.ready
     assert result.package_access.pattern_trials[0].outcome == "accepted"
     assert next(n for n in result.detailed.nets if n.net == "CLOCK").connected
@@ -121,13 +109,13 @@ def test_impossible_contact_stops_area_and_preserves_failure_evidence():
     board = replace(board, copper_keepouts=(CopperKeepout("no-contact-via",
         board.stackup.copper_layers, board.zones[0].outline,
         block_tracks=False, block_vias=True, block_zones=False),))
-    result = run_routing_pipeline(board, legacy_gates=True,
+    result = run_routing_pipeline(board,
         placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
             refinement_passes=0, escape_spacing_passes=0,
             fixed_references=frozenset(p.reference for p in board.placements)),
         feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
         global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
-        fanout_options=settings(), package_access_options=PackageAccessOptions(maximum_trials=0))
+        fanout_options=settings())
     assert not result.package_access.ready
     assert result.plane_stitch.pending_pads
     assert result.detailed.metrics.passes == 0
@@ -207,15 +195,13 @@ def with_test_owners(board, tmp_path, *, blocking_macro=False, required_array=Fa
 
 
 def owned_pipeline(board, legacy_gates=False):
-    return run_routing_pipeline(board, legacy_gates=legacy_gates,
+    return run_routing_pipeline(board,
         placement_options=PlacementPlannerOptions(candidate_count=1, analytical_iterations=0,
             refinement_passes=0, escape_spacing_passes=0,
             fixed_references=frozenset(p.reference for p in board.placements)),
         feedback_options=PlacementRoutingFeedbackOptions(maximum_iterations=1),
         global_options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2)),
-        fanout_options=settings(), package_access_options=PackageAccessOptions(maximum_trials=0),
-        detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"),
-            maximum_passes=1, defer_zone_nets=True))
+        fanout_options=settings())
 
 
 @pytest.mark.parametrize("required_array", (False, True))
@@ -283,77 +269,6 @@ def critical_contact_trap(*, renamed=False, maximum_length="12"):
             allowed_layers=(CopperLayer.FRONT,), max_length_nm=nm_from_mm(maximum_length)),))
 
 
-@pytest.mark.parametrize("renamed", (False, True))
-@pytest.mark.parametrize("owned", (False, True))
-def test_joint_pattern_revalidates_critical_ordinary_and_boundary_owners(tmp_path, renamed, owned):
-    board = critical_contact_trap(renamed=renamed)
-    if owned:
-        board = with_test_owners(board, tmp_path, required_array=True)
-    owner = materialize_hard_macros(board)
-    assert not hard_findings(owner)
-    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    first = preflight_package_access(board, guides, settings(),
-        options=PackageAccessOptions(maximum_trials=0, maximum_pattern_trials=1))
-    # The current bounded local critical search admits this fixture in the
-    # first joint pattern; a second ordering trial is no longer necessary.
-    assert first.ready and not first.plane_stitch.pending_pads
-    events = []
-    result = preflight_package_access(board, guides, settings(),
-        options=PackageAccessOptions(maximum_trials=0), on_progress=lambda *e: events.append(e))
-    assert result.ready and result.boundary.native_accepted
-    assert result.pattern_trials[-1].strategy == "critical_and_plane_first"
-    assert result.pattern_trials[-1].outcome == "accepted" and result.pattern_trials[-1].revalidated
-    assert len(result.pattern_trials) == 1
-    # This ordering admits ordinary exits before the final plane stitch. Do
-    # not relabel those exits as a plane-first reservation in the report.
-    assert result.critical.plane_reservation_track_count == 0
-    assert result.critical.plane_reservation_via_count == 0
-    assert result.critical.reserved_track_count == len(result.fanout.created_tracks)
-    assert result.critical.reserved_via_count == len(result.fanout.created_vias)
-    report = json.loads(result.critical.to_json())
-    assert report["plane_reservation_track_count"] == result.critical.plane_reservation_track_count
-    assert report["plane_reservation_via_count"] == 0
-    timing = "TIMING_X" if renamed else "TIMING"
-    rail = "SUPPLY_Z" if renamed else "RAIL"
-    assert all(n.connected for n in result.critical.nets)
-    assert not any(v.net == timing for v in result.board.vias)
-    assert all(t.layer is CopperLayer.FRONT for t in result.board.tracks if t.net == timing)
-    assert all(t.net != rail for t in result.fanout.created_tracks)
-    assert all(v.net != rail for v in result.fanout.created_vias)
-    assert Counter(owner.tracks) <= Counter(result.board.tracks)
-    assert Counter(owner.vias) <= Counter(result.board.vias)
-    arrays = Counter(via_in_pad_array_vias(board))
-    actual = Counter(result.board.vias)
-    assert all(actual[v] == count for v, count in arrays.items())
-    validate_hard_macros(result.board)
-    require_via_in_pad_arrays(result.board, "plane-first all-owner regression")
-    assert result.board.placements == board.placements and result.source == board
-    assert not result.accepted_moves and not hard_findings(result.board)
-    assert any(p == "package_critical_search" and e == "started" and not d["plane_contacts_first"]
-               for p, e, d in events)
-    assert not result.board.zone_fills and result.board.metadata["fabrication_ready"] == "false"
-
-
-@pytest.mark.parametrize("renamed", (False, True))
-def test_plane_first_cannot_trade_a_successful_critical_route_for_plane_access(renamed):
-    # Seven millimetres allows only the direct critical path. Reserving the
-    # contact would require a longer detour; never relax the declared limit.
-    board = critical_contact_trap(renamed=renamed, maximum_length="7")
-    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    first = preflight_package_access(board, guides, settings(),
-        options=PackageAccessOptions(maximum_trials=0, maximum_pattern_trials=1))
-    assert not first.ready and not first.failed_critical_nets
-    result = preflight_package_access(board, guides, settings(),
-        options=PackageAccessOptions(maximum_trials=0))
-    assert not result.ready and not result.failed_critical_nets
-    assert result.pattern_trials[-1].strategy == "plane_first"
-    assert result.pattern_trials[-1].outcome != "accepted" and result.pattern_trials[-1].revalidated
-    assert result.board == first.board and result.critical == first.critical
-    assert result.fanout == first.fanout and result.plane_stitch == first.plane_stitch
-    assert not result.critical.plane_reservation_via_count
-    assert result.source == board and not hard_findings(result.board)
-
-
 def test_pipeline_preserves_plane_first_ownership_through_area_routing():
     board = critical_contact_trap()
     result = owned_pipeline(board)
@@ -363,21 +278,6 @@ def test_pipeline_preserves_plane_first_ownership_through_area_routing():
     early = tuple(v for v in result.package_access.board.vias if v.net == "RAIL")
     assert early and all(v in result.board.vias for v in early)
     assert not hard_findings(result.board)
-
-
-def test_critical_only_feedback_refuses_to_relabel_plane_reservations():
-    from pcbir.critical import route_critical_nets
-    from pcbir.critical_feedback import improve_critical_placement
-    from pcbir.plane import PlaneStitchOptions
-    board = critical_contact_trap()
-    guides = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    critical = route_critical_nets(board, guides, plane_stitch_options=PlaneStitchOptions())
-    assert critical.plane_reservation_via_count and not critical.reserved_via_count
-    with pytest.raises(ValueError, match="package-access controller"):
-        improve_critical_placement(board, guides, critical, maximum_trials=0)
-    with pytest.raises(ValueError, match="guides are stale"):
-        route_critical_nets(board, replace(guides, placement_fingerprint="stale"),
-                            plane_stitch_options=PlaneStitchOptions())
 
 
 def test_early_plane_contacts_preserve_specialized_coupled_pair_routing():

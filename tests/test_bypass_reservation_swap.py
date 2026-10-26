@@ -172,7 +172,7 @@ def test_the_late_pass_uses_the_stage_launch_options_and_reports_the_links(monke
     for given, connected, pending in ((launch, ["CAP.1->U.1"], []), (None, [], [
             {"link": "CAP.1->U.1", "reason": "bounded surface candidates blocked"}])):
         events, observe = _events()
-        completed, _ = _complete_critical_stage(critical, None, None, False, access=None, unified_options=options,
+        completed, _ = _complete_critical_stage(critical, None, None, False, unified_options=options,
                                                 plane_stitch_options=None, on_progress=observe,
                                                 fanout_options=given)
         finished = next(d for p, e, d in events if (p, e) == ("bypass_completion", "finished"))

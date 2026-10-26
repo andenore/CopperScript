@@ -96,7 +96,7 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None, only_links=N
     from .hard_macros import macro_owned_pads
     from .routing_layers import routing_layers
     from .route_quality import escape_paths_cross
-    from .package_access import _verified_bypass_links
+    from .bypass_links import verified_bypass_links
     from .decoupling_paths import (_budget_reason, verify_crosslayer_decoupling,
                                   refresh_crosslayer_witnesses)
     poses = {p.reference: p for p in board.placements}
@@ -106,12 +106,12 @@ def route_decouplers(board, *, only_nets=None, fanout_options=None, only_links=N
     tracks, vias, successful, pending, witnesses, accesses = [], [], set(), [], [], {}
     admitted_witnesses = []
     all_bypass_nets = {link.net for link in board.decoupling_links}
-    verified = _verified_bypass_links(board, all_bypass_nets)
+    verified = verified_bypass_links(board, all_bypass_nets)
     def admission(candidate, link):
         reason = _budget_reason(candidate, link.net)
         if reason:
             return None, reason
-        current = _verified_bypass_links(candidate, all_bypass_nets)
+        current = verified_bypass_links(candidate, all_bypass_nets)
         if not (verified | {link}) <= current:
             return None, "would_lose_verified_bypass_association"
         if admitted_witnesses and refresh_crosslayer_witnesses(candidate,tuple(admitted_witnesses))[1]:
@@ -253,7 +253,7 @@ def improve_decoupling_placement(board, placements, options, *, progress=None):
     from .hard_macros import materialize_hard_macros, macro_owned_pads
     from .routing_clearance import RoutingClearanceIndex
     from .routing_layers import routing_layers
-    from .package_access import _verified_bypass_links
+    from .bypass_links import verified_bypass_links
     from .pad_via_arrays import array_rules
     from .decoupling_paths import propose_crosslayer_decoupling
     from .drc import DrcSeverity, run_physical_drc
@@ -283,7 +283,7 @@ def improve_decoupling_placement(board, placements, options, *, progress=None):
     reservation = route_decouplers(frame, **({"progress": progress} if progress else {}))
     baseline_nets = {link.net for link in board.decoupling_links}
     witnesses, via_witnesses = {}, {}
-    verified = _verified_bypass_links(reservation.board, baseline_nets,
+    verified = verified_bypass_links(reservation.board, baseline_nets,
                                      witness_paths=witnesses, witness_vias=via_witnesses)
     baseline_verified = verified
     pending_links = {link for link, _ in reservation.pending}
@@ -398,7 +398,7 @@ def improve_decoupling_placement(board, placements, options, *, progress=None):
                 created_vias = ()
                 trial = replace(scratch, tracks=(*scratch.tracks, *created))
             trial_witnesses, trial_via_witnesses = {}, {}
-            trial_verified = _verified_bypass_links(trial, baseline_nets,
+            trial_verified = verified_bypass_links(trial, baseline_nets,
                                                     witness_paths=trial_witnesses,
                                                     witness_vias=trial_via_witnesses)
             if not (verified | {link}) <= trial_verified:
@@ -449,7 +449,7 @@ def improve_decoupling_placement(board, placements, options, *, progress=None):
             progress("decoupler_regenerate")
         regenerated = route_decouplers(materialize_hard_macros(replace(board,
             placements=tuple(poses.values()))), **({"progress": progress} if progress else {}))
-        if not (baseline_verified | verified) <= _verified_bypass_links(regenerated.board, baseline_nets):
+        if not (baseline_verified | verified) <= verified_bypass_links(regenerated.board, baseline_nets):
             return dict(placements), 0
         regenerated_hard = {finding.fingerprint for finding in run_physical_drc(regenerated.board).findings
                             if finding.severity is DrcSeverity.ERROR

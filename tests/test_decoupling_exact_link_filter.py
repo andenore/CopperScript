@@ -2,7 +2,7 @@
 from dataclasses import replace
 import pytest
 from pcbir.decoupling import route_decouplers
-from pcbir.package_access import _verified_bypass_links
+from pcbir.bypass_links import verified_bypass_links as _verified_bypass_links
 from pcbir.physical import PadReference, Point
 from surface_bypass_fixture import build
 

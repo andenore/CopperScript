@@ -31,18 +31,13 @@ from .physicalize import (
     resolved_physicalize,
 )
 from .physical import PadReference, nm_from_mm
-from .detailed import DetailedRouterOptions
 from .drc import DrcDecision, run_physical_drc
 from .route_summary import connection_summary
 from .flow import PhysicalFlowStatus, run_routing_pipeline
 from .fanout import FanoutOptions
-from .package_access import PackageAccessOptions
-from .boundary_access import BoundaryAccessOptions
-from .escape_feedback import EscapeFeedbackOptions, improve_zone_escapes
 from .pad_stitch import DuplicatePadStitchResult, stitch_duplicate_pads
 from .pad_via_arrays import via_in_pad_array_report
 from .plane import PlaneStitchOptions, stitch_zone_pads
-from .plane_verify import verify_filled_planes
 from .filled_feedback import FilledCopperFeedbackOptions, improve_filled_copper
 from .route_closure import reconcile_zone_lands, routing_complete_with_fill
 from .routing import GlobalRouterOptions, GlobalRoutingStatus
@@ -242,11 +237,9 @@ def _run_replay_critical(args: argparse.Namespace) -> int:
     from .state_codec import StateError
     started = perf_counter()
     try:
-        from .unified_router import UnifiedRouterOptions
-        clock_options = UnifiedRouterOptions() if args.clock_router == "unified" else None
         input_digest = sha256(args.state.read_bytes()).hexdigest()
         result = replay_critical(args.state, only_nets=frozenset(args.only) if args.only else None,
-                                 pair_state_limit=args.pair_states, unified_options=clock_options)
+                                 pair_state_limit=args.pair_states)
         if sha256(args.state.read_bytes()).hexdigest() != input_digest:
             raise ValueError("replay input changed during the diagnostic")
     except (StateError, OSError, ValueError) as exc:
@@ -256,7 +249,7 @@ def _run_replay_critical(args: argparse.Namespace) -> int:
     document = {"schema": "copperscript-critical-replay/v1", "status": result.status.value,
         "scope": "bounded saved-input diagnostic; no current-source, full-board or native acceptance",
         "fabrication_ready": False, "qualified_release": False, "native_verification": "not_run", "state": str(args.state),
-        "state_sha256": input_digest, "only_nets": args.only, "clock_router": args.clock_router,
+        "state_sha256": input_digest, "only_nets": args.only,
         "pair_state_limit": args.pair_states, "seconds": round(perf_counter() - started, 1),
         "critical": json.loads(result.to_json()), "drc": json.loads(drc.to_json()),
         "summary": connection_summary(result.board, drc)}
@@ -644,8 +637,6 @@ def _parser() -> argparse.ArgumentParser:
         help="attempt complete critical groups containing this net; all source rules/copper remain")
     critical_replay.add_argument("--pair-states", type=_nonnegative_int, default=6000,
         help="aggregate state bound per coupled pair (default: 6000)")
-    critical_replay.add_argument("--clock-router", choices=("legacy", "unified"), default="unified",
-        help="clock and general critical fallback backend; differential groups retain their coupled engine")
     critical_replay.add_argument("--report", type=Path)
     critical_replay.add_argument("-o", "--output", type=Path, help="diagnostic KiCad board for copper view")
     from .design_query import QUERY_KINDS
@@ -843,12 +834,6 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--report", type=Path, help="physical routing and DRC report JSON")
     board_route_parser.add_argument("--routing-profile", choices=("quick", "balanced", "thorough"),
         help="bounded generic work profile; explicit numerical CLI options override the profile")
-    board_route_parser.add_argument("--plan-power-areas", action="store_true",
-        help="evaluate bounded distribution areas during placement and after package access")
-    board_route_parser.add_argument("--power-area-net", action="append", default=[],
-        help="restrict power area planning to this net; repeat for joint allocation")
-    board_route_parser.add_argument("--power-area-config", type=Path,
-        help="exact material/load models, protected corridors and bounded planner settings JSON")
     board_route_parser.add_argument("--no-check", action="store_true", help="attempt routing despite ERC errors")
     board_route_parser.add_argument("--footprint-root", action="append", default=[], type=Path)
     board_route_parser.add_argument("--allow-proxy-footprints", action="store_true")
@@ -901,42 +886,21 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--router-iterations", type=int, default=5)
     board_route_parser.add_argument("--feedback-iterations", type=int, default=1)
     board_route_parser.add_argument("--critical-feedback-trials", type=int, default=0,
-                                    help="bounded critical placement trials; with --fanout adds budget to the package-access "
-                                         "controller (--router legacy); the unified router maps it onto "
-                                         "--congestion-feedback-trials")
+                                    help="adds to the congestion-driven placement feedback budget "
+                                         "(see --congestion-feedback-trials)")
     board_route_parser.add_argument("--pitch-mm", default="1")
-    board_route_parser.add_argument("--passes", type=int, default=1)
-    board_route_parser.add_argument("--search-budget", type=int, default=50_000)
-    board_route_parser.add_argument("--minimum-repair-pitch-mm", type=_positive_mm, default="0.1",
-        help="resolution floor for up to four failed-net-only no-path refinement rounds (default: 0.1 mm)")
     board_route_parser.add_argument("--debug", action="store_true",
         help="print the full traceback of an error before its one-line summary")
     board_route_parser.add_argument("--progress", action="store_true",
         help="stream elapsed phase/group/trial events; telemetry is not completion or signoff evidence")
     board_route_parser.add_argument(
-        "--heuristic-weight", type=int, default=100,
-        help="A* heuristic weight in percent (100=shortest-search baseline, up to 300)",
-    )
-    board_route_parser.add_argument(
-        "--soft-ripup", action="store_true",
-        help="try slower tentative routes through removable copper, then reroute blockers",
-    )
-    board_route_parser.add_argument(
         "--maximum-ripup-blockers", type=int, default=4,
         help="maximum ordinary nets displaced in one transactional repair (1..8)",
     )
     board_route_parser.add_argument(
-        "--search-reuse-entries", type=_nonnegative_int, default=128,
-        help="per-run bound on exactly repeated detailed repair searches answered from memory; "
-             "routed copper is unchanged (default: 128; 0 disables)",
-    )
-    board_route_parser.add_argument(
         "--fanout", action=argparse.BooleanOptionalAction, default=True,
-        help="reserve and negotiate package exits and plane access before area routing (default; --no-fanout opts out)",
+        help="seed package pad escapes before routing (default; --no-fanout opts out)",
     )
-    board_route_parser.add_argument("--router", choices=("legacy", "unified"), default="unified",
-        help="ordinary detailed router: the unified negotiated router (default) or the pre-refactor "
-             "pass-based legacy pipeline")
     board_route_parser.add_argument("--escape-plan", action=argparse.BooleanOptionalAction, default=False,
         help="plan crossing bundles between two parts (layer per net, route order) and give the plan "
              "to escape generation and the router (docs/escape-planning.md)")
@@ -969,7 +933,7 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--unified-save-inputs", type=Path, default=None, metavar="STATE",
         help="unified router: save its inputs as a state file for replay_unified")
     board_route_parser.add_argument("--unified-direct", action="store_true",
-        help="unified router: negotiate all nets from source-fixed copper without legacy critical or bypass routing")
+        help="unified router: negotiate all nets from source-fixed copper without critical or bypass routing")
     board_route_parser.add_argument("--unified-set", action="append", default=[], metavar="OPTION=VALUE",
         help="unified router: set any UnifiedRouterOptions field (JSON value, else text; repeatable), "
              "e.g. --unified-set buses_first=true")
@@ -980,24 +944,9 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--power-islands", default="off", metavar="auto|off|LAYER",
         help="unified router: carve islands for decoupled supply rails out of a spare plane layer "
              "(auto picks the outermost layer of a net with two plane layers)")
-    board_route_parser.add_argument("--legacy-gates", action="store_true",
-        help="stop before ordinary routing when package access or power preparation is incomplete (pre-refactor behaviour)")
-    board_route_parser.add_argument("--package-access-trials", type=int, default=8,
-        help="bounded whole-unit placement trials for failed package access with --fanout (default: 8; 0 disables moves, not the gate)")
-    board_route_parser.add_argument("--package-placement-probes", type=_nonnegative_int, default=16,
-        help="total disposable local-access probes for ranking placement repair (default: 16; 0 retains move order; full preflight still required)")
-    board_route_parser.add_argument("--package-pattern-trials", type=int, choices=range(3), default=2,
-        help="alternate ordinary/critical/plane escape patterns before placement repair (default: up to 2; 0 disables negotiation)")
-    board_route_parser.add_argument("--package-partial-owner-nets", type=int, choices=range(9), default=8,
-        help="maximum intersecting ordinary escape nets rebuilt in a partial-owner pattern (default: 8; 0 disables; shares pattern trial budget)")
     board_route_parser.add_argument("--package-initial-pair-states", type=_nonnegative_int, default=6000,
-        help="initial aggregate pair-search state cap with --fanout (default: 6000; 0 disables staged search; full-budget fallback if incomplete)")
-    board_route_parser.add_argument("--package-full-pair-states", type=_nonnegative_int, default=0,
-        help="aggregate state cap per pair in the full package tier, including fallback (default: 0 retains historical per-search bounds)")
-    board_route_parser.add_argument("--package-boundary-step-mm", type=_positive_mm, default="0.5",
-        help="coarse boundary-port sampling with --fanout (default: 0.5 mm, locally refined to 0.1 mm)")
-    board_route_parser.add_argument("--package-destination-ports", action="store_true",
-        help="opt-in: prefer boundary ports facing each escaped pin's nearest other-component terminal")
+        help="per-pair search state cap of the critical stage (default: 6000; 0: no cap); "
+             "--unified-pair-states takes precedence")
     board_route_parser.add_argument("--fanout-step-mm", type=_positive_mm, default="0.5",
         help="coarse package escape candidate step (default: 0.5 mm)")
     board_route_parser.add_argument("--fanout-maze", action="store_true",
@@ -1006,34 +955,19 @@ def _parser() -> argparse.ArgumentParser:
         help="opt-in extra obstacle-boundary via-site proposals per physical land (default: 0)")
     board_route_parser.add_argument("--fanout-refinement-step-mm", type=_positive_mm, default="0.1",
         help="adaptive step for empty/conflicting escape domains; <= coarse step (default: 0.1 mm)")
-    board_route_parser.add_argument("--package-access-movement-mm", type=_positive_mm, default="0.5",
-        help="initial package-access placement repair distance (default: 0.5 mm)")
     board_route_parser.add_argument(
         "--detailed-feedback-trials", type=int, default=0,
-        help="bounded legal placement retries guided by detailed-route failures (--router legacy); "
-             "the unified router maps it onto --congestion-feedback-trials",
+        help="adds to the congestion-driven placement feedback budget (see --congestion-feedback-trials)",
     )
     board_route_parser.add_argument(
         "--congestion-feedback-trials", type=_nonnegative_int, default=4,
-        help="unified router: congestion-driven placement feedback, at most this many full reruns of the "
+        help="congestion-driven placement feedback, at most this many full reruns of the "
              "pipeline tail; the budget is max(N, --detailed-feedback-trials + --critical-feedback-trials) "
              "(default: 4; 0 disables; costs nothing when every net routes)",
     )
     board_route_parser.add_argument(
-        "--zone-escape-trials", type=int, default=4,
-        help="bounded placement trials for late-failing plane pads; unsupported incremental repairs use full reroutes (default: 4)",
-    )
-    board_route_parser.add_argument(
-        "--zone-local-ripup-trials", type=int, default=6,
-        help="bounded blocker-aware local pad-escape reroutes before placement feedback (default: 6)",
-    )
-    board_route_parser.add_argument(
         "--zone-dependency-expansions", type=int, choices=range(9), default=2,
         help="extra bounded local blocker-cone rounds; 0 disables dependency expansion (default: 2)",
-    )
-    board_route_parser.add_argument(
-        "--no-incremental-placement-repair", action="store_true",
-        help="use full-pipeline placement trials instead of bounded incremental repairs",
     )
     board_route_parser.add_argument(
         "--layer-preference-cost", type=int, default=4,
@@ -1052,41 +986,8 @@ def _parser() -> argparse.ArgumentParser:
         help="soft per-mm layer-assignment cost of a full global edge at --pitch-mm lanes (default: 0)",
     )
     board_route_parser.add_argument(
-        "--guide-escape-mm", default="0", type=_nonnegative_mm,
-        help="opt-in corridor radius around fixed-layer terminals that may change to the guide layer (default: 0, off)",
-    )
-    board_route_parser.add_argument(
         "--no-route-smoothing", action="store_true",
-        help="keep accepted ordinary copper instead of straightening removable bends and detours "
-             "(either router)",
-    )
-    board_route_parser.add_argument(
-        "--no-escape-terminals", action="store_true",
-        help="route escaped package pins only from their reserved boundary port and keep all escape copper",
-    )
-    board_route_parser.add_argument(
-        "--zone-escape-movement-mm", default="0.5", type=_positive_mm,
-        help="local placement step for plane-pad escape feedback (default: 0.5 mm)",
-    )
-    board_route_parser.add_argument(
-        "--constrained-pins-first", action="store_true",
-        help="connect multi-terminal pads with fewer legal accesses first",
-    )
-    board_route_parser.add_argument(
-        "--progressive-guides", action="store_true",
-        help="retry maze search in gradually wider guide corridors",
-    )
-    board_route_parser.add_argument(
-        "--guide-distance-heuristic", action="store_true",
-        help="add the unavoidable guide-deviation cost to the maze search lower bound",
-    )
-    board_route_parser.add_argument(
-        "--repair-budget-multiplier", type=int, default=1,
-        help="multiply the search limit only when retrying nets left open after all passes",
-    )
-    board_route_parser.add_argument(
-        "--defer-zone-nets", action="store_true",
-        help="explicitly request the default plane-first treatment of declared zone nets",
+        help="keep accepted ordinary copper instead of straightening removable bends and detours",
     )
     board_route_parser.add_argument(
         "--stitch-zone-pads", action="store_true",
@@ -1134,7 +1035,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument(
         "--early-plane-stitch", action=argparse.BooleanOptionalAction, default=True,
-        help="reserve and negotiate plane contacts during package preflight (default; --no-early-plane-stitch opts out)",
+        help="give the critical stage return-plane contacts (default; --no-early-plane-stitch opts out)",
     )
     board_route_parser.add_argument(
         "--ground-via-in-pad", action="store_true",
@@ -1157,10 +1058,14 @@ def _parser() -> argparse.ArgumentParser:
     from .flow import STOP_STAGES
     board_route_parser.add_argument("--stop-after", choices=STOP_STAGES,
         help="end the run at this stage boundary and write the report (status fail, stopped_after set); "
-             "skips zone-escape, filled-copper and final native verification; package-* stops need fanout "
-             "(on unless --no-fanout)")
+             "skips filled-copper and final native verification")
+    for flag, arity in _REMOVED_ROUTE_BOARD_FLAGS.items():
+        # Accepted, hidden and ignored (reported as ignored_flags), so command
+        # lines written for the removed legacy router still run.
+        board_route_parser.add_argument(flag, dest=_removed_dest(flag), help=argparse.SUPPRESS,
+                                        **({"action": "store_true"} if arity == 0 else {"default": None}))
     board_route_parser.add_argument("--checkpoint-dir", type=Path,
-        help="write a reusable placement checkpoint and diagnostic package-stage states here")
+        help="write a reusable placement checkpoint and critical-stage input states here")
     board_route_parser.add_argument("--reuse-placement", type=Path,
         help="start from a placement checkpoint; refused when the physical board or placement/global/"
              "feedback options differ; a compiler code change is allowed and recorded in the report")
@@ -1220,23 +1125,18 @@ def _apply_routing_profile(args, argv):
     if args.command != "route-board" or args.routing_profile is None:
         return
     profiles = {
-        "quick": (1, 10000, 2, 4, 2, 2000, 4),
-        "balanced": (2, 30000, 8, 16, 8, 4000, 16),
-        "thorough": (4, 100000, 16, 32, 16, 12000, 64),
+        "quick": (2, 2000, 4),
+        "balanced": (8, 4000, 16),
+        "thorough": (16, 12000, 64),
     }
     flags = {item.split("=", 1)[0] for item in argv if item.startswith("--")}
-    names = ("passes", "search_budget", "package_access_trials", "package_placement_probes",
-             "filled_copper_trials", "filled_copper_search_states", "decoupling_placement_trials")
+    names = ("filled_copper_trials", "filled_copper_search_states", "decoupling_placement_trials")
     for name, value in zip(names, profiles[args.routing_profile], strict=True):
         if "--" + name.replace("_", "-") not in flags:
             setattr(args, name, value)
 
 
 def _unified_options(args):
-    if getattr(args, "router", "unified") != "unified":
-        if getattr(args, "unified_direct", False):
-            raise ValueError("--unified-direct requires --router unified")
-        return None
     from .bench import unified_overrides
     from .unified_router import UnifiedRouterOptions
     # Absent attributes (a namespace not built by the route-board parser) keep
@@ -1262,67 +1162,81 @@ def _unified_options(args):
     return UnifiedRouterOptions(**options)
 
 
-# route-board options read only by DetailedRouterOptions. With the unified router
-# (the default) the pipeline discards that object (flow._route_unified_compat), so they have
-# no effect. --pitch-mm also sets the global local-demand lane pitch, which is
-# read only with --local-demand-cost > 0.
-_LEGACY_ORDINARY_ROUTER_FLAGS = (
-    "pitch_mm", "passes", "search_budget", "minimum_repair_pitch_mm", "heuristic_weight",
-    "soft_ripup", "constrained_pins_first", "progressive_guides", "guide_distance_heuristic",
-    "repair_budget_multiplier", "search_reuse_entries", "guide_escape_mm", "no_escape_terminals",
-)
-# route-board options of stages the unified pipeline skips: package-access
-# search (and its --legacy-gates stop), power preparation/area planning and the
-# late zone-escape repair (improve_zone_escapes).
-_UNIFIED_SKIPPED_STAGE_FLAGS = (
-    "package_access_trials", "package_placement_probes", "package_pattern_trials",
-    "package_partial_owner_nets", "package_initial_pair_states", "package_boundary_step_mm",
-    "package_destination_ports", "package_access_movement_mm", "legacy_gates",
-    "plan_power_areas", "power_area_net", "power_area_config",
-    "zone_escape_trials", "zone_local_ripup_trials", "zone_escape_movement_mm",
-    "no_incremental_placement_repair",
-)
+# route-board options of the removed legacy router and of its stages (package
+# access search, power preparation, late zone-escape repair), with their
+# arity (0: a switch). The parser still accepts them, hidden, so existing
+# command lines run; they have no effect and are reported as ignored.
+_REMOVED_ROUTE_BOARD_FLAGS = {
+    "--plan-power-areas": 0,
+    "--power-area-net": 1,
+    "--power-area-config": 1,
+    "--passes": 1,
+    "--search-budget": 1,
+    "--minimum-repair-pitch-mm": 1,
+    "--heuristic-weight": 1,
+    "--soft-ripup": 0,
+    "--search-reuse-entries": 1,
+    "--router": 1,
+    "--legacy-gates": 0,
+    "--package-access-trials": 1,
+    "--package-placement-probes": 1,
+    "--package-pattern-trials": 1,
+    "--package-partial-owner-nets": 1,
+    "--package-full-pair-states": 1,
+    "--package-boundary-step-mm": 1,
+    "--package-destination-ports": 0,
+    "--package-access-movement-mm": 1,
+    "--zone-escape-trials": 1,
+    "--zone-local-ripup-trials": 1,
+    "--no-incremental-placement-repair": 0,
+    "--guide-escape-mm": 1,
+    "--no-escape-terminals": 0,
+    "--zone-escape-movement-mm": 1,
+    "--constrained-pins-first": 0,
+    "--progressive-guides": 0,
+    "--guide-distance-heuristic": 0,
+    "--repair-budget-multiplier": 1,
+    "--defer-zone-nets": 0,
+}
 
 
-# route-board placement-feedback flags whose budget the unified router spends
-# on its congestion-driven loop (run_placement_feedback) instead.
+def _removed_dest(flag: str) -> str:
+    return "removed_" + flag[2:].replace("-", "_")
+
+
+# Placement-feedback flags whose budget the congestion-driven loop
+# (run_placement_feedback) spends.
 _UNIFIED_MAPPED_FLAGS = ("detailed_feedback_trials", "critical_feedback_trials")
 
 
-def _unified_flag_notes(args) -> dict[str, list[str]] | None:
-    """Name route-board flags that a unified-router run (the default) does not apply.
+def _unified_flag_notes(args) -> dict[str, list[str]]:
+    """Name route-board flags this run does not apply, and flags it maps.
 
-    A flag counts as given when its value differs from the parser default
-    (a --routing-profile value counts too). Skipped-stage flags are listed only
-    when they would enable work (non-zero, true or non-empty). Advisory only:
-    routing is unchanged.
+    ``ignored_flags`` lists given removed flags, and ``--pitch-mm`` when no
+    ``--local-demand-cost`` reads it. ``mapped_flags`` lists non-zero
+    placement-feedback flags the congestion loop's budget includes.
+    Advisory only: routing is unchanged.
     """
-    if getattr(args, "router", "unified") != "unified":
-        return None
     defaults = _parser().parse_args(["route-board", str(getattr(args, "board", "board.copper"))])
     def given(name):
         # An absent attribute was not given on this command line.
         return getattr(args, name, getattr(defaults, name)) != getattr(defaults, name)
-    def flag(name):
-        return "--" + name.replace("_", "-")
-    ignored = [flag(name) for name in _LEGACY_ORDINARY_ROUTER_FLAGS if given(name)
-               and not (name == "pitch_mm" and getattr(args, "local_demand_cost", 0) > 0)]
-    skipped = [flag(name) for name in _UNIFIED_SKIPPED_STAGE_FLAGS
-               if given(name) and getattr(args, name)]
-    # The legacy placement controllers' budgets become the congestion loop's.
-    mapped = [flag(name) for name in _UNIFIED_MAPPED_FLAGS if given(name) and getattr(args, name)]
-    return {"ignored_flags": ignored, "skipped_stage_flags": skipped, "mapped_flags": mapped}
+    ignored = [flag for flag in _REMOVED_ROUTE_BOARD_FLAGS
+               if getattr(args, _removed_dest(flag), None) not in (None, False)]
+    if given("pitch_mm") and getattr(args, "local_demand_cost", 0) <= 0:
+        ignored.insert(0, "--pitch-mm")
+    mapped = ["--" + name.replace("_", "-") for name in _UNIFIED_MAPPED_FLAGS
+              if given(name) and getattr(args, name)]
+    return {"ignored_flags": ignored, "mapped_flags": mapped}
 
 
-def _fine_region_report(args, board) -> dict | None:
-    """The unified router's fine-patch plan for the final placement (None on the legacy router).
+def _fine_region_report(args, board) -> dict:
+    """The unified router's fine-patch plan for the final placement.
 
     The plan is a pure function of the outline, stackup, footprints and
     placements, so it is the one the last unified run built its lattice from.
     """
     options = _unified_options(args)
-    if options is None:
-        return None
     from .unified_router import fine_region_plan
     plan = fine_region_plan(board, options)
     if plan is None:
@@ -1331,9 +1245,7 @@ def _fine_region_report(args, board) -> dict | None:
 
 
 def _congestion_feedback_budget(args) -> int:
-    """Trials of the unified congestion-driven placement loop (0 on the legacy router)."""
-    if getattr(args, "router", "unified") != "unified":
-        return 0
+    """Trials of the congestion-driven placement loop."""
     return max(getattr(args, "congestion_feedback_trials", 0),
                getattr(args, "detailed_feedback_trials", 0) + getattr(args, "critical_feedback_trials", 0))
 
@@ -1771,10 +1683,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     physical_board = apply_hard_macro_scene(physical_board, scene,
                         locked=args.locked, offline=args.offline)
                 editor_source_board = physical_board
-                direct_unified = args.router == "unified" and args.unified_direct
+                direct_unified = args.unified_direct
                 if direct_unified:
-                    # Native verification is read-only here. Re-entry must use
-                    # unified negotiation, never the legacy bridge controller.
+                    # Native verification is read-only here: no filled-copper re-entry.
                     args.filled_copper_trials = 0
                 stitch_enabled = args.stitch_zone_pads or bool(physical_board.zones)
                 early_pads: set[PadReference] = set()
@@ -1861,25 +1772,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     initial_movement_nm=router_options.tile_size_nm,
                     preferred_candidate_id=args.placement_candidate,
                 )
-                detailed_options = DetailedRouterOptions(
-                    pitch_nm=nm_from_mm(args.pitch_mm), maximum_passes=args.passes,
-                    maximum_search_states=args.search_budget,
-                    minimum_repair_pitch_nm=nm_from_mm(args.minimum_repair_pitch_mm),
-                    heuristic_weight_percent=args.heuristic_weight,
-                    enable_soft_ripup=args.soft_ripup,
-                    constrained_pins_first=args.constrained_pins_first,
-                    progressive_guides=args.progressive_guides,
-                    guide_distance_heuristic=args.guide_distance_heuristic,
-                    repair_budget_multiplier=args.repair_budget_multiplier,
-                    defer_zone_nets=bool(physical_board.zones) or args.defer_zone_nets,
-                    maximum_ripup_blockers=args.maximum_ripup_blockers,
-                    search_reuse_entries=args.search_reuse_entries,
-                    layer_preference_cost=args.layer_preference_cost,
-                    direction_preference_cost=args.direction_preference_cost,
-                    guide_escape_nm=nm_from_mm(args.guide_escape_mm),
-                    route_smoothing=not args.no_route_smoothing,
-                    escape_terminals=not args.no_escape_terminals,
-                )
                 fanout_options = FanoutOptions(
                     step_nm=nm_from_mm(args.fanout_step_mm),
                     refinement_step_nm=nm_from_mm(args.fanout_refinement_step_mm),
@@ -1892,36 +1784,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if progress is not None:
                     # Remember the open stage so a failure leaves a located record.
                     stage_tracker = progress = StageTracker(progress)
-                from .power_config import load_power_area_options
-                power_area_options = (load_power_area_options(args.power_area_config, nets=args.power_area_net)
-                    if args.plan_power_areas or args.power_area_config or args.power_area_net else None)
-                power_native_verifier = None
-                if power_area_options is not None and power_area_options.plane_return_nets and args.verify_plane_fill:
-                    preparation_directory = (args.report or Path(f'{board.name}.route-report.json')).with_name(
-                        'power-return-native-' + uuid4().hex[:12])
-                    preparation_invocations = []
-                    def power_native_verifier(candidate, stage):
-                        preparation_invocations.append(stage)
-                        return verify_filled_planes(candidate, kicad_cli=args.verify_plane_fill,
-                            artifact_directory=preparation_directory / f'{len(preparation_invocations):03d}-{stage}')
-                if unified_flag_notes and (unified_flag_notes["ignored_flags"]
-                                           or unified_flag_notes["skipped_stage_flags"]):
-                    # Advisory: these flags do not reach the unified pipeline.
+                if unified_flag_notes["ignored_flags"]:
+                    # Advisory: these flags do not reach the pipeline.
                     emit(progress, "router_options", "ignored", router="unified",
-                         ignored_flags=unified_flag_notes["ignored_flags"],
-                         skipped_stage_flags=unified_flag_notes["skipped_stage_flags"])
-                if unified_flag_notes and unified_flag_notes["mapped_flags"]:
+                         ignored_flags=unified_flag_notes["ignored_flags"])
+                if unified_flag_notes["mapped_flags"]:
                     emit(progress, "router_options", "mapped", router="unified",
                          mapped_flags=unified_flag_notes["mapped_flags"],
                          congestion_feedback_trials=_congestion_feedback_budget(args))
-                # Placement also sees fanout, pair-state and native settings when it runs
-                # support-pattern trials for power areas (flow.run_routing_pipeline).
-                placement_extra = ((fanout_options, args.package_initial_pair_states or None,
-                                    power_native_verifier is not None)
-                                   if power_area_options is not None and placement_options.support_pattern_trials
-                                   else None)
                 checkpoint_key = (placement_key(physical_board, placement_options, router_options,
-                                                feedback_options, power_area_options, placement_extra)
+                                                feedback_options)
                                   if args.checkpoint_dir or args.reuse_placement else None)
                 initial_placement = None
                 if args.reuse_placement:
@@ -1951,19 +1823,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                         else:
                             checkpoints["placement"] = str(path)
                             print(f"Placement checkpoint -> {path}", flush=True)
-                    elif args.checkpoint_dir and name in {"package-preflight", "package-access",
-                            "ordinary-fanout", "package-initial-baseline", "package-full-baseline"}:
-                        from .workbench import save_state
-                        path = args.checkpoint_dir / f"{name}.state.json"
-                        try:
-                            save_state(path, value,
-                                note="Diagnostic package-stage state; not a reusable placement checkpoint or signoff.")
-                        except (OSError, ValueError) as exc:
-                            checkpoints[f"{name}_error"] = f"{type(exc).__name__}: {exc}"[:500]
-                            print(f"Package diagnostic state not saved: {exc}", flush=True)
-                        else:
-                            checkpoints[name] = str(path)
-                            print(f"Package diagnostic state -> {path}", flush=True)
 
                 result = run_routing_pipeline(
                     physical_board,
@@ -1973,73 +1832,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                     placement_options=placement_options,
                     global_options=router_options,
                     feedback_options=feedback_options,
-                    detailed_options=detailed_options,
                     fanout_options=fanout_options,
                     plane_stitch_options=early_options,
                     detailed_feedback_trials=args.detailed_feedback_trials,
                     critical_feedback_trials=args.critical_feedback_trials,
                     placement_feedback_trials=getattr(args, "congestion_feedback_trials", 0),
-                    package_access_options=PackageAccessOptions(
-                        maximum_trials=args.package_access_trials,
-                        maximum_placement_probes=args.package_placement_probes,
-                        reserve_plane_contacts=args.early_plane_stitch,
-                        movement_nm=nm_from_mm(args.package_access_movement_mm),
-                        maximum_pattern_trials=args.package_pattern_trials,
-                        maximum_partial_owner_nets=args.package_partial_owner_nets,
-                        initial_pair_state_limit=args.package_initial_pair_states,
-                        full_pair_state_limit=args.package_full_pair_states,
-                        boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
-                            destination_ports=args.package_destination_ports,
-                            refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
+                    critical_pair_state_limit=args.package_initial_pair_states,
                     on_progress=progress,
-                    legacy_gates=args.legacy_gates,
                     unified_options=_unified_options(args),
                     escape_plan_options=(EscapePlanOptions(two_end_order=args.escape_plan or args.bus_layers,
                                                            bus_layers=args.bus_layers, array_flow=args.array_flow,
                                                            via_lattice=args.via_lattice)
                                          if args.escape_plan or args.bus_layers or args.array_flow
                                          or args.via_lattice else None),
-                    **({"power_area_options": power_area_options} if power_area_options is not None else {}),
-                    **({"power_native_verifier": power_native_verifier} if power_native_verifier is not None else {}),
                 )
-                escape_feedback = (
-                    improve_zone_escapes(
-                        result, plane_options,
-                        placement_options=placement_options,
-                        global_options=router_options,
-                        feedback_options=feedback_options,
-                        detailed_options=detailed_options,
-                        fanout_options=fanout_options,
-                        package_access_options=PackageAccessOptions(
-                            maximum_trials=args.package_access_trials,
-                            maximum_placement_probes=args.package_placement_probes,
-                            reserve_plane_contacts=args.early_plane_stitch,
-                            movement_nm=nm_from_mm(args.package_access_movement_mm),
-                            maximum_pattern_trials=args.package_pattern_trials,
-                            maximum_partial_owner_nets=args.package_partial_owner_nets,
-                            initial_pair_state_limit=args.package_initial_pair_states,
-                            full_pair_state_limit=args.package_full_pair_states,
-                            boundary_options=BoundaryAccessOptions(port_step_nm=nm_from_mm(args.package_boundary_step_mm),
-                                destination_ports=args.package_destination_ports,
-                                refinement_step_nm=min(nm_from_mm("0.1"), nm_from_mm(args.package_boundary_step_mm)))),
-                        options=EscapeFeedbackOptions(
-                            maximum_trials=args.zone_escape_trials,
-                            maximum_local_trials=args.zone_local_ripup_trials,
-                            maximum_dependency_expansions=args.zone_dependency_expansions,
-                            incremental_placement=not args.no_incremental_placement_repair,
-                            maximum_local_blockers=args.maximum_ripup_blockers,
-                            movement_nm=nm_from_mm(args.zone_escape_movement_mm),
-                        ),
-                        on_progress=progress,
-                    ) if stitch_enabled and (args.zone_escape_trials
-                                             or args.zone_local_ripup_trials)
-                      # The unified router joins plane pads itself; the legacy
-                      # late-escape repair reruns the legacy pipeline.
-                      and getattr(args, "router", "unified") != "unified"
-                      and result.stopped_after is None else None
-                )
-                if escape_feedback is not None:
-                    result = escape_feedback.pipeline
             except Exception as exc:
                 # Expected failures (ValueError) exit 2; anything else is a bug and keeps its
                 # traceback. Both leave a located record next to --report.
@@ -2064,7 +1870,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not result.stopped_after:
                 emit(progress, "final_contacts_native_drc", "started")
             stitch = (result.plane_stitch if result.stopped_after
-                      else escape_feedback.plane_stitch if escape_feedback is not None
                       else stitch_zone_pads(result.board, plane_options) if stitch_enabled and not direct_unified
                       else result.plane_stitch)
             plane_repair = None
@@ -2085,8 +1890,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             from .hard_macros import resolved_macro_geometry
             from .route_cleanup import trim_dangling_overhangs
             fixed = Counter(physical_board.tracks)
-            from .power_geometry import owned_power_copper
-            fixed.update(owned_power_copper(result)[0])
             for macro in output_board.hard_macros:
                 if macro.cluster in output_board.materialized_macros:
                     fixed.update(resolved_macro_geometry(output_board, macro)[0])
@@ -2118,7 +1921,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                             maximum_search_states=args.filled_copper_search_states,
                             maximum_blockers=args.maximum_ripup_blockers,
                             maximum_dependency_expansions=args.zone_dependency_expansions),
-                        detailed_options=detailed_options, artifact_directory=evidence_directory,
+                        artifact_directory=evidence_directory,
                         on_progress=progress)
                     result = filled_feedback.pipeline
                     output_board = filled_feedback.board
@@ -2126,11 +1929,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     output_drc = run_physical_drc(output_board)
                 if plane_verification is not None:
                     from .plane_verify import remove_native_dangling_tracks
-                    prefix = (result.fanout.board if result.fanout else
-                              result.plane_stitch.board if result.plane_stitch else result.critical.board)
+                    prefix = result.plane_stitch.board if result.plane_stitch else result.critical.board
                     native_fixed = fixed | Counter(prefix.tracks)
                     native_fixed_vias = Counter(physical_board.vias) | Counter(prefix.vias)
-                    native_fixed_vias.update(owned_power_copper(result)[1])
                     before_cleanup, before_native = output_board, plane_verification
                     cleanup_diagnostics = []
                     output_board, plane_verification = remove_native_dangling_tracks(
@@ -2165,27 +1966,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             plane_pending, plane_verified = reconcile_zone_lands(
                 output_board, stitch.pending_pads if stitch is not None else (),
                 plane_verification)
-            power_observation, power_plan = None, None
-            if power_area_options is not None:
-                from .power_extract import assess_power_plan_fill
-                power_plan = result.power_area_plan or result.placement_and_global.power_area_plan
-                baseline_evidence = None
-                if (power_plan is not None and plane_verification is not None
-                        and result.power_area_status == "contact_routed_native_pending"):
-                    try:
-                        baseline_evidence = verify_filled_planes(power_plan.source_board,
-                            kicad_cli=native_cli, artifact_directory=evidence_directory / "power-area-baseline")
-                    except (RuntimeError, ValueError, OSError) as exc:
-                        power_observation = {"status": "native_baseline_unavailable", "detail": str(exc)}
-                if power_observation is None:
-                    power_observation = (assess_power_plan_fill(output_board, power_plan, plane_verification,
-                        power_area_options, baseline_evidence=baseline_evidence) if power_plan is not None
-                        else {"status": "plan_unavailable"})
-            final_power_preparation = None
-            if result.power_preparation is not None:
-                from .power_preparation import validate_power_preparation
-                final_power_preparation = validate_power_preparation(result.power_preparation,
-                    output_board, plane_verification, power_area_options)
             closure_status = (
                 PhysicalFlowStatus.PASS
                 if result.stopped_after is None
@@ -2193,10 +1973,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 and (not args.verify_plane_fill or plane_verification is not None and plane_verification.passed)
                 and not duplicate_pending
                 and not plane_pending
-                and (power_plan is None or result.power_area_status != "contact_routed_native_pending"
-                     or power_observation["status"] == "native_connected")
-                and (result.power_preparation is None or result.power_preparation.accepted
-                     and final_power_preparation['status'] == 'native_connected')
                 else PhysicalFlowStatus.FAIL
             )
             report_path = args.report or Path(f"{board.name}.route-report.json")
@@ -2206,23 +1982,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "routing_profile": args.routing_profile or "custom_defaults",
                 "work_limits": {name: getattr(args, name) for name in (
-                    "router", "unified_direct", "unified_retain_escape_copper", "unified_iterations",
+                    "unified_direct", "unified_retain_escape_copper", "unified_iterations",
                     "unified_time_budget_s", "unified_search_states", "fine_regions",
-                    "passes", "search_budget", "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials", "package_access_trials", "package_placement_probes",
-                    "package_pattern_trials", "zone_escape_trials", "zone_local_ripup_trials",
-                    "zone_dependency_expansions", "maximum_ripup_blockers", "filled_copper_trials",
-                    "filled_copper_search_states", "decoupling_placement_trials", "placement_seeds",
-                    "placement_refinement_passes", "escape_spacing_passes")} | {
-                    "congestion_feedback_trials": _congestion_feedback_budget(args)} | ({
-                    "unified_ignored_flags": unified_flag_notes["ignored_flags"],
-                    "unified_skipped_stage_flags": unified_flag_notes["skipped_stage_flags"],
-                    "unified_mapped_flags": unified_flag_notes["mapped_flags"],
-                } if unified_flag_notes is not None else {}),
+                    "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials",
+                    "package_initial_pair_states", "zone_dependency_expansions", "maximum_ripup_blockers",
+                    "filled_copper_trials", "filled_copper_search_states", "decoupling_placement_trials",
+                    "placement_seeds", "placement_refinement_passes", "escape_spacing_passes")} | {
+                    "congestion_feedback_trials": _congestion_feedback_budget(args),
+                    "ignored_flags": unified_flag_notes["ignored_flags"],
+                    "mapped_flags": unified_flag_notes["mapped_flags"]},
                 "erc_diagnostics": [str(item) for item in diagnostics],
                 **({"stopped_after": result.stopped_after, "native_verification": "skipped_for_stopped_run",
                     "final_copper_processing": "skipped_for_stopped_run"}
                    if result.stopped_after else {}),
-                # Later stages (package-access moves, zone-escape trials) may still move parts.
+                # Later stages (congestion feedback) may still move parts.
                 **({"placement_reuse": {**placement_reuse,
                                         "final_candidate": result.placement_and_global.placement_candidate}}
                    if placement_reuse else {}),
@@ -2230,7 +2003,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "fabrication_ready": False,
                 "routing_complete": closure_status is PhysicalFlowStatus.PASS,
                 "placement_candidate": result.placement_and_global.placement_candidate,
-                "detailed_feedback_trials": result.detailed_feedback_trials,
                 "global": json.loads(result.placement_and_global.global_route.to_json()),
                 "critical": json.loads(result.critical.to_json()),
                 "detailed": json.loads(result.detailed.to_json()),
@@ -2249,110 +2021,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     result.placement_and_global.board, EscapePlanOptions(array_flow=True))]}
                    if args.array_flow else {}),
             }
-            if power_area_options is not None:
-                report["power_area_planning"] = {
-                    "adoption_status": result.power_area_status,
-                    "plan": power_plan.report() if power_plan is not None else None,
-                    "final_observation": power_observation,
-                    "return_preparation": result.power_preparation.report() if result.power_preparation else None,
-                    "return_preservation": final_power_preparation,
-                }
-            fine_regions = _fine_region_report(args, output_board)
-            if fine_regions is not None:
-                report["fine_regions"] = fine_regions
+            report["fine_regions"] = _fine_region_report(args, output_board)
             if result.placement_feedback is not None:
-                # Unified router: congestion-driven placement feedback (trials, moves, hot tiles).
+                # Congestion-driven placement feedback (trials, moves, hot tiles).
                 report["placement_feedback"] = result.placement_feedback.report()
-            if result.critical_feedback is not None:
-                report["critical_placement_feedback"] = {
-                    "accepted_moves": result.critical_feedback.accepted_moves,
-                    "trials": [asdict(trial) for trial in result.critical_feedback.trials],
-                }
-            if result.package_access is not None:
-                access = result.package_access
-                report["package_access"] = {
-                    "status": "ready" if access.ready else "blocked",
-                    "stage_order": (["critical_routes", "power_return_preparation", "ordinary_package_exits",
-                        "selected_plane_contacts", "package_boundary_access", "native_return_preservation", "ordinary_area"]
-                        if result.power_preparation else
-                        ["ordinary_package_exits", "critical_routes", "selected_plane_contacts", "package_boundary_access",
-                         *(["power_area_planning"] if power_area_options is not None else []), "ordinary_area"]),
-                    "pending_pads": [f"{pad.component}.{pad.pad}" for pad in sorted(access.pending_pads)],
-                    "failed_critical_nets": sorted(access.failed_critical_nets),
-                    "hard_findings": access.hard_findings,
-                    "accepted_moves": access.accepted_moves,
-                    "placement_probe_limit": args.package_placement_probes,
-                    "placement_probe_scope": "local ordinary exits, selected plane contacts and boundary access; excludes generated critical copper and native filled connectivity",
-                    "placement_stop_reason": access.placement_stop_reason,
-                    "placement_constraints": [asdict(item) for item in access.placement_constraints],
-                    "coupled_placement_attempts": [asdict(item) for item in access.coupled_placement_attempts],
-                    "placement_probe_slots_spent": access.placement_probe_slots_spent,
-                    "placement_constraint_scope": "at most 32 sampled rejected proposals; not an impossibility proof",
-                    "placement_probes": [{**asdict(probe), **{
-                        key: [f"{p.component}.{p.pad}" for p in getattr(probe, key)]
-                        for key in ("ordinary_pending_pads", "plane_pending_pads", "boundary_pending_pads", "lost_access_pads")}}
-                        for probe in access.placement_probes],
-                    "pattern_trial_limit": args.package_pattern_trials,
-                    "partial_owner_net_limit": args.package_partial_owner_nets,
-                    "initial_pair_state_limit": args.package_initial_pair_states,
-                    "full_pair_state_limit": args.package_full_pair_states,
-                    "search_tiers": [asdict(tier) for tier in access.search_tiers],
-                    "pattern_trials": [{**asdict(trial), "pending_pads": [f"{p.component}.{p.pad}" for p in trial.pending_pads]}
-                                       for trial in access.pattern_trials],
-                    "trials": [{**asdict(trial), "pending_pads": [f"{p.component}.{p.pad}" for p in trial.pending_pads]}
-                               for trial in access.trials],
-                    "ordinary_area_started": access.ready and result.stopped_after is None,
-                }
-                if access.boundary is not None:
-                    boundary = access.boundary
-                    materialized = bool(result.fanout is not None and result.fanout.boundary_accesses is not None)
-                    report["package_access"]["boundary"] = {
-                        "scope": ("ordinary local channel capacity; owned paths reserved before area routing; abandoned paths may be pruned"
-                                  if materialized else "provisional ordinary local channel capacity; witness copper is not committed"),
-                        "materialized": materialized,
-                        "source_digest": boundary.source_digest,
-                        "anchor_count": len(result.fanout.boundary_accesses) if materialized else 0,
-                        "added_track_count": (len(result.fanout.created_tracks) - len(access.fanout.created_tracks)) if materialized else 0,
-                        "status": "ready" if boundary.ready else "blocked",
-                        "native_accepted": boundary.native_accepted,
-                        "limits": asdict(boundary.options),
-                        "pending_pads": [f"{p.component}.{p.pad}" for p in boundary.pending_pads],
-                        "collars": [{"reference": c.reference, "bounds_nm": asdict(c.bounds)} for c in boundary.collars],
-                        "ports": [{"pad": f"{p.pad.component}.{p.pad.pad}", "position_nm": asdict(p.position),
-                                   "layer": p.layer.value, "edge": p.edge,
-                                   "path": [asdict(t) for t in p.path]} for p in boundary.ports],
-                        "pin_analysis": [{**asdict(p), "pad": f"{p.pad.component}.{p.pad.pad}"}
-                                         for p in boundary.pin_analysis],
-                        "assignment": asdict(boundary.assignment),
-                    }
-            if escape_feedback is not None:
-                report["zone_escape_feedback"] = {
-                    "dependency_expansion_limit": args.zone_dependency_expansions,
-                    "incremental_placement_enabled": not args.no_incremental_placement_repair,
-                    "local_blocker_limit": args.maximum_ripup_blockers,
-                    "trials": [
-                        {
-                            "description": attempt.description,
-                            "early_pending": [f"{pad.component}.{pad.pad}"
-                                              for pad in attempt.early_pending],
-                            "late_pending": (
-                                [f"{pad.component}.{pad.pad}"
-                                 for pad in attempt.late_pending]
-                                if attempt.late_pending is not None else None
-                            ),
-                            "signal_failures": attempt.signal_failures,
-                            "failed_signals": list(attempt.failed_signals),
-                            "repair_nets": list(attempt.repair_nets),
-                            "dependency_expansions": attempt.dependency_expansions,
-                            "strategy": attempt.strategy,
-                            "changed_references": list(attempt.changed_references),
-                            "rebuilt_zone_nets": list(attempt.rebuilt_zone_nets),
-                            "accepted": attempt.accepted,
-                            "decision": attempt.decision,
-                        }
-                        for attempt in escape_feedback.attempts
-                    ],
-                }
             from .zone_geometry import distribution_zone_nets
             zone_nets = distribution_zone_nets(output_board)
             ordinary_results = [item for item in result.detailed.nets if item.net not in zone_nets]
@@ -2411,54 +2083,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             via_arrays = via_in_pad_array_report(output_board)
             if via_arrays:
                 report["via_in_pad_arrays"] = via_arrays
-            if result.fanout is not None:
-                report["fanout"] = {
-                    "step_nm": fanout_options.step_nm,
-                    "refinement_step_nm": fanout_options.refinement_step_nm,
-                    "maximum_geometry_candidates": fanout_options.maximum_geometry_candidates,
-                    "diagnostic_samples_per_pad": fanout_options.diagnostic_samples_per_pad,
-                    "added_track_count": result.fanout.added_track_count,
-                    "added_via_count": result.fanout.added_via_count,
-                    "escaped_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.accesses],
-                    "pending_pads": [f"{pad.component}.{pad.pad}" for pad in result.fanout.pending_pads],
-                    "decoupling_pending": [{"capacitor": f"{pad.component}.{pad.pad}", "reason": reason}
-                                            for pad, reason in result.fanout.decoupling_pending],
-                    "late_bypass_completion": asdict(result.fanout.late_bypass) if result.fanout.late_bypass else None,
-                    "released_exit_retry": asdict(result.fanout.released_exit_retry) if result.fanout.released_exit_retry else None,
-                    "decoupling_pending_links": [{"capacitor": f"{link.capacitor.component}.{link.capacitor.pad}",
-                        "target": f"{link.target.component}.{link.target.pad}", "net": link.net,
-                        "return_pad": f"{link.return_pad.component}.{link.return_pad.pad}",
-                        "return_net": link.return_net, "reason": reason}
-                        for link,reason in result.fanout.decoupling_pending_links],
-                    "protected_decoupling_track_count": len(result.fanout.decoupling_tracks),
-                    "protected_decoupling_via_count": len(result.fanout.decoupling_vias),
-                    **({"surface_escaped_pads": [f"{pad.component}.{pad.pad}"
-                                                 for pad in result.fanout.surface_accesses]}
-                       if result.fanout.surface_accesses else {}),
-                    "pin_access_analysis": [{
-                        "pad": f"{item.pad.component}.{item.pad.pad}",
-                        "legal_candidate_count": item.legal_candidate_count,
-                        "selected_candidate_index": item.selected_candidate_index,
-                        "diagnostic": item.diagnostic,
-                        "two_leg_candidate_count": item.two_leg_candidate_count,
-                        "refined_candidate_count": item.refined_candidate_count,
-                        "access_diagnostics": (asdict(item.access_diagnostics)
-                            if item.access_diagnostics is not None and item.pad in result.fanout.pending_pads else None),
-                    } for item in result.fanout.pin_analysis],
-                }
-                if result.fanout.assignment is not None:
-                    assignment = result.fanout.assignment
-                    report["fanout"]["assignment"] = {
-                        "pair_checks": assignment.pair_checks,
-                        "pair_queries": assignment.pair_queries,
-                        "broad_phase_accepts": assignment.broad_phase_accepts,
-                        "native_accepted": assignment.native_accepted,
-                        "expanded_pads": [f"{p.component}.{p.pad}" for p in assignment.expanded_pads],
-                        "trials": [{"pad": f"{t.pad.component}.{t.pad.pad}",
-                            "cluster": [f"{p.component}.{p.pad}" for p in t.cluster],
-                            "search_states": t.search_states, "solution_found": t.solution_found,
-                            "diagnostic": t.diagnostic} for t in assignment.trials],
-                    }
             if stitch is not None:
                 report["plane_stitch"] = {
                     "stitched_pads": [

@@ -8,12 +8,12 @@ import subprocess
 import pytest
 
 from pcbir import (
-    BoardCutout, BoardOutline, BoardSide, CopperLayer, DetailedRouterOptions,
+    BoardCutout, BoardOutline, BoardSide, CopperLayer,
     FootprintPad, GlobalRouterOptions,
     KiCadPcbBackend, MechanicalHole, PadKind, PadReference, PadShape,
     PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, PlacementKeepout,
     PlacementRegion, Point, Size, TrackSegment, Via, nm_from_mm,
-    parse_xnc, reconcile_drills, route_detailed, route_global, run_physical_drc,
+    parse_xnc, reconcile_drills, route_global, run_physical_drc,
     write_kicad_project,
 )
 from pcbir.drc import DrcCompleteness, PhysicalDrcPolicy, physical_board_digest
@@ -27,6 +27,7 @@ from pcbir.process_drc import (
 )
 from pcbir.routing_clearance import RoutingClearanceIndex
 from pcbir.surface_path import _track_inside_board, via_inside_board
+from pcbir.unified_router import route_unified
 
 
 def ring(*points):
@@ -217,7 +218,7 @@ def test_npth_requires_separate_provenance_bound_process_limit():
 def routed_probe():
     board = board_fixture()
     global_result = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm(2)))
-    result = route_detailed(board, global_result, DetailedRouterOptions(maximum_passes=2))
+    result = route_unified(board, global_result)
     assert result.status.value == "success"
     assert result.board.tracks
     for track in result.board.tracks:

@@ -201,8 +201,6 @@ def summarize_run(directory: Path) -> dict:
         "detailed_metrics": detailed.get("metrics", {}),
         "pending_ground": report.get("plane_stitch", {}).get("pending_pads", []),
         "pending_duplicate_lands": report.get("duplicate_pad_stitch", {}).get("pending_pads", []),
-        "pending_fanout": report.get("fanout", {}).get("pending_pads", []),
-        "package_access": report.get("package_access", {}).get("status"),
         "independent": ({"passed": plane.get("passed"), "kicad_version": plane.get("kicad_version"),
             "unconnected_count": plane.get("unconnected_count"),
             "other_violation_count": plane.get("other_violation_count"),
@@ -283,7 +281,7 @@ def compare_runs(baseline: dict, candidate: dict) -> dict:
         copper_deltas = _compare_declared_quality(old, new, regressions, blockers)
         if old["signal_names"] != new["signal_names"]:
             blockers.append("signal sets differ")
-        for name in ("failed_signals", "failed_critical", "pending_ground", "pending_duplicate_lands", "pending_fanout"):
+        for name in ("failed_signals", "failed_critical", "pending_ground", "pending_duplicate_lands"):
             if not set(new[name]).issubset(old[name]):
                 regressions.append(f"new {name}: {sorted(set(new[name]) - set(old[name]))}")
         if Counter(new["hard_native_findings"]) - Counter(old["hard_native_findings"]):
@@ -293,7 +291,7 @@ def compare_runs(baseline: dict, candidate: dict) -> dict:
         if groups(new["hard_native_groups"]) - groups(old["hard_native_groups"]):
             regressions.append("new native hard findings on affected nets")
         for name, success in (("critical_status", {"success", "warning"}),
-                              ("global_status", {"success"}), ("package_access", {"ready"}),
+                              ("global_status", {"success"}),
                               ("report_status", {"pass"}), ("native_decision", {"pass"})):
             if old[name] in success and new[name] not in success:
                 regressions.append(f"{name} regressed")
@@ -364,7 +362,6 @@ _TABLE_ROWS = (
     ("Elapsed seconds", "elapsed_seconds"),
     ("Global routing status", "quality.global_status"),
     ("Critical routing status", "quality.critical_status"),
-    ("Package access", "quality.package_access"),
     ("Failed signal nets", "quality.failed_signals"),
     ("Failed critical nets", "quality.failed_critical"),
     ("Unrouted ordinary nets", "quality.detailed_metrics.unrouted_net_count"),

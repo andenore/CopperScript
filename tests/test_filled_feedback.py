@@ -7,9 +7,21 @@ import shutil
 
 import pytest
 
-from pcbir import (BoardOutline, CopperKeepout, CopperLayer, CopperZone, NetRoutingRule,
-    PadReference, PhysicalBoard, PhysicalNet, Placement, Point, RouteKind, TrackSegment, nm_from_mm,
-    DetailedRouterOptions)
+from pcbir import (
+    BoardOutline,
+    CopperKeepout,
+    CopperLayer,
+    CopperZone,
+    NetRoutingRule,
+    PadReference,
+    PhysicalBoard,
+    PhysicalNet,
+    Placement,
+    Point,
+    RouteKind,
+    TrackSegment,
+    nm_from_mm,
+)
 from pcbir.filled_feedback import FilledCopperFeedbackOptions, improve_filled_copper
 from pcbir.filled_feedback import _proposals, _rejection_context
 from pcbir.filled_connectivity import filled_component_roots
@@ -358,9 +370,7 @@ def test_native_bridge_dependency_transaction_preserves_signal_and_owners(native
     else:
         assert next(item for item in initial.detailed.nets if item.net == signal).connected
     result = improve_filled_copper(initial, kicad_cli=native_cli,
-        options=FilledCopperFeedbackOptions(maximum_trials=2, step_nm=nm_from_mm("0.5")),
-        detailed_options=DetailedRouterOptions(pitch_nm=nm_from_mm("0.5"), maximum_passes=2,
-            maximum_search_states=20000))
+        options=FilledCopperFeedbackOptions(maximum_trials=2, step_nm=nm_from_mm("0.5")))
     assert result.board.placements == board.placements and result.board.zones == board.zones
     assert not hard_findings(result.board)
     if immutable:

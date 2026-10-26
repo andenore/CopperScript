@@ -2,7 +2,7 @@
 from dataclasses import replace
 import pytest
 from test_fanout_and_plane_verify import _dense_board
-from pcbir.fanout import route_fanout, FanoutOptions
+from pcbir.fanout import route_fanout
 from pcbir.routing import route_global, GlobalRouterOptions
 from pcbir.physical import PadReference, PhysicalNet, Point, nm_from_mm
 
@@ -53,25 +53,6 @@ def test_fixed_prefix_cannot_change_placement_or_source_copper():
         route_global(source,fixed_prefix=shifted,reserved_accesses=fanout.routing_accesses)
     with pytest.raises(ValueError,match='require an explicitly fixed'):
         route_global(source,reserved_accesses=fanout.routing_accesses)
-
-
-def test_package_preflight_rebuilds_a_failed_coarse_guide_from_verified_ports():
-    from pcbir.package_access import preflight_package_access, PackageAccessOptions
-    from pcbir.routing import GlobalRoutingStatus
-    source=_dense_board()
-    options=GlobalRouterOptions(tile_size_nm=nm_from_mm(2),maximum_iterations=1)
-    original=route_global(source,options)
-    failed=replace(original,status=GlobalRoutingStatus.UNREACHABLE,
-        routes=tuple(replace(r,connected=False,diagnostics=('synthetic coarse access miss',)) for r in original.routes),
-        metrics=replace(original.metrics,routed_net_count=0,unrouted_net_count=1),
-        routing_fingerprint='synthetic-coarse-access-miss')
-    result=preflight_package_access(source,failed,FanoutOptions(),
-        options=PackageAccessOptions(maximum_pattern_trials=0,guide_replan_options=options))
-    assert result.ready and result.global_route.status is GlobalRoutingStatus.SUCCESS
-    assert result.global_route.fixed_prefix_digest and result.global_route.routing_fingerprint!=failed.routing_fingerprint
-    assert failed.status is GlobalRoutingStatus.UNREACHABLE and not failed.routes[0].connected
-    assert all(t in result.board.tracks for t in result.fanout.created_tracks)
-    assert all(v in result.board.vias for v in result.fanout.created_vias)
 
 
 def test_fixed_global_prefix_preserves_immutable_macro_tracks(tmp_path):

@@ -52,7 +52,7 @@ def complete_late_bypasses(incumbent, original_pending, options, *, only_nets=No
     from .decoupling import route_decouplers
     from .decoupling_paths import (_budget_reason, _normal_via, _track_ok,
                                    refresh_crosslayer_witnesses)
-    from .package_access import _verified_bypass_links
+    from .bypass_links import verified_bypass_links
     from .routing_clearance import RoutingClearanceIndex
     board=incumbent.board
     poses={p.reference:p for p in board.placements}
@@ -84,7 +84,7 @@ def complete_late_bypasses(incumbent, original_pending, options, *, only_nets=No
     if not _ports_valid(board,incumbent.accesses,incumbent.surface_accesses,incumbent.boundary_accesses,index):
         return reject("invalid_incumbent_port")
     nets=frozenset(link.net for link in board.decoupling_links)
-    verified=_verified_bypass_links(board,nets,admitted_witnesses=old)
+    verified=verified_bypass_links(board,nets,admitted_witnesses=old)
     baseline=_hard(board)
     report=replace(report,passes=1)
     late=route_decouplers(board,only_links=frozenset(selected),only_nets=only_nets,fanout_options=options)
@@ -106,7 +106,7 @@ def complete_late_bypasses(incumbent, original_pending, options, *, only_nets=No
     admitted,reason=refresh_crosslayer_witnesses(candidate,(*old,*late.admitted_path_witnesses),index=fresh)
     if reason:
         return reject("lost_admitted_witness:"+reason)
-    current=_verified_bypass_links(candidate,nets,admitted_witnesses=admitted)
+    current=verified_bypass_links(candidate,nets,admitted_witnesses=admitted)
     if not verified<=current:
         return reject("lost_verified_association")
     if any(_budget_reason(candidate,net.name) for net in candidate.nets):

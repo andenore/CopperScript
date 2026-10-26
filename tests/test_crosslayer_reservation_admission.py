@@ -1,13 +1,11 @@
 """Actual cross-face fanout admission and exact supply/return owner rollback."""
-from collections import Counter
 from dataclasses import replace
 
 import pytest
 
-import pcbir.contact_owner_regeneration as regeneration
 from pcbir.bypass_reservations import verified_bypass_reservations
-from pcbir.fanout import FanoutOptions, route_fanout
-from pcbir.package_access import _verified_bypass_links
+from pcbir.fanout import route_fanout
+from pcbir.bypass_links import verified_bypass_links as _verified_bypass_links
 from pcbir.physical import CopperLayer, NetRoutingRule, PhysicalNet, Point, RouteKind, TrackSegment
 from test_decoupling_crosslayer_paths import fixture
 
@@ -109,110 +107,6 @@ def test_crossface_admission_rejects_incomplete_or_forged_semantics(defect):
             replace(result.board.placements[1], position=Point.mm(14, 9)))))
     admitted = verified_bypass_reservations(source, result)
     assert admitted[0] == admitted[1] == () and admitted[2]
-
-
-@pytest.mark.parametrize('two', (False, True))
-def test_supply_regeneration_preserves_unselected_return_and_sibling_exactly(two, monkeypatch):
-    board, link, baseline, group = pair_fixture(two=two)
-    contact = contact_at(baseline, group, link.net)
-    before = baseline.board
-    real = regeneration.route_fanout
-    calls = []
-    def measure(*args, **kwargs):
-        calls.append(kwargs['only_nets'])
-        return real(*args, **kwargs)
-    monkeypatch.setattr(regeneration, 'route_fanout', measure)
-    proposal = regeneration.regenerate_contact_owners(board, baseline, group, contact, (),
-        FanoutOptions(), maximum_owner_nets=1)
-    assert proposal is not None
-    assert calls == [frozenset((link.net,))]
-    assert verified_bypass_reservations(board, proposal)[2] is None
-    assert _verified_bypass_links(proposal.board, {l.net for l in board.decoupling_links}) == set(board.decoupling_links)
-    kept_tracks = tuple(t for t in baseline.decoupling_tracks if t.net != link.net)
-    kept_vias = tuple(v for v in baseline.decoupling_vias if v.net != link.net)
-    assert Counter(kept_tracks) <= Counter(proposal.decoupling_tracks)
-    assert Counter(kept_vias) <= Counter(proposal.decoupling_vias)
-    assert all(any(v is actual for actual in proposal.created_vias) for v in kept_vias)
-    assert baseline.escaped_pads <= proposal.escaped_pads
-    assert all(t not in proposal.board.tracks for t in contact)
-    assert replace(proposal.board, tracks=board.tracks, vias=board.vias) == board
-    assert baseline.board is before
-
-
-def test_return_only_collision_cannot_release_unselected_supply_cohort(monkeypatch):
-    board, link, baseline, group = pair_fixture()
-    contact = contact_at(baseline, group, link.return_net)
-    def forbidden(*args, **kwargs):
-        raise AssertionError('return-only owner must remain protected')
-    monkeypatch.setattr(regeneration, 'route_fanout', forbidden)
-    before = baseline.board
-    assert regeneration.regenerate_contact_owners(board, baseline, group, contact, (),
-        FanoutOptions(), maximum_owner_nets=1) is None
-    assert baseline.board is before
-    assert _verified_bypass_links(before, {link.net}) == {link}
-
-
-def test_selected_supply_may_create_only_its_exact_declared_return_without_extra_owner(monkeypatch):
-    board, link, full, group = pair_fixture()
-    via = next(v for v in full.decoupling_vias if v.net == link.net)
-    # A genuinely verified ordinary target launch precedes the incomplete
-    # association. It grants ownership of that launch, never a return-net slot.
-    track = next(t for t in full.created_tracks if t.net == link.net
-                 and t.layer is CopperLayer.FRONT)
-    baseline = replace(full, board=replace(board, tracks=(track,), vias=(via,)),
-        created_tracks=(track,), created_vias=(via,), added_track_count=1, added_via_count=1,
-        decoupling_tracks=(), decoupling_vias=(), decoupling_witnesses=(), accesses={link.target:via.position},
-        surface_accesses={}, pin_analysis=(),
-        pending_pads=tuple(p for net in board.nets for p in net.pads if p != link.target),
-        decoupling_pending=((link.capacitor, 'unrouted association'),))
-    assert verified_bypass_reservations(board, baseline)[2] is None
-    assert not _verified_bypass_links(baseline.board, {link.net})
-    real = regeneration.route_fanout
-    calls = []
-    def measure(*args, **kwargs):
-        calls.append(kwargs['only_nets'])
-        return real(*args, **kwargs)
-    monkeypatch.setattr(regeneration, 'route_fanout', measure)
-    contact = contact_at(full, group, link.net)
-    proposal = regeneration.regenerate_contact_owners(board, baseline, group, contact, (),
-        FanoutOptions(), maximum_owner_nets=1)
-    assert proposal is not None
-    assert calls == [frozenset((link.net,))]
-    returned = tuple(v for v in proposal.created_vias if v.net == link.return_net)
-    assert returned and Counter(returned) <= Counter(proposal.decoupling_vias)
-    assert _verified_bypass_links(proposal.board, {link.net}) == {link}
-    assert verified_bypass_reservations(board, proposal)[2] is None
-    assert all(t not in proposal.board.tracks for t in contact)
-
-
-@pytest.mark.parametrize('defect', ('via_count', 'extra_ground', 'source_prefix', 'lost_witness',
-                                  'lost_semantic_via', 'lost_semantic_track'))
-def test_corrupt_crossface_rebuild_never_adopts_partial_ownership(monkeypatch, defect):
-    board, link, baseline, group = pair_fixture()
-    contact = contact_at(baseline, group, link.net)
-    real = regeneration.route_fanout
-    def corrupt(*args, **kwargs):
-        result = real(*args, **kwargs)
-        if defect == 'via_count':
-            return replace(result, added_via_count=result.added_via_count+1)
-        if defect == 'lost_semantic_via':
-            return replace(result, decoupling_vias=())
-        if defect == 'lost_semantic_track':
-            return replace(result, decoupling_tracks=())
-        if defect == 'source_prefix':
-            return replace(result, board=replace(result.board, vias=result.board.vias[1:]))
-        if defect == 'lost_witness':
-            via = next(v for v in result.board.vias if v.net == link.return_net)
-            return replace(result, board=replace(result.board, vias=tuple(v for v in result.board.vias if v != via)))
-        extra = replace(baseline.decoupling_vias[-1], position=Point.mm(20, 15))
-        return replace(result, board=replace(result.board, vias=(*result.board.vias, extra)),
-            created_vias=(*result.created_vias, extra), added_via_count=result.added_via_count+1,
-            decoupling_vias=(*result.decoupling_vias, extra))
-    monkeypatch.setattr(regeneration, 'route_fanout', corrupt)
-    before = baseline.board
-    assert regeneration.regenerate_contact_owners(board, baseline, group, contact, (),
-        FanoutOptions(), maximum_owner_nets=1) is None
-    assert baseline.board is before
 
 
 def test_formal_critical_pair_and_retained_clock_admit_only_complete_crossface_prefix():

@@ -24,16 +24,14 @@ design instead of re-reading source. See [CLI workflow](cli-workflow.md).
 
 ```console
 copper issues build/BOARD/runs/STAMP                  # grouped causes with ids and windows
-copper view build/BOARD/runs/STAMP --issue P1         # one picture per relevant copper layer
+copper view build/BOARD/runs/STAMP --issue R1         # one picture per relevant copper layer
 copper view build/BOARD/runs/STAMP --issue N3 --filled
-copper view build/BOARD/runs/STAMP --issue P1 --reference REF.kicad_pcb --align U1:U1
+copper view build/BOARD/runs/STAMP --issue R1 --reference REF.kicad_pcb --align U1:U1
 ```
 
-`issues` reads the run's report and board. Pending package exits are grouped
-spatially (`P`); native gaps (unconnected items) per net and place, other native
-kinds (dangling copper, clearance) per type (`N`); repeated consequences collapse
-into one line with `caused_by` (for example every net blocked by
-package-access preflight, `<- P1..P17`). Connected copper over a declared
+`issues` reads the run's report and board. Unrouted nets are grouped by reason
+(`R`); native gaps (unconnected items) per net and place, other native
+kinds (dangling copper, clearance) per type (`N`). Connected copper over a declared
 length or skew budget is a `review` issue (`B`), not an open: decide by
 placement or manual review. Layout reports list failed gates (`L`)
 and non-passing findings (`F`). `--cluster-mm` changes grouping and ids, so
@@ -65,41 +63,29 @@ fixed while you change later stages:
 
 ```console
 copper route-board BOARD --progress --stop-after placement --checkpoint-dir CK -o RUN/board.kicad_pcb --report RUN/route-report.json
-copper route-board BOARD --progress --reuse-placement CK/placement.state.json --router legacy --stop-after package-preflight ...
 copper route-board BOARD --progress --reuse-placement CK/placement.state.json ...
 ```
 
-`--stop-after` accepts `placement`, `package-preflight` and `package-access`
-(runs the package-access improvement trials, then stops). The package stops
-need `--router legacy` and fanout, which is on unless `--no-fanout`; with power-return preparation
-(`--plan-power-areas` and plane-return nets) the preparation replaces those
-trials, so both package stops end after it. A stopped run writes its report and
-draft board, is marked `stopped_after`, skips zone-escape, filled-copper and
+`--stop-after` accepts `placement`. A stopped run writes its report and
+draft board, is marked `stopped_after`, skips filled-copper and
 final native verification, and never passes; its open nets read "run stopped
 after ...". `copper issues` shows the stop in its header.
 
 `--checkpoint-dir DIR` saves `DIR/placement.state.json`, keyed on the physical
-board, the placement/global/feedback/power-area options (plus fanout and
-native settings when power-area support-pattern trials run inside placement)
-and the compiler code. A failed save is reported and the run continues.
+board, the placement/global/feedback options and the compiler code. A failed save is reported and the run continues.
 `--reuse-placement` refuses a checkpoint whose board or options differ; a
 compiler change is allowed (that is the point of holding placement fixed) and
 recorded as `placement_reuse.code_changed` in the report. Rerun placement
 before signoff whenever placement code or inputs changed.
 
-The same directory also receives `package-preflight.state.json` or
-`package-access.state.json` when that stage completes. These diagnostic states
-retain the source, ordinary escape ownership and critical/contact results for
-`copper state show`, `copper view` and `pcbir.workbench` experiments. They are
-not accepted by `--reuse-placement`, do not resume the routing pipeline and do
-not establish package acceptance or signoff. A failed save remains visible in
-the report's `checkpoints` field.
-
-It also saves `ordinary-fanout.state.json` immediately after ordinary exits and
-`package-initial-baseline.state.json` / `package-full-baseline.state.json` before
-pattern negotiation in each search tier. These earlier snapshots allow bounded
-experiments while later critical or negotiation work is still running. They
-have the same diagnostic-only status and cannot replace a fresh full build.
+The same directory also receives `critical-inputs.state.json` (and
+`critical-retry-inputs.state.json` when the critical stage retries) with the
+board and global route the critical stage starts from, and
+`final-board.state.json` with the exported board. These diagnostic states serve
+`copper state show`, `copper view`, `copper replay-critical` and
+`pcbir.workbench` experiments. They are not accepted by `--reuse-placement`,
+do not resume the routing pipeline and do not establish acceptance or signoff.
+A failed save remains visible in the report's `checkpoints` field.
 
 When `route-board --report RUN/route-report.json` fails with an error, it
 writes `RUN/route-report.error.json`: error type, message, the components it

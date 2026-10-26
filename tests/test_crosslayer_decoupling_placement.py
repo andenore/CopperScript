@@ -7,7 +7,7 @@ import pytest
 from pcbir.decoupling import improve_decoupling_placement, route_decouplers
 from pcbir.decoupling_paths import verify_crosslayer_decoupling, validate_crosslayer_witness
 from pcbir.hard_macros import materialize_hard_macros
-from pcbir.package_access import _verified_bypass_links
+from pcbir.bypass_links import verified_bypass_links as _verified_bypass_links
 from pcbir.physical import (BoardSide, ComponentPlacementRule, Point,
                            PadReference, Placement)
 from pcbir.placement import PlacementPlannerOptions, placement_solution_is_legal

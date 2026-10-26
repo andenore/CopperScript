@@ -4,9 +4,7 @@ import json
 import pytest
 
 from pcbir.bench import route_board_file
-from pcbir.detailed import _separate_lands, land_pieces
-from pcbir.importers.kicad_pcb import load_kicad_pcb, parse_kicad_pcb
-from pcbir.physical import nm_from_mm
+from pcbir.importers.kicad_pcb import load_kicad_pcb
 
 BOARD = """(kicad_pcb (version 20260206) (generator "test")
   (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
@@ -29,23 +27,10 @@ def _board(jumpers=""):
     return BOARD.replace("{jumpers}", jumpers)
 
 
-def test_separate_lands_skip_the_first_land_and_touching_lands():
-    board = parse_kicad_pcb(_board(), source="lands").board
-    placement = next(p for p in board.placements if p.reference == "J1")
-    lands = _separate_lands(placement, board.footprints[placement.footprint], "1")
-    # Four lands: the second through-hole lug and one piece for the two touching surface lands.
-    positions = sorted((point.x_nm, point.y_nm) for _, point in lands)
-    assert positions == [(nm_from_mm(10), nm_from_mm(13)), (nm_from_mm(22), nm_from_mm(10))]
-    # The touching surface lands are one piece; the first land's piece comes first.
-    pieces = land_pieces(placement, board.footprints[placement.footprint], "1")
-    assert [len(piece) for piece in pieces] == [1, 1, 2]
-    assert pieces[0][0][1] == placement.position
-
-
 def _route(tmp_path, text, router="legacy"):
     path = tmp_path / "board.kicad_pcb"
     path.write_text(text)
-    record = route_board_file(path, tmp_path / "out", router=router)
+    record = route_board_file(path, tmp_path / "out")
     routed = (tmp_path / "out" / "routed.kicad_pcb").read_text()
     return record, routed
 
