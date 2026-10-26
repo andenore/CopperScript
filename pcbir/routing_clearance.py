@@ -20,6 +20,7 @@ from ._cache import IdentityKey
 from .breakout import BreakoutLand, BreakoutRegions, _nearest_region
 from .drc import non_plated_holes, placed_pad_shape
 from .geometry import Bounds, RoundedConvexShape, shapes_clear
+from .mechanical import shape_in_board
 from .physical import (
     BoardSide,
     CopperLayer,
@@ -249,6 +250,11 @@ class RoutingClearanceIndex:
             *(rule.pair_gap_nm or 0 for rule in self.rules.values()
               if rule.breakout_length_nm is not None),
         )
+        # Rule clearance per net is fixed for the index's lifetime.
+        minimum = board.rules.minimum_clearance_nm
+        self._net_clearance_nm: dict[str, int] = {
+            net: max(minimum, rule.clearance_nm or 0) for net, rule in self.rules.items()}
+        self._breakout_active = bool(self.breakout)
         template = _pad_template_for(board, bin_size_nm)
         # The cached template is immutable. Each index owns fresh containers;
         # Source breakout-owner strings belong to that complete source epoch;
@@ -445,7 +451,6 @@ class RoutingClearanceIndex:
         # Every outline, plain polygons included: the detailed grid spans the
         # outline's bounds inclusively, so edge nodes would otherwise admit
         # copper the exported copper-to-edge clearance rejects.
-        from .mechanical import shape_in_board
         if not shape_in_board(self.board, shape, self.board.rules.minimum_clearance_nm,
                               self.board.rules.minimum_hole_clearance_nm):
             return False  # Always locked, including speculative soft rip-up.
@@ -456,6 +461,12 @@ class RoutingClearanceIndex:
         blocked_layers = self._static_hole_via_layers if for_via else self._static_hole_track_layers
         if any(layer in blocked_layers for layer in layers):
             return False
+        # Quick reject: nothing static on these layers reaches the query.
+        reach, bounds = self._static_reach_nm, shape.bounds
+        layer_bounds = self._static_layer_bounds
+        if not any(layer in layer_bounds and bounds.intersects_expanded(layer_bounds[layer], reach)
+                   for layer in layers):
+            return True
         for keepout in self._overlapping_static_regions(shape, layers):
             if not (keepout.block_vias if for_via else keepout.block_tracks):
                 continue
@@ -481,11 +492,18 @@ class RoutingClearanceIndex:
                                   if region.block_tracks or region.block_vias))
         bins, large, by_layer = {}, {}, {}
         hole_tracks, hole_vias = set(), set()
+        layer_bounds: dict[CopperLayer, Bounds] = {}
+        reach = 1  # macro reservations reject exact contact (one nm margin)
         for identity, region in enumerate(self._static_regions):
             area = region.shape.bounds
             xs, ys = self._static_cells(area)
+            reach = max(reach, region.clearance_nm + 1)
             for layer in region.layers:
                 by_layer.setdefault(layer, []).append(identity)
+                known = layer_bounds.get(layer)
+                layer_bounds[layer] = area if known is None else Bounds(
+                    min(known.min_x, area.min_x), min(known.min_y, area.min_y),
+                    max(known.max_x, area.max_x), max(known.max_y, area.max_y))
                 if region.has_holes:
                     if region.block_tracks:
                         hole_tracks.add(layer)
@@ -497,6 +515,8 @@ class RoutingClearanceIndex:
                     for x in xs:
                         for y in ys:
                             bins.setdefault((layer, x, y), []).append(identity)
+        self._static_layer_bounds = layer_bounds
+        self._static_reach_nm = reach
         self._static_bins = {key: tuple(ids) for key, ids in bins.items()}
         self._static_large = {key: tuple(ids) for key, ids in large.items()}
         self._static_by_layer = {key: tuple(ids) for key, ids in by_layer.items()}
@@ -921,14 +941,23 @@ class RoutingClearanceIndex:
         *, clearance_floor_nm: int = 0,
     ) -> bool:
         land = self._breakout_land(net, shape)
+        bounds = shape.bounds
+        reach = max(self._max_clearance_nm, clearance_floor_nm)
+        breakout = self._breakout_active
+        own = self._net_clearance_nm.get(net, self.board.rules.minimum_clearance_nm)
+        net_clearance = self._net_clearance_nm
         for other in self._overlapping_objects(shape, layers):
             if other.net == net:
                 continue
-            clearance = max(
-                self._rule_clearance(net, land, other),
-                clearance_floor_nm,
-                other.clearance_nm,
-            )
+            # Every clearance below is at most ``reach``: a box miss at that
+            # distance is a miss for the exact test too.
+            if not bounds.intersects_expanded(other.shape.bounds, max(reach, other.clearance_nm)):
+                continue
+            if breakout:
+                clearance = self._rule_clearance(net, land, other)
+            else:
+                clearance = max(own, net_clearance.get(other.net, 0))
+            clearance = max(clearance, clearance_floor_nm, other.clearance_nm)
             if not shapes_clear(shape, other.shape, clearance):
                 return False
         return True
@@ -941,7 +970,7 @@ class RoutingClearanceIndex:
 
     def _rule_clearance(self, net: str, land: str | None, other: _CopperObject) -> int:
         """Net-rule spacing between queried copper and ``other``, region-aware."""
-        if self.breakout:
+        if self._breakout_active:
             return self.breakout.spacing_nm(net, land, other.net, other.breakout_land)
         own_rule = self.rules.get(net)
         other_rule = self.rules.get(other.net)

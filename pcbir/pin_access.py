@@ -10,7 +10,6 @@ from __future__ import annotations
 from heapq import heappop, heappush
 from dataclasses import dataclass
 
-from .geometry import point_in_polygon
 from .physical import CopperLayer, PhysicalBoard, Point, TrackSegment
 from .routing_clearance import RoutingClearanceIndex
 
@@ -130,8 +129,7 @@ def _legal_segment(
     # obeys the same eight-direction contract as every maze edge.
     if dx and dy and dx != dy:
         return False
-    midpoint = Point((start.x_nm + end.x_nm) // 2,
-                     (start.y_nm + end.y_nm) // 2)
     # An ordinary breakout net may neck down next to its lands (plan R1).
-    return (point_in_polygon(midpoint, board.outline.vertices)
-            and clearance.can_route(net, start, end, width_nm, layer))
+    # can_route keeps the whole capsule inside the outline (shape_in_board),
+    # which implies the midpoint test this function used to run first.
+    return clearance.can_route(net, start, end, width_nm, layer)

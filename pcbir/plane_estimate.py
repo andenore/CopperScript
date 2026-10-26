@@ -101,14 +101,25 @@ def estimate_plane_connectivity(board: PhysicalBoard, *, pitch_nm: int = nm_from
     material = _polygon_inside(vertices, px, py)
     for cutout in board.outline.cutouts:
         material &= ~_polygon_inside(cutout.vertices, px, py)
-    edge = np.full(px.shape, np.inf)
+    minimum_clearance = board.rules.minimum_clearance_nm
+    half = pitch_nm / 2
+    # Cells at least ``minimum_clearance + half`` from every outline edge. A
+    # cell nearer than that to an edge lies in the edge's box grown by that
+    # distance, so each edge is tested in its own window only.
+    edge_reach = minimum_clearance + half
+    edge_ok = np.ones(px.shape, dtype=bool)
     for ring in (vertices, *(c.vertices for c in board.outline.cutouts)):
         for i in range(len(ring)):
             a, b = ring[i], ring[(i + 1) % len(ring)]
-            edge = np.minimum(edge, _segment_distance(px, py, float(a.x_nm), float(a.y_nm),
-                                                      float(b.x_nm), float(b.y_nm)))
-    minimum_clearance = board.rules.minimum_clearance_nm
-    half = pitch_nm / 2
+            i0 = max(0, int((min(a.x_nm, b.x_nm) - edge_reach - x0) // pitch_nm))
+            i1 = min(nx - 1, int((max(a.x_nm, b.x_nm) + edge_reach - x0) // pitch_nm) + 1)
+            j0 = max(0, int((min(a.y_nm, b.y_nm) - edge_reach - y0) // pitch_nm))
+            j1 = min(ny - 1, int((max(a.y_nm, b.y_nm) + edge_reach - y0) // pitch_nm) + 1)
+            if i0 > i1 or j0 > j1:
+                continue
+            edge_ok[j0:j1 + 1, i0:i1 + 1] &= _segment_distance(
+                px[j0:j1 + 1, i0:i1 + 1], py[j0:j1 + 1, i0:i1 + 1],
+                float(a.x_nm), float(a.y_nm), float(b.x_nm), float(b.y_nm)) >= edge_reach
 
     # Copper objects: (net, layers, spine, radius, kind, pad_kind)
     objects = []
@@ -178,7 +189,7 @@ def estimate_plane_connectivity(board: PhysicalBoard, *, pitch_nm: int = nm_from
         for hole in zone.outline.holes:
             outer &= ~_polygon_inside(hole.vertices, px, py)
         for layer in zone.layers:
-            fill = outer & material & (edge >= minimum_clearance + half)
+            fill = outer & material & edge_ok
             for identity, layers, spine, radius, pad_kind in objects:
                 if layer not in layers:
                     continue
