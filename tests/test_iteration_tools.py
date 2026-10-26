@@ -150,17 +150,17 @@ def test_cli_issues_and_view(run_dir, tmp_path):
     listed = subprocess.run([sys.executable, "-m", "copperscript", "issues", str(run_dir), "--json"],
                             text=True, capture_output=True, check=True)
     document = json.loads(listed.stdout)
-    assert document["schema"] == "copperscript.run-issues/v1" and document["issue_count"] == 5
+    assert document["schema"] == "copperscript.run-issues/v1" and document["issue_count"] == 4
     import hashlib
     assert document["board_sha256"] == hashlib.sha256((run_dir / "board.kicad_pcb").read_bytes()).hexdigest()
-    output = tmp_path / "p1.png"
-    viewed = subprocess.run([sys.executable, "-m", "copperscript", "view", str(run_dir), "--issue", "P1",
+    output = tmp_path / "n2.png"
+    viewed = subprocess.run([sys.executable, "-m", "copperscript", "view", str(run_dir), "--issue", "N2",
                              "-o", str(output)], text=True, capture_output=True)
     assert viewed.returncode == 0, viewed.stdout + viewed.stderr
     assert output.is_file() and "markers (red rings): 1" in viewed.stdout
     missing = subprocess.run([sys.executable, "-m", "copperscript", "view", str(run_dir), "--issue", "Z9"],
                              text=True, capture_output=True)
-    assert missing.returncode == 2 and "known: P1" in missing.stdout
+    assert missing.returncode == 2 and "known: N1, N2, O1, R1" in missing.stdout
 
 
 def test_state_decoding_cannot_reach_imported_callables():
