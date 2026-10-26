@@ -1038,10 +1038,14 @@ def _release_escape_masks(reserved, critical, plane_stitch, fanout, pre_detailed
     pre_detailed = release_masks(pre_detailed)
     if getattr(unified_options, "planned_escapes_as_copper", False) and (reserved[0] or reserved[1]):
         joined = _join_reserved_copper(pre_detailed, reserved[0], reserved[1], ())
-        kept_tracks = len(joined.tracks) - len(pre_detailed.tracks)
-        kept_vias = len(joined.vias) - len(pre_detailed.vias)
-        emit(on_progress, "ordinary_escapes", "joined", tracks=kept_tracks, vias=kept_vias,
-             dropped_tracks=len(reserved[0]) - kept_tracks, dropped_vias=len(reserved[1]) - kept_vias)
+        kept_tracks = joined.tracks[len(pre_detailed.tracks):]
+        kept_vias = joined.vias[len(pre_detailed.vias):]
+        dropped = sorted({item.net for item in (*reserved[0], *reserved[1])}
+                         - {item.net for item in (*kept_tracks, *kept_vias)}
+                         | {v.net for v in reserved[1] if v not in kept_vias})
+        emit(on_progress, "ordinary_escapes", "joined", tracks=len(kept_tracks), vias=len(kept_vias),
+             dropped_tracks=len(reserved[0]) - len(kept_tracks), dropped_vias=len(reserved[1]) - len(kept_vias),
+             dropped_nets=dropped)
         pre_detailed = joined
     return critical, plane_stitch, fanout, pre_detailed
 

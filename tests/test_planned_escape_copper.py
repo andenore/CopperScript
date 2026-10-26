@@ -37,7 +37,7 @@ def test_planned_escapes_join_the_ordinary_board_exact_checked() -> None:
     assert not any(k.id.startswith("escape-reserve") for k in pre.copper_keepouts)
     assert reserved[0][0] in pre.tracks and reserved[1][0] in pre.vias
     assert [d for p, e, d in events if (p, e) == ("ordinary_escapes", "joined")] == [
-        {"tracks": 1, "vias": 1, "dropped_tracks": 0, "dropped_vias": 0}]
+        {"tracks": 1, "vias": 1, "dropped_tracks": 0, "dropped_vias": 0, "dropped_nets": []}]
     # Off: the masks go and the copper stays out, as before.
     _, _, _, plain = _release_escape_masks(reserved, critical, None, None, masked,
                                            unified_options=UnifiedRouterOptions(planned_escapes_as_copper=False))
@@ -52,6 +52,7 @@ def test_planned_escapes_join_the_ordinary_board_exact_checked() -> None:
     assert reserved[1][0] not in cut.vias
     joined = next(d for p, e, d in events if (p, e) == ("ordinary_escapes", "joined"))
     assert joined["dropped_vias"] == 1 and joined["dropped_tracks"] + joined["tracks"] == 1
+    assert joined["dropped_nets"] == ["S"]
 
 
 def test_the_ordinary_stage_fanout_reuses_the_joined_planned_escapes() -> None:
