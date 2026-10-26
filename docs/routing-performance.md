@@ -75,6 +75,10 @@ nothing is board-specific and nothing relaxes a declared rule.
   sites. The macro port halos (`_macro_port_halos`) now bind that stitch
   too (`PlaneStitchOptions.keepouts`, through
   `critical_return_plane_options`); the pairs still route without them.
+  Replaying run C's critical retry inputs with the halos bound to the
+  stitch: **every critical group connects**, USB_TX1_IC in 6,982 states
+  within its skew budget, and the pass takes 922 s instead of 2,283 s (no
+  rip-up attempts needed).
 
 Bounded CopperProbe runs through the critical stage (fresh placement): the
 critical stage now leaves only USB_TX1_IC open (two pairs before), with FB
