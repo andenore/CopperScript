@@ -46,3 +46,27 @@ def astar():
                          I, P, P, P, P, P, P]
     _loaded = function
     return function
+
+
+_mirror = None
+
+
+def clearance_mirror():
+    """The prototype Rust ``ClearanceMirror`` class, or None.
+
+    None when the extension is not built (tools/build_clearance_rs.py) or
+    ``COPPER_NO_RUST_CLEARANCE`` / ``COPPER_NO_NATIVE`` is set; the clearance
+    index then answers in pure Python with identical results.
+    """
+    global _mirror
+    if _mirror is not None:
+        return _mirror or None
+    _mirror = False
+    if os.environ.get("COPPER_NO_NATIVE") or os.environ.get("COPPER_NO_RUST_CLEARANCE"):
+        return None
+    try:
+        from ._clearance_rs import ClearanceMirror
+    except ImportError:
+        return None
+    _mirror = ClearanceMirror
+    return ClearanceMirror

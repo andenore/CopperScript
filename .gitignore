@@ -23,3 +23,7 @@ dist/
 
 # Publishing tools are locked separately and never shipped as extension runtime.
 /integrations/vscode/tools/node_modules/
+
+# Prototype Rust clearance mirror: build output (tools/build_clearance_rs.py).
+/pcbir/native/clearance_rs/target/
+/pcbir/native/_clearance_rs.*

@@ -1,0 +1,19 @@
+[package]
+name = "clearance_rs"
+version = "0.1.0"
+edition = "2021"
+description = "Prototype exact broad phase and clearance predicates for pcbir.routing_clearance"
+publish = false
+
+[lib]
+name = "_clearance_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py39"] }
+rustc-hash = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

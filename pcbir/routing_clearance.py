@@ -21,6 +21,7 @@ from .breakout import BreakoutLand, BreakoutRegions, _nearest_region
 from .drc import non_plated_holes, placed_pad_shape
 from .geometry import Bounds, RoundedConvexShape, shapes_clear
 from .mechanical import shape_in_board
+from .native import clearance_mirror
 from .physical import (
     BoardSide,
     CopperLayer,
@@ -191,6 +192,17 @@ def _geometry_identity(value) -> str:
     return sha256(json.dumps(canonical(value), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _flat_spine(spine: tuple[Point, ...]) -> tuple[int, ...]:
+    """Spine coordinates as one flat integer tuple, for the Rust mirror."""
+    if len(spine) == 2:
+        a, b = spine
+        return (a.x_nm, a.y_nm, b.x_nm, b.y_nm)
+    if len(spine) == 1:
+        a = spine[0]
+        return (a.x_nm, a.y_nm)
+    return tuple(value for point in spine for value in (point.x_nm, point.y_nm))
+
+
 class RoutingClearanceIndex:
     """Reserve copper; same-net tracks may join, but vias must avoid pads."""
 
@@ -198,6 +210,13 @@ class RoutingClearanceIndex:
                  _deferred_components: frozenset[str] = frozenset()) -> None:
         if bin_size_nm <= 0:
             raise ValueError("clearance bin size must be positive")
+        # Optional Rust mirror of the binned copper (prototype), built once the
+        # index is complete and then kept in step by _add/_drop_object/_compact.
+        self._mirror = None
+        self._mirror_nets: dict[str, int] = {}
+        self._mirror_layers: dict[CopperLayer, int] = {}
+        self._mirror_layer_lists: dict[tuple, list[int]] = {}
+        self._mirror_pads: dict[PadReference, int] = {}
         self.board = board
         from .terminal_preferences import TerminalPreferences
         self.terminal_preferences = TerminalPreferences(board)
@@ -290,6 +309,42 @@ class RoutingClearanceIndex:
             self.add_track(track, locked=True, occurrence=f"track:{ordinal}")
         for ordinal, via in enumerate(board.vias):
             self.add_via(via, locked=True, occurrence=f"via:{ordinal}")
+        self._mirror = self._new_mirror()
+
+    # -- Rust mirror (prototype) ------------------------------------------
+
+    def _new_mirror(self):
+        """A Rust mirror of every live slot, or None without the extension."""
+        mirror_type = clearance_mirror()
+        if mirror_type is None:
+            return None
+        mirror = mirror_type(self.bin_size_nm)
+        for slot, item in enumerate(self._slots):
+            if item is not None:
+                self._mirror_add(mirror, slot, item)
+        return mirror
+
+    def _mirror_net(self, net: str) -> int:
+        identity = self._mirror_nets.get(net)
+        if identity is None:
+            identity = self._mirror_nets[net] = len(self._mirror_nets)
+        return identity
+
+    def _mirror_layer_list(self, layers) -> list[int]:
+        found = self._mirror_layer_lists.get(layers)
+        if found is None:
+            codes = self._mirror_layers
+            found = [codes.setdefault(layer, len(codes)) for layer in layers]
+            self._mirror_layer_lists[layers] = found
+        return found
+
+    def _mirror_add(self, mirror, slot: int, item: _CopperObject) -> None:
+        pad = -1
+        if item.pad_reference is not None:
+            pad = self._mirror_pads.setdefault(item.pad_reference, len(self._mirror_pads))
+        mirror.add(slot, self._mirror_net(item.net), self._mirror_layer_list(tuple(item.layers)),
+                   _flat_spine(item.shape.spine), item.shape.radius_nm, item.clearance_nm,
+                   self._net_clearance_nm.get(item.net, 0), item.is_pad, pad)
 
     def can_track(
         self, net: str, start: Point, end: Point, width_nm: int, layer: CopperLayer
@@ -430,6 +485,14 @@ class RoutingClearanceIndex:
         # Include same-net and unassigned pads, and the complete annulus rather
         # than only the drill/center. A one-nanometre separation rejects contact
         # too; foreign copper still observes the ordinary clearance rule.
+        mirror = self._mirror
+        if mirror is not None:
+            allowed = -1 if allowed_pad is None else self._mirror_pads.get(allowed_pad, -2)
+            result = mirror.pad_clear(_flat_spine(shape.spine), shape.radius_nm,
+                                      self._mirror_layer_list(tuple(layers)), allowed,
+                                      self._max_clearance_nm)
+            if result is not None:
+                return result
         return all(not other.is_pad or (allowed_pad is not None and other.pad_reference == allowed_pad)
                    or shapes_clear(shape, other.shape, 1)
                    for other in self._overlapping_objects(shape, layers))
@@ -650,6 +713,8 @@ class RoutingClearanceIndex:
                     ids.remove(slot)
                     if not ids:
                         del self._bins[(layer, x, y)]
+        if self._mirror is not None:
+            self._mirror.remove(slot)
         self._slots[slot] = None
         self._dead_slots += 1
 
@@ -710,6 +775,8 @@ class RoutingClearanceIndex:
         self._bins = {key: [remap[slot] for slot in ids] for key, ids in self._bins.items()}
         self._hole_bins = {key: [hole_remap[slot] for slot in ids]
                            for key, ids in self._hole_bins.items()}
+        if self._mirror is not None:
+            self._mirror = self._new_mirror()
         for record in self._records:
             record.objects = tuple(remap[slot] for slot in record.objects)
             if record.hole is not None:
@@ -939,6 +1006,8 @@ class RoutingClearanceIndex:
             for x in range(bounds.min_x // self.bin_size_nm, bounds.max_x // self.bin_size_nm + 1):
                 for y in range(bounds.min_y // self.bin_size_nm, bounds.max_y // self.bin_size_nm + 1):
                     self._bins.setdefault((layer, x, y), []).append(identity)
+        if self._mirror is not None:
+            self._mirror_add(self._mirror, identity, item)
         return identity
 
     def _clear(
@@ -956,6 +1025,13 @@ class RoutingClearanceIndex:
         # The broad phase of ``_overlapping_objects`` (nearby_copper), inlined:
         # the same bins and objects, each object once. The answer is a
         # conjunction, so it does not depend on the visiting order.
+        mirror = self._mirror
+        if mirror is not None and not breakout:
+            result = mirror.clear(self._mirror_net(net), _flat_spine(shape.spine), shape.radius_nm,
+                                  self._mirror_layer_list(tuple(layers)), clearance_floor_nm,
+                                  own, reach, self._max_clearance_nm)
+            if result is not None:
+                return result
         size, bins, slots = self.bin_size_nm, self._bins, self._slots
         distance = self._max_clearance_nm
         xs = range((qx0 - distance) // size, (qx1 + distance) // size + 1)
