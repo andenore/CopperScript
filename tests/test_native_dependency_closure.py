@@ -30,6 +30,7 @@ from pcbir.plane_verify import verify_filled_planes, remove_native_dangling_copp
 from pcbir.filled_feedback import _proposals
 from routing_fixtures import pipeline, rectangle, terminal
 from test_filled_feedback import fragmented
+from test_filled_feedback_scope import STARVED
 from test_autonomous_plane_access import with_test_owners
 
 
@@ -118,7 +119,9 @@ def test_trial_budget_reaches_second_open_net_before_retrying_first(native_cli, 
             rectangle('9.5', 0, '10.5', 20), block_tracks=False, block_vias=False, block_zones=True),
             CopperKeepout('first-rail-track-barrier', (CopperLayer.FRONT,),
             rectangle(8, 1, 12, 9), block_tracks=True, block_vias=False, block_zones=False)))
-    initial = pipeline(board)
+    # Both rails must reach native verification open: the unified router
+    # would otherwise route FIRST around the barrier's ends before the trials.
+    initial = pipeline(board, unified_options=STARVED)
     result = improve_filled_copper(initial, kicad_cli=native_cli,
         options=FilledCopperFeedbackOptions(maximum_trials=2, maximum_search_states=100,
                                            step_nm=nm_from_mm('0.5')))

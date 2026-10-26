@@ -1,8 +1,6 @@
 """Every separate land of a pad number is routed unless the part declares it internally joined."""
 import json
 
-import pytest
-
 from pcbir.bench import route_board_file
 from pcbir.importers.kicad_pcb import load_kicad_pcb
 
@@ -27,7 +25,7 @@ def _board(jumpers=""):
     return BOARD.replace("{jumpers}", jumpers)
 
 
-def _route(tmp_path, text, router="legacy"):
+def _route(tmp_path, text):
     path = tmp_path / "board.kicad_pcb"
     path.write_text(text)
     record = route_board_file(path, tmp_path / "out")
@@ -35,18 +33,15 @@ def _route(tmp_path, text, router="legacy"):
     return record, routed
 
 
-@pytest.mark.parametrize("router", ["legacy", "unified"])
-def test_every_separate_land_is_routed(tmp_path, router):
-    record, routed = _route(tmp_path, _board(), router)
+def test_every_separate_land_is_routed(tmp_path):
+    record, routed = _route(tmp_path, _board())
     assert record["status"] == "routed" and record["unrouted_nets"] == []
     # The far lug at (22, 10) carries copper to the rest of the pin.
     assert "(end 22 10)" in routed or "(start 22 10)" in routed
 
 
-@pytest.mark.parametrize("router", ["legacy", "unified"])
-def test_declared_internal_group_is_not_routed_between_its_lands(tmp_path, router):
-    record, routed = _route(tmp_path, _board('(duplicate_pad_numbers_are_jumpers no) (jumper_pad_groups ("1"))'),
-                            router)
+def test_declared_internal_group_is_not_routed_between_its_lands(tmp_path):
+    record, routed = _route(tmp_path, _board('(duplicate_pad_numbers_are_jumpers no) (jumper_pad_groups ("1"))'))
     assert record["status"] == "routed" and record["unrouted_nets"] == []
     imported = load_kicad_pcb(tmp_path / "board.kicad_pcb").board
     assert next(f for f in imported.footprints.values() if f.internal_pad_groups).internal_pad_groups

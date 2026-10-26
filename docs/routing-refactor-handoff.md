@@ -1,5 +1,11 @@
 # Routing refactor: handoff (2026-10-21)
 
+> Superseded 2026-10-26: the legacy router and every stage only it reached
+> (`--router legacy`, `route_detailed`, package access, power preparation, late
+> zone-escape repair) are deleted; their `route-board` flags are accepted and
+> ignored. See the P7 row of [routing-refactor-plan.md](routing-refactor-plan.md).
+> The rest of this note is the 2026-10-21 record.
+
 Where the routing refactor stands, what is open, and how to get it merged to
 `main`. The plan, phase table and decisions are in
 [routing-refactor-plan.md](routing-refactor-plan.md); this note is the
