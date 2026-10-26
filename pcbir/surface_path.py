@@ -178,6 +178,25 @@ def surface_path_to_via(
         (0, 0, -1): None,
     }
     radius_squared = radius_nm * radius_nm
+    # A point is expanded once per arrival heading, up to eight times. Its via
+    # predicate and its outgoing edges do not depend on the heading, and the
+    # index does not change during the search, so each is checked once.
+    via_legal: dict[tuple[int, int], bool] = {}
+    edge_legal: dict[tuple[int, int, int, int], bool] = {}
+
+    def legal_via(x: int, y: int, point: Point) -> bool:
+        key = (x, y)
+        result = via_legal.get(key)
+        if result is None:
+            result = via_legal[key] = bool(
+                accept_via(point)
+                and via_inside_board(board, point, via_size_nm)
+                and clearance.can_via(
+                    net, point, via_size_nm, via_layers[0], via_layers[1],
+                    via_drill_nm, check_hole_copper=True,
+                ))
+        return result
+
     expanded = 0
     while queue and expanded < state_budget:
         _, cost, _, x, y, heading = heappop(queue)
@@ -188,12 +207,7 @@ def surface_path_to_via(
         point = Point(start.x_nm + x * step_nm, start.y_nm + y * step_nm)
         if (
             (x or y) and (not targets or point in targets)
-            and accept_via(point)
-            and via_inside_board(board, point, via_size_nm)
-            and clearance.can_via(
-                net, point, via_size_nm, via_layers[0], via_layers[1],
-                via_drill_nm, check_hole_copper=True,
-            )
+            and legal_via(x, y, point)
         ):
             nodes: list[Point] = []
             cursor: tuple[int, int, int] | None = state
@@ -223,11 +237,15 @@ def surface_path_to_via(
             nx, ny = x + dx, y + dy
             if (nx * step_nm) ** 2 + (ny * step_nm) ** 2 > radius_squared:
                 continue
-            neighbor = Point(start.x_nm + nx * step_nm,
-                             start.y_nm + ny * step_nm)
-            if not _track_inside_board(board, point, neighbor, width_nm):
-                continue
-            if not clearance.can_route(net, point, neighbor, width_nm, layer):
+            edge = (x, y, dx, dy)
+            legal = edge_legal.get(edge)
+            if legal is None:
+                neighbor = Point(start.x_nm + nx * step_nm,
+                                 start.y_nm + ny * step_nm)
+                legal = edge_legal[edge] = (
+                    _track_inside_board(board, point, neighbor, width_nm)
+                    and clearance.can_route(net, point, neighbor, width_nm, layer))
+            if not legal:
                 continue
             difference = abs(next_heading - heading) if heading >= 0 else 0
             turn_steps = min(difference, 8 - difference) if heading >= 0 else 0
