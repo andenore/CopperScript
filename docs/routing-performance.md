@@ -118,6 +118,7 @@ on one machine, so their times are inflated against the baseline's.
 | C: B plus the bypass swap, B's placement | 7 / 237 | 6 | 2 (GND N4/N6) | 343 | 2,766 mm | 8 | 4 (two adopted) | 9,157 s (alone on the machine) |
 | E: C plus the late bypass pass and the stitch corridors | **6 / 237** | 4 | 2 (GND N4/N6) | 321 | 2,670 mm | 7 | 4 (two adopted) | 9,549 s (with the test suite) |
 | F: E plus planned escapes as copper, main merged (`1124441`) | **4 / 237** | 4 | 2 (GND N4/N6) | 382 | 2,767 mm | 2 | 3 (one adopted) | 6,588 s |
+| G: F with the join reusing coincident vias (`d2d5f54`) | **4 / 237**, 0 DRC errors | 4 | 2 (GND N4/N6) | 381 | 2,767 mm | 2 | 3 (one adopted) | 5,484 s |
 
 Run F joins 71 planned tracks and 64 vias (6 and 10 dropped as illegal by
 then) and connects ADC_OVR; ADC_D0 opens instead and ACQ_EN, FX_V33 and
@@ -128,6 +129,10 @@ promised via at K10 joined on top of the dogbone the BGA fanout had placed
 at the same site (`can_via` reuses a coincident same-net via, so the join
 added a second drill). The join now reuses a coincident same-net via and a
 contained track instead of adding them (`reused_*` in the joined event).
+Run G confirms it: the same 4 / 237 with the K10 via reused and no DRC
+error, in 5,484 s. The four open signal nets (ACQ_EN at K7, ADC_D0, FX_V33,
+SWDIO at K9) all end with "no path to the remaining pad group" in the
+unified stage; they are the next target.
 
 Run E (`d14d221`, B's placement) is the first full route in which **every
 critical group connects**: USB_TX1_IC on the first pass (3,257 states),
