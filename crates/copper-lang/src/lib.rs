@@ -6,9 +6,20 @@
 //! Python CLI does. Offsets and columns count Unicode code points, as Python
 //! strings do.
 
+pub mod compiler;
+pub mod elaborate;
 mod error;
 mod lexer;
+pub mod library;
+pub mod lower;
+pub mod mechanical;
+pub mod model;
+pub mod modes;
+pub mod packages;
 mod parser;
+pub mod paths;
+pub mod serializer;
+pub mod silkscreen;
 mod suggest;
 pub mod syntax;
 

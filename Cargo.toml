@@ -23,6 +23,7 @@ num-traits = "0.2"
 sha2 = "0.10"
 unicode-general-category = "1"
 copper-json = { path = "crates/copper-json" }
+copper-lang = { path = "crates/copper-lang" }
 copper-state = { path = "crates/copper-state" }
 copper-units = { path = "crates/copper-units" }
 

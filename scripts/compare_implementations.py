@@ -66,6 +66,8 @@ class Case:
     files: tuple[str, ...] | None = None
     json_keys: dict[str, list[str]] = field(default_factory=dict)
     skip_reason: str | None = None
+    # (repository-relative source, seed): run on a seeded mutation of the source.
+    mutation: tuple[str, int] | None = None
 
 
 def milestone_number(name: str) -> int:
@@ -104,6 +106,37 @@ def _expand(template: list[str], values: dict[str, object]) -> list[str]:
                 item = item.replace("{" + key + "}", value)
         args.append(item)
     return args
+
+
+_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*|\d+(?:\.\d+)?")
+
+
+def mutate_source(text: str, seed: int) -> str:
+    """A deterministic small edit that keeps most of the source valid.
+
+    Line deletions, duplications and swaps, and identifier or number swaps
+    reach the compiler's semantic checks rather than only the parser.
+    """
+    import random
+    rng = random.Random(seed)
+    lines = text.split("\n")
+    kind = rng.choice(["delete", "duplicate", "swap", "identifier", "number"])
+    if kind in {"delete", "duplicate", "swap"} and len(lines) > 2:
+        index = rng.randrange(1, len(lines) - 1)
+        if kind == "delete":
+            del lines[index]
+        elif kind == "duplicate":
+            lines.insert(index, lines[index])
+        else:
+            other = rng.randrange(1, len(lines) - 1)
+            lines[index], lines[other] = lines[other], lines[index]
+        return "\n".join(lines)
+    tokens = list(_TOKEN.finditer(text))
+    wanted = [m for m in tokens if (m.group()[0].isdigit()) == (kind == "number")]
+    if len(wanted) < 2:
+        return text[:-1]
+    target, replacement = rng.choice(wanted), rng.choice(wanted).group()
+    return text[:target.start()] + replacement + text[target.end():]
 
 
 def _ladder_cases(suite: dict, base: dict, kicad_cli: str | None) -> list[Case]:
@@ -145,6 +178,11 @@ def load_corpus(path: Path, kicad_cli: str | None = None) -> tuple[dict, list[Ca
         for source in _inputs(suite.get("inputs", []), suite.get("declares")):
             cases.append(Case(id=f"{name}/{source}", args=_expand(suite["args"], {"input": source}), cwd=ROOT,
                               timeout_s=timeout, **base))
+            for number in range(int(suite.get("mutations", 0))):
+                seed = int(hashlib.sha256(f"{source}#{number}".encode()).hexdigest()[:12], 16)
+                mutated = (Path(source).parent / f".compare-mutation-{number}.copper").as_posix()
+                cases.append(Case(id=f"{name}/{source}#m{number}", args=_expand(suite["args"], {"input": mutated}),
+                                  cwd=ROOT, timeout_s=timeout, mutation=(source, seed), **base))
         selected = suite.get("boards")
         if selected:
             names = sorted(boards) if selected == "*" else selected
@@ -278,6 +316,7 @@ def _summary(run: Run | None) -> dict | None:
     if run is None:
         return None
     return {"exit": run.exit, "seconds": run.seconds, "timed_out": run.timed_out,
+            "stdout_head": run.stdout[:160].decode("utf-8", "replace"),
             "stdout_sha256": _sha256(run.stdout), "stderr_sha256": _sha256(run.stderr),
             "files": {name: _sha256(data) for name, data in run.files.items()}}
 
@@ -291,6 +330,22 @@ def compare_case(case: Case, rust_command: list[str], python_command: list[str],
         return {**record, "status": "skipped", "reason": case.skip_reason}, []
     slug = re.sub(r"[^A-Za-z0-9._-]+", "_", case.id)
     out = work / slug / "out"
+    mutated = None
+    if case.mutation is not None:
+        source, seed = case.mutation
+        original = (ROOT / source).read_text(encoding="utf-8")
+        mutated = ROOT / Path(source).parent / Path(case.args[1]).name
+        mutated.write_bytes(mutate_source(original, seed).encode("utf-8"))
+    try:
+        return _compare_runs(case, record, rust_command, python_command, work, slug, out, environment,
+                             differences, oracle_when_pending, keep)
+    finally:
+        if mutated is not None:
+            mutated.unlink(missing_ok=True)
+
+
+def _compare_runs(case, record, rust_command, python_command, work, slug, out, environment, differences,
+                  oracle_when_pending, keep):
     rust = run_one(rust_command, case, out, environment)
     stash = work / slug / "rust"
     shutil.move(str(out), stash)

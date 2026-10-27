@@ -8,6 +8,7 @@
 mod agent_guide;
 mod args;
 mod commands;
+mod compile;
 mod pypath;
 mod state;
 

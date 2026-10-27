@@ -92,6 +92,10 @@ fn comparison_and_integral_rounding_match_python() {
         );
         assert_eq!(value.to_bigint().to_string(), text(case, "int"), "int({})", text(case, "value"));
     }
+    for case in decimal.get("normalize").unwrap().as_array().unwrap() {
+        let got = d(text(case, "value")).normalize().unwrap().to_sci_string();
+        assert_eq!(got, text(case, "normalize"), "normalize({})", text(case, "value"));
+    }
     for case in decimal.get("nm_from_mm").unwrap().as_array().unwrap() {
         let expected = match case.get("nm") {
             Some(Value::Int(number)) => number.to_string(),

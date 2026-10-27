@@ -34,6 +34,7 @@ name = "copper"
 version = "0.1.0"
 dependencies = [
  "copper-json",
+ "copper-lang",
  "copper-state",
  "sha2",
 ]
@@ -54,6 +55,7 @@ version = "0.1.0"
 dependencies = [
  "copper-json",
  "copper-state",
+ "copper-units",
  "indexmap",
  "num-bigint",
  "sha2",

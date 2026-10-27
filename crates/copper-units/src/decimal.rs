@@ -224,6 +224,22 @@ impl Decimal {
         Decimal::triple(self.negative, coefficient, exponent)
     }
 
+    /// Python's `normalize()`: round to the context, then drop trailing zeros
+    /// (zero becomes `0` with its sign kept).
+    pub fn normalize(&self) -> Result<Self, DecimalError> {
+        let fixed = self.clone().fix()?;
+        if fixed.coefficient.is_zero() {
+            return Ok(Decimal::triple(fixed.negative, BigUint::zero(), 0));
+        }
+        let (mut coefficient, mut exponent) = (fixed.coefficient, fixed.exponent);
+        let ten = BigUint::from(10u8);
+        while (&coefficient % &ten).is_zero() && exponent < EMAX {
+            coefficient /= 10u8;
+            exponent += 1;
+        }
+        Ok(Decimal::triple(fixed.negative, coefficient, exponent))
+    }
+
     /// Python's `-value` (unary minus applies the context; `-0` is `0`).
     pub fn neg(&self) -> Result<Self, DecimalError> {
         let negative = if self.coefficient.is_zero() { false } else { !self.negative };

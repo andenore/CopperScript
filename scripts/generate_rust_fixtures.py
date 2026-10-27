@@ -89,8 +89,10 @@ def decimal_fixture() -> dict:
                    "100.0000015", "0.1", "50", "0.075"]
     millimetres += [str(Decimal(rng.randint(-10**9, 10**9)) / Decimal(10 ** rng.randint(0, 9))) for _ in range(40)]
     nm = [{"mm": text, "nm": nm_from_mm(text)} for text in millimetres]
+    normalize = [{"value": text, "normalize": str(Decimal(text).normalize())}
+                 for text in pool + ["1.500", "-0.000", "100", "1E+2", "0.300", "120.0E-3"]]
     return {"schema": SCHEMA, "decimal": {"parse": parse, "binary": binary, "compare": compare,
-                                          "integral": integral, "nm_from_mm": nm}}
+                                          "integral": integral, "nm_from_mm": nm, "normalize": normalize}}
 
 
 def quantity_fixture() -> dict:
@@ -261,7 +263,9 @@ def _parse_outcome(text: str, filename: str) -> dict:
 
 def parse_sources() -> list[str]:
     patterns = ("examples/**/*.copper", "tests/**/*.copper")
-    return sorted({path.relative_to(ROOT).as_posix() for pattern in patterns for path in ROOT.glob(pattern)})
+    # Package caches (.copper-cache) and other hidden trees are not repository sources.
+    return sorted({path.relative_to(ROOT).as_posix() for pattern in patterns for path in ROOT.glob(pattern)
+                   if not any(part.startswith(".") for part in path.relative_to(ROOT).parts)})
 
 
 def mutate(text: str, mutation: list | None) -> str:

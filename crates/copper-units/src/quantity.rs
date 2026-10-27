@@ -132,6 +132,13 @@ impl Quantity {
         Ok(Quantity { dimension, base_value, display_unit })
     }
 
+    /// Python's `Kind(base_value, unit)`: the base value as given.
+    pub fn from_base(dimension: Dimension, base_value: Decimal, unit: &str) -> Result<Quantity, QuantityError> {
+        let (display_unit, _) =
+            dimension.scale(unit).ok_or_else(|| QuantityError::UnsupportedUnit { dimension, unit: unit.to_owned() })?;
+        Ok(Quantity { dimension, base_value, display_unit })
+    }
+
     pub fn dimension(&self) -> Dimension {
         self.dimension
     }
