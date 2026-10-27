@@ -22,6 +22,7 @@ mod option_parser;
 mod power_check;
 mod pypath;
 mod query;
+mod si_check;
 mod state;
 
 use std::io::{self, Write};

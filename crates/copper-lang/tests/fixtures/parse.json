@@ -32502,6 +32502,2149 @@
    "source": "tests/rust-port/export-kicad-pcb/zones.copper"
   },
   {
+   "digest": "sha256:d24935a4bbe7e6e4154fccfabc50166af1df6bc9c5b2ecfb3200194217332bad",
+   "mutation": null,
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 27,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 15,
+    "message": "expected component reference, found end of file",
+    "offset": 571,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:15:27: PAR007: expected component reference, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    571
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 64,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 40,
+    "message": "expected '=', found end of file",
+    "offset": 1805,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:40:64: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1805
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 9,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 26,
+    "message": "expected stackup layer kind, found end of file",
+    "offset": 970,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:26:9: PAR007: expected stackup layer kind, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    970
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 58,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 39,
+    "message": "expected '=', found end of file",
+    "offset": 1698,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:39:58: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1698
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR010",
+    "column": 54,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 1,
+    "message": "expected 'board', 'module', 'part', 'device', or 'board_profile', found end of file",
+    "offset": 53,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:1:54: PAR010: expected 'board', 'module', 'part', 'device', or 'board_profile', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    53
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 19,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 7,
+    "message": "expected part name, found end of file",
+    "offset": 274,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:7:19: PAR007: expected part name, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    274
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 42,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 31,
+    "message": "expected ';', found end of file",
+    "offset": 1278,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:31:42: PAR009: expected ';', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1278
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 21,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 20,
+    "message": "expected '{', found end of file",
+    "offset": 666,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:20:21: PAR009: expected '{', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    666
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "digest": "sha256:36730619f7dc0b08c5aeecc16940dbb7306d43b670850bbac6fdc960d5f74ce9",
+   "mutation": [
+    "delete",
+    2354
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "digest": "sha256:1ef3de7b71020e62b1f8ed3464f5586dad13ed964590d29503d6d2392651619e",
+   "mutation": [
+    "delete",
+    306
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 48,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 47,
+    "message": "expected ')', found '{'",
+    "offset": 2373,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:47:48: PAR009: expected ')', found '{'"
+   },
+   "mutation": [
+    "delete",
+    2372
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "digest": "sha256:e665817b81c4ec775ab452cb34cb9e6c91bf65492517e55fa591d57465b9045c",
+   "mutation": [
+    "delete",
+    1230
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "digest": "sha256:5a4412823e4ec144b96310d340d152ec1bacfbe29ee1ba3baa65826aad1b2dfc",
+   "mutation": [
+    "delete",
+    997
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "digest": "sha256:68026c30e25c506a2841421ca5cb68ee6417086164d17d3c04537bc961a0682d",
+   "mutation": [
+    "delete",
+    1664
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 9,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 40,
+    "message": "expected ';', found 'allowed_layers'",
+    "offset": 1749,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:40:9: PAR009: expected ';', found 'allowed_layers'"
+   },
+   "mutation": [
+    "delete",
+    1740
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "digest": "sha256:e8857706cd9d7e70418ac55270718fe81a5e2de73316f46f1508fbb138a16851",
+   "mutation": [
+    "delete",
+    1331
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 50,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 45,
+    "message": "expected '=', found '}'",
+    "offset": 2242,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:45:50: PAR009: expected '=', found '}'"
+   },
+   "mutation": [
+    "insert",
+    2242,
+    "}"
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "digest": "sha256:124eda356c243bd4f969edd6de2d72d147b496e360b5cf1e1c425c580ea236e1",
+   "mutation": [
+    "insert",
+    1418,
+    "("
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 95,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 42,
+    "message": "expected '=', found '{'",
+    "offset": 2053,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:42:95: PAR009: expected '=', found '{'"
+   },
+   "mutation": [
+    "insert",
+    2053,
+    "{"
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "error": {
+    "code": "LEX001",
+    "column": 93,
+    "filename": "tests/rust-port/si-check/dphy.copper",
+    "hint": null,
+    "line": 44,
+    "message": "unexpected character '@'",
+    "offset": 2184,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/dphy.copper:44:93: LEX001: unexpected character '@'"
+   },
+   "mutation": [
+    "insert",
+    2184,
+    "@"
+   ],
+   "source": "tests/rust-port/si-check/dphy.copper"
+  },
+  {
+   "digest": "sha256:c39e5201679527e6e6c935a40b081a6c469e1bc0de4524d84551498c7a4a82f2",
+   "mutation": null,
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 37,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 24,
+    "message": "expected '=', found end of file",
+    "offset": 853,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:24:37: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    853
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 10,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 38,
+    "message": "expected '=', found end of file",
+    "offset": 1734,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:38:10: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1734
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR013",
+    "column": 14,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 21,
+    "message": "unknown mechanical declaration 'stack'",
+    "offset": 700,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:21:14: PAR013: unknown mechanical declaration 'stack'"
+   },
+   "mutation": [
+    "truncate",
+    700
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR014",
+    "column": 13,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 27,
+    "message": "unknown stackup layer kind 'dielect'; expected 'copper' or 'dielectric'",
+    "offset": 994,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:27:13: PAR014: unknown stackup layer kind 'dielect'; expected 'copper' or 'dielectric'"
+   },
+   "mutation": [
+    "truncate",
+    1001
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 31,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 34,
+    "message": "expected property name, found end of file",
+    "offset": 1328,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:34:31: PAR007: expected property name, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1328
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR014",
+    "column": 13,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 26,
+    "message": "unknown stackup layer kind 'co'; expected 'copper' or 'dielectric'",
+    "offset": 942,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:26:13: PAR014: unknown stackup layer kind 'co'; expected 'copper' or 'dielectric'"
+   },
+   "mutation": [
+    "truncate",
+    944
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 39,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 37,
+    "message": "expected ';', found end of file",
+    "offset": 1663,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:37:39: PAR009: expected ';', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1663
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 11,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 12,
+    "message": "expected '{', found end of file",
+    "offset": 453,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:12:11: PAR009: expected '{', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    453
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR014",
+    "column": 13,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 24,
+    "message": "unknown stackup layer kind 'coper'; expected 'copper' or 'dielectric'",
+    "offset": 829,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:24:13: PAR014: unknown stackup layer kind 'coper'; expected 'copper' or 'dielectric'"
+   },
+   "mutation": [
+    "delete",
+    832
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "digest": "sha256:17658cd62121e3eec2cd2a28578823e3612e014efe4e05a87ca374eaf7f4f731",
+   "mutation": [
+    "delete",
+    52
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 24,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 23,
+    "message": "expected '=', found 'P1'",
+    "offset": 776,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:23:24: PAR009: expected '=', found 'P1'"
+   },
+   "mutation": [
+    "delete",
+    752
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "digest": "sha256:bae486d3d7a131ce2de449fb9f8f2274e1c631c8b2a36f9636c99326c3b30c7c",
+   "mutation": [
+    "delete",
+    1566
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 37,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 37,
+    "message": "expected '=', found 'differential'",
+    "offset": 1661,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:37:37: PAR009: expected '=', found 'differential'"
+   },
+   "mutation": [
+    "delete",
+    1660
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "digest": "sha256:82b0b3999ce69803b26e6d9c6445c3c25b668438b00b76aeb67247d29108b8c3",
+   "mutation": [
+    "delete",
+    1422
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "digest": "sha256:013e9c236aa4f703fbbafb555a4ec2575e92ff64f9cff4f10154ffaedc90cc8c",
+   "mutation": [
+    "delete",
+    1523
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 56,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 33,
+    "message": "expected '=', found 'CKN'",
+    "offset": 1228,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:33:56: PAR009: expected '=', found 'CKN'"
+   },
+   "mutation": [
+    "delete",
+    1227
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 44,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 34,
+    "message": "expected ';', found '('",
+    "offset": 1341,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:34:44: PAR009: expected ';', found '('"
+   },
+   "mutation": [
+    "insert",
+    1341,
+    "("
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 1,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 36,
+    "message": "expected property name, found '='",
+    "offset": 1522,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:36:1: PAR007: expected property name, found '='"
+   },
+   "mutation": [
+    "insert",
+    1522,
+    "="
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 14,
+    "message": "unknown declaration 'n'",
+    "offset": 503,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:14:5: PAR002: unknown declaration 'n'"
+   },
+   "mutation": [
+    "insert",
+    504,
+    ";"
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR014",
+    "column": 13,
+    "filename": "tests/rust-port/si-check/four_layer.copper",
+    "hint": null,
+    "line": 27,
+    "message": "unknown stackup layer kind 'd'; expected 'copper' or 'dielectric'",
+    "offset": 994,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/four_layer.copper:27:13: PAR014: unknown stackup layer kind 'd'; expected 'copper' or 'dielectric'"
+   },
+   "mutation": [
+    "insert",
+    995,
+    ","
+   ],
+   "source": "tests/rust-port/si-check/four_layer.copper"
+  },
+  {
+   "digest": "sha256:6db23256d6aaf64343f2205cd14bb96056e12143e58219901704da261efd94fc",
+   "mutation": null,
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": null,
+    "line": 40,
+    "message": "unknown declaration 'con'",
+    "offset": 1771,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/layer_groups.copper:40:5: PAR002: unknown declaration 'con'"
+   },
+   "mutation": [
+    "truncate",
+    1774
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": "did you mean 'constraint'?",
+    "line": 37,
+    "message": "unknown declaration 'constra'",
+    "offset": 1414,
+    "replacement": "constraint",
+    "text": "tests/rust-port/si-check/layer_groups.copper:37:5: PAR002: unknown declaration 'constra' (did you mean 'constraint'?)"
+   },
+   "mutation": [
+    "truncate",
+    1421
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": "did you mean 'constraint'?",
+    "line": 38,
+    "message": "unknown declaration 'constra'",
+    "offset": 1547,
+    "replacement": "constraint",
+    "text": "tests/rust-port/si-check/layer_groups.copper:38:5: PAR002: unknown declaration 'constra' (did you mean 'constraint'?)"
+   },
+   "mutation": [
+    "truncate",
+    1554
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 38,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": null,
+    "line": 5,
+    "message": "expected '=', found end of file",
+    "offset": 183,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/layer_groups.copper:5:38: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    183
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 37,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": null,
+    "line": 25,
+    "message": "expected '=', found end of file",
+    "offset": 930,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/layer_groups.copper:25:37: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    930
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 24,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": null,
+    "line": 12,
+    "message": "expected pin or terminal name, found end of file",
+    "offset": 476,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/layer_groups.copper:12:24: PAR007: expected pin or terminal name, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    476
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 15,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": null,
+    "line": 15,
+    "message": "expected component reference, found end of file",
+    "offset": 551,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/layer_groups.copper:15:15: PAR007: expected component reference, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    551
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 26,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": null,
+    "line": 5,
+    "message": "expected '{', found end of file",
+    "offset": 171,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/layer_groups.copper:5:26: PAR009: expected '{', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    171
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "digest": "sha256:c3275e5c219bcd1683014c382f42fafbe7f215e199dedb3bd3bfadb6ebff87d6",
+   "mutation": [
+    "delete",
+    1502
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "digest": "sha256:190aeae273ac1e2083fbdc91a04755453d2b05b066be935cd5cfbed95208636b",
+   "mutation": [
+    "delete",
+    176
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "digest": "sha256:a8bbf1640d7eace48a06789176388d87236593fac983e91663b7300237ac0442",
+   "mutation": [
+    "delete",
+    1792
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "digest": "sha256:a1bc316c0d33235acf10f5771a3088a0989f46a7a8ee62c18f485c0203e95a27",
+   "mutation": [
+    "delete",
+    726
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 18,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": null,
+    "line": 12,
+    "message": "expected pin or terminal name, found ';'",
+    "offset": 470,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/layer_groups.copper:12:18: PAR007: expected pin or terminal name, found ';'"
+   },
+   "mutation": [
+    "delete",
+    470
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "digest": "sha256:5eb19c1c9637ba45f5b765c0bd8cd95fa1dc9298bc706743ce511196dacd25bd",
+   "mutation": [
+    "delete",
+    703
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": "did you mean 'constraint'?",
+    "line": 41,
+    "message": "unknown declaration 'constraintlength_match'",
+    "offset": 1849,
+    "replacement": "constraint",
+    "text": "tests/rust-port/si-check/layer_groups.copper:41:5: PAR002: unknown declaration 'constraintlength_match' (did you mean 'constraint'?)"
+   },
+   "mutation": [
+    "delete",
+    1859
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "digest": "sha256:04a7fe65b49de22966fdb943e58f93e22713c4ba054a2c194d806b825eb061d0",
+   "mutation": [
+    "delete",
+    1476
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "digest": "sha256:e91d8c4d22053b40e116c831c8ccd70a3ec397ca33c26773a99ca4ba02c8652c",
+   "mutation": [
+    "insert",
+    57,
+    "{"
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "PAR006",
+    "column": 62,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": null,
+    "line": 38,
+    "message": "expected a string, identifier, boolean, number, or quantity",
+    "offset": 1604,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/layer_groups.copper:38:62: PAR006: expected a string, identifier, boolean, number, or quantity"
+   },
+   "mutation": [
+    "insert",
+    1604,
+    ")"
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "LEX001",
+    "column": 47,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": null,
+    "line": 23,
+    "message": "unexpected character '\\\\'",
+    "offset": 810,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/layer_groups.copper:23:47: LEX001: unexpected character '\\\\'"
+   },
+   "mutation": [
+    "insert",
+    810,
+    "\\"
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "error": {
+    "code": "LEX001",
+    "column": 50,
+    "filename": "tests/rust-port/si-check/layer_groups.copper",
+    "hint": null,
+    "line": 25,
+    "message": "unexpected character '@'",
+    "offset": 943,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/layer_groups.copper:25:50: LEX001: unexpected character '@'"
+   },
+   "mutation": [
+    "insert",
+    943,
+    "@"
+   ],
+   "source": "tests/rust-port/si-check/layer_groups.copper"
+  },
+  {
+   "digest": "sha256:6f21bc372f54ae0b1337bc0e864484ee6906f2e0c61c256f44d7826ad34f5589",
+   "mutation": null,
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 98,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 31,
+    "message": "expected ';', found end of file",
+    "offset": 1521,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:31:98: PAR009: expected ';', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1521
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 36,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 10,
+    "message": "expected '=', found end of file",
+    "offset": 426,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:10:36: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    426
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 32,
+    "message": "expected property name, found end of file",
+    "offset": 1529,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:32:5: PAR007: expected property name, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1529
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 49,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 29,
+    "message": "expected '=', found end of file",
+    "offset": 1339,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:29:49: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1339
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 37,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 25,
+    "message": "expected '=', found end of file",
+    "offset": 893,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:25:37: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    893
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 6,
+    "message": "unknown declaration 'co'",
+    "offset": 191,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:6:5: PAR002: unknown declaration 'co'"
+   },
+   "mutation": [
+    "truncate",
+    193
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 51,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 28,
+    "message": "expected property name, found end of file",
+    "offset": 1240,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:28:51: PAR007: expected property name, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1240
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 9,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 25,
+    "message": "expected property name, found end of file",
+    "offset": 865,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:25:9: PAR007: expected property name, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    865
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "digest": "sha256:97ed6aff6312e7afa20858ba5b5e43738ff071bd0fa7ff004700078397474f43",
+   "mutation": [
+    "delete",
+    848
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "digest": "sha256:f6ec89b70ad0c9a4f59d2108e292c0ab5fcac3c286cdbb5b84cf6bf252402f2b",
+   "mutation": [
+    "delete",
+    1506
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "digest": "sha256:a78246ecf3672262e4f6aa56a8fbd3941b50f412e47cc69d14b77bba36ea3469",
+   "mutation": [
+    "delete",
+    1561
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 41,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 7,
+    "message": "expected '=', found '0402'",
+    "offset": 278,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:7:41: PAR009: expected '=', found '0402'"
+   },
+   "mutation": [
+    "delete",
+    277
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "digest": "sha256:ff2fae1b61c004fb85fc6a02451f28b9f809b06fa817920796e3d3af763512da",
+   "mutation": [
+    "delete",
+    899
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "digest": "sha256:e843764745acbc5d70d83921091fbaaee10973ad4313ce8a5a6e2aa301f576fb",
+   "mutation": [
+    "delete",
+    86
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 55,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 34,
+    "message": "expected '=', found 'csi-lanes'",
+    "offset": 1712,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:34:55: PAR009: expected '=', found 'csi-lanes'"
+   },
+   "mutation": [
+    "delete",
+    1711
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "digest": "sha256:f3e1999bb3818d63e79ad7ccfdda62e9e5bfa08fd197db1ece60360588a2c755",
+   "mutation": [
+    "delete",
+    1169
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 25,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 9,
+    "message": "expected '{', found ']'",
+    "offset": 364,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:9:25: PAR009: expected '{', found ']'"
+   },
+   "mutation": [
+    "insert",
+    364,
+    "]"
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 78,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 25,
+    "message": "expected '=', found '['",
+    "offset": 934,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:25:78: PAR009: expected '=', found '['"
+   },
+   "mutation": [
+    "insert",
+    934,
+    "["
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "LEX001",
+    "column": 13,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 24,
+    "message": "unexpected character '\\\\'",
+    "offset": 768,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:24:13: LEX001: unexpected character '\\\\'"
+   },
+   "mutation": [
+    "insert",
+    768,
+    "\\"
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "error": {
+    "code": "PAR006",
+    "column": 75,
+    "filename": "tests/rust-port/si-check/no_stackup.copper",
+    "hint": null,
+    "line": 31,
+    "message": "expected a string, identifier, boolean, number, or quantity",
+    "offset": 1498,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/no_stackup.copper:31:75: PAR006: expected a string, identifier, boolean, number, or quantity"
+   },
+   "mutation": [
+    "insert",
+    1498,
+    ","
+   ],
+   "source": "tests/rust-port/si-check/no_stackup.copper"
+  },
+  {
+   "digest": "sha256:3fea7bdb580008d94ab28e903dbb80c22d64d281d9606b1b27df1ed245806549",
+   "mutation": null,
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 54,
+    "filename": "tests/rust-port/si-check/reference_planes.copper",
+    "hint": null,
+    "line": 27,
+    "message": "expected ';', found '.'",
+    "offset": 1041,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/reference_planes.copper:27:54: PAR009: expected ';', found '.'"
+   },
+   "mutation": [
+    "truncate",
+    1042
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "error": {
+    "code": "PAR014",
+    "column": 13,
+    "filename": "tests/rust-port/si-check/reference_planes.copper",
+    "hint": null,
+    "line": 24,
+    "message": "unknown stackup layer kind 'cop'; expected 'copper' or 'dielectric'",
+    "offset": 836,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/reference_planes.copper:24:13: PAR014: unknown stackup layer kind 'cop'; expected 'copper' or 'dielectric'"
+   },
+   "mutation": [
+    "truncate",
+    839
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 12,
+    "filename": "tests/rust-port/si-check/reference_planes.copper",
+    "hint": null,
+    "line": 14,
+    "message": "expected '{', found end of file",
+    "offset": 502,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/reference_planes.copper:14:12: PAR009: expected '{', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    502
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 42,
+    "filename": "tests/rust-port/si-check/reference_planes.copper",
+    "hint": null,
+    "line": 37,
+    "message": "expected ';', found end of file",
+    "offset": 1432,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/reference_planes.copper:37:42: PAR009: expected ';', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1432
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "error": {
+    "code": "PAR006",
+    "column": 40,
+    "filename": "tests/rust-port/si-check/reference_planes.copper",
+    "hint": null,
+    "line": 31,
+    "message": "expected a string, identifier, boolean, number, or quantity",
+    "offset": 1250,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/reference_planes.copper:31:40: PAR006: expected a string, identifier, boolean, number, or quantity"
+   },
+   "mutation": [
+    "truncate",
+    1250
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "error": {
+    "code": "PAR006",
+    "column": 53,
+    "filename": "tests/rust-port/si-check/reference_planes.copper",
+    "hint": null,
+    "line": 29,
+    "message": "expected a string, identifier, boolean, number, or quantity",
+    "offset": 1151,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/reference_planes.copper:29:53: PAR006: expected a string, identifier, boolean, number, or quantity"
+   },
+   "mutation": [
+    "truncate",
+    1151
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/reference_planes.copper",
+    "hint": "did you mean 'constraint'?",
+    "line": 36,
+    "message": "unknown declaration 'constrain'",
+    "offset": 1340,
+    "replacement": "constraint",
+    "text": "tests/rust-port/si-check/reference_planes.copper:36:5: PAR002: unknown declaration 'constrain' (did you mean 'constraint'?)"
+   },
+   "mutation": [
+    "truncate",
+    1349
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "error": {
+    "code": "LEX003",
+    "column": 102,
+    "filename": "tests/rust-port/si-check/reference_planes.copper",
+    "hint": null,
+    "line": 38,
+    "message": "unterminated string",
+    "offset": 1615,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/reference_planes.copper:38:102: LEX003: unterminated string"
+   },
+   "mutation": [
+    "truncate",
+    1624
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "digest": "sha256:3ddef3ce51ac54953378d6a562db0bd66c066ae171cbe8d56feca5f45daa0767",
+   "mutation": [
+    "delete",
+    1757
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "digest": "sha256:b56a64c645dab02cc82d860b2af75447b9e0f3528b26bbd2a9ab51d39fc41834",
+   "mutation": [
+    "delete",
+    1421
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "digest": "sha256:0237171ea69e39484e9f30e3bd20ab8dbb8248dfbe4535062741554d7fee2165",
+   "mutation": [
+    "delete",
+    1295
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "digest": "sha256:04d3075cbfc0f49016f1194387d8c8178e728b904594e0b1b097149f4bf8542c",
+   "mutation": [
+    "delete",
+    233
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "error": {
+    "code": "LEX003",
+    "column": 68,
+    "filename": "tests/rust-port/si-check/reference_planes.copper",
+    "hint": null,
+    "line": 41,
+    "message": "unterminated string",
+    "offset": 1824,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/reference_planes.copper:41:68: LEX003: unterminated string"
+   },
+   "mutation": [
+    "delete",
+    174
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "digest": "sha256:a18348722f196e99a270a9ce9e225d39d9a6773bc0f044a383234471caad75a4",
+   "mutation": [
+    "delete",
+    804
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "digest": "sha256:07977950257b6876664c5929395852c61d60c687780c308be9f70e827e9a4198",
+   "mutation": [
+    "delete",
+    1128
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "digest": "sha256:711a4b82ed48905a6863dd49e43486378e0915a89e7d449bb086e2440905c3fc",
+   "mutation": [
+    "delete",
+    463
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "digest": "sha256:a18a02cebef98cbc45df5fcb021c0aceb98ac7033c040fa5d76bc89f8491c478",
+   "mutation": [
+    "insert",
+    539,
+    "a"
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "error": {
+    "code": "PAR006",
+    "column": 53,
+    "filename": "tests/rust-port/si-check/reference_planes.copper",
+    "hint": null,
+    "line": 31,
+    "message": "expected a string, identifier, boolean, number, or quantity",
+    "offset": 1263,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/reference_planes.copper:31:53: PAR006: expected a string, identifier, boolean, number, or quantity"
+   },
+   "mutation": [
+    "insert",
+    1263,
+    ","
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "error": {
+    "code": "LEX001",
+    "column": 7,
+    "filename": "tests/rust-port/si-check/reference_planes.copper",
+    "hint": null,
+    "line": 15,
+    "message": "unexpected character '\\\\'",
+    "offset": 525,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/reference_planes.copper:15:7: LEX001: unexpected character '\\\\'"
+   },
+   "mutation": [
+    "insert",
+    525,
+    "\\"
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "digest": "sha256:22154cd47d20188c613b4b91f0615b47d85c030dd55b26d38f2290c272212a5f",
+   "mutation": [
+    "insert",
+    1071,
+    "-"
+   ],
+   "source": "tests/rust-port/si-check/reference_planes.copper"
+  },
+  {
+   "digest": "sha256:3a074633fec586648317048cfdae1aab66bc7d904c01653ab943a2ef7aecbd80",
+   "mutation": null,
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 19,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 39,
+    "message": "expected '(', found end of file",
+    "offset": 1703,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:39:19: PAR009: expected '(', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1703
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 25,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 12,
+    "message": "expected ';', found end of file",
+    "offset": 463,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:12:25: PAR009: expected ';', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    463
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 64,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 39,
+    "message": "expected '=', found end of file",
+    "offset": 1748,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:39:64: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1748
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 36,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 32,
+    "message": "expected '=', found end of file",
+    "offset": 1309,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:32:36: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1309
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 9,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 23,
+    "message": "expected stackup layer kind, found end of file",
+    "offset": 758,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:23:9: PAR007: expected stackup layer kind, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    758
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 104,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 37,
+    "message": "expected '=', found end of file",
+    "offset": 1558,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:37:104: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1558
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 58,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 37,
+    "message": "expected ';', found end of file",
+    "offset": 1512,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:37:58: PAR009: expected ';', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1512
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 47,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 29,
+    "message": "expected ';', found end of file",
+    "offset": 1149,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:29:47: PAR009: expected ';', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1149
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "digest": "sha256:6475c824b7224905697c17da4e8bd98246f99934712fca78dcd126637293041c",
+   "mutation": [
+    "delete",
+    1381
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "digest": "sha256:7d9756d741954c788fe43f78e85f4de78db4754619377c1230a40d59a61ff004",
+   "mutation": [
+    "delete",
+    1562
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "digest": "sha256:948acbaba411c415d622893f72f2a79f9067467a9f6976c155411f83c092a5e8",
+   "mutation": [
+    "delete",
+    31
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": "did you mean 'component'?",
+    "line": 10,
+    "message": "unknown declaration 'componen'",
+    "offset": 391,
+    "replacement": "component",
+    "text": "tests/rust-port/si-check/single_ended.copper:10:5: PAR002: unknown declaration 'componen' (did you mean 'component'?)"
+   },
+   "mutation": [
+    "delete",
+    399
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "digest": "sha256:83857719c225d0f3950deefde933f260616e83a4030c28a675ff039b50f8a1e8",
+   "mutation": [
+    "delete",
+    1372
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR014",
+    "column": 13,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 29,
+    "message": "unknown stackup layer kind 'dielectricC2'; expected 'copper' or 'dielectric'",
+    "offset": 1115,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:29:13: PAR014: unknown stackup layer kind 'dielectricC2'; expected 'copper' or 'dielectric'"
+   },
+   "mutation": [
+    "delete",
+    1125
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "digest": "sha256:0709155ca5892135bfc5096748c3f5d792bc15fd94e2afaf2d95657dc243a105",
+   "mutation": [
+    "delete",
+    1313
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "LEX003",
+    "column": 83,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 37,
+    "message": "unterminated string",
+    "offset": 1536,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:37:83: LEX003: unterminated string"
+   },
+   "mutation": [
+    "delete",
+    128
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 46,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 31,
+    "message": "expected ';', found ','",
+    "offset": 1260,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:31:46: PAR009: expected ';', found ','"
+   },
+   "mutation": [
+    "insert",
+    1260,
+    ","
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 28,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 9,
+    "message": "expected '{', found '['",
+    "offset": 363,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:9:28: PAR009: expected '{', found '['"
+   },
+   "mutation": [
+    "insert",
+    363,
+    "["
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 34,
+    "message": "expected mechanical declaration, found '{'",
+    "offset": 1337,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:34:5: PAR007: expected mechanical declaration, found '{'"
+   },
+   "mutation": [
+    "insert",
+    1337,
+    "{"
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "error": {
+    "code": "LEX001",
+    "column": 61,
+    "filename": "tests/rust-port/si-check/single_ended.copper",
+    "hint": null,
+    "line": 36,
+    "message": "unexpected character '\\\\'",
+    "offset": 1400,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/single_ended.copper:36:61: LEX001: unexpected character '\\\\'"
+   },
+   "mutation": [
+    "insert",
+    1400,
+    "\\"
+   ],
+   "source": "tests/rust-port/si-check/single_ended.copper"
+  },
+  {
+   "digest": "sha256:0c250765cd4b2db1b941ba49bd5184f15c42224481b54e9a59068d1a6c446b8a",
+   "mutation": null,
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 99,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": null,
+    "line": 30,
+    "message": "expected ';', found end of file",
+    "offset": 1177,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/two_layer.copper:30:99: PAR009: expected ';', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1177
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 69,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": null,
+    "line": 31,
+    "message": "expected '=', found end of file",
+    "offset": 1277,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/two_layer.copper:31:69: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1277
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 36,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": null,
+    "line": 30,
+    "message": "expected '=', found end of file",
+    "offset": 1114,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/two_layer.copper:30:36: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1114
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 59,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": null,
+    "line": 20,
+    "message": "expected mechanical declaration, found end of file",
+    "offset": 700,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/two_layer.copper:20:59: PAR007: expected mechanical declaration, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    700
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "LEX003",
+    "column": 44,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": null,
+    "line": 28,
+    "message": "unterminated string",
+    "offset": 939,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/two_layer.copper:28:44: LEX003: unterminated string"
+   },
+   "mutation": [
+    "truncate",
+    941
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "LEX003",
+    "column": 17,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": null,
+    "line": 3,
+    "message": "unterminated string",
+    "offset": 141,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/two_layer.copper:3:17: LEX003: unterminated string"
+   },
+   "mutation": [
+    "truncate",
+    146
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": "did you mean 'net'?",
+    "line": 12,
+    "message": "unknown declaration 'ne'",
+    "offset": 461,
+    "replacement": "net",
+    "text": "tests/rust-port/si-check/two_layer.copper:12:5: PAR002: unknown declaration 'ne' (did you mean 'net'?)"
+   },
+   "mutation": [
+    "truncate",
+    463
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 44,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": null,
+    "line": 20,
+    "message": "expected '=', found end of file",
+    "offset": 685,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/two_layer.copper:20:44: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    685
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "digest": "sha256:a7701923efd8ca1ca1f33ebe5171236a3c42cef4bf47a989e03fdf17c940ae0d",
+   "mutation": [
+    "delete",
+    1185
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "digest": "sha256:cf1e017e4f24d62e5370ce22d48a835d711e9a7dad674bd10f6f7b669d0f42ca",
+   "mutation": [
+    "delete",
+    827
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 124,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": null,
+    "line": 29,
+    "message": "expected '=', found '90'",
+    "offset": 1072,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/two_layer.copper:29:124: PAR009: expected '=', found '90'"
+   },
+   "mutation": [
+    "delete",
+    1071
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "digest": "sha256:11ce01a7b9715c610f0e70064f3cec95bd982d7e89c709f7ea858f0ec597c6d4",
+   "mutation": [
+    "delete",
+    104
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": "did you mean 'net'?",
+    "line": 15,
+    "message": "unknown declaration 'et'",
+    "offset": 545,
+    "replacement": "net",
+    "text": "tests/rust-port/si-check/two_layer.copper:15:5: PAR002: unknown declaration 'et' (did you mean 'net'?)"
+   },
+   "mutation": [
+    "delete",
+    545
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "digest": "sha256:57d386a97f71b9ddd6f4b0617d14561f03fbaadfe46b04697ef4774e498fa6f4",
+   "mutation": [
+    "delete",
+    59
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "digest": "sha256:0f9cf456a36666e0ab24d841eb7bc2a419762df7fb6793c9aea07cbe3d988249",
+   "mutation": [
+    "delete",
+    1268
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "digest": "sha256:dcf7b349abcff868cb096e087da02223b89645c6a9b00cf8011d5a0202030e56",
+   "mutation": [
+    "delete",
+    1276
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": "did you mean 'component'?",
+    "line": 10,
+    "message": "unknown declaration 'component1'",
+    "offset": 409,
+    "replacement": "component",
+    "text": "tests/rust-port/si-check/two_layer.copper:10:5: PAR002: unknown declaration 'component1' (did you mean 'component'?)"
+   },
+   "mutation": [
+    "insert",
+    418,
+    "1"
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR014",
+    "column": 13,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": null,
+    "line": 23,
+    "message": "unknown stackup layer kind 'dielect'; expected 'copper' or 'dielectric'",
+    "offset": 780,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/two_layer.copper:23:13: PAR014: unknown stackup layer kind 'dielect'; expected 'copper' or 'dielectric'"
+   },
+   "mutation": [
+    "insert",
+    787,
+    "]"
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 117,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": null,
+    "line": 29,
+    "message": "expected '=', found ')'",
+    "offset": 1065,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/two_layer.copper:29:117: PAR009: expected '=', found ')'"
+   },
+   "mutation": [
+    "insert",
+    1065,
+    ")"
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 47,
+    "filename": "tests/rust-port/si-check/two_layer.copper",
+    "hint": null,
+    "line": 22,
+    "message": "expected property name, found ')'",
+    "offset": 765,
+    "replacement": null,
+    "text": "tests/rust-port/si-check/two_layer.copper:22:47: PAR007: expected property name, found ')'"
+   },
+   "mutation": [
+    "insert",
+    765,
+    ")"
+   ],
+   "source": "tests/rust-port/si-check/two_layer.copper"
+  },
+  {
    "error": {
     "code": "PAR010",
     "column": 1,

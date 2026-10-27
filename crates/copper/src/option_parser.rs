@@ -45,6 +45,11 @@ impl Parsed {
     pub fn value(&self, long: &str) -> Option<&str> {
         self.options.iter().rev().find(|(name, _)| *name == long).and_then(|(_, value)| value.as_deref())
     }
+
+    /// Every value given for a repeatable option.
+    pub fn values(&self, long: &str) -> Vec<&str> {
+        self.options.iter().filter(|(name, _)| *name == long).filter_map(|(_, value)| value.as_deref()).collect()
+    }
 }
 
 fn looks_negative(text: &str) -> bool {

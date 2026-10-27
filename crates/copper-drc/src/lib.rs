@@ -13,6 +13,7 @@ pub mod breakout;
 pub mod connectivity;
 pub mod legality;
 pub mod macros;
+pub mod signal_integrity;
 
 use indexmap::{IndexMap, IndexSet};
 

@@ -12212,6 +12212,957 @@
    ]
   },
   {
+   "name": "si-check-proxy",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper",
+    "tests/rust-port/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints"
+   ],
+   "mutations": 10
+  },
+  {
+   "name": "si-check-json",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper",
+    "tests/rust-port/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--json"
+   ],
+   "mutations": 3
+  },
+  {
+   "name": "si-check-resolved",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper",
+    "tests/rust-port/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--json"
+   ]
+  },
+  {
+   "name": "si-check-six-layer",
+   "milestone": "M3",
+   "inputs": [
+    "tests/rust-port/si-check/*.copper",
+    "examples/*/board.copper"
+   ],
+   "declares": "board",
+   "mutations": 10,
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--layers",
+    "6",
+    "--fab-profile",
+    "jlcpcb-six-layer"
+   ]
+  },
+  {
+   "name": "si-check-six-layer-json",
+   "milestone": "M3",
+   "inputs": [
+    "tests/rust-port/si-check/*.copper"
+   ],
+   "declares": "board",
+   "mutations": 10,
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--layers",
+    "6",
+    "--fab-profile",
+    "jlcpcb-six-layer",
+    "--json"
+   ]
+  },
+  {
+   "name": "si-check-four-layer",
+   "milestone": "M3",
+   "inputs": [
+    "tests/rust-port/si-check/*.copper",
+    "examples/*/board.copper"
+   ],
+   "declares": "board",
+   "mutations": 5,
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--layers",
+    "4",
+    "--fab-profile",
+    "jlcpcb-four-layer",
+    "--json"
+   ]
+  },
+  {
+   "name": "si-check-boards",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "si-check-boards/cm4/text",
+     "args": [
+      "si-check",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer"
+     ]
+    },
+    {
+     "id": "si-check-boards/cm4/json",
+     "args": [
+      "si-check",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/cm4/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/cm4/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/full-vertical/text",
+     "args": [
+      "si-check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer"
+     ]
+    },
+    {
+     "id": "si-check-boards/full-vertical/json",
+     "args": [
+      "si-check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/full-vertical/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/full-vertical/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-anchors/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_anchors/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-anchors/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_anchors/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-anchors/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_anchors/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-anchors/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_anchors/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-curves/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_curves/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-curves/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_curves/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-curves/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_curves/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-curves/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_curves/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-editor/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_editor_demo/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-editor/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_editor_demo/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-editor/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_editor_demo/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-editor/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_editor_demo/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-outline/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_outline/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-outline/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_outline/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-outline/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_outline/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-outline/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_outline/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-profile/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_profile_project/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-profile/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_profile_project/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-profile/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_profile_project/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-profile/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_profile_project/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-reference/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_reference/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-reference/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_reference/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-reference/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_reference/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-reference/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_reference/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/nrf52/text",
+     "args": [
+      "si-check",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer"
+     ]
+    },
+    {
+     "id": "si-check-boards/nrf52/json",
+     "args": [
+      "si-check",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/nrf52/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/nrf52/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/resolved-footprint/text",
+     "args": [
+      "si-check",
+      "examples/resolved_footprint_board/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/resolved-footprint/json",
+     "args": [
+      "si-check",
+      "examples/resolved_footprint_board/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/resolved-footprint/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/resolved_footprint_board/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/resolved-footprint/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/resolved_footprint_board/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/round-led-ring/text",
+     "args": [
+      "si-check",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/round-led-ring/json",
+     "args": [
+      "si-check",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/round-led-ring/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/round-led-ring/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "si-check-options",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "si-check-options/profile-mismatch",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "jlcpcb-six-layer"
+     ]
+    },
+    {
+     "id": "si-check-options/four-layer-profile-on-six",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-four-layer"
+     ]
+    },
+    {
+     "id": "si-check-options/generic-six",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6"
+     ]
+    },
+    {
+     "id": "si-check-options/generic-four-json",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers=4",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-options/footprint-root",
+     "args": [
+      "si-check",
+      "examples/resolved_footprint_board/board.copper",
+      "--locked",
+      "--offline",
+      "--footprint-root",
+      "examples/resolved_footprint_board",
+      "--footprint-root",
+      "tests/fixtures/footprints"
+     ]
+    },
+    {
+     "id": "si-check-options/footprint-root-missing",
+     "args": [
+      "si-check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--footprint-root",
+      "{out}/missing"
+     ]
+    },
+    {
+     "id": "si-check-options/resolved-unlocked",
+     "args": [
+      "si-check",
+      "examples/valid_board/board.copper",
+      "--offline"
+     ]
+    },
+    {
+     "id": "si-check-options/missing-board",
+     "args": [
+      "si-check",
+      "examples/missing/board.copper",
+      "--locked",
+      "--offline"
+     ]
+    },
+    {
+     "id": "si-check-options/wrong-suffix",
+     "args": [
+      "si-check",
+      "README.md",
+      "--locked",
+      "--offline"
+     ]
+    },
+    {
+     "id": "si-check-options/abbreviated",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--lock",
+      "--off",
+      "--allow",
+      "--lay",
+      "6",
+      "--fab",
+      "jlcpcb-six-layer",
+      "--js"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-bad-layers",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--layers",
+      "3"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-layers-text",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--layers",
+      "six"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-bad-profile",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--fab-profile",
+      "oshpark"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-no-board",
+     "args": [
+      "si-check",
+      "--json"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-two-boards",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "tests/rust-port/si-check/dphy.copper"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-unknown",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--width-mm",
+      "50"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/help",
+     "args": [
+      "si-check",
+      "--help"
+     ],
+     "compare": [
+      "exit"
+     ]
+    }
+   ]
+  },
+  {
    "name": "ladder",
    "milestone": "M4",
    "ladder": "bench/ladder.json",
