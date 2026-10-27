@@ -102,6 +102,8 @@ jobs:
           python scripts/compare_implementations.py --jobs 4 --milestone M2
           --suite export-kicad --suite export-kicad-no-check --suite export-kicad-outputs
           --suite check-footprint --suite check-footprint-strict
+          --suite export-kicad-pcb --suite export-kicad-pcb-proxy --suite export-kicad-pcb-fixtures
+          --suite export-kicad-pcb-options
           --report build/compare/report-m2.json --markdown build/compare/report-m2.md
       - name: Publish the comparison summary
         if: always()
