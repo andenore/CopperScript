@@ -332,8 +332,8 @@ do not shrink as much.
 - Corpus: 1,723 gated cases (M0 and M1). 1,716 are byte-identical and 7
   are recorded differences (D-0001 to D-0007: Python crashes on a component
   with an unknown part). Locally, 199 targeted mechanical and silkscreen
-  snippets and about 2,400 further seeded mutations of the mechanical
-  boards also match.
+  snippets and about 1,200 further seeded mutations of the mechanical
+  boards, each run through `check --json` and `compile`, also match.
 - Exactness: Python's 60- and 80-digit decimal steps (curve chord limits,
   edge-attachment offsets, DXF lengths, reference transforms) are computed
   with exact rationals, which agree wherever those digits can tell the
