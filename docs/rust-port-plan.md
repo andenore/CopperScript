@@ -317,31 +317,34 @@ do not shrink as much.
 - Ladder: the `ladder` suite is the timing hook. M0 does not change the
   Python implementation, so the ladder was not rerun for it.
 
-**M1 (started 2026-10-27): `check` and `compile` done; the other M1 commands remain.**
+**M1 (2026-10-27): complete locally; gated in CI from this change.**
 
-- `copper-lang` parses every CopperScript document kind into a Rust syntax
-  tree with Python's diagnostics: code, message, code-point location, the
-  `difflib` "did you mean" hint and the replacement. 1,118 recorded parse
-  outcomes match (every in-repo source, seeded truncations, deletions and
-  insertions, and snippets for all 18 lexer and parser error codes); all 146
-  CopperLib and 6 CopperAssetTracker sources also match locally.
-- Package resolution, lockfiles, electrical lowering, elaboration, ERC,
-  diagnostics and the compiled JSON are rewritten. `copper-physical` holds
-  the exact board geometry (outlines, cutouts, holes, slots, line/arc paths)
-  that mechanical lowering validates; `copper-lang` lowers `mechanical`
-  (profiles, anchors, assembly, DXF references, stackup) and `silkscreen`
-  (including the flattened Cu logo).
-- `check`, `check --json` and `compile` are byte-identical on all 704 corpus
-  cases (every example and fixture board plus 10 seeded mutations each,
-  including the 10 boards with mechanical or silkscreen blocks). Locally,
-  199 targeted mechanical and silkscreen snippets (every error message of
-  those blocks, DXF parsing, logo and reference transforms) also match on
-  both commands.
+- Commands rewritten: `check`, `compile`, `query`, `power-check`,
+  `audit-footprints`, `lock`, `compile-macro` and `library`.
+- `copper-lang` parses every CopperScript document kind with Python's
+  diagnostics (1,118 recorded parse outcomes match; all 146 CopperLib and 6
+  CopperAssetTracker sources match locally) and rewrites package resolution
+  and lockfiles, electrical, mechanical and silkscreen lowering, ERC, the
+  compiled JSON, design queries, power-state analysis, footprint resolution
+  and audit, macro lowering and asset preparation, and library discovery.
+  `copper-physical` holds the exact board geometry, the footprint model and
+  the `.kicad_mod` importer.
+- Corpus: 1,723 gated cases (M0 and M1). 1,716 are byte-identical and 7
+  are recorded differences (D-0001 to D-0007: Python crashes on a component
+  with an unknown part). Locally, 199 targeted mechanical and silkscreen
+  snippets and about 2,400 further seeded mutations of the mechanical
+  boards also match.
 - Exactness: Python's 60- and 80-digit decimal steps (curve chord limits,
   edge-attachment offsets, DXF lengths, reference transforms) are computed
   with exact rationals, which agree wherever those digits can tell the
   results apart. Lengths beyond 2^40 nm (1.1 km) report "not implemented".
-- Decision taken for open item 1: exit statuses stay Python's; usage, help
-  and error wording of the argument parser is not copied.
-- Next: `lock`, `audit-footprints`, `library`, `compile-macro`, `query` and
-  `power-check`; then populate the package cache in CI and gate M1.
+- Decisions: exit statuses stay Python's, argparse wording is not copied
+  (usage-error cases compare exit status and stdout only); the binary
+  writes LF everywhere (section 4); an uncaught Python exception is
+  compared by its final line, so its reviewed difference matches on every
+  platform.
+- CI populates each board's package cache with a locked online
+  `copper check` and compares with `--jobs 4`. The KiCad footprint
+  repository stays uncached, so footprint resolution through it reports the
+  offline cache miss in both implementations.
+- Next: M2 (`export-kicad-pcb`, `export-kicad`, `check-footprint`).

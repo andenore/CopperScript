@@ -9,9 +9,9 @@ changes its behaviour.
 | `copper-json` | JSON values and a serializer that reproduces Python's `json.dumps` byte for byte; Python text-mode newlines |
 | `copper-units` | `Decimal` with Python's default context, integer nanometres (`Nm`), `Fraction`, quantities and the `100 nF` formatter |
 | `copper-state` | The frozen `copperscript.state/v1` format: read, verify, write |
-| `copper-physical` | Exact board geometry: points, outlines, cutouts, holes, slots, line/arc paths and their validation |
+| `copper-physical` | Exact board geometry (outlines, cutouts, holes, slots, line/arc paths), footprints and the `.kicad_mod` importer |
 | `copper-lang` | Lexer, parser, package resolution, lowering (electrical, mechanical, silkscreen), ERC and the compiled JSON (M1, in progress) |
-| `copper` | The `copper` binary; implemented commands: `agent-guide`, `state`, `check`, `compile` |
+| `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` (M0); `check`, `compile`, `query`, `power-check`, `audit-footprints`, `lock`, `compile-macro`, `library` (M1) |
 
 ## Build and test
 
@@ -32,6 +32,7 @@ package installed (`uv sync --locked` or `pip install -e .`).
 python scripts/compare_implementations.py                 # the gated suites; exit 1 on any difference
 python scripts/compare_implementations.py --list --suite all
 python scripts/compare_implementations.py --suite check --keep build/compare/keep
+python scripts/compare_implementations.py --jobs 4                      # parallel; timings only comparable with --jobs 1
 python scripts/compare_implementations.py --suite ladder --oracle-when-pending --report build/compare/ladder.json
 ```
 

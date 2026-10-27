@@ -1,7 +1,7 @@
 name: Rust rewrite
 
 # Builds and tests the Rust workspace and compares the `copper` binary with the
-# Python CLI on the gated corpus suites (docs/rust-port-plan.md, milestone M0).
+# Python CLI on the gated corpus suites (docs/rust-port-plan.md).
 # Python changes trigger it too: the Python CLI is the oracle, so a change to
 # its output shows up here as a stale fixture or a differing case.
 on:
@@ -58,7 +58,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash
@@ -86,8 +86,16 @@ jobs:
         run: python -m pip install -e ".[test]"
       - name: Check the oracle fixtures are current
         run: python scripts/generate_rust_fixtures.py --check
+      - name: Populate the package cache
+        # Locked online checks fetch every board's pinned packages into its
+        # .copper-cache without changing copper.lock; the comparison then runs
+        # offline, as locally. Boards that fail ERC still fetch.
+        run: |
+          for board in examples/*/board.copper examples/simulation/*.copper; do
+            python -m copperscript check "$board" --locked > /dev/null || true
+          done
       - name: Compare the binary with the Python CLI
-        run: python scripts/compare_implementations.py --report build/compare/report.json --markdown build/compare/report.md
+        run: python scripts/compare_implementations.py --jobs 4 --report build/compare/report.json --markdown build/compare/report.md
       - name: Publish the comparison summary
         if: always()
         run: if [ -f build/compare/report.md ]; then cat build/compare/report.md >> "$GITHUB_STEP_SUMMARY"; fi

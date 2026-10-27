@@ -26,6 +26,7 @@ one ``route-board`` case per board: this is the ladder timing hook.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import difflib
 import fnmatch
 import glob
@@ -37,6 +38,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -467,6 +469,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--oracle-when-pending", action="store_true",
                         help="run the Python oracle even when the Rust command is not implemented (timing)")
     parser.add_argument("--kicad-cli", help="pass --verify-plane-fill to native ladder boards")
+    parser.add_argument("--jobs", type=int, default=1,
+                        help="cases to run at once (default 1; timings are only comparable with 1)")
     args = parser.parse_args(argv)
 
     corpus, cases = load_corpus(args.corpus, args.kicad_cli)
@@ -496,19 +500,37 @@ def main(argv: list[str] | None = None) -> int:
     environment = {**os.environ, **ENVIRONMENT}
     differences = load_differences(args.differences)
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    records = []
+    results: dict[int, dict] = {}
+    printing = threading.Lock()
+    # Cases on one example's tree run in one group, in order: a seeded
+    # mutation is written next to its source, where a sibling package import
+    # of the same tree would otherwise inventory it.
+    groups: dict[str, list[int]] = {}
+    for index, case in enumerate(cases):
+        tree = next((arg for arg in case.args if arg.startswith(("examples/", "tests/"))), None)
+        key = "/".join(Path(tree).parts[:2]) if tree else case.id
+        groups.setdefault(key, []).append(index)
     with tempfile.TemporaryDirectory(prefix="copper-compare-") as temporary:
         work = Path(temporary)
-        for case in cases:
-            record, excerpt = compare_case(case, [str(rust_binary)], [args.python, "-m", "copperscript"], work,
-                                           environment, differences, args.oracle_when_pending, args.keep)
-            record["gated"] = milestone_number(case.milestone) <= gate_number
-            records.append(record)
-            timing = " ".join(f"{name} {record[name]['seconds']}s" for name in ("python", "rust")
-                              if record.get(name))
-            print(f"{record['status']:<9} {case.id}" + (f"  ({timing})" if timing else ""), flush=True)
-            for line in excerpt:
-                print(line)
+
+        def run_group(indexes: list[int]) -> None:
+            for index in indexes:
+                case = cases[index]
+                record, excerpt = compare_case(case, [str(rust_binary)], [args.python, "-m", "copperscript"], work,
+                                               environment, differences, args.oracle_when_pending, args.keep)
+                record["gated"] = milestone_number(case.milestone) <= gate_number
+                results[index] = record
+                timing = " ".join(f"{name} {record[name]['seconds']}s" for name in ("python", "rust")
+                                  if record.get(name))
+                with printing:
+                    print(f"{record['status']:<9} {case.id}" + (f"  ({timing})" if timing else ""), flush=True)
+                    for line in excerpt:
+                        print(line)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+            for future in [pool.submit(run_group, indexes) for indexes in groups.values()]:
+                future.result()
+    records = [results[index] for index in range(len(cases))]
     suite_rows = []
     for name in dict.fromkeys(record["suite"] for record in records):
         rows = [record for record in records if record["suite"] == name]
