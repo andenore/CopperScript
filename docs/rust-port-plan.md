@@ -349,16 +349,37 @@ do not shrink as much.
   offline cache miss in both implementations.
 - Next: M2 (`export-kicad-pcb`, `export-kicad`, `check-footprint`).
 
-**M2 (in progress).**
+**M2 (2026-10-27): complete; gated in CI on Linux and Windows.**
 
-- `export-kicad`: the KiCad schematic backend (`copper-lang`
-  `kicad_schematic`: flat single-sheet schematic, embedded symbols, the
-  project-local symbol library, `sym-lib-table` and `.kicad_pro`) and its
-  writer. The `export-kicad`, `export-kicad-no-check` and
-  `export-kicad-outputs` suites (374 cases: every example and fixture board,
-  ERC failures with and without `--no-check`, output-path forms) are
-  byte-identical.
-- `check-footprint`: the `.kicad_mod` import report. The `check-footprint`
-  and `check-footprint-strict` suites (269 cases: every footprint in the
-  examples, fixtures and cached CopperLib packages, with seeded mutations)
-  are byte-identical.
+- Commands rewritten: `check-footprint`, `export-kicad`, `export-kicad-pcb`.
+- `copper-lang` gains the KiCad schematic backend (flat single-sheet
+  schematic, embedded symbols, the project-local symbol library,
+  `sym-lib-table` and `.kicad_pro`). `copper-pcb` holds the physical board IR,
+  physicalisation with proxy and resolved footprints, placement templates,
+  hard-macro scenes, width contracts and edge openings, and the KiCad
+  PCB/project backend with tracks, vias, fixed polygons and the via-process
+  sidecar. `copper-drc` (pulled forward from M3, because M2 requires macro
+  examples to materialise) holds the physical DRC on that path, exact copper
+  connectivity, breakout-region spacing, placement legality and hard-macro
+  materialisation with its port, plane-return and private-net proofs.
+- Corpus: 12 M2 suites, 1,484 cases (every example, fixture, footprint and
+  synthetic macro board, every option, error paths and seeded mutations):
+  1,458 byte-identical and 26 recorded differences (D-0008 to D-0033, all
+  Python crashes on a component with an unknown part). The full gate (M0 to
+  M2) is 3,174 equal and 33 recorded.
+- Consumer boards: CopperLedRing's `export-kicad-pcb` is byte-identical in
+  every file; CopperAssetTracker's matches (its macros stop before
+  placement in both). With its macros pinned, the three real CopperLib
+  macros materialise and reproduce Python's DRC report byte for byte.
+- Windows: Python's two OS-error forms (C runtime `[Errno N]` for file I/O,
+  `[WinError N]` for `os` calls) and `str(Path(arg))` for option paths are
+  reproduced (`copper_json::oserror`).
+- The oracle needs shapely (macro edge openings), installed with it in CI.
+  Python oracle results are cached by the non-Rust tree, so Rust-only
+  changes rerun only the binary.
+- Not implemented (exit 3, no corpus case reaches them): via-in-pad via
+  arrays, non-numeric macro rotations, non-string scene fields. The DRC
+  signoff token, waivers, relaxation records and zone-fill checks are M3.
+- Next: M3, M5 and M6 run in parallel streams (`rust-m3-layout`,
+  `rust-m3-assembly`, `rust-m5-reports`, `rust-m6-lsp`); M4 follows
+  placement.
