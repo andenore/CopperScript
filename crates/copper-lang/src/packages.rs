@@ -20,6 +20,10 @@ use crate::syntax::Location;
 
 type Result<T> = std::result::Result<T, CopperScriptError>;
 
+/// An editor's snapshot read of a package source (`source_reader`): open
+/// buffers instead of disk. Builds always read the filesystem.
+pub type SourceReader = Arc<dyn Fn(&Path) -> std::io::Result<String> + Send + Sync>;
+
 pub const LOCK_SCHEMA: &str = "copperscript.package-lock/v1";
 const LOCKED_SUFFIXES: [&str; 7] = [".copper", ".kicad_mod", ".step", ".stp", ".wrl", ".json", ".csv"];
 const IGNORED_PARTS: [&str; 5] = [".git", ".copper-cache", "cache", "__pycache__", ".pytest_cache"];
@@ -463,6 +467,8 @@ pub struct PackageResolver {
     /// Module roots resolved so far -> (module path, version, checksum).
     source_roots: IndexMap<PathBuf, (String, String, String)>,
     pub source_directory: PathBuf,
+    /// Reads package sources instead of the filesystem (the language server).
+    pub source_reader: Option<SourceReader>,
 }
 
 impl PackageResolver {
@@ -479,6 +485,7 @@ impl PackageResolver {
             source_roots: IndexMap::new(),
             source_directory: paths::resolve(&root),
             manifest,
+            source_reader: None,
         })
     }
 

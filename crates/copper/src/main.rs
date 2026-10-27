@@ -17,6 +17,7 @@ mod export_kicad;
 mod export_kicad_pcb;
 mod library;
 mod lock;
+mod lsp;
 mod power_check;
 mod pypath;
 mod query;
@@ -35,6 +36,10 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         }
+    }
+    if args.first().is_some_and(|command| command == "lsp") {
+        // The language server's diagnostics thread writes stdout too: no held lock.
+        return ExitCode::from(commands::run(&args, &mut io::stdout(), &mut io::stderr()));
     }
     let mut stdout = io::stdout().lock();
     let mut stderr = io::stderr().lock();

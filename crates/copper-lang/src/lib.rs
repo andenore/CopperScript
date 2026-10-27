@@ -35,5 +35,5 @@ pub mod syntax_state;
 
 pub use error::{CopperScriptError, Diagnostic};
 pub use lexer::{Token, TokenKind, tokenize, tokenize_recovering};
-pub use parser::parse;
+pub use parser::{parse, parse_tokens};
 pub use suggest::close_match;

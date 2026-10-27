@@ -23,10 +23,27 @@ use crate::packages::PackageResolver;
 use crate::paths;
 use crate::syntax::{Declaration, Document, DocumentKind, Location, MacroItemDecl, MacroPadDecl, Scalar, Value};
 
-const ROOT_PROPERTIES: [&str; 6] =
+pub const ROOT_PROPERTIES: [&str; 6] =
     ["source", "anchor", "allowed_rotations", "required_layers", "internal_clearance", "unresolved"];
 
-fn item_properties(kind: &str) -> Option<&'static [&'static str]> {
+/// The keys of `ITEM_PROPERTIES`, in its order.
+pub const ITEM_KINDS: [&str; 12] = [
+    "member",
+    "track",
+    "via",
+    "port",
+    "protected_region",
+    "keepout",
+    "zone",
+    "polygon",
+    "plane_return",
+    "contact",
+    "width_contract",
+    "edge_opening",
+];
+
+/// `ITEM_PROPERTIES[kind]`.
+pub fn item_properties(kind: &str) -> Option<&'static [&'static str]> {
     Some(match kind {
         "member" => &["footprint", "at", "rotation", "edge_clearance"],
         "track" => &["net", "layer", "width", "points"],
@@ -840,13 +857,22 @@ pub struct PreparedMacroBinding {
 
 const REMOTE: [&str; 3] = ["github.com/", "gitlab.com/", "https://"];
 
-/// `prepare_macro_asset`: one verified data contract.
-fn prepare_macro_asset(
+/// `prepare_macro_asset`: one verified data contract. An editor passes its
+/// snapshot resolver, whose `source_reader` supplies an open macro source.
+pub fn prepare_macro_asset(
     reference: &MacroAssetReference,
     locked: bool,
     offline: bool,
+    shared: Option<&mut PackageResolver>,
 ) -> Result<(PathBuf, String, Json)> {
-    let mut resolver = PackageResolver::for_source(Path::new(&reference.base_directory), locked, offline)?;
+    let mut own;
+    let resolver = match shared {
+        Some(resolver) => resolver,
+        None => {
+            own = PackageResolver::for_source(Path::new(&reference.base_directory), locked, offline)?;
+            &mut own
+        }
+    };
     let (path, mut digest) = if REMOTE.iter().any(|prefix| reference.asset.starts_with(prefix)) {
         let asset = resolver.resolve_asset(&reference.asset, &reference.location)?;
         (asset.path, asset.sha256)
@@ -865,12 +891,21 @@ fn prepare_macro_asset(
         return Err(MacroError::Value("macro changed after inventory verification".to_owned()));
     }
     let data = if !reference.symbol.is_empty() {
-        let document = crate::parse(&utf8(&raw, &path)?, &paths::display(&path))?;
+        let source = match &resolver.source_reader {
+            Some(reader) => reader(&path).map_err(|e| os_error(&e, &path))?,
+            None => utf8(&raw, &path)?,
+        };
+        let document = crate::parse(&source, &paths::display(&path))?;
         if document.kind != DocumentKind::Macro || document.name != reference.symbol {
             return Err(MacroError::Value(format!("macro source no longer exports {}", repr(&reference.symbol))));
         }
-        let (data, mut inputs) = lower_macro(&document, &resolver, true)?;
-        inputs.insert(paths::display(&path), digest.clone());
+        let (data, mut inputs) = lower_macro(&document, resolver, true)?;
+        let source_path = paths::display(&path);
+        inputs.insert(source_path.clone(), digest.clone());
+        if resolver.source_reader.is_some() {
+            // The open buffer, not the file, is the source being checked.
+            inputs.shift_remove(&source_path);
+        }
         verify_macro_inputs(&inputs)?;
         digest = sha256_hex(&canonical_macro_bytes(&data));
         data
@@ -925,13 +960,40 @@ fn asset_roles(data: &Json) -> std::result::Result<(Vec<String>, IndexSet<String
     Ok((references, nets))
 }
 
+/// Why `prepare_macro_bindings` failed: an unresolvable binding, or a binding
+/// whose asset could not be prepared (`MacroPreparationError`).
+#[derive(Debug)]
+pub enum PreparationError {
+    Compile(CopperScriptError),
+    Binding { location: Location, message: String },
+}
+
+impl std::fmt::Display for PreparationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PreparationError::Compile(error) => error.fmt(formatter),
+            PreparationError::Binding { location, message } => write!(formatter, "{location}: MAC005: {message}"),
+        }
+    }
+}
+
 /// `prepare_macro_bindings`: verified asset snapshots for every binding.
 pub fn prepare_macro_bindings(
     flat: &FlatElectricalView,
     locked: bool,
     offline: bool,
 ) -> std::result::Result<Vec<PreparedMacroBinding>, String> {
-    let bindings = crate::compiler::resolve_macro_bindings(flat).map_err(|error| error.to_string())?;
+    prepare_macro_bindings_with(flat, locked, offline, None).map_err(|error| error.to_string())
+}
+
+/// `prepare_macro_bindings(..., package_resolver=...)`.
+pub fn prepare_macro_bindings_with(
+    flat: &FlatElectricalView,
+    locked: bool,
+    offline: bool,
+    mut resolver: Option<&mut PackageResolver>,
+) -> std::result::Result<Vec<PreparedMacroBinding>, PreparationError> {
+    let bindings = crate::compiler::resolve_macro_bindings(flat).map_err(PreparationError::Compile)?;
     let mut snapshots: IndexMap<(String, String, String), (PathBuf, String, Json)> = IndexMap::new();
     let mut result = Vec::new();
     for binding in bindings {
@@ -939,7 +1001,8 @@ pub fn prepare_macro_bindings(
         let key = (reference.asset.clone(), reference.base_directory.clone(), reference.symbol.clone());
         let prepared = (|| -> std::result::Result<(PathBuf, String, Json), String> {
             if !snapshots.contains_key(&key) {
-                let snapshot = prepare_macro_asset(reference, locked, offline).map_err(|error| error.to_string())?;
+                let snapshot = prepare_macro_asset(reference, locked, offline, resolver.as_deref_mut())
+                    .map_err(|error| error.to_string())?;
                 snapshots.insert(key.clone(), snapshot);
             }
             let (path, digest, data) = snapshots[&key].clone();
@@ -972,12 +1035,10 @@ pub fn prepare_macro_bindings(
         match prepared {
             Ok((path, digest, data)) => result.push(PreparedMacroBinding { binding, path, digest, data }),
             Err(message) => {
-                return Err(format!(
-                    "{}: MAC005: macro {} ({}): {message}",
-                    binding.location,
-                    repr(&binding.name),
-                    binding.asset.asset
-                ));
+                return Err(PreparationError::Binding {
+                    location: binding.location.clone(),
+                    message: format!("macro {} ({}): {message}", repr(&binding.name), binding.asset.asset),
+                });
             }
         }
     }
