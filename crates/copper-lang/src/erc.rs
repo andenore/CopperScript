@@ -61,11 +61,11 @@ impl Diagnostic {
         }
     }
 
-    fn error(code: &str, message: impl Into<String>, subject: impl Into<String>) -> Self {
+    pub(crate) fn error(code: &str, message: impl Into<String>, subject: impl Into<String>) -> Self {
         Diagnostic::new(Severity::Error, code, message, subject)
     }
 
-    fn warning(code: &str, message: impl Into<String>, subject: impl Into<String>) -> Self {
+    pub(crate) fn warning(code: &str, message: impl Into<String>, subject: impl Into<String>) -> Self {
         Diagnostic::new(Severity::Warning, code, message, subject)
     }
 
@@ -133,7 +133,7 @@ impl Context {
         self.components.get(reference).map(|index| &self.board.components[*index])
     }
 
-    fn net(&self, name: &str) -> Option<&Net> {
+    pub fn net(&self, name: &str) -> Option<&Net> {
         self.nets.get(name).map(|index| &self.board.nets[*index])
     }
 
@@ -241,6 +241,28 @@ impl Context {
     }
 }
 
+impl Context {
+    /// Component references, first declaration per reference.
+    pub fn component_names(&self) -> impl Iterator<Item = &str> {
+        self.components.keys().map(String::as_str)
+    }
+
+    /// Net names, first declaration per name.
+    pub fn net_names(&self) -> impl Iterator<Item = &str> {
+        self.nets.keys().map(String::as_str)
+    }
+}
+
+/// `no_connect_endpoints`: canonical open pins and their reasons (first wins).
+pub fn no_connect_endpoints(context: &Context) -> IndexMap<Endpoint, Option<String>> {
+    let mut result = IndexMap::new();
+    for item in &context.board.no_connects {
+        let canonical = context.canonical_endpoint(&item.endpoint).unwrap_or_else(|| item.endpoint.clone());
+        result.entry(canonical).or_insert_with(|| item.reason.clone());
+    }
+    result
+}
+
 /// `build_context`.
 pub fn build_context(board: FlatElectricalView) -> Context {
     let mut context = Context {
@@ -330,7 +352,7 @@ fn unknown_pin(
     .origin(origin)
 }
 
-fn is_power_input(profile: Option<&ElectricalProfile>) -> bool {
+pub fn is_power_input(profile: Option<&ElectricalProfile>) -> bool {
     profile.is_some_and(|profile| {
         (profile.domains.contains(&SignalDomain::Power) || profile.domains.contains(&SignalDomain::Ground))
             && profile.directions.contains(&Direction::Input)

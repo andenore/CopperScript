@@ -10,7 +10,9 @@ mod args;
 mod check;
 mod commands;
 mod compile;
+mod power_check;
 mod pypath;
+mod query;
 mod state;
 
 use std::io::{self, Write};

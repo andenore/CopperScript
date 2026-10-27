@@ -279,6 +279,193 @@
    "mutations": 10
   },
   {
+   "name": "power-check",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "power-check",
+    "{input}",
+    "--locked",
+    "--offline"
+   ],
+   "mutations": 5
+  },
+  {
+   "name": "query-components",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "query",
+    "{input}",
+    "components",
+    "--locked",
+    "--offline",
+    "--json"
+   ]
+  },
+  {
+   "name": "query-components-text",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "query",
+    "{input}",
+    "components",
+    "--locked",
+    "--offline"
+   ]
+  },
+  {
+   "name": "query-nets",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "query",
+    "{input}",
+    "nets",
+    "--locked",
+    "--offline"
+   ]
+  },
+  {
+   "name": "query-unconnected",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "query",
+    "{input}",
+    "unconnected",
+    "--locked",
+    "--offline",
+    "--json"
+   ],
+   "mutations": 3
+  },
+  {
+   "name": "query-unconnected-text",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "query",
+    "{input}",
+    "unconnected",
+    "--locked",
+    "--offline"
+   ]
+  },
+  {
+   "name": "query-pins",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "query",
+    "{input}",
+    "pins",
+    "U1",
+    "--locked",
+    "--offline",
+    "--json"
+   ]
+  },
+  {
+   "name": "query-pins-text",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "query",
+    "{input}",
+    "pins",
+    "U1",
+    "--locked",
+    "--offline"
+   ]
+  },
+  {
+   "name": "query-component",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "query",
+    "{input}",
+    "component",
+    "R1",
+    "--locked",
+    "--offline"
+   ]
+  },
+  {
+   "name": "query-net",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "query",
+    "{input}",
+    "net",
+    "GND",
+    "--locked",
+    "--offline",
+    "--json"
+   ]
+  },
+  {
+   "name": "query-net-text",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "query",
+    "{input}",
+    "net",
+    "GND",
+    "--locked",
+    "--offline"
+   ]
+  },
+  {
    "name": "export-kicad-pcb",
    "milestone": "M2",
    "boards": "*",
