@@ -1,0 +1,7 @@
+// Assembly fixture part: explicitly not assembled.
+part DNP {
+    footprint = "Resistor_SMD:R_0402_1005Metric";
+    assembled = false;
+    pin A { number = "1"; domains = "analog"; directions = "passive"; }
+    pin B { number = "2"; domains = "analog"; directions = "passive"; }
+}

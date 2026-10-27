@@ -1,0 +1,185 @@
+{
+  "board": "HierarchicalSensorBoard",
+  "electrical_sha256": "06a70e9a779f8d9647a9beb4795d312ead67a243069540579da8534635978783",
+  "schema": "copperscript-assembly-lock/v0.3",
+  "selections": [
+    {
+      "footprint": "0402",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-100nF-0402",
+      "part": "CAPACITOR",
+      "populate": "supplier",
+      "reference": "C1",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C931213",
+      "supplier": "jlcpcb",
+      "supplier_part": "C931213"
+    },
+    {
+      "footprint": null,
+      "manufacturer": null,
+      "mpn": null,
+      "part": "VOLTAGE_SOURCE",
+      "populate": "none",
+      "reference": "PS1",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "0603",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-10uF-0603",
+      "part": "CAPACITOR",
+      "populate": "supplier",
+      "reference": "PWR/C_IN",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "lcsc",
+      "supplier_part": "C717524"
+    },
+    {
+      "footprint": "0603",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-22uF-0603",
+      "part": "CAPACITOR",
+      "populate": "supplier",
+      "reference": "PWR/C_OUT",
+      "reviewed": false,
+      "source_url": "https://jlcpcb.com/partdetail/C533267",
+      "supplier": "jlcpcb",
+      "supplier_part": "C533267"
+    },
+    {
+      "footprint": "SOD-123",
+      "manufacturer": "Generic Passives",
+      "mpn": "SCHOTTKY_DIODE-40VSchottky-SOD-123",
+      "part": "SCHOTTKY_DIODE",
+      "populate": "consigned",
+      "reference": "PWR/D1",
+      "reviewed": true,
+      "source_url": "https://example.com/parts/SCHOTTKY_DIODE-40VSchottky-SOD-123",
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/398582",
+          "supplier": "Mouser",
+          "supplier_part": "M-398582"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D398582"
+        }
+      ],
+      "footprint": "L_4x4mm",
+      "manufacturer": "Generic Passives",
+      "mpn": "INDUCTOR-10uH-L_4x4mm",
+      "part": "INDUCTOR",
+      "populate": "supplier",
+      "reference": "PWR/L1",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C398582"
+    },
+    {
+      "footprint": "0402",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-31.6kohm-0402",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "PWR/R_BOTTOM",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C410206",
+      "supplier": "jlcpcb",
+      "supplier_part": "C410206"
+    },
+    {
+      "footprint": "0402",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-100kohm-0402",
+      "part": "RESISTOR",
+      "populate": "none",
+      "reference": "PWR/R_TOP",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C201815"
+    },
+    {
+      "footprint": "SOT-23-5",
+      "manufacturer": "Generic Passives",
+      "mpn": "BUCK_REGULATOR-5Vto3.3Vbuck-SOT-23-5",
+      "part": "BUCK_REGULATOR",
+      "populate": "supplier",
+      "reference": "PWR/U1",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C392880"
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/140734",
+          "supplier": "Mouser",
+          "supplier_part": "M-140734"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D140734"
+        }
+      ],
+      "footprint": "0402",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-4.7kohm-0402",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R1",
+      "reviewed": false,
+      "source_url": "https://jlcpcb.com/partdetail/C140734",
+      "supplier": "jlcpcb",
+      "supplier_part": "C140734"
+    },
+    {
+      "footprint": "0402",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-4.7kohm-0402",
+      "part": "RESISTOR",
+      "populate": "consigned",
+      "reference": "R2",
+      "reviewed": true,
+      "source_url": "https://example.com/parts/RESISTOR-4.7kohm-0402",
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "LQFP-48",
+      "manufacturer": "STMicroelectronics",
+      "mpn": "STM32G0B1CBT6-LQFP-48",
+      "part": "stm32.STM32G0B1CBT6",
+      "populate": "supplier",
+      "reference": "U1",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C386062"
+    },
+    {
+      "footprint": "LGA-8",
+      "manufacturer": "Example Sensors",
+      "mpn": "BME280-LGA-8",
+      "part": "sensors.BME280",
+      "populate": "supplier",
+      "reference": "U2",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C188214",
+      "supplier": "lcsc",
+      "supplier_part": "C188214"
+    }
+  ]
+}

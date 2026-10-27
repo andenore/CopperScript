@@ -3,8 +3,9 @@
 use std::io::Write;
 
 use crate::{
-    agent_guide, audit_footprints, check, check_footprint, compile, compile_macro, explain, export_kicad,
-    export_kicad_pcb, issues, library, lock, lsp, power_check, query, state, summarize, view,
+    agent_guide, assembly, audit_footprints, check, check_footprint, compile, compile_macro, explain, export_kicad,
+    export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, power_check, query, si_check, state, summarize,
+    view,
 };
 
 /// Exit status of a command the Rust rewrite does not implement yet.
@@ -34,11 +35,11 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("editor-overlay", Plan::Milestone("M6")),
     ("edit-mechanical", Plan::Milestone("M3")),
     ("edit", Plan::Milestone("M3")),
-    ("export-manufacturing", Plan::Milestone("M3")),
+    ("export-manufacturing", Plan::Done),
     ("audit-cam", Plan::Python),
     ("assess-engineering", Plan::Python),
     ("qualification-gate", Plan::Python),
-    ("assembly", Plan::Milestone("M3")),
+    ("assembly", Plan::Done),
     ("sim", Plan::Python),
     ("check", Plan::Done),
     ("explain", Plan::Done),
@@ -48,7 +49,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("replay-unified", Plan::Milestone("M4")),
     ("replay-critical", Plan::Milestone("M4")),
     ("query", Plan::Done),
-    ("si-check", Plan::Milestone("M3")),
+    ("si-check", Plan::Done),
     ("lock", Plan::Done),
     ("power-check", Plan::Done),
     ("compile", Plan::Done),
@@ -105,6 +106,9 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "issues" => issues::run(rest, out, err),
         "view" => view::run(rest, out, err),
         "summarize" => summarize::run(rest, out, err),
+        "assembly" => assembly::run(rest, out, err),
+        "si-check" => si_check::run(rest, out, err),
+        "export-manufacturing" => export_manufacturing::run(rest, out, err),
         _ => match plan(command) {
             Some(Plan::Milestone(milestone)) => {
                 let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");

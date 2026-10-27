@@ -1,0 +1,8 @@
+Comment,Designator,Footprint,LCSC Part #,Manufacturer,MPN
+10 kohm,"R_LED1,R_LED10,R_LED12,R_LED2,R_LED4,R_LED5,R_LED7,R_LED8,R_LED9,R_RESET",Resistor_SMD:R_0603_1608Metric,C731258,Generic Passives,RESISTOR-10kohm-R_0603_1608Metric
+100 nF,"C_DEC1,C_VDD1,C_VDD2",Capacitor_SMD:C_0402_1005Metric,C659099,Generic Passives,CAPACITOR-100nF-C_0402_1005Metric
+100 pF,C_DEC3,Capacitor_SMD:C_0402_1005Metric,C230143,Generic Passives,CAPACITOR-100pF-C_0402_1005Metric
+4.7 uF,C_BULK,Capacitor_SMD:C_0603_1608Metric,C344238,Generic Passives,CAPACITOR-4.7uF-C_0603_1608Metric
+KEYSTONE_3034-BatteryHolder_Keystone_3034_1x20mm.kicad_mod,BT1,github.com/andenore/CopperLib/packages/parts/keystone/3034/footprints/Battery.pretty/BatteryHolder_Keystone_3034_1x20mm.kicad_mod,C793849,Keystone Electronics,KEYSTONE_3034-BatteryHolder_Keystone_3034_1x20mm.kicad_mod
+LED-LED_0603_1608Metric,"LED1,LED10,LED12,LED2,LED3,LED4,LED5,LED7,LED8,LED9",LED_SMD:LED_0603_1608Metric,C839358,Generic Passives,LED-LED_0603_1608Metric
+NRF52832_QFAA-QFN-48-1EP_6x6mm_P0.4mm_EP4.2x4.2mm,U1,Package_DFN_QFN:QFN-48-1EP_6x6mm_P0.4mm_EP4.2x4.2mm,C131044,Nordic Semiconductor,NRF52832_QFAA-QFN-48-1EP_6x6mm_P0.4mm_EP4.2x4.2mm

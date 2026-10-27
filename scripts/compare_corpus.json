@@ -6893,6 +6893,7119 @@
    ]
   },
   {
+   "name": "assembly-snapshot",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper",
+    "tests/rust-port/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "assembly",
+    "snapshot",
+    "{input}",
+    "--locked",
+    "--offline",
+    "-o",
+    "{out}/assembly.lock"
+   ],
+   "mutations": 10
+  },
+  {
+   "name": "assembly-check-foreign",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper",
+    "tests/rust-port/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "assembly",
+    "check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--lock",
+    "tests/rust-port/assembly/valid_board/reviewed.lock",
+    "--report",
+    "{out}/report.json"
+   ],
+   "mutations": 5
+  },
+  {
+   "name": "assembly-boards",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "assembly-boards/valid_board/unreviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/unreviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/valid_board/unreviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/unreviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/valid_board/unreviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/unreviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/valid_board/unreviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/unreviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/valid_board/reviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/valid_board/reviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/valid_board/reviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/valid_board/reviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/valid_board/candidate/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/valid_board/candidate/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/valid_board/candidate/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/valid_board/candidate/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/unreviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/unreviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/unreviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/unreviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/unreviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/unreviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/hierarchical_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/unreviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/unreviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/reviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/reviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/reviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/reviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/hierarchical_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/reviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/reviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/candidate/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/candidate.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/candidate/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/candidate.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/candidate/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/hierarchical_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/hierarchical_board/candidate/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/hierarchical_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/hierarchical_board/candidate.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/unreviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/unreviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/unreviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/unreviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/unreviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/unreviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/cm4_baseboard/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/unreviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/unreviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/reviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/reviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/reviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/reviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/cm4_baseboard/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/reviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/reviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/candidate/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/candidate.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/candidate/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/candidate.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/candidate/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/cm4_baseboard/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/cm4_baseboard/candidate/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/cm4_baseboard/candidate.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/unreviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/unreviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/unreviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/unreviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/unreviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/unreviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/nrf52_coin_cell/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/unreviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/unreviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/reviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/reviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/reviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/reviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/nrf52_coin_cell/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/reviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/reviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/candidate/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/candidate.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/candidate/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/candidate.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/candidate/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/nrf52_coin_cell/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/nrf52_coin_cell/candidate/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/nrf52_coin_cell/candidate.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/unreviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/unreviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/unreviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/unreviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/unreviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/unreviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/full_vertical/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/unreviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/unreviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/reviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/reviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/reviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/reviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/full_vertical/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/reviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/reviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/candidate/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/candidate.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/candidate/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/candidate.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/candidate/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/full_vertical/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/full_vertical/candidate/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/full_vertical/candidate.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/unreviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/unreviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/unreviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/unreviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/unreviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/unreviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/round_led_ring/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/unreviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/unreviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/reviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/reviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/reviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/reviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/round_led_ring/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/reviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/reviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/candidate/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/candidate.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/candidate/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/candidate.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/candidate/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/round_led_ring/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/round_led_ring/candidate/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/round_led_ring/candidate.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/unreviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/unreviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/unreviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/unreviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/unreviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/unreviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/tps62130a_macro/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/unreviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/unreviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/reviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/reviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/reviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/reviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/tps62130a_macro/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/reviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/reviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/candidate/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/candidate.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/candidate/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/candidate.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/candidate/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/tps62130a_macro/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/tps62130a_macro/candidate/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/tps62130a_macro/candidate.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/unreviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/unreviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/unreviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/unreviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/unreviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/unreviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/device_model_showcase/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/unreviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/unreviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/reviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/reviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/reviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/reviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/device_model_showcase/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/reviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/reviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/candidate/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/candidate.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/candidate/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/candidate.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/candidate/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/device_model_showcase/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/device_model_showcase/candidate/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/device_model_showcase/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/device_model_showcase/candidate.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/unreviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/unreviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/unreviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/unreviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/unreviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/unreviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/collision/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/unreviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/unreviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/reviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/reviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/reviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/reviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/collision/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/reviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/reviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/candidate/check",
+     "args": [
+      "assembly",
+      "check",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/candidate.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/candidate/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/candidate.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/candidate/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/collision/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/collision/candidate/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/collision.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/collision/candidate.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/unreviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/unreviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/unreviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/unreviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/unreviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/unreviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/dnp/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/unreviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/unreviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/reviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/reviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/reviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/reviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/dnp/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/reviewed/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/reviewed.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/candidate/check",
+     "args": [
+      "assembly",
+      "check",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/candidate.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/candidate/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/candidate.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/candidate/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/dnp/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-boards/dnp/candidate/candidate-no-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/dnp/candidate.lock",
+      "-o",
+      "{out}/candidate"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "assembly-errors",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "assembly-errors/all-consigned/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/all-consigned.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/all-consigned/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/all-consigned.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/all-consigned/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/all-consigned.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/alternates-not-list/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/alternates-not-list.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/alternates-not-list/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/alternates-not-list.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/alternates-not-list/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/alternates-not-list.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/alternates-v0.2/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/alternates-v0.2.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/alternates-v0.2/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/alternates-v0.2.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/alternates-v0.2/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/alternates-v0.2.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/alternates-without-mpn/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/alternates-without-mpn.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/alternates-without-mpn/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/alternates-without-mpn.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/alternates-without-mpn/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/alternates-without-mpn.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/board-empty/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/board-empty.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/board-empty/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/board-empty.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/board-empty/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/board-empty.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/board-mismatch/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/board-mismatch.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/board-mismatch/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/board-mismatch.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/board-mismatch/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/board-mismatch.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/bom-prefix/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/bom-prefix.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/bom-prefix/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/bom-prefix.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/bom-prefix/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/bom-prefix.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/conflicting-offer/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/conflicting-offer.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/conflicting-offer/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/conflicting-offer.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/conflicting-offer/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/conflicting-offer.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/crlf-error/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/crlf-error.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/crlf-error/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/crlf-error.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/crlf-error/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/crlf-error.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/digest-short/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/digest-short.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/digest-short/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/digest-short.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/digest-short/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/digest-short.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/digest-uppercase/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/digest-uppercase.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/digest-uppercase/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/digest-uppercase.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/digest-uppercase/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/digest-uppercase.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/dnp-non-assembled/check",
+     "args": [
+      "assembly",
+      "check",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/dnp-non-assembled.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/dnp-non-assembled/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/dnp-non-assembled.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/dnp-non-assembled/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "tests/rust-port/assembly/boards/dnp/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/dnp-non-assembled.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/dnp/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-key/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-key.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-key/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-key.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-key/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-key.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-nested-key/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-nested-key.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-nested-key/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-nested-key.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-nested-key/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-nested-key.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-offer/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-offer.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-offer/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-offer.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-offer/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-offer.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-selection/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-selection.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-selection/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-selection.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/duplicate-selection/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/duplicate-selection.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/empty/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/empty.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/empty/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/empty.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/empty/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/empty.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/extra-field/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/extra-field.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/extra-field/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/extra-field.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/extra-field/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/extra-field.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/footprint-mismatch/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/footprint-mismatch.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/footprint-mismatch/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/footprint-mismatch.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/footprint-mismatch/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/footprint-mismatch.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/full-vertical-consigned/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/full-vertical-consigned.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/full-vertical-consigned/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/full-vertical-consigned.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/full-vertical-consigned/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/full-vertical-consigned.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/full_vertical/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/invalid-supplier-part/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/invalid-supplier-part.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/invalid-supplier-part/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/invalid-supplier-part.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/invalid-supplier-part/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/invalid-supplier-part.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/list/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/list.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/list/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/list.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/list/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/list.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/manufacturer-mismatch/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/manufacturer-mismatch.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/manufacturer-mismatch/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/manufacturer-mismatch.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/manufacturer-mismatch/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/manufacturer-mismatch.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-reference/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-reference.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-reference/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-reference.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-reference/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-reference.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-selection/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-selection.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-selection/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-selection.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-selection/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-selection.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-three/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-three.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-three/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-three.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-three/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-three.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-two/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-two.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-two/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-two.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/missing-two/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/missing-two.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/mpn-control/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/mpn-control.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/mpn-control/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/mpn-control.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/mpn-control/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/mpn-control.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/mpn-untrimmed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/mpn-untrimmed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/mpn-untrimmed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/mpn-untrimmed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/mpn-untrimmed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/mpn-untrimmed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/none-fitted/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/none-fitted.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/none-fitted/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/none-fitted.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/none-fitted/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/none-fitted.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/not-json/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/not-json.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/not-json/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/not-json.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/not-json/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/not-json.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/offer-missing-part/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/offer-missing-part.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/offer-missing-part/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/offer-missing-part.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/offer-missing-part/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/offer-missing-part.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/offer-unknown-field/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/offer-unknown-field.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/offer-unknown-field/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/offer-unknown-field.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/offer-unknown-field/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/offer-unknown-field.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/offer-untrimmed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/offer-untrimmed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/offer-untrimmed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/offer-untrimmed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/offer-untrimmed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/offer-untrimmed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/other-supplier/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/other-supplier.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/other-supplier/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/other-supplier.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/other-supplier/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/other-supplier.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/part-empty/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/part-empty.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/part-empty/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/part-empty.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/part-empty/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/part-empty.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/part-mismatch/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/part-mismatch.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/part-mismatch/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/part-mismatch.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/part-mismatch/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/part-mismatch.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/populate-unknown/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/populate-unknown.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/populate-unknown/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/populate-unknown.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/populate-unknown/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/populate-unknown.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/reference-number/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/reference-number.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/reference-number/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/reference-number.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/reference-number/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/reference-number.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/reviewed-string/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/reviewed-string.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/reviewed-string/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/reviewed-string.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/reviewed-string/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/reviewed-string.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/selection-not-object/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/selection-not-object.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/selection-not-object/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/selection-not-object.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/selection-not-object/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/selection-not-object.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/selections-not-list/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/selections-not-list.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/selections-not-list/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/selections-not-list.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/selections-not-list/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/selections-not-list.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/stale/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/stale.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/stale/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/stale.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/stale/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/stale.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/trailing-data/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/trailing-data.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/trailing-data/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/trailing-data.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/trailing-data/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/trailing-data.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unknown-reference/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unknown-reference.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/unknown-reference/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unknown-reference.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unknown-reference/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unknown-reference.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unknown-schema/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unknown-schema.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/unknown-schema/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unknown-schema.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unknown-schema/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unknown-schema.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unknown-selection-field/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unknown-selection-field.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/unknown-selection-field/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unknown-selection-field.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unknown-selection-field/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unknown-selection-field.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unresolved-consigned/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unresolved-consigned.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/unresolved-consigned/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unresolved-consigned.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unresolved-consigned/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unresolved-consigned.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unresolved/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unresolved.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/unresolved/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unresolved.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unresolved/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unresolved.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unreviewed/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unreviewed.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/unreviewed/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unreviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/unreviewed/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/unreviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/v0.1/check",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/v0.1.lock",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-errors/v0.1/bom",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/v0.1.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "{out}/hand.csv",
+      "--ordering",
+      "{out}/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-errors/v0.1/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/errors/v0.1.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/valid_board/positions.csv"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "assembly-positions",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "assembly-positions/bad-columns/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/bad-columns.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/bad-columns/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/bad-columns.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/bad-number/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/bad-number.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/bad-number/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/bad-number.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/bad-side/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/bad-side.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/bad-side/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/bad-side.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/blank-lines/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/blank-lines.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/blank-lines/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/blank-lines.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/crlf/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/crlf.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/crlf/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/crlf.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/dnp-only-missing/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/dnp-only-missing.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/dnp-only-missing/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/dnp-only-missing.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/duplicate/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/duplicate.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/duplicate/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/duplicate.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/empty/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/empty.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/empty/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/empty.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/first-line-blank/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/first-line-blank.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/first-line-blank/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/first-line-blank.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/infinite/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/infinite.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/infinite/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/infinite.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/missing/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/missing.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/missing/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/missing.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/quoted/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/quoted.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/quoted/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/quoted.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/short-row/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/short-row.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/short-row/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/short-row.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/signature/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/signature.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/signature/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/signature.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/whitespace-numbers/candidate",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/candidate.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/whitespace-numbers.csv"
+     ]
+    },
+    {
+     "id": "assembly-positions/whitespace-numbers/reviewed",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/candidate",
+      "--positions",
+      "tests/rust-port/assembly/positions/whitespace-numbers.csv"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "assembly-options",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "assembly-options/snapshot-nested",
+     "args": [
+      "assembly",
+      "snapshot",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "{out}/a/b/assembly.lock"
+     ]
+    },
+    {
+     "id": "assembly-options/snapshot-existing",
+     "args": [
+      "assembly",
+      "snapshot",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "examples/valid_board/board.copper"
+     ]
+    },
+    {
+     "id": "assembly-options/snapshot-parent-is-file",
+     "args": [
+      "assembly",
+      "snapshot",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "examples/valid_board/board.copper/assembly.lock"
+     ]
+    },
+    {
+     "id": "assembly-options/snapshot-dotted-output",
+     "args": [
+      "assembly",
+      "snapshot",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--output={out}/./x//assembly.lock"
+     ]
+    },
+    {
+     "id": "assembly-options/snapshot-unlocked",
+     "args": [
+      "assembly",
+      "snapshot",
+      "examples/valid_board/board.copper",
+      "--offline",
+      "-o",
+      "{out}/assembly.lock"
+     ]
+    },
+    {
+     "id": "assembly-options/snapshot-missing-board",
+     "args": [
+      "assembly",
+      "snapshot",
+      "examples/missing/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "{out}/a.lock"
+     ]
+    },
+    {
+     "id": "assembly-options/snapshot-wrong-suffix",
+     "args": [
+      "assembly",
+      "snapshot",
+      "README.md",
+      "--locked",
+      "--offline",
+      "-o",
+      "{out}/a.lock"
+     ]
+    },
+    {
+     "id": "assembly-options/check-missing-lock",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "{out}/missing.lock"
+     ]
+    },
+    {
+     "id": "assembly-options/check-lock-is-directory",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "examples"
+     ]
+    },
+    {
+     "id": "assembly-options/check-no-report",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock"
+     ]
+    },
+    {
+     "id": "assembly-options/check-report-nested",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "--report",
+      "{out}/x/y/report.json"
+     ]
+    },
+    {
+     "id": "assembly-options/check-report-parent-is-file",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "--report",
+      "examples/valid_board/board.copper/r.json"
+     ]
+    },
+    {
+     "id": "assembly-options/check-abbreviated",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locke",
+      "--off",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "--rep",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "assembly-options/check-erc-failure",
+     "args": [
+      "assembly",
+      "check",
+      "examples/invalid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock"
+     ]
+    },
+    {
+     "id": "assembly-options/snapshot-erc-failure",
+     "args": [
+      "assembly",
+      "snapshot",
+      "examples/nrf_antenna_macro/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "{out}/a.lock"
+     ]
+    },
+    {
+     "id": "assembly-options/bom-only",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/bom.csv"
+     ]
+    },
+    {
+     "id": "assembly-options/bom-nested",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/a/b/bom.csv"
+     ]
+    },
+    {
+     "id": "assembly-options/bom-parent-is-file",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "examples/valid_board/board.copper/bom.csv"
+     ]
+    },
+    {
+     "id": "assembly-options/bom-hand-parent-is-file",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--hand-assembly",
+      "examples/valid_board/board.copper/hand.csv"
+     ]
+    },
+    {
+     "id": "assembly-options/bom-ordering-only",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/bom.csv",
+      "--ordering",
+      "{out}/o/ordering.csv"
+     ]
+    },
+    {
+     "id": "assembly-options/candidate-existing-output",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "examples"
+     ]
+    },
+    {
+     "id": "assembly-options/candidate-missing-positions",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/c",
+      "--positions",
+      "{out}/missing.csv"
+     ]
+    },
+    {
+     "id": "assembly-options/candidate-nested",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/a/b/c"
+     ]
+    },
+    {
+     "id": "assembly-options/candidate-parent-is-file",
+     "args": [
+      "assembly",
+      "candidate-bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "examples/valid_board/board.copper/c"
+     ]
+    },
+    {
+     "id": "assembly-options/usage-no-action",
+     "args": [
+      "assembly"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "assembly-options/usage-bad-action",
+     "args": [
+      "assembly",
+      "order",
+      "examples/valid_board/board.copper"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "assembly-options/usage-missing-lock",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "assembly-options/usage-missing-output",
+     "args": [
+      "assembly",
+      "bom",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "assembly-options/usage-missing-board",
+     "args": [
+      "assembly",
+      "snapshot",
+      "-o",
+      "{out}/a.lock"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "assembly-options/usage-extra-board",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "examples/valid_board/board.copper",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "assembly-options/usage-unknown-option",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "--json"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "assembly-options/usage-ambiguous",
+     "args": [
+      "assembly",
+      "check",
+      "examples/valid_board/board.copper",
+      "--lo",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "assembly-options/usage-snapshot-lock",
+     "args": [
+      "assembly",
+      "snapshot",
+      "examples/valid_board/board.copper",
+      "--lock",
+      "tests/rust-port/assembly/valid_board/reviewed.lock",
+      "-o",
+      "{out}/a.lock"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "assembly-options/help",
+     "args": [
+      "assembly",
+      "--help"
+     ],
+     "compare": [
+      "exit"
+     ]
+    },
+    {
+     "id": "assembly-options/action-help",
+     "args": [
+      "assembly",
+      "bom",
+      "-h"
+     ],
+     "compare": [
+      "exit"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "si-check-proxy",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper",
+    "tests/rust-port/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints"
+   ],
+   "mutations": 10
+  },
+  {
+   "name": "si-check-json",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper",
+    "tests/rust-port/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--json"
+   ],
+   "mutations": 3
+  },
+  {
+   "name": "si-check-resolved",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper",
+    "tests/rust-port/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--json"
+   ]
+  },
+  {
+   "name": "si-check-six-layer",
+   "milestone": "M3",
+   "inputs": [
+    "tests/rust-port/si-check/*.copper",
+    "examples/*/board.copper"
+   ],
+   "declares": "board",
+   "mutations": 10,
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--layers",
+    "6",
+    "--fab-profile",
+    "jlcpcb-six-layer"
+   ]
+  },
+  {
+   "name": "si-check-six-layer-json",
+   "milestone": "M3",
+   "inputs": [
+    "tests/rust-port/si-check/*.copper"
+   ],
+   "declares": "board",
+   "mutations": 10,
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--layers",
+    "6",
+    "--fab-profile",
+    "jlcpcb-six-layer",
+    "--json"
+   ]
+  },
+  {
+   "name": "si-check-four-layer",
+   "milestone": "M3",
+   "inputs": [
+    "tests/rust-port/si-check/*.copper",
+    "examples/*/board.copper"
+   ],
+   "declares": "board",
+   "mutations": 5,
+   "args": [
+    "si-check",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--layers",
+    "4",
+    "--fab-profile",
+    "jlcpcb-four-layer",
+    "--json"
+   ]
+  },
+  {
+   "name": "si-check-boards",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "si-check-boards/cm4/text",
+     "args": [
+      "si-check",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer"
+     ]
+    },
+    {
+     "id": "si-check-boards/cm4/json",
+     "args": [
+      "si-check",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/cm4/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/cm4/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/full-vertical/text",
+     "args": [
+      "si-check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer"
+     ]
+    },
+    {
+     "id": "si-check-boards/full-vertical/json",
+     "args": [
+      "si-check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/full-vertical/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/full-vertical/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-anchors/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_anchors/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-anchors/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_anchors/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-anchors/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_anchors/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-anchors/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_anchors/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-curves/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_curves/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-curves/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_curves/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-curves/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_curves/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-curves/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_curves/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-editor/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_editor_demo/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-editor/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_editor_demo/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-editor/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_editor_demo/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-editor/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_editor_demo/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-outline/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_outline/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-outline/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_outline/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-outline/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_outline/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-outline/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_outline/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-profile/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_profile_project/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-profile/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_profile_project/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-profile/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_profile_project/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-profile/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_profile_project/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-reference/text",
+     "args": [
+      "si-check",
+      "examples/mechanical_reference/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-reference/json",
+     "args": [
+      "si-check",
+      "examples/mechanical_reference/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-reference/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/mechanical_reference/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/mechanical-reference/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/mechanical_reference/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/nrf52/text",
+     "args": [
+      "si-check",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer"
+     ]
+    },
+    {
+     "id": "si-check-boards/nrf52/json",
+     "args": [
+      "si-check",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/nrf52/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/nrf52/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/resolved-footprint/text",
+     "args": [
+      "si-check",
+      "examples/resolved_footprint_board/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/resolved-footprint/json",
+     "args": [
+      "si-check",
+      "examples/resolved_footprint_board/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/resolved-footprint/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/resolved_footprint_board/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/resolved-footprint/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/resolved_footprint_board/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/round-led-ring/text",
+     "args": [
+      "si-check",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic"
+     ]
+    },
+    {
+     "id": "si-check-boards/round-led-ring/json",
+     "args": [
+      "si-check",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-boards/round-led-ring/allow-proxy-footprints",
+     "args": [
+      "si-check",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints"
+     ]
+    },
+    {
+     "id": "si-check-boards/round-led-ring/allow-proxy-footprints-json",
+     "args": [
+      "si-check",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--allow-proxy-footprints",
+      "--json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "si-check-options",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "si-check-options/profile-mismatch",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "jlcpcb-six-layer"
+     ]
+    },
+    {
+     "id": "si-check-options/four-layer-profile-on-six",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-four-layer"
+     ]
+    },
+    {
+     "id": "si-check-options/generic-six",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6"
+     ]
+    },
+    {
+     "id": "si-check-options/generic-four-json",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers=4",
+      "--json"
+     ]
+    },
+    {
+     "id": "si-check-options/footprint-root",
+     "args": [
+      "si-check",
+      "examples/resolved_footprint_board/board.copper",
+      "--locked",
+      "--offline",
+      "--footprint-root",
+      "examples/resolved_footprint_board",
+      "--footprint-root",
+      "tests/fixtures/footprints"
+     ]
+    },
+    {
+     "id": "si-check-options/footprint-root-missing",
+     "args": [
+      "si-check",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--footprint-root",
+      "{out}/missing"
+     ]
+    },
+    {
+     "id": "si-check-options/resolved-unlocked",
+     "args": [
+      "si-check",
+      "examples/valid_board/board.copper",
+      "--offline"
+     ]
+    },
+    {
+     "id": "si-check-options/missing-board",
+     "args": [
+      "si-check",
+      "examples/missing/board.copper",
+      "--locked",
+      "--offline"
+     ]
+    },
+    {
+     "id": "si-check-options/wrong-suffix",
+     "args": [
+      "si-check",
+      "README.md",
+      "--locked",
+      "--offline"
+     ]
+    },
+    {
+     "id": "si-check-options/abbreviated",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--lock",
+      "--off",
+      "--allow",
+      "--lay",
+      "6",
+      "--fab",
+      "jlcpcb-six-layer",
+      "--js"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-bad-layers",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--layers",
+      "3"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-layers-text",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--layers",
+      "six"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-bad-profile",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--fab-profile",
+      "oshpark"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-no-board",
+     "args": [
+      "si-check",
+      "--json"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-two-boards",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "tests/rust-port/si-check/dphy.copper"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/usage-unknown",
+     "args": [
+      "si-check",
+      "tests/rust-port/si-check/dphy.copper",
+      "--width-mm",
+      "50"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "si-check-options/help",
+     "args": [
+      "si-check",
+      "--help"
+     ],
+     "compare": [
+      "exit"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "export-manufacturing",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "export-manufacturing/valid_board",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/valid_board/bom",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/cm4_baseboard",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/cm4_baseboard/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/cm4_baseboard/bom",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/cm4_baseboard/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/cm4_baseboard/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/hierarchical_board",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/hierarchical_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/hierarchical_board/bom",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/hierarchical_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/hierarchical_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/dnp",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/dnp/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/dnp/bom",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/dnp/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/dnp/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/round_led_ring",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/round_led_ring/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/six_layer",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/six_layer/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/no-version",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-no-version.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/version-fails",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-version-fails.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/drc-fails",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-drc-fails.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/drc-silent",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-drc-silent.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/drc-violations",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-drc-violations.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/drc-not-json",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-drc-not-json.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/drc-missing-key",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-drc-missing-key.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/gerbers-fail",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-gerbers-fail.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/missing-gerber",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-missing-gerber.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/no-drill",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-no-drill.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/empty-drill",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-empty-drill.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/no-netlist",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-no-netlist.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/pos-fails",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-pos-fails.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/pos-duplicate",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-pos-duplicate.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/circle-outline",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/circle-outline.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/crlf",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/crlf.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/empty",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/empty.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/footprint",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/footprint.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/minimal",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/minimal.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/no-copper",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/no-copper.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/no-layers",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/no-layers.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/no-outline",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/no-outline.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/no-project",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/no-project.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/not-sexpr",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/not-sexpr.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/not-utf8",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/not-utf8.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/trailing",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/trailing.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/unclosed",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/unclosed.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/unterminated-string",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/unterminated-string.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/duplicate",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/duplicate.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/empty-reference",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/empty-reference.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/incomplete",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/incomplete.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/minimal",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/minimal.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/no-rows",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/no-rows.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/not-jlcpcb",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/not-jlcpcb.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/unknown-reference",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/unknown-reference.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/missing-kicad-cli",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{out}/missing-kicad-cli",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/default-kicad-cli",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/kicad-cli-not-executable",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/generate.py",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/kicad-cli-relative",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/replace-new-output",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--replace"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/missing-pcb",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/missing/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/pcb-is-directory",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/missing-bom",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "{out}/missing.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/bom-inside-output",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "{out}/mfg/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/pcb-inside-output",
+     "args": [
+      "export-manufacturing",
+      "{out}/mfg/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/inline-values",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom=tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/existing-output",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "examples"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/replace-non-manufacturing",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "--replace",
+      "-o",
+      "examples"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/output-parent-is-file",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "README.md/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/nested-output",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "--output",
+      "{out}/a/b/./mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/usage/no-acknowledgement",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "-o",
+      "{out}/mfg"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "export-manufacturing/usage/no-output",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--skip-independent-cam"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "export-manufacturing/usage/no-pcb",
+     "args": [
+      "export-manufacturing",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/m"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "export-manufacturing/usage/acknowledgement-value",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--skip-independent-cam=yes",
+      "-o",
+      "{out}/m"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "export-manufacturing/help",
+     "args": [
+      "export-manufacturing",
+      "-h"
+     ],
+     "compare": [
+      "exit"
+     ]
+    }
+   ]
+  },
+  {
    "name": "ladder",
    "milestone": "M4",
    "ladder": "bench/ladder.json",

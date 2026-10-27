@@ -1,0 +1,514 @@
+{
+  "board": "RoundLedRing",
+  "electrical_sha256": "330c692087ff905d5d8e5801f6c3c0ac8d0ae7d962cbc563e9c5a30f7a80dea9",
+  "schema": "copperscript-assembly-lock/v0.3",
+  "selections": [
+    {
+      "footprint": "github.com/andenore/CopperLib/packages/parts/keystone/3034/footprints/Battery.pretty/BatteryHolder_Keystone_3034_1x20mm.kicad_mod",
+      "manufacturer": "Keystone Electronics",
+      "mpn": "KEYSTONE_3034-BatteryHolder_Keystone_3034_1x20mm.kicad_mod",
+      "part": "keystone.KEYSTONE_3034",
+      "populate": "supplier",
+      "reference": "BT1",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C793849",
+      "supplier": "jlcpcb",
+      "supplier_part": "C793849"
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/344238",
+          "supplier": "Mouser",
+          "supplier_part": "M-344238"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D344238"
+        }
+      ],
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-4.7uF-C_0603_1608Metric",
+      "part": "CAPACITOR",
+      "populate": "supplier",
+      "reference": "C_BULK",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C344238"
+    },
+    {
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-100nF-C_0402_1005Metric",
+      "part": "CAPACITOR",
+      "populate": "supplier",
+      "reference": "C_DEC1",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "lcsc",
+      "supplier_part": "C659099"
+    },
+    {
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-100pF-C_0402_1005Metric",
+      "part": "CAPACITOR",
+      "populate": "supplier",
+      "reference": "C_DEC3",
+      "reviewed": false,
+      "source_url": "https://jlcpcb.com/partdetail/C230143",
+      "supplier": "jlcpcb",
+      "supplier_part": "C230143"
+    },
+    {
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-1uF-C_0603_1608Metric",
+      "part": "CAPACITOR",
+      "populate": "consigned",
+      "reference": "C_DEC4",
+      "reviewed": true,
+      "source_url": "https://example.com/parts/CAPACITOR-1uF-C_0603_1608Metric",
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/659099",
+          "supplier": "Mouser",
+          "supplier_part": "M-659099"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D659099"
+        }
+      ],
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-100nF-C_0402_1005Metric",
+      "part": "CAPACITOR",
+      "populate": "supplier",
+      "reference": "C_VDD1",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C659099"
+    },
+    {
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-100nF-C_0402_1005Metric",
+      "part": "CAPACITOR",
+      "populate": "supplier",
+      "reference": "C_VDD2",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C659099",
+      "supplier": "jlcpcb",
+      "supplier_part": "C659099"
+    },
+    {
+      "footprint": "Connector_Debug:FTSH-105-01-L-DV-007-K",
+      "manufacturer": "Samtec",
+      "mpn": "SWD_HEADER-FTSH-105-01-L-DV-007-K",
+      "part": "swd.SWD_HEADER",
+      "populate": "none",
+      "reference": "J_SWD",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C350467"
+    },
+    {
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "supplier",
+      "reference": "LED1",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C839358"
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/839358",
+          "supplier": "Mouser",
+          "supplier_part": "M-839358"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D839358"
+        }
+      ],
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "supplier",
+      "reference": "LED10",
+      "reviewed": false,
+      "source_url": "https://jlcpcb.com/partdetail/C839358",
+      "supplier": "jlcpcb",
+      "supplier_part": "C839358"
+    },
+    {
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "consigned",
+      "reference": "LED11",
+      "reviewed": true,
+      "source_url": "https://example.com/parts/LED-LED_0603_1608Metric",
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "supplier",
+      "reference": "LED12",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C839358"
+    },
+    {
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "supplier",
+      "reference": "LED2",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C839358",
+      "supplier": "lcsc",
+      "supplier_part": "C839358"
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/839358",
+          "supplier": "Mouser",
+          "supplier_part": "M-839358"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D839358"
+        }
+      ],
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "supplier",
+      "reference": "LED3",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C839358"
+    },
+    {
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "supplier",
+      "reference": "LED4",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C839358"
+    },
+    {
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "supplier",
+      "reference": "LED5",
+      "reviewed": false,
+      "source_url": "https://jlcpcb.com/partdetail/C839358",
+      "supplier": "jlcpcb",
+      "supplier_part": "C839358"
+    },
+    {
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "consigned",
+      "reference": "LED6",
+      "reviewed": true,
+      "source_url": "https://example.com/parts/LED-LED_0603_1608Metric",
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/839358",
+          "supplier": "Mouser",
+          "supplier_part": "M-839358"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D839358"
+        }
+      ],
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "supplier",
+      "reference": "LED7",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "lcsc",
+      "supplier_part": "C839358"
+    },
+    {
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "supplier",
+      "reference": "LED8",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C839358",
+      "supplier": "jlcpcb",
+      "supplier_part": "C839358"
+    },
+    {
+      "footprint": "LED_SMD:LED_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "LED-LED_0603_1608Metric",
+      "part": "generic_led.LED",
+      "populate": "supplier",
+      "reference": "LED9",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C839358"
+    },
+    {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R_LED1",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C731258"
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/731258",
+          "supplier": "Mouser",
+          "supplier_part": "M-731258"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D731258"
+        }
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R_LED10",
+      "reviewed": false,
+      "source_url": "https://jlcpcb.com/partdetail/C731258",
+      "supplier": "jlcpcb",
+      "supplier_part": "C731258"
+    },
+    {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "consigned",
+      "reference": "R_LED11",
+      "reviewed": true,
+      "source_url": "https://example.com/parts/RESISTOR-10kohm-R_0603_1608Metric",
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R_LED12",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C731258"
+    },
+    {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R_LED2",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C731258",
+      "supplier": "jlcpcb",
+      "supplier_part": "C731258"
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/731258",
+          "supplier": "Mouser",
+          "supplier_part": "M-731258"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D731258"
+        }
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "none",
+      "reference": "R_LED3",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C731258"
+    },
+    {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R_LED4",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C731258"
+    },
+    {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R_LED5",
+      "reviewed": false,
+      "source_url": "https://jlcpcb.com/partdetail/C731258",
+      "supplier": "lcsc",
+      "supplier_part": "C731258"
+    },
+    {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "consigned",
+      "reference": "R_LED6",
+      "reviewed": true,
+      "source_url": "https://example.com/parts/RESISTOR-10kohm-R_0603_1608Metric",
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/731258",
+          "supplier": "Mouser",
+          "supplier_part": "M-731258"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D731258"
+        }
+      ],
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R_LED7",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C731258"
+    },
+    {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R_LED8",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C731258",
+      "supplier": "jlcpcb",
+      "supplier_part": "C731258"
+    },
+    {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R_LED9",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C731258"
+    },
+    {
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-10kohm-R_0603_1608Metric",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R_RESET",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "lcsc",
+      "supplier_part": "C731258"
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/131044",
+          "supplier": "Mouser",
+          "supplier_part": "M-131044"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D131044"
+        }
+      ],
+      "footprint": "Package_DFN_QFN:QFN-48-1EP_6x6mm_P0.4mm_EP4.2x4.2mm",
+      "manufacturer": "Nordic Semiconductor",
+      "mpn": "NRF52832_QFAA-QFN-48-1EP_6x6mm_P0.4mm_EP4.2x4.2mm",
+      "part": "nordic.NRF52832_QFAA",
+      "populate": "supplier",
+      "reference": "U1",
+      "reviewed": false,
+      "source_url": "https://jlcpcb.com/partdetail/C131044",
+      "supplier": "jlcpcb",
+      "supplier_part": "C131044"
+    }
+  ]
+}

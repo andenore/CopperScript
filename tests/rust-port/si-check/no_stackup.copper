@@ -1,0 +1,35 @@
+// Rust-port corpus input: impedance targets without a declared stack-up; not a circuit.
+board DphyNoStackup {
+    use library "tiny";
+
+    component R1: RESISTOR { footprint = "0402"; }
+    component R2: RESISTOR { footprint = "0402"; }
+    component R3: RESISTOR { footprint = "0402"; }
+    component R4: RESISTOR { footprint = "0402"; }
+    component R5: RESISTOR { footprint = "0402"; }
+    component R6: RESISTOR { footprint = "0402"; }
+
+    net CKP { R1.1; R2.1; }
+    net CKN { R1.2; R2.2; }
+    net D0P { R3.1; R4.1; }
+    net D0N { R3.2; R4.2; }
+    net GND { R5.1; R6.1; }
+    net RF { R5.2; R6.2; }
+
+    mechanical {
+        outline rectangle { width = 40mm; height = 30mm; }
+    }
+
+    constraint copper_zone(GND) { layers = "In1.Cu,In4.Cu"; }
+    constraint routing(CKP) { kind = differential; partner = CKN; width = 0.14mm; pair_gap = 0.26mm;
+        allowed_layers = "F.Cu"; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint routing(CKN) { kind = differential; partner = CKP; width = 0.14mm; pair_gap = 0.26mm;
+        allowed_layers = "F.Cu"; target_impedance_ohms = 100; target_single_ended_ohms = 50; layer_group = "csi"; }
+    constraint routing(D0P) { kind = differential; partner = D0N; width = 0.10mm; pair_gap = 0.30mm;
+        allowed_layers = "F.Cu,In2.Cu"; target_impedance_ohms = 100; impedance_tolerance_percent = 5;
+        layer_group = "csi"; }
+    constraint routing(D0N) { kind = differential; partner = D0P; width = 0.10mm; pair_gap = 0.30mm;
+        allowed_layers = "F.Cu,In2.Cu"; target_impedance_ohms = 100; impedance_tolerance_percent = 5;
+        layer_group = "csi"; }
+    constraint length_match(CKP, CKN, D0P, D0N) { id = "csi-lanes"; max_skew = 1.5mm; }
+}

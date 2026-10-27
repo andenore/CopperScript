@@ -16,6 +16,7 @@ copper-json.workspace = true
 copper-lang.workspace = true
 copper-lsp.workspace = true
 copper-physical.workspace = true
+copper-assembly.workspace = true
 copper-drc.workspace = true
 copper-pcb.workspace = true
 copper-report.workspace = true

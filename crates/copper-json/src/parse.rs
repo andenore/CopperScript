@@ -43,7 +43,8 @@ impl ParseError {
 /// wins, at the first key's position). Unlike Python, a lone UTF-16 surrogate
 /// escape is refused because a Rust string cannot hold it.
 pub fn parse(text: &str) -> Result<Value, ParseError> {
-    let mut parser = Parser { text, bytes: text.as_bytes(), offset: 0, strict: false, rejection: None };
+    let mut parser =
+        Parser { text, bytes: text.as_bytes(), offset: 0, duplicates: false, constants: false, rejection: None };
     parser.document()
 }
 
@@ -68,10 +69,33 @@ pub enum StrictError {
 /// [`parse`] with hooks that refuse non-finite constants and repeated keys,
 /// raising at the point Python's hooks would.
 pub fn parse_strict(text: &str) -> Result<Value, StrictError> {
-    let mut parser = Parser { text, bytes: text.as_bytes(), offset: 0, strict: true, rejection: None };
+    let mut parser =
+        Parser { text, bytes: text.as_bytes(), offset: 0, duplicates: true, constants: true, rejection: None };
     parser.document().map_err(|error| match parser.rejection.take() {
         Some(rejection) => StrictError::Rejected(rejection),
         None => StrictError::Syntax(error),
+    })
+}
+
+/// Why [`parse_unique`] refused a document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UniqueError {
+    Syntax(ParseError),
+    /// An object repeats this key.
+    DuplicateKey(String),
+}
+
+/// [`parse`] with an `object_pairs_hook` that refuses repeated keys.
+///
+/// Like the Python hook, an object is checked when it closes, so a syntax
+/// error inside it, or an inner object's repeated key, is reported first.
+pub fn parse_unique(text: &str) -> Result<Value, UniqueError> {
+    let mut parser =
+        Parser { text, bytes: text.as_bytes(), offset: 0, duplicates: true, constants: false, rejection: None };
+    parser.document().map_err(|failure| match parser.rejection.take() {
+        Some(Rejection::DuplicateKey(key)) => UniqueError::DuplicateKey(key),
+        Some(Rejection::Constant(_)) => unreachable!("parse_unique accepts constants"),
+        None => UniqueError::Syntax(failure),
     })
 }
 
@@ -79,8 +103,11 @@ struct Parser<'a> {
     text: &'a str,
     bytes: &'a [u8],
     offset: usize,
-    strict: bool,
-    /// Set when a strict hook refused a value; the error returned with it only unwinds.
+    /// Refuse repeated object keys (an `object_pairs_hook`).
+    duplicates: bool,
+    /// Refuse `NaN` and the infinities (a `parse_constant` hook).
+    constants: bool,
+    /// Set when a hook refused a value; the error returned with it only unwinds.
     rejection: Option<Rejection>,
 }
 
@@ -104,7 +131,7 @@ impl Parser<'_> {
         if !self.text[self.offset..].starts_with(word) {
             return Err(self.error("Expecting value"));
         }
-        if self.strict {
+        if self.constants {
             return Err(self.reject(Rejection::Constant(word)));
         }
         self.offset += word.len();
@@ -347,7 +374,7 @@ impl Parser<'_> {
                 }
                 Some(b'}') => {
                     self.offset += 1;
-                    if let Some(key) = repeated.filter(|_| self.strict) {
+                    if let Some(key) = repeated.filter(|_| self.duplicates) {
                         return Err(self.reject(Rejection::DuplicateKey(key)));
                     }
                     return Ok(Value::Object(object));

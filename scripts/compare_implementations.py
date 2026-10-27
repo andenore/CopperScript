@@ -15,7 +15,9 @@ and the same output directory, so paths in their output agree. The harness
 compares the exit status, stdout, stderr and every output file byte for byte
 (a suite may narrow this), and records both run times. The Rust binary writes
 LF line endings on every platform; on Windows the Python outputs' CRLF is read
-as LF before comparing. A Rust command that
+as LF before comparing (and the Rust outputs' too, for formats such as CSV
+that use CRLF on every platform). ``{root}`` in case arguments is the
+checkout, for paths a command resolves from another working directory. A Rust command that
 reports it is not implemented yet is ``pending``; its oracle run is skipped
 unless ``--oracle-when-pending`` asks for the Python timing anyway.
 
@@ -272,11 +274,12 @@ class Run:
     def pending(self) -> bool:
         return self.exit == NOT_IMPLEMENTED_EXIT and NOT_IMPLEMENTED_MARKER in self.stderr
 
-    def with_lf(self) -> "Run":
+    def with_lf(self, stdout: bool = True) -> "Run":
         """The run with `\r\n` as `\n`: the Rust binary writes LF text on every
-        platform, while Python's text mode writes CRLF on Windows."""
+        platform, while Python's text mode writes CRLF on Windows. LSP stdout
+        (``stdout=False``) is binary framing with CRLF headers on both sides."""
         lf = lambda data: data.replace(b"\r\n", b"\n")
-        return Run(self.exit, self.seconds, lf(self.stdout), lf(self.stderr),
+        return Run(self.exit, self.seconds, lf(self.stdout) if stdout else self.stdout, lf(self.stderr),
                    {name: lf(data) for name, data in self.files.items()}, self.timed_out)
 
 
@@ -379,7 +382,7 @@ def run_one(command: list[str], case: Case, out: Path, environment: dict[str, st
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    args = _expand(case.args, {"out": str(out)})
+    args = _expand(case.args, {"out": str(out), "root": str(ROOT)})
     started = time.perf_counter()
     if case.stdin:
         code, stdout, stderr, timed_out = _run_transcript([*command, *args], case, environment)
@@ -605,9 +608,8 @@ def _compare_runs(case, record, rust_command, python_command, work, slug, out, e
     else:
         out.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
-        lf = python.with_lf()
-        # LSP framing is binary on both sides: keep its CRLF headers.
-        python = Run(lf.exit, lf.seconds, python.stdout, lf.stderr, lf.files, lf.timed_out) if case.stdin else lf
+        # Formats that end lines with CRLF everywhere (CSV) do so in both.
+        python, rust = python.with_lf(stdout=not case.stdin), rust.with_lf(stdout=not case.stdin)
     shutil.move(str(out), work / slug / "python")
     record.update(python=_summary(python), rust=_summary(rust))
     if python.timed_out or python.exit is None:

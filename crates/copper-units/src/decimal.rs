@@ -227,6 +227,12 @@ impl Decimal {
         Decimal::triple(self.negative, coefficient, exponent)
     }
 
+    /// Python's `quantize(Decimal("1E<exponent>"))` (round half even) for a
+    /// result that fits the context's precision.
+    pub fn quantize(&self, exponent: i64) -> Self {
+        self.rescale(exponent, Rounding::HalfEven)
+    }
+
     /// Python's `normalize()`: round to the context, then drop trailing zeros
     /// (zero becomes `0` with its sign kept).
     pub fn normalize(&self) -> Result<Self, DecimalError> {

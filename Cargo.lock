@@ -33,6 +33,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 name = "copper"
 version = "0.1.0"
 dependencies = [
+ "copper-assembly",
  "copper-drc",
  "copper-json",
  "copper-lang",
@@ -41,6 +42,19 @@ dependencies = [
  "copper-physical",
  "copper-report",
  "copper-state",
+ "sha2",
+]
+
+[[package]]
+name = "copper-assembly"
+version = "0.1.0"
+dependencies = [
+ "copper-json",
+ "copper-lang",
+ "copper-pcb",
+ "copper-physical",
+ "copper-units",
+ "indexmap",
  "sha2",
 ]
 

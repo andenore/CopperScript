@@ -1,0 +1,35 @@
+Ref,Val,Package,PosX,PosY,Rot,Side
+"BT1","keystone.KEYSTONE_3034","keystone.KEYSTONE_3034",10.0000,-20.0000,0.0000,top
+"C_BULK","4.7 uF","CAPACITOR",12.5000,-21.2500,90.0000,top
+"C_DEC1","100 nF","CAPACITOR",15.0000,-22.5000,180.0000,top
+"C_DEC3","100 pF","CAPACITOR",17.5000,-23.7500,-90.0000,bottom
+"C_DEC4","1 uF","CAPACITOR",20.0000,-25.0000,0.0000,top
+"C_VDD1","100 nF","CAPACITOR",22.5000,-26.2500,90.0000,top
+"C_VDD2","100 nF","CAPACITOR",25.0000,-27.5000,180.0000,top
+"J_SWD","swd.SWD_HEADER","swd.SWD_HEADER",27.5000,-28.7500,-90.0000,top
+"LED1","generic_led.LED","generic_led.LED",30.0000,-30.0000,0.0000,bottom
+"LED10","generic_led.LED","generic_led.LED",32.5000,-31.2500,90.0000,top
+"LED11","generic_led.LED","generic_led.LED",35.0000,-32.5000,180.0000,top
+"LED12","generic_led.LED","generic_led.LED",37.5000,-33.7500,-90.0000,top
+"LED2","generic_led.LED","generic_led.LED",40.0000,-35.0000,0.0000,top
+"LED3","generic_led.LED","generic_led.LED",42.5000,-36.2500,90.0000,bottom
+"LED4","generic_led.LED","generic_led.LED",45.0000,-37.5000,180.0000,top
+"LED5","generic_led.LED","generic_led.LED",47.5000,-38.7500,-90.0000,top
+"LED6","generic_led.LED","generic_led.LED",50.0000,-40.0000,0.0000,top
+"LED7","generic_led.LED","generic_led.LED",52.5000,-41.2500,90.0000,top
+"LED8","generic_led.LED","generic_led.LED",55.0000,-42.5000,180.0000,bottom
+"LED9","generic_led.LED","generic_led.LED",57.5000,-43.7500,-90.0000,top
+"R_LED1","10 kohm","RESISTOR",60.0000,-45.0000,0.0000,top
+"R_LED10","10 kohm","RESISTOR",62.5000,-46.2500,90.0000,top
+"R_LED11","10 kohm","RESISTOR",65.0000,-47.5000,180.0000,top
+"R_LED12","10 kohm","RESISTOR",67.5000,-48.7500,-90.0000,bottom
+"R_LED2","10 kohm","RESISTOR",70.0000,-50.0000,0.0000,top
+"R_LED3","10 kohm","RESISTOR",72.5000,-51.2500,90.0000,top
+"R_LED4","10 kohm","RESISTOR",75.0000,-52.5000,180.0000,top
+"R_LED5","10 kohm","RESISTOR",77.5000,-53.7500,-90.0000,top
+"R_LED6","10 kohm","RESISTOR",80.0000,-55.0000,0.0000,bottom
+"R_LED7","10 kohm","RESISTOR",82.5000,-56.2500,90.0000,top
+"R_LED8","10 kohm","RESISTOR",85.0000,-57.5000,180.0000,top
+"R_LED9","10 kohm","RESISTOR",87.5000,-58.7500,-90.0000,top
+"R_RESET","10 kohm","RESISTOR",90.0000,-60.0000,0.0000,top
+"U1","nordic.NRF52832_QFAA","nordic.NRF52832_QFAA",92.5000,-61.2500,90.0000,bottom

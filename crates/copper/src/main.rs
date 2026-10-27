@@ -7,6 +7,7 @@
 
 mod agent_guide;
 mod args;
+mod assembly;
 mod audit_footprints;
 mod check;
 mod check_footprint;
@@ -16,14 +17,17 @@ mod compile_macro;
 mod explain;
 mod export_kicad;
 mod export_kicad_pcb;
+mod export_manufacturing;
 mod issues;
 mod library;
 mod lock;
 mod lsp;
+mod option_parser;
 mod power_check;
 mod pypath;
 mod query;
 mod report_args;
+mod si_check;
 mod state;
 mod summarize;
 mod view;
