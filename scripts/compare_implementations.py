@@ -21,6 +21,14 @@ unless ``--oracle-when-pending`` asks for the Python timing anyway.
 
 The ``ladder`` suite expands ``bench/ladder.json`` (via ``pcbir.ladder``) into
 one ``route-board`` case per board: this is the ladder timing hook.
+
+Python results are cached under ``build/oracle-cache``, keyed by everything an
+oracle run can depend on (``oracle_digest``: the non-Rust tree, the
+interpreter and its packages, the platform and checkout path) and by the case.
+A change to the Rust side alone therefore reruns only the binary;
+``--no-oracle-cache`` runs Python for every case. Ladder cases always run it.
+One comparison runs per checkout at a time (``build/compare.lock``), because a
+run writes seeded mutations beside their sources.
 """
 
 from __future__ import annotations
@@ -273,6 +281,98 @@ def run_one(command: list[str], case: Case, out: Path, environment: dict[str, st
     return Run(code, seconds, stdout, stderr, _collect_files(out), timed_out)
 
 
+# Paths whose content cannot change a Python oracle result.
+_RUST_ONLY = ("crates", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "docs", ".github",
+              "scripts/compare_corpus.json")
+
+
+def oracle_digest(python: str) -> str:
+    """Everything a Python oracle run can depend on, except the case itself.
+
+    The tracked non-Rust tree (with the content of local edits and untracked
+    files), the interpreter and its installed distributions, the platform and
+    the checkout path, which absolute paths in messages expose. Package caches
+    are content-addressed, so their directory names already pin their bytes.
+    """
+    exclude = [f":(exclude){path}" for path in _RUST_ONLY]
+    git = lambda *args: subprocess.run(["git", *args, "--", ".", *exclude], cwd=ROOT, capture_output=True,
+                                       check=True).stdout
+    digest = hashlib.sha256(git("ls-files", "-s"))
+    changed = git("ls-files", "-m", "-o", "--exclude-standard").decode("utf-8").splitlines()
+    for name in sorted(set(changed)):
+        path = ROOT / name
+        digest.update(name.encode() + b"\0" + (path.read_bytes() if path.is_file() else b"<deleted>"))
+    versions = subprocess.run([python, "-c", "import sys, importlib.metadata as m; print(sys.version); "
+                               "print(sorted(f'{d.metadata[\"Name\"]}=={d.version}' for d in m.distributions()))"],
+                              capture_output=True, check=True).stdout
+    digest.update(versions + f"{sys.platform}|{ROOT}|{sorted(ENVIRONMENT.items())}".encode())
+    return digest.hexdigest()
+
+
+class OracleCache:
+    """Python oracle results by case, valid while `oracle_digest` is unchanged."""
+
+    def __init__(self, directory: Path, digest: str):
+        self.directory = directory / digest[:20]
+        self.hits = 0
+
+    def _path(self, case: Case) -> Path:
+        key = json.dumps([case.id, case.args, str(case.cwd), case.timeout_s, case.mutation])
+        return self.directory / hashlib.sha256(key.encode()).hexdigest()
+
+    def load(self, case: Case) -> Run | None:
+        path = self._path(case)
+        try:
+            meta = json.loads((path / "run.json").read_text(encoding="utf-8"))
+            files = {name: (path / "files" / name).read_bytes() for name in meta["files"]}
+            run = Run(meta["exit"], meta["seconds"], (path / "stdout").read_bytes(), (path / "stderr").read_bytes(),
+                      files, meta["timed_out"])
+        except (OSError, ValueError, KeyError):
+            return None
+        self.hits += 1
+        return run
+
+    def store(self, case: Case, run: Run) -> None:
+        path = self._path(case)
+        partial = path.with_name(path.name + f".{os.getpid()}.{threading.get_ident()}")
+        shutil.rmtree(partial, ignore_errors=True)
+        (partial / "files").mkdir(parents=True)
+        (partial / "stdout").write_bytes(run.stdout)
+        (partial / "stderr").write_bytes(run.stderr)
+        for name, data in run.files.items():
+            (partial / "files" / name).parent.mkdir(parents=True, exist_ok=True)
+            (partial / "files" / name).write_bytes(data)
+        (partial / "run.json").write_text(json.dumps({"exit": run.exit, "seconds": run.seconds, "files": sorted(run.files),
+                                                      "timed_out": run.timed_out}), encoding="utf-8")
+        shutil.rmtree(path, ignore_errors=True)
+        try:
+            partial.rename(path)
+        except OSError:
+            shutil.rmtree(partial, ignore_errors=True)
+
+
+class CheckoutLock:
+    """One comparison per checkout: a run writes seeded mutations beside their
+    sources (package caches included), which another run would read."""
+
+    def __init__(self, path: Path):
+        self.path = path
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            raise SystemExit(f"another comparison is running in this checkout ({self.path}); "
+                             "delete the file if it is stale") from None
+        os.write(descriptor, str(os.getpid()).encode())
+        os.close(descriptor)
+        return self
+
+    def __exit__(self, *exc):
+        self.path.unlink(missing_ok=True)
+
+
 def oracle_crash(stderr: bytes) -> bytes | None:
     """The final exception line of an uncaught Python exception, else None.
 
@@ -352,7 +452,7 @@ def _summary(run: Run | None) -> dict | None:
 
 def compare_case(case: Case, rust_command: list[str], python_command: list[str], work: Path,
                  environment: dict[str, str], differences: list[dict], oracle_when_pending: bool,
-                 keep: Path | None) -> tuple[dict, list[str]]:
+                 keep: Path | None, cache: OracleCache | None = None) -> tuple[dict, list[str]]:
     record = {"id": case.id, "suite": case.suite, "milestone": case.milestone, "args": case.args,
               "cwd": case.cwd.relative_to(ROOT).as_posix() if case.cwd.is_relative_to(ROOT) else str(case.cwd)}
     if case.skip_reason:
@@ -367,21 +467,27 @@ def compare_case(case: Case, rust_command: list[str], python_command: list[str],
         mutated.write_bytes(mutate_source(original, seed).encode("utf-8"))
     try:
         return _compare_runs(case, record, rust_command, python_command, work, slug, out, environment,
-                             differences, oracle_when_pending, keep)
+                             differences, oracle_when_pending, keep, cache)
     finally:
         if mutated is not None:
             mutated.unlink(missing_ok=True)
 
 
 def _compare_runs(case, record, rust_command, python_command, work, slug, out, environment, differences,
-                  oracle_when_pending, keep):
+                  oracle_when_pending, keep, cache):
     rust = run_one(rust_command, case, out, environment)
     stash = work / slug / "rust"
     shutil.move(str(out), stash)
     if rust.pending() and not oracle_when_pending:
         return {**record, "status": "pending", "rust": _summary(rust),
                 "reason": rust.stderr.decode("utf-8", "replace").strip()}, []
-    python = run_one(python_command, case, out, environment)
+    python = cache.load(case) if cache else None
+    if python is None:
+        python = run_one(python_command, case, out, environment)
+        if cache and not python.timed_out:
+            cache.store(case, python)
+    else:
+        out.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
         python = python.with_lf()
     shutil.move(str(out), work / slug / "python")
@@ -469,10 +575,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--oracle-when-pending", action="store_true",
                         help="run the Python oracle even when the Rust command is not implemented (timing)")
     parser.add_argument("--kicad-cli", help="pass --verify-plane-fill to native ladder boards")
+    parser.add_argument("--oracle-cache", type=Path, default=ROOT / "build" / "oracle-cache",
+                        help="reuse Python oracle results while its sources and environment are unchanged")
+    parser.add_argument("--no-oracle-cache", action="store_true", help="always run the Python oracle")
+    parser.add_argument("--print-oracle-digest", action="store_true",
+                        help="print the oracle cache digest (for a CI cache key) and stop")
     parser.add_argument("--jobs", type=int, default=1,
                         help="cases to run at once (default 1; timings are only comparable with 1)")
     args = parser.parse_args(argv)
 
+    if args.print_oracle_digest:
+        print(oracle_digest(args.python))
+        return 0
     corpus, cases = load_corpus(args.corpus, args.kicad_cli)
     gate = args.milestone or corpus["accepted_milestone"]
     gate_number = milestone_number(gate)
@@ -510,26 +624,36 @@ def main(argv: list[str] | None = None) -> int:
         tree = next((arg for arg in case.args if arg.startswith(("examples/", "tests/"))), None)
         key = "/".join(Path(tree).parts[:2]) if tree else case.id
         groups.setdefault(key, []).append(index)
-    with tempfile.TemporaryDirectory(prefix="copper-compare-") as temporary:
-        work = Path(temporary)
+    with CheckoutLock(ROOT / "build" / "compare.lock"):
+        # Ladder timings measure the oracle itself, so its cases always run it.
+        cache = None if args.no_oracle_cache else OracleCache(args.oracle_cache, oracle_digest(args.python))
+        # A fixed work directory per checkout: output paths appear in messages,
+        # so a cached oracle result must name the same directory as a fresh run.
+        work = Path(tempfile.gettempdir()) / f"copper-compare-{hashlib.sha256(str(ROOT).encode()).hexdigest()[:12]}"
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir(parents=True)
+        try:
 
-        def run_group(indexes: list[int]) -> None:
-            for index in indexes:
-                case = cases[index]
-                record, excerpt = compare_case(case, [str(rust_binary)], [args.python, "-m", "copperscript"], work,
-                                               environment, differences, args.oracle_when_pending, args.keep)
-                record["gated"] = milestone_number(case.milestone) <= gate_number
-                results[index] = record
-                timing = " ".join(f"{name} {record[name]['seconds']}s" for name in ("python", "rust")
-                                  if record.get(name))
-                with printing:
-                    print(f"{record['status']:<9} {case.id}" + (f"  ({timing})" if timing else ""), flush=True)
-                    for line in excerpt:
-                        print(line)
+            def run_group(indexes: list[int]) -> None:
+                for index in indexes:
+                    case = cases[index]
+                    record, excerpt = compare_case(case, [str(rust_binary)], [args.python, "-m", "copperscript"], work,
+                                                   environment, differences, args.oracle_when_pending, args.keep,
+                                                   None if case.suite == "ladder" else cache)
+                    record["gated"] = milestone_number(case.milestone) <= gate_number
+                    results[index] = record
+                    timing = " ".join(f"{name} {record[name]['seconds']}s" for name in ("python", "rust")
+                                      if record.get(name))
+                    with printing:
+                        print(f"{record['status']:<9} {case.id}" + (f"  ({timing})" if timing else ""), flush=True)
+                        for line in excerpt:
+                            print(line)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
-            for future in [pool.submit(run_group, indexes) for indexes in groups.values()]:
-                future.result()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as pool:
+                for future in [pool.submit(run_group, indexes) for indexes in groups.values()]:
+                    future.result()
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
     records = [results[index] for index in range(len(cases))]
     suite_rows = []
     for name in dict.fromkeys(record["suite"] for record in records):
@@ -554,6 +678,8 @@ def main(argv: list[str] | None = None) -> int:
         args.markdown.parent.mkdir(parents=True, exist_ok=True)
         args.markdown.write_text(summary, encoding="utf-8")
     print()
+    if cache:
+        print(f"Oracle cache: {cache.hits} of {len(records)} cases reused ({cache.directory})")
     print(summary, end="")
     return 0 if not failing else 1
 

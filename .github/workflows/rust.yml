@@ -83,7 +83,8 @@ jobs:
       - name: Build the binary
         run: cargo build --release --locked -p copper
       - name: Install the Python oracle
-        run: python -m pip install -e ".[test]"
+        # Python proves macro edge openings with shapely (the qualification extra).
+        run: python -m pip install -e ".[test]" "shapely==2.1.2"
       - name: Check the oracle fixtures are current
         run: python scripts/generate_rust_fixtures.py --check
       - name: Populate the package cache
@@ -94,11 +95,19 @@ jobs:
           for board in examples/*/board.copper examples/simulation/*.copper; do
             python -m copperscript check "$board" --locked > /dev/null || true
           done
+      - name: Key the oracle cache
+        # Python results stay valid while the non-Rust tree and the
+        # interpreter's packages are unchanged; Rust-only pushes reuse them.
+        id: oracle
+        run: echo "digest=$(python scripts/compare_implementations.py --print-oracle-digest)" >> "$GITHUB_OUTPUT"
+      - name: Restore the oracle cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/oracle-cache
+          key: oracle-${{ runner.os }}-${{ steps.oracle.outputs.digest }}-${{ github.run_id }}
+          restore-keys: oracle-${{ runner.os }}-${{ steps.oracle.outputs.digest }}-
       - name: Compare the binary with the Python CLI
         run: python scripts/compare_implementations.py --jobs 4 --report build/compare/report.json --markdown build/compare/report.md
-      - name: Install the macro edge-opening oracle dependency
-        # Python proves macro edge openings with shapely (the qualification extra).
-        run: python -m pip install "shapely==2.1.2"
       - name: Compare the finished M2 commands
         # Gated ahead of M2's acceptance so they cannot regress meanwhile.
         run: >-
@@ -109,6 +118,12 @@ jobs:
           --suite export-kicad-pcb-options --suite export-kicad-pcb-resolved --suite export-kicad-pcb-macros
           --suite export-kicad-pcb-edge-openings
           --report build/compare/report-m2.json --markdown build/compare/report-m2.md
+      - name: Save the oracle cache
+        if: always() && steps.oracle.outputs.digest != ''
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/oracle-cache
+          key: oracle-${{ runner.os }}-${{ steps.oracle.outputs.digest }}-${{ github.run_id }}
       - name: Publish the comparison summary
         if: always()
         run: |
