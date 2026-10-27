@@ -678,6 +678,84 @@ pub struct AssemblyAccess {
     pub purpose: String,
 }
 
+/// `PlacementGroup`: components the planner keeps together.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacementGroup {
+    pub name: String,
+    pub references: Vec<String>,
+    pub anchor: Option<String>,
+    pub priority: i64,
+    pub source: String,
+}
+
+impl PlacementGroup {
+    /// `PlacementGroup.__post_init__`: members deduplicated in order.
+    pub fn new(name: &str, references: &[String], anchor: Option<&str>, priority: i64, source: &str) -> Result<Self> {
+        let mut unique: Vec<String> = Vec::new();
+        for reference in references {
+            if !unique.contains(reference) {
+                unique.push(reference.clone());
+            }
+        }
+        if name.is_empty() || unique.is_empty() {
+            return fail("placement group requires a name and members");
+        }
+        if anchor.is_some_and(|anchor| !unique.iter().any(|r| r == anchor)) {
+            return fail("placement group anchor must be a member");
+        }
+        Ok(PlacementGroup {
+            name: name.to_owned(),
+            references: unique,
+            anchor: anchor.map(str::to_owned),
+            priority,
+            source: source.to_owned(),
+        })
+    }
+}
+
+/// `PhysicalPowerDomain`: derived rail membership; never new connectivity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PhysicalPowerDomain {
+    pub net: String,
+    pub members: Vec<PadReference>,
+    pub sources: Vec<PadReference>,
+    pub source_ports: Vec<String>,
+}
+
+/// `PowerFeedBoundary`: a directed, source-backed passive DC boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PowerFeedBoundary {
+    pub net: String,
+    pub terminal: PadReference,
+    pub upstream_net: String,
+    pub upstream_terminal: PadReference,
+    pub provenance: String,
+}
+
+/// `DecouplingLink`: a semantic bypass association.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecouplingLink {
+    pub capacitor: PadReference,
+    pub target: PadReference,
+    pub return_pad: PadReference,
+    pub net: String,
+    pub return_net: String,
+}
+
+/// `PhysicalAttachment`: a component pose bound to a mechanical target.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PhysicalAttachment {
+    pub id: String,
+    pub reference: String,
+    pub target: Option<String>,
+    pub position: Point,
+    pub offset: Point,
+    pub anchor: String,
+    pub anchor_point: Point,
+    pub rotation: Decimal,
+    pub side: BoardSide,
+}
+
 /// `PhysicalBoard`: the fields this export reads or validates.
 #[derive(Clone, Debug)]
 pub struct PhysicalBoard {
@@ -695,6 +773,8 @@ pub struct PhysicalBoard {
     pub keepouts: Vec<PlacementKeepout>,
     pub placement_rules: Vec<ComponentPlacementRule>,
     pub relative_rules: Vec<RelativePlacementRule>,
+    pub placement_groups: Vec<PlacementGroup>,
+    pub power_domains: Vec<PhysicalPowerDomain>,
     pub net_routing_rules: Vec<NetRoutingRule>,
     pub zones: Vec<CopperZone>,
     pub polygons: Vec<CopperPolygon>,
@@ -707,11 +787,15 @@ pub struct PhysicalBoard {
     pub mechanical_slots: Vec<MechanicalSlot>,
     pub datums: Vec<BoardDatum>,
     pub boundary_edges: Vec<BoardEdge>,
+    pub attachments: Vec<PhysicalAttachment>,
     pub component_heights: Vec<ComponentHeight>,
     pub body_overhangs: Vec<copper_lang::mechanical::assembly::BodyOverhang>,
     pub assembly_envelopes: Vec<copper_lang::mechanical::assembly::AssemblyEnvelope>,
     pub assembly_access: Vec<AssemblyAccess>,
     pub match_groups: Vec<NetMatchGroup>,
     pub component_hole_clearances: Vec<ComponentHoleClearance>,
+    pub decoupling_links: Vec<DecouplingLink>,
     pub silkscreen: Vec<Artwork>,
+    pub power_feeds: Vec<PowerFeedBoundary>,
+    pub mechanical_references: Vec<copper_lang::mechanical::MechanicalReference>,
 }

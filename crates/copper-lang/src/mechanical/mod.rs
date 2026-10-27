@@ -899,12 +899,12 @@ pub fn mechanical_document(m: &MechanicalDesign) -> Json {
                     .collect(),
             ),
         ),
-        ("provenance", provenance(m)),
+        ("provenance", mechanical_provenance(m)),
     ])
 }
 
 /// `mechanical_provenance`.
-fn provenance(m: &MechanicalDesign) -> Json {
+pub fn mechanical_provenance(m: &MechanicalDesign) -> Json {
     let profiles = m
         .profiles
         .iter()
