@@ -505,3 +505,27 @@ do not shrink as much.
 - Corpus (15 suites, 3,293 cases): 3,248 byte-identical and 45 recorded
   (D-0034 to D-0078: Python crashes in `si-check` on a component with an
   unknown part). The M2 gate still passes.
+
+**M3 stream: `plan-layout` (branch `rust-m3-layout`).**
+
+- `copper-place` ports the planner (seeds, analytical placement,
+  legalization, rigid clusters, refinement, relative-constraint repair,
+  escape spacing, candidate selection), placement-stage requirement
+  verification, the physical board digest and the engineering summary.
+  `copper-drc` legality gained the planner's policy (`Checker`), and the
+  physical IR gained placement groups, power domains and feeds,
+  decoupling links and attachments. Python's `math.hypot` and float `sum`
+  are reproduced bit for bit (`copper-physical` `pyfloat`).
+- Corpus: the `plan-layout` acceptance suite (11 boards, `--candidates 1`)
+  is byte-identical, report and `placement.summary.json` included. Eight
+  further suites (proxy inputs, fixtures, macros, six-layer macros, edge
+  openings, options, error paths, templates) bring the total to 503
+  cases: 480 byte-identical, 15 recorded Python crashes (D-0034 to
+  D-0048) and 8 pending.
+- Not implemented (exit 3): the decoupling-access phase when a movable
+  decoupler needs the decoupler router (M4), non-zero
+  `--support-pattern-trials`/`--package-support-trials`, via-in-pad
+  arrays, routing-stage requirements and route-report summaries.
+- Windows: Python digests the report it wrote with CRLF, so the summary's
+  `report_sha256` differs from the Rust binary's LF report there; it needs
+  recording once a Windows run has the digests.

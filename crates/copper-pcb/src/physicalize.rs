@@ -80,7 +80,7 @@ pub enum Footprints<'a> {
 // Constraint parameters
 
 /// Python's `str(value)` of a constraint parameter.
-pub(crate) fn parameter_str(value: &ParameterValue) -> String {
+pub fn parameter_str(value: &ParameterValue) -> String {
     match value {
         ParameterValue::Text(text) => text.clone(),
         ParameterValue::Int(number) => number.to_string(),
@@ -592,11 +592,14 @@ pub fn physicalize(
     let mut metadata: IndexMap<String, String> = IndexMap::new();
     let proxy = matches!(source, Footprints::Proxy);
     if proxy {
+        metadata.insert("generator".to_owned(), "copperscript-prototype-physicalizer".to_owned());
         metadata.insert("prototype_footprints".to_owned(), "true".to_owned());
     } else {
+        metadata.insert("generator".to_owned(), "copperscript-resolved-footprint-physicalizer".to_owned());
         metadata.insert("resolved_footprints".to_owned(), "true".to_owned());
     }
     metadata.insert("prototype_placement".to_owned(), "true".to_owned());
+    metadata.insert("fabrication_ready".to_owned(), "false".to_owned());
     let mut rules = fabrication_rules(options);
     if options.fabrication_profile.starts_with("jlcpcb-") {
         metadata.insert("fabrication_profile".to_owned(), options.fabrication_profile.clone());
@@ -621,6 +624,34 @@ pub fn physicalize(
         })
         .collect();
     selected.sort_by(|a, b| a.component.reference.cmp(&b.component.reference));
+    // Electrical pin names beside physical pad numbers, for editors.
+    let mut pad_names = copper_json::Object::new();
+    for item in &selected {
+        let mut by_number: IndexMap<&str, Vec<&str>> = IndexMap::new();
+        for pin in item.part.pins.values() {
+            by_number.entry(pin.number.as_str()).or_default().push(pin.name.as_str());
+        }
+        if by_number.is_empty() {
+            continue;
+        }
+        let mut numbers: Vec<&&str> = by_number.keys().collect();
+        numbers.sort();
+        let mut names = copper_json::Object::new();
+        for number in numbers {
+            let mut unique: Vec<&str> = Vec::new();
+            for name in &by_number[*number] {
+                if !unique.contains(name) {
+                    unique.push(name);
+                }
+            }
+            names.insert((*number).to_owned(), copper_json::Value::Str(unique.join("/")));
+        }
+        pad_names.insert(item.component.reference.clone(), copper_json::Value::Object(names));
+    }
+    if !pad_names.is_empty() {
+        let text = copper_json::Dumps::new().sort_keys(true).dumps(&copper_json::Value::Object(pad_names));
+        metadata.insert("pad_names".to_owned(), text);
+    }
 
     let xs: Vec<i64>;
     let ys: Vec<i64>;
@@ -739,9 +770,21 @@ pub fn physicalize(
         }
     }
 
+    let mut omitted: Vec<&str> = flat
+        .components
+        .iter()
+        .filter(|c| selected_footprint(c, &flat.library[&c.part]).is_none())
+        .map(|c| c.reference.as_str())
+        .collect();
+    omitted.sort_unstable();
+    metadata.insert("omitted_components".to_owned(), omitted.join(","));
     let lowered = lower_physical_constraints(&flat, &component_index, &outline)?;
+    if let Some(targets) = &lowered.omitted_targets {
+        metadata.insert("omitted_constraint_targets".to_owned(), targets.clone());
+    }
     let mut keepouts = lowered.keepouts;
     let mut placement_rules = lowered.rules;
+    let mut attachments = Vec::new();
     if let Some(mechanical) = mechanical {
         keepouts.extend(mechanical.keepouts.iter().cloned());
         let names: Vec<&str> = keepouts.iter().map(|k| k.name.as_str()).collect();
@@ -749,7 +792,23 @@ pub fn physicalize(
             return fail("conflicting placement keepout names");
         }
         placement_rules = bind_profile_connectors(mechanical, &flat, &footprints, &placements, placement_rules)?;
-        placement_rules = bind_attachments(mechanical, &flat, &footprints, &placements, placement_rules)?;
+        (placement_rules, attachments) =
+            bind_attachments(mechanical, &flat, &footprints, &placements, placement_rules)?;
+        let owners: copper_json::Object = attachments
+            .iter()
+            .map(|a: &PhysicalAttachment| (a.reference.clone(), copper_json::Value::Str(a.id.clone())))
+            .collect();
+        let dumps = copper_json::Dumps::new().sort_keys(true);
+        metadata.insert("mechanical_attachment_owners".to_owned(), dumps.dumps(&copper_json::Value::Object(owners)));
+        if !mechanical.profiles.is_empty() {
+            let provenance = copper_lang::mechanical::mechanical_provenance(mechanical);
+            metadata.insert("mechanical_provenance".to_owned(), dumps.dumps(&provenance));
+            let mut roles = copper_json::Object::new();
+            for connector in &mechanical.connectors {
+                roles.insert(pyvalue::text(&connector.reference), copper_json::Value::Str(connector.role.clone()));
+            }
+            metadata.insert("mechanical_connector_roles".to_owned(), dumps.dumps(&copper_json::Value::Object(roles)));
+        }
     }
     let fixed: IndexMap<&str, &ComponentPlacementRule> =
         placement_rules.iter().map(|rule| (rule.reference.as_str(), rule)).collect();
@@ -784,7 +843,9 @@ pub fn physicalize(
     };
     let avoid = fixed_pad_shapes(&placements, &footprints, &fixed);
     let silkscreen = copper_lang::silkscreen::physical_artwork(&design.silkscreen, &outline, &avoid)?;
-    lower_decoupling(&flat, &nets)?;
+    let power_domains = crate::power::lower_power_domains(&flat, &nets);
+    let power_feeds = crate::power::lower_power_feeds(&flat, &nets, &power_domains);
+    let decoupling_links = lower_decoupling(&flat, &nets)?;
     let match_groups = lower_match_groups(&flat)?;
     let groups: Vec<(String, Vec<String>)> =
         match_groups.iter().map(|(id, nets, _)| (id.clone(), nets.clone())).collect();
@@ -794,7 +855,11 @@ pub fn physicalize(
     let component_heights = mechanical.map_or_else(Vec::new, |m| {
         m.component_heights
             .iter()
-            .map(|h| ComponentHeight { reference: pyvalue::text(&h.reference), height_nm: h.height_nm })
+            .map(|h| ComponentHeight {
+                id: h.id.clone(),
+                reference: pyvalue::text(&h.reference),
+                height_nm: h.height_nm,
+            })
             .collect()
     });
     let mut physical = PhysicalBoard {
@@ -812,6 +877,8 @@ pub fn physicalize(
         keepouts,
         placement_rules,
         relative_rules: lowered.relative,
+        placement_groups: lowered.groups,
+        power_domains,
         net_routing_rules: lowered.routing,
         zones: lowered.zones,
         polygons: Vec::new(),
@@ -824,6 +891,7 @@ pub fn physicalize(
         mechanical_slots: mechanical.map_or_else(Vec::new, |m| m.slots.clone()),
         datums: mechanical.map_or_else(Vec::new, |m| m.datums.clone()),
         boundary_edges: mechanical.map_or_else(Vec::new, |m| m.boundary_edges.clone()),
+        attachments,
         component_heights,
         body_overhangs: mechanical.map_or_else(Vec::new, |m| m.body_overhangs.clone()),
         assembly_envelopes: mechanical.map_or_else(Vec::new, |m| m.assembly_envelopes.clone()),
@@ -848,7 +916,10 @@ pub fn physicalize(
             })
             .collect(),
         component_hole_clearances: hole_clearances,
+        decoupling_links,
         silkscreen,
+        power_feeds,
+        mechanical_references: mechanical.map_or_else(Vec::new, |m| m.references.clone()),
     };
     let match_groups: Vec<(String, Vec<String>)> = match_groups.into_iter().map(|(id, nets, _)| (id, nets)).collect();
     finish_board(&mut physical, &match_groups, &lowered.region_names)?;
@@ -904,15 +975,19 @@ fn fixed_pad_shapes(
     shapes
 }
 
-struct Lowered {
-    region_names: Vec<String>,
-    regions: Vec<PlacementRegion>,
-    relative: Vec<RelativePlacementRule>,
-    keepouts: Vec<PlacementKeepout>,
-    rules: Vec<ComponentPlacementRule>,
-    routing: Vec<NetRoutingRule>,
-    zones: Vec<CopperZone>,
-    via_in_pad: Vec<PadViaInPadRule>,
+/// The result of `_lower_physical_constraints`.
+pub struct Lowered {
+    pub region_names: Vec<String>,
+    pub regions: Vec<PlacementRegion>,
+    pub relative: Vec<RelativePlacementRule>,
+    pub keepouts: Vec<PlacementKeepout>,
+    pub rules: Vec<ComponentPlacementRule>,
+    pub groups: Vec<PlacementGroup>,
+    pub routing: Vec<NetRoutingRule>,
+    pub zones: Vec<CopperZone>,
+    pub via_in_pad: Vec<PadViaInPadRule>,
+    /// `metadata["omitted_constraint_targets"]`, when a target was not selected.
+    pub omitted_targets: Option<String>,
 }
 
 struct Target {
@@ -924,11 +999,25 @@ fn placement_targets(targets: &[Target]) -> Vec<PlacementTarget> {
     targets.iter().map(|t| PlacementTarget { reference: t.reference.clone(), pad: t.pad.clone() }).collect()
 }
 
+/// `_lower_physical_constraints` over the selected components of `flat`.
+pub fn lower_constraints(
+    flat: &FlatElectricalView,
+    selected: &[(&ComponentInstance, &PartDefinition)],
+    outline: &BoardOutline,
+) -> Result<Lowered> {
+    let items: Vec<Selected> =
+        selected.iter().map(|(component, part)| Selected { component, part, footprint: String::new() }).collect();
+    let components: IndexMap<&str, &Selected> = items.iter().map(|i| (i.component.reference.as_str(), i)).collect();
+    lower_physical_constraints(flat, &components, outline)
+}
+
 fn lower_physical_constraints(
     flat: &FlatElectricalView,
     components: &IndexMap<&str, &Selected>,
     outline: &BoardOutline,
 ) -> Result<Lowered> {
+    let skipped: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+    let mut groups: Vec<PlacementGroup> = Vec::new();
     let mut region_names = Vec::new();
     let mut regions = Vec::new();
     let mut relative = Vec::new();
@@ -944,7 +1033,10 @@ fn lower_physical_constraints(
                 Some((reference, pin)) => (reference, Some(pin)),
                 None => (value.as_str(), None),
             };
-            let Some(item) = components.get(reference) else { return Ok(None) };
+            let Some(item) = components.get(reference) else {
+                skipped.borrow_mut().push(value.clone());
+                return Ok(None);
+            };
             let pad = match pin {
                 Some(pin) => {
                     Some(physical_pin_number(item.component, item.part, &flat.devices, pin).ok_or_else(|| {
@@ -1142,7 +1234,7 @@ fn lower_physical_constraints(
                 if weight <= 0 {
                     return fail("relative placement tolerance and weight are invalid");
                 }
-                constraint_int(parameters, "priority", 50)?;
+                let priority = constraint_int(parameters, "priority", 50)?;
                 let kind = if constraint.kind == ConstraintKind::MaxDistance {
                     RelativePlacementKind::MaxDistance
                 } else {
@@ -1156,6 +1248,15 @@ fn lower_physical_constraints(
                     tolerance_nm: 0,
                     weight,
                 });
+                let references: Vec<String> = lowered.iter().map(|t| t.reference.clone()).collect();
+                let anchor = references.last().cloned();
+                groups.push(PlacementGroup::new(
+                    &format!("proximity:{index}"),
+                    &references,
+                    anchor.as_deref(),
+                    priority,
+                    "constraint",
+                )?);
             }
             ConstraintKind::PlacementRegion => {
                 let gap = if parameters.contains_key("courtyard_gap") {
@@ -1299,20 +1400,87 @@ fn lower_physical_constraints(
                     return Err(Error::NotImplemented("an empty placement_group".to_owned()));
                 };
                 let anchor = parameters.get("anchor").map_or_else(|| first.clone(), parameter_str);
-                constraint_int(parameters, "priority", 0)?;
-                if name.is_empty() {
-                    return fail("placement group requires a name and members");
-                }
-                if !references.contains(&anchor) {
-                    return fail("placement group anchor must be a member");
-                }
+                let priority = constraint_int(parameters, "priority", 0)?;
+                groups.push(PlacementGroup::new(&name, &references, Some(&anchor), priority, "constraint")?);
             }
             _ => {}
         }
     }
+    let pin_count = |reference: &str| components[reference].part.pins.len();
+    // `max(members, key=...)`: the first member with the most pins.
+    let anchor_of = |members: &[String]| {
+        let mut best = &members[0];
+        for member in members {
+            if pin_count(member) > pin_count(best) {
+                best = member;
+            }
+        }
+        best.clone()
+    };
+    for module in &flat.module_instances {
+        let prefix = format!("{}/", module.path);
+        let mut members: Vec<String> =
+            components.keys().filter(|r| r.starts_with(&prefix)).map(|r| (*r).to_owned()).collect();
+        members.sort();
+        if !members.is_empty() {
+            let anchor = anchor_of(&members);
+            groups.push(PlacementGroup::new(
+                &format!("module:{}", module.path),
+                &members,
+                Some(&anchor),
+                100,
+                "hierarchy",
+            )?);
+        }
+    }
+    for interface in &flat.interfaces {
+        let mut members: Vec<String> =
+            interface.bindings.keys().filter(|r| components.contains_key(r.as_str())).cloned().collect();
+        members.sort();
+        if members.len() >= 2 {
+            let anchor = anchor_of(&members);
+            groups.push(PlacementGroup::new(
+                &format!("interface:{}", interface.name),
+                &members,
+                Some(&anchor),
+                25,
+                "interface",
+            )?);
+        }
+    }
     let mut ordered: Vec<ComponentPlacementRule> = rules.into_values().collect();
     ordered.sort_by(|a, b| a.reference.cmp(&b.reference));
-    Ok(Lowered { region_names, regions, relative, keepouts, rules: ordered, routing, zones, via_in_pad })
+    let mut omitted: Vec<String> = skipped.into_inner();
+    omitted.sort();
+    omitted.dedup();
+    Ok(Lowered {
+        region_names,
+        regions,
+        relative,
+        keepouts,
+        rules: ordered,
+        groups: unique_groups(groups),
+        routing,
+        zones,
+        via_in_pad,
+        omitted_targets: (!omitted.is_empty()).then(|| omitted.join(",")),
+    })
+}
+
+/// `_unique_groups`: a repeated name gets a `:N` suffix.
+fn unique_groups(groups: Vec<PlacementGroup>) -> Vec<PlacementGroup> {
+    let mut names: IndexMap<String, usize> = IndexMap::new();
+    groups
+        .into_iter()
+        .map(|mut group| {
+            let count = names.get(&group.name).copied().unwrap_or(0);
+            names.insert(group.name.clone(), count + 1);
+            if count != 0 {
+                group.name = format!("{}:{count}", group.name);
+            }
+            group
+        })
+        .collect()
 }
 
 fn lower_routing_rule(net: &str, parameters: &Parameters) -> Result<NetRoutingRule> {
@@ -1401,8 +1569,8 @@ fn lower_routing_rule(net: &str, parameters: &Parameters) -> Result<NetRoutingRu
     })
 }
 
-/// `_lower_decoupling`: validate each decoupler's explicit association.
-fn lower_decoupling(flat: &FlatElectricalView, nets: &[PhysicalNet]) -> Result<()> {
+/// `_lower_decoupling`: each decoupler's explicit association.
+fn lower_decoupling(flat: &FlatElectricalView, nets: &[PhysicalNet]) -> Result<Vec<DecouplingLink>> {
     let components: IndexMap<&str, &ComponentInstance> =
         flat.components.iter().map(|c| (c.reference.as_str(), c)).collect();
     let assigned: IndexMap<&PadReference, &str> =
@@ -1410,6 +1578,7 @@ fn lower_decoupling(flat: &FlatElectricalView, nets: &[PhysicalNet]) -> Result<(
     let ground: IndexSet<&str> =
         flat.supplies.iter().filter(|s| s.voltage.base_value().is_zero()).map(|s| s.net.as_str()).collect();
     let mut seen: IndexSet<&str> = IndexSet::new();
+    let mut links = Vec::new();
     for component in &flat.components {
         if component.properties.get("role").map(String::as_str) != Some("decoupling") {
             continue;
@@ -1447,8 +1616,15 @@ fn lower_decoupling(flat: &FlatElectricalView, nets: &[PhysicalNet]) -> Result<(
         if !seen.insert(component.reference.as_str()) {
             return fail("a decoupler requires one explicit protected pin association");
         }
+        links.push(DecouplingLink {
+            capacitor: feed.clone(),
+            target,
+            return_pad: back.clone(),
+            net: net.expect("netted target").to_owned(),
+            return_net: assigned[back].to_owned(),
+        });
     }
-    Ok(())
+    Ok(links)
 }
 
 /// `_lower_match_groups`: the nets of each `length_match` constraint.
@@ -1717,7 +1893,8 @@ fn bind_attachments(
     footprints: &IndexMap<String, PhysicalFootprint>,
     placements: &[Placement],
     rules: Vec<ComponentPlacementRule>,
-) -> Result<Vec<ComponentPlacementRule>> {
+) -> Result<(Vec<ComponentPlacementRule>, Vec<PhysicalAttachment>)> {
+    let mut resolved = Vec::new();
     let explicit: IndexSet<&str> = flat
         .constraints
         .iter()
@@ -1789,10 +1966,21 @@ fn bind_attachments(
         };
         let rule = merge_rule(previous, &binding.reference, changes)?;
         by_reference.insert(binding.reference.clone(), rule);
+        resolved.push(PhysicalAttachment {
+            id: binding.id.clone(),
+            reference: binding.reference.clone(),
+            target: binding.target.clone(),
+            position: binding.position,
+            offset: binding.offset,
+            anchor: binding.anchor.clone(),
+            anchor_point: local,
+            rotation: binding.rotation.clone(),
+            side: binding.side,
+        });
     }
     let mut result: Vec<ComponentPlacementRule> = by_reference.into_values().collect();
     result.sort_by(|a, b| a.reference.cmp(&b.reference));
-    Ok(result)
+    Ok((result, resolved))
 }
 
 // ---------------------------------------------------------------------------

@@ -11,14 +11,13 @@ changes its behaviour.
 | `copper-state` | The frozen `copperscript.state/v1` format: read, verify, write |
 | `copper-physical` | Exact board geometry (outlines, cutouts, holes, slots, line/arc paths), footprints and the `.kicad_mod` importer |
 | `copper-lang` | Lexer, parser, package resolution, lowering (electrical, mechanical, silkscreen), ERC, the compiled JSON and the KiCad schematic backend |
-| `copper-pcb` | Physical board IR, physicalization (proxy and resolved footprints), placement templates, hard-macro scenes and the KiCad PCB/project backend |
-| `copper-drc` | Physical DRC findings and coverage, exact copper connectivity, breakout spacing, placement legality and hard-macro materialization (M2 subset of M3's DRC) |
+| `copper-pcb` | Physical board IR, physicalization (proxy and resolved footprints), placement templates, hard-macro scenes and the KiCad PCB/project backend (M2, in progress) |
+| `copper-drc` | Physical DRC findings and coverage, exact copper connectivity, breakout spacing, placement legality and hard-macro materialization (M2 subset of M3's DRC); signal-integrity screening (`si-check`) |
 | `copper-lsp` | The language server (`copper lsp`): Content-Length framing, JSON-RPC dispatch with Python's error codes and messages, the debounced diagnostics worker, recovering parse, symbols, hover, definition, completion, compiler-backed diagnostics and quick fixes (M6) |
 | `copper-report` | Run diagnostics and reports: diagnostic explanations, a run's issues grouped by cause, board window views (scene reader, legend and SVG) and engineering summaries (M5) |
-| `copper-pcb` | Physical board IR, physicalization (proxy and resolved footprints), placement templates, hard-macro scenes and the KiCad PCB/project backend (M2, in progress) |
 | `copper-assembly` | Assembly locks and checks, BOM/CPL and hand-assembly/ordering CSVs, and native KiCad manufacturing files (`zipfile`-exact archives with a zlib-exact DEFLATE) (M3) |
-| `copper-drc` | Physical DRC findings and coverage, exact copper connectivity, breakout spacing, placement legality and hard-macro materialization (M2 subset of M3's DRC); signal-integrity screening (`si-check`) |
-| `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` (M0); `check`, `compile`, `query`, `power-check`, `audit-footprints`, `lock`, `compile-macro`, `library` (M1); `check-footprint`, `export-kicad`, `export-kicad-pcb` (M2); `assembly`, `si-check`, `export-manufacturing --skip-independent-cam` (M3); `lsp` (M6) |
+| `copper-place` | The placement planner behind `plan-layout`: seeds, legalization, rigid clusters, refinement, escape spacing, candidate selection, requirement verification and the engineering summary (M3) |
+| `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` (M0); `check`, `compile`, `query`, `power-check`, `audit-footprints`, `lock`, `compile-macro`, `library` (M1); `check-footprint`, `export-kicad`, `export-kicad-pcb` (M2); `plan-layout`, `assembly`, `si-check`, `export-manufacturing` (M3); `explain`, `issues`, `view`, `summarize` (M5); `lsp` (M6) |
 
 ## Build and test
 

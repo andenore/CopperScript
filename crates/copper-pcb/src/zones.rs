@@ -4,10 +4,10 @@ use indexmap::IndexMap;
 
 use copper_lang::model::{Constraint, ConstraintKind, ParameterValue};
 use copper_physical::geometry::{point_in_polygon, ring_edges, segment_in_polygon, segments_intersect};
-use copper_physical::{BoardOutline, Point};
+use copper_physical::{BoardOutline, CopperLayer, Point};
 use copper_units::Dimension;
 
-use crate::board::CopperZone;
+use crate::board::{CopperZone, NetRoutingRule, PhysicalBoard};
 use crate::{Error, Result, fail};
 
 /// The value of a length parameter, in integer nanometres truncated toward zero.
@@ -200,4 +200,55 @@ pub fn validate_routing_reservations(zones: &[CopperZone]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `distribution_zone_nets`: nets with declared (non-macro) copper zones.
+pub fn distribution_zone_nets(board: &PhysicalBoard) -> indexmap::IndexSet<String> {
+    let local: Vec<&str> = board.hard_macros.iter().flat_map(|m| m.zones.iter().map(|z| z.id.as_str())).collect();
+    board.zones.iter().filter(|z| !local.contains(&z.id.as_str())).map(|z| z.net.clone()).collect()
+}
+
+fn area_twice(vertices: &[Point]) -> i128 {
+    let mut total: i128 = 0;
+    for (index, first) in vertices.iter().enumerate() {
+        let second = vertices[(index + 1) % vertices.len()];
+        total += i128::from(first.x_nm) * i128::from(second.y_nm) - i128::from(second.x_nm) * i128::from(first.y_nm);
+    }
+    total.abs()
+}
+
+/// `dedicated_plane_layers`: unambiguous, nearly board-wide inner-layer planes.
+pub fn dedicated_plane_layers(board: &PhysicalBoard) -> IndexMap<CopperLayer, String> {
+    let board_area = area_twice(&board.outline.vertices);
+    let mut result = IndexMap::new();
+    if board_area == 0 {
+        return result;
+    }
+    let layers = &board.stackup.copper_layers;
+    for layer in layers.iter().skip(1).take(layers.len().saturating_sub(2)) {
+        let zones: Vec<&CopperZone> = board.zones.iter().filter(|z| z.layers.contains(layer)).collect();
+        let wide: Vec<&&CopperZone> =
+            zones.iter().filter(|z| z.holes.is_empty() && 5 * area_twice(&z.outer) >= 4 * board_area).collect();
+        let nets: indexmap::IndexSet<&str> = wide.iter().map(|z| z.net.as_str()).collect();
+        if nets.len() != 1 {
+            continue;
+        }
+        let net = &wide[0].net;
+        let base = wide.iter().map(|z| z.priority).min().expect("wide zones");
+        // A split plane stays a plane: other nets may only carve islands with a higher priority.
+        if zones.iter().all(|z| z.net == *net || z.priority > base) {
+            result.insert(*layer, net.clone());
+        }
+    }
+    result
+}
+
+/// `routing_layers`: legal track layers, preserving explicit restrictions and planes.
+pub fn routing_layers(board: &PhysicalBoard, net: &str, rule: Option<&NetRoutingRule>) -> Vec<CopperLayer> {
+    let selected = match rule {
+        Some(rule) if !rule.allowed_layers.is_empty() => &rule.allowed_layers,
+        _ => &board.stackup.copper_layers,
+    };
+    let planes = dedicated_plane_layers(board);
+    selected.iter().filter(|layer| planes.get(*layer).is_none_or(|owner| owner == net)).copied().collect()
 }

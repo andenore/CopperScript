@@ -664,7 +664,7 @@ impl Analysis {
                 offline: true,
                 symbol: String::new(),
             };
-            let (path, _, data) =
+            let (path, _, data, _) =
                 prepare_macro_asset(&reference, true, true, None).map_err(|failure| match failure {
                     MacroError::Compile(error) => error,
                     MacroError::Value(message) => CopperScriptError::new(

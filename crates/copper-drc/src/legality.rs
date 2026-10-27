@@ -18,7 +18,7 @@ use copper_physical::geometry::{
     RoundedConvexShape, polygon_triangles, ring_edges, segments_intersect, shapes_clear, shapes_touch_or_overlap,
 };
 use copper_physical::mechanical::{hole_shape, shape_in_outline, slot_shape, validated_ring};
-use copper_physical::pyfloat::{big_ratio_to_f64, round_int};
+use copper_physical::pyfloat::{big_ratio_to_f64, hypot, round_int};
 use copper_physical::{BoardSide, CopperKeepout, CopperLayer, PlacementKeepout, Point};
 use copper_units::Decimal;
 
@@ -100,15 +100,15 @@ pub fn float_point_segment_distance(point: Point, start: Point, end: Point) -> f
     let (dx, dy) = (i128::from(end.x_nm - start.x_nm), i128::from(end.y_nm - start.y_nm));
     let (px, py) = (point.x_nm as f64, point.y_nm as f64);
     if dx == 0 && dy == 0 {
-        return (px - start.x_nm as f64).hypot(py - start.y_nm as f64);
+        return hypot(px - start.x_nm as f64, py - start.y_nm as f64);
     }
     let dot = i128::from(point.x_nm - start.x_nm) * dx + i128::from(point.y_nm - start.y_nm) * dy;
     let fraction = true_divide(dot, dx * dx + dy * dy).clamp(0.0, 1.0);
-    (px - (start.x_nm as f64 + fraction * dx as f64)).hypot(py - (start.y_nm as f64 + fraction * dy as f64))
+    hypot(px - (start.x_nm as f64 + fraction * dx as f64), py - (start.y_nm as f64 + fraction * dy as f64))
 }
 
 /// `placement._point_in_polygon`: float crossing test, boundary inclusive.
-fn float_point_in_polygon(point: Point, polygon: &[Point]) -> bool {
+pub fn float_point_in_polygon(point: Point, polygon: &[Point]) -> bool {
     let mut inside = false;
     for (start, end) in ring_edges(polygon) {
         if float_point_segment_distance(point, start, end) == 0.0 {
@@ -215,7 +215,7 @@ fn polygon_interiors_overlap(first: &[Point], second: &[Point]) -> bool {
 }
 
 /// `_courtyards_too_close`: extra courtyard gaps use interior-only overlap at zero.
-fn courtyards_too_close(first: &[Point], second: &[Point], clearance: i64) -> bool {
+pub fn courtyards_too_close(first: &[Point], second: &[Point], clearance: i64) -> bool {
     if clearance != 0 {
         return polygons_too_close(first, second, clearance);
     }
@@ -227,7 +227,7 @@ fn courtyards_too_close(first: &[Point], second: &[Point], clearance: i64) -> bo
 }
 
 /// `_polygon_inside`: vertices and edge midpoints inside, with clearance.
-fn polygon_inside(inner: &[Point], outer: &[Point], clearance: i64) -> bool {
+pub fn polygon_inside(inner: &[Point], outer: &[Point], clearance: i64) -> bool {
     let mut samples = inner.to_vec();
     samples.extend(
         ring_edges(inner)
@@ -527,6 +527,12 @@ fn derive_corridor(board: &PhysicalBoard, members: &[String]) -> Result<std::res
 
 /// `reserved_corridors().corridors`: corridors of `reserve_corridor` pairs that can be derived.
 pub fn reserved_corridors(board: &PhysicalBoard) -> Result<Vec<ReservedCorridor>> {
+    Ok(corridor_reservation(board)?.0)
+}
+
+/// `reserved_corridors()`: the derived corridors, and each skipped pair with its reason.
+#[allow(clippy::type_complexity)]
+pub fn corridor_reservation(board: &PhysicalBoard) -> Result<(Vec<ReservedCorridor>, Vec<(Vec<String>, String)>)> {
     let mut pairs: Vec<Vec<String>> = Vec::new();
     for rule in board.net_routing_rules.iter().filter(|r| r.reserve_corridor) {
         let mut pair = match &rule.differential_partner {
@@ -539,13 +545,14 @@ pub fn reserved_corridors(board: &PhysicalBoard) -> Result<Vec<ReservedCorridor>
         }
     }
     pairs.sort();
-    let mut result = Vec::new();
+    let (mut result, mut skipped) = (Vec::new(), Vec::new());
     for members in pairs {
-        if let Ok(corridor) = derive_corridor(board, &members)? {
-            result.push(corridor);
+        match derive_corridor(board, &members)? {
+            Ok(corridor) => result.push(corridor),
+            Err(reason) => skipped.push((members, reason)),
         }
     }
-    Ok(result)
+    Ok((result, skipped))
 }
 
 /// `automatic_pair_corridors`: corridors of every fixed differential pair without `reserve_corridor`.
@@ -575,7 +582,12 @@ pub fn automatic_pair_corridors(board: &PhysicalBoard) -> Result<Vec<ReservedCor
 }
 
 /// `_keepout_blocks`: a placement keepout excludes this placed body.
-fn keepout_blocks(board: &PhysicalBoard, keepout: &PlacementKeepout, candidate: &Placement, polygon: &[Point]) -> bool {
+pub fn keepout_blocks(
+    board: &PhysicalBoard,
+    keepout: &PlacementKeepout,
+    candidate: &Placement,
+    polygon: &[Point],
+) -> bool {
     if keepout.side.is_some_and(|side| side != candidate.side) {
         return false;
     }
@@ -601,7 +613,7 @@ fn land_shapes<'a>(
 }
 
 /// `_lands_meet_keepout`: pad-only isolation areas.
-fn lands_meet_keepout(board: &PhysicalBoard, pose: &Placement, keepout: &CopperKeepout) -> Result<bool> {
+pub fn lands_meet_keepout(board: &PhysicalBoard, pose: &Placement, keepout: &CopperKeepout) -> Result<bool> {
     let region = shape(keepout.vertices.clone(), 0)?;
     let side = side_layer(pose.side);
     for (pad, copper) in land_shapes(board, pose) {
@@ -621,7 +633,7 @@ fn lands_meet_keepout(board: &PhysicalBoard, pose: &Placement, keepout: &CopperK
 }
 
 /// `_lands_meet_macro_copper`: a non-member's lands violate a hard macro's copper.
-fn lands_meet_macro_copper(
+pub fn lands_meet_macro_copper(
     board: &PhysicalBoard,
     pose: &Placement,
     tracks: &[TrackSegment],
@@ -822,160 +834,340 @@ pub fn footprint_holes_clear(board: &PhysicalBoard, candidate: &Placement, held:
     Ok(true)
 }
 
-/// `_legal`: one candidate pose against the accepted placements.
-pub fn legal(
-    candidate: &Placement,
-    placed: &Poses,
-    board: &PhysicalBoard,
-    cluster_keepouts: Option<&[CopperKeepout]>,
-) -> Result<bool> {
-    let all_rules = rules(board);
-    let rule = all_rules.get(candidate.reference.as_str()).copied();
-    if !allowed_orientations(board, &candidate.reference).contains(&candidate.rotation_degrees) {
-        return Ok(false);
-    }
-    if rule.and_then(|r| r.side).is_some_and(|side| side != candidate.side) {
-        return Ok(false);
-    }
-    let polygon = placement_polygon(board, candidate);
-    for other in placed.values().filter(|o| o.side == candidate.side) {
-        let gap =
-            component_pair_courtyard_gap_nm(board, &candidate.reference, &other.reference, COMPONENT_CLEARANCE_NM)?;
-        if courtyards_too_close(&polygon, &placement_polygon(board, other), gap) {
-            return Ok(false);
+/// The `PlacementPlannerOptions` fields the hard predicates read.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Policy {
+    pub edge_clearance_nm: i64,
+    pub component_clearance_nm: i64,
+    pub auto_pair_corridors: bool,
+    /// Session locks: these poses must not change.
+    pub fixed_references: IndexSet<String>,
+}
+
+impl Default for Policy {
+    fn default() -> Self {
+        Policy {
+            edge_clearance_nm: EDGE_CLEARANCE_NM,
+            component_clearance_nm: COMPONENT_CLEARANCE_NM,
+            auto_pair_corridors: true,
+            fixed_references: IndexSet::new(),
         }
     }
-    if !footprint_holes_clear(board, candidate, placed)? {
-        return Ok(false);
-    }
-    if array_owners(board) {
-        return copper_pcb::not_implemented("via-in-pad via arrays");
-    }
-    let edge = rule.and_then(|r| r.edge_clearance_nm).unwrap_or(EDGE_CLEARANCE_NM);
-    let body = shape(polygon.clone(), 0)?;
-    let outline = &board.outline;
-    let inside = if !board.body_overhangs.is_empty() {
-        body_in_material(board, candidate, &body, edge)?
-    } else if outline.circular_boundary.is_some()
-        || outline.boundary_path.is_some()
-        || !outline.cutouts.is_empty()
-        || !board.mechanical_holes.is_empty()
-        || !board.mechanical_slots.is_empty()
-    {
-        shape_in_board(board, &body, edge, 0)?
-    } else {
-        polygon_inside(&polygon, &outline.vertices, edge)
-    };
-    if !inside {
-        return Ok(false);
-    }
-    if (!board.body_overhangs.is_empty() || !board.assembly_envelopes.is_empty() || !board.assembly_access.is_empty())
-        && !assembly_pose_legal(board, candidate, &polygon, placed)?
-    {
-        return Ok(false);
-    }
-    for hole in board.mechanical_holes.iter().filter(|h| h.head_clearance_radius_nm != 0) {
-        if !shapes_clear(&body, &shape(vec![hole.position], hole.head_clearance_radius_nm)?, 1) {
-            return Ok(false);
-        }
-    }
-    if let Some(name) = rule.and_then(|r| r.region.as_ref()) {
-        let region = board.regions.iter().find(|r| r.name == *name).expect("validated region");
-        if region.side.is_some_and(|side| side != candidate.side) {
-            return Ok(false);
-        }
-        if !polygon_inside(&polygon, &region.outline.vertices, 0) {
-            return Ok(false);
-        }
-    }
-    let mut macro_poses = placed.clone();
-    macro_poses.insert(candidate.reference.clone(), candidate.clone());
-    for hard in &board.hard_macros {
-        let cluster = board.rigid_clusters.iter().find(|c| c.name == hard.cluster).expect("macro cluster");
-        if !macro_poses.contains_key(&cluster.anchor_reference) {
-            continue;
-        }
-        let members: IndexSet<&str> = cluster.members.iter().map(|m| m.reference.as_str()).collect();
-        let outsiders: Vec<&Placement> = if members.contains(candidate.reference.as_str()) {
-            placed.iter().filter(|(r, _)| !members.contains(r.as_str())).map(|(_, p)| p).collect()
-        } else {
-            vec![candidate]
-        };
-        let geometry = resolved_macro_geometry(board, hard, &macro_poses)?;
-        for region in &geometry.regions {
-            for outsider in &outsiders {
-                if region.layers.contains(&side_layer(outsider.side))
-                    && polygons_too_close(&placement_polygon(board, outsider), &region.vertices, 0)
-                {
-                    return Ok(false);
+}
+
+/// The hard placement predicates for one board and policy, with the
+/// board-derived inputs (rules, gap policy, derived corridors) computed once.
+pub struct Checker<'a> {
+    pub board: &'a PhysicalBoard,
+    pub policy: Policy,
+    rules: IndexMap<&'a str, &'a ComponentPlacementRule>,
+    known: IndexSet<&'a str>,
+    explicit_gaps: IndexMap<&'a str, Option<i64>>,
+    internal_gaps: IndexMap<(&'a str, &'a str), i64>,
+    corridors: std::cell::OnceCell<Result<Vec<ReservedCorridor>>>,
+    automatic: std::cell::OnceCell<Result<Vec<ReservedCorridor>>>,
+}
+
+impl<'a> Checker<'a> {
+    pub fn new(board: &'a PhysicalBoard, policy: Policy) -> Self {
+        let mut internal_gaps: IndexMap<(&str, &str), i64> = IndexMap::new();
+        for cluster in &board.rigid_clusters {
+            let Some(value) = cluster.internal_clearance_nm else { continue };
+            for (index, first) in cluster.members.iter().enumerate() {
+                for second in &cluster.members[index + 1..] {
+                    let pair = ordered_pair(&first.reference, &second.reference);
+                    let entry = internal_gaps.entry(pair).or_insert(0);
+                    *entry = (*entry).max(value);
                 }
             }
         }
-        for outsider in &outsiders {
-            if lands_meet_macro_copper(board, outsider, &geometry.tracks, &geometry.vias)? {
+        Checker {
+            board,
+            policy,
+            rules: rules(board),
+            known: board.placements.iter().map(|p| p.reference.as_str()).collect(),
+            explicit_gaps: board
+                .placement_rules
+                .iter()
+                .map(|r| (r.reference.as_str(), r.additional_courtyard_gap_nm))
+                .collect(),
+            internal_gaps,
+            corridors: std::cell::OnceCell::new(),
+            automatic: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// The placement rule of a component.
+    pub fn rule(&self, reference: &str) -> Option<&'a ComponentPlacementRule> {
+        self.rules.get(reference).copied()
+    }
+
+    /// `reserved_corridors(board).corridors`, derived once.
+    pub fn reserved_corridors(&self) -> Result<&[ReservedCorridor]> {
+        match self.corridors.get_or_init(|| reserved_corridors(self.board)) {
+            Ok(corridors) => Ok(corridors),
+            Err(error) => Err(error.clone()),
+        }
+    }
+
+    /// `automatic_pair_corridors(board)`, derived once.
+    pub fn automatic_pair_corridors(&self) -> Result<&[ReservedCorridor]> {
+        match self.automatic.get_or_init(|| automatic_pair_corridors(self.board)) {
+            Ok(corridors) => Ok(corridors),
+            Err(error) => Err(error.clone()),
+        }
+    }
+
+    /// `component_pair_courtyard_gap_nm` with an explicit fallback.
+    pub fn courtyard_gap(&self, first: &str, second: &str, fallback: i64) -> Result<i64> {
+        if first == second || !self.known.contains(first) || !self.known.contains(second) {
+            return Err(Error::Value("courtyard gap requires two distinct physical components".to_owned()));
+        }
+        let (a, b) =
+            (self.explicit_gaps.get(first).copied().flatten(), self.explicit_gaps.get(second).copied().flatten());
+        if let Some(gap) = self.internal_gaps.get(&ordered_pair(first, second)) {
+            return Ok((*gap).max(a.unwrap_or(0)).max(b.unwrap_or(0)));
+        }
+        Ok(a.unwrap_or(fallback).max(b.unwrap_or(fallback)))
+    }
+
+    /// `_legal`: one candidate pose against the accepted placements.
+    pub fn legal(
+        &self,
+        candidate: &Placement,
+        placed: &Poses,
+        cluster_keepouts: Option<&[CopperKeepout]>,
+    ) -> Result<bool> {
+        let board = self.board;
+        let rule = self.rule(&candidate.reference);
+        let allowed = match rule {
+            Some(rule) => match &rule.fixed_rotation_degrees {
+                Some(rotation) => *rotation == candidate.rotation_degrees,
+                None => rule.allowed_orientations.contains(&candidate.rotation_degrees),
+            },
+            None => [0, 90, 180, 270].iter().any(|v| Decimal::from_i64(*v) == candidate.rotation_degrees),
+        };
+        if !allowed {
+            return Ok(false);
+        }
+        if rule.and_then(|r| r.side).is_some_and(|side| side != candidate.side) {
+            return Ok(false);
+        }
+        let polygon = placement_polygon(board, candidate);
+        // Reject local courtyard collisions before expensive board/cutout checks.
+        for other in placed.values().filter(|o| o.side == candidate.side) {
+            let gap = self.courtyard_gap(&candidate.reference, &other.reference, self.policy.component_clearance_nm)?;
+            if courtyards_too_close(&polygon, &placement_polygon(board, other), gap) {
                 return Ok(false);
             }
         }
-    }
-    for keepout in &board.keepouts {
-        if keepout_blocks(board, keepout, candidate, &polygon) {
+        if !footprint_holes_clear(board, candidate, placed)? {
             return Ok(false);
         }
-    }
-    for corridor in reserved_corridors(board)? {
-        if !corridor.terminal_references.contains(&candidate.reference)
-            && keepout_blocks(board, &corridor.keepout, candidate, &polygon)
+        if array_owners(board) {
+            return copper_pcb::not_implemented("via-in-pad via arrays");
+        }
+        let edge = rule.and_then(|r| r.edge_clearance_nm).unwrap_or(self.policy.edge_clearance_nm);
+        let outline = &board.outline;
+        let inside = if !board.body_overhangs.is_empty() {
+            body_in_material(board, candidate, &shape(polygon.clone(), 0)?, edge)?
+        } else if outline.circular_boundary.is_some()
+            || outline.boundary_path.is_some()
+            || !outline.cutouts.is_empty()
+            || !board.mechanical_holes.is_empty()
+            || !board.mechanical_slots.is_empty()
+        {
+            shape_in_board(board, &shape(polygon.clone(), 0)?, edge, 0)?
+        } else {
+            polygon_inside(&polygon, &outline.vertices, edge)
+        };
+        if !inside {
+            return Ok(false);
+        }
+        if (!board.body_overhangs.is_empty()
+            || !board.assembly_envelopes.is_empty()
+            || !board.assembly_access.is_empty())
+            && !assembly_pose_legal(board, candidate, &polygon, placed)?
         {
             return Ok(false);
         }
-    }
-    if rule.is_none_or(|r| r.fixed_position.is_none()) {
-        for corridor in automatic_pair_corridors(board)? {
+        for hole in board.mechanical_holes.iter().filter(|h| h.head_clearance_radius_nm != 0) {
+            if !shapes_clear(
+                &shape(polygon.clone(), 0)?,
+                &shape(vec![hole.position], hole.head_clearance_radius_nm)?,
+                1,
+            ) {
+                return Ok(false);
+            }
+        }
+        if let Some(name) = rule.and_then(|r| r.region.as_ref()) {
+            let region = board.regions.iter().find(|r| r.name == *name).expect("validated region");
+            if region.side.is_some_and(|side| side != candidate.side) {
+                return Ok(false);
+            }
+            if !polygon_inside(&polygon, &region.outline.vertices, 0) {
+                return Ok(false);
+            }
+        }
+        if !board.hard_macros.is_empty() {
+            let mut macro_poses = placed.clone();
+            macro_poses.insert(candidate.reference.clone(), candidate.clone());
+            for hard in &board.hard_macros {
+                let cluster = board.rigid_clusters.iter().find(|c| c.name == hard.cluster).expect("macro cluster");
+                if !macro_poses.contains_key(&cluster.anchor_reference) {
+                    continue;
+                }
+                let members: IndexSet<&str> = cluster.members.iter().map(|m| m.reference.as_str()).collect();
+                let outsiders: Vec<&Placement> = if members.contains(candidate.reference.as_str()) {
+                    placed.iter().filter(|(r, _)| !members.contains(r.as_str())).map(|(_, p)| p).collect()
+                } else {
+                    vec![candidate]
+                };
+                let geometry = resolved_macro_geometry(board, hard, &macro_poses)?;
+                for region in &geometry.regions {
+                    for outsider in &outsiders {
+                        if region.layers.contains(&side_layer(outsider.side))
+                            && polygons_too_close(&placement_polygon(board, outsider), &region.vertices, 0)
+                        {
+                            return Ok(false);
+                        }
+                    }
+                }
+                for outsider in &outsiders {
+                    if lands_meet_macro_copper(board, outsider, &geometry.tracks, &geometry.vias)? {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        for keepout in &board.keepouts {
+            if keepout_blocks(board, keepout, candidate, &polygon) {
+                return Ok(false);
+            }
+        }
+        for corridor in self.reserved_corridors()? {
             if !corridor.terminal_references.contains(&candidate.reference)
                 && keepout_blocks(board, &corridor.keepout, candidate, &polygon)
             {
                 return Ok(false);
             }
         }
-    }
-    let resolved;
-    let cluster_keepouts = match cluster_keepouts {
-        Some(keepouts) => keepouts,
-        None => {
-            resolved = resolved_cluster_keepouts(board, &macro_poses);
-            &resolved[..]
+        if self.policy.auto_pair_corridors && rule.is_none_or(|r| r.fixed_position.is_none()) {
+            // Movable parts only: an authored fixed pose is the author's call.
+            for corridor in self.automatic_pair_corridors()? {
+                if !corridor.terminal_references.contains(&candidate.reference)
+                    && keepout_blocks(board, &corridor.keepout, candidate, &polygon)
+                {
+                    return Ok(false);
+                }
+            }
         }
-    };
-    let candidate_layer = side_layer(candidate.side);
-    for keepout in board.copper_keepouts.iter().chain(cluster_keepouts.iter()) {
-        if keepout.block_footprints
-            && keepout.layers.contains(&candidate_layer)
-            && polygons_too_close(&polygon, &keepout.vertices, 0)
+        let resolved;
+        let cluster_keepouts = match cluster_keepouts {
+            Some(keepouts) => keepouts,
+            None if board.rigid_clusters.is_empty() => &[],
+            None => {
+                let mut macro_poses = placed.clone();
+                macro_poses.insert(candidate.reference.clone(), candidate.clone());
+                resolved = resolved_cluster_keepouts(board, &macro_poses);
+                &resolved[..]
+            }
+        };
+        let candidate_layer = side_layer(candidate.side);
+        for keepout in board.copper_keepouts.iter().chain(cluster_keepouts.iter()) {
+            if keepout.block_footprints
+                && keepout.layers.contains(&candidate_layer)
+                && polygons_too_close(&polygon, &keepout.vertices, 0)
+            {
+                return Ok(false);
+            }
+            if keepout.block_pads && lands_meet_keepout(board, candidate, keepout)? {
+                return Ok(false);
+            }
+        }
+        let footprint = &board.footprints[&candidate.footprint];
+        for other in placed.values().filter(|o| o.side == candidate.side) {
+            let other_footprint = &board.footprints[&other.footprint];
+            if other_footprint.keepouts.is_empty() && footprint.keepouts.is_empty() {
+                continue;
+            }
+            let other_polygon = placement_polygon(board, other);
+            for local in other_footprint.keepouts.iter().filter(|k| k.block_footprints) {
+                let area: Vec<Point> = local.vertices.iter().map(|p| transformed_local_point(other, *p)).collect();
+                if polygons_too_close(&polygon, &area, 0) {
+                    return Ok(false);
+                }
+            }
+            for local in footprint.keepouts.iter().filter(|k| k.block_footprints) {
+                let area: Vec<Point> = local.vertices.iter().map(|p| transformed_local_point(candidate, *p)).collect();
+                if polygons_too_close(&other_polygon, &area, 0) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// `placement_solution_is_hard_legal`.
+    pub fn placement_solution_is_hard_legal(&self, placements: &Poses) -> Result<bool> {
+        let board = self.board;
+        let original = placement_map(board);
+        if placements.len() != original.len() || !placements.keys().all(|k| original.contains_key(k)) {
+            return Ok(false);
+        }
+        if placements
+            .iter()
+            .any(|(reference, item)| item.reference != *reference || item.footprint != original[reference].footprint)
         {
             return Ok(false);
         }
-        if keepout.block_pads && lands_meet_keepout(board, candidate, keepout)? {
+        if !cluster_placement_matches(board, placements)? {
             return Ok(false);
         }
-    }
-    let footprint = &board.footprints[&candidate.footprint];
-    for other in placed.values().filter(|o| o.side == candidate.side) {
-        let other_footprint = &board.footprints[&other.footprint];
-        let other_polygon = placement_polygon(board, other);
-        for local in other_footprint.keepouts.iter().filter(|k| k.block_footprints) {
-            let area: Vec<Point> = local.vertices.iter().map(|p| transformed_local_point(other, *p)).collect();
-            if polygons_too_close(&polygon, &area, 0) {
+        if self.policy.fixed_references.iter().any(|r| placements.get(r) != original.get(r)) {
+            return Ok(false);
+        }
+        for rule in &board.placement_rules {
+            let pose = &placements[&rule.reference];
+            if rule.fixed_position.is_some_and(|p| p != pose.position) {
+                return Ok(false);
+            }
+            if rule.fixed_rotation_degrees.as_ref().is_some_and(|r| *r != pose.rotation_degrees) {
                 return Ok(false);
             }
         }
-        for local in footprint.keepouts.iter().filter(|k| k.block_footprints) {
-            let area: Vec<Point> = local.vertices.iter().map(|p| transformed_local_point(candidate, *p)).collect();
-            if polygons_too_close(&other_polygon, &area, 0) {
+        let keepouts = resolved_cluster_keepouts(board, placements);
+        let mut accepted: Poses = IndexMap::new();
+        let mut references: Vec<&String> = placements.keys().collect();
+        references.sort();
+        for reference in references {
+            let candidate = &placements[reference];
+            if !self.legal(candidate, &accepted, Some(&keepouts))? {
                 return Ok(false);
             }
+            accepted.insert(reference.clone(), candidate.clone());
         }
+        Ok(true)
     }
-    Ok(true)
+
+    /// `placement_solution_is_legal`: hard rules plus every relative rule.
+    pub fn placement_solution_is_legal(&self, placements: &Poses) -> Result<bool> {
+        Ok(self.placement_solution_is_hard_legal(placements)? && relative_penalty(self.board, placements)? == 0)
+    }
+}
+
+fn ordered_pair<'b>(first: &'b str, second: &'b str) -> (&'b str, &'b str) {
+    if first <= second { (first, second) } else { (second, first) }
+}
+
+/// `_legal` at the planner's default options.
+pub fn legal(
+    candidate: &Placement,
+    placed: &Poses,
+    board: &PhysicalBoard,
+    cluster_keepouts: Option<&[CopperKeepout]>,
+) -> Result<bool> {
+    Checker::new(board, Policy::default()).legal(candidate, placed, cluster_keepouts)
 }
 
 fn target_point(board: &PhysicalBoard, placements: &Poses, target: &PlacementTarget) -> Result<Option<Point>> {
@@ -992,7 +1184,7 @@ fn target_point(board: &PhysicalBoard, placements: &Poses, target: &PlacementTar
 }
 
 fn rounded_distance(a: Point, b: Point) -> i64 {
-    round_int(((a.x_nm - b.x_nm) as f64).hypot((a.y_nm - b.y_nm) as f64))
+    round_int(hypot((a.x_nm - b.x_nm) as f64, (a.y_nm - b.y_nm) as f64))
 }
 
 fn rule_points(board: &PhysicalBoard, placements: &Poses, rule: &RelativePlacementRule) -> Result<Option<Vec<Point>>> {
@@ -1086,47 +1278,14 @@ pub fn relative_violation_messages(board: &PhysicalBoard, placements: &Poses) ->
     Ok(messages)
 }
 
-/// `placement_solution_is_hard_legal`.
+/// `placement_solution_is_hard_legal` at the default options.
 pub fn placement_solution_is_hard_legal(board: &PhysicalBoard, placements: &Poses) -> Result<bool> {
-    let original = placement_map(board);
-    if placements.len() != original.len() || !placements.keys().all(|k| original.contains_key(k)) {
-        return Ok(false);
-    }
-    if placements
-        .iter()
-        .any(|(reference, item)| item.reference != *reference || item.footprint != original[reference].footprint)
-    {
-        return Ok(false);
-    }
-    if !cluster_placement_matches(board, placements)? {
-        return Ok(false);
-    }
-    for rule in &board.placement_rules {
-        let pose = &placements[&rule.reference];
-        if rule.fixed_position.is_some_and(|p| p != pose.position) {
-            return Ok(false);
-        }
-        if rule.fixed_rotation_degrees.as_ref().is_some_and(|r| *r != pose.rotation_degrees) {
-            return Ok(false);
-        }
-    }
-    let keepouts = resolved_cluster_keepouts(board, placements);
-    let mut accepted: Poses = IndexMap::new();
-    let mut references: Vec<&String> = placements.keys().collect();
-    references.sort();
-    for reference in references {
-        let candidate = &placements[reference];
-        if !legal(candidate, &accepted, board, Some(&keepouts))? {
-            return Ok(false);
-        }
-        accepted.insert(reference.clone(), candidate.clone());
-    }
-    Ok(true)
+    Checker::new(board, Policy::default()).placement_solution_is_hard_legal(placements)
 }
 
 /// `placement_solution_is_legal`: hard rules plus every relative rule.
 pub fn placement_solution_is_legal(board: &PhysicalBoard, placements: &Poses) -> Result<bool> {
-    Ok(placement_solution_is_hard_legal(board, placements)? && relative_penalty(board, placements)? == 0)
+    Checker::new(board, Policy::default()).placement_solution_is_legal(placements)
 }
 
 /// `placement_rejection_reasons`: why a pose is rejected, by the planner's own predicates.

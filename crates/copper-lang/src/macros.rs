@@ -853,6 +853,8 @@ pub struct PreparedMacroBinding {
     pub path: PathBuf,
     pub digest: String,
     pub data: Json,
+    /// `prepare_macro_asset`'s provenance record (asset, resolution, inputs, digests).
+    pub provenance: copper_json::Object,
 }
 
 const REMOTE: [&str; 3] = ["github.com/", "gitlab.com/", "https://"];
@@ -864,7 +866,10 @@ pub fn prepare_macro_asset(
     locked: bool,
     offline: bool,
     shared: Option<&mut PackageResolver>,
-) -> Result<(PathBuf, String, Json)> {
+) -> Result<Snapshot> {
+    let mut provenance = copper_json::Object::new();
+    let text = |value: &str| Json::Str(value.to_owned());
+    provenance.insert("asset".to_owned(), text(&reference.asset));
     let mut own;
     let resolver = match shared {
         Some(resolver) => resolver,
@@ -875,8 +880,13 @@ pub fn prepare_macro_asset(
     };
     let (path, mut digest) = if REMOTE.iter().any(|prefix| reference.asset.starts_with(prefix)) {
         let asset = resolver.resolve_asset(&reference.asset, &reference.location)?;
+        provenance.insert("module".to_owned(), text(&asset.module_path));
+        provenance.insert("version".to_owned(), text(&asset.version));
+        provenance.insert("inventory_checksum".to_owned(), text(&asset.checksum));
+        provenance.insert("resolution".to_owned(), text("managed"));
         (asset.path, asset.sha256)
     } else {
+        provenance.insert("resolution".to_owned(), text("local_input"));
         let unresolved = Path::new(&reference.base_directory).join(&reference.asset);
         if symlinked(&unresolved) {
             return Err(MacroError::Value("local macro assets may not be symlinks".to_owned()));
@@ -907,15 +917,24 @@ pub fn prepare_macro_asset(
             inputs.shift_remove(&source_path);
         }
         verify_macro_inputs(&inputs)?;
+        provenance.insert("source_sha256".to_owned(), text(&digest));
+        provenance
+            .insert("inputs".to_owned(), Json::Object(inputs.iter().map(|(k, v)| (k.clone(), text(v))).collect()));
+        provenance.insert("symbol".to_owned(), text(&reference.symbol));
         digest = sha256_hex(&canonical_macro_bytes(&data));
         data
     } else {
-        let text = utf8(&raw, &path)?;
-        copper_json::parse(&text).map_err(|error| MacroError::Value(error.python_message(&text)))?
+        let raw_text = utf8(&raw, &path)?;
+        copper_json::parse(&raw_text).map_err(|error| MacroError::Value(error.python_message(&raw_text)))?
     };
     validate_macro_asset_data(&data).map_err(MacroError::Value)?;
-    Ok((path, digest, data))
+    provenance.insert("source_path".to_owned(), text(&paths::display(&path)));
+    provenance.insert("asset_sha256".to_owned(), text(&digest));
+    Ok((path, digest, data, provenance))
 }
+
+/// One prepared asset: its path, digest, data and provenance.
+pub type Snapshot = (PathBuf, String, Json, copper_json::Object);
 
 fn sorted_repr(items: &IndexSet<String>) -> String {
     let mut sorted: Vec<&str> = items.iter().map(String::as_str).collect();
@@ -994,18 +1013,18 @@ pub fn prepare_macro_bindings_with(
     mut resolver: Option<&mut PackageResolver>,
 ) -> std::result::Result<Vec<PreparedMacroBinding>, PreparationError> {
     let bindings = crate::compiler::resolve_macro_bindings(flat).map_err(PreparationError::Compile)?;
-    let mut snapshots: IndexMap<(String, String, String), (PathBuf, String, Json)> = IndexMap::new();
+    let mut snapshots: IndexMap<(String, String, String), Snapshot> = IndexMap::new();
     let mut result = Vec::new();
     for binding in bindings {
         let reference = &binding.asset;
         let key = (reference.asset.clone(), reference.base_directory.clone(), reference.symbol.clone());
-        let prepared = (|| -> std::result::Result<(PathBuf, String, Json), String> {
+        let prepared = (|| -> std::result::Result<Snapshot, String> {
             if !snapshots.contains_key(&key) {
                 let snapshot = prepare_macro_asset(reference, locked, offline, resolver.as_deref_mut())
                     .map_err(|error| error.to_string())?;
                 snapshots.insert(key.clone(), snapshot);
             }
-            let (path, digest, data) = snapshots[&key].clone();
+            let (path, digest, data, provenance) = snapshots[&key].clone();
             let (expected_members, expected_nets) = asset_roles(&data)?;
             let actual_members: IndexSet<String> =
                 binding.mappings.iter().filter(|m| m.kind == "member").map(|m| m.key.clone()).collect();
@@ -1030,10 +1049,12 @@ pub fn prepare_macro_bindings_with(
                     sorted_repr(&actual_nets)
                 ));
             }
-            Ok((path, digest, data))
+            Ok((path, digest, data, provenance))
         })();
         match prepared {
-            Ok((path, digest, data)) => result.push(PreparedMacroBinding { binding, path, digest, data }),
+            Ok((path, digest, data, provenance)) => {
+                result.push(PreparedMacroBinding { binding, path, digest, data, provenance })
+            }
             Err(message) => {
                 return Err(PreparationError::Binding {
                     location: binding.location.clone(),

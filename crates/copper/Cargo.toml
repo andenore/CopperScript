@@ -19,7 +19,9 @@ copper-physical.workspace = true
 copper-assembly.workspace = true
 copper-drc.workspace = true
 copper-pcb.workspace = true
+copper-place.workspace = true
 copper-report.workspace = true
+copper-units.workspace = true
 copper-state.workspace = true
 sha2.workspace = true
 

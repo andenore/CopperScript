@@ -23,6 +23,7 @@ mod library;
 mod lock;
 mod lsp;
 mod option_parser;
+mod plan_layout;
 mod power_check;
 mod pypath;
 mod query;
