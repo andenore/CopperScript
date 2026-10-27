@@ -1338,7 +1338,7 @@ uninstrumented variants sequentially on the same otherwise idle machine. Repeat
 in alternating order before drawing a wall-time conclusion:
 
 ```powershell
-make EXAMPLE=full-vertical route PROFILE=none EXTRA_ROUTE_ARGS=--no-incremental-placement-repair
+make EXAMPLE=full-vertical route PROFILE=none EXTRA_ROUTE_ARGS="--zone-dependency-expansions 0"
 make EXAMPLE=full-vertical route PROFILE=none
 uv run --no-sync python -m pcbir.routing_benchmark compare "build/full-vertical/runs/<baseline-id>" "build/full-vertical/runs/<candidate-id>"
 ```
@@ -1354,8 +1354,8 @@ incomparable/incomplete data or an input error; none means manufacturing signoff
 The standalone `summarize` command returns 0 for valid observations, even if a run
 is still active, and clearly marks its completion state.
 
-The two explicit repair switches (`--no-incremental-placement-repair` and
-`--zone-dependency-expansions`) are interventions under test and may differ. Other
+The explicit repair switch `--zone-dependency-expansions` is an intervention
+under test and may differ. Other
 settings, including search budgets, must match. Runtime provenance does not hash
 all footprint files or capture machine load, so an eligible ratio still requires
 external-library verification and repeated measurements. This is a review aid,
@@ -1401,14 +1401,6 @@ candidate was selected. The same observer is forwarded through placement trials
 and local zone dependency reroutes. There are no per-expanded-state callbacks.
 The requested budget is not an aggregate net budget: branch searches, guide
 expansions and bounded pitch refinements can perform several searches.
-
-Every finished net event also carries a process-local `search_identity`.
-Within one repair stage, a search repeated with identical inputs is answered
-from a bounded memo (`search_reuse: "hit"`, with the original `reused_search_seconds`); a
-`detailed_search_reuse` summary follows `detailed_repair`. The attempt is the
-identical earlier result, so copper, reports and fingerprints do not change.
-`--search-reuse-entries 0` disables it for comparison runs; see
-[exact repair-search reuse](routing-performance.md).
 
 Follow a running build in PowerShell:
 
@@ -1456,20 +1448,9 @@ been enabled by this profiling change.
 
 
 
-## Exact search reuse and acceptance
+## Acceptance of performance changes
 
-Repair-stage memoization is bounded by `--search-reuse-entries` (default 128;
-0 disables). Reuse requires identical board/obstacle geometry, keepouts, rules,
-guides, anchors, congestion, options and ordered copper state. Any blocking
-geometry change needs a fresh search, including previously failed searches;
-budget exhaustion is not a reusable proof of impossibility on another board.
-Separate board objects conservatively receive separate caches. Grid material
-queries may reuse immutable board/axes data but keep fresh mutable query state.
-
-Incremental placement repairs invalidate incident nets, moved-pad/keepout/contact
-collisions and derived guide/access evidence. Unsupported ownership or excessive
-dependency cones fall back to a full pipeline. No failed transaction publishes
-tentative copper. Static geometry caches need complete snapshot/invalidation keys.
+Static geometry caches need complete snapshot/invalidation keys.
 
 Compare connectivity, exact DRC, critical/package constraints, deterministic
 results and final-copper quality alongside uninstrumented time and work counts.

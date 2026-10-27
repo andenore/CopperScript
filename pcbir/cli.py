@@ -826,7 +826,10 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     board_route_parser = subparsers.add_parser(
-        "route-board", help="attempt complete physical routing and run native DRC"
+        "route-board", help="attempt complete physical routing and run native DRC",
+        # Exact flags only: a removed option such as --router must be refused,
+        # not taken as an abbreviation of --router-iterations.
+        allow_abbrev=False,
     )
     board_route_parser.add_argument("board", type=Path, help="a .copper source file")
     _add_resolution_options(board_route_parser)
@@ -1059,11 +1062,6 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--stop-after", choices=STOP_STAGES,
         help="end the run at this stage boundary and write the report (status fail, stopped_after set); "
              "skips filled-copper and final native verification")
-    for flag, arity in _REMOVED_ROUTE_BOARD_FLAGS.items():
-        # Accepted, hidden and ignored (reported as ignored_flags), so command
-        # lines written for the removed legacy router still run.
-        board_route_parser.add_argument(flag, dest=_removed_dest(flag), help=argparse.SUPPRESS,
-                                        **({"action": "store_true"} if arity == 0 else {"default": None}))
     board_route_parser.add_argument("--checkpoint-dir", type=Path,
         help="write a reusable placement checkpoint and critical-stage input states here")
     board_route_parser.add_argument("--reuse-placement", type=Path,
@@ -1162,48 +1160,6 @@ def _unified_options(args):
     return UnifiedRouterOptions(**options)
 
 
-# route-board options of the removed legacy router and of its stages (package
-# access search, power preparation, late zone-escape repair), with their
-# arity (0: a switch). The parser still accepts them, hidden, so existing
-# command lines run; they have no effect and are reported as ignored.
-_REMOVED_ROUTE_BOARD_FLAGS = {
-    "--plan-power-areas": 0,
-    "--power-area-net": 1,
-    "--power-area-config": 1,
-    "--passes": 1,
-    "--search-budget": 1,
-    "--minimum-repair-pitch-mm": 1,
-    "--heuristic-weight": 1,
-    "--soft-ripup": 0,
-    "--search-reuse-entries": 1,
-    "--router": 1,
-    "--legacy-gates": 0,
-    "--package-access-trials": 1,
-    "--package-placement-probes": 1,
-    "--package-pattern-trials": 1,
-    "--package-partial-owner-nets": 1,
-    "--package-full-pair-states": 1,
-    "--package-boundary-step-mm": 1,
-    "--package-destination-ports": 0,
-    "--package-access-movement-mm": 1,
-    "--zone-escape-trials": 1,
-    "--zone-local-ripup-trials": 1,
-    "--no-incremental-placement-repair": 0,
-    "--guide-escape-mm": 1,
-    "--no-escape-terminals": 0,
-    "--zone-escape-movement-mm": 1,
-    "--constrained-pins-first": 0,
-    "--progressive-guides": 0,
-    "--guide-distance-heuristic": 0,
-    "--repair-budget-multiplier": 1,
-    "--defer-zone-nets": 0,
-}
-
-
-def _removed_dest(flag: str) -> str:
-    return "removed_" + flag[2:].replace("-", "_")
-
-
 # Placement-feedback flags whose budget the congestion-driven loop
 # (run_placement_feedback) spends.
 _UNIFIED_MAPPED_FLAGS = ("detailed_feedback_trials", "critical_feedback_trials")
@@ -1212,8 +1168,8 @@ _UNIFIED_MAPPED_FLAGS = ("detailed_feedback_trials", "critical_feedback_trials")
 def _unified_flag_notes(args) -> dict[str, list[str]]:
     """Name route-board flags this run does not apply, and flags it maps.
 
-    ``ignored_flags`` lists given removed flags, and ``--pitch-mm`` when no
-    ``--local-demand-cost`` reads it. ``mapped_flags`` lists non-zero
+    ``ignored_flags`` lists ``--pitch-mm`` when no ``--local-demand-cost``
+    reads it. ``mapped_flags`` lists non-zero
     placement-feedback flags the congestion loop's budget includes.
     Advisory only: routing is unchanged.
     """
@@ -1221,10 +1177,8 @@ def _unified_flag_notes(args) -> dict[str, list[str]]:
     def given(name):
         # An absent attribute was not given on this command line.
         return getattr(args, name, getattr(defaults, name)) != getattr(defaults, name)
-    ignored = [flag for flag in _REMOVED_ROUTE_BOARD_FLAGS
-               if getattr(args, _removed_dest(flag), None) not in (None, False)]
-    if given("pitch_mm") and getattr(args, "local_demand_cost", 0) <= 0:
-        ignored.insert(0, "--pitch-mm")
+    ignored = (["--pitch-mm"] if given("pitch_mm") and getattr(args, "local_demand_cost", 0) <= 0
+               else [])
     mapped = ["--" + name.replace("_", "-") for name in _UNIFIED_MAPPED_FLAGS
               if given(name) and getattr(args, name)]
     return {"ignored_flags": ignored, "mapped_flags": mapped}

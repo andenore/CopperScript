@@ -102,21 +102,13 @@ precedence; no extra search or rip-up allowance is created.
 The unified router's own controls are the `--unified-*` flags and
 `--no-route-smoothing`; `--fanout` options seed its pad escapes and repair
 rounds. `--pitch-mm` applies only when `--local-demand-cost` is above 0.
-The removed router's flags stay accepted and hidden so pinned command lines
-keep running: `--router`, `--passes`, `--search-budget`,
-`--minimum-repair-pitch-mm`, `--heuristic-weight`, `--soft-ripup`,
-`--constrained-pins-first`, `--progressive-guides`, `--guide-distance-heuristic`,
-`--repair-budget-multiplier`, `--search-reuse-entries`, `--guide-escape-mm`,
-`--no-escape-terminals`, `--defer-zone-nets`, `--legacy-gates`,
-`--package-access-trials`, `--package-placement-probes`, `--package-pattern-trials`,
-`--package-partial-owner-nets`, `--package-full-pair-states`,
-`--package-boundary-step-mm`, `--package-destination-ports`,
-`--package-access-movement-mm`, `--plan-power-areas`, `--power-area-net`,
-`--power-area-config`, `--zone-escape-trials`, `--zone-local-ripup-trials`,
-`--zone-escape-movement-mm` and `--no-incremental-placement-repair`. They have
-no effect. When any is given, `route-board` emits one `router_options` /
-`ignored` progress event and lists them in the report's
-`work_limits.ignored_flags`; routing is unchanged. `--stop-after` accepts only
+When it does not apply, `route-board` emits one `router_options` / `ignored`
+progress event and lists it in the report's `work_limits.ignored_flags`;
+routing is unchanged. The removed router's options (`--router`, `--passes`,
+`--search-budget`, `--soft-ripup`, `--constrained-pins-first`,
+`--progressive-guides`, `--repair-budget-multiplier`, the package-access,
+power-area and zone-escape options and the rest) are no longer accepted, and
+`route-board` takes no abbreviated options. `--stop-after` accepts only
 `placement`. The CLI plane post-stitch (`stitch_zone_pads`, then
 `repair_cut_off_plane_pads`) still runs unless `--unified-direct`.
 

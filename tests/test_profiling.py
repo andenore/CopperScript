@@ -84,7 +84,7 @@ def test_summary_bounds_rows_but_raw_preserves_all_functions(tmp_path):
 def test_real_routing_geometry_reports_and_project_bytes_identical(tmp_path):
     base = [sys.executable, "-u", "-m", "copperscript", "route-board",
             str(ROOT / "examples/valid_board/board.copper"), "--allow-proxy-footprints",
-            "--candidates", "1", "--zone-escape-trials", "0", "--zone-local-ripup-trials", "0"]
+            "--candidates", "1"]
     commands = []
     for name in ("plain", "observed"):
         commands.append([*base, "--report", str(tmp_path / f"{name}.json"),

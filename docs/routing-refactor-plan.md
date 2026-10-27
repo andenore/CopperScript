@@ -382,8 +382,8 @@ pipeline still calls (`bypass_reservations.py`,
 `fanout_bypass_completion.py`, `critical_preflight.py`, `critical_reuse.py`,
 `local_critical.py`, `pair_search_resume.py`, `pair_tuning_spans.py`) remain,
 with unreachable definitions removed; `verified_bypass_links` moved to
-`bypass_links.py`. Removed `route-board` flags stay accepted, hidden and
-ignored so pinned consumer targets keep running. The single-ended critical
+`bypass_links.py`. The removed `route-board` flags were accepted and ignored
+until the consumers dropped them (2026-10-27); they are now refused. The single-ended critical
 fallback for RF-feed, power and general critical kinds, which still called
 `route_detailed` on the default path, now uses the unified router (see the
 2026-10-26 progress row). The option-profile cut and the docs collapse below

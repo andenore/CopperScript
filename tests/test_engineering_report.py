@@ -70,7 +70,7 @@ def test_standard_route_writes_summary_and_optional_strict_requirement_gate(tmp_
     for strict in (False, True):
         path = tmp_path / ("strict.json" if strict else "route.json")
         args = ["route-board", str(source), "--allow-proxy-footprints", "--candidates", "1",
-                "--passes", "1", "--pitch-mm", "0.5", "--width-mm", "60", "--height-mm", "40",
+                "--pitch-mm", "0.5", "--width-mm", "60", "--height-mm", "40",
                 "--report", str(path)]
         if strict:
             args.append("--require-verified-intent")

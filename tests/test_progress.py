@@ -73,7 +73,7 @@ def test_cli_progress_is_opt_in_and_does_not_change_exports(tmp_path, capsys):
     assert not _parser().parse_args(['route-board', 'example.copper']).progress
     root = Path(__file__).resolve().parents[1]
     command = ['route-board', str(root/'examples/valid_board/board.copper'), '--allow-proxy-footprints',
-               '--candidates', '1', '--zone-escape-trials', '0', '--zone-local-ripup-trials', '0']
+               '--candidates', '1']
     plain_report, observed_report = tmp_path/'plain.json', tmp_path/'observed.json'
     plain_pcb, observed_pcb = tmp_path/'plain'/'board.kicad_pcb', tmp_path/'observed'/'board.kicad_pcb'
     plain_exit = main([*command, '--report', str(plain_report), '-o', str(plain_pcb)])

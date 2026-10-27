@@ -1,5 +1,7 @@
-"""route-board accepts and names the removed router's flags, which no longer apply."""
+"""route-board names the flags a run does not apply and refuses the removed router's flags."""
 import json
+
+import pytest
 
 import pcbir.cli as cli
 
@@ -40,14 +42,13 @@ def _router_events(output):
             if line.startswith("PROGRESS ") and '"router_options"' in line]
 
 
-def test_unified_route_board_reports_ignored_legacy_flags(tmp_path, capsys):
+def test_route_board_reports_an_unused_pitch_as_ignored(tmp_path, capsys):
     source, footprints = _board(tmp_path)
-    code, data = _route(tmp_path, source, footprints, "legacy-flags", "--passes", "7", "--search-budget", "123")
+    code, data = _route(tmp_path, source, footprints, "unused-pitch", "--pitch-mm", "0.5")
     assert code == 0
-    assert data["work_limits"]["ignored_flags"] == ["--passes", "--search-budget"]
+    assert data["work_limits"]["ignored_flags"] == ["--pitch-mm"]
     events = _router_events(capsys.readouterr().out)
-    assert [(e["event"], e["details"]["ignored_flags"]) for e in events] == [
-        ("ignored", ["--passes", "--search-budget"])]
+    assert [(e["event"], e["details"]["ignored_flags"]) for e in events] == [("ignored", ["--pitch-mm"])]
 
     code, data = _route(tmp_path, source, footprints, "unified-only", "--unified-iterations", "20",
                         "--no-route-smoothing")
@@ -57,7 +58,16 @@ def test_unified_route_board_reports_ignored_legacy_flags(tmp_path, capsys):
     assert _router_events(capsys.readouterr().out) == []
 
 
-def test_removed_flags_are_accepted_and_reported_as_ignored():
+@pytest.mark.parametrize("flag", (["--router", "unified"], ["--passes", "2"], ["--soft-ripup"],
+                                  ["--package-access-trials", "0"], ["--plan-power-areas"],
+                                  ["--zone-escape-trials", "0"]))
+def test_removed_router_flags_are_refused(flag, capsys):
+    with pytest.raises(SystemExit) as exit:
+        cli._parser().parse_args(["route-board", "board.copper", *flag])
+    assert exit.value.code == 2 and "unrecognized arguments" in capsys.readouterr().err
+
+
+def test_flag_notes_name_an_unused_pitch_and_mapped_budgets():
     def notes(*extra):
         args = cli._parser().parse_args(["route-board", "board.copper", *extra])
         cli._apply_routing_profile(args, list(extra))
@@ -66,11 +76,6 @@ def test_removed_flags_are_accepted_and_reported_as_ignored():
     none = {"ignored_flags": [], "mapped_flags": []}
     assert notes() == none
     assert notes("--fanout", "--no-route-smoothing", "--layer-preference-cost", "2") == none
-    assert notes("--passes", "7") == {"ignored_flags": ["--passes"], "mapped_flags": []}
-    # Every removed flag parses, including the old router selection and stage switches.
-    assert notes("--router", "legacy", "--package-access-trials", "0", "--zone-escape-trials", "2",
-                 "--plan-power-areas", "--soft-ripup")["ignored_flags"] == [
-        "--plan-power-areas", "--soft-ripup", "--router", "--package-access-trials", "--zone-escape-trials"]
     # --pitch-mm still sets global local-demand lanes when that cost is enabled.
     assert notes("--pitch-mm", "0.5")["ignored_flags"] == ["--pitch-mm"]
     assert notes("--pitch-mm", "0.5", "--local-demand-cost", "3")["ignored_flags"] == []

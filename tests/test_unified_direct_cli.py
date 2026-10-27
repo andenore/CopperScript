@@ -45,7 +45,7 @@ def test_direct_cli_has_no_legacy_contact_or_native_repair_routing(tmp_path, mon
     monkeypatch.setattr(cli, "improve_filled_copper", verify_only)
     report = tmp_path / "route.json"
     code = cli.main(["route-board", str(source), "--footprint-root", str(library.parent),
-        "--router", "unified", "--unified-direct", "--unified-time-budget-s", "10",
+        "--unified-direct", "--unified-time-budget-s", "10",
         "--unified-search-states", str(search_states),
         "--unified-save-inputs", str(tmp_path / "inputs.state.json"),
         "--checkpoint-dir", str(tmp_path / "checkpoint"),

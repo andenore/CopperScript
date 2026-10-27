@@ -272,7 +272,7 @@ def test_route_board_reports_the_review_of_the_exported_copper(tmp_path) -> None
     report = tmp_path / "route-report.json"
     result = subprocess.run(
         [sys.executable, "-m", "copperscript", "route-board", str(source), "--allow-proxy-footprints",
-         "--layers", "2", "--fab-profile", "generic", "--candidates", "1", "--passes", "1",
+         "--layers", "2", "--fab-profile", "generic", "--candidates", "1",
          "--pitch-mm", "1", "--report", str(report)],
         cwd=ROOT, text=True, capture_output=True, check=False,
     )
