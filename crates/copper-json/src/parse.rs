@@ -288,7 +288,16 @@ impl Parser<'_> {
             items.push(self.value()?);
             self.skip_whitespace();
             match self.peek() {
-                Some(b',') => self.offset += 1,
+                Some(b',') => {
+                    // Python 3.13 names a trailing comma at the comma.
+                    let comma = self.offset;
+                    self.offset += 1;
+                    self.skip_whitespace();
+                    if self.peek() == Some(b']') {
+                        self.offset = comma;
+                        return Err(self.error("Illegal trailing comma before end of array"));
+                    }
+                }
                 Some(b']') => {
                     self.offset += 1;
                     return Ok(Value::Array(items));
@@ -326,7 +335,16 @@ impl Parser<'_> {
             object.insert(key, value);
             self.skip_whitespace();
             match self.peek() {
-                Some(b',') => self.offset += 1,
+                Some(b',') => {
+                    // Python 3.13 names a trailing comma at the comma.
+                    let comma = self.offset;
+                    self.offset += 1;
+                    self.skip_whitespace();
+                    if self.peek() == Some(b'}') {
+                        self.offset = comma;
+                        return Err(self.error("Illegal trailing comma before end of object"));
+                    }
+                }
                 Some(b'}') => {
                     self.offset += 1;
                     if let Some(key) = repeated.filter(|_| self.strict) {
@@ -365,6 +383,17 @@ mod tests {
         assert!(parse("1.").is_err());
         assert!(matches!(parse("NaN").unwrap(), Value::Float(x) if x.is_nan()));
         assert_eq!(parse("-Infinity").unwrap(), Value::Float(f64::NEG_INFINITY));
+    }
+
+    #[test]
+    fn trailing_commas_are_named_like_python_3_13() {
+        let error = parse("[1,\n ]").unwrap_err();
+        assert_eq!(
+            error.python_message("[1,\n ]"),
+            "Illegal trailing comma before end of array: line 1 column 3 (char 2)"
+        );
+        assert_eq!(parse(r#"{"a": 1 , }"#).unwrap_err().message, "Illegal trailing comma before end of object");
+        assert_eq!(parse(r#"{"a": 1, "#).unwrap_err().message, "Expecting property name enclosed in double quotes");
     }
 
     #[test]

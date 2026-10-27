@@ -383,6 +383,11 @@ do not shrink as much.
   small example boards, derived reports for branches those boards do not
   reach, a handwritten scene board, malformed reports); see its README for
   the generating commands.
+- Corpus: 748 cases in 10 M5 suites (`explain`, `issues`, `issues-json`,
+  `issues-bad`, `view`, `view-boards`, `view-states`, `summarize`,
+  `summarize-bad`, `summarize-json`): 746 byte-identical and 2 recorded
+  differences (D-0029, D-0030: Python crashes on a malformed view target).
+  `copper-json` now names Python 3.13's trailing-comma errors.
 - Inputs the Rust reader does not model (a KiCad layer or net name written as
   a list, a malformed state file, a decimal tuple as a track length) exit 3
   as not implemented.

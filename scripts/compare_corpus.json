@@ -7710,14 +7710,16 @@
      "args": [
       "explain",
       " Unmarked_Pin\t"
-     ]
+     ],
+     "id": "explain/tab"
     },
     {
      "args": [
       "explain",
       " Unmarked_Pin\t",
       "--json"
-     ]
+     ],
+     "id": "explain/tab-json"
     },
     {
      "args": [
@@ -7931,27 +7933,31 @@
      "args": [
       "explain",
       "PAR٣"
-     ]
+     ],
+     "id": "explain/arabic-digit"
     },
     {
      "args": [
       "explain",
       "PAR٣",
       "--json"
-     ]
+     ],
+     "id": "explain/arabic-digit-json"
     },
     {
      "args": [
       "explain",
       "ß"
-     ]
+     ],
+     "id": "explain/sharp-s"
     },
     {
      "args": [
       "explain",
       "ß",
       "--json"
-     ]
+     ],
+     "id": "explain/sharp-s-json"
     },
     {
      "args": [
@@ -8341,6 +8347,10 @@
       "tests/rust-port/reports/runs/valid-clearance/failing.json",
       "--stage",
       "escape"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
      ]
     },
     {
@@ -8357,6 +8367,10 @@
       "tests/rust-port/reports/runs/valid-clearance/failing.json",
       "--stage",
       "plane"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
      ]
     },
     {
@@ -8427,6 +8441,10 @@
       "escape",
       "--code",
       "escape-crossing"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
      ]
     },
     {
