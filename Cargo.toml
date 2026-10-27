@@ -28,6 +28,7 @@ copper-lsp = { path = "crates/copper-lsp" }
 copper-drc = { path = "crates/copper-drc" }
 copper-pcb = { path = "crates/copper-pcb" }
 copper-physical = { path = "crates/copper-physical" }
+copper-report = { path = "crates/copper-report" }
 copper-state = { path = "crates/copper-state" }
 copper-units = { path = "crates/copper-units" }
 

@@ -3,8 +3,8 @@
 use std::io::Write;
 
 use crate::{
-    agent_guide, audit_footprints, check, check_footprint, compile, compile_macro, export_kicad, export_kicad_pcb,
-    library, lock, lsp, power_check, query, state,
+    agent_guide, audit_footprints, check, check_footprint, compile, compile_macro, explain, export_kicad,
+    export_kicad_pcb, issues, library, lock, lsp, power_check, query, state, summarize, view,
 };
 
 /// Exit status of a command the Rust rewrite does not implement yet.
@@ -29,7 +29,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("lsp", Plan::Done),
     ("agent-guide", Plan::Done),
     ("library", Plan::Done),
-    ("summarize", Plan::Milestone("M5")),
+    ("summarize", Plan::Done),
     ("benchmark-routing", Plan::Milestone("M4")),
     ("editor-overlay", Plan::Milestone("M6")),
     ("edit-mechanical", Plan::Milestone("M3")),
@@ -41,9 +41,9 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("assembly", Plan::Milestone("M3")),
     ("sim", Plan::Python),
     ("check", Plan::Done),
-    ("explain", Plan::Milestone("M5")),
-    ("issues", Plan::Milestone("M5")),
-    ("view", Plan::Milestone("M5")),
+    ("explain", Plan::Done),
+    ("issues", Plan::Done),
+    ("view", Plan::Done),
     ("state", Plan::Done),
     ("replay-unified", Plan::Milestone("M4")),
     ("replay-critical", Plan::Milestone("M4")),
@@ -101,6 +101,10 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "export-kicad" => export_kicad::run(rest, out, err),
         "export-kicad-pcb" => export_kicad_pcb::run(rest, out, err),
         "lsp" => lsp::run(rest, out, err),
+        "explain" => explain::run(rest, out, err),
+        "issues" => issues::run(rest, out, err),
+        "view" => view::run(rest, out, err),
+        "summarize" => summarize::run(rest, out, err),
         _ => match plan(command) {
             Some(Plan::Milestone(milestone)) => {
                 let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");

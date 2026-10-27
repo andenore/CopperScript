@@ -6910,6 +6910,3275 @@
    }
   },
   {
+   "name": "explain",
+   "milestone": "M5",
+   "cases": [
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_COMPONENT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_COMPONENT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PIN"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PIN",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_CONSTRAINT_TARGET"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_CONSTRAINT_TARGET",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PART"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PART",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_NET"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_NET",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_DEVICE"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_DEVICE",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_DEVICE_PAD"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_DEVICE_PAD",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNMODELED_PIN"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNMODELED_PIN",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_COMPONENT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_COMPONENT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_NET"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_NET",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_SUPPLY"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_SUPPLY",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_INTERFACE"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_INTERFACE",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_PERIPHERAL_CONFIGURATION"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_PERIPHERAL_CONFIGURATION",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PIN_ON_MULTIPLE_NETS"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PIN_ON_MULTIPLE_NETS",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "INTERNAL_PAD_NET_CONFLICT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "INTERNAL_PAD_NET_CONFLICT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "OUTPUT_CONFLICT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "OUTPUT_CONFLICT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_SUPPLY_SOURCE"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_SUPPLY_SOURCE",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_SOURCE_NOT_OUTPUT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_SOURCE_NOT_OUTPUT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_SOURCE_NOT_ON_NET"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_SOURCE_NOT_ON_NET",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNSOURCED_POWER_INPUT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNSOURCED_POWER_INPUT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_VOLTAGE_HIGH"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_VOLTAGE_HIGH",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_VOLTAGE_LOW"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_VOLTAGE_LOW",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_VOLTAGE_ABSOLUTE_HIGH"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_VOLTAGE_ABSOLUTE_HIGH",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_VOLTAGE_ABSOLUTE_LOW"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SUPPLY_VOLTAGE_ABSOLUTE_LOW",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "POWER_DOMAIN_VOLTAGE_HIGH"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "POWER_DOMAIN_VOLTAGE_HIGH",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "POWER_DOMAIN_VOLTAGE_LOW"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "POWER_DOMAIN_VOLTAGE_LOW",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "VOLTAGE_LIMIT_UNRESOLVED"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "VOLTAGE_LIMIT_UNRESOLVED",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_MISSING_SIGNAL"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_MISSING_SIGNAL",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_TOO_FEW_PARTICIPANTS"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_TOO_FEW_PARTICIPANTS",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_MISSING_BINDING"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_MISSING_BINDING",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_UNKNOWN_PIN"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_UNKNOWN_PIN",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_BINDING_NOT_ON_NET"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_BINDING_NOT_ON_NET",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_INCOMPATIBLE_PIN"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_INCOMPATIBLE_PIN",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_NO_PULLUP_SUPPLY"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_NO_PULLUP_SUPPLY",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_UNKNOWN_PULLUP_SUPPLY"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_UNKNOWN_PULLUP_SUPPLY",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_MISSING_PULLUP"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_MISSING_PULLUP",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_CONFIGURATION_COMPONENT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_CONFIGURATION_COMPONENT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PART_HAS_NO_DEVICE"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PART_HAS_NO_DEVICE",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PERIPHERAL"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PERIPHERAL",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MISSING_PERIPHERAL_SIGNAL"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MISSING_PERIPHERAL_SIGNAL",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PERIPHERAL_SIGNAL"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PERIPHERAL_SIGNAL",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_MUX_PIN"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_MUX_PIN",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "INVALID_MUX_OPTION"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "INVALID_MUX_OPTION",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MUX_SELECTOR_MISMATCH"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MUX_SELECTOR_MISMATCH",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MUX_INCOMPATIBLE_PIN"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MUX_INCOMPATIBLE_PIN",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PERIPHERAL_CONFLICT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PERIPHERAL_CONFLICT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PIN_MUX_CONFLICT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PIN_MUX_CONFLICT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MUX_RESOURCE_CONFLICT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MUX_RESOURCE_CONFLICT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DO_NOT_CONNECT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DO_NOT_CONNECT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "REQUIRED_PIN_UNCONNECTED"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "REQUIRED_PIN_UNCONNECTED",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "REQUIRED_NET_TRAIT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "REQUIRED_NET_TRAIT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_MODE_GROUP"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_MODE_GROUP",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MODE_NOT_SELECTED"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MODE_NOT_SELECTED",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_MODE_CHOICE"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_MODE_CHOICE",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "INCOMPLETE_DIFFERENTIAL_PAIR"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "INCOMPLETE_DIFFERENTIAL_PAIR",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "NO_CONNECT_CONNECTED"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "NO_CONNECT_CONNECTED",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "NO_CONNECT_REQUIRED_PIN"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "NO_CONNECT_REQUIRED_PIN",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_NO_CONNECT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_NO_CONNECT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "NO_CONNECT_MODULE_PORT"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "NO_CONNECT_MODULE_PORT",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNMARKED_PIN"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNMARKED_PIN",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "unknown_pin"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "unknown_pin",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      " Unmarked_Pin\t"
+     ],
+     "id": "explain/tab"
+    },
+    {
+     "args": [
+      "explain",
+      " Unmarked_Pin\t",
+      "--json"
+     ],
+     "id": "explain/tab-json"
+    },
+    {
+     "args": [
+      "explain",
+      "PAR002"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PAR002",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "par002"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "par002",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "LEX001"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "LEX001",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "CMP12"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "CMP12",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MEC1"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MEC1",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SLK999"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "SLK999",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MAC0"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "MAC0",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PAR"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PAR",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PAR0x"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PAR0x",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "XYZ001"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "XYZ001",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PINS"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PINS",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "unknown-net"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "unknown-net",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_PART"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "DUPLICATE_PART",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_PULLUP"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "I2C_PULLUP",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "zzz"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "zzz",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PARnnn"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PARnnn",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "PAR٣"
+     ],
+     "id": "explain/arabic-digit"
+    },
+    {
+     "args": [
+      "explain",
+      "PAR٣",
+      "--json"
+     ],
+     "id": "explain/arabic-digit-json"
+    },
+    {
+     "args": [
+      "explain",
+      "ß"
+     ],
+     "id": "explain/sharp-s"
+    },
+    {
+     "args": [
+      "explain",
+      "ß",
+      "--json"
+     ],
+     "id": "explain/sharp-s-json"
+    },
+    {
+     "args": [
+      "explain"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "--list"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "--list",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PIN",
+      "--list"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "--js",
+      "--li"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      ""
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "--",
+      "--list"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "UNKNOWN_PIN",
+      "UNKNOWN_NET"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "--bogus"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "explain",
+      "--json=yes"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "issues",
+   "milestone": "M5",
+   "inputs": [
+    "tests/rust-port/reports/runs/*/route-report*.json",
+    "tests/rust-port/reports/runs/*/layout-report.json",
+    "tests/rust-port/reports/runs/valid-clearance/*.json"
+   ],
+   "args": [
+    "issues",
+    "{input}"
+   ],
+   "mutations": 6,
+   "cases": [
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-pass"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-pass/",
+      "--json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/",
+      "--json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-stopped"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-stopped/",
+      "--json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/hierarchical"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/hierarchical/",
+      "--json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/outline"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/outline/",
+      "--json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/margin-error"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/margin-error/",
+      "--json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/ring-error"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/ring-error/",
+      "--json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/layout"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/layout/",
+      "--json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/renamed"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/renamed/",
+      "--json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/closed.json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/closed.json",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/unbound.json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/unbound.json",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/replay.json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/replay.json",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--limit",
+      "1"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--limit",
+      "3",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--limit",
+      "-1"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--limit",
+      "100"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--stage",
+      "global"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--stage",
+      "critical",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--stage",
+      "physical"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--stage",
+      "routing"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--stage",
+      "review"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--stage",
+      "escape"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--stage",
+      "placement"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--stage",
+      "plane"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--stage",
+      "access"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--net",
+      "I2C_SDA"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--net",
+      "NET3",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--net",
+      ""
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--code",
+      "net-unrouted"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--code",
+      "DRC-OPEN-NET",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--code",
+      "nothing"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--net",
+      "I2C_SCL",
+      "--stage",
+      "escape",
+      "--code",
+      "escape-crossing"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--cluster-mm",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--cluster-mm",
+      "50",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--cluster-mm",
+      "-1"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--cluster-mm",
+      "nan"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--cluster-mm",
+      "inf",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--li",
+      "2",
+      "--js"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--limit=2"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--cluster-mm",
+      "0.1"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--cluster-mm",
+      "5",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--stage",
+      "native",
+      "--json",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--net",
+      "GND",
+      "--limit",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--code",
+      "CLEARANCE"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/boards/scene.kicad_pcb",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/README.md"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/missing"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/missing.json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/states/final-board.state.json"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--stage",
+      "nonsense"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--limit",
+      "x"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--cluster-mm",
+      "x"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "issues"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "issues",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--net"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "issues-json",
+   "milestone": "M5",
+   "inputs": [
+    "tests/rust-port/reports/runs/*/route-report*.json",
+    "tests/rust-port/reports/runs/*/layout-report.json",
+    "tests/rust-port/reports/runs/valid-clearance/*.json"
+   ],
+   "args": [
+    "issues",
+    "{input}",
+    "--json",
+    "--limit",
+    "0"
+   ],
+   "mutations": 2
+  },
+  {
+   "name": "issues-bad",
+   "milestone": "M5",
+   "inputs": [
+    "tests/rust-port/reports/bad/*.json"
+   ],
+   "args": [
+    "issues",
+    "{input}"
+   ]
+  },
+  {
+   "name": "view",
+   "milestone": "M5",
+   "cases": [
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--issue",
+      "N1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--issue",
+      "n2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--issue",
+      "N3",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--issue",
+      "N4",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--issue",
+      "N5",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--issue",
+      "N6",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--issue",
+      "N1",
+      "--filled",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--issue",
+      "N4",
+      "--filled",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/native.json",
+      "--net",
+      "GND",
+      "--filled",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance",
+      "--net",
+      "GND",
+      "--filled",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance",
+      "--window",
+      "15,0,30,15",
+      "--filled",
+      "--layers",
+      "all",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "G1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "G2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "G3",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "O1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "D1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "D2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "D3",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "D4",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "B1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "B2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "B3",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "C1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "C2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "R1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "R2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "R3",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "E1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "E2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "X1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "X2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "W1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "W2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "Z9",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "D3",
+      "--json",
+      "--layers",
+      "all",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "B1",
+      "--margin",
+      "0",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "B1",
+      "--margin",
+      "-0.5",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue",
+      "R1",
+      "--cluster-mm",
+      "50",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/replay.json",
+      "--issue",
+      "R1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/closed.json",
+      "--issue",
+      "O1",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--component",
+      "U2",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance",
+      "--component",
+      "U2",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/hierarchical",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/hierarchical",
+      "--component",
+      "U2",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/outline",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/outline",
+      "--component",
+      "U2",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-stopped",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-stopped",
+      "--component",
+      "U2",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-stopped",
+      "--issue",
+      "R1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-stopped",
+      "--issue",
+      "O1",
+      "--layers",
+      "B.Cu",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/hierarchical",
+      "--issue",
+      "D1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/hierarchical",
+      "--pad",
+      "PWR/C_OUT.1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/hierarchical",
+      "--component",
+      "PWR/L1",
+      "--highlight",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/outline",
+      "--issue",
+      "W1",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/ring-error",
+      "--issue",
+      "E1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/ring-error",
+      "--component",
+      "U1",
+      "--layers",
+      "all",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/margin-error",
+      "--issue",
+      "E1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/margin-error",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/layout",
+      "--issue",
+      "F2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/layout",
+      "--issue",
+      "L1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/layout",
+      "--net",
+      "V3V3",
+      "--net",
+      "GND",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/renamed",
+      "--issue",
+      "R1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--pad",
+      "U2.1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--pad",
+      "U2.99",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--pad",
+      "nodot",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--component",
+      "Q9",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--net",
+      "NOPE",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--net",
+      "I2C_SDA",
+      "--net",
+      "I2C_SCL",
+      "--highlight",
+      "GND",
+      "--highlight",
+      "I2C_SDA",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--window",
+      "10,10,40,40",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--window",
+      "40,10,10,40",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--window",
+      "1,2,3",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--window",
+      "1,2,x,4",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--window",
+      " 1 , 2 , 30 , 40 ",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--window",
+      "10,10,40,40",
+      "--layers",
+      "B.Cu,F.Cu",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--window",
+      "10,10,40,40",
+      "--layers",
+      "In1.Cu,F.Cu",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--window",
+      "10,10,40,40",
+      "--layers",
+      " , ",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--window",
+      "10,10,40,40",
+      "--layers",
+      "all",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--component",
+      "U2",
+      "--reference",
+      "tests/rust-port/reports/boards/reference-rotated.kicad_pcb",
+      "--align",
+      "U2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--component",
+      "U2",
+      "--reference",
+      "tests/rust-port/reports/boards/reference-rotated.kicad_pcb",
+      "--align",
+      "U2:U2",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--component",
+      "U2",
+      "--reference",
+      "tests/rust-port/reports/boards/reference-rotated.kicad_pcb",
+      "--align",
+      "U2:U3",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--component",
+      "U2",
+      "--reference",
+      "tests/rust-port/reports/boards/reference-rotated.kicad_pcb",
+      "--align",
+      "U1:R1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--component",
+      "U2",
+      "--reference",
+      "tests/rust-port/reports/boards/reference-rotated.kicad_pcb",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--component",
+      "U2",
+      "--reference",
+      "tests/rust-port/reports/boards/missing.kicad_pcb",
+      "--align",
+      "U2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--issue",
+      "N1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass/board.kicad_pcb",
+      "--issue",
+      "N1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass/board.kicad_pcb",
+      "--net",
+      "GND",
+      "--filled",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--net",
+      "GND"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--component",
+      "U3",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/deeper/nested/picture"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/picture.tar.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--net",
+      "GND",
+      "-o{out}/short.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-pass",
+      "--net",
+      "GND",
+      "--output={out}/long.svg"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/states/final-board.state.json",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/states/final-board.state.json",
+      "--component",
+      "U2",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/states/placement.state.json",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/states/placement.state.json",
+      "--component",
+      "U2",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "--component",
+      "U2",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/states/final-board.state.json",
+      "--issue",
+      "N1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "crates/copper-state/tests/fixtures/synthetic.state.json",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "crates/copper-state/tests/fixtures/hierarchical-board.state.json",
+      "--component",
+      "PWR/U_REG",
+      "--layers",
+      "all",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/ring-error/route-report.error.state.json",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/README.md",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/missing.kicad_pcb",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/missing.json",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/bad/list.json",
+      "--net",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/boards/scene.kicad_pcb",
+      "--window=-5,-5,50,50",
+      "--layers",
+      "all",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/boards/scene.kicad_pcb",
+      "--net",
+      "SIG",
+      "--net",
+      "VCC",
+      "--layers",
+      "In1.Cu,In2.Cu",
+      "--json",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/boards/scene.kicad_pcb",
+      "--pad",
+      "PWR/U1.3",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/boards/scene.kicad_pcb",
+      "--component",
+      "R1#2",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/boards/scene.kicad_pcb",
+      "--component",
+      "R1#3",
+      "--highlight",
+      "GND",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/boards/scene.kicad_pcb",
+      "--component",
+      "Logo#1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/boards/scene.kicad_pcb",
+      "--window",
+      "0,0,12,12",
+      "--reference",
+      "tests/rust-port/reports/boards/scene.kicad_pcb",
+      "--align",
+      "PWR/U1",
+      "-o",
+      "{out}/view.png"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--net",
+      "GND",
+      "--pad",
+      "U2.1"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issue"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--net",
+      "GND",
+      "--margin",
+      "x"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--window",
+      "-5,-5,5,5"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "view",
+      "--net",
+      "GND"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "view-boards",
+   "milestone": "M5",
+   "inputs": [
+    "tests/rust-port/reports/boards/*.kicad_pcb"
+   ],
+   "args": [
+    "view",
+    "{input}",
+    "--window=-5,-5,60,60",
+    "--layers",
+    "all",
+    "-o",
+    "{out}/view.png"
+   ],
+   "mutations": 12
+  },
+  {
+   "name": "view-states",
+   "milestone": "M5",
+   "inputs": [
+    "tests/rust-port/reports/states/*.state.json"
+   ],
+   "args": [
+    "view",
+    "{input}",
+    "--component",
+    "U2",
+    "--json",
+    "-o",
+    "{out}/view.png"
+   ],
+   "mutations": 2
+  },
+  {
+   "name": "summarize",
+   "milestone": "M5",
+   "inputs": [
+    "tests/rust-port/reports/runs/*/route-report*.json",
+    "tests/rust-port/reports/runs/*/layout-report.json",
+    "tests/rust-port/reports/runs/valid-clearance/*.json"
+   ],
+   "args": [
+    "summarize",
+    "{input}"
+   ],
+   "mutations": 8,
+   "cases": [
+    {
+     "args": [
+      "summarize",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issues",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "summarize",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issues",
+      "100",
+      "--json"
+     ]
+    },
+    {
+     "args": [
+      "summarize",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issues",
+      "3"
+     ]
+    },
+    {
+     "args": [
+      "summarize",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--iss",
+      "2",
+      "--js"
+     ]
+    },
+    {
+     "args": [
+      "summarize",
+      "tests/rust-port/reports/runs/valid-clearance"
+     ]
+    },
+    {
+     "args": [
+      "summarize",
+      "tests/rust-port/reports/missing.json"
+     ]
+    },
+    {
+     "args": [
+      "summarize",
+      "tests/rust-port/reports/runs/valid-clearance/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "summarize",
+      "tests/rust-port/reports/states/final-board.state.json"
+     ]
+    },
+    {
+     "args": [
+      "summarize",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issues",
+      "101"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "summarize",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issues",
+      "-1"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "summarize",
+      "tests/rust-port/reports/runs/valid-clearance/failing.json",
+      "--issues",
+      "x"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "summarize"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "summarize-bad",
+   "milestone": "M5",
+   "inputs": [
+    "tests/rust-port/reports/bad/*.json"
+   ],
+   "args": [
+    "summarize",
+    "{input}"
+   ]
+  },
+  {
+   "name": "summarize-json",
+   "milestone": "M5",
+   "inputs": [
+    "tests/rust-port/reports/runs/*/route-report*.json",
+    "tests/rust-port/reports/runs/*/layout-report.json",
+    "tests/rust-port/reports/runs/valid-clearance/*.json",
+    "tests/rust-port/reports/bad/*.json"
+   ],
+   "args": [
+    "summarize",
+    "{input}",
+    "--json",
+    "--issues",
+    "100"
+   ]
+  },
+  {
    "name": "lsp-sessions",
    "milestone": "M6",
    "timeout_s": 120,
