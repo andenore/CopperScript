@@ -1,0 +1,6 @@
+{
+  "board": "ValidSensorBoard",
+  "electrical_sha256": "b46410c5e021747d9c5aa8b59d30500a1addf3cddfafe7fe3983324e9e937934",
+  "schema": "copperscript-assembly-lock/v0.3",
+  "selections": {}
+}

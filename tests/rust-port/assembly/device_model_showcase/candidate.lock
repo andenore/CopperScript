@@ -1,0 +1,101 @@
+{
+  "board": "DeviceModelShowcase",
+  "electrical_sha256": "6c84196e71e9ad75156bc1fc596a223faff96bd8eb9bb4ad0f043bba3a22e3ac",
+  "schema": "copperscript-assembly-lock/v0.3",
+  "selections": [
+    {
+      "footprint": "LFCSP-56",
+      "manufacturer": "Analog Devices",
+      "mpn": "AD4134BCPZ-LFCSP-56",
+      "part": "parts.AD4134BCPZ",
+      "populate": "supplier",
+      "reference": "ADC",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C796802",
+      "supplier": "jlcpcb",
+      "supplier_part": "C796802"
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/498815",
+          "supplier": "Mouser",
+          "supplier_part": "M-498815"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D498815"
+        }
+      ],
+      "footprint": "QFN-48",
+      "manufacturer": "Lattice Semiconductor",
+      "mpn": "ICE40UP5K_SG48-QFN-48",
+      "part": "parts.ICE40UP5K_SG48",
+      "populate": "supplier",
+      "reference": "FPGA",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C498815"
+    },
+    {
+      "footprint": "BGA-121",
+      "manufacturer": "Infineon",
+      "mpn": "CYUSB4014_FCAXI-BGA-121",
+      "part": "parts.CYUSB4014_FCAXI",
+      "populate": "supplier",
+      "reference": "FX",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "lcsc",
+      "supplier_part": "C827547"
+    },
+    {
+      "footprint": "SOIC-8",
+      "manufacturer": "Texas Instruments",
+      "mpn": "ISO6721D-SOIC-8",
+      "part": "parts.ISO6721D",
+      "populate": "supplier",
+      "reference": "ISO",
+      "reviewed": false,
+      "source_url": "https://jlcpcb.com/partdetail/C337928",
+      "supplier": "jlcpcb",
+      "supplier_part": "C337928"
+    },
+    {
+      "footprint": "aQFN-73",
+      "manufacturer": "Nordic Semiconductor",
+      "mpn": "NRF52840_QIAA-aQFN-73",
+      "part": "parts.NRF52840_QIAA",
+      "populate": "consigned",
+      "reference": "NRF",
+      "reviewed": true,
+      "source_url": "https://example.com/parts/NRF52840_QIAA-aQFN-73",
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/176440",
+          "supplier": "Mouser",
+          "supplier_part": "M-176440"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D176440"
+        }
+      ],
+      "footprint": "SOIC-8",
+      "manufacturer": "Texas Instruments",
+      "mpn": "OPA2197ID-SOIC-8",
+      "part": "parts.OPA2197ID",
+      "populate": "supplier",
+      "reference": "OP",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C176440"
+    }
+  ]
+}

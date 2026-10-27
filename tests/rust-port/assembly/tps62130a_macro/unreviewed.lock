@@ -1,0 +1,115 @@
+{
+  "board": "BuckLayoutTrial",
+  "electrical_sha256": "312b66391275e34233df68a3c496d714a1a639357087d927279fc955dc206e4b",
+  "schema": "copperscript-assembly-lock/v0.2",
+  "selections": [
+    {
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "manufacturer": null,
+      "mpn": null,
+      "part": "buck.passives.CAPACITOR",
+      "populate": "supplier",
+      "reference": "B/C_AVIN",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "Capacitor_SMD:C_0805_2012Metric",
+      "manufacturer": null,
+      "mpn": null,
+      "part": "buck.passives.CAPACITOR",
+      "populate": "supplier",
+      "reference": "B/C_OUT1",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "Capacitor_SMD:C_0805_2012Metric",
+      "manufacturer": null,
+      "mpn": null,
+      "part": "buck.passives.CAPACITOR",
+      "populate": "supplier",
+      "reference": "B/C_OUT2",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "Capacitor_SMD:C_0805_2012Metric",
+      "manufacturer": null,
+      "mpn": null,
+      "part": "buck.passives.CAPACITOR",
+      "populate": "supplier",
+      "reference": "B/C_PVIN",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "manufacturer": null,
+      "mpn": null,
+      "part": "buck.passives.CAPACITOR",
+      "populate": "supplier",
+      "reference": "B/C_SS",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "github.com/andenore/CopperLib/packages/parts/coilcraft/xal4020/footprints/Inductor_SMD.pretty/L_Coilcraft_XAL4020-XXX.kicad_mod",
+      "manufacturer": "Coilcraft",
+      "mpn": null,
+      "part": "buck.coilcraft.XFL4020_222MEC",
+      "populate": "supplier",
+      "reference": "B/L",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "Package_DFN_QFN:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
+      "manufacturer": "Texas Instruments",
+      "mpn": null,
+      "part": "buck.ti.TPS62130ARGTR",
+      "populate": "supplier",
+      "reference": "B/U",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "Resistor_SMD:R_0402_1005Metric",
+      "manufacturer": null,
+      "mpn": null,
+      "part": "passives.RESISTOR",
+      "populate": "supplier",
+      "reference": "R_BOT",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "Resistor_SMD:R_0402_1005Metric",
+      "manufacturer": null,
+      "mpn": null,
+      "part": "passives.RESISTOR",
+      "populate": "supplier",
+      "reference": "R_TOP",
+      "reviewed": false,
+      "source_url": null,
+      "supplier": null,
+      "supplier_part": null
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+Ref,Val,Package,PosX,PosY,Rot,Side
+"B_C_AVIN","100 nF","buck.passives.CAPACITOR",10.0000,-20.0000,0.0000,top
+"B_C_OUT1","22 uF","buck.passives.CAPACITOR",12.5000,-21.2500,90.0000,top
+"B_C_OUT2","22 uF","buck.passives.CAPACITOR",15.0000,-22.5000,180.0000,top
+"B_C_PVIN","10 uF","buck.passives.CAPACITOR",17.5000,-23.7500,-90.0000,bottom
+"B_C_SS","3.3 nF","buck.passives.CAPACITOR",20.0000,-25.0000,0.0000,top
+"B_L","buck.coilcraft.XFL4020_222MEC","buck.coilcraft.XFL4020_222MEC",22.5000,-26.2500,90.0000,top
+"B_U","buck.ti.TPS62130ARGTR","buck.ti.TPS62130ARGTR",25.0000,-27.5000,180.0000,top
+"R_BOT","100 kohm","passives.RESISTOR",27.5000,-28.7500,-90.0000,top
+"R_TOP","49.9 kohm","passives.RESISTOR",30.0000,-30.0000,0.0000,bottom

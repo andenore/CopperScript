@@ -57,13 +57,14 @@ pub struct FootprintImportResult {
     pub source_version: Option<String>,
 }
 
+/// An s-expression node of a KiCad file.
 #[derive(Clone, Debug, PartialEq)]
-enum Node {
+pub enum Node {
     Atom(String),
     List(Vec<Node>),
 }
 
-type List = Vec<Node>;
+pub type List = Vec<Node>;
 
 fn hex(data: &[u8]) -> String {
     Sha256::digest(data).iter().map(|byte| format!("{byte:02x}")).collect()
@@ -128,11 +129,11 @@ fn lists(items: &[Node]) -> impl Iterator<Item = &List> {
     })
 }
 
-fn children<'a>(node: &'a List, name: &str) -> Vec<&'a List> {
+pub fn children<'a>(node: &'a List, name: &str) -> Vec<&'a List> {
     lists(&node[1..]).filter(|child| tag(child) == Some(name)).collect()
 }
 
-fn first<'a>(node: &'a List, name: &str) -> Option<&'a List> {
+pub fn first<'a>(node: &'a List, name: &str) -> Option<&'a List> {
     if node.is_empty() {
         return None;
     }
@@ -143,7 +144,7 @@ fn required_child<'a>(node: &'a List, name: &str, source: &str, description: &st
     first(node, name).ok_or_else(|| ImportError::Import(format!("{source}: missing {description}")))
 }
 
-fn atom(node: &List, index: usize) -> Option<&str> {
+pub fn atom(node: &List, index: usize) -> Option<&str> {
     match node.get(index) {
         Some(Node::Atom(text)) => Some(text),
         _ => None,
@@ -275,7 +276,8 @@ fn tokenize(text: &str, source: &str) -> Result<Vec<Token>> {
     Ok(tokens)
 }
 
-fn parse_sexpr(text: &str, source: &str) -> Result<List> {
+/// `_parse_sexpr`: the root list of a KiCad s-expression file.
+pub fn parse_sexpr(text: &str, source: &str) -> Result<List> {
     let tokens = tokenize(text, source)?;
     if tokens.first().is_none_or(|token| token.value != "(") {
         return import(format!("{source}: expected '(' at start of footprint"));

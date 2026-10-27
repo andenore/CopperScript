@@ -1,0 +1,11 @@
+// Assembly fixture: a fitted part next to an explicitly non-assembled one.
+board AssemblyDnpBoard {
+    import p "./parts";
+
+    component R1: p.Fitted;
+    component R2: p.Fitted;
+    component C_DNP: p.DNP;
+
+    net SIGNAL { R1.A; R2.A; C_DNP.A; }
+    net GND { R1.B; R2.B; C_DNP.B; }
+}

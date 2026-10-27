@@ -1,0 +1,102 @@
+{
+  "board": "ValidSensorBoard",
+  "electrical_sha256": "b46410c5e021747d9c5aa8b59d30500a1addf3cddfafe7fe3983324e9e937934",
+  "schema": "copperscript-assembly-lock/v0.3",
+  "selections": [
+    {
+      "footprint": "0402",
+      "manufacturer": "Generic Passives",
+      "mpn": "A\tB",
+      "part": "CAPACITOR",
+      "populate": "supplier",
+      "reference": "C1",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C931213",
+      "supplier": "jlcpcb",
+      "supplier_part": "C931213"
+    },
+    {
+      "footprint": null,
+      "manufacturer": null,
+      "mpn": null,
+      "part": "VOLTAGE_SOURCE",
+      "populate": "none",
+      "reference": "PS1",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "footprint": "0402",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-4.7kohm-0402",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R1",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C140734"
+    },
+    {
+      "footprint": "0402",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-4.7kohm-0402",
+      "part": "RESISTOR",
+      "populate": "supplier",
+      "reference": "R2",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C140734",
+      "supplier": "jlcpcb",
+      "supplier_part": "C140734"
+    },
+    {
+      "footprint": "SOT-23-3",
+      "manufacturer": "Generic Passives",
+      "mpn": "REGULATOR_3V3-SOT-23-3",
+      "part": "REGULATOR_3V3",
+      "populate": "consigned",
+      "reference": "U1",
+      "reviewed": true,
+      "source_url": "https://example.com/parts/REGULATOR_3V3-SOT-23-3",
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/386062",
+          "supplier": "Mouser",
+          "supplier_part": "M-386062"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D386062"
+        }
+      ],
+      "footprint": "LQFP-48",
+      "manufacturer": "STMicroelectronics",
+      "mpn": "STM32G0B1CBT6-LQFP-48",
+      "part": "stm32.STM32G0B1CBT6",
+      "populate": "supplier",
+      "reference": "U2",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C386062"
+    },
+    {
+      "footprint": "LGA-8",
+      "manufacturer": "Example Sensors",
+      "mpn": "BME280-LGA-8",
+      "part": "sensors.BME280",
+      "populate": "supplier",
+      "reference": "U3",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C188214",
+      "supplier": "jlcpcb",
+      "supplier_part": "C188214"
+    }
+  ]
+}

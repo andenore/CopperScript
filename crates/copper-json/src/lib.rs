@@ -12,7 +12,7 @@ mod serialize;
 pub mod text;
 
 pub use float::python_float_repr;
-pub use parse::{ParseError, parse};
+pub use parse::{ParseError, UniqueError, parse, parse_unique};
 pub use serialize::{Dumps, encode_str};
 
 use indexmap::IndexMap;
@@ -138,5 +138,6 @@ impl From<Object> for Value {
 
 mod unicode;
 pub use unicode::{
-    python_isalnum, python_isalpha, python_isdigit, python_isprintable, python_isspace, python_str_repr,
+    python_casefold, python_isalnum, python_isalpha, python_isdigit, python_isprintable, python_isspace,
+    python_str_repr,
 };

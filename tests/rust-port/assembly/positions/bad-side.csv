@@ -1,0 +1,8 @@
+Ref,Val,Package,PosX,PosY,Rot,Side
+"C1","v","p",1.5,-2,0,top
+"PS1","v","p",0,0,0,top
+"R1","v","p",3.25,-4,90,bottom
+"R2","v","p",5,-6.5,180,inner
+"U1","v","p",7,-8,270,top
+"U2","v","p",9.125,-10,-45,bottom
+"U3","v","p",11,-12,1E+1,top

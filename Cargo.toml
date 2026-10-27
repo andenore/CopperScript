@@ -24,6 +24,7 @@ sha2 = "0.10"
 unicode-general-category = "1"
 copper-json = { path = "crates/copper-json" }
 copper-lang = { path = "crates/copper-lang" }
+copper-assembly = { path = "crates/copper-assembly" }
 copper-drc = { path = "crates/copper-drc" }
 copper-pcb = { path = "crates/copper-pcb" }
 copper-physical = { path = "crates/copper-physical" }

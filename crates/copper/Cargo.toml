@@ -15,6 +15,7 @@ path = "src/main.rs"
 copper-json.workspace = true
 copper-lang.workspace = true
 copper-physical.workspace = true
+copper-assembly.workspace = true
 copper-drc.workspace = true
 copper-pcb.workspace = true
 copper-state.workspace = true

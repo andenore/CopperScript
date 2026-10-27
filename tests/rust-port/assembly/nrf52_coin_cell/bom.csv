@@ -1,0 +1,15 @@
+Comment,Designator,Footprint,LCSC Part #,Manufacturer,MPN
+0.8 pF,C_BT_MATCH,github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/footprints/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod,C545536,Generic Passives,CAPACITOR-0.8pF-C_0402_1005Metric.kicad_mod
+1 pF,C_ANT_SERIES,github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/footprints/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod,C715821,Generic Passives,CAPACITOR-1pF-C_0402_1005Metric.kicad_mod
+100 kohm,"R_BUTTON1,R_BUTTON2",Resistor_SMD:R_0402_1005Metric,C165035,Generic Passives,RESISTOR-100kohm-R_0402_1005Metric
+100 nF,"C_DEC1,C_VDD1,C_VDD2",Capacitor_SMD:C_0402_1005Metric,C659099,Generic Passives,CAPACITOR-100nF-C_0402_1005Metric
+100 pF,C_DEC3,Capacitor_SMD:C_0402_1005Metric,C230143,Generic Passives,CAPACITOR-100pF-C_0402_1005Metric
+12 pF,C_X2,Capacitor_SMD:C_0402_1005Metric,C477690,Generic Passives,CAPACITOR-12pF-C_0402_1005Metric
+3.9 nH,"L_ANT_SERIES,L_BT_MATCH",github.com/andenore/CopperLib/packages/circuits/nordic/nrf52832-johanson-reference/footprints/Inductor_SMD.pretty/L_0402_1005Metric.kicad_mod,C667452,Generic Passives,INDUCTOR-3.9nH-L_0402_1005Metric.kicad_mod
+32 MHz,X1,Crystal:Crystal_SMD_2016-4Pin_2.0x1.6mm,C916640,Generic Passives,REFERENCE_XTAL_2016-32MHz-Crystal_SMD_2016-4Pin_2.0x1.6mm
+4.7 kohm,"R_LED1,R_LED2",Resistor_SMD:R_0402_1005Metric,C806172,Generic Passives,RESISTOR-4.7kohm-R_0402_1005Metric
+BUTTON-SW_SPST_TL3342,"SW_1,SW_2",Button_Switch_SMD:SW_SPST_TL3342,C784198,E-Switch,BUTTON-SW_SPST_TL3342
+JOHANSON_2450AT18A0100001E-Johanson_2450AT18x100,ANT_BT,RF_Antenna:Johanson_2450AT18x100,C914878,Johanson Technology,JOHANSON_2450AT18A0100001E-Johanson_2450AT18x100
+KEYSTONE_3034-BatteryHolder_Keystone_3034_1x20mm.kicad_mod,BT1,github.com/andenore/CopperLib/packages/parts/keystone/3034/footprints/Battery.pretty/BatteryHolder_Keystone_3034_1x20mm.kicad_mod,C793849,Keystone Electronics,KEYSTONE_3034-BatteryHolder_Keystone_3034_1x20mm.kicad_mod
+REFERENCE_LED_0603-LED_0603_1608Metric,"LED_1,LED_2",LED_SMD:LED_0603_1608Metric,C207276,Generic Passives,REFERENCE_LED_0603-LED_0603_1608Metric
+SWD_HEADER-FTSH-105-01-L-DV-007-K,J_SWD,Connector_Debug:FTSH-105-01-L-DV-007-K,C350467,Samtec,SWD_HEADER-FTSH-105-01-L-DV-007-K

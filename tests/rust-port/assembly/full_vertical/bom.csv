@@ -1,0 +1,36 @@
+Comment,Designator,Footprint,LCSC Part #,Manufacturer,MPN
+0.8 pF,C_BT_MATCH,Capacitor_SMD:C_0402_1005Metric,C590312,Generic Passives,CAPACITOR-0.8pF-C_0402_1005Metric
+1 kohm,"R_LED_1,R_LED_2",Resistor_SMD:R_0402_1005Metric,C543646,Generic Passives,RESISTOR-1kohm-R_0402_1005Metric
+1 pF,C_ANT_SERIES,Capacitor_SMD:C_0402_1005Metric,C151260,Generic Passives,CAPACITOR-1pF-C_0402_1005Metric
+1 uF,C_GNSS,Capacitor_SMD:C_0603_1608Metric,C134745,Generic Passives,CAPACITOR-1uF-C_0603_1608Metric
+10 kohm,"R_CC_OUT1,R_CC_OUT2,R_RESET_NRF",Resistor_SMD:R_0402_1005Metric,C513397,Generic Passives,RESISTOR-10kohm-R_0402_1005Metric
+10 uF,PWR_C_5V,Capacitor_SMD:C_0805_2012Metric,C641524,Generic Passives,CAPACITOR-10uF-C_0805_2012Metric
+100 kohm,PWR_R_MODEM_EN_PD,Resistor_SMD:R_0402_1005Metric,C165035,Generic Passives,RESISTOR-100kohm-R_0402_1005Metric
+100 nF,"C_ACCEL,C_MCU,PWR_C_MODEM_AVIN",Capacitor_SMD:C_0402_1005Metric,C659099,Generic Passives,CAPACITOR-100nF-C_0402_1005Metric
+120 ohm,R_CAN_TERM,Resistor_SMD:R_0603_1608Metric,C812045,Generic Passives,RESISTOR-120ohm-R_0603_1608Metric
+2.7 nH,L_ANT_SHUNT,Inductor_SMD:L_0402_1005Metric,C300621,Generic Passives,INDUCTOR-2.7nH-L_0402_1005Metric
+200 kohm,PWR_R_MODEM_FB_BOT,Resistor_SMD:R_0402_1005Metric,C294949,Generic Passives,RESISTOR-200kohm-R_0402_1005Metric
+22 uF,"PWR_C_3V3,PWR_C_3V8",Capacitor_SMD:C_0805_2012Metric,C584122,Generic Passives,CAPACITOR-22uF-C_0805_2012Metric
+3.9 nH,L_ANT_SERIES,Inductor_SMD:L_0402_1005Metric,C427550,Generic Passives,INDUCTOR-3.9nH-L_0402_1005Metric
+4.7 kohm,R_I2C_SCL,Resistor_SMD:R_0402_1005Metric,C806172,Generic Passives,RESISTOR-4.7kohm-R_0402_1005Metric
+4.7 uF,C_NRF,Capacitor_SMD:C_0603_1608Metric,C344238,Generic Passives,CAPACITOR-4.7uF-C_0603_1608Metric
+750 kohm,PWR_R_MODEM_FB_TOP,Resistor_SMD:R_0402_1005Metric,C828005,Generic Passives,RESISTOR-750kohm-R_0402_1005Metric
+900 kohm,R_CC_VBUS,Resistor_SMD:R_0402_1005Metric,C816975,Generic Passives,RESISTOR-900kohm-R_0402_1005Metric
+BUTTON-SW_SPST_TL3342,SW_USER,Button_Switch_SMD:SW_SPST_TL3342,C784198,E-Switch,BUTTON-SW_SPST_TL3342
+COILCRAFT_0603USB_601MLC-L_CommonModeChoke_Coilcraft_0603USB,FL_USB,Inductor_SMD:L_CommonModeChoke_Coilcraft_0603USB,C100920,Coilcraft,COILCRAFT_0603USB_601MLC-L_CommonModeChoke_Coilcraft_0603USB
+DEBUG_UART_HEADER-PinHeader_1x04_P2.54mm_Vertical,J_DEBUG,Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical,C895620,Generic Passives,DEBUG_UART_HEADER-PinHeader_1x04_P2.54mm_Vertical
+DUAL_UART_LEVEL_SHIFTER-TSSOP-8_3x3mm_P0.65mm,U_MODEM_LEVEL,Package_SO:TSSOP-8_3x3mm_P0.65mm,C957066,Generic Passives,DUAL_UART_LEVEL_SHIFTER-TSSOP-8_3x3mm_P0.65mm
+EG800G_EU-Quectel_EG800G,U_MODEM,EG800G:Quectel_EG800G,C118191,Quectel,EG800G_EU-Quectel_EG800G
+GCT_USB4135_GF_A-USB_C_Receptacle_GCT_USB4135-GF-A_6P_TopMnt_Horizontal.kicad_mod,J_POWER,github.com/andenore/CopperLib/packages/parts/gct/usb4135/footprints/Connector_USB.pretty/USB_C_Receptacle_GCT_USB4135-GF-A_6P_TopMnt_Horizontal.kicad_mod,C704717,GCT,GCT_USB4135_GF_A-USB_C_Receptacle_GCT_USB4135-GF-A_6P_TopMnt_Horizontal.kicad_mod
+JOHANSON_2450AT18A0100001E-Johanson_2450AT18x100,ANT_BT,RF_Antenna:Johanson_2450AT18x100,C914878,Johanson Technology,JOHANSON_2450AT18A0100001E-Johanson_2450AT18x100
+LED-LED_0603_1608Metric,"LED_1,LED_2",LED_SMD:LED_0603_1608Metric,C839358,Generic Passives,LED-LED_0603_1608Metric
+MAX_M10S_00B-u-blox_MAX-M10S,U_GNSS,MAX_M10S:u-blox_MAX-M10S,C814249,u-blox,MAX_M10S_00B-u-blox_MAX-M10S
+NRF52832_QFAA-QFN-48-1EP_6x6mm_P0.4mm_EP4.2x4.2mm,U_NRF,Package_DFN_QFN:QFN-48-1EP_6x6mm_P0.4mm_EP4.2x4.2mm,C131044,Nordic Semiconductor,NRF52832_QFAA-QFN-48-1EP_6x6mm_P0.4mm_EP4.2x4.2mm
+REGULATOR_3V3-SOT-23,PWR_U_LOGIC,Package_TO_SOT_SMD:SOT-23,C604222,Generic Passives,REGULATOR_3V3-SOT-23
+RF_CONNECTOR-U.FL_Hirose_U.FL-R-SMT-1_Vertical,"J_CELL,J_GNSS",Connector_Coaxial:U.FL_Hirose_U.FL-R-SMT-1_Vertical,C381799,Generic Passives,RF_CONNECTOR-U.FL_Hirose_U.FL-R-SMT-1_Vertical
+SIM8060_6_0_14_00_A-nanoSIM_GCT_SIM8060-6-0-14-00.kicad_mod,J_SIM,github.com/andenore/CopperLib/packages/parts/gct/sim8060/footprints/Connector_Card.pretty/nanoSIM_GCT_SIM8060-6-0-14-00.kicad_mod,C839295,GCT,SIM8060_6_0_14_00_A-nanoSIM_GCT_SIM8060-6-0-14-00.kicad_mod
+STM32G0C1RET6-LQFP-64_10x10mm_P0.5mm,U_MCU,Package_QFP:LQFP-64_10x10mm_P0.5mm,C194774,STMicroelectronics,STM32G0C1RET6-LQFP-64_10x10mm_P0.5mm
+SWD_HEADER-FTSH-105-01-L-DV-007-K,J_SWD_NRF,Connector_Debug:FTSH-105-01-L-DV-007-K,C350467,Samtec,SWD_HEADER-FTSH-105-01-L-DV-007-K
+TCAN334G-VSSOP-8_3x3mm_P0.65mm.kicad_mod,U_CAN,github.com/andenore/CopperLib/packages/parts/ti/tcan334g/footprints/Package_SO.pretty/VSSOP-8_3x3mm_P0.65mm.kicad_mod,C281846,Texas Instruments,TCAN334G-VSSOP-8_3x3mm_P0.65mm.kicad_mod
+TUSB320LAI-Texas_X2QFN-12_1.6x1.6mm_P0.4mm,U_CC,Package_DFN_QFN:Texas_X2QFN-12_1.6x1.6mm_P0.4mm,C540963,Texas Instruments,TUSB320LAI-Texas_X2QFN-12_1.6x1.6mm_P0.4mm
+XAL4020_222MEC-L_Coilcraft_XAL4020-XXX.kicad_mod,PWR_L_MODEM,github.com/andenore/CopperLib/packages/parts/coilcraft/xal4020/footprints/Inductor_SMD.pretty/L_Coilcraft_XAL4020-XXX.kicad_mod,C317020,Coilcraft,XAL4020_222MEC-L_Coilcraft_XAL4020-XXX.kicad_mod

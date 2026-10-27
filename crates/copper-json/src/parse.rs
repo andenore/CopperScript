@@ -43,23 +43,50 @@ impl ParseError {
 /// wins, at the first key's position). Unlike Python, a lone UTF-16 surrogate
 /// escape is refused because a Rust string cannot hold it.
 pub fn parse(text: &str) -> Result<Value, ParseError> {
-    let mut parser = Parser { text, bytes: text.as_bytes(), offset: 0 };
-    parser.skip_whitespace();
-    let value = parser.value()?;
-    parser.skip_whitespace();
-    if parser.offset != parser.bytes.len() {
-        return Err(parser.error("Extra data"));
-    }
-    Ok(value)
+    let mut parser = Parser { text, bytes: text.as_bytes(), offset: 0, unique: false, duplicate: None };
+    parser.document()
+}
+
+/// Why [`parse_unique`] refused a document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UniqueError {
+    Syntax(ParseError),
+    /// An object repeats this key.
+    DuplicateKey(String),
+}
+
+/// [`parse`] with an `object_pairs_hook` that refuses repeated keys.
+///
+/// Like the Python hook, an object is checked when it closes, so a syntax
+/// error inside it, or an inner object's repeated key, is reported first.
+pub fn parse_unique(text: &str) -> Result<Value, UniqueError> {
+    let mut parser = Parser { text, bytes: text.as_bytes(), offset: 0, unique: true, duplicate: None };
+    parser.document().map_err(|failure| match parser.duplicate.take() {
+        Some(key) => UniqueError::DuplicateKey(key),
+        None => UniqueError::Syntax(failure),
+    })
 }
 
 struct Parser<'a> {
     text: &'a str,
     bytes: &'a [u8],
     offset: usize,
+    /// Refuse repeated object keys ([`parse_unique`]).
+    unique: bool,
+    duplicate: Option<String>,
 }
 
 impl Parser<'_> {
+    fn document(&mut self) -> Result<Value, ParseError> {
+        self.skip_whitespace();
+        let value = self.value()?;
+        self.skip_whitespace();
+        if self.offset != self.bytes.len() {
+            return Err(self.error("Extra data"));
+        }
+        Ok(value)
+    }
+
     fn error(&self, message: &str) -> ParseError {
         ParseError { message: message.to_owned(), offset: self.offset }
     }
@@ -251,6 +278,7 @@ impl Parser<'_> {
     fn object(&mut self) -> Result<Value, ParseError> {
         self.offset += 1;
         let mut object = Object::new();
+        let mut repeated = None;
         self.skip_whitespace();
         if self.peek() == Some(b'}') {
             self.offset += 1;
@@ -269,12 +297,18 @@ impl Parser<'_> {
             self.offset += 1;
             self.skip_whitespace();
             let value = self.value()?;
-            object.insert(key, value);
+            if object.insert(key.clone(), value).is_some() {
+                repeated.get_or_insert(key);
+            }
             self.skip_whitespace();
             match self.peek() {
                 Some(b',') => self.offset += 1,
                 Some(b'}') => {
                     self.offset += 1;
+                    if let Some(key) = repeated.filter(|_| self.unique) {
+                        self.duplicate = Some(key);
+                        return Err(self.error("duplicate key"));
+                    }
                     return Ok(Value::Object(object));
                 }
                 _ => return Err(self.error("Expecting ',' delimiter")),
@@ -293,6 +327,13 @@ mod tests {
         let object = value.as_object().unwrap();
         assert_eq!(object.keys().collect::<Vec<_>>(), ["b", "a"]);
         assert_eq!(object["b"], Value::from(3i64));
+    }
+
+    #[test]
+    fn unique_parsing_reports_the_first_closed_repeat() {
+        assert_eq!(parse_unique(r#"{"a": {"b": 1, "b": 2}, "a": 3}"#), Err(UniqueError::DuplicateKey("b".to_owned())));
+        assert!(matches!(parse_unique(r#"{"a": 1, "a": 2"#), Err(UniqueError::Syntax(_))));
+        assert!(parse_unique(r#"{"a": [{"b": 1}, {"b": 2}]}"#).is_ok());
     }
 
     #[test]

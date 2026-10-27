@@ -1,0 +1,137 @@
+{
+  "board": "BuckLayoutTrial",
+  "electrical_sha256": "312b66391275e34233df68a3c496d714a1a639357087d927279fc955dc206e4b",
+  "schema": "copperscript-assembly-lock/v0.3",
+  "selections": [
+    {
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-100nF-C_0402_1005Metric",
+      "part": "buck.passives.CAPACITOR",
+      "populate": "supplier",
+      "reference": "B/C_AVIN",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C659099",
+      "supplier": "jlcpcb",
+      "supplier_part": "C659099"
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/584122",
+          "supplier": "Mouser",
+          "supplier_part": "M-584122"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D584122"
+        }
+      ],
+      "footprint": "Capacitor_SMD:C_0805_2012Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-22uF-C_0805_2012Metric",
+      "part": "buck.passives.CAPACITOR",
+      "populate": "supplier",
+      "reference": "B/C_OUT1",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C584122"
+    },
+    {
+      "footprint": "Capacitor_SMD:C_0805_2012Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-22uF-C_0805_2012Metric",
+      "part": "buck.passives.CAPACITOR",
+      "populate": "supplier",
+      "reference": "B/C_OUT2",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C584122"
+    },
+    {
+      "footprint": "Capacitor_SMD:C_0805_2012Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-10uF-C_0805_2012Metric",
+      "part": "buck.passives.CAPACITOR",
+      "populate": "supplier",
+      "reference": "B/C_PVIN",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C641524",
+      "supplier": "jlcpcb",
+      "supplier_part": "C641524"
+    },
+    {
+      "footprint": "Capacitor_SMD:C_0402_1005Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "CAPACITOR-3.3nF-C_0402_1005Metric",
+      "part": "buck.passives.CAPACITOR",
+      "populate": "consigned",
+      "reference": "B/C_SS",
+      "reviewed": true,
+      "source_url": "https://example.com/parts/CAPACITOR-3.3nF-C_0402_1005Metric",
+      "supplier": null,
+      "supplier_part": null
+    },
+    {
+      "alternates": [
+        {
+          "source_url": "https://example.com/mouser/660852",
+          "supplier": "Mouser",
+          "supplier_part": "M-660852"
+        },
+        {
+          "supplier": "digikey",
+          "supplier_part": "D660852"
+        }
+      ],
+      "footprint": "github.com/andenore/CopperLib/packages/parts/coilcraft/xal4020/footprints/Inductor_SMD.pretty/L_Coilcraft_XAL4020-XXX.kicad_mod",
+      "manufacturer": "Coilcraft",
+      "mpn": "XFL4020_222MEC-L_Coilcraft_XAL4020-XXX.kicad_mod",
+      "part": "buck.coilcraft.XFL4020_222MEC",
+      "populate": "supplier",
+      "reference": "B/L",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C660852"
+    },
+    {
+      "footprint": "Package_DFN_QFN:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
+      "manufacturer": "Texas Instruments",
+      "mpn": "TPS62130ARGTR-VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm",
+      "part": "buck.ti.TPS62130ARGTR",
+      "populate": "supplier",
+      "reference": "B/U",
+      "reviewed": true,
+      "source_url": "https://jlcpcb.com/partdetail/C698635",
+      "supplier": "jlcpcb",
+      "supplier_part": "C698635"
+    },
+    {
+      "footprint": "Resistor_SMD:R_0402_1005Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-100kohm-R_0402_1005Metric",
+      "part": "passives.RESISTOR",
+      "populate": "none",
+      "reference": "R_BOT",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C165035"
+    },
+    {
+      "footprint": "Resistor_SMD:R_0402_1005Metric",
+      "manufacturer": "Generic Passives",
+      "mpn": "RESISTOR-49.9kohm-R_0402_1005Metric",
+      "part": "passives.RESISTOR",
+      "populate": "supplier",
+      "reference": "R_TOP",
+      "reviewed": true,
+      "source_url": null,
+      "supplier": "jlcpcb",
+      "supplier_part": "C854332"
+    }
+  ]
+}
