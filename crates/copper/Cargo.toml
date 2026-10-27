@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 copper-json.workspace = true
 copper-lang.workspace = true
+copper-physical.workspace = true
 copper-state.workspace = true
 sha2.workspace = true
 

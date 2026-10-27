@@ -5649,6 +5649,76 @@
    ]
   },
   {
+   "name": "check-footprint",
+   "milestone": "M2",
+   "inputs": [
+    "examples/*/footprints/*.kicad_mod",
+    "examples/*/*.kicad_mod",
+    "examples/*/probe/*.kicad_mod",
+    "tests/fixtures/footprints/*.kicad_mod",
+    "examples/nrf52_coin_cell/.copper-cache/pkg/*/packages/**/*.kicad_mod",
+    "examples/cm4_baseboard/.copper-cache/pkg/*/packages/**/*.kicad_mod"
+   ],
+   "args": [
+    "check-footprint",
+    "{input}"
+   ],
+   "mutations": 3,
+   "cases": [
+    {
+     "args": [
+      "check-footprint"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "check-footprint",
+      "missing.kicad_mod"
+     ]
+    },
+    {
+     "args": [
+      "check-footprint",
+      "examples/nrf52_coin_cell/board.copper"
+     ]
+    },
+    {
+     "args": [
+      "check-footprint",
+      "examples/resolved_footprint_board/footprints"
+     ]
+    },
+    {
+     "args": [
+      "check-footprint",
+      "examples//resolved_footprint_board/./footprints/"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "check-footprint-strict",
+   "milestone": "M2",
+   "inputs": [
+    "examples/*/footprints/*.kicad_mod",
+    "examples/*/*.kicad_mod",
+    "examples/*/probe/*.kicad_mod",
+    "tests/fixtures/footprints/*.kicad_mod",
+    "examples/nrf52_coin_cell/.copper-cache/pkg/*/packages/**/*.kicad_mod",
+    "examples/cm4_baseboard/.copper-cache/pkg/*/packages/**/*.kicad_mod"
+   ],
+   "args": [
+    "check-footprint",
+    "{input}",
+    "--strict"
+   ],
+   "mutations": 1
+  },
+  {
    "name": "plan-layout",
    "milestone": "M3",
    "boards": "*",

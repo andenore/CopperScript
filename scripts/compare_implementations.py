@@ -187,7 +187,7 @@ def load_corpus(path: Path, kicad_cli: str | None = None) -> tuple[dict, list[Ca
                               timeout_s=timeout, **base))
             for number in range(int(suite.get("mutations", 0))):
                 seed = int(hashlib.sha256(f"{source}#{number}".encode()).hexdigest()[:12], 16)
-                mutated = (Path(source).parent / f".compare-mutation-{number}.copper").as_posix()
+                mutated = (Path(source).parent / f".compare-mutation-{number}{Path(source).suffix}").as_posix()
                 cases.append(Case(id=f"{name}/{source}#m{number}", args=_expand(suite["args"], {"input": mutated}),
                                   cwd=ROOT, timeout_s=timeout, mutation=(source, seed), **base))
         selected = suite.get("boards")
