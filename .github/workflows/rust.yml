@@ -96,9 +96,19 @@ jobs:
           done
       - name: Compare the binary with the Python CLI
         run: python scripts/compare_implementations.py --jobs 4 --report build/compare/report.json --markdown build/compare/report.md
+      - name: Compare the finished M2 commands
+        # Gated ahead of M2's acceptance so they cannot regress meanwhile.
+        run: >-
+          python scripts/compare_implementations.py --jobs 4 --milestone M2
+          --suite export-kicad --suite export-kicad-no-check --suite export-kicad-outputs
+          --suite check-footprint --suite check-footprint-strict
+          --report build/compare/report-m2.json --markdown build/compare/report-m2.md
       - name: Publish the comparison summary
         if: always()
-        run: if [ -f build/compare/report.md ]; then cat build/compare/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+        run: |
+          for report in build/compare/report.md build/compare/report-m2.md; do
+            if [ -f "$report" ]; then cat "$report" >> "$GITHUB_STEP_SUMMARY"; fi
+          done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
