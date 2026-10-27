@@ -1,0 +1,6 @@
+# Iteration order feeds output, so hash-ordered collections are not allowed.
+# Use indexmap::IndexMap / IndexSet or std::collections::BTreeMap / BTreeSet.
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "iteration order is not deterministic; use IndexMap or BTreeMap" },
+    { path = "std::collections::HashSet", reason = "iteration order is not deterministic; use IndexSet or BTreeSet" },
+]

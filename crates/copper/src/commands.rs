@@ -1,0 +1,142 @@
+//! Command dispatch and the rewrite status of every Python CLI command.
+
+use std::io::Write;
+
+use crate::{agent_guide, state};
+
+/// Exit status of a command the Rust rewrite does not implement yet.
+pub const NOT_IMPLEMENTED_EXIT: u8 = 3;
+/// The stderr marker the comparison harness looks for.
+pub const NOT_IMPLEMENTED_MARKER: &str = "not implemented in the Rust rewrite";
+
+/// Where each command of the Python CLI (`python -m copperscript`) is rewritten.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plan {
+    /// Implemented in this binary.
+    Done,
+    /// Planned for the named milestone of docs/rust-port-plan.md.
+    Milestone(&'static str),
+    /// An independent check that stays on the Python CLI in the first iteration.
+    Python,
+}
+
+/// Every subcommand of `pcbir.cli`, in its parser order, plus `bench`.
+pub const COMMANDS: &[(&str, Plan)] = &[
+    ("compile-macro", Plan::Milestone("M1")),
+    ("lsp", Plan::Milestone("M6")),
+    ("agent-guide", Plan::Done),
+    ("library", Plan::Milestone("M1")),
+    ("summarize", Plan::Milestone("M5")),
+    ("benchmark-routing", Plan::Milestone("M4")),
+    ("editor-overlay", Plan::Milestone("M6")),
+    ("edit-mechanical", Plan::Milestone("M3")),
+    ("edit", Plan::Milestone("M3")),
+    ("export-manufacturing", Plan::Milestone("M3")),
+    ("audit-cam", Plan::Python),
+    ("assess-engineering", Plan::Python),
+    ("qualification-gate", Plan::Python),
+    ("assembly", Plan::Milestone("M3")),
+    ("sim", Plan::Python),
+    ("check", Plan::Milestone("M1")),
+    ("explain", Plan::Milestone("M5")),
+    ("issues", Plan::Milestone("M5")),
+    ("view", Plan::Milestone("M5")),
+    ("state", Plan::Done),
+    ("replay-unified", Plan::Milestone("M4")),
+    ("replay-critical", Plan::Milestone("M4")),
+    ("query", Plan::Milestone("M1")),
+    ("si-check", Plan::Milestone("M3")),
+    ("lock", Plan::Milestone("M1")),
+    ("power-check", Plan::Milestone("M1")),
+    ("compile", Plan::Milestone("M1")),
+    ("export-kicad", Plan::Milestone("M2")),
+    ("export-kicad-pcb", Plan::Milestone("M2")),
+    ("plan-layout", Plan::Milestone("M3")),
+    ("route-global", Plan::Milestone("M4")),
+    ("route-board", Plan::Milestone("M4")),
+    ("check-footprint", Plan::Milestone("M2")),
+    ("audit-footprints", Plan::Milestone("M1")),
+    ("bench", Plan::Milestone("M4")),
+];
+
+pub fn plan(command: &str) -> Option<Plan> {
+    COMMANDS.iter().find(|(name, _)| *name == command).map(|(_, plan)| *plan)
+}
+
+const USAGE: &str = "usage: copper COMMAND [ARGS]";
+
+pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
+    let Some(command) = args.first() else {
+        let _ = writeln!(err, "{USAGE}\ncopper: error: the following arguments are required: command");
+        return 2;
+    };
+    let rest = &args[1..];
+    match command.as_str() {
+        "-h" | "--help" => {
+            let _ = writeln!(out, "{USAGE}\n\nCopperScript command line (Rust rewrite). Commands:");
+            for (name, plan) in COMMANDS {
+                let status = match plan {
+                    Plan::Done => "rewritten".to_owned(),
+                    Plan::Milestone(milestone) => format!("planned for {milestone}"),
+                    Plan::Python => "stays on the Python CLI".to_owned(),
+                };
+                let _ = writeln!(out, "  {name:<22} {status}");
+            }
+            0
+        }
+        "agent-guide" => agent_guide::run(rest, out, err),
+        "state" => state::run(rest, out, err),
+        _ => match plan(command) {
+            Some(Plan::Milestone(milestone)) => {
+                let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");
+                NOT_IMPLEMENTED_EXIT
+            }
+            Some(Plan::Python) => {
+                let _ = writeln!(
+                    err,
+                    "copper: {NOT_IMPLEMENTED_MARKER}: {command} stays on the Python CLI in the first iteration; \
+                     run python -m copperscript {command}"
+                );
+                NOT_IMPLEMENTED_EXIT
+            }
+            Some(Plan::Done) => unreachable!("implemented commands are dispatched above"),
+            None => {
+                let choices: Vec<&str> = COMMANDS.iter().map(|(name, _)| *name).collect();
+                let _ = writeln!(
+                    err,
+                    "{USAGE}\ncopper: error: invalid command '{command}' (choose from {})",
+                    choices.join(", ")
+                );
+                2
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn call(args: &[&str]) -> (u8, String, String) {
+        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = run(&args, &mut out, &mut err);
+        (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+    }
+
+    #[test]
+    fn unported_commands_report_their_milestone() {
+        let (code, out, err) = call(&["route-board", "board.copper"]);
+        assert_eq!((code, out.as_str()), (NOT_IMPLEMENTED_EXIT, ""));
+        assert!(err.contains(NOT_IMPLEMENTED_MARKER) && err.contains("M4"), "{err}");
+        let (code, _, err) = call(&["audit-cam"]);
+        assert_eq!(code, NOT_IMPLEMENTED_EXIT);
+        assert!(err.contains("python -m copperscript audit-cam"), "{err}");
+    }
+
+    #[test]
+    fn unknown_and_missing_commands_are_usage_errors() {
+        assert_eq!(call(&["frobnicate"]).0, 2);
+        assert_eq!(call(&[]).0, 2);
+    }
+}

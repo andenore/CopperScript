@@ -1,0 +1,20 @@
+[package]
+name = "copper-units"
+description = "Exact numeric types: Python-compatible decimals, nanometres, fractions and quantities"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+num-bigint.workspace = true
+num-integer.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+
+[dev-dependencies]
+copper-json.workspace = true
+
+[lints]
+workspace = true

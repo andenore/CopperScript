@@ -23,3 +23,6 @@ dist/
 
 # Publishing tools are locked separately and never shipped as extension runtime.
 /integrations/vscode/tools/node_modules/
+
+# Rust rewrite build output.
+/target/

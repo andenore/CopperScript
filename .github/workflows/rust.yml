@@ -1,0 +1,102 @@
+name: Rust rewrite
+
+# Builds and tests the Rust workspace and compares the `copper` binary with the
+# Python CLI on the gated corpus suites (docs/rust-port-plan.md, milestone M0).
+# Python changes trigger it too: the Python CLI is the oracle, so a change to
+# its output shows up here as a stale fixture or a differing case.
+on:
+  push:
+    branches: ['**']
+    paths:
+      - '.github/workflows/rust.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'rustfmt.toml'
+      - 'clippy.toml'
+      - 'crates/**'
+      - 'scripts/compare_implementations.py'
+      - 'scripts/compare_corpus.json'
+      - 'scripts/generate_rust_fixtures.py'
+      - 'docs/rust-port-differences.md'
+      - 'bench/ladder.json'
+      - 'pcbir/**'
+      - 'copperscript/**'
+      - 'examples/**'
+      - 'pyproject.toml'
+  pull_request:
+    paths:
+      - '.github/workflows/rust.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'rustfmt.toml'
+      - 'clippy.toml'
+      - 'crates/**'
+      - 'scripts/compare_implementations.py'
+      - 'scripts/compare_corpus.json'
+      - 'scripts/generate_rust_fixtures.py'
+      - 'docs/rust-port-differences.md'
+      - 'bench/ladder.json'
+      - 'pcbir/**'
+      - 'copperscript/**'
+      - 'examples/**'
+      - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.13'
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Build the binary
+        run: cargo build --release --locked -p copper
+      - name: Install the Python oracle
+        run: python -m pip install -e ".[test]"
+      - name: Check the oracle fixtures are current
+        run: python scripts/generate_rust_fixtures.py --check
+      - name: Compare the binary with the Python CLI
+        run: python scripts/compare_implementations.py --report build/compare/report.json --markdown build/compare/report.md
+      - name: Publish the comparison summary
+        if: always()
+        run: if [ -f build/compare/report.md ]; then cat build/compare/report.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: copper-${{ runner.os }}
+          path: |
+            target/release/copper
+            target/release/copper.exe
+            build/compare/
+          if-no-files-found: warn

@@ -1,6 +1,7 @@
 # Rust rewrite plan
 
-Status: revised 2026-10-27 after owner decisions (section 8). Owner: andenore.
+Status: revised 2026-10-27 after owner decisions (section 8); M0 implemented
+(section 10). Owner: andenore.
 This plan does not change routing, placement or language behaviour on the
 Python side; algorithm work there still follows the
 [routing refactor plan](routing-refactor-plan.md) and the
@@ -126,10 +127,20 @@ whole command is equivalent; milestones are therefore cut per CLI command
   `examples/`, the six benchmark-ladder boards (round-led-ring, nrf52,
   full-vertical, cm4, CopperLedRing, CopperAssetTracker at pinned commits)
   and the consumer boards.
-- A harness (`copper compare`, or a script in `scripts/`) runs the same
-  command on both implementations and diffs the outputs: compiled design
-  JSON, ERC diagnostics, `copperscript.state/v1` files, DRC and route
-  reports, generated `.kicad_pcb`/`.kicad_pro` bytes, manufacturing files.
+- The harness, `scripts/compare_implementations.py`, runs the same command
+  on both implementations and compares exit status, stdout, stderr and every
+  output file byte for byte: compiled design JSON, ERC diagnostics,
+  `copperscript.state/v1` files, DRC and route reports, generated
+  `.kicad_pcb`/`.kicad_pro` bytes, manufacturing files. Both runs use the
+  same working and output directories, so paths in the output agree. The
+  oracle runs with `PYTHONUTF8=1` and `PYTHONHASHSEED=0`.
+- The corpus manifest, `scripts/compare_corpus.json`, lists each suite of
+  commands with the milestone that rewrites it. Suites up to its
+  `accepted_milestone` are gated in CI; later suites report `pending`.
+- Unit tests check the foundation crates against fixtures recorded from the
+  oracle by `scripts/generate_rust_fixtures.py` (decimal arithmetic, float
+  `repr`, JSON escaping, quantity text, real state files). CI fails when a
+  fixture is stale, so a Python change that alters these shows up at once.
 - Ladder run time is recorded for both implementations on every milestone
   (AGENTS.md: measure every change with the benchmark ladder).
 
@@ -147,7 +158,12 @@ completion time) may differ within the recorded entries.
 
 - Lengths are integer nanometres in `i64`, with `i128` for products. Exact
   fractions use `num-rational`; fixed-point quantities keep their
-  `base_value` and the shared formatter rules (`100 nF`).
+  `base_value` and the shared formatter rules (`100 nF`). `Decimal`
+  reproduces Python's default context: 28 significant digits, round half
+  even, Python's exponent rules for every operation and for `str()`.
+- Text that Python writes in text mode (`print`, `write_text`) gets `\r\n`
+  on Windows; the binary writes such text through the same translation so
+  each platform's output matches the Python CLI on that platform.
 - Float code (`hypot`, `atan2`, cost weights) keeps the same operations in
   the same order unless a recorded difference says otherwise.
 - Iteration order is deterministic everywhere: `BTreeMap`/`IndexMap`, no
@@ -156,11 +172,13 @@ completion time) may differ within the recorded entries.
 
 ### Boundaries inside the Rust workspace
 
-One crate per layer, with the physical IR and geometry as the shared
-foundation: `copper-lang` (frontend), `copper-physical` (IR, geometry,
-footprints, macros, mechanics), `copper-kicad` (I/O), `copper-drc`,
-`copper-place`, `copper-route`, `copper-report` (state codec, issues, view),
-`copper-lsp`, and the `copper` binary. Crate boundaries follow the current
+One crate per layer. The foundation, from M0: `copper-json` (Python-exact
+JSON), `copper-units` (decimal, nanometres, fractions, quantities) and
+`copper-state` (the state format). Then `copper-lang` (frontend),
+`copper-physical` (IR, geometry, footprints, macros, mechanics),
+`copper-kicad` (I/O), `copper-drc`, `copper-place`, `copper-route`,
+`copper-report` (issues, view, summaries), `copper-lsp`, and the `copper`
+binary. Crate boundaries follow the current
 module groups so the Python source can be read alongside.
 
 ## 5. Milestones, in dependency order
@@ -171,12 +189,12 @@ named commands equivalent on the corpus, with every deviation recorded.
 
 | Milestone | Scope | Commands equivalent | Accept when |
 |---|---|---|---|
-| M0 Foundations | Cargo workspace, Linux and Windows binaries in CI, numeric types, state-codec schema frozen, the comparison harness and differences log, ladder timing hook | none | The harness compares one trivial command on both platforms |
-| M1 Frontend | Lexer, parser, compiler, model, ERC, quantities, packages and lockfiles (git fetching), library loading | `check`, `compile`, `lock`, `audit-footprints`, `library`, `compile-macro`, `agent-guide` | Every `.copper` source in the corpus compiles to equivalent JSON; ERC diagnostics equivalent |
-| M2 Physical IR and KiCad I/O | `physical`, `geometry`, `surface_path`, `zone_geometry`, `breakout`, footprints and `kicad_mod` import, outline and mechanics, hard-macro materialisation, `kicad_pcb`/`kicad_project` backends and the board importer | `export-kicad-pcb` | KiCad output equivalent for the examples and consumer boards; macro examples materialise |
-| M3 DRC, placement, assembly | `drc`, `process_drc`, `pad_stitch`, `placement`, `clusters`, `congestion_feedback`, `layout`, assembly locks and manufacturing files (without the independent CAM audit), editor backend | `plan-layout`, `edit-mechanical`, `assembly`, `export-manufacturing --skip-independent-cam`, `state` | Placement and DRC reports equivalent on the ladder; editor tests pass against the binary |
-| M4 Routing | Global router, `routing_lattice`, `layer_assignment`, `routeflow`, `unified_router` (A* kernel retired), `critical`, `pair_*`, `escape_plan`, `fanout`, `decoupling*`, `plane`, `bypass*`, `filled_feedback`, `dependency_reroute`, `power_islands`, `flow` | `route-board`, `benchmark-routing`, `bench run` | All six ladder boards route completely and pass native DRC; metrics within the recorded differences; run time recorded per board |
-| M5 Diagnostics and reports | `run_issues`, `view` rendering, `explain`, `summarize`, `routing_benchmark` summaries, the `bench` subcommands (`run`, `boards`, `failures`, `causes`, `compare`, `baseline`, `annotate`) | `issues`, `view`, `explain`, `summarize`, `bench` | Reports equivalent on the ladder runs |
+| M0 Foundations | Cargo workspace, Linux and Windows binaries in CI, numeric types, state-codec schema frozen, the comparison harness and differences log, ladder timing hook | `agent-guide`, `state` | The harness compares the M0 commands on both platforms |
+| M1 Frontend | Lexer, parser, compiler, model, ERC, quantities, packages and lockfiles (git fetching), library loading, power-state analysis | `check`, `compile`, `lock`, `audit-footprints`, `library`, `compile-macro`, `query`, `power-check` | Every `.copper` source in the corpus compiles to equivalent JSON; ERC diagnostics equivalent |
+| M2 Physical IR and KiCad I/O | `physical`, `geometry`, `surface_path`, `zone_geometry`, `breakout`, footprints and `kicad_mod` import, outline and mechanics, hard-macro materialisation, `kicad_pcb`/`kicad_project` backends and the board importer | `export-kicad-pcb`, `export-kicad`, `check-footprint` | KiCad output equivalent for the examples and consumer boards; macro examples materialise |
+| M3 DRC, placement, assembly | `drc`, `process_drc`, `pad_stitch`, `placement`, `clusters`, `congestion_feedback`, `layout`, assembly locks and manufacturing files (without the independent CAM audit), editor backend | `plan-layout`, `edit-mechanical` (and its alias `edit`), `si-check`, `assembly`, `export-manufacturing --skip-independent-cam` | Placement and DRC reports equivalent on the ladder; editor tests pass against the binary |
+| M4 Routing | Global router, `routing_lattice`, `layer_assignment`, `routeflow`, `unified_router` (A* kernel retired), `critical`, `pair_*`, `escape_plan`, `fanout`, `decoupling*`, `plane`, `bypass*`, `filled_feedback`, `dependency_reroute`, `power_islands`, `flow` | `route-board`, `route-global`, `replay-unified`, `replay-critical`, `benchmark-routing`, `bench` (the ladder runner) | All six ladder boards route completely and pass native DRC; metrics within the recorded differences; run time recorded per board |
+| M5 Diagnostics and reports | `run_issues`, `view` rendering, `explain`, `summarize`, `routing_benchmark` summaries, the third-party board benchmark tool (`python -m pcbir.bench`) | `issues`, `view`, `explain`, `summarize` | Reports equivalent on the ladder runs |
 | M6 LSP and editor | `lsp` (for example `tower-lsp`), editor server, VS Code extension pointed at the binary | `lsp`, `editor-overlay` | Extension and editor tests pass against the binary |
 | M7 Cutover | Consumer `pcbir` imports removed (section 3), consumer Makefiles on the binary, Python core deleted, the pinned oracle commit recorded | all of the above | Consumer Make targets run unchanged except for the binary path; `pcbir` reduced to section 5's remainder |
 
@@ -187,7 +205,8 @@ The independent qualification and CAM checks (`cam_*`, `rf_*`,
 the native qualification and RF probes) and the ngspice simulation glue are
 not rewritten in this iteration. They stay as the Python commands `audit-cam`,
 `assess-engineering`, `qualification-gate` and `sim`, reading the binary's
-outputs (KiCad files, state files, reports) from disk.
+outputs (KiCad files, state files, reports) from disk. The binary answers
+these commands with a pointer to `python -m copperscript`.
 
 They import core `pcbir` modules (`physical`, `placement`, `pair_geometry`,
 `power_integrity`, `route_path_geometry`, `rf_geometry`, `engineering`), so
@@ -253,11 +272,45 @@ do not shrink as much.
 - **D5 Identity bar: reviewed differences allowed.** Byte identity is the
   default; every deviation is recorded in the differences log (section 4).
 
-## 9. First steps
+## 9. Next steps
 
-1. M0: the workspace, the CI binaries, the comparison harness with the corpus
-   enumerated, and the empty differences log.
+1. Accept M0 once the Rust workflow is green on Linux and Windows.
 2. Consumer PRs under section 3, starting with CopperLib (largest count) and
    CopperBench (all deletable); confirm each repository's dispositions with
    its owner before deleting.
 3. M1: the frontend, measured by `check` and `compile` on the whole corpus.
+   Settle open item 1 below first.
+
+### Open items
+
+1. **CLI usage, help and error text.** Python's argparse wording (usage
+   wrapping, `invalid choice` lists, `-h` output) is not reproduced. M0
+   keeps argparse exit statuses and leaves those texts out of the corpus.
+   Recommendation for M1: keep the exit statuses, choose a Rust argument
+   parser, and record argparse text as differences only where a consumer
+   depends on it.
+2. **Entry points without a milestone.** `copper-devicegen` (device model
+   generation) has no milestone yet; `copper-lsp` becomes `copper lsp` in M6.
+   Decide before M7.
+
+## 10. Status
+
+**M0 (2026-10-27): implemented, Linux verified, Windows pending CI.**
+
+- Workspace: `Cargo.toml`, `rust-toolchain.toml` (1.97.0), `crates/` with
+  `copper-json`, `copper-units`, `copper-state` and the `copper` binary; see
+  [crates/README.md](../crates/README.md).
+- The binary implements `agent-guide` and `state`; every other Python
+  command reports its milestone and exits 3.
+- Oracle fixtures: 2,716 decimal operations, 630 floats, quantity text for
+  every unit, JSON escaping and documents, and three state files (two
+  physicalized example boards and one value using every tag) round-trip
+  byte for byte.
+- Harness and corpus: 111 cases in 8 suites (M0 18, M1 64, M2 11, M3 11,
+  ladder 7). On Linux all 18 gated M0 cases are byte-identical.
+- [Differences log](rust-port-differences.md): empty.
+- CI: `.github/workflows/rust.yml` runs format, clippy, tests, the fixture
+  check and the gated comparison on `ubuntu-24.04` and `windows-latest`, and
+  uploads the binaries and the comparison report.
+- Ladder: the `ladder` suite is the timing hook. M0 does not change the
+  Python implementation, so the ladder was not rerun for it.

@@ -1,0 +1,90 @@
+{
+ "schema": "copperscript.compare-corpus/v1",
+ "description": "Inputs and commands the Rust binary must reproduce (docs/rust-port-plan.md). Suites up to accepted_milestone are gated: every case must be equal or a recorded difference.",
+ "accepted_milestone": "M0",
+ "boards": {
+  "cm4": {"source": "examples/cm4_baseboard/board.copper", "physical": ["--layers", "4", "--fab-profile", "jlcpcb-four-layer"]},
+  "full-vertical": {"source": "examples/full_vertical/board.copper", "physical": ["--layers", "6", "--fab-profile", "jlcpcb-six-layer"]},
+  "nrf52": {"source": "examples/nrf52_coin_cell/board.copper", "physical": ["--layers", "6", "--fab-profile", "jlcpcb-six-layer", "--width-mm", "50", "--height-mm", "40"]},
+  "round-led-ring": {"source": "examples/round_led_ring/board.copper", "physical": ["--layers", "2", "--fab-profile", "generic"]},
+  "mechanical-outline": {"source": "examples/mechanical_outline/board.copper", "physical": ["--layers", "2", "--fab-profile", "generic"]},
+  "mechanical-editor": {"source": "examples/mechanical_editor_demo/board.copper", "physical": ["--layers", "2", "--fab-profile", "generic"]},
+  "mechanical-anchors": {"source": "examples/mechanical_anchors/board.copper", "physical": ["--layers", "2", "--fab-profile", "generic"]},
+  "mechanical-curves": {"source": "examples/mechanical_curves/board.copper", "physical": ["--layers", "2", "--fab-profile", "generic"]},
+  "mechanical-reference": {"source": "examples/mechanical_reference/board.copper", "physical": ["--layers", "2", "--fab-profile", "generic"]},
+  "mechanical-profile": {"source": "examples/mechanical_profile_project/board.copper", "physical": ["--layers", "2", "--fab-profile", "generic"]},
+  "resolved-footprint": {"source": "examples/resolved_footprint_board/board.copper", "physical": ["--layers", "2", "--fab-profile", "generic"]}
+ },
+ "suites": [
+  {
+   "name": "agent-guide",
+   "milestone": "M0",
+   "cases": [
+    {"args": ["agent-guide"]},
+    {"args": ["agent-guide", "--json"]},
+    {"args": ["agent-guide", "start"]},
+    {"args": ["agent-guide", "syntax"]},
+    {"args": ["agent-guide", "syntax", "--json"]},
+    {"args": ["agent-guide", "libraries"]},
+    {"args": ["agent-guide", "libraries", "--json"]},
+    {"args": ["agent-guide", "verification"]},
+    {"args": ["agent-guide", "verification", "--json"]},
+    {"args": ["agent-guide", "iteration"]},
+    {"args": ["agent-guide", "iteration", "--json"]},
+    {"args": ["agent-guide", "recovery"]},
+    {"args": ["agent-guide", "--json", "recovery"]}
+   ]
+  },
+  {
+   "name": "state",
+   "milestone": "M0",
+   "inputs": ["crates/copper-state/tests/fixtures/*.state.json"],
+   "args": ["state", "show", "{input}"],
+   "cases": [
+    {"id": "state/not-a-state-file", "args": ["state", "show", "./bench//ladder.json"]},
+    {"id": "state/missing-file", "args": ["state", "show", "build/missing.state.json"]}
+   ]
+  },
+  {
+   "name": "check",
+   "milestone": "M1",
+   "inputs": ["examples/*/board.copper", "examples/simulation/*.copper", "tests/fixtures/**/*.copper"],
+   "declares": "board",
+   "args": ["check", "{input}", "--locked", "--offline"]
+  },
+  {
+   "name": "check-json",
+   "milestone": "M1",
+   "inputs": ["examples/*/board.copper", "examples/simulation/*.copper"],
+   "declares": "board",
+   "args": ["check", "{input}", "--locked", "--offline", "--json"]
+  },
+  {
+   "name": "compile",
+   "milestone": "M1",
+   "inputs": ["examples/*/board.copper", "examples/simulation/*.copper"],
+   "declares": "board",
+   "args": ["compile", "{input}", "--locked", "--offline", "-o", "{out}/board.json"]
+  },
+  {
+   "name": "export-kicad-pcb",
+   "milestone": "M2",
+   "boards": "*",
+   "args": ["export-kicad-pcb", "{input}", "--locked", "--offline", "{physical}", "-o", "{out}/board.kicad_pcb"]
+  },
+  {
+   "name": "plan-layout",
+   "milestone": "M3",
+   "boards": "*",
+   "args": ["plan-layout", "{input}", "--locked", "--offline", "{physical}", "--candidates", "1", "-o", "{out}/placed.kicad_pcb", "--report", "{out}/placement.json"]
+  },
+  {
+   "name": "ladder",
+   "milestone": "M4",
+   "ladder": "bench/ladder.json",
+   "compare": ["exit", "files"],
+   "files": ["board.kicad_pcb"],
+   "json": {"route-report.json": ["summary"]}
+  }
+ ]
+}

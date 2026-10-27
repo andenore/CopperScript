@@ -1,0 +1,37 @@
+# Rust rewrite workspace (docs/rust-port-plan.md). One crate per layer; the
+# `copper` crate builds the binary. The Python package stays the oracle until
+# cutover.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+# Must match pyproject.toml: `agent-guide` reports it as package_version.
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+base64 = "0.22"
+indexmap = "2"
+num-bigint = "0.4"
+num-integer = "0.1"
+num-rational = "0.4"
+num-traits = "0.2"
+sha2 = "0.10"
+copper-json = { path = "crates/copper-json" }
+copper-state = { path = "crates/copper-state" }
+copper-units = { path = "crates/copper-units" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+# Output must not depend on hash iteration order (plan section 4).
+disallowed_types = "deny"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

@@ -1,0 +1,3746 @@
+{
+ "errors": [
+  {
+   "kind": "Voltage",
+   "message": "unsupported Voltage unit 'kV'; use V, mV",
+   "unit": "kV"
+  },
+  {
+   "kind": "Capacitance",
+   "message": "unsupported Capacitance unit 'mF'; use F, uF, nF, pF",
+   "unit": "mF"
+  },
+  {
+   "kind": "Length",
+   "message": "unsupported Length unit 'in'; use m, mm, um",
+   "unit": "in"
+  }
+ ],
+ "quantities": [
+  {
+   "base_value": "0",
+   "kind": "Voltage",
+   "str": "0 V",
+   "unit": "V",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Voltage",
+   "str": "1 V",
+   "unit": "V",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Voltage",
+   "str": "3.3 V",
+   "unit": "V",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Voltage",
+   "str": "100 V",
+   "unit": "V",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Voltage",
+   "str": "0.1 V",
+   "unit": "V",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Voltage",
+   "str": "4.7 V",
+   "unit": "V",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Voltage",
+   "str": "10 V",
+   "unit": "V",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Voltage",
+   "str": "2.2 V",
+   "unit": "V",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Voltage",
+   "str": "0.001 V",
+   "unit": "V",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Voltage",
+   "str": "1000 V",
+   "unit": "V",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Voltage",
+   "str": "47.5 V",
+   "unit": "V",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Voltage",
+   "str": "-1.8 V",
+   "unit": "V",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Voltage",
+   "str": "1 V",
+   "unit": "V",
+   "value": "1.00"
+  },
+  {
+   "base_value": "8.1009",
+   "kind": "Voltage",
+   "str": "8.1009 V",
+   "unit": "V",
+   "value": "8.1009"
+  },
+  {
+   "base_value": "0.000",
+   "kind": "Voltage",
+   "str": "0 mV",
+   "unit": "mV",
+   "value": "0"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Voltage",
+   "str": "1 mV",
+   "unit": "mV",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0033",
+   "kind": "Voltage",
+   "str": "3.3 mV",
+   "unit": "mV",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.100",
+   "kind": "Voltage",
+   "str": "100 mV",
+   "unit": "mV",
+   "value": "100"
+  },
+  {
+   "base_value": "0.0001",
+   "kind": "Voltage",
+   "str": "0.1 mV",
+   "unit": "mV",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0047",
+   "kind": "Voltage",
+   "str": "4.7 mV",
+   "unit": "mV",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.010",
+   "kind": "Voltage",
+   "str": "10 mV",
+   "unit": "mV",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0022",
+   "kind": "Voltage",
+   "str": "2.2 mV",
+   "unit": "mV",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Voltage",
+   "str": "0.001 mV",
+   "unit": "mV",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1.000",
+   "kind": "Voltage",
+   "str": "1000 mV",
+   "unit": "mV",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0475",
+   "kind": "Voltage",
+   "str": "47.5 mV",
+   "unit": "mV",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0018",
+   "kind": "Voltage",
+   "str": "-1.8 mV",
+   "unit": "mV",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00100",
+   "kind": "Voltage",
+   "str": "1 mV",
+   "unit": "mV",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.0090305",
+   "kind": "Voltage",
+   "str": "9.0305 mV",
+   "unit": "mV",
+   "value": "9.0305"
+  },
+  {
+   "base_value": "0",
+   "kind": "Resistance",
+   "str": "0 ohm",
+   "unit": "ohm",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Resistance",
+   "str": "1 ohm",
+   "unit": "ohm",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Resistance",
+   "str": "3.3 ohm",
+   "unit": "ohm",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Resistance",
+   "str": "100 ohm",
+   "unit": "ohm",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Resistance",
+   "str": "0.1 ohm",
+   "unit": "ohm",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Resistance",
+   "str": "4.7 ohm",
+   "unit": "ohm",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Resistance",
+   "str": "10 ohm",
+   "unit": "ohm",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Resistance",
+   "str": "2.2 ohm",
+   "unit": "ohm",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Resistance",
+   "str": "0.001 ohm",
+   "unit": "ohm",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Resistance",
+   "str": "1000 ohm",
+   "unit": "ohm",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Resistance",
+   "str": "47.5 ohm",
+   "unit": "ohm",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Resistance",
+   "str": "-1.8 ohm",
+   "unit": "ohm",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Resistance",
+   "str": "1 ohm",
+   "unit": "ohm",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.5955",
+   "kind": "Resistance",
+   "str": "0.5955 ohm",
+   "unit": "ohm",
+   "value": "0.5955"
+  },
+  {
+   "base_value": "0",
+   "kind": "Resistance",
+   "str": "0 kohm",
+   "unit": "kohm",
+   "value": "0"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Resistance",
+   "str": "1 kohm",
+   "unit": "kohm",
+   "value": "1"
+  },
+  {
+   "base_value": "3300.0",
+   "kind": "Resistance",
+   "str": "3.3 kohm",
+   "unit": "kohm",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100000",
+   "kind": "Resistance",
+   "str": "100 kohm",
+   "unit": "kohm",
+   "value": "100"
+  },
+  {
+   "base_value": "100.0",
+   "kind": "Resistance",
+   "str": "0.1 kohm",
+   "unit": "kohm",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4700.0",
+   "kind": "Resistance",
+   "str": "4.7 kohm",
+   "unit": "kohm",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10000",
+   "kind": "Resistance",
+   "str": "10 kohm",
+   "unit": "kohm",
+   "value": "10"
+  },
+  {
+   "base_value": "2200.0",
+   "kind": "Resistance",
+   "str": "2.2 kohm",
+   "unit": "kohm",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1.000",
+   "kind": "Resistance",
+   "str": "0.001 kohm",
+   "unit": "kohm",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000000",
+   "kind": "Resistance",
+   "str": "1000 kohm",
+   "unit": "kohm",
+   "value": "1000"
+  },
+  {
+   "base_value": "47500.0",
+   "kind": "Resistance",
+   "str": "47.5 kohm",
+   "unit": "kohm",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1800.0",
+   "kind": "Resistance",
+   "str": "-1.8 kohm",
+   "unit": "kohm",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1000.00",
+   "kind": "Resistance",
+   "str": "1 kohm",
+   "unit": "kohm",
+   "value": "1.00"
+  },
+  {
+   "base_value": "8961200.0",
+   "kind": "Resistance",
+   "str": "8961.2 kohm",
+   "unit": "kohm",
+   "value": "8961.2"
+  },
+  {
+   "base_value": "0",
+   "kind": "Resistance",
+   "str": "0 Mohm",
+   "unit": "Mohm",
+   "value": "0"
+  },
+  {
+   "base_value": "1000000",
+   "kind": "Resistance",
+   "str": "1 Mohm",
+   "unit": "Mohm",
+   "value": "1"
+  },
+  {
+   "base_value": "3300000.0",
+   "kind": "Resistance",
+   "str": "3.3 Mohm",
+   "unit": "Mohm",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100000000",
+   "kind": "Resistance",
+   "str": "100 Mohm",
+   "unit": "Mohm",
+   "value": "100"
+  },
+  {
+   "base_value": "100000.0",
+   "kind": "Resistance",
+   "str": "0.1 Mohm",
+   "unit": "Mohm",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4700000.0",
+   "kind": "Resistance",
+   "str": "4.7 Mohm",
+   "unit": "Mohm",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10000000",
+   "kind": "Resistance",
+   "str": "10 Mohm",
+   "unit": "Mohm",
+   "value": "10"
+  },
+  {
+   "base_value": "2200000.0",
+   "kind": "Resistance",
+   "str": "2.2 Mohm",
+   "unit": "Mohm",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1000.000",
+   "kind": "Resistance",
+   "str": "0.001 Mohm",
+   "unit": "Mohm",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000000000",
+   "kind": "Resistance",
+   "str": "1000 Mohm",
+   "unit": "Mohm",
+   "value": "1000"
+  },
+  {
+   "base_value": "47500000.0",
+   "kind": "Resistance",
+   "str": "47.5 Mohm",
+   "unit": "Mohm",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1800000.0",
+   "kind": "Resistance",
+   "str": "-1.8 Mohm",
+   "unit": "Mohm",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1000000.00",
+   "kind": "Resistance",
+   "str": "1 Mohm",
+   "unit": "Mohm",
+   "value": "1.00"
+  },
+  {
+   "base_value": "4928000.000",
+   "kind": "Resistance",
+   "str": "4.928 Mohm",
+   "unit": "Mohm",
+   "value": "4.928"
+  },
+  {
+   "base_value": "0",
+   "kind": "Capacitance",
+   "str": "0 F",
+   "unit": "F",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Capacitance",
+   "str": "1 F",
+   "unit": "F",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Capacitance",
+   "str": "3.3 F",
+   "unit": "F",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Capacitance",
+   "str": "100 F",
+   "unit": "F",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Capacitance",
+   "str": "0.1 F",
+   "unit": "F",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Capacitance",
+   "str": "4.7 F",
+   "unit": "F",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Capacitance",
+   "str": "10 F",
+   "unit": "F",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Capacitance",
+   "str": "2.2 F",
+   "unit": "F",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Capacitance",
+   "str": "0.001 F",
+   "unit": "F",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Capacitance",
+   "str": "1000 F",
+   "unit": "F",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Capacitance",
+   "str": "47.5 F",
+   "unit": "F",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Capacitance",
+   "str": "-1.8 F",
+   "unit": "F",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Capacitance",
+   "str": "1 F",
+   "unit": "F",
+   "value": "1.00"
+  },
+  {
+   "base_value": "7087",
+   "kind": "Capacitance",
+   "str": "7087 F",
+   "unit": "F",
+   "value": "7087"
+  },
+  {
+   "base_value": "0.000000",
+   "kind": "Capacitance",
+   "str": "0 uF",
+   "unit": "uF",
+   "value": "0"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Capacitance",
+   "str": "1 uF",
+   "unit": "uF",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0000033",
+   "kind": "Capacitance",
+   "str": "3.3 uF",
+   "unit": "uF",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.000100",
+   "kind": "Capacitance",
+   "str": "100 uF",
+   "unit": "uF",
+   "value": "100"
+  },
+  {
+   "base_value": "1E-7",
+   "kind": "Capacitance",
+   "str": "0.1 uF",
+   "unit": "uF",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0000047",
+   "kind": "Capacitance",
+   "str": "4.7 uF",
+   "unit": "uF",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.000010",
+   "kind": "Capacitance",
+   "str": "10 uF",
+   "unit": "uF",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0000022",
+   "kind": "Capacitance",
+   "str": "2.2 uF",
+   "unit": "uF",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1E-9",
+   "kind": "Capacitance",
+   "str": "0.001 uF",
+   "unit": "uF",
+   "value": "0.001"
+  },
+  {
+   "base_value": "0.001000",
+   "kind": "Capacitance",
+   "str": "1000 uF",
+   "unit": "uF",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0000475",
+   "kind": "Capacitance",
+   "str": "47.5 uF",
+   "unit": "uF",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0000018",
+   "kind": "Capacitance",
+   "str": "-1.8 uF",
+   "unit": "uF",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00000100",
+   "kind": "Capacitance",
+   "str": "1 uF",
+   "unit": "uF",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.034453",
+   "kind": "Capacitance",
+   "str": "34453 uF",
+   "unit": "uF",
+   "value": "34453"
+  },
+  {
+   "base_value": "0E-9",
+   "kind": "Capacitance",
+   "str": "0 nF",
+   "unit": "nF",
+   "value": "0"
+  },
+  {
+   "base_value": "1E-9",
+   "kind": "Capacitance",
+   "str": "1 nF",
+   "unit": "nF",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3E-9",
+   "kind": "Capacitance",
+   "str": "3.3 nF",
+   "unit": "nF",
+   "value": "3.3"
+  },
+  {
+   "base_value": "1.00E-7",
+   "kind": "Capacitance",
+   "str": "100 nF",
+   "unit": "nF",
+   "value": "100"
+  },
+  {
+   "base_value": "1E-10",
+   "kind": "Capacitance",
+   "str": "0.1 nF",
+   "unit": "nF",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7E-9",
+   "kind": "Capacitance",
+   "str": "4.7 nF",
+   "unit": "nF",
+   "value": "4.7"
+  },
+  {
+   "base_value": "1.0E-8",
+   "kind": "Capacitance",
+   "str": "10 nF",
+   "unit": "nF",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2E-9",
+   "kind": "Capacitance",
+   "str": "2.2 nF",
+   "unit": "nF",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1E-12",
+   "kind": "Capacitance",
+   "str": "0.001 nF",
+   "unit": "nF",
+   "value": "0.001"
+  },
+  {
+   "base_value": "0.000001000",
+   "kind": "Capacitance",
+   "str": "1000 nF",
+   "unit": "nF",
+   "value": "1000"
+  },
+  {
+   "base_value": "4.75E-8",
+   "kind": "Capacitance",
+   "str": "47.5 nF",
+   "unit": "nF",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8E-9",
+   "kind": "Capacitance",
+   "str": "-1.8 nF",
+   "unit": "nF",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00E-9",
+   "kind": "Capacitance",
+   "str": "1 nF",
+   "unit": "nF",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.0000060211",
+   "kind": "Capacitance",
+   "str": "6021.1 nF",
+   "unit": "nF",
+   "value": "6021.1"
+  },
+  {
+   "base_value": "0E-12",
+   "kind": "Capacitance",
+   "str": "0 pF",
+   "unit": "pF",
+   "value": "0"
+  },
+  {
+   "base_value": "1E-12",
+   "kind": "Capacitance",
+   "str": "1 pF",
+   "unit": "pF",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3E-12",
+   "kind": "Capacitance",
+   "str": "3.3 pF",
+   "unit": "pF",
+   "value": "3.3"
+  },
+  {
+   "base_value": "1.00E-10",
+   "kind": "Capacitance",
+   "str": "100 pF",
+   "unit": "pF",
+   "value": "100"
+  },
+  {
+   "base_value": "1E-13",
+   "kind": "Capacitance",
+   "str": "0.1 pF",
+   "unit": "pF",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7E-12",
+   "kind": "Capacitance",
+   "str": "4.7 pF",
+   "unit": "pF",
+   "value": "4.7"
+  },
+  {
+   "base_value": "1.0E-11",
+   "kind": "Capacitance",
+   "str": "10 pF",
+   "unit": "pF",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2E-12",
+   "kind": "Capacitance",
+   "str": "2.2 pF",
+   "unit": "pF",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1E-15",
+   "kind": "Capacitance",
+   "str": "0.001 pF",
+   "unit": "pF",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1.000E-9",
+   "kind": "Capacitance",
+   "str": "1000 pF",
+   "unit": "pF",
+   "value": "1000"
+  },
+  {
+   "base_value": "4.75E-11",
+   "kind": "Capacitance",
+   "str": "47.5 pF",
+   "unit": "pF",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8E-12",
+   "kind": "Capacitance",
+   "str": "-1.8 pF",
+   "unit": "pF",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00E-12",
+   "kind": "Capacitance",
+   "str": "1 pF",
+   "unit": "pF",
+   "value": "1.00"
+  },
+  {
+   "base_value": "7.8178E-9",
+   "kind": "Capacitance",
+   "str": "7817.8 pF",
+   "unit": "pF",
+   "value": "7817.8"
+  },
+  {
+   "base_value": "0",
+   "kind": "Inductance",
+   "str": "0 H",
+   "unit": "H",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Inductance",
+   "str": "1 H",
+   "unit": "H",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Inductance",
+   "str": "3.3 H",
+   "unit": "H",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Inductance",
+   "str": "100 H",
+   "unit": "H",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Inductance",
+   "str": "0.1 H",
+   "unit": "H",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Inductance",
+   "str": "4.7 H",
+   "unit": "H",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Inductance",
+   "str": "10 H",
+   "unit": "H",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Inductance",
+   "str": "2.2 H",
+   "unit": "H",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Inductance",
+   "str": "0.001 H",
+   "unit": "H",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Inductance",
+   "str": "1000 H",
+   "unit": "H",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Inductance",
+   "str": "47.5 H",
+   "unit": "H",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Inductance",
+   "str": "-1.8 H",
+   "unit": "H",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Inductance",
+   "str": "1 H",
+   "unit": "H",
+   "value": "1.00"
+  },
+  {
+   "base_value": "76662",
+   "kind": "Inductance",
+   "str": "76662 H",
+   "unit": "H",
+   "value": "76662"
+  },
+  {
+   "base_value": "0.000",
+   "kind": "Inductance",
+   "str": "0 mH",
+   "unit": "mH",
+   "value": "0"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Inductance",
+   "str": "1 mH",
+   "unit": "mH",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0033",
+   "kind": "Inductance",
+   "str": "3.3 mH",
+   "unit": "mH",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.100",
+   "kind": "Inductance",
+   "str": "100 mH",
+   "unit": "mH",
+   "value": "100"
+  },
+  {
+   "base_value": "0.0001",
+   "kind": "Inductance",
+   "str": "0.1 mH",
+   "unit": "mH",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0047",
+   "kind": "Inductance",
+   "str": "4.7 mH",
+   "unit": "mH",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.010",
+   "kind": "Inductance",
+   "str": "10 mH",
+   "unit": "mH",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0022",
+   "kind": "Inductance",
+   "str": "2.2 mH",
+   "unit": "mH",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Inductance",
+   "str": "0.001 mH",
+   "unit": "mH",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1.000",
+   "kind": "Inductance",
+   "str": "1000 mH",
+   "unit": "mH",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0475",
+   "kind": "Inductance",
+   "str": "47.5 mH",
+   "unit": "mH",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0018",
+   "kind": "Inductance",
+   "str": "-1.8 mH",
+   "unit": "mH",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00100",
+   "kind": "Inductance",
+   "str": "1 mH",
+   "unit": "mH",
+   "value": "1.00"
+  },
+  {
+   "base_value": "76.687",
+   "kind": "Inductance",
+   "str": "76687 mH",
+   "unit": "mH",
+   "value": "76687"
+  },
+  {
+   "base_value": "0.000000",
+   "kind": "Inductance",
+   "str": "0 uH",
+   "unit": "uH",
+   "value": "0"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Inductance",
+   "str": "1 uH",
+   "unit": "uH",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0000033",
+   "kind": "Inductance",
+   "str": "3.3 uH",
+   "unit": "uH",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.000100",
+   "kind": "Inductance",
+   "str": "100 uH",
+   "unit": "uH",
+   "value": "100"
+  },
+  {
+   "base_value": "1E-7",
+   "kind": "Inductance",
+   "str": "0.1 uH",
+   "unit": "uH",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0000047",
+   "kind": "Inductance",
+   "str": "4.7 uH",
+   "unit": "uH",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.000010",
+   "kind": "Inductance",
+   "str": "10 uH",
+   "unit": "uH",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0000022",
+   "kind": "Inductance",
+   "str": "2.2 uH",
+   "unit": "uH",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1E-9",
+   "kind": "Inductance",
+   "str": "0.001 uH",
+   "unit": "uH",
+   "value": "0.001"
+  },
+  {
+   "base_value": "0.001000",
+   "kind": "Inductance",
+   "str": "1000 uH",
+   "unit": "uH",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0000475",
+   "kind": "Inductance",
+   "str": "47.5 uH",
+   "unit": "uH",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0000018",
+   "kind": "Inductance",
+   "str": "-1.8 uH",
+   "unit": "uH",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00000100",
+   "kind": "Inductance",
+   "str": "1 uH",
+   "unit": "uH",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.000027903",
+   "kind": "Inductance",
+   "str": "27.903 uH",
+   "unit": "uH",
+   "value": "27.903"
+  },
+  {
+   "base_value": "0E-9",
+   "kind": "Inductance",
+   "str": "0 nH",
+   "unit": "nH",
+   "value": "0"
+  },
+  {
+   "base_value": "1E-9",
+   "kind": "Inductance",
+   "str": "1 nH",
+   "unit": "nH",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3E-9",
+   "kind": "Inductance",
+   "str": "3.3 nH",
+   "unit": "nH",
+   "value": "3.3"
+  },
+  {
+   "base_value": "1.00E-7",
+   "kind": "Inductance",
+   "str": "100 nH",
+   "unit": "nH",
+   "value": "100"
+  },
+  {
+   "base_value": "1E-10",
+   "kind": "Inductance",
+   "str": "0.1 nH",
+   "unit": "nH",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7E-9",
+   "kind": "Inductance",
+   "str": "4.7 nH",
+   "unit": "nH",
+   "value": "4.7"
+  },
+  {
+   "base_value": "1.0E-8",
+   "kind": "Inductance",
+   "str": "10 nH",
+   "unit": "nH",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2E-9",
+   "kind": "Inductance",
+   "str": "2.2 nH",
+   "unit": "nH",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1E-12",
+   "kind": "Inductance",
+   "str": "0.001 nH",
+   "unit": "nH",
+   "value": "0.001"
+  },
+  {
+   "base_value": "0.000001000",
+   "kind": "Inductance",
+   "str": "1000 nH",
+   "unit": "nH",
+   "value": "1000"
+  },
+  {
+   "base_value": "4.75E-8",
+   "kind": "Inductance",
+   "str": "47.5 nH",
+   "unit": "nH",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8E-9",
+   "kind": "Inductance",
+   "str": "-1.8 nH",
+   "unit": "nH",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00E-9",
+   "kind": "Inductance",
+   "str": "1 nH",
+   "unit": "nH",
+   "value": "1.00"
+  },
+  {
+   "base_value": "5.3382E-7",
+   "kind": "Inductance",
+   "str": "533.82 nH",
+   "unit": "nH",
+   "value": "533.82"
+  },
+  {
+   "base_value": "0",
+   "kind": "Length",
+   "str": "0 m",
+   "unit": "m",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Length",
+   "str": "1 m",
+   "unit": "m",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Length",
+   "str": "3.3 m",
+   "unit": "m",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Length",
+   "str": "100 m",
+   "unit": "m",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Length",
+   "str": "0.1 m",
+   "unit": "m",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Length",
+   "str": "4.7 m",
+   "unit": "m",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Length",
+   "str": "10 m",
+   "unit": "m",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Length",
+   "str": "2.2 m",
+   "unit": "m",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Length",
+   "str": "0.001 m",
+   "unit": "m",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Length",
+   "str": "1000 m",
+   "unit": "m",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Length",
+   "str": "47.5 m",
+   "unit": "m",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Length",
+   "str": "-1.8 m",
+   "unit": "m",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Length",
+   "str": "1 m",
+   "unit": "m",
+   "value": "1.00"
+  },
+  {
+   "base_value": "8965.8",
+   "kind": "Length",
+   "str": "8965.8 m",
+   "unit": "m",
+   "value": "8965.8"
+  },
+  {
+   "base_value": "0.000",
+   "kind": "Length",
+   "str": "0 mm",
+   "unit": "mm",
+   "value": "0"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Length",
+   "str": "1 mm",
+   "unit": "mm",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0033",
+   "kind": "Length",
+   "str": "3.3 mm",
+   "unit": "mm",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.100",
+   "kind": "Length",
+   "str": "100 mm",
+   "unit": "mm",
+   "value": "100"
+  },
+  {
+   "base_value": "0.0001",
+   "kind": "Length",
+   "str": "0.1 mm",
+   "unit": "mm",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0047",
+   "kind": "Length",
+   "str": "4.7 mm",
+   "unit": "mm",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.010",
+   "kind": "Length",
+   "str": "10 mm",
+   "unit": "mm",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0022",
+   "kind": "Length",
+   "str": "2.2 mm",
+   "unit": "mm",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Length",
+   "str": "0.001 mm",
+   "unit": "mm",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1.000",
+   "kind": "Length",
+   "str": "1000 mm",
+   "unit": "mm",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0475",
+   "kind": "Length",
+   "str": "47.5 mm",
+   "unit": "mm",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0018",
+   "kind": "Length",
+   "str": "-1.8 mm",
+   "unit": "mm",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00100",
+   "kind": "Length",
+   "str": "1 mm",
+   "unit": "mm",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.02813",
+   "kind": "Length",
+   "str": "28.13 mm",
+   "unit": "mm",
+   "value": "28.13"
+  },
+  {
+   "base_value": "0.000000",
+   "kind": "Length",
+   "str": "0 um",
+   "unit": "um",
+   "value": "0"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Length",
+   "str": "1 um",
+   "unit": "um",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0000033",
+   "kind": "Length",
+   "str": "3.3 um",
+   "unit": "um",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.000100",
+   "kind": "Length",
+   "str": "100 um",
+   "unit": "um",
+   "value": "100"
+  },
+  {
+   "base_value": "1E-7",
+   "kind": "Length",
+   "str": "0.1 um",
+   "unit": "um",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0000047",
+   "kind": "Length",
+   "str": "4.7 um",
+   "unit": "um",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.000010",
+   "kind": "Length",
+   "str": "10 um",
+   "unit": "um",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0000022",
+   "kind": "Length",
+   "str": "2.2 um",
+   "unit": "um",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1E-9",
+   "kind": "Length",
+   "str": "0.001 um",
+   "unit": "um",
+   "value": "0.001"
+  },
+  {
+   "base_value": "0.001000",
+   "kind": "Length",
+   "str": "1000 um",
+   "unit": "um",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0000475",
+   "kind": "Length",
+   "str": "47.5 um",
+   "unit": "um",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0000018",
+   "kind": "Length",
+   "str": "-1.8 um",
+   "unit": "um",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00000100",
+   "kind": "Length",
+   "str": "1 um",
+   "unit": "um",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.0000011305",
+   "kind": "Length",
+   "str": "1.1305 um",
+   "unit": "um",
+   "value": "1.1305"
+  },
+  {
+   "base_value": "0",
+   "kind": "Current",
+   "str": "0 A",
+   "unit": "A",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Current",
+   "str": "1 A",
+   "unit": "A",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Current",
+   "str": "3.3 A",
+   "unit": "A",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Current",
+   "str": "100 A",
+   "unit": "A",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Current",
+   "str": "0.1 A",
+   "unit": "A",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Current",
+   "str": "4.7 A",
+   "unit": "A",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Current",
+   "str": "10 A",
+   "unit": "A",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Current",
+   "str": "2.2 A",
+   "unit": "A",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Current",
+   "str": "0.001 A",
+   "unit": "A",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Current",
+   "str": "1000 A",
+   "unit": "A",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Current",
+   "str": "47.5 A",
+   "unit": "A",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Current",
+   "str": "-1.8 A",
+   "unit": "A",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Current",
+   "str": "1 A",
+   "unit": "A",
+   "value": "1.00"
+  },
+  {
+   "base_value": "27525",
+   "kind": "Current",
+   "str": "27525 A",
+   "unit": "A",
+   "value": "27525"
+  },
+  {
+   "base_value": "0.000",
+   "kind": "Current",
+   "str": "0 mA",
+   "unit": "mA",
+   "value": "0"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Current",
+   "str": "1 mA",
+   "unit": "mA",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0033",
+   "kind": "Current",
+   "str": "3.3 mA",
+   "unit": "mA",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.100",
+   "kind": "Current",
+   "str": "100 mA",
+   "unit": "mA",
+   "value": "100"
+  },
+  {
+   "base_value": "0.0001",
+   "kind": "Current",
+   "str": "0.1 mA",
+   "unit": "mA",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0047",
+   "kind": "Current",
+   "str": "4.7 mA",
+   "unit": "mA",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.010",
+   "kind": "Current",
+   "str": "10 mA",
+   "unit": "mA",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0022",
+   "kind": "Current",
+   "str": "2.2 mA",
+   "unit": "mA",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Current",
+   "str": "0.001 mA",
+   "unit": "mA",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1.000",
+   "kind": "Current",
+   "str": "1000 mA",
+   "unit": "mA",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0475",
+   "kind": "Current",
+   "str": "47.5 mA",
+   "unit": "mA",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0018",
+   "kind": "Current",
+   "str": "-1.8 mA",
+   "unit": "mA",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00100",
+   "kind": "Current",
+   "str": "1 mA",
+   "unit": "mA",
+   "value": "1.00"
+  },
+  {
+   "base_value": "89.335",
+   "kind": "Current",
+   "str": "89335 mA",
+   "unit": "mA",
+   "value": "89335"
+  },
+  {
+   "base_value": "0.000000",
+   "kind": "Current",
+   "str": "0 uA",
+   "unit": "uA",
+   "value": "0"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Current",
+   "str": "1 uA",
+   "unit": "uA",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0000033",
+   "kind": "Current",
+   "str": "3.3 uA",
+   "unit": "uA",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.000100",
+   "kind": "Current",
+   "str": "100 uA",
+   "unit": "uA",
+   "value": "100"
+  },
+  {
+   "base_value": "1E-7",
+   "kind": "Current",
+   "str": "0.1 uA",
+   "unit": "uA",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0000047",
+   "kind": "Current",
+   "str": "4.7 uA",
+   "unit": "uA",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.000010",
+   "kind": "Current",
+   "str": "10 uA",
+   "unit": "uA",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0000022",
+   "kind": "Current",
+   "str": "2.2 uA",
+   "unit": "uA",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1E-9",
+   "kind": "Current",
+   "str": "0.001 uA",
+   "unit": "uA",
+   "value": "0.001"
+  },
+  {
+   "base_value": "0.001000",
+   "kind": "Current",
+   "str": "1000 uA",
+   "unit": "uA",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0000475",
+   "kind": "Current",
+   "str": "47.5 uA",
+   "unit": "uA",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0000018",
+   "kind": "Current",
+   "str": "-1.8 uA",
+   "unit": "uA",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00000100",
+   "kind": "Current",
+   "str": "1 uA",
+   "unit": "uA",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.000025709",
+   "kind": "Current",
+   "str": "25.709 uA",
+   "unit": "uA",
+   "value": "25.709"
+  },
+  {
+   "base_value": "0",
+   "kind": "Frequency",
+   "str": "0 Hz",
+   "unit": "Hz",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Frequency",
+   "str": "1 Hz",
+   "unit": "Hz",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Frequency",
+   "str": "3.3 Hz",
+   "unit": "Hz",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Frequency",
+   "str": "100 Hz",
+   "unit": "Hz",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Frequency",
+   "str": "0.1 Hz",
+   "unit": "Hz",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Frequency",
+   "str": "4.7 Hz",
+   "unit": "Hz",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Frequency",
+   "str": "10 Hz",
+   "unit": "Hz",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Frequency",
+   "str": "2.2 Hz",
+   "unit": "Hz",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Frequency",
+   "str": "0.001 Hz",
+   "unit": "Hz",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Frequency",
+   "str": "1000 Hz",
+   "unit": "Hz",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Frequency",
+   "str": "47.5 Hz",
+   "unit": "Hz",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Frequency",
+   "str": "-1.8 Hz",
+   "unit": "Hz",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Frequency",
+   "str": "1 Hz",
+   "unit": "Hz",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.7424",
+   "kind": "Frequency",
+   "str": "0.7424 Hz",
+   "unit": "Hz",
+   "value": "0.7424"
+  },
+  {
+   "base_value": "0",
+   "kind": "Frequency",
+   "str": "0 kHz",
+   "unit": "kHz",
+   "value": "0"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Frequency",
+   "str": "1 kHz",
+   "unit": "kHz",
+   "value": "1"
+  },
+  {
+   "base_value": "3300.0",
+   "kind": "Frequency",
+   "str": "3.3 kHz",
+   "unit": "kHz",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100000",
+   "kind": "Frequency",
+   "str": "100 kHz",
+   "unit": "kHz",
+   "value": "100"
+  },
+  {
+   "base_value": "100.0",
+   "kind": "Frequency",
+   "str": "0.1 kHz",
+   "unit": "kHz",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4700.0",
+   "kind": "Frequency",
+   "str": "4.7 kHz",
+   "unit": "kHz",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10000",
+   "kind": "Frequency",
+   "str": "10 kHz",
+   "unit": "kHz",
+   "value": "10"
+  },
+  {
+   "base_value": "2200.0",
+   "kind": "Frequency",
+   "str": "2.2 kHz",
+   "unit": "kHz",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1.000",
+   "kind": "Frequency",
+   "str": "0.001 kHz",
+   "unit": "kHz",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000000",
+   "kind": "Frequency",
+   "str": "1000 kHz",
+   "unit": "kHz",
+   "value": "1000"
+  },
+  {
+   "base_value": "47500.0",
+   "kind": "Frequency",
+   "str": "47.5 kHz",
+   "unit": "kHz",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1800.0",
+   "kind": "Frequency",
+   "str": "-1.8 kHz",
+   "unit": "kHz",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1000.00",
+   "kind": "Frequency",
+   "str": "1 kHz",
+   "unit": "kHz",
+   "value": "1.00"
+  },
+  {
+   "base_value": "4544500.0",
+   "kind": "Frequency",
+   "str": "4544.5 kHz",
+   "unit": "kHz",
+   "value": "4544.5"
+  },
+  {
+   "base_value": "0",
+   "kind": "Frequency",
+   "str": "0 MHz",
+   "unit": "MHz",
+   "value": "0"
+  },
+  {
+   "base_value": "1000000",
+   "kind": "Frequency",
+   "str": "1 MHz",
+   "unit": "MHz",
+   "value": "1"
+  },
+  {
+   "base_value": "3300000.0",
+   "kind": "Frequency",
+   "str": "3.3 MHz",
+   "unit": "MHz",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100000000",
+   "kind": "Frequency",
+   "str": "100 MHz",
+   "unit": "MHz",
+   "value": "100"
+  },
+  {
+   "base_value": "100000.0",
+   "kind": "Frequency",
+   "str": "0.1 MHz",
+   "unit": "MHz",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4700000.0",
+   "kind": "Frequency",
+   "str": "4.7 MHz",
+   "unit": "MHz",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10000000",
+   "kind": "Frequency",
+   "str": "10 MHz",
+   "unit": "MHz",
+   "value": "10"
+  },
+  {
+   "base_value": "2200000.0",
+   "kind": "Frequency",
+   "str": "2.2 MHz",
+   "unit": "MHz",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1000.000",
+   "kind": "Frequency",
+   "str": "0.001 MHz",
+   "unit": "MHz",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000000000",
+   "kind": "Frequency",
+   "str": "1000 MHz",
+   "unit": "MHz",
+   "value": "1000"
+  },
+  {
+   "base_value": "47500000.0",
+   "kind": "Frequency",
+   "str": "47.5 MHz",
+   "unit": "MHz",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1800000.0",
+   "kind": "Frequency",
+   "str": "-1.8 MHz",
+   "unit": "MHz",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1000000.00",
+   "kind": "Frequency",
+   "str": "1 MHz",
+   "unit": "MHz",
+   "value": "1.00"
+  },
+  {
+   "base_value": "2040600000.0",
+   "kind": "Frequency",
+   "str": "2040.6 MHz",
+   "unit": "MHz",
+   "value": "2040.6"
+  },
+  {
+   "base_value": "0",
+   "kind": "Frequency",
+   "str": "0 GHz",
+   "unit": "GHz",
+   "value": "0"
+  },
+  {
+   "base_value": "1000000000",
+   "kind": "Frequency",
+   "str": "1 GHz",
+   "unit": "GHz",
+   "value": "1"
+  },
+  {
+   "base_value": "3300000000.0",
+   "kind": "Frequency",
+   "str": "3.3 GHz",
+   "unit": "GHz",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100000000000",
+   "kind": "Frequency",
+   "str": "100 GHz",
+   "unit": "GHz",
+   "value": "100"
+  },
+  {
+   "base_value": "100000000.0",
+   "kind": "Frequency",
+   "str": "0.1 GHz",
+   "unit": "GHz",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4700000000.0",
+   "kind": "Frequency",
+   "str": "4.7 GHz",
+   "unit": "GHz",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10000000000",
+   "kind": "Frequency",
+   "str": "10 GHz",
+   "unit": "GHz",
+   "value": "10"
+  },
+  {
+   "base_value": "2200000000.0",
+   "kind": "Frequency",
+   "str": "2.2 GHz",
+   "unit": "GHz",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1000000.000",
+   "kind": "Frequency",
+   "str": "0.001 GHz",
+   "unit": "GHz",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000000000000",
+   "kind": "Frequency",
+   "str": "1000 GHz",
+   "unit": "GHz",
+   "value": "1000"
+  },
+  {
+   "base_value": "47500000000.0",
+   "kind": "Frequency",
+   "str": "47.5 GHz",
+   "unit": "GHz",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1800000000.0",
+   "kind": "Frequency",
+   "str": "-1.8 GHz",
+   "unit": "GHz",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1000000000.00",
+   "kind": "Frequency",
+   "str": "1 GHz",
+   "unit": "GHz",
+   "value": "1.00"
+  },
+  {
+   "base_value": "96655000000.000",
+   "kind": "Frequency",
+   "str": "96.655 GHz",
+   "unit": "GHz",
+   "value": "96.655"
+  },
+  {
+   "base_value": "0",
+   "kind": "Impedance",
+   "str": "0 ohm",
+   "unit": "ohm",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Impedance",
+   "str": "1 ohm",
+   "unit": "ohm",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Impedance",
+   "str": "3.3 ohm",
+   "unit": "ohm",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Impedance",
+   "str": "100 ohm",
+   "unit": "ohm",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Impedance",
+   "str": "0.1 ohm",
+   "unit": "ohm",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Impedance",
+   "str": "4.7 ohm",
+   "unit": "ohm",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Impedance",
+   "str": "10 ohm",
+   "unit": "ohm",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Impedance",
+   "str": "2.2 ohm",
+   "unit": "ohm",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Impedance",
+   "str": "0.001 ohm",
+   "unit": "ohm",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Impedance",
+   "str": "1000 ohm",
+   "unit": "ohm",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Impedance",
+   "str": "47.5 ohm",
+   "unit": "ohm",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Impedance",
+   "str": "-1.8 ohm",
+   "unit": "ohm",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Impedance",
+   "str": "1 ohm",
+   "unit": "ohm",
+   "value": "1.00"
+  },
+  {
+   "base_value": "9320.6",
+   "kind": "Impedance",
+   "str": "9320.6 ohm",
+   "unit": "ohm",
+   "value": "9320.6"
+  },
+  {
+   "base_value": "0",
+   "kind": "Impedance",
+   "str": "0 kohm",
+   "unit": "kohm",
+   "value": "0"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Impedance",
+   "str": "1 kohm",
+   "unit": "kohm",
+   "value": "1"
+  },
+  {
+   "base_value": "3300.0",
+   "kind": "Impedance",
+   "str": "3.3 kohm",
+   "unit": "kohm",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100000",
+   "kind": "Impedance",
+   "str": "100 kohm",
+   "unit": "kohm",
+   "value": "100"
+  },
+  {
+   "base_value": "100.0",
+   "kind": "Impedance",
+   "str": "0.1 kohm",
+   "unit": "kohm",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4700.0",
+   "kind": "Impedance",
+   "str": "4.7 kohm",
+   "unit": "kohm",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10000",
+   "kind": "Impedance",
+   "str": "10 kohm",
+   "unit": "kohm",
+   "value": "10"
+  },
+  {
+   "base_value": "2200.0",
+   "kind": "Impedance",
+   "str": "2.2 kohm",
+   "unit": "kohm",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1.000",
+   "kind": "Impedance",
+   "str": "0.001 kohm",
+   "unit": "kohm",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000000",
+   "kind": "Impedance",
+   "str": "1000 kohm",
+   "unit": "kohm",
+   "value": "1000"
+  },
+  {
+   "base_value": "47500.0",
+   "kind": "Impedance",
+   "str": "47.5 kohm",
+   "unit": "kohm",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1800.0",
+   "kind": "Impedance",
+   "str": "-1.8 kohm",
+   "unit": "kohm",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1000.00",
+   "kind": "Impedance",
+   "str": "1 kohm",
+   "unit": "kohm",
+   "value": "1.00"
+  },
+  {
+   "base_value": "32363.000",
+   "kind": "Impedance",
+   "str": "32.363 kohm",
+   "unit": "kohm",
+   "value": "32.363"
+  },
+  {
+   "base_value": "0",
+   "kind": "Impedance",
+   "str": "0 Mohm",
+   "unit": "Mohm",
+   "value": "0"
+  },
+  {
+   "base_value": "1000000",
+   "kind": "Impedance",
+   "str": "1 Mohm",
+   "unit": "Mohm",
+   "value": "1"
+  },
+  {
+   "base_value": "3300000.0",
+   "kind": "Impedance",
+   "str": "3.3 Mohm",
+   "unit": "Mohm",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100000000",
+   "kind": "Impedance",
+   "str": "100 Mohm",
+   "unit": "Mohm",
+   "value": "100"
+  },
+  {
+   "base_value": "100000.0",
+   "kind": "Impedance",
+   "str": "0.1 Mohm",
+   "unit": "Mohm",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4700000.0",
+   "kind": "Impedance",
+   "str": "4.7 Mohm",
+   "unit": "Mohm",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10000000",
+   "kind": "Impedance",
+   "str": "10 Mohm",
+   "unit": "Mohm",
+   "value": "10"
+  },
+  {
+   "base_value": "2200000.0",
+   "kind": "Impedance",
+   "str": "2.2 Mohm",
+   "unit": "Mohm",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1000.000",
+   "kind": "Impedance",
+   "str": "0.001 Mohm",
+   "unit": "Mohm",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000000000",
+   "kind": "Impedance",
+   "str": "1000 Mohm",
+   "unit": "Mohm",
+   "value": "1000"
+  },
+  {
+   "base_value": "47500000.0",
+   "kind": "Impedance",
+   "str": "47.5 Mohm",
+   "unit": "Mohm",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1800000.0",
+   "kind": "Impedance",
+   "str": "-1.8 Mohm",
+   "unit": "Mohm",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1000000.00",
+   "kind": "Impedance",
+   "str": "1 Mohm",
+   "unit": "Mohm",
+   "value": "1.00"
+  },
+  {
+   "base_value": "2251800000.0",
+   "kind": "Impedance",
+   "str": "2251.8 Mohm",
+   "unit": "Mohm",
+   "value": "2251.8"
+  },
+  {
+   "base_value": "0",
+   "kind": "Time",
+   "str": "0 s",
+   "unit": "s",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Time",
+   "str": "1 s",
+   "unit": "s",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Time",
+   "str": "3.3 s",
+   "unit": "s",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Time",
+   "str": "100 s",
+   "unit": "s",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Time",
+   "str": "0.1 s",
+   "unit": "s",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Time",
+   "str": "4.7 s",
+   "unit": "s",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Time",
+   "str": "10 s",
+   "unit": "s",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Time",
+   "str": "2.2 s",
+   "unit": "s",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Time",
+   "str": "0.001 s",
+   "unit": "s",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Time",
+   "str": "1000 s",
+   "unit": "s",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Time",
+   "str": "47.5 s",
+   "unit": "s",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Time",
+   "str": "-1.8 s",
+   "unit": "s",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Time",
+   "str": "1 s",
+   "unit": "s",
+   "value": "1.00"
+  },
+  {
+   "base_value": "38.213",
+   "kind": "Time",
+   "str": "38.213 s",
+   "unit": "s",
+   "value": "38.213"
+  },
+  {
+   "base_value": "0.000",
+   "kind": "Time",
+   "str": "0 ms",
+   "unit": "ms",
+   "value": "0"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Time",
+   "str": "1 ms",
+   "unit": "ms",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0033",
+   "kind": "Time",
+   "str": "3.3 ms",
+   "unit": "ms",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.100",
+   "kind": "Time",
+   "str": "100 ms",
+   "unit": "ms",
+   "value": "100"
+  },
+  {
+   "base_value": "0.0001",
+   "kind": "Time",
+   "str": "0.1 ms",
+   "unit": "ms",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0047",
+   "kind": "Time",
+   "str": "4.7 ms",
+   "unit": "ms",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.010",
+   "kind": "Time",
+   "str": "10 ms",
+   "unit": "ms",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0022",
+   "kind": "Time",
+   "str": "2.2 ms",
+   "unit": "ms",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Time",
+   "str": "0.001 ms",
+   "unit": "ms",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1.000",
+   "kind": "Time",
+   "str": "1000 ms",
+   "unit": "ms",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0475",
+   "kind": "Time",
+   "str": "47.5 ms",
+   "unit": "ms",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0018",
+   "kind": "Time",
+   "str": "-1.8 ms",
+   "unit": "ms",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00100",
+   "kind": "Time",
+   "str": "1 ms",
+   "unit": "ms",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.082941",
+   "kind": "Time",
+   "str": "82.941 ms",
+   "unit": "ms",
+   "value": "82.941"
+  },
+  {
+   "base_value": "0.000000",
+   "kind": "Time",
+   "str": "0 us",
+   "unit": "us",
+   "value": "0"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Time",
+   "str": "1 us",
+   "unit": "us",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0000033",
+   "kind": "Time",
+   "str": "3.3 us",
+   "unit": "us",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.000100",
+   "kind": "Time",
+   "str": "100 us",
+   "unit": "us",
+   "value": "100"
+  },
+  {
+   "base_value": "1E-7",
+   "kind": "Time",
+   "str": "0.1 us",
+   "unit": "us",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0000047",
+   "kind": "Time",
+   "str": "4.7 us",
+   "unit": "us",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.000010",
+   "kind": "Time",
+   "str": "10 us",
+   "unit": "us",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0000022",
+   "kind": "Time",
+   "str": "2.2 us",
+   "unit": "us",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1E-9",
+   "kind": "Time",
+   "str": "0.001 us",
+   "unit": "us",
+   "value": "0.001"
+  },
+  {
+   "base_value": "0.001000",
+   "kind": "Time",
+   "str": "1000 us",
+   "unit": "us",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0000475",
+   "kind": "Time",
+   "str": "47.5 us",
+   "unit": "us",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0000018",
+   "kind": "Time",
+   "str": "-1.8 us",
+   "unit": "us",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00000100",
+   "kind": "Time",
+   "str": "1 us",
+   "unit": "us",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.00040176",
+   "kind": "Time",
+   "str": "401.76 us",
+   "unit": "us",
+   "value": "401.76"
+  },
+  {
+   "base_value": "0E-9",
+   "kind": "Time",
+   "str": "0 ns",
+   "unit": "ns",
+   "value": "0"
+  },
+  {
+   "base_value": "1E-9",
+   "kind": "Time",
+   "str": "1 ns",
+   "unit": "ns",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3E-9",
+   "kind": "Time",
+   "str": "3.3 ns",
+   "unit": "ns",
+   "value": "3.3"
+  },
+  {
+   "base_value": "1.00E-7",
+   "kind": "Time",
+   "str": "100 ns",
+   "unit": "ns",
+   "value": "100"
+  },
+  {
+   "base_value": "1E-10",
+   "kind": "Time",
+   "str": "0.1 ns",
+   "unit": "ns",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7E-9",
+   "kind": "Time",
+   "str": "4.7 ns",
+   "unit": "ns",
+   "value": "4.7"
+  },
+  {
+   "base_value": "1.0E-8",
+   "kind": "Time",
+   "str": "10 ns",
+   "unit": "ns",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2E-9",
+   "kind": "Time",
+   "str": "2.2 ns",
+   "unit": "ns",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1E-12",
+   "kind": "Time",
+   "str": "0.001 ns",
+   "unit": "ns",
+   "value": "0.001"
+  },
+  {
+   "base_value": "0.000001000",
+   "kind": "Time",
+   "str": "1000 ns",
+   "unit": "ns",
+   "value": "1000"
+  },
+  {
+   "base_value": "4.75E-8",
+   "kind": "Time",
+   "str": "47.5 ns",
+   "unit": "ns",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8E-9",
+   "kind": "Time",
+   "str": "-1.8 ns",
+   "unit": "ns",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00E-9",
+   "kind": "Time",
+   "str": "1 ns",
+   "unit": "ns",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.0000021313",
+   "kind": "Time",
+   "str": "2131.3 ns",
+   "unit": "ns",
+   "value": "2131.3"
+  },
+  {
+   "base_value": "0",
+   "kind": "Power",
+   "str": "0 W",
+   "unit": "W",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Power",
+   "str": "1 W",
+   "unit": "W",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Power",
+   "str": "3.3 W",
+   "unit": "W",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Power",
+   "str": "100 W",
+   "unit": "W",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Power",
+   "str": "0.1 W",
+   "unit": "W",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Power",
+   "str": "4.7 W",
+   "unit": "W",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Power",
+   "str": "10 W",
+   "unit": "W",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Power",
+   "str": "2.2 W",
+   "unit": "W",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Power",
+   "str": "0.001 W",
+   "unit": "W",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Power",
+   "str": "1000 W",
+   "unit": "W",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Power",
+   "str": "47.5 W",
+   "unit": "W",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Power",
+   "str": "-1.8 W",
+   "unit": "W",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Power",
+   "str": "1 W",
+   "unit": "W",
+   "value": "1.00"
+  },
+  {
+   "base_value": "43547",
+   "kind": "Power",
+   "str": "43547 W",
+   "unit": "W",
+   "value": "43547"
+  },
+  {
+   "base_value": "0.000",
+   "kind": "Power",
+   "str": "0 mW",
+   "unit": "mW",
+   "value": "0"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Power",
+   "str": "1 mW",
+   "unit": "mW",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0033",
+   "kind": "Power",
+   "str": "3.3 mW",
+   "unit": "mW",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.100",
+   "kind": "Power",
+   "str": "100 mW",
+   "unit": "mW",
+   "value": "100"
+  },
+  {
+   "base_value": "0.0001",
+   "kind": "Power",
+   "str": "0.1 mW",
+   "unit": "mW",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0047",
+   "kind": "Power",
+   "str": "4.7 mW",
+   "unit": "mW",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.010",
+   "kind": "Power",
+   "str": "10 mW",
+   "unit": "mW",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0022",
+   "kind": "Power",
+   "str": "2.2 mW",
+   "unit": "mW",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Power",
+   "str": "0.001 mW",
+   "unit": "mW",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1.000",
+   "kind": "Power",
+   "str": "1000 mW",
+   "unit": "mW",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0475",
+   "kind": "Power",
+   "str": "47.5 mW",
+   "unit": "mW",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0018",
+   "kind": "Power",
+   "str": "-1.8 mW",
+   "unit": "mW",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00100",
+   "kind": "Power",
+   "str": "1 mW",
+   "unit": "mW",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.044005",
+   "kind": "Power",
+   "str": "44.005 mW",
+   "unit": "mW",
+   "value": "44.005"
+  },
+  {
+   "base_value": "0",
+   "kind": "Energy",
+   "str": "0 J",
+   "unit": "J",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Energy",
+   "str": "1 J",
+   "unit": "J",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Energy",
+   "str": "3.3 J",
+   "unit": "J",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Energy",
+   "str": "100 J",
+   "unit": "J",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Energy",
+   "str": "0.1 J",
+   "unit": "J",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Energy",
+   "str": "4.7 J",
+   "unit": "J",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Energy",
+   "str": "10 J",
+   "unit": "J",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Energy",
+   "str": "2.2 J",
+   "unit": "J",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Energy",
+   "str": "0.001 J",
+   "unit": "J",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Energy",
+   "str": "1000 J",
+   "unit": "J",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Energy",
+   "str": "47.5 J",
+   "unit": "J",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Energy",
+   "str": "-1.8 J",
+   "unit": "J",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Energy",
+   "str": "1 J",
+   "unit": "J",
+   "value": "1.00"
+  },
+  {
+   "base_value": "98.316",
+   "kind": "Energy",
+   "str": "98.316 J",
+   "unit": "J",
+   "value": "98.316"
+  },
+  {
+   "base_value": "0.000",
+   "kind": "Energy",
+   "str": "0 mJ",
+   "unit": "mJ",
+   "value": "0"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Energy",
+   "str": "1 mJ",
+   "unit": "mJ",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0033",
+   "kind": "Energy",
+   "str": "3.3 mJ",
+   "unit": "mJ",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.100",
+   "kind": "Energy",
+   "str": "100 mJ",
+   "unit": "mJ",
+   "value": "100"
+  },
+  {
+   "base_value": "0.0001",
+   "kind": "Energy",
+   "str": "0.1 mJ",
+   "unit": "mJ",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0047",
+   "kind": "Energy",
+   "str": "4.7 mJ",
+   "unit": "mJ",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.010",
+   "kind": "Energy",
+   "str": "10 mJ",
+   "unit": "mJ",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0022",
+   "kind": "Energy",
+   "str": "2.2 mJ",
+   "unit": "mJ",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Energy",
+   "str": "0.001 mJ",
+   "unit": "mJ",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1.000",
+   "kind": "Energy",
+   "str": "1000 mJ",
+   "unit": "mJ",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0475",
+   "kind": "Energy",
+   "str": "47.5 mJ",
+   "unit": "mJ",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0018",
+   "kind": "Energy",
+   "str": "-1.8 mJ",
+   "unit": "mJ",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00100",
+   "kind": "Energy",
+   "str": "1 mJ",
+   "unit": "mJ",
+   "value": "1.00"
+  },
+  {
+   "base_value": "98.241",
+   "kind": "Energy",
+   "str": "98241 mJ",
+   "unit": "mJ",
+   "value": "98241"
+  },
+  {
+   "base_value": "0.000000",
+   "kind": "Energy",
+   "str": "0 uJ",
+   "unit": "uJ",
+   "value": "0"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Energy",
+   "str": "1 uJ",
+   "unit": "uJ",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0000033",
+   "kind": "Energy",
+   "str": "3.3 uJ",
+   "unit": "uJ",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.000100",
+   "kind": "Energy",
+   "str": "100 uJ",
+   "unit": "uJ",
+   "value": "100"
+  },
+  {
+   "base_value": "1E-7",
+   "kind": "Energy",
+   "str": "0.1 uJ",
+   "unit": "uJ",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0000047",
+   "kind": "Energy",
+   "str": "4.7 uJ",
+   "unit": "uJ",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.000010",
+   "kind": "Energy",
+   "str": "10 uJ",
+   "unit": "uJ",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0000022",
+   "kind": "Energy",
+   "str": "2.2 uJ",
+   "unit": "uJ",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1E-9",
+   "kind": "Energy",
+   "str": "0.001 uJ",
+   "unit": "uJ",
+   "value": "0.001"
+  },
+  {
+   "base_value": "0.001000",
+   "kind": "Energy",
+   "str": "1000 uJ",
+   "unit": "uJ",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0000475",
+   "kind": "Energy",
+   "str": "47.5 uJ",
+   "unit": "uJ",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0000018",
+   "kind": "Energy",
+   "str": "-1.8 uJ",
+   "unit": "uJ",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00000100",
+   "kind": "Energy",
+   "str": "1 uJ",
+   "unit": "uJ",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.000009042",
+   "kind": "Energy",
+   "str": "9.042 uJ",
+   "unit": "uJ",
+   "value": "9.042"
+  },
+  {
+   "base_value": "0",
+   "kind": "Charge",
+   "str": "0 C",
+   "unit": "C",
+   "value": "0"
+  },
+  {
+   "base_value": "1",
+   "kind": "Charge",
+   "str": "1 C",
+   "unit": "C",
+   "value": "1"
+  },
+  {
+   "base_value": "3.3",
+   "kind": "Charge",
+   "str": "3.3 C",
+   "unit": "C",
+   "value": "3.3"
+  },
+  {
+   "base_value": "100",
+   "kind": "Charge",
+   "str": "100 C",
+   "unit": "C",
+   "value": "100"
+  },
+  {
+   "base_value": "0.1",
+   "kind": "Charge",
+   "str": "0.1 C",
+   "unit": "C",
+   "value": "0.1"
+  },
+  {
+   "base_value": "4.7",
+   "kind": "Charge",
+   "str": "4.7 C",
+   "unit": "C",
+   "value": "4.7"
+  },
+  {
+   "base_value": "10",
+   "kind": "Charge",
+   "str": "10 C",
+   "unit": "C",
+   "value": "10"
+  },
+  {
+   "base_value": "2.2",
+   "kind": "Charge",
+   "str": "2.2 C",
+   "unit": "C",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Charge",
+   "str": "0.001 C",
+   "unit": "C",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1000",
+   "kind": "Charge",
+   "str": "1000 C",
+   "unit": "C",
+   "value": "1000"
+  },
+  {
+   "base_value": "47.5",
+   "kind": "Charge",
+   "str": "47.5 C",
+   "unit": "C",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-1.8",
+   "kind": "Charge",
+   "str": "-1.8 C",
+   "unit": "C",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "1.00",
+   "kind": "Charge",
+   "str": "1 C",
+   "unit": "C",
+   "value": "1.00"
+  },
+  {
+   "base_value": "6.5706",
+   "kind": "Charge",
+   "str": "6.5706 C",
+   "unit": "C",
+   "value": "6.5706"
+  },
+  {
+   "base_value": "0.000",
+   "kind": "Charge",
+   "str": "0 mC",
+   "unit": "mC",
+   "value": "0"
+  },
+  {
+   "base_value": "0.001",
+   "kind": "Charge",
+   "str": "1 mC",
+   "unit": "mC",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0033",
+   "kind": "Charge",
+   "str": "3.3 mC",
+   "unit": "mC",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.100",
+   "kind": "Charge",
+   "str": "100 mC",
+   "unit": "mC",
+   "value": "100"
+  },
+  {
+   "base_value": "0.0001",
+   "kind": "Charge",
+   "str": "0.1 mC",
+   "unit": "mC",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0047",
+   "kind": "Charge",
+   "str": "4.7 mC",
+   "unit": "mC",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.010",
+   "kind": "Charge",
+   "str": "10 mC",
+   "unit": "mC",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0022",
+   "kind": "Charge",
+   "str": "2.2 mC",
+   "unit": "mC",
+   "value": "2.2"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Charge",
+   "str": "0.001 mC",
+   "unit": "mC",
+   "value": "0.001"
+  },
+  {
+   "base_value": "1.000",
+   "kind": "Charge",
+   "str": "1000 mC",
+   "unit": "mC",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0475",
+   "kind": "Charge",
+   "str": "47.5 mC",
+   "unit": "mC",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0018",
+   "kind": "Charge",
+   "str": "-1.8 mC",
+   "unit": "mC",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00100",
+   "kind": "Charge",
+   "str": "1 mC",
+   "unit": "mC",
+   "value": "1.00"
+  },
+  {
+   "base_value": "4.002",
+   "kind": "Charge",
+   "str": "4002 mC",
+   "unit": "mC",
+   "value": "4002"
+  },
+  {
+   "base_value": "0.000000",
+   "kind": "Charge",
+   "str": "0 uC",
+   "unit": "uC",
+   "value": "0"
+  },
+  {
+   "base_value": "0.000001",
+   "kind": "Charge",
+   "str": "1 uC",
+   "unit": "uC",
+   "value": "1"
+  },
+  {
+   "base_value": "0.0000033",
+   "kind": "Charge",
+   "str": "3.3 uC",
+   "unit": "uC",
+   "value": "3.3"
+  },
+  {
+   "base_value": "0.000100",
+   "kind": "Charge",
+   "str": "100 uC",
+   "unit": "uC",
+   "value": "100"
+  },
+  {
+   "base_value": "1E-7",
+   "kind": "Charge",
+   "str": "0.1 uC",
+   "unit": "uC",
+   "value": "0.1"
+  },
+  {
+   "base_value": "0.0000047",
+   "kind": "Charge",
+   "str": "4.7 uC",
+   "unit": "uC",
+   "value": "4.7"
+  },
+  {
+   "base_value": "0.000010",
+   "kind": "Charge",
+   "str": "10 uC",
+   "unit": "uC",
+   "value": "10"
+  },
+  {
+   "base_value": "0.0000022",
+   "kind": "Charge",
+   "str": "2.2 uC",
+   "unit": "uC",
+   "value": "2.2"
+  },
+  {
+   "base_value": "1E-9",
+   "kind": "Charge",
+   "str": "0.001 uC",
+   "unit": "uC",
+   "value": "0.001"
+  },
+  {
+   "base_value": "0.001000",
+   "kind": "Charge",
+   "str": "1000 uC",
+   "unit": "uC",
+   "value": "1000"
+  },
+  {
+   "base_value": "0.0000475",
+   "kind": "Charge",
+   "str": "47.5 uC",
+   "unit": "uC",
+   "value": "47.5"
+  },
+  {
+   "base_value": "-0.0000018",
+   "kind": "Charge",
+   "str": "-1.8 uC",
+   "unit": "uC",
+   "value": "-1.8"
+  },
+  {
+   "base_value": "0.00000100",
+   "kind": "Charge",
+   "str": "1 uC",
+   "unit": "uC",
+   "value": "1.00"
+  },
+  {
+   "base_value": "0.007050",
+   "kind": "Charge",
+   "str": "7050 uC",
+   "unit": "uC",
+   "value": "7050"
+  }
+ ],
+ "schema": "copperscript.rust-fixture/v1"
+}

@@ -19,6 +19,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Investigate blocked package exits | [Required reference-layout comparison](component-integration-guidelines.md#package-escape-faults-reference-comparison-is-required) |
 | Profile or compare routing | [Routing performance](routing-performance.md) |
 | Plan the Rust rewrite | [Rust rewrite plan](rust-port-plan.md) |
+| Build, test or compare the Rust rewrite | [Rust workspace](../crates/README.md), [recorded differences](rust-port-differences.md) |
 | Add components or reusable circuits | [Integration guidelines](component-integration-guidelines.md) |
 | Author or bind physical macros | [Physical hard macros](physical-hard-macros.md); [definition syntax](macro-definitions.md); [binding syntax](physical-macro-syntax-plan.md); [definition requirements](macro-definition-plan.md) |
 | Edit mechanics or floorplan | [Mechanical editor](mechanical-editor.md) |
