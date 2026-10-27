@@ -1,6 +1,6 @@
 # Rust rewrite plan
 
-Status: revised 2026-10-27 after owner decisions (section 8); M0 implemented
+Status: revised 2026-10-27 after owner decisions (section 8); M0 accepted
 (section 10). Owner: andenore.
 This plan does not change routing, placement or language behaviour on the
 Python side; algorithm work there still follows the
@@ -274,11 +274,10 @@ do not shrink as much.
 
 ## 9. Next steps
 
-1. Accept M0 once the Rust workflow is green on Linux and Windows.
-2. Consumer PRs under section 3, starting with CopperLib (largest count) and
+1. Consumer PRs under section 3, starting with CopperLib (largest count) and
    CopperBench (all deletable); confirm each repository's dispositions with
    its owner before deleting.
-3. M1: the frontend, measured by `check` and `compile` on the whole corpus.
+2. M1: the frontend, measured by `check` and `compile` on the whole corpus.
    Settle open item 1 below first.
 
 ### Open items
@@ -295,7 +294,8 @@ do not shrink as much.
 
 ## 10. Status
 
-**M0 (2026-10-27): implemented, Linux verified, Windows pending CI.**
+**M0 (2026-10-27): accepted.** Rust workflow run 40472862859 passed on
+`ubuntu-24.04` and `windows-latest` at commit e8ce9b3.
 
 - Workspace: `Cargo.toml`, `rust-toolchain.toml` (1.97.0), `crates/` with
   `copper-json`, `copper-units`, `copper-state` and the `copper` binary; see
@@ -307,7 +307,8 @@ do not shrink as much.
   physicalized example boards and one value using every tag) round-trip
   byte for byte.
 - Harness and corpus: 111 cases in 8 suites (M0 18, M1 64, M2 11, M3 11,
-  ladder 7). On Linux all 18 gated M0 cases are byte-identical.
+  ladder 7). All 18 gated M0 cases are byte-identical on Linux and Windows,
+  including Windows path text and CRLF output.
 - [Differences log](rust-port-differences.md): empty.
 - CI: `.github/workflows/rust.yml` runs format, clippy, tests, the fixture
   check and the gated comparison on `ubuntu-24.04` and `windows-latest`, and
