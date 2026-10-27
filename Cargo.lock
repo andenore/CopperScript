@@ -57,6 +57,7 @@ dependencies = [
  "num-bigint",
  "num-rational",
  "num-traits",
+ "sha2",
 ]
 
 [[package]]
@@ -123,6 +124,7 @@ dependencies = [
  "copper-physical",
  "copper-units",
  "indexmap",
+ "sha2",
 ]
 
 [[package]]
