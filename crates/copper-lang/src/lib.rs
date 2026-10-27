@@ -12,6 +12,7 @@ pub mod elaborate;
 pub mod erc;
 mod error;
 pub mod footprints;
+pub mod kicad_schematic;
 mod lexer;
 pub mod library;
 pub mod library_context;
