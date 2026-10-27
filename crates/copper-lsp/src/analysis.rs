@@ -550,7 +550,8 @@ impl Sources {
 /// The editor's view of one root source and its imports.
 pub struct Analysis {
     sources: Sources,
-    uris: IndexMap<PathKey, String>,
+    /// The client's spellings of opened documents, for replies.
+    pub uris: IndexMap<PathKey, String>,
     units: Vec<Unit>,
     unit_keys: IndexMap<(PathKey, String), usize>,
     exports: IndexMap<String, Vec<SymbolRef>>,
@@ -1660,12 +1661,7 @@ impl Workspace {
     }
 }
 
-/// `Workspace.analysis(uri)` over a snapshot of open documents.
-pub fn analyse(uri: &Value, sources: Sources, uris: IndexMap<PathKey, String>) -> PyResult<Analysis> {
-    let path = path_from_uri(uri)?;
-    analyse_path(&path, sources, uris)
-}
-
+/// `Workspace.analysis` of a resolved path over a snapshot of open documents.
 pub fn analyse_path(path: &Path, sources: Sources, uris: IndexMap<PathKey, String>) -> PyResult<Analysis> {
     sources.root(path)?;
     Analysis::new(path, sources, uris)

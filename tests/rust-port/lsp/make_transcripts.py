@@ -387,6 +387,41 @@ def physical_macros():
     s.write("macros.jsonl")
 
 
+def macro_assets():
+    board = "tests/rust-port/export-kicad-pcb/macros/contracts.copper"
+    uri = "{root_uri}/" + board
+    text = (ROOT / board).read_text(encoding="utf-8")
+    s = Session("JSON macro assets: alias navigation, contract roles and binding diagnostics; slash-scoped members.")
+    s.start()
+    s.open(uri, text)
+    s.symbols(uri)
+    for needle, advance in (("SET: layout", 7), ("import layout", 9), ("member chip", 8), ("= U1", 3),
+                            ("net sig", 5), ("= SIG", 3)):
+        s.at("hover", uri, position(text, needle, advance))
+        s.at("definition", uri, position(text, needle, advance))
+    blank = text.replace("        net gnd = GND;", "        net gnd = GND;\n        member \n        net \n        member x = ")
+    s.change(uri, 2, [{"text": blank}])
+    for needle, advance in (("member \n", 7), ("net \n", 4), ("member x = ", 11), ("member ch", 9)):
+        s.at("completion", uri, position(blank, needle, advance))
+    unbound = text.replace("        member cap = C1;\n", "")
+    s.change(uri, 3, [{"text": unbound}])
+    renamed = text.replace('"./assets/contracts.json"', '"./assets/missing.json"')
+    s.change(uri, 4, [{"text": renamed}])
+    s.at("definition", uri, position(renamed, "SET: layout", 7))
+    absolute = text.replace('"./assets/contracts.json"', '"/abs/contracts.json"')
+    s.change(uri, 5, [{"text": absolute}])
+    scoped = "examples/tps62130a_macro/board.copper"
+    scoped_uri = "{root_uri}/" + scoped
+    scoped_text = (ROOT / scoped).read_text(encoding="utf-8")
+    s.open(scoped_uri, scoped_text, published=2)
+    for needle, advance in (("B/C_AVIN", 3), ("B/C_AVIN", 0), ("= R_BOT", 3), ("B/SS", 2), ("net VIN = VIN", 11),
+                            ("buck_layout.TPS62130A", 14)):
+        s.at("hover", scoped_uri, position(scoped_text, needle, advance))
+        s.at("definition", scoped_uri, position(scoped_text, needle, advance))
+    s.stop()
+    s.write("macro-assets.jsonl")
+
+
 def framing():
     """Transport failures end the server; each runs alone."""
     init = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
@@ -436,4 +471,5 @@ if __name__ == "__main__":
     quickfixes()
     packages()
     physical_macros()
+    macro_assets()
     framing()

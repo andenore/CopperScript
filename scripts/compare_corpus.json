@@ -7055,6 +7055,13 @@
      "stdin": "tests/rust-port/lsp/lifecycle.jsonl"
     },
     {
+     "id": "lsp-sessions/macro-assets",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/macro-assets.jsonl"
+    },
+    {
      "id": "lsp-sessions/macros",
      "args": [
       "lsp"

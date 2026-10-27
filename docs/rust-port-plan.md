@@ -362,3 +362,48 @@ do not shrink as much.
   and `check-footprint-strict` suites (269 cases: every footprint in the
   examples, fixtures and cached CopperLib packages, with seeded mutations)
   are byte-identical.
+
+**M6 `copper lsp` (stream `rust-m6-lsp`): complete locally.**
+
+- `crates/copper-lsp` rewrites `pcbir.lsp` on the `copper-lang` frontend:
+  Content-Length framing with Python's transport errors, JSON-RPC dispatch
+  with Python's error codes and `str(exc)` messages (malformed parameters
+  fail with the same `KeyError`/`TypeError` text), the 150 ms debounced
+  diagnostics worker publishing only current snapshots, the recovering
+  parse on token slices (`copper_lang::parse_tokens`), symbols, hover,
+  definition, completion, compiler-backed diagnostics with fixes, and code
+  actions. The compiler and macro preparation read open buffers through a
+  `source_reader` on the package resolver (`compile_design_source_with`,
+  `prepare_macro_bindings_with`).
+- Harness: a case may pipe a client transcript (`stdin`, JSON lines of
+  `send`, `raw` and `wait` steps, framed by the harness; `{root_uri}` and
+  suite-input placeholders). `wait N` blocks until N complete server
+  messages arrived, so debounced notifications land at fixed points; an
+  unmet wait is a timed-out run. The transcript digest is part of the
+  oracle cache key. LSP stdout is binary on both sides (CRLF headers by
+  protocol, LF-free JSON bodies), so the Windows CRLF reading is not applied
+  to it; stderr still is.
+- Corpus: `lsp-sessions` (26 transcripts from
+  `tests/rust-port/lsp/make_transcripts.py`: lifecycle, unsaved edits,
+  Unicode/CRLF and rejected updates, quick fixes, packages, physical macros,
+  JSON macro assets, 16 malformed transports, end of input), `lsp-sources`
+  (every board with 3 seeded mutations through `board.jsonl`, a full
+  editing session) and `lsp-library-sources` (package sources, never
+  mutated because other boards inventory them): 359 cases, all
+  byte-identical locally. The M2 gate still passes.
+- URIs follow `urlsplit`/`url2pathname` (posix, and `nturl2path` on
+  Windows with VS Code's `%3A` drive) and `Path.as_uri()`; replies use the
+  client's spelling of an opened document. `Path` keys compare
+  case-insensitively on Windows.
+- `tests/lsp-client.cjs` runs the server from `COPPER_TEST_LSP_BINARY`
+  when set (the extension itself is unchanged; its interpreter probe still
+  uses `COPPER_TEST_PYTHON`): all five tests pass against the binary.
+- Requests reuse one analysis per document and generation, as Python's
+  `Workspace.cache` does. Not reproduced, because no client message can
+  observe it: Python's dependency snapshots (`SnapshotResolver`, reused
+  imports across generations); the binary re-resolves imports for each new
+  analysis with one shared resolver. Only a package file edited on disk
+  without a save or watched-file notification could tell them apart.
+  Python analysis crashes (`LSP_ANALYSIS`) where the Rust frontend reports
+  a located error are the recorded-crash class; none occurs in the corpus.
+- `editor-overlay` (M6) needs routed build runs (M4) and remains.

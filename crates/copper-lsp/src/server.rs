@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 
 use copper_json::{Dumps, Object, Value};
 
-use crate::analysis::{Workspace, analyse, analyse_path};
+use crate::analysis::{Analysis, Workspace, analyse_path};
 use crate::pyerr::{PyError, PyResult, item};
-use crate::text::{int, object};
+use crate::text::{PathKey, int, object, path_from_uri};
 
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 const MAX_HEADER: usize = 8192;
@@ -259,6 +259,8 @@ pub struct Server {
     shared: Arc<Shared>,
     initialized: bool,
     worker: Option<JoinHandle<()>>,
+    /// The requests' analysis of one document at one generation (`Workspace.cache`).
+    cache: Option<(u64, PathKey, Analysis)>,
 }
 
 fn capabilities() -> Value {
@@ -309,7 +311,7 @@ impl Server {
                 .spawn(move || shared.work())
                 .expect("spawn the diagnostics worker")
         };
-        Server { shared, initialized: false, worker: Some(worker) }
+        Server { shared, initialized: false, worker: Some(worker), cache: None }
     }
 
     pub fn exited(&self) -> bool {
@@ -324,9 +326,19 @@ impl Server {
         self.shared.writer.broken.load(Ordering::SeqCst)
     }
 
-    fn snapshot_analysis(&self, uri: &Value) -> PyResult<crate::analysis::Analysis> {
-        let (sources, uris) = self.shared.workspace.lock().expect("workspace").sources();
-        analyse(uri, sources, uris)
+    fn snapshot_analysis(&mut self, uri: &Value) -> PyResult<&Analysis> {
+        let path = path_from_uri(uri)?;
+        let key = PathKey::of(&path);
+        let (generation, (sources, uris)) = {
+            let workspace = self.shared.workspace.lock().expect("workspace");
+            (workspace.generation, workspace.sources())
+        };
+        match &mut self.cache {
+            // Client URI spellings may change without a new generation; replies use the current ones.
+            Some((cached, known, analysis)) if *cached == generation && *known == key => analysis.uris = uris,
+            cache => *cache = Some((generation, key, analyse_path(&path, sources, uris)?)),
+        }
+        Ok(&self.cache.as_ref().expect("cached above").2)
     }
 
     fn handle(&mut self, method: &str, params: &Value) -> PyResult<Value> {

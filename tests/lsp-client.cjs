@@ -5,6 +5,14 @@ const {pathToFileURL, fileURLToPath} = require("node:url");
 const {Connection, activateLsp} = require("../integrations/vscode/lsp-client.cjs");
 const python = process.env.COPPER_TEST_PYTHON;
 const root = path.resolve(__dirname, "..");
+// COPPER_TEST_LSP_BINARY runs the Rust `copper lsp` wherever the extension starts
+// `python -u -m pcbir.lsp.server`; the interpreter probe still uses COPPER_TEST_PYTHON.
+const binary = process.env.COPPER_TEST_LSP_BINARY;
+if (binary) {
+  const spawn = cp.spawn;
+  cp.spawn = (command, args, options) => args.slice(-3).join(" ") === "-u -m pcbir.lsp.server"
+    ? spawn(binary, ["lsp"], options) : spawn(command, args, options);
+}
 
 test("actual stdio client initializes, queries, and shuts down", {skip: !python}, async () => {
   const errors = [], c = new Connection([python], root, () => {}, e => errors.push(e));
