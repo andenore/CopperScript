@@ -5635,6 +5635,119 @@
    ]
   },
   {
+   "name": "export-kicad",
+   "milestone": "M2",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "export-kicad",
+    "{input}",
+    "--locked",
+    "--offline",
+    "-o",
+    "{out}/board.kicad_sch"
+   ],
+   "mutations": 10
+  },
+  {
+   "name": "export-kicad-no-check",
+   "milestone": "M2",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "export-kicad",
+    "{input}",
+    "--locked",
+    "--offline",
+    "-o",
+    "{out}/board.kicad_sch",
+    "--no-check"
+   ],
+   "mutations": 5
+  },
+  {
+   "name": "export-kicad-outputs",
+   "milestone": "M2",
+   "cases": [
+    {
+     "id": "export-kicad-outputs/nested",
+     "args": [
+      "export-kicad",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "{out}/nested/deeper/board.kicad_sch"
+     ]
+    },
+    {
+     "id": "export-kicad-outputs/no-suffix",
+     "args": [
+      "export-kicad",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "{out}/schematic"
+     ]
+    },
+    {
+     "id": "export-kicad-outputs/project-suffix",
+     "args": [
+      "export-kicad",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "{out}/board.kicad_pro"
+     ]
+    },
+    {
+     "id": "export-kicad-outputs/dotted-name",
+     "args": [
+      "export-kicad",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "{out}/v1.2.board.kicad_sch"
+     ]
+    },
+    {
+     "id": "export-kicad-outputs/parent-is-a-file",
+     "args": [
+      "export-kicad",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "examples/valid_board/board.copper/board.kicad_sch"
+     ],
+     "compare": [
+      "exit",
+      "files"
+     ]
+    },
+    {
+     "id": "export-kicad-outputs/missing-board",
+     "args": [
+      "export-kicad"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    }
+   ]
+  },
+  {
    "name": "export-kicad-pcb",
    "milestone": "M2",
    "boards": "*",

@@ -12,6 +12,7 @@ mod check;
 mod commands;
 mod compile;
 mod compile_macro;
+mod export_kicad;
 mod library;
 mod lock;
 mod power_check;

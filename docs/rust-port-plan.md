@@ -348,3 +348,13 @@ do not shrink as much.
   repository stays uncached, so footprint resolution through it reports the
   offline cache miss in both implementations.
 - Next: M2 (`export-kicad-pcb`, `export-kicad`, `check-footprint`).
+
+**M2 (in progress).**
+
+- `export-kicad`: the KiCad schematic backend (`copper-lang`
+  `kicad_schematic`: flat single-sheet schematic, embedded symbols, the
+  project-local symbol library, `sym-lib-table` and `.kicad_pro`) and its
+  writer. The `export-kicad`, `export-kicad-no-check` and
+  `export-kicad-outputs` suites (374 cases: every example and fixture board,
+  ERC failures with and without `--no-check`, output-path forms) are
+  byte-identical.

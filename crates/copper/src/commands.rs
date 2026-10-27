@@ -2,7 +2,10 @@
 
 use std::io::Write;
 
-use crate::{agent_guide, audit_footprints, check, compile, compile_macro, library, lock, power_check, query, state};
+use crate::{
+    agent_guide, audit_footprints, check, compile, compile_macro, export_kicad, library, lock, power_check, query,
+    state,
+};
 
 /// Exit status of a command the Rust rewrite does not implement yet.
 pub const NOT_IMPLEMENTED_EXIT: u8 = 3;
@@ -49,7 +52,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("lock", Plan::Done),
     ("power-check", Plan::Done),
     ("compile", Plan::Done),
-    ("export-kicad", Plan::Milestone("M2")),
+    ("export-kicad", Plan::Done),
     ("export-kicad-pcb", Plan::Milestone("M2")),
     ("plan-layout", Plan::Milestone("M3")),
     ("route-global", Plan::Milestone("M4")),
@@ -94,6 +97,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "compile-macro" => compile_macro::run(rest, out, err),
         "audit-footprints" => audit_footprints::run(rest, out, err),
         "power-check" => power_check::run(rest, out, err),
+        "export-kicad" => export_kicad::run(rest, out, err),
         _ => match plan(command) {
             Some(Plan::Milestone(milestone)) => {
                 let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");

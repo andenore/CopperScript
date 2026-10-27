@@ -10,7 +10,7 @@ changes its behaviour.
 | `copper-units` | `Decimal` with Python's default context, integer nanometres (`Nm`), `Fraction`, quantities and the `100 nF` formatter |
 | `copper-state` | The frozen `copperscript.state/v1` format: read, verify, write |
 | `copper-physical` | Exact board geometry (outlines, cutouts, holes, slots, line/arc paths), footprints and the `.kicad_mod` importer |
-| `copper-lang` | Lexer, parser, package resolution, lowering (electrical, mechanical, silkscreen), ERC and the compiled JSON (M1, in progress) |
+| `copper-lang` | Lexer, parser, package resolution, lowering (electrical, mechanical, silkscreen), ERC, the compiled JSON and the KiCad schematic backend |
 | `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` (M0); `check`, `compile`, `query`, `power-check`, `audit-footprints`, `lock`, `compile-macro`, `library` (M1) |
 
 ## Build and test
