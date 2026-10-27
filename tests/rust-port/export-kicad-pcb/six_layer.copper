@@ -1,0 +1,37 @@
+// Rust-port corpus input: a declared six-layer stack-up, via-in-pad and decoupling; not a circuit.
+board SixLayerStack {
+    use library "tiny";
+
+    component PS1: VOLTAGE_SOURCE { footprint = "SOT-23"; }
+    component U1: STM32_LIKE { footprint = "LQFP-48"; }
+    component C1: CAPACITOR {
+        value = 100nF; footprint = "0402";
+        role = "decoupling"; decouples = "U1.VDD";
+    }
+
+    net V3V3 { PS1.OUT; U1.VDD; C1.1; }
+    net GND { PS1.GND; U1.VSS; C1.2; }
+
+    supply V3V3 { voltage = 3.3V; source = PS1.OUT; }
+    supply GND { voltage = 0V; external = true; }
+
+    constraint via_in_pad(U1.VSS) { process = "filled-capped"; }
+    constraint copper_zone(GND) { layers = "In1.Cu,In4.Cu"; pad_connection = solid; }
+
+    mechanical {
+        outline rectangle { width = 40mm; height = 30mm; }
+        stackup {
+            copper F.Cu { thickness = 0.035mm; }
+            dielectric P1 { thickness = 0.1mm; er = 4.4; material = "7628"; type = prepreg; }
+            copper In1.Cu { thickness = 0.0175mm; }
+            dielectric C1 { thickness = 0.5mm; er = 4.6; type = core; loss_tangent = 0.02; }
+            copper In2.Cu { thickness = 0.0175mm; }
+            dielectric P2 { thickness = 0.2mm; er = 4.2; }
+            copper In3.Cu { thickness = 0.0175mm; }
+            dielectric C2 { thickness = 0.5mm; er = 4.5; }
+            copper In4.Cu { thickness = 0.0175mm; }
+            dielectric P3 { thickness = 0.1mm; type = prepreg; er = 4.3; }
+            copper B.Cu { thickness = 0.035mm; }
+        }
+    }
+}

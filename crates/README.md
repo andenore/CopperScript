@@ -11,7 +11,8 @@ changes its behaviour.
 | `copper-state` | The frozen `copperscript.state/v1` format: read, verify, write |
 | `copper-physical` | Exact board geometry (outlines, cutouts, holes, slots, line/arc paths), footprints and the `.kicad_mod` importer |
 | `copper-lang` | Lexer, parser, package resolution, lowering (electrical, mechanical, silkscreen), ERC and the compiled JSON (M1, in progress) |
-| `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` (M0); `check`, `compile`, `query`, `power-check`, `audit-footprints`, `lock`, `compile-macro`, `library` (M1) |
+| `copper-pcb` | Physical board IR, physicalization (proxy and resolved footprints), placement templates, hard-macro scenes and the KiCad PCB/project backend (M2, in progress) |
+| `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` (M0); `check`, `compile`, `query`, `power-check`, `audit-footprints`, `lock`, `compile-macro`, `library` (M1); `export-kicad-pcb` (M2) |
 
 ## Build and test
 
