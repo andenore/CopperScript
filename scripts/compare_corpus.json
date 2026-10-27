@@ -6908,6 +6908,53 @@
      "summary"
     ]
    }
+  },
+  {
+   "name": "lsp-sessions",
+   "milestone": "M6",
+   "timeout_s": 120,
+   "cases": [
+    {
+     "id": "lsp-sessions/lifecycle",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/lifecycle.jsonl"
+    }
+   ]
+  },
+  {
+   "name": "lsp-sources",
+   "milestone": "M6",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper",
+    "tests/rust-port/**/*.copper"
+   ],
+   "args": [
+    "lsp"
+   ],
+   "stdin": "tests/rust-port/lsp/board.jsonl",
+   "mutations": 3,
+   "timeout_s": 120
+  },
+  {
+   "name": "lsp-library-sources",
+   "milestone": "M6",
+   "inputs": [
+    "examples/packages/**/*.copper",
+    "examples/*/parts/*.copper",
+    "examples/*/layouts/*.copper",
+    "examples/*/mechanics/*.copper",
+    "examples/*/probe/*.copper",
+    "examples/simulation/*/board.copper"
+   ],
+   "args": [
+    "lsp"
+   ],
+   "stdin": "tests/rust-port/lsp/board.jsonl",
+   "timeout_s": 120
   }
  ]
 }
