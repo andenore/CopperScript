@@ -395,3 +395,6 @@ do not shrink as much.
   `bom.csv`, `cpl.csv`). Staging directories carry random `mkdtemp` names;
   an OS error naming a file inside one (a `kicad-cli` that exits 0 without
   writing `drc.json`) cannot match and is left out of the corpus.
+- Corpus (15 suites, 3,293 cases): 3,248 byte-identical and 45 recorded
+  (D-0034 to D-0078: Python crashes in `si-check` on a component with an
+  unknown part). The M2 gate still passes.
