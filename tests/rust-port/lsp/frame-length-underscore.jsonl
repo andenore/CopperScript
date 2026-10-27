@@ -1,0 +1,2 @@
+# Transport: length underscore.
+{"raw": "Content-Length: +65\r\n\r\n{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"initialize\", \"params\": {}}Content-Length: 0_65\r\n\r\n{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"initialize\", \"params\": {}}"}

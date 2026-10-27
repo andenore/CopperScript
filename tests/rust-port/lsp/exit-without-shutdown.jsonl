@@ -1,0 +1,5 @@
+# Exit without shutdown, then ignored input.
+{"send": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}, "processId": null, "rootUri": "{root_uri}"}}}
+{"send": {"jsonrpc": "2.0", "method": "initialized", "params": {}}}
+{"send": {"jsonrpc": "2.0", "method": "exit", "params": {}}}
+{"send": {"jsonrpc": "2.0", "id": 2, "method": "shutdown"}}

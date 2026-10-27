@@ -1,0 +1,2 @@
+# Transport: headers mixed.
+{"raw": "content-type: application/vscode-jsonrpc; charset=utf-8\r\nCONTENT-LENGTH:  65 \r\n\r\n{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"initialize\", \"params\": {}}"}

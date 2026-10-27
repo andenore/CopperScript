@@ -6915,11 +6915,179 @@
    "timeout_s": 120,
    "cases": [
     {
+     "id": "lsp-sessions/edits",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/edits.jsonl"
+    },
+    {
+     "id": "lsp-sessions/eof-without-shutdown",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/eof-without-shutdown.jsonl"
+    },
+    {
+     "id": "lsp-sessions/exit-without-shutdown",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/exit-without-shutdown.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-bare-newline",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-bare-newline.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-bom-payload",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-bom-payload.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-duplicate-header",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-duplicate-header.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-headers-mixed",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-headers-mixed.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-invalid-header",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-invalid-header.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-invalid-json",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-invalid-json.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-length-underscore",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-length-underscore.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-missing-length",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-missing-length.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-nan-payload",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-nan-payload.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-negative-length",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-negative-length.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-non-ascii-header",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-non-ascii-header.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-oversized-header",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-oversized-header.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-oversized-length",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-oversized-length.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-truncated-header",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-truncated-header.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-truncated-payload",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-truncated-payload.jsonl"
+    },
+    {
+     "id": "lsp-sessions/frame-zero-length",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/frame-zero-length.jsonl"
+    },
+    {
      "id": "lsp-sessions/lifecycle",
      "args": [
       "lsp"
      ],
      "stdin": "tests/rust-port/lsp/lifecycle.jsonl"
+    },
+    {
+     "id": "lsp-sessions/macros",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/macros.jsonl"
+    },
+    {
+     "id": "lsp-sessions/packages",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/packages.jsonl"
+    },
+    {
+     "id": "lsp-sessions/quickfix",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/quickfix.jsonl"
+    },
+    {
+     "id": "lsp-sessions/shutdown-then-eof",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/shutdown-then-eof.jsonl"
+    },
+    {
+     "id": "lsp-sessions/unsaved",
+     "args": [
+      "lsp"
+     ],
+     "stdin": "tests/rust-port/lsp/unsaved.jsonl"
     }
    ]
   },

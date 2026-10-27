@@ -516,7 +516,7 @@ mod tests {
         assert_eq!(read(b"no colon\r\n\r\n"), Err(protocol("invalid LSP header")));
         assert_eq!(read(b""), Ok(None));
         assert_eq!(
-            read(b"Content-Length: 1_0\r\n\r\n[1,2,3,4,5]").unwrap(),
+            read(b"Content-Length: 1_1\r\n\r\n[1,2,3,4,5]").unwrap(),
             Some(copper_json::parse("[1,2,3,4,5]").unwrap())
         );
     }

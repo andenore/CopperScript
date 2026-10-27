@@ -343,22 +343,27 @@ def _run_transcript(argv: list[str], case: Case, environment: dict[str, str]) ->
     readers = [threading.Thread(target=drain, args=(name,), daemon=True) for name in output]
     for reader in readers:
         reader.start()
+    timed_out = False
     try:
         for step in transcript_steps(case):
             if isinstance(step, int):
-                while (_complete_messages(bytes(output["stdout"])) < step and process.poll() is None
-                       and time.monotonic() < deadline):
+                while _complete_messages(bytes(output["stdout"])) < step and process.poll() is None:
+                    if time.monotonic() >= deadline:
+                        # A wait the server never satisfies is a failed run, not a slow one.
+                        timed_out = True
+                        raise TimeoutError(f"waiting for message {step}")
                     time.sleep(0.01)
                 continue
             process.stdin.write(step)
             process.stdin.flush()
-    except (BrokenPipeError, OSError):
+    except TimeoutError:
+        process.kill()
+    except OSError:
         pass
     try:
         process.stdin.close()
     except OSError:
         pass
-    timed_out = False
     try:
         process.wait(timeout=max(0.1, deadline - time.monotonic()))
     except subprocess.TimeoutExpired:

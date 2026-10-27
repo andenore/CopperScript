@@ -1102,29 +1102,30 @@ impl Analysis {
                     {
                         let keys = contract_keys(data, mapping);
                         candidates = keys.into_iter().map(|key| (key, (5, format!("Asset {mapping} role")))).collect();
-                    } else if header.iter().any(|text| text == "=") && on.is_some() {
-                        if let Some(unit) = self.macro_scope_unit(declaration) {
-                            let wanted: &[&str] = if header[0] == "member" {
-                                &["ComponentDecl", "ModuleInstanceDecl"]
-                            } else {
-                                &["NetDecl", "ModuleInstanceDecl"]
-                            };
-                            let current = &self.units[unit];
-                            candidates = IndexMap::new();
-                            for (index, symbol) in current.symbols.iter().enumerate() {
-                                if wanted.contains(&current.class(symbol.node)) {
-                                    candidates
-                                        .insert(symbol.name.clone(), (6, self.description(SymbolRef { unit, index })));
-                                }
+                    } else if header.iter().any(|text| text == "=")
+                        && on.is_some()
+                        && let Some(unit) = self.macro_scope_unit(declaration)
+                    {
+                        let wanted: &[&str] = if header[0] == "member" {
+                            &["ComponentDecl", "ModuleInstanceDecl"]
+                        } else {
+                            &["NetDecl", "ModuleInstanceDecl"]
+                        };
+                        let current = &self.units[unit];
+                        candidates = IndexMap::new();
+                        for (index, symbol) in current.symbols.iter().enumerate() {
+                            if wanted.contains(&current.class(symbol.node)) {
+                                candidates
+                                    .insert(symbol.name.clone(), (6, self.description(SymbolRef { unit, index })));
                             }
-                            if header[0] == "net" {
-                                for symbol in &current.symbols {
-                                    if current.class(symbol.node) == "PortDecl" {
-                                        candidates.insert(
-                                            format!("port.{}", symbol.name),
-                                            (5, "Existing module boundary net".to_owned()),
-                                        );
-                                    }
+                        }
+                        if header[0] == "net" {
+                            for symbol in &current.symbols {
+                                if current.class(symbol.node) == "PortDecl" {
+                                    candidates.insert(
+                                        format!("port.{}", symbol.name),
+                                        (5, "Existing module boundary net".to_owned()),
+                                    );
                                 }
                             }
                         }

@@ -1,0 +1,4 @@
+# End of input without shutdown: exit status 1, pending diagnostics never publish.
+{"send": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}, "processId": null, "rootUri": "{root_uri}"}}}
+{"send": {"jsonrpc": "2.0", "method": "initialized", "params": {}}}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper", "languageId": "copper", "version": 1, "text": "board Demo {\n    use library \"tiny\";\n    component R1: RESISTOR { value = 4.7kohm; }\n    net N { R1.1; }\n}"}}}}

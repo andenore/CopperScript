@@ -1,0 +1,58 @@
+# An unsaved board: symbols, hovers, definitions and completions while it is edited.
+{"send": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}, "processId": null, "rootUri": "{root_uri}"}}}
+{"send": {"jsonrpc": "2.0", "method": "initialized", "params": {}}}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper", "languageId": "copper", "version": 1, "text": "board Demo {\n    use library \"tiny\";\n    component R1: RESISTOR { value = 4.7kohm; }\n    net N { R1.1; }\n}"}}}}
+{"wait": 2}
+{"send": {"jsonrpc": "2.0", "id": 2, "method": "textDocument/documentSymbol", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}}}}
+{"send": {"jsonrpc": "2.0", "id": 3, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 12}}}}
+{"send": {"jsonrpc": "2.0", "id": 4, "method": "textDocument/definition", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 12}}}}
+{"send": {"jsonrpc": "2.0", "id": 5, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 15}}}}
+{"send": {"jsonrpc": "2.0", "id": 6, "method": "textDocument/definition", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 15}}}}
+{"send": {"jsonrpc": "2.0", "id": 7, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 8}}}}
+{"send": {"jsonrpc": "2.0", "id": 8, "method": "textDocument/definition", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 8}}}}
+{"send": {"jsonrpc": "2.0", "id": 9, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 1, "character": 18}}}}
+{"send": {"jsonrpc": "2.0", "id": 10, "method": "textDocument/definition", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 1, "character": 18}}}}
+{"send": {"jsonrpc": "2.0", "id": 11, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 0, "character": 2}}}}
+{"send": {"jsonrpc": "2.0", "id": 12, "method": "textDocument/definition", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 0, "character": 2}}}}
+{"send": {"jsonrpc": "2.0", "id": 13, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 0, "character": 7}}}}
+{"send": {"jsonrpc": "2.0", "id": 14, "method": "textDocument/definition", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 0, "character": 7}}}}
+{"send": {"jsonrpc": "2.0", "id": 15, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 2, "character": 39}}}}
+{"send": {"jsonrpc": "2.0", "id": 16, "method": "textDocument/definition", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 2, "character": 39}}}}
+{"send": {"jsonrpc": "2.0", "id": 17, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 2, "character": 21}}}}
+{"send": {"jsonrpc": "2.0", "id": 18, "method": "textDocument/definition", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 2, "character": 21}}}}
+{"send": {"jsonrpc": "2.0", "id": 19, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 1, "character": 5}}}}
+{"send": {"jsonrpc": "2.0", "id": 20, "method": "textDocument/definition", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 1, "character": 5}}}}
+{"send": {"jsonrpc": "2.0", "id": 21, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 15}}}}
+{"send": {"jsonrpc": "2.0", "id": 22, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 1, "character": 19}}}}
+{"send": {"jsonrpc": "2.0", "id": 23, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 0}}}}
+{"send": {"jsonrpc": "2.0", "id": 24, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 2, "character": 8}}}}
+{"send": {"jsonrpc": "2.0", "id": 25, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 2, "character": 31}}}}
+{"send": {"jsonrpc": "2.0", "id": 26, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 11}}}}
+{"send": {"jsonrpc": "2.0", "id": 27, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 2, "character": 47}}}}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper", "version": 2}, "contentChanges": [{"text": "board Demo {\n    use library \"tiny\";\n    component R1: RESISTOR { val = 4.7kohm; }\n    net N { R1.; }\n}"}]}}}
+{"wait": 29}
+{"send": {"jsonrpc": "2.0", "id": 28, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 15}}}}
+{"send": {"jsonrpc": "2.0", "id": 29, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 2, "character": 32}}}}
+{"send": {"jsonrpc": "2.0", "id": 30, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 13}}}}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper", "version": 3}, "contentChanges": [{"text": "board Demo {\n    use library \"tiny\";\n    component R1: RESISTOR { val = 4.7kohm; }\n    // comment R1.\n    # note R1\n    net N { R1.; }\n}"}]}}}
+{"wait": 33}
+{"send": {"jsonrpc": "2.0", "id": 31, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 18}}}}
+{"send": {"jsonrpc": "2.0", "id": 32, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 4, "character": 13}}}}
+{"send": {"jsonrpc": "2.0", "id": 33, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 5, "character": 8}}}}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper", "version": 4}, "contentChanges": [{"text": "board Demo {\n    use library \"tiny\";\n    silkscreen {\n        text T { \n    }\n    component R1: RESISTOR { val = 4.7kohm; }\n    // comment R1.\n    # note R1\n    net N { R1.; }\n}\n"}]}}}
+{"wait": 37}
+{"send": {"jsonrpc": "2.0", "id": 34, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 3, "character": 17}}}}
+{"send": {"jsonrpc": "2.0", "id": 35, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}, "position": {"line": 2, "character": 16}}}}
+{"send": {"jsonrpc": "2.0", "id": 36, "method": "textDocument/documentSymbol", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}}}}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-second.copper", "languageId": "copper", "version": 7, "text": "board Second {\n    use library \"tiny\";\n    component R9: RESISTOR { value = 4.7kohm; }\n    net N { R9.1; }\n}"}}}}
+{"wait": 42}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didSave", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}}}}
+{"wait": 44}
+{"send": {"jsonrpc": "2.0", "method": "workspace/didChangeWatchedFiles", "params": {"changes": []}}}
+{"wait": 46}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-second.copper"}}}}
+{"wait": 48}
+{"send": {"jsonrpc": "2.0", "id": 37, "method": "textDocument/documentSymbol", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-second.copper"}}}}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": {"uri": "{root_uri}/build/lsp-unsaved.copper"}}}}
+{"send": {"jsonrpc": "2.0", "id": 38, "method": "shutdown"}}
+{"send": {"jsonrpc": "2.0", "method": "exit", "params": {}}}
