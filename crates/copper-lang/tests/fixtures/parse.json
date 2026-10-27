@@ -14990,6 +14990,1242 @@
    "source": "tests/fixtures/editor-artwork/board.copper"
   },
   {
+   "digest": "sha256:b3903ac1e2a676a6928c14aedf29a702a9fb98a34dffa843d5130c6eaf6ad21a",
+   "mutation": null,
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 11,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 22,
+    "message": "expected supply name, found end of file",
+    "offset": 974,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:22:11: PAR007: expected supply name, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    974
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 28,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 10,
+    "message": "expected '{', found end of file",
+    "offset": 483,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:10:28: PAR009: expected '{', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    483
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 15,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 17,
+    "message": "expected component reference, found end of file",
+    "offset": 799,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:17:15: PAR007: expected component reference, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    799
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 12,
+    "message": "unknown declaration 'com'",
+    "offset": 594,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:12:5: PAR002: unknown declaration 'com'"
+   },
+   "mutation": [
+    "truncate",
+    597
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 30,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 24,
+    "message": "expected '(', found end of file",
+    "offset": 1044,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:24:30: PAR009: expected '(', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1044
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR010",
+    "column": 7,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 1,
+    "message": "expected 'board', 'module', 'part', 'device', or 'board_profile', found end of file",
+    "offset": 6,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:1:7: PAR010: expected 'board', 'module', 'part', 'device', or 'board_profile', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    6
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "LEX003",
+    "column": 57,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 7,
+    "message": "unterminated string",
+    "offset": 320,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:7:57: LEX003: unterminated string"
+   },
+   "mutation": [
+    "truncate",
+    321
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 30,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 9,
+    "message": "expected property name, found end of file",
+    "offset": 419,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:9:30: PAR007: expected property name, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    419
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": "did you mean 'supply'?",
+    "line": 21,
+    "message": "unknown declaration 'suply'",
+    "offset": 916,
+    "replacement": "supply",
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:21:5: PAR002: unknown declaration 'suply' (did you mean 'supply'?)"
+   },
+   "mutation": [
+    "delete",
+    919
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "digest": "sha256:31b98f70363a5e0b619d2813418f21b627f8dceb53a1eab26cfa059628c2ed8b",
+   "mutation": [
+    "delete",
+    1953
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": "did you mean 'supply'?",
+    "line": 21,
+    "message": "unknown declaration 'upply'",
+    "offset": 916,
+    "replacement": "supply",
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:21:5: PAR002: unknown declaration 'upply' (did you mean 'supply'?)"
+   },
+   "mutation": [
+    "delete",
+    916
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "digest": "sha256:f3473175cccbbf4f739bd337263fb39ba6aeb50894f5512ec8efd53fe0672f02",
+   "mutation": [
+    "delete",
+    975
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 55,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 28,
+    "message": "expected '=', found '0, 180'",
+    "offset": 1379,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:28:55: PAR009: expected '=', found '0, 180'"
+   },
+   "mutation": [
+    "delete",
+    1378
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR011",
+    "column": 9,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 3,
+    "message": "expected 'library', found 'librar'",
+    "offset": 126,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:3:9: PAR011: expected 'library', found 'librar'"
+   },
+   "mutation": [
+    "delete",
+    132
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 44,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 15,
+    "message": "expected ';', found '}'",
+    "offset": 748,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:15:44: PAR009: expected ';', found '}'"
+   },
+   "mutation": [
+    "delete",
+    747
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "digest": "sha256:3368043f5dc5268488ca9b661cb51f7bbf33dd753404c09f633ed90c4b9a2824",
+   "mutation": [
+    "delete",
+    1219
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 36,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 21,
+    "message": "expected '=', found ';'",
+    "offset": 947,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:21:36: PAR009: expected '=', found ';'"
+   },
+   "mutation": [
+    "insert",
+    947,
+    ";"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 62,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 38,
+    "message": "expected declaration, found '='",
+    "offset": 2042,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:38:62: PAR007: expected declaration, found '='"
+   },
+   "mutation": [
+    "insert",
+    2042,
+    "="
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR006",
+    "column": 28,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 22,
+    "message": "expected a string, identifier, boolean, number, or quantity",
+    "offset": 991,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:22:28: PAR006: expected a string, identifier, boolean, number, or quantity"
+   },
+   "mutation": [
+    "insert",
+    991,
+    ")"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 43,
+    "filename": "tests/rust-port/export-kicad-pcb/placement.copper",
+    "hint": null,
+    "line": 19,
+    "message": "expected component reference, found ')'",
+    "offset": 896,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/placement.copper:19:43: PAR007: expected component reference, found ')'"
+   },
+   "mutation": [
+    "insert",
+    896,
+    ")"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/placement.copper"
+  },
+  {
+   "digest": "sha256:b67a8f027515b3dc2e24eb9a144ac6f3d28b9b6670b52b1e4da60757d41c0bfa",
+   "mutation": null,
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/export-kicad-pcb/routing.copper",
+    "hint": "did you mean 'use'?",
+    "line": 3,
+    "message": "unknown declaration 'us'",
+    "offset": 113,
+    "replacement": "use",
+    "text": "tests/rust-port/export-kicad-pcb/routing.copper:3:5: PAR002: unknown declaration 'us' (did you mean 'use'?)"
+   },
+   "mutation": [
+    "truncate",
+    115
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 77,
+    "filename": "tests/rust-port/export-kicad-pcb/routing.copper",
+    "hint": null,
+    "line": 27,
+    "message": "expected '=', found end of file",
+    "offset": 1270,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/routing.copper:27:77: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1270
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 17,
+    "filename": "tests/rust-port/export-kicad-pcb/routing.copper",
+    "hint": null,
+    "line": 22,
+    "message": "expected '(', found end of file",
+    "offset": 805,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/routing.copper:22:17: PAR009: expected '(', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    805
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 41,
+    "filename": "tests/rust-port/export-kicad-pcb/routing.copper",
+    "hint": null,
+    "line": 29,
+    "message": "expected ';', found end of file",
+    "offset": 1406,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/routing.copper:29:41: PAR009: expected ';', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1406
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "error": {
+    "code": "PAR010",
+    "column": 47,
+    "filename": "tests/rust-port/export-kicad-pcb/routing.copper",
+    "hint": null,
+    "line": 1,
+    "message": "expected 'board', 'module', 'part', 'device', or 'board_profile', found end of file",
+    "offset": 46,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/routing.copper:1:47: PAR010: expected 'board', 'module', 'part', 'device', or 'board_profile', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    46
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/export-kicad-pcb/routing.copper",
+    "hint": "did you mean 'constraint'?",
+    "line": 24,
+    "message": "unknown declaration 'constr'",
+    "offset": 1039,
+    "replacement": "constraint",
+    "text": "tests/rust-port/export-kicad-pcb/routing.copper:24:5: PAR002: unknown declaration 'constr' (did you mean 'constraint'?)"
+   },
+   "mutation": [
+    "truncate",
+    1045
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/export-kicad-pcb/routing.copper",
+    "hint": "did you mean 'component'?",
+    "line": 9,
+    "message": "unknown declaration 'compo'",
+    "offset": 382,
+    "replacement": "component",
+    "text": "tests/rust-port/export-kicad-pcb/routing.copper:9:5: PAR002: unknown declaration 'compo' (did you mean 'component'?)"
+   },
+   "mutation": [
+    "truncate",
+    387
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "error": {
+    "code": "PAR001",
+    "column": 5,
+    "filename": "tests/rust-port/export-kicad-pcb/routing.copper",
+    "hint": null,
+    "line": 5,
+    "message": "expected '}' before end of file",
+    "offset": 138,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/routing.copper:5:5: PAR001: expected '}' before end of file"
+   },
+   "mutation": [
+    "truncate",
+    138
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "digest": "sha256:5dc7cc2ed98296b94de4ab983e7f6a74404cf7ee125fb853360df1f82e723701",
+   "mutation": [
+    "delete",
+    1095
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "digest": "sha256:8ed6c02588707ce54e3cddf681149f061232939b2791ab683dc4e51532f7e033",
+   "mutation": [
+    "delete",
+    594
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "digest": "sha256:aa842a4e7a9ffb3d030e8c0704ae11138d3c001bb46ae3752d957037bcc79695",
+   "mutation": [
+    "delete",
+    729
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "digest": "sha256:8700260b14d4525fe0490a027eb734e1a240a0f3966e20f9151fe23466051119",
+   "mutation": [
+    "delete",
+    880
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "digest": "sha256:02528bf9a02ac06a7405c9e486fafcf65d2d47847014c06789e8a8f2e9c72241",
+   "mutation": [
+    "delete",
+    1269
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "digest": "sha256:c77ee8212ea564aab8daa221fcdd6e9a659c6cf6407d52f89294d9afee880c22",
+   "mutation": [
+    "delete",
+    879
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "digest": "sha256:0905a033c51427e1c139d51b15040cd50cb79bdded5715555ed09a8cdf74f3ed",
+   "mutation": [
+    "delete",
+    615
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "digest": "sha256:a41160accc5b51ffc7e07be0595c33e559cf58be53293b342cfbf82ab5099b8d",
+   "mutation": [
+    "delete",
+    1352
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "error": {
+    "code": "LEX001",
+    "column": 115,
+    "filename": "tests/rust-port/export-kicad-pcb/routing.copper",
+    "hint": null,
+    "line": 23,
+    "message": "unexpected character '\\\\'",
+    "offset": 1026,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/routing.copper:23:115: LEX001: unexpected character '\\\\'"
+   },
+   "mutation": [
+    "insert",
+    1026,
+    "\\"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "digest": "sha256:bbc599a8c30402b86a8c929d8b025af86072b3d1f06d8089e8446625fee359b7",
+   "mutation": [
+    "insert",
+    214,
+    "-"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 22,
+    "filename": "tests/rust-port/export-kicad-pcb/routing.copper",
+    "hint": null,
+    "line": 15,
+    "message": "expected pin or terminal name, found ']'",
+    "offset": 603,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/routing.copper:15:22: PAR007: expected pin or terminal name, found ']'"
+   },
+   "mutation": [
+    "insert",
+    603,
+    "]"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 84,
+    "filename": "tests/rust-port/export-kicad-pcb/routing.copper",
+    "hint": null,
+    "line": 25,
+    "message": "expected '=', found '}'",
+    "offset": 1152,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/routing.copper:25:84: PAR009: expected '=', found '}'"
+   },
+   "mutation": [
+    "insert",
+    1152,
+    "}"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/routing.copper"
+  },
+  {
+   "digest": "sha256:978b1352ab0b157ea2db68c908f08deb63158cf84d0fc3fc0396d4202fc8a385",
+   "mutation": null,
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 1,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 36,
+    "message": "expected mechanical declaration, found end of file",
+    "offset": 1521,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:36:1: PAR007: expected mechanical declaration, found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1521
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 70,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 33,
+    "message": "expected ';', found '.'",
+    "offset": 1456,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:33:70: PAR009: expected ';', found '.'"
+   },
+   "mutation": [
+    "truncate",
+    1457
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 37,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 6,
+    "message": "expected '=', found end of file",
+    "offset": 243,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:6:37: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    243
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 24,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 22,
+    "message": "expected '{', found end of file",
+    "offset": 771,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:22:24: PAR009: expected '{', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    771
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 31,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 27,
+    "message": "expected '=', found end of file",
+    "offset": 1050,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:27:31: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1050
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 50,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 22,
+    "message": "expected '=', found end of file",
+    "offset": 797,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:22:50: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    797
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR001",
+    "column": 3,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 21,
+    "message": "expected '}' before end of file",
+    "offset": 733,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:21:3: PAR001: expected '}' before end of file"
+   },
+   "mutation": [
+    "truncate",
+    733
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 17,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 13,
+    "message": "expected '.', found end of file",
+    "offset": 450,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:13:17: PAR009: expected '.', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    450
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR006",
+    "column": 53,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 25,
+    "message": "expected a string, identifier, boolean, number, or quantity",
+    "offset": 926,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:25:53: PAR006: expected a string, identifier, boolean, number, or quantity"
+   },
+   "mutation": [
+    "delete",
+    926
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "digest": "sha256:9bd99044915da95063cee5669101812d1d7f3aedcc38fe5d01327438b9368288",
+   "mutation": [
+    "delete",
+    1011
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "digest": "sha256:39297d6771d06b0ebac1c4f0f706e42d93e75176e8c5f5cece01072b73c5c4c5",
+   "mutation": [
+    "delete",
+    1421
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "digest": "sha256:14a5ac65ebc4c90cd116ae5be27da3c62b08f5e178a397c1926b9f955ce4b824",
+   "mutation": [
+    "delete",
+    1100
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "digest": "sha256:796d3a9475474570372cc116d728f0c1cb65d888a2f0e50bb5a994caecdd4f3d",
+   "mutation": [
+    "delete",
+    1430
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "digest": "sha256:b5c180e22b62943ca2d9515592dd433ab78eec142a229730800fb8fb23d52d7e",
+   "mutation": [
+    "delete",
+    1142
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "digest": "sha256:5dd9d3cad0d9108005b1f65ed92a676fd27345cd64c5ac95eb62f5dfe46d1dc2",
+   "mutation": [
+    "delete",
+    488
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "digest": "sha256:386e5e5d9711b140f963d08524e35ab33018b5650325e6fa97fbb04fff72b9a7",
+   "mutation": [
+    "delete",
+    791
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR006",
+    "column": 40,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 31,
+    "message": "expected a string, identifier, boolean, number, or quantity",
+    "offset": 1315,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:31:40: PAR006: expected a string, identifier, boolean, number, or quantity"
+   },
+   "mutation": [
+    "insert",
+    1315,
+    "["
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 5,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 24,
+    "message": "expected stackup layer kind, found ';'",
+    "offset": 829,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:24:5: PAR007: expected stackup layer kind, found ';'"
+   },
+   "mutation": [
+    "insert",
+    829,
+    ";"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": "did you mean 'mechanical'?",
+    "line": 21,
+    "message": "unknown declaration 'mechani'",
+    "offset": 735,
+    "replacement": "mechanical",
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:21:5: PAR002: unknown declaration 'mechani' (did you mean 'mechanical'?)"
+   },
+   "mutation": [
+    "insert",
+    742,
+    ")"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 12,
+    "filename": "tests/rust-port/export-kicad-pcb/six_layer.copper",
+    "hint": null,
+    "line": 8,
+    "message": "expected '=', found '('",
+    "offset": 304,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/six_layer.copper:8:12: PAR009: expected '=', found '('"
+   },
+   "mutation": [
+    "insert",
+    304,
+    "("
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/six_layer.copper"
+  },
+  {
+   "digest": "sha256:5e7170f98d962b57012a9673925b17c8ec81dbc4cc6310145e33600e3e82e1bf",
+   "mutation": null,
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "LEX003",
+    "column": 17,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 3,
+    "message": "unterminated string",
+    "offset": 115,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:3:17: LEX003: unterminated string"
+   },
+   "mutation": [
+    "truncate",
+    117
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 42,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 30,
+    "message": "expected '=', found end of file",
+    "offset": 1367,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:30:42: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    1367
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR002",
+    "column": 5,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": "did you mean 'constraint'?",
+    "line": 30,
+    "message": "unknown declaration 'constra'",
+    "offset": 1330,
+    "replacement": "constraint",
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:30:5: PAR002: unknown declaration 'constra' (did you mean 'constraint'?)"
+   },
+   "mutation": [
+    "truncate",
+    1337
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR006",
+    "column": 33,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 19,
+    "message": "expected a string, identifier, boolean, number, or quantity",
+    "offset": 720,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:19:33: PAR006: expected a string, identifier, boolean, number, or quantity"
+   },
+   "mutation": [
+    "truncate",
+    720
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "LEX003",
+    "column": 18,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 28,
+    "message": "unterminated string",
+    "offset": 1237,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:28:18: LEX003: unterminated string"
+   },
+   "mutation": [
+    "truncate",
+    1243
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 10,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 2,
+    "message": "expected '{', found end of file",
+    "offset": 88,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:2:10: PAR009: expected '{', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    88
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 21,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 15,
+    "message": "expected '=', found end of file",
+    "offset": 566,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:15:21: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    566
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 39,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 6,
+    "message": "expected '=', found end of file",
+    "offset": 222,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:6:39: PAR009: expected '=', found end of file"
+   },
+   "mutation": [
+    "truncate",
+    222
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 38,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 8,
+    "message": "expected '=', found '100'",
+    "offset": 347,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:8:38: PAR009: expected '=', found '100'"
+   },
+   "mutation": [
+    "delete",
+    346
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 41,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 11,
+    "message": "expected '.', found ';'",
+    "offset": 457,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:11:41: PAR009: expected '.', found ';'"
+   },
+   "mutation": [
+    "delete",
+    454
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 41,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 11,
+    "message": "expected '.', found ';'",
+    "offset": 457,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:11:41: PAR009: expected '.', found ';'"
+   },
+   "mutation": [
+    "delete",
+    456
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "digest": "sha256:8c7ec0f7c61cb1a345efa897f818f8c972416e14f06769f589b3917e97560ef3",
+   "mutation": [
+    "delete",
+    1160
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "digest": "sha256:ffdb901d61fdbc12c3783609b31ed70c5f765bd03c3a01a2d07918b9d6076498",
+   "mutation": [
+    "delete",
+    1166
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "digest": "sha256:7c3a638e19c1d3c8825d491cf19ea90f74a82ab4c6cf211ab608b9a065b2f21b",
+   "mutation": [
+    "delete",
+    410
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "digest": "sha256:ae2304235ae6cf323a664236f6ce456ad20f044ec1892191b9dbb72bf2780a89",
+   "mutation": [
+    "delete",
+    287
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "digest": "sha256:074fdc0690352da03c7bebfe8d6a77e48dc135415b2ff54de10326c24b1ba18f",
+   "mutation": [
+    "delete",
+    174
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 3,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 19,
+    "message": "expected property name, found ']'",
+    "offset": 690,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:19:3: PAR007: expected property name, found ']'"
+   },
+   "mutation": [
+    "insert",
+    690,
+    "]"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR007",
+    "column": 2,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 18,
+    "message": "expected declaration, found ']'",
+    "offset": 651,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:18:2: PAR007: expected declaration, found ']'"
+   },
+   "mutation": [
+    "insert",
+    651,
+    "]"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "PAR009",
+    "column": 6,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 26,
+    "message": "expected '=', found '}'",
+    "offset": 1184,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:26:6: PAR009: expected '=', found '}'"
+   },
+   "mutation": [
+    "insert",
+    1180,
+    "a"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
+   "error": {
+    "code": "LEX001",
+    "column": 5,
+    "filename": "tests/rust-port/export-kicad-pcb/zones.copper",
+    "hint": null,
+    "line": 22,
+    "message": "unexpected character '\\\\'",
+    "offset": 866,
+    "replacement": null,
+    "text": "tests/rust-port/export-kicad-pcb/zones.copper:22:5: LEX001: unexpected character '\\\\'"
+   },
+   "mutation": [
+    "insert",
+    866,
+    "\\"
+   ],
+   "source": "tests/rust-port/export-kicad-pcb/zones.copper"
+  },
+  {
    "error": {
     "code": "PAR010",
     "column": 1,
