@@ -43,23 +43,74 @@ impl ParseError {
 /// wins, at the first key's position). Unlike Python, a lone UTF-16 surrogate
 /// escape is refused because a Rust string cannot hold it.
 pub fn parse(text: &str) -> Result<Value, ParseError> {
-    let mut parser = Parser { text, bytes: text.as_bytes(), offset: 0 };
-    parser.skip_whitespace();
-    let value = parser.value()?;
-    parser.skip_whitespace();
-    if parser.offset != parser.bytes.len() {
-        return Err(parser.error("Extra data"));
-    }
-    Ok(value)
+    let mut parser = Parser { text, bytes: text.as_bytes(), offset: 0, strict: false, rejection: None };
+    parser.document()
+}
+
+/// What a strict reader refuses while parsing, in document order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Rejection {
+    /// Python's `json.loads(..., parse_constant=...)` raising: `NaN`,
+    /// `Infinity` or `-Infinity`, as written.
+    Constant(&'static str),
+    /// An `object_pairs_hook` raising on the first repeated key of an
+    /// object, when the object closes.
+    DuplicateKey(String),
+}
+
+/// Why a strict parse failed: malformed JSON, or a refused value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StrictError {
+    Syntax(ParseError),
+    Rejected(Rejection),
+}
+
+/// [`parse`] with hooks that refuse non-finite constants and repeated keys,
+/// raising at the point Python's hooks would.
+pub fn parse_strict(text: &str) -> Result<Value, StrictError> {
+    let mut parser = Parser { text, bytes: text.as_bytes(), offset: 0, strict: true, rejection: None };
+    parser.document().map_err(|error| match parser.rejection.take() {
+        Some(rejection) => StrictError::Rejected(rejection),
+        None => StrictError::Syntax(error),
+    })
 }
 
 struct Parser<'a> {
     text: &'a str,
     bytes: &'a [u8],
     offset: usize,
+    strict: bool,
+    /// Set when a strict hook refused a value; the error returned with it only unwinds.
+    rejection: Option<Rejection>,
 }
 
 impl Parser<'_> {
+    fn document(&mut self) -> Result<Value, ParseError> {
+        self.skip_whitespace();
+        let value = self.value()?;
+        self.skip_whitespace();
+        if self.offset != self.bytes.len() {
+            return Err(self.error("Extra data"));
+        }
+        Ok(value)
+    }
+
+    fn reject(&mut self, rejection: Rejection) -> ParseError {
+        self.rejection = Some(rejection);
+        self.error("rejected")
+    }
+
+    fn constant(&mut self, word: &'static str, value: f64) -> Result<Value, ParseError> {
+        if !self.text[self.offset..].starts_with(word) {
+            return Err(self.error("Expecting value"));
+        }
+        if self.strict {
+            return Err(self.reject(Rejection::Constant(word)));
+        }
+        self.offset += word.len();
+        Ok(Value::Float(value))
+    }
+
     fn error(&self, message: &str) -> ParseError {
         ParseError { message: message.to_owned(), offset: self.offset }
     }
@@ -91,11 +142,10 @@ impl Parser<'_> {
             Some(b't') => self.literal("true", Value::Bool(true)),
             Some(b'f') => self.literal("false", Value::Bool(false)),
             Some(b'n') => self.literal("null", Value::Null),
-            Some(b'N') => self.literal("NaN", Value::Float(f64::NAN)),
-            Some(b'I') => self.literal("Infinity", Value::Float(f64::INFINITY)),
+            Some(b'N') => self.constant("NaN", f64::NAN),
+            Some(b'I') => self.constant("Infinity", f64::INFINITY),
             Some(b'-') if self.text[self.offset..].starts_with("-Infinity") => {
-                self.offset += "-Infinity".len();
-                Ok(Value::Float(f64::NEG_INFINITY))
+                self.constant("-Infinity", f64::NEG_INFINITY)
             }
             Some(b'-' | b'0'..=b'9') => self.number(),
             _ => Err(self.error("Expecting value")),
@@ -251,6 +301,7 @@ impl Parser<'_> {
     fn object(&mut self) -> Result<Value, ParseError> {
         self.offset += 1;
         let mut object = Object::new();
+        let mut repeated: Option<String> = None;
         self.skip_whitespace();
         if self.peek() == Some(b'}') {
             self.offset += 1;
@@ -269,12 +320,18 @@ impl Parser<'_> {
             self.offset += 1;
             self.skip_whitespace();
             let value = self.value()?;
+            if repeated.is_none() && object.contains_key(&key) {
+                repeated = Some(key.clone());
+            }
             object.insert(key, value);
             self.skip_whitespace();
             match self.peek() {
                 Some(b',') => self.offset += 1,
                 Some(b'}') => {
                     self.offset += 1;
+                    if let Some(key) = repeated.filter(|_| self.strict) {
+                        return Err(self.reject(Rejection::DuplicateKey(key)));
+                    }
                     return Ok(Value::Object(object));
                 }
                 _ => return Err(self.error("Expecting ',' delimiter")),
@@ -308,6 +365,17 @@ mod tests {
         assert!(parse("1.").is_err());
         assert!(matches!(parse("NaN").unwrap(), Value::Float(x) if x.is_nan()));
         assert_eq!(parse("-Infinity").unwrap(), Value::Float(f64::NEG_INFINITY));
+    }
+
+    #[test]
+    fn strict_parse_rejects_constants_and_repeated_keys_in_order() {
+        assert_eq!(parse_strict("[1, NaN]"), Err(StrictError::Rejected(Rejection::Constant("NaN"))));
+        assert_eq!(
+            parse_strict(r#"{"a": {"b": 1, "b": 2}, "c": -Infinity}"#),
+            Err(StrictError::Rejected(Rejection::DuplicateKey("b".to_owned())))
+        );
+        assert!(matches!(parse_strict(r#"{"a": 1, "a": 2"#), Err(StrictError::Syntax(_))));
+        assert_eq!(parse_strict(r#"{"a": [-1.5]}"#).unwrap(), parse(r#"{"a": [-1.5]}"#).unwrap());
     }
 
     #[test]

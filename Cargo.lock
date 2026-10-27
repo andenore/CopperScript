@@ -38,6 +38,7 @@ dependencies = [
  "copper-lang",
  "copper-pcb",
  "copper-physical",
+ "copper-report",
  "copper-state",
  "sha2",
 ]
@@ -106,6 +107,22 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-rational",
+ "num-traits",
+ "sha2",
+]
+
+[[package]]
+name = "copper-report"
+version = "0.1.0"
+dependencies = [
+ "copper-json",
+ "copper-lang",
+ "copper-pcb",
+ "copper-physical",
+ "copper-state",
+ "copper-units",
+ "indexmap",
+ "num-bigint",
  "num-traits",
  "sha2",
 ]

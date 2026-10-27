@@ -1,0 +1,208 @@
+{
+  "algorithm": "hierarchical-analytical/hybrid-legalize/route-refine-v0.2",
+  "board": "ValidSensorBoard",
+  "candidates": [
+    {
+      "id": "candidate-02",
+      "metrics": {
+        "component_count": 6,
+        "congestion_bin_count": 640,
+        "congestion_capacity_per_bin": 11,
+        "congestion_overflow": 0,
+        "constraint_penalty_nm": 0,
+        "crossing_count": 2,
+        "escape_channel_deficit_nm": 0,
+        "escape_channel_pair_count": 0,
+        "escape_channel_penalty_nm": 0,
+        "estimated_connection_count": 12,
+        "estimated_via_count": 1,
+        "group_spread_nm": 413500000,
+        "half_perimeter_wire_length_nm": 56865000,
+        "local_connection_length_nm": 0,
+        "maximum_congestion_utilization_ppm": 272727,
+        "minimum_constraint_margin_nm": 171573,
+        "net_count": 5,
+        "pin_escape_pressure": 0,
+        "power_domain_penalty_nm": 2068250,
+        "weighted_wire_length_nm": 56865000
+      },
+      "seed": 2,
+      "selected": true,
+      "statistics": {
+        "analytical_iterations": 40,
+        "exact_repair_count": 0,
+        "refinement_move_count": 7,
+        "refinement_swap_count": 0,
+        "relative_repair_count": 0,
+        "routing_feedback_passes": 2
+      }
+    },
+    {
+      "id": "candidate-01",
+      "metrics": {
+        "component_count": 6,
+        "congestion_bin_count": 640,
+        "congestion_capacity_per_bin": 11,
+        "congestion_overflow": 0,
+        "constraint_penalty_nm": 0,
+        "crossing_count": 8,
+        "escape_channel_deficit_nm": 0,
+        "escape_channel_pair_count": 0,
+        "escape_channel_penalty_nm": 0,
+        "estimated_connection_count": 12,
+        "estimated_via_count": 4,
+        "group_spread_nm": 388500000,
+        "half_perimeter_wire_length_nm": 58270000,
+        "local_connection_length_nm": 0,
+        "maximum_congestion_utilization_ppm": 363636,
+        "minimum_constraint_margin_nm": 171573,
+        "net_count": 5,
+        "pin_escape_pressure": 0,
+        "power_domain_penalty_nm": 1745250,
+        "weighted_wire_length_nm": 58270000
+      },
+      "seed": 1,
+      "selected": false,
+      "statistics": {
+        "analytical_iterations": 40,
+        "exact_repair_count": 0,
+        "refinement_move_count": 7,
+        "refinement_swap_count": 0,
+        "relative_repair_count": 0,
+        "routing_feedback_passes": 2
+      }
+    }
+  ],
+  "escape_channels": [],
+  "findings": [
+    {
+      "code": "PROXY_FOOTPRINTS",
+      "message": "proxy footprints are sufficient for workflow testing but not physical signoff",
+      "stage": "prepare",
+      "status": "warning"
+    },
+    {
+      "code": "OMITTED_COMPONENTS",
+      "message": "components without selected footprints were omitted: PS1",
+      "stage": "prepare",
+      "status": "warning"
+    },
+    {
+      "code": "ESTIMATED_CROSSINGS",
+      "message": "coarse routing estimate contains 2 same-layer crossings",
+      "stage": "place",
+      "status": "warning"
+    },
+    {
+      "code": "PLACEMENT_CANDIDATES",
+      "message": "generated 2 non-dominated deterministic placement candidate(s)",
+      "stage": "place",
+      "status": "pass"
+    },
+    {
+      "code": "DETAILED_ROUTING_NOT_RUN",
+      "message": "placement includes a coarse routability estimate only; no copper routes were generated",
+      "stage": "route",
+      "status": "not_run"
+    },
+    {
+      "code": "PHYSICAL_SIGNOFF_NOT_RUN",
+      "message": "DRC, SI/PI, thermal, RF, DFX, and independent CAM verification remain required",
+      "stage": "verify",
+      "status": "not_run"
+    }
+  ],
+  "gates": [
+    {
+      "stage": "prepare",
+      "status": "warning",
+      "summary": "inputs accepted for placement exploration"
+    },
+    {
+      "stage": "place",
+      "status": "warning",
+      "summary": "legal placement produced with routability warnings"
+    },
+    {
+      "stage": "route",
+      "status": "not_run",
+      "summary": "detailed routing is not run by plan-layout"
+    },
+    {
+      "stage": "verify",
+      "status": "blocked",
+      "summary": "release is blocked until routing and signoff pass"
+    }
+  ],
+  "metrics": {
+    "component_count": 6,
+    "congestion_bin_count": 640,
+    "congestion_capacity_per_bin": 11,
+    "congestion_overflow": 0,
+    "constraint_penalty_nm": 0,
+    "crossing_count": 2,
+    "escape_channel_deficit_nm": 0,
+    "escape_channel_pair_count": 0,
+    "escape_channel_penalty_nm": 0,
+    "estimated_connection_count": 12,
+    "estimated_via_count": 1,
+    "group_spread_nm": 413500000,
+    "half_perimeter_wire_length_nm": 56865000,
+    "local_connection_length_nm": 0,
+    "maximum_congestion_utilization_ppm": 272727,
+    "minimum_constraint_margin_nm": 171573,
+    "net_count": 5,
+    "pin_escape_pressure": 0,
+    "power_domain_penalty_nm": 2068250,
+    "weighted_wire_length_nm": 56865000
+  },
+  "requirements": {
+    "board_digest": "63dc79fb54c423f3f8fbe549fb9835041c5c5addbce426c324e20b98db3e686d",
+    "complete": true,
+    "counts": {
+      "pass": 1
+    },
+    "native_report_digest": null,
+    "requirements": [
+      {
+        "declared_consumers": [],
+        "declared_verifier": null,
+        "detail": "checked against actual final placement geometry",
+        "id": "max_distance:0",
+        "kind": "max_distance",
+        "measurements": [
+          {
+            "actual_nm": 2828427,
+            "comparison": "exact squared distance",
+            "limit_nm": 3000000,
+            "passed": true,
+            "property": "max_distance"
+          }
+        ],
+        "mode": "require",
+        "origins": [
+          "/home/user/CopperScript/examples/valid_board/board.copper:106:16"
+        ],
+        "parameters": {
+          "distance": "3 mm"
+        },
+        "required": true,
+        "status": "pass",
+        "targets": [
+          "C1",
+          "U2.VDD"
+        ],
+        "verifier": "copperscript-final-geometry/v0.1"
+      }
+    ],
+    "schema": "copperscript-requirement-verification/v0.1",
+    "scope": "explicit semantic declarations; ERC, mechanical, package, CAM and production gates remain separate",
+    "source_digest": "98b4a7a48575fd198aa5e47266380b97fe1e46cdffc6e540ce848a1ba631ed75",
+    "stage": "placement",
+    "status": "pass"
+  },
+  "reserved_corridors": [],
+  "schema": "copperscript-layout-report/v0.1",
+  "selected_candidate": "candidate-02",
+  "skipped_corridors": []
+}

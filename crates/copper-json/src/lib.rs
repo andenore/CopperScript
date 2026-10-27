@@ -12,7 +12,7 @@ mod serialize;
 pub mod text;
 
 pub use float::python_float_repr;
-pub use parse::{ParseError, parse};
+pub use parse::{ParseError, Rejection, StrictError, parse, parse_strict};
 pub use serialize::{Dumps, encode_str};
 
 use indexmap::IndexMap;

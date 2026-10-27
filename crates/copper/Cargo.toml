@@ -17,6 +17,7 @@ copper-lang.workspace = true
 copper-physical.workspace = true
 copper-drc.workspace = true
 copper-pcb.workspace = true
+copper-report.workspace = true
 copper-state.workspace = true
 sha2.workspace = true
 

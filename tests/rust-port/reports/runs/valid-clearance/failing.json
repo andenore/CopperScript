@@ -1,0 +1,982 @@
+{
+  "connectivity": {
+    "deferred_zone_nets": [],
+    "native_fill_verified": false,
+    "routed_ordinary_net_count": 4,
+    "unrouted_ordinary_nets": []
+  },
+  "critical": {
+    "bundles": [],
+    "global_routing_fingerprint": "901dc251abd84636e056da58a8c0d5fbe8176b4999c7841d6cc93d06f6aa2521",
+    "lanes": [],
+    "match_tuning": [],
+    "nets": [
+      {
+        "connected": false,
+        "diagnostics": [
+          "pair blocked at U2"
+        ],
+        "local_preparation": {
+          "reason": "terminal escape crosses U2.45",
+          "status": "blocked"
+        },
+        "nets": [
+          "I2C_SDA",
+          "I2C_SCL"
+        ],
+        "repairs": [
+          {
+            "pair_budget_exhausted": true,
+            "ripped_up": [
+              "V3V3"
+            ],
+            "search_states": 812
+          },
+          {
+            "ripped_up": [],
+            "search_states": 3
+          },
+          "skipped"
+        ]
+      },
+      {
+        "connected": false,
+        "diagnostics": [],
+        "local_preparation": {
+          "status": "unsupported"
+        },
+        "nets": [
+          "VBUS"
+        ]
+      },
+      {
+        "connected": true,
+        "diagnostics": [
+          "fine"
+        ],
+        "nets": [
+          "GND"
+        ]
+      }
+    ],
+    "plane_reservation_track_count": 0,
+    "plane_reservation_via_count": 0,
+    "reserved_track_count": 0,
+    "reserved_via_count": 0,
+    "routing_fingerprint": "7079ce8132f0e4e313c785f2126c24d068758e78795cfd25f4bf2ed965201abd",
+    "schema": "copperscript-critical-route/v0.1",
+    "status": "success"
+  },
+  "critical_lane_review": {
+    "coupling_factor": 2,
+    "ignored_zone_nets": [],
+    "match_groups": [],
+    "nets": [],
+    "pairs": [],
+    "search_radius_nm": 1000000,
+    "sharp_bend_degrees": 45
+  },
+  "detailed": {
+    "global_routing_fingerprint": "901dc251abd84636e056da58a8c0d5fbe8176b4999c7841d6cc93d06f6aa2521",
+    "locked_track_count": 9,
+    "locked_via_count": 9,
+    "metrics": {
+      "conflict_resource_count": 0,
+      "passes": 3,
+      "routed_net_count": 4,
+      "total_conflict_overflow": 0,
+      "total_length_nm": 55269929,
+      "track_count": 56,
+      "unrouted_net_count": 0,
+      "via_count": 2
+    },
+    "nets": [
+      {
+        "connected": false,
+        "diagnostics": [
+          "search budget exhausted"
+        ],
+        "net": "I2C_SDA"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "search budget exhausted"
+        ],
+        "net": "I2C_SCL"
+      },
+      {
+        "connected": false,
+        "diagnostics": [],
+        "net": "V3V3"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "no legal via site"
+        ],
+        "net": "NET0"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "no legal via site"
+        ],
+        "net": "NET1"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "no legal via site"
+        ],
+        "net": "NET2"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "no legal via site"
+        ],
+        "net": "NET3"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "no legal via site"
+        ],
+        "net": "NET4"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "no legal via site"
+        ],
+        "net": "NET5"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "no legal via site"
+        ],
+        "net": "NET6"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "no legal via site"
+        ],
+        "net": "NET7"
+      },
+      {
+        "connected": true,
+        "diagnostics": [],
+        "net": "GND"
+      }
+    ],
+    "repair_trial_report_limit": 256,
+    "repair_trials": [],
+    "routing_fingerprint": "bd9e0ed01fc1d621bf42dc8bd6a6a602ccf148603fb53217e5a4eda6667ed90d",
+    "schema": "copperscript-detailed-route/v0.1",
+    "search_work": null,
+    "status": "success"
+  },
+  "drc": {
+    "completeness": "complete",
+    "coverage": [
+      {
+        "check": "route_completeness",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "connectivity",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "placement_legality",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "courtyard_gap",
+        "detail": "",
+        "required": true,
+        "status": "not_applicable"
+      },
+      {
+        "check": "track_width_and_budgets",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "differential_geometry",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "length_match",
+        "detail": "",
+        "required": true,
+        "status": "not_applicable"
+      },
+      {
+        "check": "single_ended_return_vias",
+        "detail": "exact existing-barrel span and center distance; no filled-reference or SI proof",
+        "required": true,
+        "status": "not_applicable"
+      },
+      {
+        "check": "via_geometry_and_budgets",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "copper_to_board_edge",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "shorts_and_clearance",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "non_plated_hole_clearance",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "via_hole_to_copper",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "drill_to_drill_spacing",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "copper_keepouts",
+        "detail": "polygonal keepout checks for tracks, vias, and component pads",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "copper_zones",
+        "detail": "",
+        "required": false,
+        "status": "not_applicable"
+      },
+      {
+        "check": "solder_mask",
+        "detail": "mask sliver and expansion checks require final artwork",
+        "required": false,
+        "status": "unsupported"
+      },
+      {
+        "check": "silkscreen",
+        "detail": "silkscreen-to-mask checks require final artwork",
+        "required": false,
+        "status": "unsupported"
+      },
+      {
+        "check": "creepage",
+        "detail": "creepage requires a declared safety profile",
+        "required": false,
+        "status": "unsupported"
+      },
+      {
+        "check": "signal_integrity",
+        "detail": "impedance and signal integrity require external qualification",
+        "required": false,
+        "status": "unsupported"
+      },
+      {
+        "check": "thermal",
+        "detail": "thermal/current qualification requires external analysis",
+        "required": false,
+        "status": "unsupported"
+      }
+    ],
+    "decision": "fail",
+    "findings": [
+      {
+        "code": "DRC-CLEARANCE",
+        "disposition": "active",
+        "fingerprint": "b3469d7e5c0e87c3f171c32c2225b28f6819c65979ab02791b5dbdad09ccaa58",
+        "layers": [
+          "F.Cu"
+        ],
+        "measured_nm": 550363,
+        "message": "pad:C1.2:1 and pad:U2.45:4 violate copper spacing",
+        "nets": [
+          "GND",
+          "I2C_SCL"
+        ],
+        "objects": [
+          "pad:C1.2:1",
+          "pad:U2.45:4"
+        ],
+        "required_nm": 700000,
+        "severity": "error",
+        "waiver_reason": null
+      },
+      {
+        "code": "DRC-CLEARANCE",
+        "disposition": "active",
+        "fingerprint": "a6d34c4f9577bbc7964224e66204c4f61a670e03432352bd716fb2be1062585d",
+        "layers": [
+          "F.Cu"
+        ],
+        "measured_nm": 501597,
+        "message": "pad:C1.2:1 and pad:U2.46:5 violate copper spacing",
+        "nets": [
+          "GND",
+          "I2C_SDA"
+        ],
+        "objects": [
+          "pad:C1.2:1",
+          "pad:U2.46:5"
+        ],
+        "required_nm": 700000,
+        "severity": "error",
+        "waiver_reason": null
+      },
+      {
+        "code": "DRC-OPEN-NET",
+        "message": "open",
+        "nets": [
+          "I2C_SDA",
+          "I2C_SCL"
+        ],
+        "severity": "error"
+      },
+      {
+        "code": "DRC-OPEN-NET",
+        "message": "open",
+        "nets": [
+          "V3V3"
+        ],
+        "severity": "error"
+      },
+      {
+        "code": "DRC-TRACK-CLEARANCE",
+        "layers": [
+          "F.Cu"
+        ],
+        "message": "track too close",
+        "nets": [
+          "I2C_SCL"
+        ],
+        "objects": [
+          "track:0",
+          "via:0",
+          "track:9999",
+          "pad:C1.1"
+        ],
+        "severity": "error"
+      },
+      {
+        "code": "DRC-TRACK-CLEARANCE",
+        "layers": [],
+        "message": "mismatching objects get no marker",
+        "nets": [
+          "NOT_THIS_NET"
+        ],
+        "objects": [
+          "track:1",
+          "via:1"
+        ],
+        "severity": "error"
+      },
+      {
+        "code": "DRC-MAX-LENGTH",
+        "measured_nm": 31250000,
+        "message": "I2C_SDA exceeds its budget",
+        "nets": [
+          "I2C_SDA"
+        ],
+        "required_nm": 25000000,
+        "severity": "warning"
+      },
+      {
+        "code": "DRC-DIFF-SKEW",
+        "message": "skew",
+        "nets": [
+          "NET0",
+          "NET1",
+          "NET2",
+          "NET3",
+          "NET4",
+          "NET5",
+          "NET6",
+          "NET7"
+        ],
+        "severity": "warning"
+      },
+      {
+        "code": "DRC-LENGTH-MATCH",
+        "measured_nm": 1.5,
+        "message": "match",
+        "nets": [
+          "I2C_SCL"
+        ],
+        "required_nm": 2,
+        "severity": "warning"
+      },
+      {
+        "code": "DRC-OTHER",
+        "message": "ignored",
+        "nets": [
+          "GND"
+        ],
+        "severity": "warning"
+      },
+      "not a finding"
+    ],
+    "schema": "copperscript-physical-drc/v0.1",
+    "token": {
+      "board_digest": "e82d822316859317b9ffb0d13a971b26147e2361479274ff130ca16619f25e09",
+      "completeness": "complete",
+      "decision": "fail",
+      "report_digest": "34ab70735cd3c2fc9a4087bdb173a238e56ea27952081c97453884f5f2d98feb",
+      "rules_digest": "7ae6e616e9a6f497d08fae739fb1165387618557022e087c4d0f3a0485d2c43f",
+      "schema": "copperscript-signoff/v0.1",
+      "token_digest": "dbed3197ac9455db48250d0084291266421127635169fe130502751252b98de4"
+    }
+  },
+  "duplicate_pad_stitch": {
+    "added_track_count": 0,
+    "already_connected_pads": [],
+    "pending_pads": [],
+    "pipeline_added_track_count": 0,
+    "stitched_pads": [],
+    "surface_pending_pads": [],
+    "zone_verified_pads": []
+  },
+  "erc_diagnostics": [],
+  "erc_pass": true,
+  "escape": {
+    "clusters": [
+      {
+        "channels": [
+          {
+            "capacity": 3,
+            "demand": 5,
+            "layer": "F.Cu"
+          },
+          {
+            "capacity": 4,
+            "demand": 1,
+            "layer": "B.Cu"
+          },
+          "x"
+        ],
+        "component": "U2",
+        "inner_signal_pins": [
+          "U2.45",
+          "U2.46",
+          "U2.99"
+        ],
+        "overflow": 2
+      },
+      {
+        "component": "U3",
+        "overflow": 0
+      }
+    ],
+    "crossing_pairs": 0,
+    "overflow_clusters": [],
+    "pairs": [
+      {
+        "components": [
+          "U2",
+          "U3"
+        ],
+        "crossing_nets": [
+          "I2C_SDA",
+          "I2C_SCL"
+        ],
+        "crossing_pairs": 2,
+        "layer_moves": [
+          "I2C_SCL"
+        ]
+      },
+      {
+        "components": [
+          "U1",
+          "C1"
+        ],
+        "crossing_nets": [],
+        "crossing_pairs": 0
+      }
+    ],
+    "schema": "copperscript.escape-diagnostics/v0.1"
+  },
+  "fabrication_ready": false,
+  "fanout": {
+    "late_bypass_completion": {
+      "added_tracks": 4,
+      "added_vias": 1,
+      "completed_links": [
+        "a"
+      ],
+      "maximum_passes": 3,
+      "passes": 2,
+      "reason": "remaining links have no legal via site",
+      "remaining_links": [
+        "b",
+        "c"
+      ],
+      "selected_links": [
+        "a",
+        "b",
+        "c"
+      ],
+      "status": "partial"
+    }
+  },
+  "fine_regions": {
+    "base_nodes": 39528,
+    "base_pitch_mm": 0.25,
+    "fine_nodes": 0,
+    "finest_pitch_mm": 0.25,
+    "layers": 2,
+    "mode": "arrays",
+    "patches": [],
+    "skipped": [],
+    "total_nodes": 39528,
+    "uniform_nodes_at_finest": 39528,
+    "uniform_to_nested_ratio": 1.0
+  },
+  "gates": [
+    {
+      "stage": "route",
+      "status": "fail",
+      "summary": "routing incomplete"
+    },
+    {
+      "stage": "verify",
+      "status": "not_run",
+      "summary": ""
+    },
+    {
+      "stage": "place",
+      "status": "pass",
+      "summary": "placed"
+    }
+  ],
+  "global": {
+    "hotspots": [],
+    "metrics": {
+      "deferred_net_count": 0,
+      "iterations": 2,
+      "maximum_overflow": 0,
+      "maximum_utilization_ppm": 1000000,
+      "overfull_resource_count": 0,
+      "proposed_via_count": 2,
+      "region_only_access_count": 0,
+      "routed_net_count": 4,
+      "total_length_nm": 105365000,
+      "total_overflow": 0,
+      "unrouted_net_count": 0
+    },
+    "placement_fingerprint": "f88c0993c9749ca2b7e9855f25fb17144da35e5163d814fdbf186ca03b3c5e17",
+    "routes": [
+      {
+        "connected": false,
+        "diagnostics": [
+          "no pin access for U2.46",
+          "blocked near U3.4"
+        ],
+        "net": "I2C_SDA"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "no pin access for U2.45"
+        ],
+        "net": "I2C_SCL"
+      },
+      {
+        "connected": false,
+        "deferred_to_zone": true,
+        "diagnostics": [
+          "zone"
+        ],
+        "net": "V3V3"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "capacity exhausted"
+        ],
+        "net": "NET0"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "capacity exhausted"
+        ],
+        "net": "NET1"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "capacity exhausted"
+        ],
+        "net": "NET2"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "capacity exhausted"
+        ],
+        "net": "NET3"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "capacity exhausted"
+        ],
+        "net": "NET4"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "capacity exhausted"
+        ],
+        "net": "NET5"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "capacity exhausted"
+        ],
+        "net": "NET6"
+      },
+      {
+        "connected": false,
+        "diagnostics": [
+          "capacity exhausted"
+        ],
+        "net": "NET7"
+      },
+      {
+        "connected": false,
+        "net": "GND"
+      },
+      {
+        "connected": true,
+        "net": "VBUS"
+      },
+      "not a route"
+    ],
+    "routing_fingerprint": "901dc251abd84636e056da58a8c0d5fbe8176b4999c7841d6cc93d06f6aa2521",
+    "schema": "copperscript-global-route/v0.1",
+    "status": "success"
+  },
+  "placement_candidate": "candidate-01",
+  "placement_feedback": {
+    "accepted_moves": 0,
+    "final_failed_nets": [],
+    "final_score": [
+      2,
+      0,
+      0,
+      0,
+      0,
+      55269929,
+      2
+    ],
+    "hot_tiles": [],
+    "initial_failed_nets": [],
+    "initial_score": [
+      2,
+      0,
+      0,
+      0,
+      0,
+      55269929,
+      2
+    ],
+    "map_source": null,
+    "reruns": 0,
+    "rounds": 0,
+    "score_order": [
+      "hard_drc_errors",
+      "open_signal_nets",
+      "critical_failures",
+      "unrouted_nets",
+      "conflict_overflow",
+      "total_length_nm",
+      "vias"
+    ],
+    "stop_reason": "no_failed_nets",
+    "trials": []
+  },
+  "placement_findings": [
+    {
+      "code": "REMOTE_FIXED_PART",
+      "message": "U3 is fixed far away",
+      "status": "warn",
+      "subject": "U3"
+    },
+    {
+      "code": "CORRIDOR_PART",
+      "message": "fine",
+      "status": "pass",
+      "subject": "R1"
+    },
+    {
+      "message": "no subject",
+      "status": "warn"
+    }
+  ],
+  "requirements": {
+    "board_digest": "e82d822316859317b9ffb0d13a971b26147e2361479274ff130ca16619f25e09",
+    "complete": false,
+    "counts": {
+      "blocked": 1,
+      "fail": 1,
+      "pass": 1
+    },
+    "native_report_digest": null,
+    "requirements": [
+      {
+        "declared_consumers": [],
+        "declared_verifier": null,
+        "detail": "checked against actual final placement geometry",
+        "id": "max_distance:0",
+        "kind": "max_distance",
+        "measurements": [
+          {
+            "actual_nm": 1414213,
+            "comparison": "exact squared distance",
+            "limit_nm": 3000000,
+            "passed": true,
+            "property": "max_distance"
+          }
+        ],
+        "mode": "require",
+        "origins": [
+          "/home/user/CopperScript/examples/valid_board/board.copper:106:16"
+        ],
+        "parameters": {
+          "distance": "3 mm"
+        },
+        "required": true,
+        "status": "pass",
+        "targets": [
+          "C1",
+          "U2.VDD"
+        ],
+        "verifier": "copperscript-final-geometry/v0.1"
+      },
+      {
+        "detail": "C1 is 4.2 mm from U2.VDD (limit 3 mm)",
+        "id": "max_distance:1",
+        "measurements": [
+          {
+            "actual_nm": 4200000,
+            "limit_nm": 3000000
+          },
+          {
+            "actual_nm": 4200000,
+            "limit_nm": 3000000
+          },
+          {
+            "actual_nm": 4200000,
+            "limit_nm": 3000000
+          },
+          {
+            "actual_nm": 4200000,
+            "limit_nm": 3000000
+          },
+          {
+            "actual_nm": 4200000,
+            "limit_nm": 3000000
+          }
+        ],
+        "origins": [
+          "board.copper:107:16",
+          "board.copper:108:16",
+          "lib.copper:4:1",
+          "lib.copper:9:1"
+        ],
+        "status": "fail"
+      },
+      {
+        "detail": "no field solver",
+        "id": "impedance:0",
+        "measurements": [],
+        "origins": "board.copper:120:5",
+        "status": "blocked"
+      }
+    ],
+    "schema": "copperscript-requirement-verification/v0.1",
+    "scope": "explicit semantic declarations; ERC, mechanical, package, CAM and production gates remain separate",
+    "source_digest": "98b4a7a48575fd198aa5e47266380b97fe1e46cdffc6e540ce848a1ba631ed75",
+    "stage": "route",
+    "status": "fail"
+  },
+  "requirements_complete": true,
+  "route_geometry": {
+    "signal_layer_length_nm": {
+      "B.Cu": 18263831,
+      "F.Cu": 46006090
+    },
+    "signal_track_length_nm": {
+      "diagonal_45_nm": 29344921,
+      "other_angle_nm": 0,
+      "straight_nm": 34925000
+    },
+    "zone_net_track_count": 0,
+    "zone_nets_deferred": []
+  },
+  "routing_complete": false,
+  "routing_profile": "quick",
+  "routing_quality": {
+    "angle_length_nm": {
+      "diagonal_45_nm": 29344921,
+      "other_angle_nm": 0,
+      "straight_nm": 34925000
+    },
+    "board_digest": "e82d822316859317b9ffb0d13a971b26147e2361479274ff130ca16619f25e09",
+    "decoupling": [
+      {
+        "surface_connected": true
+      },
+      {
+        "surface_connected": false
+      },
+      {}
+    ],
+    "layer_length_nm": {
+      "B.Cu": 18263831,
+      "F.Cu": 46006090
+    },
+    "length_method": "sum of integer-nanometre segment lengths rounded down",
+    "native_fill_current": false,
+    "native_report_digest": null,
+    "nets": {
+      "GND": {
+        "explicit_copper_connected": true,
+        "track_count": 18,
+        "track_length_nm": 16048557,
+        "via_count": 3
+      },
+      "I2C_SCL": {
+        "explicit_copper_connected": true,
+        "track_count": 12,
+        "track_length_nm": 14784493,
+        "via_count": 3
+      },
+      "I2C_SDA": {
+        "explicit_copper_connected": true,
+        "track_count": 12,
+        "track_length_nm": 12765801,
+        "via_count": 2
+      },
+      "V3V3": {
+        "explicit_copper_connected": true,
+        "track_count": 23,
+        "track_length_nm": 20671070,
+        "via_count": 3
+      },
+      "VBUS": {
+        "explicit_copper_connected": true,
+        "track_count": 0,
+        "track_length_nm": 0,
+        "via_count": 0
+      }
+    },
+    "reference_coverage": [],
+    "schema": "copperscript-routing-quality/v0.1",
+    "scope": "explicit track geometry and surface connectivity; no impedance, thermal or production qualification",
+    "track_count": 65,
+    "track_length_nm": 64269921,
+    "via_count": 11
+  },
+  "schema": "copperscript-route-board/v0.1",
+  "status": "fail",
+  "stopped_after": null,
+  "summary": {
+    "copper": {
+      "track_length_mm": 64.27,
+      "tracks": 65,
+      "vias": 11
+    },
+    "drc": {
+      "budget_warnings_by_code": {},
+      "decision": "fail",
+      "errors": 2,
+      "errors_by_code": {
+        "DRC-CLEARANCE": 2
+      }
+    },
+    "plane": {
+      "estimated_open_pads": {
+        "GND": [
+          "C1.2",
+          "U1.2",
+          "U2.23",
+          "U3.2"
+        ],
+        "V3V3": [
+          "U2.24",
+          "U3.1",
+          "C1.1",
+          "R1.1",
+          "R2.1",
+          "U1.2",
+          "U2.36",
+          "U2.48"
+        ]
+      }
+    },
+    "schema": "copperscript-route-summary/v1",
+    "signal": {
+      "completion": 1.0,
+      "connections": 12,
+      "nets": 4,
+      "open_nets": [],
+      "opens": 0
+    }
+  },
+  "work_limits": {
+    "congestion_feedback_trials": 4,
+    "critical_pin_access_step_mm": null,
+    "decoupling_placement_trials": 4,
+    "escape_spacing_passes": 2,
+    "filled_copper_search_states": 2000,
+    "filled_copper_trials": 2,
+    "fine_regions": "arrays",
+    "ignored_flags": [],
+    "mapped_flags": [],
+    "maximum_ripup_blockers": 4,
+    "package_initial_pair_states": 6000,
+    "pin_access_step_mm": "0.5",
+    "placement_feedback_trials": 24,
+    "placement_refinement_passes": 2,
+    "placement_seeds": null,
+    "router": "unified",
+    "unified_direct": false,
+    "unified_iterations": 150,
+    "unified_retain_escape_copper": false,
+    "unified_search_states": 400000,
+    "unified_time_budget_s": null,
+    "zone_dependency_expansions": 2
+  }
+}

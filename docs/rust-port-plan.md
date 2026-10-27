@@ -362,3 +362,27 @@ do not shrink as much.
   and `check-footprint-strict` suites (269 cases: every footprint in the
   examples, fixtures and cached CopperLib packages, with seeded mutations)
   are byte-identical.
+
+**M5 diagnostics and reports (stream `rust-m5-reports`, in progress).**
+
+- Commands rewritten: `explain`, `issues`, `view`, `summarize`, in the new
+  `copper-report` crate (explanations, the scene reader for `.kicad_pcb`
+  boards and physical-board state files, issue grouping, the view legend and
+  SVG, the engineering summary). Loosely typed report JSON is read with
+  Python's semantics, including the messages of the exceptions the CLI
+  reports; `copper-json` gained a strict parse for `summarize`'s
+  duplicate-key and non-finite hooks.
+- `view` writes the SVG that the Python command writes without Pillow, the
+  oracle's configuration in CI (`pip install -e ".[test]" shapely` installs
+  no imaging library), including its `(Pillow not installed: wrote SVG)`
+  legend line. A Python oracle with Pillow writes a PNG whose text is
+  rasterized from platform fonts; that is not reproduced. Run the M5 suites
+  locally with a Pillow-free interpreter (`--python` pointing at a fresh
+  venv).
+- Fixtures: `tests/rust-port/reports` (runs produced by the Python CLI on
+  small example boards, derived reports for branches those boards do not
+  reach, a handwritten scene board, malformed reports); see its README for
+  the generating commands.
+- Inputs the Rust reader does not model (a KiCad layer or net name written as
+  a list, a malformed state file, a decimal tuple as a track length) exit 3
+  as not implemented.
