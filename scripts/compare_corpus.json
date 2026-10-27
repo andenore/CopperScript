@@ -1,7 +1,7 @@
 {
  "schema": "copperscript.compare-corpus/v1",
  "description": "Inputs and commands the Rust binary must reproduce (docs/rust-port-plan.md). Suites up to accepted_milestone are gated: every case must be equal or a recorded difference.",
- "accepted_milestone": "M1",
+ "accepted_milestone": "M2",
  "boards": {
   "cm4": {
    "source": "examples/cm4_baseboard/board.copper",
