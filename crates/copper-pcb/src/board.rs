@@ -395,6 +395,7 @@ pub struct ComponentHoleClearance {
 /// `ComponentHeight` as the backend reads it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ComponentHeight {
+    pub id: String,
     pub reference: String,
     pub height_nm: i64,
 }

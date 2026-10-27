@@ -1306,6 +1306,7 @@ pub fn apply_source_macros(
     offline: bool,
 ) -> Result<PhysicalBoard> {
     let prepared = copper_lang::macros::prepare_macro_bindings(flat, locked, offline)?;
+    let mut provenance: Vec<Json> = Vec::new();
     for item in prepared {
         let binding = &item.binding;
         let members: IndexMap<String, String> =
@@ -1331,6 +1332,14 @@ pub fn apply_source_macros(
             }
             Err(other) => return Err(other),
         };
+        let mut record = item.provenance.clone();
+        record.insert("name".to_owned(), Json::Str(binding.name.clone()));
+        record.insert("declaration".to_owned(), Json::Str(binding.location.to_string()));
+        provenance.push(Json::Object(record));
+    }
+    if !provenance.is_empty() {
+        let text = copper_json::Dumps::new().sort_keys(true).dumps(&Json::Array(provenance));
+        board.metadata.insert("source_physical_macros".to_owned(), text);
     }
     Ok(board)
 }

@@ -14,9 +14,32 @@ use copper_units::Decimal;
 use crate::board::*;
 use crate::{Error, Result, fail};
 
-/// A short text for a JSON value that only needs to be present.
-pub(crate) fn python_str(value: &Json) -> String {
-    copper_json::Dumps::compact().dumps(value)
+/// Python's `str(value)` of a parsed JSON value (containers show their `repr`).
+pub fn python_str(value: &Json) -> String {
+    match value {
+        Json::Str(text) => text.clone(),
+        other => python_repr(other),
+    }
+}
+
+/// Python's `repr(value)` of a parsed JSON value.
+pub fn python_repr(value: &Json) -> String {
+    match value {
+        Json::Null => "None".to_owned(),
+        Json::Bool(flag) => if *flag { "True" } else { "False" }.to_owned(),
+        Json::Int(number) => number.to_string(),
+        Json::Float(number) => copper_json::python_float_repr(*number),
+        Json::Str(text) => copper_json::python_str_repr(text),
+        Json::Array(items) => format!("[{}]", items.iter().map(python_repr).collect::<Vec<_>>().join(", ")),
+        Json::Object(object) => format!(
+            "{{{}}}",
+            object
+                .iter()
+                .map(|(key, item)| format!("{}: {}", copper_json::python_str_repr(key), python_repr(item)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 /// `packages.resolve_module_asset`: a module data file through the package lock.

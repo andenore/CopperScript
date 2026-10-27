@@ -11,6 +11,7 @@
 
 pub mod breakout;
 pub mod connectivity;
+pub mod digest;
 pub mod legality;
 pub mod macros;
 

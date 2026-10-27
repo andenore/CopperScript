@@ -80,7 +80,7 @@ pub enum Footprints<'a> {
 // Constraint parameters
 
 /// Python's `str(value)` of a constraint parameter.
-pub(crate) fn parameter_str(value: &ParameterValue) -> String {
+pub fn parameter_str(value: &ParameterValue) -> String {
     match value {
         ParameterValue::Text(text) => text.clone(),
         ParameterValue::Int(number) => number.to_string(),
@@ -855,7 +855,11 @@ pub fn physicalize(
     let component_heights = mechanical.map_or_else(Vec::new, |m| {
         m.component_heights
             .iter()
-            .map(|h| ComponentHeight { reference: pyvalue::text(&h.reference), height_nm: h.height_nm })
+            .map(|h| ComponentHeight {
+                id: h.id.clone(),
+                reference: pyvalue::text(&h.reference),
+                height_nm: h.height_nm,
+            })
             .collect()
     });
     let mut physical = PhysicalBoard {
