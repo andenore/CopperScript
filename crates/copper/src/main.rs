@@ -12,6 +12,7 @@ mod check;
 mod commands;
 mod compile;
 mod compile_macro;
+mod library;
 mod lock;
 mod power_check;
 mod pypath;

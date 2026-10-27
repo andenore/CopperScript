@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use crate::{agent_guide, audit_footprints, check, compile, compile_macro, lock, power_check, query, state};
+use crate::{agent_guide, audit_footprints, check, compile, compile_macro, library, lock, power_check, query, state};
 
 /// Exit status of a command the Rust rewrite does not implement yet.
 pub const NOT_IMPLEMENTED_EXIT: u8 = 3;
@@ -25,7 +25,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("compile-macro", Plan::Done),
     ("lsp", Plan::Milestone("M6")),
     ("agent-guide", Plan::Done),
-    ("library", Plan::Milestone("M1")),
+    ("library", Plan::Done),
     ("summarize", Plan::Milestone("M5")),
     ("benchmark-routing", Plan::Milestone("M4")),
     ("editor-overlay", Plan::Milestone("M6")),
@@ -89,6 +89,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "compile" => compile::run(rest, out, err),
         "check" => check::run(rest, out, err),
         "query" => query::run(rest, out, err),
+        "library" => library::run(rest, out, err),
         "lock" => lock::run(rest, out, err),
         "compile-macro" => compile_macro::run(rest, out, err),
         "audit-footprints" => audit_footprints::run(rest, out, err),

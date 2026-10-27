@@ -175,8 +175,11 @@ def load_corpus(path: Path, kicad_cli: str | None = None) -> tuple[dict, list[Ca
             continue
         for case in suite.get("cases", []):
             case_id = case.get("id") or f"{name}/" + " ".join(case["args"][1:] or ["(default)"])
+            # A case may narrow the compared channels, e.g. to exit status
+            # for a usage error, whose argparse wording is not reproduced.
+            channels = {"compare": tuple(case["compare"])} if "compare" in case else {}
             cases.append(Case(id=case_id, args=list(case["args"]), cwd=ROOT,
-                              timeout_s=float(case.get("timeout_s", timeout)), **base))
+                              timeout_s=float(case.get("timeout_s", timeout)), **{**base, **channels}))
         for source in _inputs(suite.get("inputs", []), suite.get("declares")):
             cases.append(Case(id=f"{name}/{source}", args=_expand(suite["args"], {"input": source}), cwd=ROOT,
                               timeout_s=timeout, **base))

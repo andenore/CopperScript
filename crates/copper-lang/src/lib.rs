@@ -14,6 +14,7 @@ mod error;
 pub mod footprints;
 mod lexer;
 pub mod library;
+pub mod library_context;
 pub mod lower;
 pub mod macros;
 pub mod mechanical;
@@ -29,6 +30,7 @@ pub mod serializer;
 pub mod silkscreen;
 mod suggest;
 pub mod syntax;
+pub mod syntax_state;
 
 pub use error::{CopperScriptError, Diagnostic};
 pub use lexer::{Token, TokenKind, tokenize, tokenize_recovering};

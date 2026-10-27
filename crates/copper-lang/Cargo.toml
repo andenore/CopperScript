@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 copper-json.workspace = true
 copper-physical.workspace = true
+copper-state.workspace = true
 copper-units.workspace = true
 indexmap.workspace = true
 num-bigint.workspace = true
@@ -18,7 +19,6 @@ num-traits.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
-copper-state.workspace = true
 
 [lints]
 workspace = true
