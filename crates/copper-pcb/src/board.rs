@@ -575,6 +575,53 @@ pub struct PhysicalHardMacro {
     pub width_contracts: usize,
 }
 
+/// `PlacementRegion`: a named area some components must stay inside.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacementRegion {
+    pub name: String,
+    pub outline: BoardOutline,
+    pub side: Option<BoardSide>,
+}
+
+text_enum!(RelativePlacementKind { MaxDistance = "max_distance", MinDistance = "min_distance", Align = "align" });
+text_enum!(AlignmentAxis { X = "x", Y = "y" });
+
+/// `PlacementTarget`: a component, or one of its pads.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacementTarget {
+    pub reference: String,
+    pub pad: Option<String>,
+}
+
+/// `RelativePlacementRule`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelativePlacementRule {
+    pub kind: RelativePlacementKind,
+    pub targets: Vec<PlacementTarget>,
+    pub distance_nm: Option<i64>,
+    pub axis: Option<AlignmentAxis>,
+    pub tolerance_nm: i64,
+    pub weight: i64,
+}
+
+/// `NetMatchGroup`: nets whose routed lengths agree within `max_skew_nm`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NetMatchGroup {
+    pub id: String,
+    pub nets: Vec<String>,
+    pub max_skew_nm: i64,
+}
+
+/// `AssemblyAccess` with its component reference resolved.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AssemblyAccess {
+    pub id: String,
+    pub reference: String,
+    pub outline: BoardOutline,
+    pub side: String,
+    pub purpose: String,
+}
+
 /// `PhysicalBoard`: the fields this export reads or validates.
 #[derive(Clone, Debug)]
 pub struct PhysicalBoard {
@@ -588,8 +635,10 @@ pub struct PhysicalBoard {
     pub tracks: Vec<TrackSegment>,
     pub vias: Vec<Via>,
     pub metadata: IndexMap<String, String>,
+    pub regions: Vec<PlacementRegion>,
     pub keepouts: Vec<PlacementKeepout>,
     pub placement_rules: Vec<ComponentPlacementRule>,
+    pub relative_rules: Vec<RelativePlacementRule>,
     pub net_routing_rules: Vec<NetRoutingRule>,
     pub zones: Vec<CopperZone>,
     pub polygons: Vec<CopperPolygon>,
@@ -603,6 +652,10 @@ pub struct PhysicalBoard {
     pub datums: Vec<BoardDatum>,
     pub boundary_edges: Vec<BoardEdge>,
     pub component_heights: Vec<ComponentHeight>,
+    pub body_overhangs: Vec<copper_lang::mechanical::assembly::BodyOverhang>,
+    pub assembly_envelopes: Vec<copper_lang::mechanical::assembly::AssemblyEnvelope>,
+    pub assembly_access: Vec<AssemblyAccess>,
+    pub match_groups: Vec<NetMatchGroup>,
     pub component_hole_clearances: Vec<ComponentHoleClearance>,
     pub silkscreen: Vec<Artwork>,
 }

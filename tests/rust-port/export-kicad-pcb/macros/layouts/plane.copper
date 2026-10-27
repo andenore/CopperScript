@@ -1,0 +1,57 @@
+// Rust-port corpus input: a plane return through filled-capped via-in-pad contacts; not a circuit.
+macro Plane {
+    source = "Synthetic plane-return fixture";
+    unresolved = ["Not a qualified circuit or fabrication asset"];
+    anchor = chip;
+    required_layers = ["F.Cu", "In1.Cu", "B.Cu"];
+
+    import pair "../pair.kicad_mod";
+    net sig;
+    net gnd;
+    member chip { footprint = pair; at = (0 mm, 0 mm); }
+    member cap { footprint = pair; at = (4 mm, 0 mm); }
+    pad chip."2" = sig;
+    pad cap."1" = sig;
+    pad chip."1" = gnd;
+    pad cap."2" = gnd;
+
+    track link {
+        net = sig;
+        layer = "F.Cu";
+        width = 0.25 mm;
+        points = [chip."2", cap."1"];
+    }
+    via chip_return {
+        net = gnd;
+        at = (-0.5 mm, 0 mm);
+        size = 0.35 mm;
+        drill = 0.2 mm;
+        from_layer = "F.Cu";
+        to_layer = "B.Cu";
+        technology = none;
+        finish = "filled-capped";
+    }
+    via cap_return {
+        net = gnd;
+        at = (4.5 mm, 0 mm);
+        size = 0.35 mm;
+        drill = 0.2 mm;
+        from_layer = "F.Cu";
+        to_layer = "B.Cu";
+        technology = none;
+        finish = "filled-capped";
+    }
+    port signal {
+        net = sig;
+        layer = "F.Cu";
+        point = chip."2";
+        pads = [chip."2", cap."1"];
+    }
+    plane_return ground {
+        net = gnd;
+        layers = ["In1.Cu"];
+        pads = [chip."1", cap."2"];
+        contact chip_contact { pad = chip."1"; at = (-0.5 mm, 0 mm); }
+        contact cap_contact { pad = cap."2"; at = (4.5 mm, 0 mm); }
+    }
+}

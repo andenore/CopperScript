@@ -5824,6 +5824,24 @@
    "mutations": 10
   },
   {
+   "name": "export-kicad-pcb-macros",
+   "milestone": "M2",
+   "inputs": [
+    "tests/rust-port/export-kicad-pcb/macros/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "export-kicad-pcb",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--no-check",
+    "-o",
+    "{out}/board.kicad_pcb"
+   ],
+   "mutations": 10
+  },
+  {
    "name": "export-kicad-pcb-options",
    "milestone": "M2",
    "cases": [
@@ -6601,6 +6619,171 @@
       "--no-check",
       "--layers",
       "4",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/filled.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/filled.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "--layers",
+      "6",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/filled.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "--layers",
+      "4",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/copper_set.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "--layers",
+      "4",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/copper_set.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "--width-mm",
+      "22",
+      "--height-mm",
+      "22",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/copper_set.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/copper_set.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/rotated.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/plane.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/plane.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/unpermitted.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/macros/planeless.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
       "-o",
       "{out}/board.kicad_pcb"
      ]

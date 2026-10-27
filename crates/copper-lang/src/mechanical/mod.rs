@@ -5,7 +5,7 @@
 //! `MEC002` at the item, whole-block errors `MEC003` at the block.
 
 mod anchors;
-mod assembly;
+pub mod assembly;
 mod profiles;
 mod references;
 pub mod stackup;

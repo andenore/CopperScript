@@ -2,9 +2,8 @@
 //! `pcbir.macro_bindings.apply_source_macros`).
 //!
 //! A draft export keeps the grid placement, so a bound macro is accepted only
-//! when its members already sit at the rigid pose; copper acceptance (the
-//! physical DRC of the materialized copper) is not yet rewritten and reports
-//! not implemented.
+//! when its members already sit at the rigid pose. Materialization itself,
+//! which needs physical DRC, is `copper_drc::macros`.
 
 use std::path::Path;
 
@@ -13,13 +12,18 @@ use sha2::{Digest, Sha256};
 
 use copper_json::{Value as Json, python_str_repr as repr};
 use copper_lang::model::FlatElectricalView;
-use copper_physical::footprint::{PhysicalFootprint, footprint_geometry_digest, legacy_footprint_geometry_digest};
-use copper_physical::geometry::{segment_in_polygon, shapes_clear};
+use copper_physical::footprint::{
+    PadKind, PhysicalFootprint, footprint_geometry_digest, legacy_footprint_geometry_digest,
+};
+use copper_physical::geometry::{
+    circle_inside_shape, point_in_polygon, polygon_triangles, ring_edges, segment_in_polygon, segments_intersect,
+    shapes_clear,
+};
 use copper_physical::{BoardSide, CopperKeepout, CopperLayer, Point, RoundedConvexShape};
 use copper_units::Decimal;
 
 use crate::board::*;
-use crate::transform::transformed_local_point;
+use crate::transform::{placed_pad_shape, transformed_local_point};
 use crate::{Error, Result, fail};
 
 fn hex(data: &[u8]) -> String {
@@ -691,7 +695,362 @@ pub fn validate_hard_macros(board: &PhysicalBoard) -> Result<()> {
         }
         return Ok(());
     }
-    crate::not_implemented("materialized hard-macro validation")
+    validate_materialized(board)
+}
+
+/// `stackup.copper_layers.index(layer)`.
+pub fn layer_index(board: &PhysicalBoard, layer: CopperLayer) -> Result<usize> {
+    board
+        .stackup
+        .copper_layers
+        .iter()
+        .position(|l| *l == layer)
+        .ok_or_else(|| Error::Value("tuple.index(x): x not in tuple".to_owned()))
+}
+
+/// The copper layers a via's barrel spans.
+pub fn via_span(board: &PhysicalBoard, via: &Via) -> Result<Vec<CopperLayer>> {
+    let (a, b) = (layer_index(board, via.from_layer)?, layer_index(board, via.to_layer)?);
+    Ok(board.stackup.copper_layers[a.min(b)..=a.max(b)].to_vec())
+}
+
+/// A macro's owner copper and protected regions at its cluster's pose.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MacroGeometry {
+    pub tracks: Vec<TrackSegment>,
+    pub vias: Vec<Via>,
+    pub ports: Vec<MacroPort>,
+    pub regions: Vec<CopperKeepout>,
+}
+
+fn macro_pose_frame(
+    board: &PhysicalBoard,
+    hard: &PhysicalHardMacro,
+    placements: &IndexMap<String, Placement>,
+) -> Result<Placement> {
+    let cluster = board.rigid_clusters.iter().find(|c| c.name == hard.cluster).expect("bound macro cluster");
+    let anchor =
+        placements.get(&cluster.anchor_reference).ok_or_else(|| Error::Value(repr(&cluster.anchor_reference)))?;
+    Ok(crate::keepouts::cluster_frame(&cluster.members, anchor))
+}
+
+/// `resolved_macro_geometry`: rotate once in integer nm; never mirror layer spans.
+pub fn resolved_macro_geometry(
+    board: &PhysicalBoard,
+    hard: &PhysicalHardMacro,
+    placements: &IndexMap<String, Placement>,
+) -> Result<MacroGeometry> {
+    let frame = macro_pose_frame(board, hard, placements)?;
+    let at = |p: Point| transformed_local_point(&frame, p);
+    Ok(MacroGeometry {
+        tracks: hard.tracks.iter().map(|t| TrackSegment { start: at(t.start), end: at(t.end), ..t.clone() }).collect(),
+        vias: hard.vias.iter().map(|v| Via { position: at(v.position), ..v.clone() }).collect(),
+        ports: hard.ports.iter().map(|p| MacroPort { position: at(p.position), ..p.clone() }).collect(),
+        regions: hard
+            .protected_regions
+            .iter()
+            .map(|r| CopperKeepout { vertices: r.vertices.iter().map(|p| at(*p)).collect(), ..r.clone() })
+            .collect(),
+    })
+}
+
+/// `resolved_macro_zones`: asset-owned zones at the owner tracks' pose.
+pub fn resolved_macro_zones(
+    board: &PhysicalBoard,
+    hard: &PhysicalHardMacro,
+    placements: &IndexMap<String, Placement>,
+) -> Result<Vec<CopperZone>> {
+    let frame = macro_pose_frame(board, hard, placements)?;
+    Ok(hard
+        .zones
+        .iter()
+        .map(|z| CopperZone {
+            outer: z.outer.iter().map(|p| transformed_local_point(&frame, *p)).collect(),
+            holes: Vec::new(),
+            ..z.clone()
+        })
+        .collect())
+}
+
+/// `resolved_macro_polygons`: exact owner copper at the same rigid pose.
+pub fn resolved_macro_polygons(
+    board: &PhysicalBoard,
+    hard: &PhysicalHardMacro,
+    placements: &IndexMap<String, Placement>,
+) -> Result<Vec<CopperPolygon>> {
+    let frame = macro_pose_frame(board, hard, placements)?;
+    Ok(hard
+        .polygons
+        .iter()
+        .map(|p| CopperPolygon {
+            vertices: p.vertices.iter().map(|v| transformed_local_point(&frame, *v)).collect(),
+            ..p.clone()
+        })
+        .collect())
+}
+
+/// `macro_reservations`: protected regions of materialized macros.
+pub fn macro_reservations(board: &PhysicalBoard) -> Result<Vec<CopperKeepout>> {
+    let poses = crate::keepouts::placement_map(board);
+    let mut result = Vec::new();
+    for hard in board.hard_macros.iter().filter(|m| board.materialized_macros.contains(&m.cluster)) {
+        result.extend(resolved_macro_geometry(board, hard, &poses)?.regions);
+    }
+    Ok(result)
+}
+
+/// `_zone_outlines_overlap`: conservative closed-polygon collision on a shared layer.
+pub fn zone_outlines_overlap(
+    first_layers: &[CopperLayer],
+    first: &[Point],
+    second_layers: &[CopperLayer],
+    second: &[Point],
+) -> bool {
+    if !first_layers.iter().any(|l| second_layers.contains(l)) {
+        return false;
+    }
+    let (edges_a, edges_b) = (ring_edges(first), ring_edges(second));
+    edges_a.iter().any(|&(a, b)| edges_b.iter().any(|&(c, d)| segments_intersect(a, b, c, d)))
+        || first.iter().any(|p| point_in_polygon(*p, second))
+        || second.iter().any(|p| point_in_polygon(*p, first))
+}
+
+/// `_host_zone_overlaps_macro`: a host zone reaches a macro's private copper region.
+pub fn host_zone_overlaps_macro(
+    board: &PhysicalBoard,
+    hard: &PhysicalHardMacro,
+    hosts: &[&CopperZone],
+) -> Result<bool> {
+    let poses = crate::keepouts::placement_map(board);
+    let macro_zones = resolved_macro_zones(board, hard, &poses)?;
+    let mut owned_layers: IndexSet<CopperLayer> = macro_zones.iter().flat_map(|z| z.layers.iter().copied()).collect();
+    owned_layers.extend(resolved_macro_polygons(board, hard, &poses)?.iter().map(|p| p.layer));
+    if owned_layers.is_empty() {
+        return Ok(false);
+    }
+    let shareable =
+        |layer: CopperLayer, net: &str| macro_zones.iter().any(|z| z.layers.contains(&layer) && z.net == net);
+    let keepouts = crate::keepouts::resolved_copper_keepouts(board)?;
+    let regions = resolved_macro_geometry(board, hard, &poses)?.regions;
+    for host in hosts {
+        for region in &regions {
+            for layer in host.layers.iter().filter(|l| region.layers.contains(l) && owned_layers.contains(*l)) {
+                let only = [*layer];
+                if !zone_outlines_overlap(&only, &host.outer, &only, &region.vertices) {
+                    continue;
+                }
+                let allowed = host.allow_same_net_hard_macro_overlap
+                    && shareable(*layer, &host.net)
+                    && !region.block_zones
+                    && !keepouts.iter().any(|keepout| {
+                        keepout.layers.contains(layer)
+                            && keepout.block_zones
+                            && zone_outlines_overlap(&only, &region.vertices, &only, &keepout.vertices)
+                            && zone_outlines_overlap(&only, &host.outer, &only, &keepout.vertices)
+                    });
+                if !allowed {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn capsule(track: &TrackSegment) -> Result<RoundedConvexShape> {
+    Ok(RoundedConvexShape::new(vec![track.start, track.end], track.width_nm.div_euclid(2))?)
+}
+
+fn disk(position: Point, diameter_nm: i64) -> Result<RoundedConvexShape> {
+    Ok(RoundedConvexShape::new(vec![position], diameter_nm.div_euclid(2))?)
+}
+
+fn region_shape(region: &CopperKeepout) -> Result<RoundedConvexShape> {
+    Ok(RoundedConvexShape::new(region.vertices.clone(), 0)?)
+}
+
+/// `_validate_macro_via_permissions`: an asset's finish cannot authorize forbidden via-in-pad.
+fn validate_macro_via_permissions(board: &PhysicalBoard, hard: &PhysicalHardMacro, vias: &[Via]) -> Result<()> {
+    let permitted: IndexSet<&PadReference> = board.via_in_pad_rules.iter().map(|r| &r.pad).collect();
+    let bound: IndexSet<&PadReference> =
+        hard.pad_bindings.iter().filter(|(_, net)| net == "GND").map(|(pad, _)| pad).collect();
+    let mut lands: Option<Vec<(PadReference, RoundedConvexShape)>> = None;
+    for via in vias.iter().filter(|v| v.finish == "filled-capped") {
+        if via.net != "GND"
+            || board.metadata.get("fabrication_profile").map(String::as_str) != Some("jlcpcb-six-layer")
+            || board.stackup.copper_layers.len() != 6
+            || (via.from_layer, via.to_layer) != (CopperLayer::Front, CopperLayer::Back)
+        {
+            return fail("macro filled-capped vias require the six-layer GND through-via process");
+        }
+        let annulus = disk(via.position, via.size_nm)?;
+        let lands = lands.get_or_insert_with(|| {
+            let mut result = Vec::new();
+            for pose in &board.placements {
+                for pad in board.footprints[&pose.footprint].pads.iter().filter(|p| p.kind == PadKind::Smd) {
+                    let shape = placed_pad_shape(transformed_local_point(pose, pad.position), pad, pose);
+                    result.push((PadReference::new(&pose.reference, &pad.number), shape));
+                }
+            }
+            result
+        });
+        let area = annulus.bounds.expanded(1);
+        let mut contacts = 0;
+        for (reference, shape) in lands.iter().filter(|(_, shape)| shape.bounds.intersects(area)) {
+            if shapes_clear(&annulus, shape, 1) {
+                continue;
+            }
+            if !permitted.contains(reference) || !bound.contains(reference) {
+                return fail("macro via-in-pad requires explicit permission for the contacted private pad");
+            }
+            if !circle_inside_shape(via.position, via.size_nm.div_euclid(2), shape) {
+                return fail("macro via-in-pad annulus must be contained in its permitted pad");
+            }
+            contacts += 1;
+        }
+        if contacts > 1 {
+            return fail("macro via-in-pad cannot overlap multiple pad lands");
+        }
+    }
+    Ok(())
+}
+
+fn counts<T: std::hash::Hash + Eq + Clone>(items: &[T]) -> IndexMap<T, usize> {
+    let mut result = IndexMap::new();
+    for item in items {
+        *result.entry(item.clone()).or_insert(0) += 1;
+    }
+    result
+}
+
+/// Whether `owned - present` (a `Counter` difference) is non-empty.
+fn missing<T: std::hash::Hash + Eq>(owned: &IndexMap<T, usize>, present: &IndexMap<T, usize>) -> bool {
+    owned.iter().any(|(item, count)| present.get(item).copied().unwrap_or(0) < *count)
+}
+
+/// The elements of `present - owned`, in first-occurrence order.
+fn extra<'a, T: std::hash::Hash + Eq>(present: &'a IndexMap<T, usize>, owned: &IndexMap<T, usize>) -> Vec<&'a T> {
+    present
+        .iter()
+        .flat_map(|(item, count)| {
+            std::iter::repeat_n(item, count.saturating_sub(owned.get(item).copied().unwrap_or(0)))
+        })
+        .collect()
+}
+
+/// The materialized half of `validate_hard_macros`.
+fn validate_materialized(board: &PhysicalBoard) -> Result<()> {
+    let poses = crate::keepouts::placement_map(board);
+    if !cluster_placement_matches(board, &poses)? {
+        return fail("cannot move a materialized macro; rebuild it from an unrouted source");
+    }
+    let materialized: Vec<&PhysicalHardMacro> =
+        board.hard_macros.iter().filter(|m| board.materialized_macros.contains(&m.cluster)).collect();
+    let (mut owned_tracks, mut owned_vias) = (Vec::new(), Vec::new());
+    let mut owned_zones: IndexMap<String, CopperZone> = IndexMap::new();
+    let mut owned_polygons: IndexMap<String, CopperPolygon> = IndexMap::new();
+    for hard in &materialized {
+        let geometry = resolved_macro_geometry(board, hard, &poses)?;
+        validate_macro_via_permissions(board, hard, &geometry.vias)?;
+        owned_tracks.extend(geometry.tracks);
+        owned_vias.extend(geometry.vias);
+        for zone in resolved_macro_zones(board, hard, &poses)? {
+            if owned_zones.contains_key(&zone.id) {
+                return fail("duplicate hard-macro zone owner");
+            }
+            owned_zones.insert(zone.id.clone(), zone);
+        }
+        for polygon in resolved_macro_polygons(board, hard, &poses)? {
+            if owned_polygons.contains_key(&polygon.id) {
+                return fail("duplicate hard-macro polygon owner");
+            }
+            owned_polygons.insert(polygon.id.clone(), polygon);
+        }
+    }
+    let (owned_tracks, owned_vias) = (counts(&owned_tracks), counts(&owned_vias));
+    let (board_tracks, board_vias) = (counts(&board.tracks), counts(&board.vias));
+    if missing(&owned_tracks, &board_tracks) || missing(&owned_vias, &board_vias) {
+        return fail("immutable hard-macro copper was changed or removed");
+    }
+    let board_zones: IndexMap<&str, &CopperZone> = board.zones.iter().map(|z| (z.id.as_str(), z)).collect();
+    if owned_zones.iter().any(|(id, zone)| board_zones.get(id.as_str()) != Some(&zone)) {
+        return fail("immutable hard-macro zone was changed or removed");
+    }
+    let board_polygons: IndexMap<&str, &CopperPolygon> = board.polygons.iter().map(|p| (p.id.as_str(), p)).collect();
+    if owned_polygons.iter().any(|(id, polygon)| board_polygons.get(id.as_str()) != Some(&polygon)) {
+        return fail("immutable hard-macro polygon was changed or removed");
+    }
+    if board_polygons.len() != owned_polygons.len() || !board_polygons.keys().all(|id| owned_polygons.contains_key(*id))
+    {
+        return fail("new fixed copper polygon intrudes into a protected hard macro");
+    }
+    let hosts: Vec<&CopperZone> = board.zones.iter().filter(|z| !owned_zones.contains_key(&z.id)).collect();
+    for hard in &materialized {
+        if host_zone_overlaps_macro(board, hard, &hosts)? {
+            return fail("host zone overlaps a private hard-macro region");
+        }
+    }
+    let keepouts = crate::keepouts::resolved_copper_keepouts(board)?;
+    if owned_zones.values().any(|zone| {
+        keepouts
+            .iter()
+            .any(|k| k.block_zones && zone_outlines_overlap(&zone.layers, &zone.outer, &k.layers, &k.vertices))
+    }) {
+        return fail("hard-macro zone is blocked by a copper keepout");
+    }
+    let regions = macro_reservations(board)?;
+    for owner in &materialized {
+        let geometry = resolved_macro_geometry(board, owner, &poses)?;
+        let mut other_regions = Vec::new();
+        for other in materialized.iter().filter(|m| m.cluster != owner.cluster) {
+            other_regions.extend(resolved_macro_geometry(board, other, &poses)?.regions);
+        }
+        for track in &geometry.tracks {
+            let shape = capsule(track)?;
+            for region in other_regions.iter().filter(|r| r.layers.contains(&track.layer)) {
+                if !shapes_clear(&shape, &region_shape(region)?, 1) {
+                    return fail("hard-macro copper intrudes into another macro reservation");
+                }
+            }
+        }
+        for via in &geometry.vias {
+            let span = via_span(board, via)?;
+            let shape = disk(via.position, via.size_nm)?;
+            for region in other_regions.iter().filter(|r| r.layers.iter().any(|l| span.contains(l))) {
+                if !shapes_clear(&shape, &region_shape(region)?, 1) {
+                    return fail("hard-macro via intrudes into another macro reservation");
+                }
+            }
+        }
+        for polygon in resolved_macro_polygons(board, owner, &poses)? {
+            for region in other_regions.iter().filter(|r| r.layers.contains(&polygon.layer)) {
+                let area = region_shape(region)?;
+                for triangle in polygon_triangles(&polygon.vertices)? {
+                    if !shapes_clear(&RoundedConvexShape::new(triangle.to_vec(), 0)?, &area, 1) {
+                        return fail("hard-macro polygon intrudes into another macro reservation");
+                    }
+                }
+            }
+        }
+    }
+    for track in extra(&board_tracks, &owned_tracks) {
+        let shape = capsule(track)?;
+        for region in regions.iter().filter(|r| r.layers.contains(&track.layer)) {
+            if !shapes_clear(&shape, &region_shape(region)?, 1) {
+                return fail("new copper intrudes into a protected hard-macro region");
+            }
+        }
+    }
+    for via in extra(&board_vias, &owned_vias) {
+        let span = via_span(board, via)?;
+        let shape = disk(via.position, via.size_nm)?;
+        for region in regions.iter().filter(|r| r.layers.iter().any(|l| span.contains(l))) {
+            if !shapes_clear(&shape, &region_shape(region)?, 1) {
+                return fail("new via intrudes into a protected hard-macro region");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `cluster_placements`: the poses a rigid cluster prescribes from its anchor.
@@ -710,8 +1069,7 @@ fn cluster_placements(
     if !cluster.allowed_rotations.contains(&anchor.rotation_degrees) {
         return fail("cluster transform rotation is not allowed");
     }
-    let origin = transformed_local_point(anchor, Point::new(-local_anchor.position.x_nm, -local_anchor.position.y_nm));
-    let frame = Placement { position: origin, ..anchor.clone() };
+    let frame = crate::keepouts::cluster_frame(&cluster.members, anchor);
     let mut result = IndexMap::new();
     for member in &cluster.members {
         let mut pose = placements.get(&member.reference).ok_or_else(|| Error::Value(repr(&member.reference)))?.clone();
@@ -725,12 +1083,10 @@ fn cluster_placements(
 }
 
 /// `cluster_placement_matches`: every rigid cluster sits at its prescribed pose.
-fn cluster_placement_matches(board: &PhysicalBoard) -> Result<bool> {
-    let placements: IndexMap<String, Placement> =
-        board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+pub fn cluster_placement_matches(board: &PhysicalBoard, placements: &IndexMap<String, Placement>) -> Result<bool> {
     for cluster in &board.rigid_clusters {
         let Some(anchor) = placements.get(&cluster.anchor_reference) else { return Ok(false) };
-        let Ok(expected) = cluster_placements(cluster, anchor, &placements) else { return Ok(false) };
+        let Ok(expected) = cluster_placements(cluster, anchor, placements) else { return Ok(false) };
         if expected.iter().any(|(reference, pose)| placements.get(reference) != Some(pose)) {
             return Ok(false);
         }
@@ -739,20 +1095,6 @@ fn cluster_placement_matches(board: &PhysicalBoard) -> Result<bool> {
         return crate::not_implemented("macro edge-opening acceptance");
     }
     Ok(true)
-}
-
-/// `materialize_hard_macros`: commit macro copper, or reject the board.
-pub fn materialize_hard_macros(board: PhysicalBoard) -> Result<PhysicalBoard> {
-    if board.via_in_pad_rules.iter().any(|rule| rule.rows.is_some()) {
-        return crate::not_implemented("via-in-pad via arrays");
-    }
-    if board.hard_macros.is_empty() {
-        return Ok(board);
-    }
-    if !cluster_placement_matches(&board)? {
-        return fail("place the complete rigid macro before materializing copper");
-    }
-    crate::not_implemented("hard-macro copper acceptance (physical DRC)")
 }
 
 /// `apply_source_macros`: bind every source-selected physical macro.

@@ -220,7 +220,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         for scene in &parsed.hard_macros {
             board_physical = hard_macros::apply_hard_macro_scene(board_physical, Path::new(scene), locked, offline)?;
         }
-        let board_physical = hard_macros::materialize_hard_macros(board_physical)?;
+        let board_physical = copper_drc::macros::materialize_hard_macros(board_physical)?;
         kicad_pcb::generate(&board_physical)
     })();
     let manifest = match generated {

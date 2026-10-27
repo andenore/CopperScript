@@ -786,7 +786,9 @@ pub fn physicalize(
     let silkscreen = copper_lang::silkscreen::physical_artwork(&design.silkscreen, &outline, &avoid)?;
     lower_decoupling(&flat, &nets)?;
     let match_groups = lower_match_groups(&flat)?;
-    check_tuning_groups(&flat, &match_groups)?;
+    let groups: Vec<(String, Vec<String>)> =
+        match_groups.iter().map(|(id, nets, _)| (id.clone(), nets.clone())).collect();
+    check_tuning_groups(&flat, &groups)?;
     let hole_clearances = lower_hole_clearances(&flat, &footprints, &placements, &rules, proxy)?;
 
     let component_heights = mechanical.map_or_else(Vec::new, |m| {
@@ -806,8 +808,10 @@ pub fn physicalize(
         tracks: Vec::new(),
         vias: Vec::new(),
         metadata,
+        regions: lowered.regions,
         keepouts,
         placement_rules,
+        relative_rules: lowered.relative,
         net_routing_rules: lowered.routing,
         zones: lowered.zones,
         polygons: Vec::new(),
@@ -821,9 +825,32 @@ pub fn physicalize(
         datums: mechanical.map_or_else(Vec::new, |m| m.datums.clone()),
         boundary_edges: mechanical.map_or_else(Vec::new, |m| m.boundary_edges.clone()),
         component_heights,
+        body_overhangs: mechanical.map_or_else(Vec::new, |m| m.body_overhangs.clone()),
+        assembly_envelopes: mechanical.map_or_else(Vec::new, |m| m.assembly_envelopes.clone()),
+        assembly_access: mechanical.map_or_else(Vec::new, |m| {
+            m.assembly_access
+                .iter()
+                .map(|a| AssemblyAccess {
+                    id: a.id.clone(),
+                    reference: pyvalue::text(&a.reference),
+                    outline: a.outline.clone(),
+                    side: a.side.clone(),
+                    purpose: a.purpose.clone(),
+                })
+                .collect()
+        }),
+        match_groups: match_groups
+            .iter()
+            .map(|(id, nets, max_skew_nm)| NetMatchGroup {
+                id: id.clone(),
+                nets: nets.clone(),
+                max_skew_nm: *max_skew_nm,
+            })
+            .collect(),
         component_hole_clearances: hole_clearances,
         silkscreen,
     };
+    let match_groups: Vec<(String, Vec<String>)> = match_groups.into_iter().map(|(id, nets, _)| (id, nets)).collect();
     finish_board(&mut physical, &match_groups, &lowered.region_names)?;
     if !flat.physical_macros.is_empty() {
         physical = crate::hard_macros::apply_source_macros(physical, &flat, locked, offline)?;
@@ -879,6 +906,8 @@ fn fixed_pad_shapes(
 
 struct Lowered {
     region_names: Vec<String>,
+    regions: Vec<PlacementRegion>,
+    relative: Vec<RelativePlacementRule>,
     keepouts: Vec<PlacementKeepout>,
     rules: Vec<ComponentPlacementRule>,
     routing: Vec<NetRoutingRule>,
@@ -891,12 +920,18 @@ struct Target {
     pad: Option<String>,
 }
 
+fn placement_targets(targets: &[Target]) -> Vec<PlacementTarget> {
+    targets.iter().map(|t| PlacementTarget { reference: t.reference.clone(), pad: t.pad.clone() }).collect()
+}
+
 fn lower_physical_constraints(
     flat: &FlatElectricalView,
     components: &IndexMap<&str, &Selected>,
     outline: &BoardOutline,
 ) -> Result<Lowered> {
     let mut region_names = Vec::new();
+    let mut regions = Vec::new();
+    let mut relative = Vec::new();
     let mut keepouts = Vec::new();
     let mut rules: IndexMap<String, ComponentPlacementRule> = IndexMap::new();
     let mut routing = Vec::new();
@@ -1108,6 +1143,19 @@ fn lower_physical_constraints(
                     return fail("relative placement tolerance and weight are invalid");
                 }
                 constraint_int(parameters, "priority", 50)?;
+                let kind = if constraint.kind == ConstraintKind::MaxDistance {
+                    RelativePlacementKind::MaxDistance
+                } else {
+                    RelativePlacementKind::MinDistance
+                };
+                relative.push(RelativePlacementRule {
+                    kind,
+                    targets: placement_targets(&lowered),
+                    distance_nm: Some(distance),
+                    axis: None,
+                    tolerance_nm: 0,
+                    weight,
+                });
             }
             ConstraintKind::PlacementRegion => {
                 let gap = if parameters.contains_key("courtyard_gap") {
@@ -1138,6 +1186,7 @@ fn lower_physical_constraints(
                     return fail("placement region outlines do not support cutouts");
                 }
                 region_names.push(name.clone());
+                regions.push(PlacementRegion { name: name.clone(), outline: region, side });
                 for target in &lowered {
                     let changes = RuleChanges {
                         region: Some(Some(name.clone())),
@@ -1224,7 +1273,7 @@ fn lower_physical_constraints(
                 }
             }
             ConstraintKind::Align => {
-                enum_value(parameters, "axis", "x", "AlignmentAxis", |text| ["x", "y"].contains(&text).then_some(()))?;
+                let axis = enum_value(parameters, "axis", "x", "AlignmentAxis", AlignmentAxis::parse)?;
                 let tolerance =
                     if parameters.contains_key("tolerance") { constraint_length(parameters, "tolerance")? } else { 0 };
                 let weight = constraint_int(parameters, "weight", 5)?;
@@ -1234,6 +1283,14 @@ fn lower_physical_constraints(
                 if tolerance < 0 || weight <= 0 {
                     return fail("relative placement tolerance and weight are invalid");
                 }
+                relative.push(RelativePlacementRule {
+                    kind: RelativePlacementKind::Align,
+                    targets: placement_targets(&lowered),
+                    distance_nm: None,
+                    axis: Some(axis),
+                    tolerance_nm: tolerance,
+                    weight,
+                });
             }
             ConstraintKind::PlacementGroup => {
                 let references: Vec<String> = lowered.iter().map(|t| t.reference.clone()).collect();
@@ -1255,7 +1312,7 @@ fn lower_physical_constraints(
     }
     let mut ordered: Vec<ComponentPlacementRule> = rules.into_values().collect();
     ordered.sort_by(|a, b| a.reference.cmp(&b.reference));
-    Ok(Lowered { region_names, keepouts, rules: ordered, routing, zones, via_in_pad })
+    Ok(Lowered { region_names, regions, relative, keepouts, rules: ordered, routing, zones, via_in_pad })
 }
 
 fn lower_routing_rule(net: &str, parameters: &Parameters) -> Result<NetRoutingRule> {
@@ -1395,22 +1452,22 @@ fn lower_decoupling(flat: &FlatElectricalView, nets: &[PhysicalNet]) -> Result<(
 }
 
 /// `_lower_match_groups`: the nets of each `length_match` constraint.
-fn lower_match_groups(flat: &FlatElectricalView) -> Result<Vec<(String, Vec<String>)>> {
+fn lower_match_groups(flat: &FlatElectricalView) -> Result<Vec<(String, Vec<String>, i64)>> {
     let nets: IndexSet<&str> = flat.nets.iter().map(|n| n.name.as_str()).collect();
-    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    let mut groups: Vec<(String, Vec<String>, i64)> = Vec::new();
     let mut owner: IndexMap<String, String> = IndexMap::new();
     for (index, constraint) in flat.constraints.iter().enumerate() {
         if constraint.kind != ConstraintKind::LengthMatch {
             continue;
         }
         let origin = constraint.origins.first().cloned().unwrap_or_else(|| "length_match".to_owned());
-        let result = (|| -> Result<(String, Vec<String>)> {
+        let result = (|| -> Result<(String, Vec<String>, i64)> {
             let id = constraint
                 .constraint_id
                 .clone()
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| format!("length_match:{index}"));
-            if groups.iter().any(|(existing, _)| *existing == id) {
+            if groups.iter().any(|(existing, _, _)| *existing == id) {
                 return Err(Error::Value(format!("duplicate length_match id {}", repr(&id))));
             }
             for net in &constraint.targets {
@@ -1436,7 +1493,7 @@ fn lower_match_groups(flat: &FlatElectricalView) -> Result<Vec<(String, Vec<Stri
             if skew <= 0 {
                 return Err(Error::Value(format!("length-match group {} maximum skew must be positive", repr(&id))));
             }
-            Ok((id, constraint.targets.clone()))
+            Ok((id, constraint.targets.clone(), skew))
         })();
         match result {
             Ok(group) => groups.push(group),
@@ -1776,6 +1833,14 @@ pub fn copper_artwork_keepouts(board: &PhysicalBoard) -> Result<Vec<CopperKeepou
     Ok(result)
 }
 
+/// `replace(board, ...)`: rerun the `PhysicalBoard.__post_init__` checks on a changed board.
+pub fn revalidate(board: &mut PhysicalBoard) -> Result<()> {
+    let groups: Vec<(String, Vec<String>)> =
+        board.match_groups.iter().map(|g| (g.id.clone(), g.nets.clone())).collect();
+    let regions: Vec<String> = board.regions.iter().map(|r| r.name.clone()).collect();
+    finish_board(board, &groups, &regions)
+}
+
 /// The `PhysicalBoard.__post_init__` checks a draft export can reach.
 pub fn finish_board(
     board: &mut PhysicalBoard,
@@ -1950,6 +2015,26 @@ fn validate_references(
         }
         if rule.rows.is_some() {
             return crate::not_implemented("via-in-pad via arrays");
+        }
+    }
+    for track in &board.tracks {
+        if !net_names.contains(&track.net.as_str()) {
+            return Err(Error::Value(format!("track references unknown net {}", repr(&track.net))));
+        }
+        if !layers.contains(&track.layer) {
+            return Err(Error::Value(format!("track uses unavailable layer {}", repr(track.layer.value()))));
+        }
+    }
+    for via in &board.vias {
+        if !net_names.contains(&via.net.as_str()) {
+            return Err(Error::Value(format!("via references unknown net {}", repr(&via.net))));
+        }
+        if !layers.contains(&via.from_layer) || !layers.contains(&via.to_layer) {
+            return fail("via uses a layer not present in the stackup");
+        }
+        // No source declares a via technology catalog.
+        if let Some(technology) = &via.technology {
+            return Err(Error::Value(format!("via references unknown technology {}", repr(technology))));
         }
     }
     if crate::has_duplicates(regions) {

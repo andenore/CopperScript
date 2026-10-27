@@ -1,0 +1,21 @@
+// Rust-port corpus input: a macro plane return with permitted via-in-pad; not a circuit.
+board PlaneBoard {
+    import parts "./parts";
+    import layouts "./layouts";
+    component U1: parts.Pair;
+    component C1: parts.Pair;
+    component R1: parts.Pair;
+    net SIG { U1.B; C1.A; R1.A; }
+    net GND { U1.A; C1.B; R1.B; }
+    constraint fixed_placement(U1) { x = 20 mm; y = 20 mm; rotation = 0; }
+    constraint fixed_placement(C1) { x = 24 mm; y = 20 mm; rotation = 0; }
+    constraint copper_zone(GND) { layers = "In1.Cu"; pad_connection = solid; }
+    constraint via_in_pad(U1.A) { process = "filled-capped"; }
+    constraint via_in_pad(C1.B) { process = "filled-capped"; }
+    physical_macro SET: layouts.Plane {
+        member chip = U1;
+        member cap = C1;
+        net sig = SIG;
+        net gnd = GND;
+    }
+}

@@ -103,7 +103,7 @@ jobs:
           --suite export-kicad --suite export-kicad-no-check --suite export-kicad-outputs
           --suite check-footprint --suite check-footprint-strict
           --suite export-kicad-pcb --suite export-kicad-pcb-proxy --suite export-kicad-pcb-fixtures
-          --suite export-kicad-pcb-options
+          --suite export-kicad-pcb-options --suite export-kicad-pcb-resolved --suite export-kicad-pcb-macros
           --report build/compare/report-m2.json --markdown build/compare/report-m2.md
       - name: Publish the comparison summary
         if: always()

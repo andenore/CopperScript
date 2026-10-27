@@ -1,0 +1,23 @@
+// Rust-port corpus input: a private macro net without copper; not a circuit.
+macro Internal {
+    source = "Synthetic private-net fixture";
+    unresolved = ["Not a qualified circuit or fabrication asset"];
+    anchor = chip;
+    required_layers = ["F.Cu", "B.Cu"];
+
+    import pair "../pair.kicad_mod";
+    net sig;
+    member chip { footprint = pair; at = (0 mm, 0 mm); }
+    member cap { footprint = pair; at = (4 mm, 0 mm); }
+    pad chip."2" = sig;
+    pad cap."1" = sig;
+    isolated chip."1";
+    isolated cap."2";
+
+    track stub {
+        net = sig;
+        layer = "F.Cu";
+        width = 0.25 mm;
+        points = [chip."2", (2 mm, 0 mm)];
+    }
+}

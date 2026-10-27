@@ -57,7 +57,18 @@ pub struct Assembly {
 
 /// `expanded_body_outline`: the outline with an exterior allowance on one
 /// named axis-aligned edge; only body containment queries see it.
-pub fn expanded_body_outline(
+/// `expanded_body_outline` for physical consumers: the `ValueError` text on failure.
+pub fn body_outline(
+    outline: &BoardOutline,
+    edges: &[BoardEdge],
+    allowance: &BodyOverhang,
+) -> Result<BoardOutline, String> {
+    expanded_body_outline(outline, edges, allowance).map_err(|failure| match failure {
+        super::Fail::Value(message) | super::Fail::Rust(message) => message,
+    })
+}
+
+pub(crate) fn expanded_body_outline(
     outline: &BoardOutline,
     edges: &[BoardEdge],
     allowance: &BodyOverhang,
@@ -152,7 +163,11 @@ fn exact_keys(parameters: &indexmap::IndexMap<String, Value>, keys: &[&str]) -> 
 }
 
 /// `lower_assembly`.
-pub fn lower_assembly(items: &[&MechanicalItemDecl], outline: &BoardOutline, edges: &[BoardEdge]) -> Lower<Assembly> {
+pub(crate) fn lower_assembly(
+    items: &[&MechanicalItemDecl],
+    outline: &BoardOutline,
+    edges: &[BoardEdge],
+) -> Lower<Assembly> {
     let mut assembly = Assembly::default();
     for item in items {
         let p = &item.parameters;

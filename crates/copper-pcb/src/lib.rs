@@ -3,8 +3,9 @@
 //! `pcbir.hard_macros`, `pcbir.backends.kicad_pcb`).
 //!
 //! Errors carry the Python `ValueError` message. Physical behaviour this
-//! rewrite does not yet cover (via-in-pad arrays, hard-macro copper
-//! acceptance) reports [`Error::NotImplemented`] instead of guessing.
+//! rewrite does not yet cover (via-in-pad arrays, macro edge openings)
+//! reports [`Error::NotImplemented`] instead of guessing. Hard-macro
+//! materialization, which needs physical DRC, is in `copper-drc`.
 
 macro_rules! text_enum {
     ($name:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
@@ -25,6 +26,7 @@ macro_rules! text_enum {
 
 pub mod board;
 pub mod hard_macros;
+pub mod keepouts;
 pub mod kicad_pcb;
 pub mod physicalize;
 pub mod project;
@@ -61,7 +63,7 @@ pub(crate) fn fail<T>(message: &str) -> Result<T> {
     Err(Error::Value(message.to_owned()))
 }
 
-pub(crate) fn not_implemented<T>(what: &str) -> Result<T> {
+pub fn not_implemented<T>(what: &str) -> Result<T> {
     Err(Error::NotImplemented(what.to_owned()))
 }
 

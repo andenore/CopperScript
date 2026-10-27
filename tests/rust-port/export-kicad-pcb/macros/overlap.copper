@@ -1,0 +1,21 @@
+// Rust-port corpus input: overlapping fixed courtyards beside a macro; not a circuit.
+board OverlapBoard {
+    import parts "./parts";
+    import layouts "./layouts";
+    component U1: parts.Pair;
+    component C1: parts.Pair;
+    component R1: parts.Pair;
+    net SIG { U1.B; C1.A; R1.A; }
+    net GND { U1.A; C1.B; R1.B; }
+    constraint fixed_placement(U1) { x = 20 mm; y = 20 mm; rotation = 0; }
+    constraint fixed_placement(C1) { x = 24 mm; y = 20 mm; rotation = 0; }
+    component R2: parts.Pair;
+    constraint fixed_placement(R1) { x = 40 mm; y = 40 mm; rotation = 0; }
+    constraint fixed_placement(R2) { x = 40.5 mm; y = 40 mm; rotation = 0; }
+    physical_macro SET: layouts.CopperSet {
+        member chip = U1;
+        member cap = C1;
+        net sig = SIG;
+        net gnd = GND;
+    }
+}

@@ -49,7 +49,7 @@ pub enum Graphic {
 }
 
 impl Graphic {
-    fn width_nm(&self) -> i64 {
+    pub fn width_nm(&self) -> i64 {
         match self {
             Graphic::Line { width_nm, .. }
             | Graphic::Rectangle { width_nm, .. }

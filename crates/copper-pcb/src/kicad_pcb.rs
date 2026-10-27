@@ -335,6 +335,53 @@ fn render_project(board: &PhysicalBoard) -> String {
     Dumps::new().indent(2).sort_keys(true).dumps(&project) + "\n"
 }
 
+/// `_render_via_process`: fabrication intent the native board does not represent.
+fn render_via_process(board: &PhysicalBoard) -> String {
+    let mut vias: Vec<&Via> = board.vias.iter().filter(|v| v.finish != "standard").collect();
+    vias.sort_by(|a, b| {
+        let key = |v: &Via| {
+            (
+                v.net.clone(),
+                v.position.x_nm,
+                v.position.y_nm,
+                v.from_layer.value(),
+                v.to_layer.value(),
+                v.size_nm,
+                v.drill_nm,
+                v.finish.clone(),
+            )
+        };
+        key(a).cmp(&key(b))
+    });
+    let object =
+        |entries: Vec<(&str, Json)>| Json::Object(entries.into_iter().map(|(k, v)| (k.to_owned(), v)).collect());
+    let rows = vias
+        .iter()
+        .map(|via| {
+            object(vec![
+                ("net", Json::from(via.net.as_str())),
+                ("position_nm", Json::Array(vec![Json::from(via.position.x_nm), Json::from(via.position.y_nm)])),
+                ("diameter_nm", Json::from(via.size_nm)),
+                ("drill_nm", Json::from(via.drill_nm)),
+                ("layers", Json::Array(vec![Json::from(via.from_layer.value()), Json::from(via.to_layer.value())])),
+                ("finish", Json::from(via.finish.as_str())),
+                ("technology", via.technology.as_deref().map_or(Json::Null, Json::from)),
+            ])
+        })
+        .collect();
+    let document = object(vec![
+        ("schema", Json::from("copperscript-via-process/v0.1")),
+        ("generated_by", Json::from("CopperScript")),
+        (
+            "fabrication_profile",
+            board.metadata.get("fabrication_profile").map_or(Json::Null, |p| Json::from(p.as_str())),
+        ),
+        ("fabrication_ready", Json::Bool(false)),
+        ("vias", Json::Array(rows)),
+    ]);
+    Dumps::new().indent(2).sort_keys(true).dumps(&document) + "\n"
+}
+
 fn library_item_name(footprint: &PhysicalFootprint) -> String {
     let leaf = footprint.name.rsplit(':').next().unwrap_or(&footprint.name).replace('\\', "/");
     let leaf = leaf.rsplit('/').next().unwrap_or(&leaf).to_owned();
@@ -492,7 +539,18 @@ pub fn generate(board: &PhysicalBoard) -> Result<Manifest> {
         warnings.push("Screw-head clearance is enforced by CopperScript placement, not exported as a native KiCad placement constraint; recheck after manual placement changes.".to_owned());
     }
     if !board.hard_macros.is_empty() {
-        return crate::not_implemented("exporting materialized hard macros");
+        let owners: indexmap::IndexSet<&str> = board.hard_macros.iter().map(|m| m.cluster.as_str()).collect();
+        let materialized: indexmap::IndexSet<&str> = board.materialized_macros.iter().map(String::as_str).collect();
+        if owners != materialized {
+            return fail("cannot export a hard macro without its immutable copper");
+        }
+        warnings.push("Experimental physical hard macros are not RF or manufacturing qualification.".to_owned());
+        if board.hard_macros.iter().any(|m| m.width_contracts > 0) {
+            warnings.push(
+                "Scoped macro widths require authoritative CopperScript owner validation; native KiCad edits do not preserve these contracts or qualify current capacity."
+                    .to_owned(),
+            );
+        }
     }
     if board.metadata.get("prototype_footprints").map(String::as_str) == Some("true") {
         warnings.push("The board uses generated proxy footprints and is for inspection only; resolve verified package footprints before fabrication.".to_owned());
@@ -511,8 +569,14 @@ pub fn generate(board: &PhysicalBoard) -> Result<Manifest> {
     if board.tracks.is_empty() {
         warnings.push("The board contains no routed tracks.".to_owned());
     }
+    let mut via_process = None;
     if board.vias.iter().any(|v| v.finish != "standard") {
-        return crate::not_implemented("the via-process sidecar");
+        via_process =
+            Some(artifact(format!("{}.via-process.json", safe_name(&board.name)), render_via_process(&board)));
+        warnings.push(
+            "Non-standard via finishes are recorded in the .via-process.json sidecar; keep it with the project. The native PCB alone does not encode this process and the sidecar is not manufacturing qualification."
+                .to_owned(),
+        );
     }
     let clearance_rules = routing_clearance_rules(&board);
     let mut rules = None;
@@ -543,6 +607,7 @@ pub fn generate(board: &PhysicalBoard) -> Result<Manifest> {
     if early && let Some(rules) = &rules {
         artifacts.push(rules.clone());
     }
+    artifacts.extend(via_process);
     artifacts.push(artifact("fp-lib-table".to_owned(), render_library_table()));
     for (reference, name) in &names {
         artifacts.push(artifact(
@@ -620,6 +685,7 @@ fn zone_lines(
     zone: &CopperZone,
     layer: CopperLayer,
     net_codes: &IndexMap<String, usize>,
+    locked: bool,
 ) -> Result<Vec<String>> {
     if !zone.holes.is_empty() {
         return Err(Error::Value(format!(
@@ -648,15 +714,18 @@ fn zone_lines(
         fill += &format!(" (island_area_min {})", area_mm2(zone.minimum_island_area_nm2.unwrap_or(0)));
     }
     fill += ")";
-    let mut result = vec![
-        "  (zone".to_owned(),
+    let mut result = vec!["  (zone".to_owned()];
+    if locked {
+        result.push("    (locked yes)".to_owned());
+    }
+    result.extend([
         format!("    (net {})", net_codes[&zone.net]),
         format!("    (net_name {})", quote(&zone.net)),
         format!("    (layer {})", quote(layer.value())),
         format!("    (uuid \"{}\")", stable_uuid(&[&board.name, "zone", &zone.id, layer.value()])),
         format!("    (name {})", quote(&zone.id)),
         "    (hatch edge 0.5)".to_owned(),
-    ];
+    ]);
     if zone.priority != 0 {
         result.push(format!("    (priority {})", zone.priority));
     }
@@ -913,6 +982,13 @@ fn footprint_lines(
     let front = placement.side == BoardSide::Front;
     let fab = if front { "F.Fab" } else { "B.Fab" };
     let mut lines = vec![format!("  (footprint {}", quote(export_name))];
+    let materialized_member = board.rigid_clusters.iter().any(|cluster| {
+        board.materialized_macros.contains(&cluster.name)
+            && cluster.members.iter().any(|m| m.reference == placement.reference)
+    });
+    if materialized_member {
+        lines.push("    (locked yes)".to_owned());
+    }
     lines.push(format!("    (layer {})", quote(if front { "F.Cu" } else { "B.Cu" })));
     lines.push(format!("    (uuid \"{}\")", stable_uuid(&[board_name, "footprint", &placement.reference])));
     lines.push(format!("    (at {} {})", point(placement.position), decimal(&placement_rotation(placement))));
@@ -1130,6 +1206,14 @@ fn resolved_cluster_keepouts(board: &PhysicalBoard) -> Vec<(String, CopperKeepou
 }
 
 fn render(board: &PhysicalBoard, library_names: &IndexMap<String, String>) -> Result<String> {
+    let poses = crate::keepouts::placement_map(board);
+    let (mut macro_tracks, mut macro_vias, mut macro_zone_ids) = (Vec::new(), Vec::new(), Vec::new());
+    for hard in board.hard_macros.iter().filter(|m| board.materialized_macros.contains(&m.cluster)) {
+        let geometry = crate::hard_macros::resolved_macro_geometry(board, hard, &poses)?;
+        macro_tracks.extend(geometry.tracks);
+        macro_vias.extend(geometry.vias);
+        macro_zone_ids.extend(crate::hard_macros::resolved_macro_zones(board, hard, &poses)?.into_iter().map(|z| z.id));
+    }
     let mut nets: Vec<&PhysicalNet> = board.nets.iter().collect();
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     let net_codes: IndexMap<String, usize> = nets.iter().enumerate().map(|(i, n)| (n.name.clone(), i + 1)).collect();
@@ -1185,8 +1269,52 @@ fn render(board: &PhysicalBoard, library_names: &IndexMap<String, String>) -> Re
         let export = format!("{GENERATED_LIBRARY}:{}", library_names[&placement.footprint]);
         lines.extend(footprint_lines(board, placement, footprint, &pad_nets, &net_codes, &export, &board.name, false));
     }
-    if !board.tracks.is_empty() || !board.vias.is_empty() || !board.polygons.is_empty() {
-        return crate::not_implemented("exporting tracks, vias or fixed copper polygons");
+    for (index, track) in board.tracks.iter().enumerate() {
+        lines.push("  (segment".to_owned());
+        if macro_tracks.contains(track) {
+            lines.push("    (locked yes)".to_owned());
+        }
+        lines.extend([
+            format!("    (start {})", point(track.start)),
+            format!("    (end {})", point(track.end)),
+            format!("    (width {})", mm(track.width_nm)),
+            format!("    (layer {})", quote(track.layer.value())),
+            format!("    (net {})", net_codes[&track.net]),
+            format!("    (uuid \"{}\")", stable_uuid(&[&board.name, "segment", &index.to_string()])),
+            "  )".to_owned(),
+        ]);
+    }
+    for (index, via) in board.vias.iter().enumerate() {
+        // No source declares via technologies, so every via is a through via.
+        lines.push("  (via".to_owned());
+        if macro_vias.contains(via) {
+            lines.push("    (locked yes)".to_owned());
+        }
+        lines.extend([
+            format!("    (at {})", point(via.position)),
+            format!("    (size {})", mm(via.size_nm)),
+            format!("    (drill {})", mm(via.drill_nm)),
+            format!("    (layers {} {})", quote(via.from_layer.value()), quote(via.to_layer.value())),
+            format!("    (net {})", net_codes[&via.net]),
+            format!("    (uuid \"{}\")", stable_uuid(&[&board.name, "via", &index.to_string()])),
+            "  )".to_owned(),
+        ]);
+    }
+    let mut polygons: Vec<&CopperPolygon> = board.polygons.iter().collect();
+    polygons.sort_by(|a, b| a.id.cmp(&b.id));
+    for polygon in polygons {
+        let points: Vec<String> = polygon.vertices.iter().map(|p| format!("(xy {})", point(*p))).collect();
+        lines.extend([
+            "  (gr_poly".to_owned(),
+            format!("    (pts {})", points.join(" ")),
+            "    (stroke (width 0) (type default))".to_owned(),
+            "    (fill yes)".to_owned(),
+            format!("    (layer {})", quote(polygon.layer.value())),
+            format!("    (net {})", net_codes[&polygon.net]),
+            "    (locked yes)".to_owned(),
+            format!("    (uuid \"{}\")", stable_uuid(&[&board.name, "polygon", &polygon.id])),
+            "  )".to_owned(),
+        ]);
     }
     let mut zones: Vec<&CopperZone> = board.zones.iter().collect();
     zones.sort_by(|a, b| b.priority.cmp(&a.priority).then_with(|| a.id.cmp(&b.id)));
@@ -1194,7 +1322,7 @@ fn render(board: &PhysicalBoard, library_names: &IndexMap<String, String>) -> Re
         let mut layers = zone.layers.clone();
         layers.sort_by_key(|l| l.value());
         for layer in layers {
-            lines.extend(zone_lines(board, zone, layer, &net_codes)?);
+            lines.extend(zone_lines(board, zone, layer, &net_codes, macro_zone_ids.contains(&zone.id))?);
         }
     }
     let mut keepouts: Vec<(String, CopperKeepout, Vec<Point>)> =
