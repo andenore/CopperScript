@@ -1,0 +1,30 @@
+// Rust-port corpus input: routing rules that export KiCad custom rules; not a circuit.
+board RoutingRules {
+    use library "tiny";
+
+    component U1: STM32_LIKE { footprint = "LQFP-48"; }
+    component U2: STM32_LIKE { footprint = "LQFP-48"; }
+    component R1: RESISTOR { value = 22ohm; footprint = "0402"; }
+    component R2: RESISTOR { value = 22ohm; footprint = "0402"; }
+    component PS1: VOLTAGE_SOURCE { footprint = "SOT-23"; }
+
+    net V3V3 { PS1.OUT; U1.VDD; U2.VDD; }
+    net GND { PS1.GND; U1.VSS; U2.VSS; }
+    net D_P { U1.PA0; R1.1; }
+    net D_N { U2.PA0; R2.1; }
+    net D_P_OUT { R1.2; U2.PB6; }
+    net D_N_OUT { R2.2; U1.PB6; }
+    net SLOW { U1.PB7; U2.PB7; }
+
+    supply V3V3 { voltage = 3.3V; source = PS1.OUT; }
+    supply GND { voltage = 0V; external = true; }
+
+    constraint routing(D_P) { kind = differential; partner = "D_N"; pair_gap = 0.15mm; width = 0.2mm; clearance = 0.3mm; }
+    constraint routing(D_N) { kind = differential; partner = "D_P"; pair_gap = 0.15mm; width = 0.2mm; clearance = 0.3mm; }
+    constraint routing(D_P_OUT) {
+        width = 0.25mm; clearance = 0.4mm; breakout_length = 1mm; breakout_clearance = 0.25mm; breakout_width = 0.2mm;
+    }
+    constraint routing(SLOW) { clearance = 0.15mm; max_vias = 2; allowed_layers = "F.Cu,B.Cu"; }
+    constraint routing(GND) { kind = power; width = 0.5mm; priority = 3; }
+    constraint routing(V3V3) { kind = power; clearance = 0.35mm; topology = "star"; }
+}

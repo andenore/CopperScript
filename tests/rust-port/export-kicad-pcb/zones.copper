@@ -1,0 +1,31 @@
+// Rust-port corpus input: copper zones of every boundary kind; not a circuit.
+board ZoneVariety {
+    use library "tiny";
+
+    component PS1: VOLTAGE_SOURCE { footprint = "SOT-23"; }
+    component U1: REGULATOR_3V3 { footprint = "SOT-23-3"; }
+    component C1: CAPACITOR { value = 10uF; footprint = "0805"; }
+    component C2: CAPACITOR { value = 100nF; footprint = "0402"; }
+
+    net VBUS { PS1.OUT; U1.IN; C1.1; }
+    net GND { PS1.GND; U1.GND; C1.2; C2.2; }
+    net V3V3 { U1.OUT; C2.1; }
+
+    supply VBUS { voltage = 5V; source = PS1.OUT; }
+    supply V3V3 { voltage = 3.3V; source = U1.OUT; }
+    supply GND { voltage = 0V; external = true; }
+
+    constraint placement_region(C1) {
+        name = "input-area"; x = 5mm; y = 5mm; width = 20mm; height = 15mm;
+    }
+    constraint copper_zone(GND) { layers = "B.Cu"; inset = 0.5mm; pad_connection = solid; }
+    constraint copper_zone(GND) { layers = "In1.Cu"; priority = 2; island_policy = remove_all; }
+    constraint copper_zone(V3V3) {
+        layers = "F.Cu,In2.Cu"; x = 30mm; y = 20mm; width = 25mm; height = 18.5mm;
+        clearance = 0.3mm; minimum_width = 0.2mm; pad_connection = thermal; island_policy = keep_all;
+    }
+    constraint copper_zone(VBUS) {
+        layers = "In2.Cu"; polygon_mm = "60,10; 90,10; 90,40; 75,55; 60,40"; pad_connection = none;
+    }
+    constraint copper_zone(VBUS) { layers = "F.Cu"; region = "input-area"; pad_connection = tht_thermal; priority = 1; }
+}

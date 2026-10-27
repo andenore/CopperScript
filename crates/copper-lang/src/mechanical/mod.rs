@@ -8,7 +8,7 @@ mod anchors;
 mod assembly;
 mod profiles;
 mod references;
-mod stackup;
+pub mod stackup;
 
 use indexmap::{IndexMap, IndexSet};
 

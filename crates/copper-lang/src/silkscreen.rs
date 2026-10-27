@@ -656,3 +656,245 @@ pub fn design_document(design: &SilkscreenDesign) -> Json {
         ("artwork".to_owned(), artwork_document(&design.artwork)),
     ]))
 }
+
+/// `artwork_layer`: the copper layer of copper artwork, else `None`.
+pub fn artwork_layer(item: &Artwork) -> Option<copper_physical::CopperLayer> {
+    let (material, side) = match item {
+        Artwork::Text { material, side, .. } | Artwork::Graphic { material, side, .. } => (*material, *side),
+    };
+    (material == ArtworkMaterial::Copper).then_some(if side == BoardSide::Front {
+        copper_physical::CopperLayer::Front
+    } else {
+        copper_physical::CopperLayer::Back
+    })
+}
+
+fn lower_text(failure: Fail) -> String {
+    match failure {
+        Fail::Value(message) | Fail::Rust(message) => message,
+    }
+}
+
+fn circle_radius(dx: i64, dy: i64) -> Result<i64, String> {
+    use num_bigint::BigInt;
+    use num_traits::ToPrimitive;
+    let (dx, dy) = (i128::from(dx), i128::from(dy));
+    let square = BigInt::from(dx * dx + dy * dy);
+    let mut radius = square.sqrt();
+    if &radius * &radius < square {
+        radius += 1;
+    }
+    radius.to_i64().ok_or_else(|| "artwork circle radius overflows".to_owned())
+}
+
+fn arc_bounds(a: &Point, b: &Point, c: &Point) -> Result<Vec<Point>, String> {
+    use num_bigint::BigInt;
+    use num_rational::BigRational;
+    use num_traits::{ToPrimitive, Zero};
+    let int = BigInt::from;
+    let denominator = int(2)
+        * (int(a.x_nm) * (int(b.y_nm) - int(c.y_nm))
+            + int(b.x_nm) * (int(c.y_nm) - int(a.y_nm))
+            + int(c.x_nm) * (int(a.y_nm) - int(b.y_nm)));
+    if denominator.is_zero() {
+        return Err("copper artwork arc points must not be collinear".to_owned());
+    }
+    let squares: Vec<BigInt> =
+        [a, b, c].iter().map(|p| int(p.x_nm) * int(p.x_nm) + int(p.y_nm) * int(p.y_nm)).collect();
+    let cx = BigRational::new(
+        &squares[0] * (int(b.y_nm) - int(c.y_nm))
+            + &squares[1] * (int(c.y_nm) - int(a.y_nm))
+            + &squares[2] * (int(a.y_nm) - int(b.y_nm)),
+        denominator.clone(),
+    );
+    let cy = BigRational::new(
+        &squares[0] * (int(c.x_nm) - int(b.x_nm))
+            + &squares[1] * (int(a.x_nm) - int(c.x_nm))
+            + &squares[2] * (int(b.x_nm) - int(a.x_nm)),
+        denominator,
+    );
+    let ax = BigRational::from_integer(int(a.x_nm));
+    let ay = BigRational::from_integer(int(a.y_nm));
+    let square = (&cx - &ax) * (&cx - &ax) + (&cy - &ay) * (&cy - &ay);
+    let mut radius = (square.numer() / square.denom()).sqrt();
+    if BigRational::from_integer(&radius * &radius) < square {
+        radius += 1;
+    }
+    let whole = |value: BigInt| value.to_i64().ok_or_else(|| "artwork arc overflows".to_owned());
+    let radius = whole(radius)?;
+    Ok(vec![
+        Point::new(whole(cx.floor().to_integer())? - radius, whole(cy.floor().to_integer())? - radius),
+        Point::new(whole(cx.ceil().to_integer())? + radius, whole(cy.ceil().to_integer())? + radius),
+    ])
+}
+
+/// `artwork_bounds`: a conservative integer envelope `(left, low, right, high)`.
+pub fn artwork_bounds(item: &Artwork) -> Result<(i64, i64, i64, i64), String> {
+    let (points, margin): (Vec<Point>, i64) = match item {
+        Artwork::Text { text, position, size_nm, thickness_nm, rotation_degrees, side, .. } => {
+            let lines: Vec<&str> = text.split('\n').collect();
+            let longest = lines.iter().map(|line| line.chars().count()).max().unwrap_or(0) as i64;
+            let half_width = (longest + 2) * size_nm;
+            let half_height = (lines.len() as i64 + 1) * size_nm;
+            let corners = [
+                (-half_width, -half_height),
+                (half_width, -half_height),
+                (half_width, half_height),
+                (-half_width, half_height),
+            ];
+            let scale = Decimal::from_i64(42);
+            let mut points = Vec::new();
+            for (x, y) in corners {
+                let x = Decimal::from_i64(x).mul(&scale).map_err(|e| e.to_string())?;
+                let y = Decimal::from_i64(y).mul(&scale).map_err(|e| e.to_string())?;
+                points.push(transform((&x, &y), *position, 1, rotation_degrees, *side).map_err(lower_text)?);
+            }
+            (points, (thickness_nm + 1) / 2 + 2)
+        }
+        Artwork::Graphic { graphic, .. } => {
+            let points = match graphic {
+                Graphic::Polygon { points, .. } => points.clone(),
+                Graphic::Line { start, end, .. } | Graphic::Rectangle { start, end, .. } => vec![*start, *end],
+                Graphic::Circle { center, end, .. } => {
+                    let radius = circle_radius(end.x_nm - center.x_nm, end.y_nm - center.y_nm)?;
+                    vec![
+                        Point::new(center.x_nm - radius, center.y_nm - radius),
+                        Point::new(center.x_nm + radius, center.y_nm + radius),
+                    ]
+                }
+                Graphic::Arc { start, midpoint, end, .. } => arc_bounds(start, midpoint, end)?,
+            };
+            (points, (graphic.width_nm() + 1) / 2)
+        }
+    };
+    let xs = || points.iter().map(|p| p.x_nm);
+    let ys = || points.iter().map(|p| p.y_nm);
+    Ok((
+        xs().min().unwrap_or(0) - margin,
+        ys().min().unwrap_or(0) - margin,
+        xs().max().unwrap_or(0) + margin,
+        ys().max().unwrap_or(0) + margin,
+    ))
+}
+
+fn branding_artwork(mark: &SilkscreenBranding, position: Point) -> Lower<Vec<Artwork>> {
+    let mut artwork =
+        logo("__copperscript", position, mark.size_nm, &mark.rotation_degrees, mark.side, mark.material, mark.exposed)?;
+    let stacked = mark.layout == "stacked";
+    let parse = |text: &str| Decimal::parse(text).expect("literal");
+    let version = format!("v{}", mark.version);
+    let labels: [(&str, &str, Decimal, Decimal); 2] = if stacked {
+        [
+            ("name", "CopperScript", Decimal::zero(), parse("31.5")),
+            ("version", &version, Decimal::zero(), parse("44.1")),
+        ]
+    } else {
+        [("name", "CopperScript", parse("82"), parse("-5")), ("version", &version, parse("82"), parse("7"))]
+    };
+    for (identity, text, x, y) in labels {
+        let at = transform((&x, &y), position, mark.size_nm, &mark.rotation_degrees, mark.side)?;
+        artwork.push(Artwork::Text {
+            id: format!("__copperscript:{identity}"),
+            text: text.to_owned(),
+            position: at,
+            size_nm: 1.max(mark.size_nm / if stacked { 10 } else { 5 }),
+            thickness_nm: 1.max(mark.size_nm * if stacked { 2 } else { 3 } / 100),
+            rotation_degrees: mark.rotation_degrees.clone(),
+            side: mark.side,
+            material: mark.material,
+            exposed: mark.exposed,
+        });
+    }
+    Ok(artwork)
+}
+
+/// `BRANDING_COPPER_GAP_NM`: the gap kept between the default mark and fixed copper.
+pub const BRANDING_COPPER_GAP_NM: i64 = 300_000;
+
+/// `_default_position`: a bounded search inside the outline, clear of `avoid`.
+fn default_position(
+    mark: &SilkscreenBranding,
+    outline: &copper_physical::BoardOutline,
+    avoid: &[copper_physical::RoundedConvexShape],
+) -> Result<Point, String> {
+    use copper_physical::RoundedConvexShape;
+    use copper_physical::geometry::shapes_clear;
+    use copper_physical::mechanical::shape_in_outline;
+    let xs = || outline.vertices.iter().map(|p| p.x_nm);
+    let ys = || outline.vertices.iter().map(|p| p.y_nm);
+    let (xmin, xmax) = (xs().min().unwrap_or(0), xs().max().unwrap_or(0));
+    let (ymin, ymax) = (ys().min().unwrap_or(0), ys().max().unwrap_or(0));
+    let s = mark.size_nm;
+    let version_length = mark.version.chars().count() as i64;
+    // Python's `-s//2` floors.
+    let (mut left, mut right) =
+        ((-s).div_euclid(2) - 150_000, s * 82 / 42 + 12.max(version_length + 1) * s / 10 + 150_000);
+    let (mut low, mut high) = ((-s).div_euclid(2) - 150_000, s / 2 + 150_000);
+    let boxed = mark.material == ArtworkMaterial::Copper || mark.layout == "stacked";
+    if boxed {
+        let boxes = branding_artwork(mark, Point::new(0, 0))
+            .map_err(lower_text)?
+            .iter()
+            .map(artwork_bounds)
+            .collect::<Result<Vec<_>, String>>()?;
+        left = boxes.iter().map(|b| b.0).min().unwrap_or(0);
+        low = boxes.iter().map(|b| b.1).min().unwrap_or(0);
+        right = boxes.iter().map(|b| b.2).max().unwrap_or(0);
+        high = boxes.iter().map(|b| b.3).max().unwrap_or(0);
+    }
+    let start = Point::new(xmin + 1_000_000 - left, ymin + 1_000_000 - low);
+    let scale = Decimal::from_i64(42);
+    let size = Decimal::from_i64(s);
+    for row in 0..17i64 {
+        for column in 0..17i64 {
+            let x = start.x_nm + (column * 0.max(xmax - right - 1_000_000 - start.x_nm)).div_euclid(16);
+            let y = start.y_nm + (row * 0.max(ymax - high - 1_000_000 - start.y_nm)).div_euclid(16);
+            let local = [(left, low), (right, low), (right, high), (left, high)];
+            let corners: Vec<Point> = if boxed {
+                local.iter().map(|(px, py)| Point::new(x + px, y + py)).collect()
+            } else {
+                let mut corners = Vec::new();
+                for (px, py) in local {
+                    let fx = Decimal::from_i64(px).mul(&scale).and_then(|v| v.div(&size)).map_err(|e| e.to_string())?;
+                    let fy = Decimal::from_i64(py).mul(&scale).and_then(|v| v.div(&size)).map_err(|e| e.to_string())?;
+                    let corner = transform((&fx, &fy), Point::new(x, y), s, &mark.rotation_degrees, mark.side);
+                    corners.push(corner.map_err(lower_text)?);
+                }
+                corners
+            };
+            let envelope = RoundedConvexShape::new(corners, 0)?;
+            if shape_in_outline(&envelope, outline, 0)?
+                && avoid.iter().all(|shape| shapes_clear(&envelope, shape, BRANDING_COPPER_GAP_NM))
+            {
+                return Ok(Point::new(x, y));
+            }
+        }
+    }
+    Ok(start)
+}
+
+/// `physical_artwork`: board artwork with the branding mark placed.
+///
+/// `avoid` holds the copper of parts whose position is fixed before placement.
+pub fn physical_artwork(
+    design: &SilkscreenDesign,
+    outline: &copper_physical::BoardOutline,
+    avoid: &[copper_physical::RoundedConvexShape],
+) -> Result<Vec<Artwork>, String> {
+    let mut artwork = design.artwork.clone();
+    let mark = &design.branding;
+    if mark.enabled {
+        let position = match mark.position {
+            Some(position) => position,
+            None => default_position(mark, outline, avoid)?,
+        };
+        artwork.extend(branding_artwork(mark, position).map_err(lower_text)?);
+    }
+    let mut ids: Vec<&str> = artwork.iter().map(Artwork::id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.len() != artwork.len() {
+        return Err("duplicate silkscreen feature id".to_owned());
+    }
+    Ok(artwork)
+}

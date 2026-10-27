@@ -5762,6 +5762,852 @@
    ]
   },
   {
+   "name": "export-kicad-pcb-proxy",
+   "milestone": "M2",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "export-kicad-pcb",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--no-check",
+    "-o",
+    "{out}/board.kicad_pcb"
+   ],
+   "mutations": 10
+  },
+  {
+   "name": "export-kicad-pcb-resolved",
+   "milestone": "M2",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "export-kicad-pcb",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--no-check",
+    "-o",
+    "{out}/board.kicad_pcb"
+   ],
+   "mutations": 3
+  },
+  {
+   "name": "export-kicad-pcb-fixtures",
+   "milestone": "M2",
+   "inputs": [
+    "tests/rust-port/export-kicad-pcb/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "export-kicad-pcb",
+    "{input}",
+    "--allow-proxy-footprints",
+    "--no-check",
+    "--layers",
+    "6",
+    "--fab-profile",
+    "jlcpcb-six-layer",
+    "-o",
+    "{out}/board.kicad_pcb"
+   ],
+   "mutations": 10
+  },
+  {
+   "name": "export-kicad-pcb-options",
+   "milestone": "M2",
+   "cases": [
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "4",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--width-mm",
+      "50",
+      "--height-mm",
+      "30",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--width-mm",
+      "24",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--width-mm",
+      "0",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--width-mm",
+      "-5",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--width-mm",
+      "33.3333",
+      "--height-mm",
+      "71.17",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--height-mm",
+      "1e2",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/mechanical_outline/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--width-mm",
+      "20",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/mechanical_outline/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "4",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/nested/deeper/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/board"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/board.pcb.txt"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--output={out}/eq.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy",
+      "--out",
+      "{out}/abbrev.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "examples/valid_board/board.copper/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/invalid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/invalid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/nrf_antenna_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/nrf_antenna_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/tps62130a_macro/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/full_vertical/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--placement-templates",
+      "examples/full_vertical/placement_templates.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-templates",
+      "examples/full_vertical/placement_templates.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-templates",
+      "examples/missing-templates.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-templates",
+      "examples/valid_board/board.copper",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-templates",
+      "scripts/compare_corpus.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--hard-macro",
+      "examples/missing-scene.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--hard-macro",
+      "scripts/compare_corpus.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--hard-macro",
+      "examples/valid_board/board.copper",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--footprint-root",
+      "tests/fixtures/footprints",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/resolved_footprint_board/board.copper",
+      "--offline",
+      "--footprint-root",
+      "examples",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/resolved_footprint_board/board.copper",
+      "--offline",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/managed_footprints/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/managed_footprints/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/missing/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "3",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "four",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--fab-profile",
+      "jlcpcb",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--width-mm",
+      "wide",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--l",
+      "4",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--h",
+      "4",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--bogus",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/zones.copper",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/zones.copper",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "--layers",
+      "4",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/routing.copper",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/placement.copper",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/six_layer.copper",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "--layers",
+      "6",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/six_layer.copper",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "--layers",
+      "4",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    }
+   ]
+  },
+  {
    "name": "check-footprint",
    "milestone": "M2",
    "inputs": [
