@@ -1,16 +1,16 @@
-# Rust port plan
+# Rust rewrite plan
 
-Status: draft 2026-10-27, for owner review (decisions in section 7 are open).
-Owner: andenore. This plan does not change routing, placement or language
-behaviour; algorithm work stays under the
+Status: revised 2026-10-27 after owner decisions (section 8). Owner: andenore.
+This plan does not change routing, placement or language behaviour on the
+Python side; algorithm work there still follows the
 [routing refactor plan](routing-refactor-plan.md) and the
-[escape planning plan](escape-planning-plan.md).
+[escape planning plan](escape-planning-plan.md) until section 5 says otherwise.
 
 ## 1. Goal
 
 One Rust implementation of the compiler and the physical pipeline, shipped as
-a native `copper` binary, that produces the same outputs as today's Python
-`pcbir` for the same inputs.
+a native `copper` binary, that produces equivalent outputs to today's Python
+`pcbir` for the same inputs. The CLI is the product. There is no Python API.
 
 Why:
 
@@ -18,14 +18,16 @@ Why:
   CopperProbe run has taken 13.4 h. Most of that is pure-Python search, object
   churn and geometry, not the 379-line C A* kernel.
 - **Distribution.** Consumers need a uv-locked Python environment today. A
-  binary (plus Python wheels for the API) removes that for CLI users.
+  binary removes that.
 - **Correctness.** Exact-integer geometry, ownership and immutability rules are
   easier to enforce with Rust types than by convention.
 
-Non-goals: changing any algorithm during the port, changing the `.copper`
-language, the report schemas, the state-file format or KiCad output bytes.
+Non-goals: changing the `.copper` language, the report schemas, the state-file
+format or the KiCad output structure. Behaviour may differ where the Python
+implementation is itself wrong, and only when the difference is reviewed and
+recorded (section 4).
 
-## 2. What there is to port
+## 2. What there is to rewrite
 
 `pcbir` and `copperscript`: 215 files, about 84,400 lines of Python.
 
@@ -40,179 +42,222 @@ language, the report schemas, the state-file format or KiCad output bytes.
 | KiCad backends and importers | 4,400 | 10 | Low |
 | Reports, issues, bench/ladder, state codec, misc | 13,900 | 55 | Medium |
 
-Plus:
+What happens to the rest:
 
-- **Tests:** 340 files, about 56,400 lines and 4,150 tests, all pytest.
-- **Native code:** the C A* kernel `pcbir/native/astar.c`, shipped as prebuilt
-  Linux and Windows libraries.
-- **JavaScript:** the browser editor assets, the VS Code extension and its
-  tests. The extension starts the compiler and the LSP as subprocesses.
-- **Python dependencies:** numpy (6 modules: lattice, unified router,
-  congestion map, plane estimate, power islands, state codec). Optional
-  extras: shapely, pygerber and gerbonara (independent qualification and CAM
-  checks), matplotlib and plotly (simulation plots), ortools (exact escape).
+- **Tests.** The 340 pytest files (56,400 lines, 4,150 tests) are not ported.
+  They are development scaffolding for the Python implementation. Their
+  fixture inputs (`.copper` sources, footprints, KiCad files, state files)
+  become the golden corpus (section 4); their assertions are replaced by Rust
+  unit tests written with each crate and by CLI-level comparison on the
+  corpus.
+- **Native code.** The C A* kernel `pcbir/native/astar.c` is retired. The
+  router is Rust end to end.
+- **JavaScript.** The browser editor assets and the VS Code extension stay.
+  The extension starts the compiler and the LSP as subprocesses, so it
+  switches from `python -m copperscript` to the binary.
+- **Python dependencies.** numpy is replaced by Rust code. The optional extras
+  (shapely, pygerber, gerbonara, matplotlib, plotly, ngspice glue) stay with
+  the independent checks, which are out of the first iteration (section 5).
 
-### The Python API is a product
+## 3. Consumers: the CLI is the only surface
 
-Consumers import `pcbir` directly, not only the CLI:
+The consumer repositories were inventoried at their current heads
+(CopperLedRing 0c4d11d, CopperAssetTracker 8ac4fea, CopperLib 1e1b8a8,
+CopperBench e8bccab; CopperProbe is empty).
 
-| Consumer | Uses |
-|---|---|
-| CopperLib | `pcbir`, `placement`, `importers`, `physical`, `hard_macros`, `engineering_qualification` in tests and generators |
-| CopperAssetTracker | `pcbir`, `hard_macros`, `placement`, `physical`, `loader`, `backends.kicad_pcb` in tests and scripts |
-| CopperLedRing | `pcbir`, `hard_macros`, `placement`, `physical`, `backends.kicad_project` |
-| CopperBench | `pcbir.workbench`, `backends.kicad_pcb`, `scene`, `manufacturing_files` |
+| Consumer | Files importing `pcbir` | What they are |
+|---|---:|---|
+| CopperLedRing | 0 | Makefile only: `check`, `export-kicad-pcb`, `edit-mechanical`, `route-board`, `assembly`, `export-manufacturing` |
+| CopperAssetTracker | 13 | 5 test files and 8 scripts under `scripts/`; the Makefile uses `lock`, `check`, `audit-footprints`, `compile`, `plan-layout`, `edit-mechanical`, `route-board`, `assembly`, `export-manufacturing`, `audit-cam`, `assess-engineering`, `qualification-gate` |
+| CopperLib | 44 | 43 pytest files and `layout_trial.py` for the TPS62130A buck macro |
+| CopperBench | 7 | Read-only tools under `full-board/tools`, `prototype` and `tools` |
 
-The port therefore keeps a Python package with the same import paths for as
-long as consumers use it (decision D2).
+**Rule (decision D2).** A `pcbir` import in a consumer is removed, not given a
+CLI equivalent. The rewrite does not grow its command surface to carry
+consumer test or development code:
 
-### What the Rust clearance prototype showed
+- A check of generic CopperScript behaviour (hard-macro materialisation,
+  pad-shape clearance, scene geometry, plane stitching) moves into
+  CopperScript's own tests, written once in Rust, and is deleted from the
+  consumer.
+- A check of the consumer's own content (a package's pin contract, a board's
+  assembly lock, an ERC result) that an existing command already exposes
+  (`check`, `compile` JSON, `audit-footprints`, `assembly`) is rewritten to
+  drive the CLI and read its JSON.
+- Everything else was intermediate testing or development tooling and is
+  deleted.
 
-Branch `prototype/rust-clearance-index` mirrored the clearance index hot path
-in Rust behind the Python API: byte-identical boards, 1–13 % faster, and no
-change on CopperAssetTracker. There, `_clear` was about 4 % of samples; time
-went to the critical pair search's own geometry and object churn. Porting one
-hot function at a time behind a fine-grained Python boundary does not pay. A
-stage has to move to Rust as a whole, with its loop, its geometry and its data
-structures, and cross the language boundary once per call.
+Disposition by kind of use, most common first:
 
-## 3. Approach: strangler port behind PyO3, oracle-checked
+| Use in consumers | Where | Disposition |
+|---|---|---|
+| Compile a tiny board and inspect the model (`compile_source`, `check`, `elaborate`, `board_to_dict`) | About 30 CopperLib test files, 2 tracker tests | Drive `copper compile`/`copper check`; keep only assertions about the package's own facts |
+| Parse a KiCad footprint (`load_kicad_mod`) to check pad geometry | About 12 CopperLib tests | Delete; footprint parsing is CopperScript's to test |
+| Physical trials around a hard macro (physicalize, materialise/validate macros, DRC, pad transforms, KiCad project export) | 11 TPS62130A macro tests, `layout_trial.py`, tracker `probe_power_macros.py`, `build_battery_revision.py`, power-layout tests | Delete from consumers; generic macro validation moves into CopperScript's Rust tests, using the `tps62130a_macro` and `nrf_antenna_macro` examples |
+| Geometry queries on routed output (`workbench`, `scene`, `kicad_reference`, power-path width) | All 7 CopperBench tools, 1 tracker script | Delete; `copper issues` and `copper view` are the supported inspection path |
+| Qualification contracts, assembly locks, manufacturing files | Tracker scripts and tests, 3 CopperLib tests | Drive `assembly`, `export-manufacturing` and the qualification commands; delete the rest |
+| Private names (`pin_escape._verified_land_path`, `importers.kicad_mod._parse_sexpr`) | 2 tracker scripts | Delete; board-specific routing checks are already disallowed in consumers |
 
-Port stage by stage into a Rust workspace exposed to Python with PyO3. The
-Python implementation of a stage stays as the reference until the Rust one
-matches it. Each stage switches over only when it is equivalent:
+These removals are PRs in the consumer repositories. They are a prerequisite
+for deleting the Python core (M7) and can start now, since each one only
+removes code or switches a test to commands that already exist.
 
-1. **Same inputs, same outputs.** Fixture inputs go through both
-   implementations. The outputs are compared exactly, as state-file JSON and
-   as KiCad bytes.
-2. **The existing suite keeps running.** The pytest suite runs against the
-   Rust-backed stage through the Python API. The 4,150 existing tests become
-   the acceptance suite with no rewrite.
-3. **The ladder is unchanged.** All six benchmark-ladder boards
-   (round-led-ring, nrf52, full-vertical, cm4, CopperLedRing,
-   CopperAssetTracker) stay byte-identical, and run time is measured on each
-   (AGENTS.md: measure every change with the benchmark ladder).
+## 4. Approach: clean rewrite, checked against the Python CLI
 
-Once every stage is in Rust, the CLI becomes a Rust binary. The Python package
-shrinks to bindings over the Rust core.
+Write the Rust implementation from the specification and the Python source,
+in a Cargo workspace under `crates/`, producing one binary. The Python
+implementation is not modified for the rewrite and is not wired to it; it
+stays in the repository as the reference until the binary passes acceptance,
+then is deleted (except section 5's independent checks).
 
-Why not a from-scratch rewrite: there is no oracle until everything is done,
-the routing code changes weekly, and consumers would see one large break
-instead of a sequence of identical releases.
+Why a clean rewrite rather than a stage-by-stage port: the owner wants one
+coherent Rust design rather than Python structure mirrored through a foreign
+function boundary, and consumers will not import the result, so there is no
+intermediate API to keep working. The cost is that nothing ships until a
+whole command is equivalent; milestones are therefore cut per CLI command
+(section 5) so each one has an oracle.
 
-### Boundaries
+### Oracle and golden corpus
 
-- **Coarse calls only.** For example `route_unified(board, guides, options) ->
-  result`, `run_physical_drc(board) -> report` or `compile_source(text) ->
-  design`. No per-query or per-node crossings.
-- **Interchange.** A boundary passes data either as native Rust objects
-  wrapped in Python classes, or through the existing state codec
-  (`copperscript.state/v1` JSON) where a stage is still Python on one side.
-  The codec format becomes the cross-language contract, so its schema is
-  frozen and versioned from R0.
-- **Callbacks.** Progress callbacks cross the boundary as events (phase, event
-  and details), batched where they are frequent.
+- The oracle is the Python CLI at a pinned commit, run through
+  `python -m copperscript`.
+- The corpus is every input the repository already has: the `.copper`
+  sources, footprints, KiCad files and state files under `tests/` and
+  `examples/`, the six benchmark-ladder boards (round-led-ring, nrf52,
+  full-vertical, cm4, CopperLedRing, CopperAssetTracker at pinned commits)
+  and the consumer boards.
+- A harness (`copper compare`, or a script in `scripts/`) runs the same
+  command on both implementations and diffs the outputs: compiled design
+  JSON, ERC diagnostics, `copperscript.state/v1` files, DRC and route
+  reports, generated `.kicad_pcb`/`.kicad_pro` bytes, manufacturing files.
+- Ladder run time is recorded for both implementations on every milestone
+  (AGENTS.md: measure every change with the benchmark ladder).
+
+### Differences (decision D5)
+
+Byte identity is the default expectation and the harness reports every
+deviation. A deviation is accepted only when it is reviewed and recorded in
+`docs/rust-port-differences.md` with the input, the two outputs, the reason
+the Python behaviour is wrong or arbitrary, and the milestone that accepted
+it. Unrecorded differences block the milestone. The ladder boards must still
+route completely and pass native DRC; their metrics (length, via count,
+completion time) may differ within the recorded entries.
 
 ### Numerics and determinism
 
-The outputs are byte-identical today; the port must keep them so:
-
 - Lengths are integer nanometres in `i64`, with `i128` for products. Exact
-  fractions use `num-rational`, and `Decimal` uses a fixed-point type with the
-  same rounding (Python rounds half to even).
-- Float code (for example `hypot`, `atan2`, cost weights) keeps the same
-  operations in the same order. Results that feed output are checked bit for
-  bit against Python, and math functions that differ between platforms are
-  pinned.
+  fractions use `num-rational`; fixed-point quantities keep their
+  `base_value` and the shared formatter rules (`100 nF`).
+- Float code (`hypot`, `atan2`, cost weights) keeps the same operations in
+  the same order unless a recorded difference says otherwise.
 - Iteration order is deterministic everywhere: `BTreeMap`/`IndexMap`, no
-  `HashMap` iteration feeding output, and stable sorts with the same keys.
-- Text output (KiCad files, reports, quantity formatting such as `100 nF`) is
-  generated by the same rules and compared byte for byte.
+  `HashMap` iteration feeding output, stable sorts with the same keys. The
+  binary must reproduce its own output bit for bit across runs and platforms.
 
-## 4. Order: stable leaves first, moving routing last
+### Boundaries inside the Rust workspace
 
-Porting code that is still being rewritten doubles the work. Stable,
-self-contained layers go first, which also builds the shared Rust types
-everything else needs. The unified router and critical routing go after the
-current routing refactor and escape planning work settle, or under a freeze
-agreed for that phase (decision D3).
+One crate per layer, with the physical IR and geometry as the shared
+foundation: `copper-lang` (frontend), `copper-physical` (IR, geometry,
+footprints, macros, mechanics), `copper-kicad` (I/O), `copper-drc`,
+`copper-place`, `copper-route`, `copper-report` (state codec, issues, view),
+`copper-lsp`, and the `copper` binary. Crate boundaries follow the current
+module groups so the Python source can be read alongside.
 
-| Phase | Scope | Why here | Accept when |
+## 5. Milestones, in dependency order
+
+Each milestone is one or more PRs and ends with a ladder run and the
+differences log updated. A milestone is accepted when the harness shows the
+named commands equivalent on the corpus, with every deviation recorded.
+
+| Milestone | Scope | Commands equivalent | Accept when |
 |---|---|---|---|
-| R0 Foundations | Cargo workspace (`crates/`), maturin and PyO3 build, Linux and Windows wheels in CI, a frozen state-codec schema, the numeric types, a differential-test harness (Python vs Rust on a fixture corpus), ladder timing hook | Everything else depends on it | A trivial ported function round-trips through the harness on both platforms |
-| R1 Physical IR and exact geometry | `physical`, `geometry`, `surface_path`, `zone_geometry`, `breakout`, `routing_clearance` (absorb the prototype), outline and mechanics | Stable leaf; every later stage uses these types | Geometry and clearance tests pass on Rust; ladder identical |
-| R2 DRC | `drc`, `process_drc`, `pad_stitch`, route closure checks | Self-contained, called in loops by later stages | DRC reports identical on the ladder and the test corpus |
-| R3 KiCad I/O | `backends/kicad_pcb`, `kicad_project`, `importers/kicad_pcb`, `importers/kicad_mod`, footprint resolution | Stable; output bytes are the identity check | Generated `.kicad_pcb`/`.kicad_pro` byte-identical; the KiCad conformance fixtures pass |
-| R4 Global routing and placement | `routing` (global router), `routing_lattice`, `layer_assignment`, `placement`, `routeflow`, `congestion_feedback` | Medium churn; large share of run time on the small boards | Ladder identical; placement checkpoints still load |
-| R5 Unified router | `unified_router` plus the C A* kernel (retired) | Largest run-time share; needs R1, R2 and R4 | Ladder identical; time recorded per board |
-| R6 Critical and pair routing | `critical`, `pair_search`, `pair_*`, tuning, `local_critical`, `escape_plan` | Dominates CopperAssetTracker; high churn | Ladder identical, the tracker included |
-| R7 Pipeline stages and flow | `flow`, `fanout`, `decoupling*`, `plane`, `bypass*`, `filled_feedback`, `dependency_reroute`, `power_islands` | Glue across R1–R6 | Whole `run_routing_pipeline` in Rust; ladder identical |
-| R8 Frontend | lexer, parser, compiler, model, ERC, packages and lockfiles (git fetching), library loading, quantities | Stable but large; the CLI needs it to drop Python | All compiler, ERC and package tests pass on Rust |
-| R9 CLI, LSP, editor, reports | `copper` binary, LSP (for example `tower-lsp`), editor server, `run_issues`, `view` rendering, bench and ladder tools | Last user-facing pieces | VS Code extension and editor tests pass against the binary; consumer Make targets run unchanged |
-| R10 Python surface | `pcbir` becomes bindings over Rust; Python implementations deleted | After every stage has switched | Consumer test suites pass on the bindings |
+| M0 Foundations | Cargo workspace, Linux and Windows binaries in CI, numeric types, state-codec schema frozen, the comparison harness and differences log, ladder timing hook | none | The harness compares one trivial command on both platforms |
+| M1 Frontend | Lexer, parser, compiler, model, ERC, quantities, packages and lockfiles (git fetching), library loading | `check`, `compile`, `lock`, `audit-footprints`, `library`, `compile-macro`, `agent-guide` | Every `.copper` source in the corpus compiles to equivalent JSON; ERC diagnostics equivalent |
+| M2 Physical IR and KiCad I/O | `physical`, `geometry`, `surface_path`, `zone_geometry`, `breakout`, footprints and `kicad_mod` import, outline and mechanics, hard-macro materialisation, `kicad_pcb`/`kicad_project` backends and the board importer | `export-kicad-pcb` | KiCad output equivalent for the examples and consumer boards; macro examples materialise |
+| M3 DRC, placement, assembly | `drc`, `process_drc`, `pad_stitch`, `placement`, `clusters`, `congestion_feedback`, `layout`, assembly locks and manufacturing files (without the independent CAM audit), editor backend | `plan-layout`, `edit-mechanical`, `assembly`, `export-manufacturing --skip-independent-cam`, `state` | Placement and DRC reports equivalent on the ladder; editor tests pass against the binary |
+| M4 Routing | Global router, `routing_lattice`, `layer_assignment`, `routeflow`, `unified_router` (A* kernel retired), `critical`, `pair_*`, `escape_plan`, `fanout`, `decoupling*`, `plane`, `bypass*`, `filled_feedback`, `dependency_reroute`, `power_islands`, `flow` | `route-board`, `benchmark-routing`, `bench run` | All six ladder boards route completely and pass native DRC; metrics within the recorded differences; run time recorded per board |
+| M5 Diagnostics and reports | `run_issues`, `view` rendering, `explain`, `summarize`, `routing_benchmark` summaries, the `bench` subcommands (`run`, `boards`, `failures`, `causes`, `compare`, `baseline`, `annotate`) | `issues`, `view`, `explain`, `summarize`, `bench` | Reports equivalent on the ladder runs |
+| M6 LSP and editor | `lsp` (for example `tower-lsp`), editor server, VS Code extension pointed at the binary | `lsp`, `editor-overlay` | Extension and editor tests pass against the binary |
+| M7 Cutover | Consumer `pcbir` imports removed (section 3), consumer Makefiles on the binary, Python core deleted, the pinned oracle commit recorded | all of the above | Consumer Make targets run unchanged except for the binary path; `pcbir` reduced to section 5's remainder |
 
-Each phase is one or more PRs. A phase ends with the Python implementation of
-that stage deleted, not kept as a second path.
-
-### Staying in Python
+### Out of the first iteration (decision D4)
 
 The independent qualification and CAM checks (`cam_*`, `rf_*`,
-`engineering_qualification`, `stackup_qualification`) use shapely, pygerber
-and gerbonara on purpose: they are separate implementations that check
-CopperScript's output. They stay in Python and call the Rust core through the
-bindings (decision D4). The ngspice and plotting glue also stays Python.
+`engineering_qualification`, `stackup_qualification`, `qualification_gate`,
+the native qualification and RF probes) and the ngspice simulation glue are
+not rewritten in this iteration. They stay as the Python commands `audit-cam`,
+`assess-engineering`, `qualification-gate` and `sim`, reading the binary's
+outputs (KiCad files, state files, reports) from disk.
 
-## 5. Effort
+They import core `pcbir` modules (`physical`, `placement`, `pair_geometry`,
+`power_integrity`, `route_path_geometry`, `rf_geometry`, `engineering`), so
+at M7 the Python package is reduced to those modules plus the check code,
+installed only with the `qualification` extra, and frozen: no further
+development on the Python side. Rewriting them is a later iteration.
+
+### Routing work during the rewrite (decision D3)
+
+The rewrite includes routing (M4) without waiting for the routing refactor or
+escape planning to finish. Consequence: every algorithm change that lands in
+Python after M4 starts has to be mirrored in Rust before M7, or dropped. The
+recommendation is that algorithm work moves to the Rust router once M4 is
+accepted and the Python router is frozen from that point; until then, the
+Python-side plans stay in force and M4 is written against the Python router
+as it stands when M4 starts.
+
+## 6. Effort
 
 Rust is usually about the same length as this kind of Python, or up to 1.5
 times longer. Very roughly, at one experienced Rust engineer full time, with
 review:
 
-| Phase | Estimate |
+| Milestone | Estimate |
 |---|---|
-| R0 | 2–3 weeks |
-| R1–R3 | 6–9 weeks |
-| R4–R5 | 6–9 weeks |
-| R6–R7 | 8–12 weeks |
-| R8–R10 | 6–9 weeks |
+| M0 | 2 weeks |
+| M1 | 4–6 weeks |
+| M2–M3 | 6–9 weeks |
+| M4 | 12–18 weeks |
+| M5–M6 | 4–6 weeks |
+| M7 and consumer PRs | 2–3 weeks |
 
-That is about 7–10 months in total. The routing phases carry most of the
-uncertainty, both in size and in how much the code changes underneath them.
-AI-assisted porting with the differential harness can shorten the mechanical
-part. Byte-identity debugging and review do not shrink as much.
+That is about 7–10 months in total, with no shippable binary before M1 and no
+replacement for a consumer build before M4. The routing milestone carries
+most of the uncertainty, both in size and in how much the Python router
+changes underneath it. AI-assisted drafting against the harness can shorten
+the mechanical part; reviewing differences and debugging routing divergence
+do not shrink as much.
 
-## 6. Risks
+## 7. Risks
 
 | Risk | Mitigation |
 |---|---|
-| Floating-point or rounding differences break byte identity | Same operation order; bit-level comparison in the harness; pin platform math; exact integer types wherever Python uses `int` or `Fraction` |
-| Two implementations drift while a stage is half ported | One stage in flight at a time; a stage switches and its Python implementation is deleted in the same phase |
-| Routing changes land while R5–R7 are in progress | Port those after the refactor settles, or freeze those modules for the phase (D3) |
-| Consumers break on API changes | Same `pcbir` import paths through PyO3 classes; run the consumer suites in CI before each release |
-| Windows builds (the current authoring environment is Windows) | Build and test Windows wheels and binaries from R0 on |
-| The boundary costs more than the work it saves | Coarse calls only; measure each switch on the ladder before accepting it |
-| Pytest relies on Python internals (monkeypatching private functions) | Treat such tests as implementation tests: move them to Rust unit tests when their module is ported |
+| No oracle for partial work | Milestones are cut per CLI command so every milestone has one; the harness runs from M0 |
+| Floating-point or rounding differences cascade in routing | Same operation order by default; the differences log forces each deviation to be understood; integer types wherever Python uses `int` or `Fraction` |
+| Routing changes land in Python while M4 is in progress | Freeze the Python router when M4 is accepted (section 5); until then, mirror or drop each change explicitly |
+| Consumers lose checks they relied on | Section 3 moves generic checks into CopperScript's tests and keeps content checks on existing commands; nothing consumer-specific is carried |
+| Windows builds (the current authoring environment is Windows) | Build and test Windows binaries in CI from M0 |
+| The reduced Python package for independent checks rots | Freeze it at M7 with a pinned lock; schedule its rewrite as the next iteration |
+| Reviewed differences hide regressions | Every entry names input, outputs and reason; the ladder must still route completely and pass native DRC |
 
-## 7. Decisions for the owner
+## 8. Decisions (recorded 2026-10-27)
 
-- **D1 Approach.** Strangler port behind PyO3, checked against the Python
-  implementation as above (recommended), or a clean rewrite.
-- **D2 Python surface.** Keep `pcbir` as a permanent Python binding layer
-  (recommended, because consumers use it), or retire it after migrating the
-  consumers to the CLI or a new API.
-- **D3 Routing timing.** Start R5–R7 only after the routing refactor and
-  escape planning steps settle (recommended), or freeze those modules while
-  they are ported.
-- **D4 Independent checks.** Keep the shapely, pygerber and gerbonara
-  qualification checks in Python (recommended), or port them too.
-- **D5 Identity bar.** Byte-identical ladder boards required for every phase
-  (recommended), or allow measured, reviewed differences where Python
-  behaviour is itself a bug.
+- **D1 Approach: clean rewrite.** No PyO3 strangler port; the Python
+  implementation is the reference only.
+- **D2 Python surface: none.** Consumers do not import `pcbir`. Their current
+  imports are removed as intermediate testing or development code, not given
+  CLI equivalents (section 3).
+- **D3 Routing timing: include routing in the rewrite now.** Do not wait for
+  the routing refactor or escape planning to settle (section 5).
+- **D4 Independent checks: not in the first iteration.** They stay as Python
+  commands on a reduced, frozen package (section 5).
+- **D5 Identity bar: reviewed differences allowed.** Byte identity is the
+  default; every deviation is recorded in the differences log (section 4).
 
-## 8. First steps
+## 9. First steps
 
-1. Owner decisions D1–D5.
-2. R0: the workspace, the build, the CI wheels and the harness, with one
-   trivial function ported end to end on Linux and Windows.
-3. R1: absorb `prototype/rust-clearance-index` into the shared geometry crate,
-   and port the physical IR types it needs.
+1. M0: the workspace, the CI binaries, the comparison harness with the corpus
+   enumerated, and the empty differences log.
+2. Consumer PRs under section 3, starting with CopperLib (largest count) and
+   CopperBench (all deletable); confirm each repository's dispositions with
+   its owner before deleting.
+3. M1: the frontend, measured by `check` and `compile` on the whole corpus.
