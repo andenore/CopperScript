@@ -15,7 +15,9 @@ and the same output directory, so paths in their output agree. The harness
 compares the exit status, stdout, stderr and every output file byte for byte
 (a suite may narrow this), and records both run times. The Rust binary writes
 LF line endings on every platform; on Windows the Python outputs' CRLF is read
-as LF before comparing. A Rust command that
+as LF before comparing (and the Rust outputs' too, for formats such as CSV
+that use CRLF on every platform). ``{root}`` in case arguments is the
+checkout, for paths a command resolves from another working directory. A Rust command that
 reports it is not implemented yet is ``pending``; its oracle run is skipped
 unless ``--oracle-when-pending`` asks for the Python timing anyway.
 
@@ -269,7 +271,7 @@ def run_one(command: list[str], case: Case, out: Path, environment: dict[str, st
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    args = _expand(case.args, {"out": str(out)})
+    args = _expand(case.args, {"out": str(out), "root": str(ROOT)})
     started = time.perf_counter()
     try:
         completed = subprocess.run([*command, *args], cwd=case.cwd, capture_output=True, env=environment,
@@ -489,7 +491,8 @@ def _compare_runs(case, record, rust_command, python_command, work, slug, out, e
     else:
         out.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
-        python = python.with_lf()
+        # Formats that end lines with CRLF everywhere (CSV) do so in both.
+        python, rust = python.with_lf(), rust.with_lf()
     shutil.move(str(out), work / slug / "python")
     record.update(python=_summary(python), rust=_summary(rust))
     if python.timed_out or python.exit is None:

@@ -13163,6 +13163,849 @@
    ]
   },
   {
+   "name": "export-manufacturing",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "export-manufacturing/valid_board",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/valid_board/bom",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/cm4_baseboard",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/cm4_baseboard/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/cm4_baseboard/bom",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/cm4_baseboard/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/cm4_baseboard/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/hierarchical_board",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/hierarchical_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/hierarchical_board/bom",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/hierarchical_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/hierarchical_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/dnp",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/dnp/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/dnp/bom",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/dnp/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/dnp/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/round_led_ring",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/round_led_ring/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/six_layer",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/six_layer/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/no-version",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-no-version.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/version-fails",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-version-fails.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/drc-fails",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-drc-fails.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/drc-silent",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-drc-silent.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/drc-violations",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-drc-violations.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/drc-not-json",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-drc-not-json.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/drc-missing-key",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-drc-missing-key.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/gerbers-fail",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-gerbers-fail.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/missing-gerber",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-missing-gerber.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/no-drill",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-no-drill.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/empty-drill",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-empty-drill.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/no-netlist",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-no-netlist.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/pos-fails",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-pos-fails.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/stub/pos-duplicate",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli-pos-duplicate.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/circle-outline",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/circle-outline.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/crlf",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/crlf.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/empty",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/empty.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/footprint",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/footprint.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/minimal",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/minimal.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/no-copper",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/no-copper.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/no-layers",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/no-layers.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/no-outline",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/no-outline.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/no-project",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/no-project.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/not-sexpr",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/not-sexpr.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/not-utf8",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/not-utf8.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/trailing",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/trailing.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/unclosed",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/unclosed.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/invalid/unterminated-string",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/invalid/unterminated-string.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/duplicate",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/duplicate.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/empty-reference",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/empty-reference.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/incomplete",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/incomplete.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/minimal",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/minimal.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/no-rows",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/no-rows.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/not-jlcpcb",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/not-jlcpcb.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/bom/unknown-reference",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "tests/rust-port/manufacturing/invalid/bom/unknown-reference.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/missing-kicad-cli",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{out}/missing-kicad-cli",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/default-kicad-cli",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/kicad-cli-not-executable",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/generate.py",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/kicad-cli-relative",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/replace-new-output",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--replace"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/missing-pcb",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/missing/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/pcb-is-directory",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/missing-bom",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "{out}/missing.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/bom-inside-output",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom",
+      "{out}/mfg/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/pcb-inside-output",
+     "args": [
+      "export-manufacturing",
+      "{out}/mfg/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/inline-values",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/mfg",
+      "--bom=tests/rust-port/assembly/valid_board/bom.csv"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/existing-output",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "examples"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/replace-non-manufacturing",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "--replace",
+      "-o",
+      "examples"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/output-parent-is-file",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "-o",
+      "README.md/mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/options/nested-output",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--kicad-cli",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--skip-independent-cam",
+      "--output",
+      "{out}/a/b/./mfg"
+     ]
+    },
+    {
+     "id": "export-manufacturing/usage/no-acknowledgement",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "-o",
+      "{out}/mfg"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "export-manufacturing/usage/no-output",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--skip-independent-cam"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "export-manufacturing/usage/no-pcb",
+     "args": [
+      "export-manufacturing",
+      "--skip-independent-cam",
+      "-o",
+      "{out}/m"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "export-manufacturing/usage/acknowledgement-value",
+     "args": [
+      "export-manufacturing",
+      "tests/rust-port/manufacturing/boards/valid_board/board.kicad_pcb",
+      "--skip-independent-cam=yes",
+      "-o",
+      "{out}/m"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "export-manufacturing/help",
+     "args": [
+      "export-manufacturing",
+      "-h"
+     ],
+     "compare": [
+      "exit"
+     ]
+    }
+   ]
+  },
+  {
    "name": "ladder",
    "milestone": "M4",
    "ladder": "bench/ladder.json",

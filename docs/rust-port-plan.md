@@ -362,3 +362,36 @@ do not shrink as much.
   and `check-footprint-strict` suites (269 cases: every footprint in the
   examples, fixtures and cached CopperLib packages, with seeded mutations)
   are byte-identical.
+
+**M3 assembly, si-check, export-manufacturing (stream `rust-m3-assembly`).**
+
+- `assembly snapshot|check|bom|candidate-bom` (`copper-assembly`
+  `assembly`): lock loading with Python's validation order and messages
+  (including `TypeError` text for missing fields and repeated JSON keys),
+  the electrical digest, the check report, the JLCPCB BOM, hand-assembly
+  and ordering lists and the candidate review bundle with its CPLs. CSV
+  files follow Python's `csv` (CRLF rows everywhere; the harness now reads
+  both implementations' CRLF as LF on Windows). Lock, position and board
+  fixtures live under `tests/rust-port/assembly` (`generate.py` rebuilds
+  them with the oracle).
+- `si-check` (`copper-drc` `signal_integrity`): closed-form impedance with
+  Python's float operations and `round(x, 9)`, reference planes, layer
+  groups and length-match screening, text and JSON. SI fixture boards are
+  under `tests/rust-port/si-check`.
+- `export-manufacturing --skip-independent-cam` (`copper-assembly`
+  `manufacturing`): the whole pipeline, including a zlib-exact raw DEFLATE
+  and `zipfile`-exact archives (checked against CPython's zlib on about 450
+  inputs). KiCad 10 could not be installed in the authoring container (its
+  PPA is blocked by the network policy; running the downloaded official
+  `kicad/kicad:10.0` image binary was not permitted), so the suite drives
+  `tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh`, a shell
+  stand-in that writes plausible outputs and injects one failure per
+  wrapper, through `{root}` (new harness placeholder). On Windows the stub
+  cannot execute and both implementations report `[WinError 193]`.
+- Not verified against real KiCad: CI would need KiCad 10 (`ppa:kicad/kicad-10.0-releases`
+  on ubuntu-24.04, or the `kicad/kicad:10.0` container). Real `kicad-cli`
+  writes dated Gerber attributes and DRC reports, so such a suite can only
+  compare exit status, stdout and the deterministic files (`manifest.json`,
+  `bom.csv`, `cpl.csv`). Staging directories carry random `mkdtemp` names;
+  an OS error naming a file inside one (a `kicad-cli` that exits 0 without
+  writing `drc.json`) cannot match and is left out of the corpus.

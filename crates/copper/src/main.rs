@@ -16,6 +16,7 @@ mod compile;
 mod compile_macro;
 mod export_kicad;
 mod export_kicad_pcb;
+mod export_manufacturing;
 mod library;
 mod lock;
 mod option_parser;
