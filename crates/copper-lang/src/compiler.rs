@@ -57,9 +57,13 @@ pub fn read_source(path: &Path) -> std::io::Result<String> {
     Ok(text.replace("\r\n", "\n").replace('\r', "\n"))
 }
 
-fn read_document(path: &Path) -> Result<Document> {
+fn read_document(path: &Path, resolver: &PackageResolver) -> Result<Document> {
     let filename = paths::display(path);
-    let source = read_source(path).map_err(|failure| {
+    let read = match &resolver.source_reader {
+        Some(reader) => reader(path),
+        None => read_source(path),
+    };
+    let source = read.map_err(|failure| {
         error(
             "CMP001",
             format!("cannot read source: {}", paths::python_os_error(&failure, Some(&filename))),
@@ -222,7 +226,7 @@ fn load_imports(
 }
 
 /// Package sources, sorted like Python's `sorted(directory.glob("*.copper"))`.
-fn package_sources(directory: &Path) -> Vec<PathBuf> {
+pub fn package_sources(directory: &Path) -> Vec<PathBuf> {
     let mut sources: Vec<PathBuf> = std::fs::read_dir(directory)
         .map(|entries| {
             entries
@@ -371,7 +375,7 @@ fn load_package(
             &location,
         ));
     }
-    let documents: Vec<Document> = sources.iter().map(|path| read_document(path)).collect::<Result<_>>()?;
+    let documents: Vec<Document> = sources.iter().map(|path| read_document(path, resolver)).collect::<Result<_>>()?;
     for document in &documents {
         if !matches!(
             document.kind,
@@ -1043,6 +1047,16 @@ fn compile_board(document: &Document, imported: &PackageContents) -> Result<Boar
 
 /// `_resolve_board_imports`.
 pub fn resolve_board_imports(document: &Document, locked: bool, offline: bool) -> Result<PackageContents> {
+    resolve_board_imports_with(document, locked, offline, None)
+}
+
+/// `_resolve_board_imports` with an editor's resolver (`package_resolver`).
+pub fn resolve_board_imports_with(
+    document: &Document,
+    locked: bool,
+    offline: bool,
+    resolver: Option<&mut PackageResolver>,
+) -> Result<PackageContents> {
     let filename = &*document.location.filename;
     if document.kind != DocumentKind::Board {
         return Err(error("CMP019", "compiler entry source must declare a board", &document.location));
@@ -1053,14 +1067,31 @@ pub fn resolve_board_imports(document: &Document, locked: bool, offline: bool) -
     if document.imports.is_empty() {
         return Ok(PackageContents::default());
     }
-    let mut resolver = PackageResolver::for_source(&paths::resolve(Path::new(filename)), locked, offline)?;
-    load_imports(document, &mut resolver, &[], "")
+    match resolver {
+        Some(resolver) => load_imports(document, resolver, &[], ""),
+        None => {
+            let mut resolver = PackageResolver::for_source(&paths::resolve(Path::new(filename)), locked, offline)?;
+            load_imports(document, &mut resolver, &[], "")
+        }
+    }
 }
 
 /// `compile_design_source`.
 pub fn compile_design_source(source: &str, filename: &str, locked: bool, offline: bool) -> Result<Design> {
+    compile_design_source_with(source, filename, locked, offline, None)
+}
+
+/// `compile_design_source(..., package_resolver=...)`: the editor's snapshot
+/// resolver, whose `source_reader` supplies open buffers.
+pub fn compile_design_source_with(
+    source: &str,
+    filename: &str,
+    locked: bool,
+    offline: bool,
+    resolver: Option<&mut PackageResolver>,
+) -> Result<Design> {
     let document = parse(source, filename)?;
-    let imported = resolve_board_imports(&document, locked, offline)?;
+    let imported = resolve_board_imports_with(&document, locked, offline, resolver)?;
     let mechanical = crate::mechanical::lower_mechanical(&document, &imported.profiles)?;
     let silkscreen = crate::silkscreen::lower_silkscreen(&document)?;
     let electrical = compile_board(&document, &imported)?;

@@ -1,0 +1,2 @@
+# Transport: bare newline.
+{"raw": "Content-Length: 2\n\r\n{}"}

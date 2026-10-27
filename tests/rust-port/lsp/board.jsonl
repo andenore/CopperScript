@@ -1,0 +1,30 @@
+# One corpus source in a full editing session: open, every request kind at
+# generic positions, incremental and full edits, save, close, reopen.
+{"send": {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"capabilities": {}}}}
+{"send": {"jsonrpc": "2.0", "method": "initialized", "params": {}}}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {"textDocument": {"uri": "{input_uri}", "languageId": "copper", "version": 1, "text": "{input_text}"}}}}
+{"wait": 2}
+{"send": {"jsonrpc": "2.0", "id": 2, "method": "textDocument/documentSymbol", "params": {"textDocument": {"uri": "{input_uri}"}}}}
+{"send": {"jsonrpc": "2.0", "id": 3, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{input_uri}"}, "position": {"line": 0, "character": 7}}}}
+{"send": {"jsonrpc": "2.0", "id": 4, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{input_uri}"}, "position": {"line": 2, "character": 16}}}}
+{"send": {"jsonrpc": "2.0", "id": 5, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{input_uri}"}, "position": {"line": 4, "character": 12}}}}
+{"send": {"jsonrpc": "2.0", "id": 6, "method": "textDocument/definition", "params": {"textDocument": {"uri": "{input_uri}"}, "position": {"line": 3, "character": 16}}}}
+{"send": {"jsonrpc": "2.0", "id": 7, "method": "textDocument/definition", "params": {"textDocument": {"uri": "{input_uri}"}, "position": {"line": 5, "character": 14}}}}
+{"send": {"jsonrpc": "2.0", "id": 8, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{input_uri}"}, "position": {"line": 1, "character": 4}}}}
+{"send": {"jsonrpc": "2.0", "id": 9, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{input_uri}"}, "position": {"line": 3, "character": 18}}}}
+{"send": {"jsonrpc": "2.0", "id": 10, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{input_uri}"}, "position": {"line": 6, "character": 10}}}}
+{"send": {"jsonrpc": "2.0", "id": 11, "method": "textDocument/hover", "params": {"textDocument": {"uri": "{input_uri}"}, "position": {"line": 0, "character": 400}}}}
+{"send": {"jsonrpc": "2.0", "id": 12, "method": "textDocument/codeAction", "params": {"textDocument": {"uri": "{input_uri}"}, "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "context": {"diagnostics": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}}, "message": "m", "data": {"no_connect": ["R1.1", "U1.2"], "fix": {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 2}}, "newText": "X", "oldText": "bo", "title": "t"}}}, {"data": {"fix": {"newText": "Y"}}}, {"data": {"no_connect": ["1A.B"]}}, "not a diagnostic"]}}}}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {"textDocument": {"uri": "{input_uri}", "version": 2}, "contentChanges": [{"range": {"start": {"line": 1, "character": 0}, "end": {"line": 1, "character": 0}}, "text": "    // edited\n"}]}}}
+{"wait": 14}
+{"send": {"jsonrpc": "2.0", "id": 13, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{input_uri}"}, "position": {"line": 1, "character": 9}}}}
+{"send": {"jsonrpc": "2.0", "id": 14, "method": "textDocument/documentSymbol", "params": {"textDocument": {"uri": "{input_uri}"}}}}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didChange", "params": {"textDocument": {"uri": "{input_uri}", "version": 3}, "contentChanges": [{"text": "board Broken {\n    component R1: RESISTOR { value = ; }\n    net N { R1.; }\n"}]}}}
+{"wait": 17}
+{"send": {"jsonrpc": "2.0", "id": 15, "method": "textDocument/completion", "params": {"textDocument": {"uri": "{input_uri}"}, "position": {"line": 2, "character": 15}}}}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didSave", "params": {"textDocument": {"uri": "{input_uri}"}}}}
+{"wait": 19}
+{"send": {"jsonrpc": "2.0", "method": "textDocument/didClose", "params": {"textDocument": {"uri": "{input_uri}"}}}}
+{"send": {"jsonrpc": "2.0", "id": 16, "method": "textDocument/documentSymbol", "params": {"textDocument": {"uri": "{input_uri}"}}}}
+{"send": {"jsonrpc": "2.0", "id": 17, "method": "shutdown"}}
+{"send": {"jsonrpc": "2.0", "method": "exit"}}

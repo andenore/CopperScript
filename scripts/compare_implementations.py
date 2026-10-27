@@ -29,6 +29,15 @@ A change to the Rust side alone therefore reruns only the binary;
 ``--no-oracle-cache`` runs Python for every case. Ladder cases always run it.
 One comparison runs per checkout at a time (``build/compare.lock``), because a
 run writes seeded mutations beside their sources.
+
+A case may name a client transcript as its ``stdin`` (the ``lsp`` suites):
+JSON lines, each a message to ``send`` (framed here with Content-Length),
+``raw`` bytes, or ``wait`` for N complete messages on stdout, so debounced
+server notifications arrive in a deterministic order. Strings may use
+``{root_uri}``, and in a suite with ``inputs``, ``{input}``, ``{input_uri}``
+and ``{input_text}``. The transcript's digest is part of the oracle cache key.
+LSP output is binary on both implementations (CRLF headers by protocol), so
+its stdout is compared without the Windows CRLF reading.
 """
 
 from __future__ import annotations
@@ -80,6 +89,9 @@ class Case:
     skip_reason: str | None = None
     # (repository-relative source, seed): run on a seeded mutation of the source.
     mutation: tuple[str, int] | None = None
+    # A client transcript piped to stdin, and the suite input it is about.
+    stdin: str | None = None
+    stdin_input: str | None = None
 
 
 def milestone_number(name: str) -> int:
@@ -189,15 +201,18 @@ def load_corpus(path: Path, kicad_cli: str | None = None) -> tuple[dict, list[Ca
             # for a usage error, whose argparse wording is not reproduced.
             channels = {"compare": tuple(case["compare"])} if "compare" in case else {}
             cases.append(Case(id=case_id, args=list(case["args"]), cwd=ROOT,
-                              timeout_s=float(case.get("timeout_s", timeout)), **{**base, **channels}))
+                              timeout_s=float(case.get("timeout_s", timeout)), stdin=case.get("stdin"),
+                              **{**base, **channels}))
         for source in _inputs(suite.get("inputs", []), suite.get("declares")):
+            stdin = suite.get("stdin")
             cases.append(Case(id=f"{name}/{source}", args=_expand(suite["args"], {"input": source}), cwd=ROOT,
-                              timeout_s=timeout, **base))
+                              timeout_s=timeout, stdin=stdin, stdin_input=source if stdin else None, **base))
             for number in range(int(suite.get("mutations", 0))):
                 seed = int(hashlib.sha256(f"{source}#{number}".encode()).hexdigest()[:12], 16)
                 mutated = (Path(source).parent / f".compare-mutation-{number}{Path(source).suffix}").as_posix()
                 cases.append(Case(id=f"{name}/{source}#m{number}", args=_expand(suite["args"], {"input": mutated}),
-                                  cwd=ROOT, timeout_s=timeout, mutation=(source, seed), **base))
+                                  cwd=ROOT, timeout_s=timeout, mutation=(source, seed), stdin=stdin,
+                                  stdin_input=mutated if stdin else None, **base))
         selected = suite.get("boards")
         if selected:
             names = sorted(boards) if selected == "*" else selected
@@ -265,12 +280,110 @@ class Run:
                    {name: lf(data) for name, data in self.files.items()}, self.timed_out)
 
 
+_PLACEHOLDER = re.compile(r"\{(root_uri|input|input_uri|input_text)\}")
+
+
+def transcript_steps(case: Case) -> list[bytes | int]:
+    """The case's client transcript: bytes to write, or a count of complete
+    server messages to wait for."""
+    values = {"root_uri": ROOT.as_uri()}
+    if case.stdin_input:
+        path = ROOT / case.stdin_input
+        values.update(input=case.stdin_input, input_uri=path.resolve().as_uri())
+        with path.open(encoding="utf-8", newline="") as stream:
+            values["input_text"] = stream.read()
+
+    def expand(value):
+        if isinstance(value, str):
+            return _PLACEHOLDER.sub(lambda match: values[match.group(1)], value)
+        if isinstance(value, list):
+            return [expand(item) for item in value]
+        if isinstance(value, dict):
+            return {key: expand(item) for key, item in value.items()}
+        return value
+
+    steps: list[bytes | int] = []
+    for line in (ROOT / case.stdin).read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        step = expand(json.loads(line))
+        if "send" in step:
+            body = json.dumps(step["send"], ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            steps.append(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+        elif "raw" in step:
+            steps.append(step["raw"].encode("utf-8"))
+        else:
+            steps.append(int(step["wait"]))
+    return steps
+
+
+def _complete_messages(data: bytes) -> int:
+    count, index = 0, 0
+    while (split := data.find(b"\r\n\r\n", index)) >= 0:
+        match = re.search(rb"Content-Length: *(\d+)", data[index:split], re.IGNORECASE)
+        end = split + 4 + int(match.group(1)) if match else split + 4
+        if end > len(data):
+            break
+        count, index = count + 1, end
+    return count
+
+
+def _run_transcript(argv: list[str], case: Case, environment: dict[str, str]) -> tuple:
+    """Feed the transcript, waiting where it says so; (exit, stdout, stderr, timed_out)."""
+    deadline = time.monotonic() + case.timeout_s
+    process = subprocess.Popen(argv, cwd=case.cwd, env=environment, stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+
+    def drain(name: str) -> None:
+        stream = getattr(process, name)
+        while chunk := stream.read1(65536):
+            output[name].extend(chunk)
+
+    readers = [threading.Thread(target=drain, args=(name,), daemon=True) for name in output]
+    for reader in readers:
+        reader.start()
+    timed_out = False
+    try:
+        for step in transcript_steps(case):
+            if isinstance(step, int):
+                while _complete_messages(bytes(output["stdout"])) < step and process.poll() is None:
+                    if time.monotonic() >= deadline:
+                        # A wait the server never satisfies is a failed run, not a slow one.
+                        timed_out = True
+                        raise TimeoutError(f"waiting for message {step}")
+                    time.sleep(0.01)
+                continue
+            process.stdin.write(step)
+            process.stdin.flush()
+    except TimeoutError:
+        process.kill()
+    except OSError:
+        pass
+    try:
+        process.stdin.close()
+    except OSError:
+        pass
+    try:
+        process.wait(timeout=max(0.1, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        timed_out = True
+    for reader in readers:
+        reader.join()
+    return (None if timed_out else process.returncode), bytes(output["stdout"]), bytes(output["stderr"]), timed_out
+
+
 def run_one(command: list[str], case: Case, out: Path, environment: dict[str, str]) -> Run:
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
     args = _expand(case.args, {"out": str(out)})
     started = time.perf_counter()
+    if case.stdin:
+        code, stdout, stderr, timed_out = _run_transcript([*command, *args], case, environment)
+        return Run(code, round(time.perf_counter() - started, 3), stdout, stderr, _collect_files(out), timed_out)
     try:
         completed = subprocess.run([*command, *args], cwd=case.cwd, capture_output=True, env=environment,
                                    timeout=case.timeout_s)
@@ -317,7 +430,10 @@ class OracleCache:
         self.hits = 0
 
     def _path(self, case: Case) -> Path:
-        key = json.dumps([case.id, case.args, str(case.cwd), case.timeout_s, case.mutation])
+        parts = [case.id, case.args, str(case.cwd), case.timeout_s, case.mutation]
+        if case.stdin:
+            parts.append(_sha256((ROOT / case.stdin).read_bytes()))
+        key = json.dumps(parts)
         return self.directory / hashlib.sha256(key.encode()).hexdigest()
 
     def load(self, case: Case) -> Run | None:
@@ -463,7 +579,7 @@ def compare_case(case: Case, rust_command: list[str], python_command: list[str],
     if case.mutation is not None:
         source, seed = case.mutation
         original = (ROOT / source).read_text(encoding="utf-8")
-        mutated = ROOT / Path(source).parent / Path(case.args[1]).name
+        mutated = ROOT / Path(source).parent / Path(case.stdin_input or case.args[1]).name
         mutated.write_bytes(mutate_source(original, seed).encode("utf-8"))
     try:
         return _compare_runs(case, record, rust_command, python_command, work, slug, out, environment,
@@ -489,7 +605,9 @@ def _compare_runs(case, record, rust_command, python_command, work, slug, out, e
     else:
         out.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
-        python = python.with_lf()
+        lf = python.with_lf()
+        # LSP framing is binary on both sides: keep its CRLF headers.
+        python = Run(lf.exit, lf.seconds, python.stdout, lf.stderr, lf.files, lf.timed_out) if case.stdin else lf
     shutil.move(str(out), work / slug / "python")
     record.update(python=_summary(python), rust=_summary(rust))
     if python.timed_out or python.exit is None:
@@ -621,7 +739,8 @@ def main(argv: list[str] | None = None) -> int:
     # of the same tree would otherwise inventory it.
     groups: dict[str, list[int]] = {}
     for index, case in enumerate(cases):
-        tree = next((arg for arg in case.args if arg.startswith(("examples/", "tests/"))), None)
+        tree = next((arg for arg in (*case.args, case.stdin_input or "") if arg.startswith(("examples/", "tests/"))),
+                    None)
         key = "/".join(Path(tree).parts[:2]) if tree else case.id
         groups.setdefault(key, []).append(index)
     with CheckoutLock(ROOT / "build" / "compare.lock"):

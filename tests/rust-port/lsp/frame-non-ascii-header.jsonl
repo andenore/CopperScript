@@ -1,0 +1,2 @@
+# Transport: non ascii header.
+{"raw": "Contént-Length: 2\r\n\r\n{}"}

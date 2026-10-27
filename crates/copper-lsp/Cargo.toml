@@ -1,0 +1,18 @@
+[package]
+name = "copper-lsp"
+description = "The CopperScript language server (`copper lsp`)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+copper-json.workspace = true
+copper-lang.workspace = true
+copper-units.workspace = true
+indexmap.workspace = true
+num-bigint.workspace = true
+
+[lints]
+workspace = true

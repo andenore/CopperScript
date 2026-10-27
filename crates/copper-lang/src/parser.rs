@@ -62,6 +62,12 @@ pub fn parse(source: &str, filename: &str) -> Result<Document> {
     Parser { tokens: tokenize(source, filename)?, index: 0 }.document()
 }
 
+/// `Parser(tokens).parse()` on an existing token sequence ending in end of file
+/// (the editor's recovering parse re-parses token slices).
+pub fn parse_tokens(tokens: Vec<Token>) -> Result<Document> {
+    Parser { tokens, index: 0 }.document()
+}
+
 fn repr(text: &str) -> String {
     python_str_repr(text)
 }

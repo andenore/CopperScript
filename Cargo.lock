@@ -36,6 +36,7 @@ dependencies = [
  "copper-drc",
  "copper-json",
  "copper-lang",
+ "copper-lsp",
  "copper-pcb",
  "copper-physical",
  "copper-state",
@@ -80,6 +81,17 @@ dependencies = [
  "num-rational",
  "num-traits",
  "sha2",
+]
+
+[[package]]
+name = "copper-lsp"
+version = "0.1.0"
+dependencies = [
+ "copper-json",
+ "copper-lang",
+ "copper-units",
+ "indexmap",
+ "num-bigint",
 ]
 
 [[package]]

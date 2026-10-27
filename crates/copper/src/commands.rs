@@ -4,7 +4,7 @@ use std::io::Write;
 
 use crate::{
     agent_guide, audit_footprints, check, check_footprint, compile, compile_macro, export_kicad, export_kicad_pcb,
-    library, lock, power_check, query, state,
+    library, lock, lsp, power_check, query, state,
 };
 
 /// Exit status of a command the Rust rewrite does not implement yet.
@@ -26,7 +26,7 @@ pub enum Plan {
 /// Every subcommand of `pcbir.cli`, in its parser order, plus `bench`.
 pub const COMMANDS: &[(&str, Plan)] = &[
     ("compile-macro", Plan::Done),
-    ("lsp", Plan::Milestone("M6")),
+    ("lsp", Plan::Done),
     ("agent-guide", Plan::Done),
     ("library", Plan::Done),
     ("summarize", Plan::Milestone("M5")),
@@ -100,6 +100,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "power-check" => power_check::run(rest, out, err),
         "export-kicad" => export_kicad::run(rest, out, err),
         "export-kicad-pcb" => export_kicad_pcb::run(rest, out, err),
+        "lsp" => lsp::run(rest, out, err),
         _ => match plan(command) {
             Some(Plan::Milestone(milestone)) => {
                 let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");
