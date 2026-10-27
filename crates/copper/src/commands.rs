@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use crate::{agent_guide, audit_footprints, check, compile, power_check, query, state};
+use crate::{agent_guide, audit_footprints, check, compile, compile_macro, lock, power_check, query, state};
 
 /// Exit status of a command the Rust rewrite does not implement yet.
 pub const NOT_IMPLEMENTED_EXIT: u8 = 3;
@@ -22,7 +22,7 @@ pub enum Plan {
 
 /// Every subcommand of `pcbir.cli`, in its parser order, plus `bench`.
 pub const COMMANDS: &[(&str, Plan)] = &[
-    ("compile-macro", Plan::Milestone("M1")),
+    ("compile-macro", Plan::Done),
     ("lsp", Plan::Milestone("M6")),
     ("agent-guide", Plan::Done),
     ("library", Plan::Milestone("M1")),
@@ -46,7 +46,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("replay-critical", Plan::Milestone("M4")),
     ("query", Plan::Done),
     ("si-check", Plan::Milestone("M3")),
-    ("lock", Plan::Milestone("M1")),
+    ("lock", Plan::Done),
     ("power-check", Plan::Done),
     ("compile", Plan::Done),
     ("export-kicad", Plan::Milestone("M2")),
@@ -89,6 +89,8 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "compile" => compile::run(rest, out, err),
         "check" => check::run(rest, out, err),
         "query" => query::run(rest, out, err),
+        "lock" => lock::run(rest, out, err),
+        "compile-macro" => compile_macro::run(rest, out, err),
         "audit-footprints" => audit_footprints::run(rest, out, err),
         "power-check" => power_check::run(rest, out, err),
         _ => match plan(command) {

@@ -11,6 +11,8 @@ mod audit_footprints;
 mod check;
 mod commands;
 mod compile;
+mod compile_macro;
+mod lock;
 mod power_check;
 mod pypath;
 mod query;

@@ -291,3 +291,175 @@ impl PhysicalFootprint {
         Ok(self)
     }
 }
+
+fn json_point(point: &Point) -> copper_json::Value {
+    use copper_json::Value;
+    Value::Object(
+        [("x_nm".to_owned(), Value::from(point.x_nm)), ("y_nm".to_owned(), Value::from(point.y_nm))]
+            .into_iter()
+            .collect(),
+    )
+}
+
+fn json_size(size: &Size) -> copper_json::Value {
+    use copper_json::Value;
+    Value::Object(
+        [("width_nm".to_owned(), Value::from(size.width_nm)), ("height_nm".to_owned(), Value::from(size.height_nm))]
+            .into_iter()
+            .collect(),
+    )
+}
+
+fn json_object(entries: Vec<(&str, copper_json::Value)>) -> copper_json::Value {
+    copper_json::Value::Object(entries.into_iter().map(|(key, value)| (key.to_owned(), value)).collect())
+}
+
+/// The dataclass document of a footprint (`clusters._footprint_geometry_digest`'s `document`).
+fn footprint_document(footprint: &PhysicalFootprint) -> copper_json::Value {
+    use copper_json::Value;
+    let text = |value: &str| Value::from(value);
+    let optional_int = |value: Option<i64>| value.map_or(Value::Null, Value::from);
+    let pads = footprint
+        .pads
+        .iter()
+        .map(|pad| {
+            json_object(vec![
+                ("number", text(&pad.number)),
+                ("position", json_point(&pad.position)),
+                ("size", json_size(&pad.size)),
+                ("kind", text(pad.kind.value())),
+                ("shape", text(pad.shape.value())),
+                ("rotation_degrees", Value::from(pad.rotation_degrees.to_sci_string().as_str())),
+                ("drill", pad.drill.as_ref().map_or(Value::Null, json_size)),
+                ("roundrect_ratio_ppm", Value::from(pad.roundrect_ratio_ppm)),
+                ("has_solder_mask", Value::Bool(pad.has_solder_mask)),
+                ("has_solder_paste", Value::Bool(pad.has_solder_paste)),
+                ("zone_connection", pad.zone_connection.map_or(Value::Null, |zone| text(zone.value()))),
+                ("heatsink", Value::Bool(pad.heatsink)),
+                ("remove_unused_layers", Value::Bool(pad.remove_unused_layers)),
+                ("connector_contact", Value::Bool(pad.connector_contact)),
+            ])
+        })
+        .collect();
+    let points = |points: &[Point]| Value::Array(points.iter().map(json_point).collect());
+    let graphics = footprint
+        .graphics
+        .iter()
+        .map(|graphic| match graphic {
+            FootprintGraphic::Line { start, end, width_nm, layer } => json_object(vec![
+                ("start", json_point(start)),
+                ("end", json_point(end)),
+                ("width_nm", Value::from(*width_nm)),
+                ("layer", text(layer.value())),
+            ]),
+            FootprintGraphic::Rectangle { start, end, width_nm, layer, filled } => json_object(vec![
+                ("start", json_point(start)),
+                ("end", json_point(end)),
+                ("width_nm", Value::from(*width_nm)),
+                ("layer", text(layer.value())),
+                ("filled", Value::Bool(*filled)),
+            ]),
+            FootprintGraphic::Circle { center, end, width_nm, layer, filled } => json_object(vec![
+                ("center", json_point(center)),
+                ("end", json_point(end)),
+                ("width_nm", Value::from(*width_nm)),
+                ("layer", text(layer.value())),
+                ("filled", Value::Bool(*filled)),
+            ]),
+            FootprintGraphic::Arc { start, midpoint, end, width_nm, layer } => json_object(vec![
+                ("start", json_point(start)),
+                ("midpoint", json_point(midpoint)),
+                ("end", json_point(end)),
+                ("width_nm", Value::from(*width_nm)),
+                ("layer", text(layer.value())),
+            ]),
+            FootprintGraphic::Polygon { points: vertices, width_nm, layer, filled } => json_object(vec![
+                ("points", points(vertices)),
+                ("width_nm", Value::from(*width_nm)),
+                ("layer", text(layer.value())),
+                ("filled", Value::Bool(*filled)),
+            ]),
+        })
+        .collect();
+    let keepouts = footprint
+        .keepouts
+        .iter()
+        .map(|keepout| {
+            json_object(vec![
+                ("id", text(&keepout.id)),
+                ("layers", Value::Array(keepout.layers.iter().map(|layer| text(layer.value())).collect())),
+                (
+                    "outline",
+                    json_object(vec![
+                        ("outer", json_object(vec![("vertices", points(&keepout.vertices))])),
+                        ("holes", Value::Array(Vec::new())),
+                    ]),
+                ),
+                ("block_tracks", Value::Bool(keepout.block_tracks)),
+                ("block_vias", Value::Bool(keepout.block_vias)),
+                ("block_pads", Value::Bool(keepout.block_pads)),
+                ("block_zones", Value::Bool(keepout.block_zones)),
+                ("block_footprints", Value::Bool(keepout.block_footprints)),
+            ])
+        })
+        .collect();
+    let groups = footprint
+        .internal_pad_groups
+        .iter()
+        .map(|group| {
+            json_object(vec![("numbers", Value::Array(group.numbers.iter().map(|number| text(number)).collect()))])
+        })
+        .collect();
+    json_object(vec![
+        ("name", text(&footprint.name)),
+        ("pads", Value::Array(pads)),
+        ("body_size", json_size(&footprint.body_size)),
+        ("source_library_id", footprint.source_library_id.as_deref().map_or(Value::Null, text)),
+        ("graphics", Value::Array(graphics)),
+        ("keepouts", Value::Array(keepouts)),
+        ("metadata", Value::Object(footprint.metadata.iter().map(|(key, value)| (key.clone(), text(value))).collect())),
+        ("courtyard", points(&footprint.courtyard)),
+        ("height_nm", optional_int(footprint.height_nm)),
+        ("clearance_nm", optional_int(footprint.clearance_nm)),
+        ("exclude_from_bom", Value::Bool(footprint.exclude_from_bom)),
+        ("exclude_from_pos_files", Value::Bool(footprint.exclude_from_pos_files)),
+        ("internal_pad_groups", Value::Array(groups)),
+    ])
+}
+
+fn footprint_digest(footprint: &PhysicalFootprint, portable: bool) -> String {
+    use sha2::{Digest, Sha256};
+    let copper_json::Value::Object(mut content) = footprint_document(footprint) else { unreachable!() };
+    if footprint.internal_pad_groups.is_empty() {
+        content.shift_remove("internal_pad_groups");
+    }
+    let mut keys = vec![
+        "source_path",
+        "resolution",
+        "managed_reference",
+        "source_asset",
+        "module_path",
+        "module_version",
+        "module_checksum",
+    ];
+    if portable {
+        keys.push("source_sha256");
+    }
+    if let Some(copper_json::Value::Object(metadata)) = content.get_mut("metadata") {
+        for key in keys {
+            metadata.shift_remove(key);
+        }
+    }
+    let text = copper_json::Dumps::compact().sort_keys(true).dumps(&copper_json::Value::Object(content));
+    Sha256::digest(text.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// `footprint_geometry_digest`: identity independent of source line endings and paths.
+pub fn footprint_geometry_digest(footprint: &PhysicalFootprint) -> String {
+    footprint_digest(footprint, true)
+}
+
+/// `legacy_footprint_geometry_digest`: the digest of older locked macro assets.
+pub fn legacy_footprint_geometry_digest(footprint: &PhysicalFootprint) -> String {
+    footprint_digest(footprint, false)
+}

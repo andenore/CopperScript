@@ -15,6 +15,7 @@ pub mod footprints;
 mod lexer;
 pub mod library;
 pub mod lower;
+pub mod macros;
 pub mod mechanical;
 pub mod model;
 pub mod modes;

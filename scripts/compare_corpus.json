@@ -514,6 +514,55 @@
    ]
   },
   {
+   "name": "lock",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "lock",
+    "{input}",
+    "--locked",
+    "--offline"
+   ],
+   "mutations": 3
+  },
+  {
+   "name": "compile-macro",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/layouts/*.copper"
+   ],
+   "declares": "macro",
+   "args": [
+    "compile-macro",
+    "{input}",
+    "-o",
+    "{out}/macro.json",
+    "--locked",
+    "--offline"
+   ],
+   "mutations": 20
+  },
+  {
+   "name": "compile-macro-copperlib",
+   "milestone": "M1",
+   "inputs": [
+    "examples/nrf52_coin_cell/.copper-cache/pkg/*/packages/**/*.copper"
+   ],
+   "declares": "macro",
+   "args": [
+    "compile-macro",
+    "{input}",
+    "-o",
+    "{out}/macro.json",
+    "--locked",
+    "--offline"
+   ]
+  },
+  {
    "name": "export-kicad-pcb",
    "milestone": "M2",
    "boards": "*",
