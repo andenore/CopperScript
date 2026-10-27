@@ -627,6 +627,9 @@ pub fn board_value(board: &Board) -> Object {
 pub fn design_value(design: &Design) -> Value {
     let mut result = board_value(&design.electrical);
     result.insert("silkscreen".to_owned(), crate::silkscreen::design_document(&design.silkscreen));
+    if let Some(mechanical) = &design.mechanical {
+        result.insert("mechanical".to_owned(), crate::mechanical::mechanical_document(mechanical));
+    }
     Value::Object(result)
 }
 

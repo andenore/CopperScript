@@ -54,11 +54,25 @@ name = "copper-lang"
 version = "0.1.0"
 dependencies = [
  "copper-json",
+ "copper-physical",
  "copper-state",
  "copper-units",
  "indexmap",
  "num-bigint",
+ "num-rational",
+ "num-traits",
  "sha2",
+]
+
+[[package]]
+name = "copper-physical"
+version = "0.1.0"
+dependencies = [
+ "copper-json",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
 ]
 
 [[package]]

@@ -304,6 +304,8 @@ def outputs() -> dict[Path, bytes]:
         # Not a fixture: the guide text the binary embeds, copied from the oracle
         # until cutover makes the Rust copy the source.
         crates / "copper/src/agent_guide_topics.json": _write(None, agent_guide_topics()),
+        # The bundled Cu mark the silkscreen `logo` flattens, embedded likewise.
+        crates / "copper-lang/assets/copper-logo.svg": (ROOT / "pcbir/editor/assets/copper-logo.svg").read_bytes(),
     }
     for name, data in state_fixtures().items():
         result[crates / "copper-state/tests/fixtures" / name] = data

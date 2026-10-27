@@ -1,0 +1,18 @@
+[package]
+name = "copper-physical"
+description = "Exact board geometry: outlines, holes, curves and their validation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+copper-json.workspace = true
+num-bigint.workspace = true
+num-integer.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+
+[lints]
+workspace = true

@@ -9,8 +9,9 @@ changes its behaviour.
 | `copper-json` | JSON values and a serializer that reproduces Python's `json.dumps` byte for byte; Python text-mode newlines |
 | `copper-units` | `Decimal` with Python's default context, integer nanometres (`Nm`), `Fraction`, quantities and the `100 nF` formatter |
 | `copper-state` | The frozen `copperscript.state/v1` format: read, verify, write |
-| `copper-lang` | Lexer, parser and syntax tree with Python's diagnostics (M1, in progress) |
-| `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` |
+| `copper-physical` | Exact board geometry: points, outlines, cutouts, holes, slots, line/arc paths and their validation |
+| `copper-lang` | Lexer, parser, package resolution, lowering (electrical, mechanical, silkscreen), ERC and the compiled JSON (M1, in progress) |
+| `copper` | The `copper` binary; implemented commands: `agent-guide`, `state`, `check`, `compile` |
 
 ## Build and test
 

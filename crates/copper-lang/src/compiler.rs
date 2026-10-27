@@ -1076,10 +1076,10 @@ pub fn compile_design_source(source: &str, filename: &str, locked: bool, offline
             .map(|component| component.reference)
             .collect();
         for (reference, location) in mechanical.bound_references() {
-            if !references.contains(&reference) {
+            if !crate::pyvalue::as_str(&reference).is_some_and(|name| references.iter().any(|known| known == name)) {
                 return Err(error(
                     "MEC005",
-                    format!("mechanical binding references unknown component {}", repr(&reference)),
+                    format!("mechanical binding references unknown component {}", crate::pyvalue::repr(&reference)),
                     location.unwrap_or(&document.location),
                 ));
             }

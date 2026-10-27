@@ -20,6 +20,7 @@ pub mod modes;
 pub mod packages;
 mod parser;
 pub mod paths;
+pub mod pyvalue;
 pub mod serializer;
 pub mod silkscreen;
 mod suggest;

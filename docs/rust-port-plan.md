@@ -315,16 +315,31 @@ do not shrink as much.
 - Ladder: the `ladder` suite is the timing hook. M0 does not change the
   Python implementation, so the ladder was not rerun for it.
 
-**M1 (started 2026-10-27): lexer and parser done.**
+**M1 (started 2026-10-27): `check` and `compile` done; the other M1 commands remain.**
 
 - `copper-lang` parses every CopperScript document kind into a Rust syntax
   tree with Python's diagnostics: code, message, code-point location, the
-  `difflib` "did you mean" hint and the replacement.
-- Oracle: 1,118 recorded parse outcomes match, covering every in-repo source,
-  20 seeded truncations, deletions and insertions of each, and targeted
-  snippets for all 18 lexer and parser error codes. All 146 CopperLib
-  sources and the 6 CopperAssetTracker sources also match locally.
+  `difflib` "did you mean" hint and the replacement. 1,118 recorded parse
+  outcomes match (every in-repo source, seeded truncations, deletions and
+  insertions, and snippets for all 18 lexer and parser error codes); all 146
+  CopperLib and 6 CopperAssetTracker sources also match locally.
+- Package resolution, lockfiles, electrical lowering, elaboration, ERC,
+  diagnostics and the compiled JSON are rewritten. `copper-physical` holds
+  the exact board geometry (outlines, cutouts, holes, slots, line/arc paths)
+  that mechanical lowering validates; `copper-lang` lowers `mechanical`
+  (profiles, anchors, assembly, DXF references, stackup) and `silkscreen`
+  (including the flattened Cu logo).
+- `check`, `check --json` and `compile` are byte-identical on all 704 corpus
+  cases (every example and fixture board plus 10 seeded mutations each,
+  including the 10 boards with mechanical or silkscreen blocks). Locally,
+  199 targeted mechanical and silkscreen snippets (every error message of
+  those blocks, DXF parsing, logo and reference transforms) also match on
+  both commands.
+- Exactness: Python's 60- and 80-digit decimal steps (curve chord limits,
+  edge-attachment offsets, DXF lengths, reference transforms) are computed
+  with exact rationals, which agree wherever those digits can tell the
+  results apart. Lengths beyond 2^40 nm (1.1 km) report "not implemented".
 - Decision taken for open item 1: exit statuses stay Python's; usage, help
   and error wording of the argument parser is not copied.
-- Next: package resolution and lockfiles, then the compiler, ERC and the
-  `compile` JSON.
+- Next: `lock`, `audit-footprints`, `library`, `compile-macro`, `query` and
+  `power-check`; then populate the package cache in CI and gate M1.

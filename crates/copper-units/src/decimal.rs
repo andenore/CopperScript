@@ -45,6 +45,8 @@ pub enum DecimalError {
     DivisionUndefined,
     /// `decimal.Overflow`.
     Overflow,
+    /// `decimal.InvalidOperation` for `%` by zero or a quotient beyond the precision.
+    DivisionImpossible,
 }
 
 impl fmt::Display for DecimalError {
@@ -55,6 +57,7 @@ impl fmt::Display for DecimalError {
             DecimalError::DivisionByZero => formatter.write_str("decimal division by zero"),
             DecimalError::DivisionUndefined => formatter.write_str("decimal division undefined (0 / 0)"),
             DecimalError::Overflow => formatter.write_str("decimal overflow"),
+            DecimalError::DivisionImpossible => formatter.write_str("decimal division impossible"),
         }
     }
 }
@@ -328,6 +331,38 @@ impl Decimal {
             }
         }
         Decimal::triple(negative, coefficient, exponent).fix()
+    }
+
+    /// Python's `a % b`: the remainder of truncating division, with the
+    /// dividend's sign (`_pydecimal.Decimal._divide`).
+    pub fn rem(&self, other: &Decimal) -> Result<Self, DecimalError> {
+        if other.is_zero() {
+            return Err(DecimalError::DivisionImpossible);
+        }
+        let ideal = self.exponent.min(other.exponent);
+        let adjusted = |value: &Decimal| value.exponent + digit_count(&value.coefficient) as i64 - 1;
+        let difference = adjusted(self) - adjusted(other);
+        if self.is_zero() || difference <= -2 {
+            return self.rescale(ideal, Rounding::HalfEven).fix();
+        }
+        if difference <= PRECISION as i64 {
+            let (mut first, mut second) = (self.coefficient.clone(), other.coefficient.clone());
+            if self.exponent >= other.exponent {
+                first *= pow10((self.exponent - other.exponent) as u64);
+            } else {
+                second *= pow10((other.exponent - self.exponent) as u64);
+            }
+            let (quotient, remainder) = first.div_rem(&second);
+            if quotient < pow10(PRECISION as u64) {
+                return Decimal::triple(self.negative, remainder, ideal).fix();
+            }
+        }
+        Err(DecimalError::DivisionImpossible)
+    }
+
+    /// `Decimal.is_integer`-style test: no fractional part.
+    pub fn is_integral(&self) -> bool {
+        self.to_integral_value(Rounding::Down) == *self
     }
 
     /// Python's `to_integral_value(rounding=...)`.
