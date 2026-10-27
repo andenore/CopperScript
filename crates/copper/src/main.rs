@@ -7,6 +7,7 @@
 
 mod agent_guide;
 mod args;
+mod check;
 mod commands;
 mod compile;
 mod pypath;

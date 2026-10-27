@@ -143,40 +143,67 @@ impl Lexer {
         }
     }
 
-    fn tokenize(mut self) -> Result<Vec<Token>, CopperScriptError> {
+    fn step(&mut self, tokens: &mut Vec<Token>) -> Result<(), CopperScriptError> {
+        let character = self.peek(0);
+        if python_isspace(character) {
+            self.advance();
+        } else if character == '#' || (character == '/' && self.peek(1) == '/') {
+            self.skip_comment();
+        } else if python_isalpha(character) || character == '_' {
+            tokens.push(self.identifier());
+        } else if python_isdigit(character) {
+            tokens.push(self.number());
+        } else if character == '"' {
+            tokens.push(self.string()?);
+        } else if SYMBOLS.contains(character) {
+            let location = self.location();
+            let text = self.advance().to_string();
+            tokens.push(self.token(TokenKind::Symbol, text, location));
+        } else {
+            return Err(CopperScriptError::new(
+                "LEX001",
+                format!("unexpected character {}", python_str_repr(&character.to_string())),
+                self.location(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// `Lexer.tokenize(recover=...)`: with `recover`, errors are collected and
+    /// lexing resumes after the offending character.
+    fn tokenize(mut self, recover: bool) -> (Vec<Token>, Vec<CopperScriptError>) {
         let mut tokens = Vec::new();
+        let mut errors = Vec::new();
         while self.offset < self.source.len() {
-            let character = self.peek(0);
-            if python_isspace(character) {
-                self.advance();
-            } else if character == '#' || (character == '/' && self.peek(1) == '/') {
-                self.skip_comment();
-            } else if python_isalpha(character) || character == '_' {
-                tokens.push(self.identifier());
-            } else if python_isdigit(character) {
-                tokens.push(self.number());
-            } else if character == '"' {
-                tokens.push(self.string()?);
-            } else if SYMBOLS.contains(character) {
-                let location = self.location();
-                let text = self.advance().to_string();
-                tokens.push(self.token(TokenKind::Symbol, text, location));
-            } else {
-                return Err(CopperScriptError::new(
-                    "LEX001",
-                    format!("unexpected character {}", python_str_repr(&character.to_string())),
-                    self.location(),
-                ));
+            let start = self.offset;
+            if let Err(error) = self.step(&mut tokens) {
+                errors.push(error);
+                if !recover {
+                    return (tokens, errors);
+                }
+                if self.offset == start {
+                    self.advance();
+                }
             }
         }
         tokens.push(self.token(TokenKind::Eof, String::new(), self.location()));
-        Ok(tokens)
+        (tokens, errors)
     }
 }
 
 /// `pcbir.lexer.tokenize`: every token, ending with an end-of-file token.
 pub fn tokenize(source: &str, filename: &str) -> Result<Vec<Token>, CopperScriptError> {
-    Lexer { source: source.chars().collect(), filename: Arc::from(filename), offset: 0, line: 1, column: 1 }.tokenize()
+    let (tokens, mut errors) = lexer(source, filename).tokenize(false);
+    if errors.is_empty() { Ok(tokens) } else { Err(errors.remove(0)) }
+}
+
+/// `Lexer(source, filename).tokenize(recover=True)`: all tokens, skipping errors.
+pub fn tokenize_recovering(source: &str, filename: &str) -> (Vec<Token>, Vec<CopperScriptError>) {
+    lexer(source, filename).tokenize(true)
+}
+
+fn lexer(source: &str, filename: &str) -> Lexer {
+    Lexer { source: source.chars().collect(), filename: Arc::from(filename), offset: 0, line: 1, column: 1 }
 }
 
 #[cfg(test)]

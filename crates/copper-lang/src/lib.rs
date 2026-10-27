@@ -7,7 +7,9 @@
 //! strings do.
 
 pub mod compiler;
+pub mod diagnostics;
 pub mod elaborate;
+pub mod erc;
 mod error;
 mod lexer;
 pub mod library;
@@ -24,6 +26,6 @@ mod suggest;
 pub mod syntax;
 
 pub use error::{CopperScriptError, Diagnostic};
-pub use lexer::{Token, TokenKind, tokenize};
+pub use lexer::{Token, TokenKind, tokenize, tokenize_recovering};
 pub use parser::parse;
 pub use suggest::close_match;

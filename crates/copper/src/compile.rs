@@ -56,10 +56,6 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(err, "{USAGE}\ncopper compile: error: the following arguments are required: board");
         return 2;
     };
-    if !parsed.flags.contains(&"--no-check") {
-        // compile runs ERC first; it is not rewritten yet.
-        return not_implemented(err, "electrical checks are planned for M1");
-    }
     let design =
         match load_design(Path::new(board), parsed.flags.contains(&"--locked"), parsed.flags.contains(&"--offline")) {
             Ok(design) => design,
@@ -71,6 +67,22 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
                 return 2;
             }
         };
+    if !parsed.flags.contains(&"--no-check") {
+        let diagnostics = match copper_lang::erc::check(&design.electrical, false) {
+            Ok(diagnostics) => diagnostics,
+            Err(message) => {
+                let _ = text::print(out, &format!("COMPILE ERROR: {message}"));
+                return 2;
+            }
+        };
+        if copper_lang::erc::has_errors(&diagnostics) {
+            for diagnostic in &diagnostics {
+                let _ = text::print(out, &diagnostic.to_string());
+            }
+            let _ = text::print(out, "Compilation stopped because ERC reported errors.");
+            return 1;
+        }
+    }
     let json = design_json(&design);
     match output {
         Some(output) => {

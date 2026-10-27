@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use crate::{agent_guide, compile, state};
+use crate::{agent_guide, check, compile, state};
 
 /// Exit status of a command the Rust rewrite does not implement yet.
 pub const NOT_IMPLEMENTED_EXIT: u8 = 3;
@@ -37,7 +37,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("qualification-gate", Plan::Python),
     ("assembly", Plan::Milestone("M3")),
     ("sim", Plan::Python),
-    ("check", Plan::Milestone("M1")),
+    ("check", Plan::Done),
     ("explain", Plan::Milestone("M5")),
     ("issues", Plan::Milestone("M5")),
     ("view", Plan::Milestone("M5")),
@@ -48,7 +48,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("si-check", Plan::Milestone("M3")),
     ("lock", Plan::Milestone("M1")),
     ("power-check", Plan::Milestone("M1")),
-    ("compile", Plan::Milestone("M1")),
+    ("compile", Plan::Done),
     ("export-kicad", Plan::Milestone("M2")),
     ("export-kicad-pcb", Plan::Milestone("M2")),
     ("plan-layout", Plan::Milestone("M3")),
@@ -87,6 +87,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "agent-guide" => agent_guide::run(rest, out, err),
         "state" => state::run(rest, out, err),
         "compile" => compile::run(rest, out, err),
+        "check" => check::run(rest, out, err),
         _ => match plan(command) {
             Some(Plan::Milestone(milestone)) => {
                 let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");
