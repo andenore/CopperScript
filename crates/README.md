@@ -64,7 +64,7 @@ COPPER_PARSE_FIXTURE=build/copperlib-parse.json cargo test -p copper-lang --test
 
 - Output must not depend on hash order: `HashMap` and `HashSet` are
   disallowed by clippy. Use `IndexMap` or `BTreeMap`.
-- Text that Python writes in text mode goes through `copper_json::text`, so
-  Windows output gets `\r\n` exactly where Python's does.
+- Text output goes through `copper_json::text` and uses LF on every platform;
+  the harness reads Python's Windows CRLF as LF.
 - Lengths are `Nm` (`i64`); exact values use `Decimal` or `Fraction`, never
   `f64`, unless the Python code uses a float.

@@ -1,26 +1,19 @@
-//! Python text-mode newline translation.
+//! Text output with LF line endings on every platform.
 //!
-//! Python writes text (`print`, `Path.write_text`, `open(..., "w")`) with
-//! universal newlines: on Windows every `"\n"` becomes `"\r\n"`, elsewhere the
-//! text is unchanged. The binary reproduces that so its stdout and text files
-//! match the Python CLI byte for byte on each platform.
+//! Python's text mode (`print`, `Path.write_text`) writes `"\r\n"` on Windows;
+//! the Rust binary deliberately writes `"\n"` everywhere (plan, section 4).
+//! The comparison harness reads the Python outputs' CRLF as LF on Windows.
 
-use std::borrow::Cow;
 use std::io::{self, Write};
 use std::path::Path;
 
-/// `text` as Python's text mode would write it on this platform.
-pub fn platform_newlines(text: &str) -> Cow<'_, str> {
-    if cfg!(windows) && text.contains('\n') { Cow::Owned(text.replace('\n', "\r\n")) } else { Cow::Borrowed(text) }
-}
-
-/// Python's `print(text)`: the text and a newline, in text mode.
+/// Python's `print(text)`: the text and a newline.
 pub fn print(out: &mut (impl Write + ?Sized), text: &str) -> io::Result<()> {
-    out.write_all(platform_newlines(text).as_bytes())?;
-    out.write_all(platform_newlines("\n").as_bytes())
+    out.write_all(text.as_bytes())?;
+    out.write_all(b"\n")
 }
 
-/// Python's `Path.write_text(text, encoding="utf-8")`.
+/// Python's `Path.write_text(text, encoding="utf-8")`, with LF line endings.
 pub fn write_text(path: &Path, text: &str) -> io::Result<()> {
-    std::fs::write(path, platform_newlines(text).as_bytes())
+    std::fs::write(path, text.as_bytes())
 }

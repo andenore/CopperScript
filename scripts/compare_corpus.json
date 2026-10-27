@@ -466,6 +466,54 @@
    ]
   },
   {
+   "name": "audit-footprints",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "audit-footprints",
+    "{input}",
+    "--locked",
+    "--offline"
+   ],
+   "mutations": 3
+  },
+  {
+   "name": "audit-footprints-json",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "audit-footprints",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--json"
+   ]
+  },
+  {
+   "name": "audit-footprints-strict",
+   "milestone": "M1",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "audit-footprints",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--strict"
+   ]
+  },
+  {
    "name": "export-kicad-pcb",
    "milestone": "M2",
    "boards": "*",

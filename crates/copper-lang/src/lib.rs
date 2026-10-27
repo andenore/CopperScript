@@ -11,6 +11,7 @@ pub mod diagnostics;
 pub mod elaborate;
 pub mod erc;
 mod error;
+pub mod footprints;
 mod lexer;
 pub mod library;
 pub mod lower;

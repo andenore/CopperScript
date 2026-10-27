@@ -578,6 +578,16 @@ impl PackageResolver {
 
     /// `resolve_asset`: checked module data, hashed against the lock.
     pub fn resolve_asset(&mut self, import_path: &str, location: &Location) -> Result<ResolvedAsset> {
+        self.resolve_asset_with(import_path, location, None)
+    }
+
+    /// `resolve_asset` reusing (and recording) verified module snapshots.
+    pub fn resolve_asset_with(
+        &mut self,
+        import_path: &str,
+        location: &Location,
+        verified: Option<&mut IndexMap<String, ResolvedPackage>>,
+    ) -> Result<ResolvedAsset> {
         let identity = import_path.strip_prefix("https://").unwrap_or(import_path);
         if !starts_with_any(identity, &["github.com/", "gitlab.com/"]) || bad_identity(identity) {
             return Err(error("PKG004", "invalid module asset path", location));
@@ -589,7 +599,17 @@ impl PackageResolver {
                 location,
             ));
         };
-        let package = self.resolve(&module, location)?;
+        let package = match verified {
+            Some(verified) => match verified.get(&module) {
+                Some(package) => package.clone(),
+                None => {
+                    let package = self.resolve(&module, location)?;
+                    verified.insert(module.clone(), package.clone());
+                    package
+                }
+            },
+            None => self.resolve(&module, location)?,
+        };
         let relative = identity[module.len()..].trim_start_matches('/');
         let unresolved = package.directory.join(relative);
         let asset = paths::resolve(&unresolved);

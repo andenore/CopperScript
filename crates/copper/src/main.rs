@@ -7,6 +7,7 @@
 
 mod agent_guide;
 mod args;
+mod audit_footprints;
 mod check;
 mod commands;
 mod compile;

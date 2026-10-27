@@ -161,9 +161,10 @@ completion time) may differ within the recorded entries.
   `base_value` and the shared formatter rules (`100 nF`). `Decimal`
   reproduces Python's default context: 28 significant digits, round half
   even, Python's exponent rules for every operation and for `str()`.
-- Text that Python writes in text mode (`print`, `write_text`) gets `\r\n`
-  on Windows; the binary writes such text through the same translation so
-  each platform's output matches the Python CLI on that platform.
+- Line endings: the binary writes LF on every platform (decision of
+  2026-10-27). Python's text mode (`print`, `write_text`) writes `\r\n` on
+  Windows; the harness reads the Python outputs' CRLF as LF on Windows before
+  comparing, so this is a policy, not a per-case recorded difference.
 - Float code (`hypot`, `atan2`, cost weights) keeps the same operations in
   the same order unless a recorded difference says otherwise.
 - Iteration order is deterministic everywhere: `BTreeMap`/`IndexMap`, no
@@ -307,7 +308,8 @@ do not shrink as much.
   byte for byte.
 - Harness and corpus: 111 cases in 8 suites (M0 18, M1 64, M2 11, M3 11,
   ladder 7). All 18 gated M0 cases are byte-identical on Linux and Windows,
-  including Windows path text and CRLF output.
+  including Windows path text. (CRLF output was matched for M0; LF on every
+  platform was decided later, see section 4.)
 - [Differences log](rust-port-differences.md): empty.
 - CI: `.github/workflows/rust.yml` runs format, clippy, tests, the fixture
   check and the gated comparison on `ubuntu-24.04` and `windows-latest`, and

@@ -12,7 +12,9 @@
 
 pub mod board;
 pub mod curves;
+pub mod footprint;
 pub mod geometry;
+pub mod kicad_mod;
 pub mod mechanical;
 pub mod pyfloat;
 

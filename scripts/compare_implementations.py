@@ -13,7 +13,9 @@ output, or a difference recorded in docs/rust-port-differences.md.
 Each case runs both implementations in turn with the same working directory
 and the same output directory, so paths in their output agree. The harness
 compares the exit status, stdout, stderr and every output file byte for byte
-(a suite may narrow this), and records both run times. A Rust command that
+(a suite may narrow this), and records both run times. The Rust binary writes
+LF line endings on every platform; on Windows the Python outputs' CRLF is read
+as LF before comparing. A Rust command that
 reports it is not implemented yet is ``pending``; its oracle run is skipped
 unless ``--oracle-when-pending`` asks for the Python timing anyway.
 
@@ -242,6 +244,13 @@ class Run:
     def pending(self) -> bool:
         return self.exit == NOT_IMPLEMENTED_EXIT and NOT_IMPLEMENTED_MARKER in self.stderr
 
+    def with_lf(self) -> "Run":
+        """The run with `\r\n` as `\n`: the Rust binary writes LF text on every
+        platform, while Python's text mode writes CRLF on Windows."""
+        lf = lambda data: data.replace(b"\r\n", b"\n")
+        return Run(self.exit, self.seconds, lf(self.stdout), lf(self.stderr),
+                   {name: lf(data) for name, data in self.files.items()}, self.timed_out)
+
 
 def run_one(command: list[str], case: Case, out: Path, environment: dict[str, str]) -> Run:
     if out.exists():
@@ -259,6 +268,20 @@ def run_one(command: list[str], case: Case, out: Path, environment: dict[str, st
     return Run(code, seconds, stdout, stderr, _collect_files(out), timed_out)
 
 
+def oracle_crash(stderr: bytes) -> bytes | None:
+    """The final exception line of an uncaught Python exception, else None.
+
+    A traceback names absolute paths and source lines, so its digest differs
+    per checkout and platform; the exception line alone is stable, which lets
+    a reviewed difference for an oracle crash match on every platform.
+    """
+    marker = b"Traceback (most recent call last):"
+    if marker not in stderr:
+        return None
+    lines = [line for line in stderr.splitlines() if line.strip()]
+    return b"python crash: " + (lines[-1].strip() if lines else b"")
+
+
 def observed(run: Run, case: Case) -> dict:
     """The compared parts of a run, as digests."""
     parts: dict[str, object] = {}
@@ -267,7 +290,8 @@ def observed(run: Run, case: Case) -> dict:
     if "stdout" in case.compare:
         parts["stdout"] = _sha256(run.stdout)
     if "stderr" in case.compare:
-        parts["stderr"] = _sha256(run.stderr)
+        crash = oracle_crash(run.stderr)
+        parts["stderr"] = _sha256(run.stderr) if crash is None else crash.decode("utf-8", "replace")
     if "files" in case.compare:
         names = sorted(run.files) if case.files is None else list(case.files)
         parts["files"] = {name: _sha256(run.files[name]) if name in run.files else None for name in names}
@@ -353,6 +377,8 @@ def _compare_runs(case, record, rust_command, python_command, work, slug, out, e
         return {**record, "status": "pending", "rust": _summary(rust),
                 "reason": rust.stderr.decode("utf-8", "replace").strip()}, []
     python = run_one(python_command, case, out, environment)
+    if os.name == "nt":
+        python = python.with_lf()
     shutil.move(str(out), work / slug / "python")
     record.update(python=_summary(python), rust=_summary(rust))
     if python.timed_out or python.exit is None:

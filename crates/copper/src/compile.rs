@@ -105,7 +105,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             let _ = text::print(out, &format!("Compiled {} -> {}", design.electrical.name, pypath::display(&output)));
         }
         None => {
-            let _ = out.write_all(text::platform_newlines(&json).as_bytes());
+            let _ = out.write_all(json.as_bytes());
         }
     }
     0
