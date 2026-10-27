@@ -26,3 +26,6 @@ dist/
 
 # Rust rewrite build output.
 /target/
+
+# Seeded mutations the comparison harness writes beside their sources while it runs.
+.compare-mutation-*
