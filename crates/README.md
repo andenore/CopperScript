@@ -9,6 +9,7 @@ changes its behaviour.
 | `copper-json` | JSON values and a serializer that reproduces Python's `json.dumps` byte for byte; Python text-mode newlines |
 | `copper-units` | `Decimal` with Python's default context, integer nanometres (`Nm`), `Fraction`, quantities and the `100 nF` formatter |
 | `copper-state` | The frozen `copperscript.state/v1` format: read, verify, write |
+| `copper-lang` | Lexer, parser and syntax tree with Python's diagnostics (M1, in progress) |
 | `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` |
 
 ## Build and test
@@ -45,13 +46,17 @@ python scripts/compare_implementations.py --suite ladder --oracle-when-pending -
 ## Oracle fixtures
 
 Unit tests check the crates against fixtures recorded from the Python oracle:
-decimal arithmetic, quantity formatting, float `repr`, JSON escaping and real
-state files. `src/agent_guide_topics.json` in the binary is the guide text,
+decimal arithmetic, quantity formatting, float `repr`, JSON escaping, real
+state files, and parse outcomes (tree digest or exact diagnostic) for every
+in-repo source and seeded mutations of each. `src/agent_guide_topics.json` in the binary is the guide text,
 copied the same way.
 
 ```sh
 python scripts/generate_rust_fixtures.py          # after a deliberate oracle change
 python scripts/generate_rust_fixtures.py --check  # CI
+python scripts/generate_rust_fixtures.py --dump-parse examples/valid_board/board.copper
+python scripts/generate_rust_fixtures.py --parse-corpus ../CopperLib --output build/copperlib-parse.json
+COPPER_PARSE_FIXTURE=build/copperlib-parse.json cargo test -p copper-lang --test python_oracle
 ```
 
 ## Rules

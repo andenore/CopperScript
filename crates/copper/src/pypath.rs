@@ -31,30 +31,9 @@ fn windows(arg: &str) -> String {
     if joined.is_empty() { ".".to_owned() } else { joined }
 }
 
-/// Python's `repr(str)` for ordinary paths: single quotes unless the text has
-/// a single quote and no double quote; backslashes doubled; control
-/// characters escaped. Non-ASCII text is kept as is.
+/// Python's `repr(str)`.
 pub fn repr(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') { '"' } else { '\'' };
-    let mut out = String::from(quote);
-    for character in text.chars() {
-        match character {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            _ if character == quote => {
-                out.push('\\');
-                out.push(quote);
-            }
-            _ if (character as u32) < 0x20 || character == '\u{7f}' => {
-                out.push_str(&format!("\\x{:02x}", character as u32))
-            }
-            _ => out.push(character),
-        }
-    }
-    out.push(quote);
-    out
+    copper_json::python_str_repr(text)
 }
 
 #[cfg(test)]

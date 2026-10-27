@@ -277,17 +277,16 @@ do not shrink as much.
 1. Consumer PRs under section 3, starting with CopperLib (largest count) and
    CopperBench (all deletable); confirm each repository's dispositions with
    its owner before deleting.
-2. M1: the frontend, measured by `check` and `compile` on the whole corpus.
-   Settle open item 1 below first.
+2. M1: the frontend, measured by `check` and `compile` on the whole corpus
+   (in progress, section 10).
 
 ### Open items
 
-1. **CLI usage, help and error text.** Python's argparse wording (usage
-   wrapping, `invalid choice` lists, `-h` output) is not reproduced. M0
-   keeps argparse exit statuses and leaves those texts out of the corpus.
-   Recommendation for M1: keep the exit statuses, choose a Rust argument
-   parser, and record argparse text as differences only where a consumer
-   depends on it.
+1. **CLI usage, help and error text (decided at the start of M1).** Python's
+   argparse wording (usage wrapping, `invalid choice` lists, `-h` output) is
+   not reproduced. The binary keeps argparse's exit statuses, and those texts
+   stay out of the corpus; a consumer that depends on one gets a recorded
+   difference.
 2. **Entry points without a milestone.** `copper-devicegen` (device model
    generation) has no milestone yet; `copper-lsp` becomes `copper lsp` in M6.
    Decide before M7.
@@ -315,3 +314,17 @@ do not shrink as much.
   uploads the binaries and the comparison report.
 - Ladder: the `ladder` suite is the timing hook. M0 does not change the
   Python implementation, so the ladder was not rerun for it.
+
+**M1 (started 2026-10-27): lexer and parser done.**
+
+- `copper-lang` parses every CopperScript document kind into a Rust syntax
+  tree with Python's diagnostics: code, message, code-point location, the
+  `difflib` "did you mean" hint and the replacement.
+- Oracle: 1,118 recorded parse outcomes match, covering every in-repo source,
+  20 seeded truncations, deletions and insertions of each, and targeted
+  snippets for all 18 lexer and parser error codes. All 146 CopperLib
+  sources and the 6 CopperAssetTracker sources also match locally.
+- Decision taken for open item 1: exit statuses stay Python's; usage, help
+  and error wording of the argument parser is not copied.
+- Next: package resolution and lockfiles, then the compiler, ERC and the
+  `compile` JSON.

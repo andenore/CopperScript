@@ -45,6 +45,18 @@ dependencies = [
  "indexmap",
  "num-bigint",
  "num-traits",
+ "unicode-general-category",
+]
+
+[[package]]
+name = "copper-lang"
+version = "0.1.0"
+dependencies = [
+ "copper-json",
+ "copper-state",
+ "indexmap",
+ "num-bigint",
+ "sha2",
 ]
 
 [[package]]
@@ -193,6 +205,12 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "unicode-general-category"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b993bddc193ae5bd0d623b49ec06ac3e9312875fdae725a975c51db1cc1677f"
 
 [[package]]
 name = "version_check"

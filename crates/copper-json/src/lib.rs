@@ -134,3 +134,8 @@ impl From<Object> for Value {
         Value::Object(object)
     }
 }
+
+mod unicode;
+pub use unicode::{
+    python_isalnum, python_isalpha, python_isdigit, python_isprintable, python_isspace, python_str_repr,
+};

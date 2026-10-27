@@ -21,6 +21,7 @@ num-integer = "0.1"
 num-rational = "0.4"
 num-traits = "0.2"
 sha2 = "0.10"
+unicode-general-category = "1"
 copper-json = { path = "crates/copper-json" }
 copper-state = { path = "crates/copper-state" }
 copper-units = { path = "crates/copper-units" }

@@ -1,0 +1,20 @@
+[package]
+name = "copper-lang"
+description = "The CopperScript language frontend: lexer, parser and syntax tree"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+copper-json.workspace = true
+indexmap.workspace = true
+num-bigint.workspace = true
+
+[dev-dependencies]
+copper-state.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true
