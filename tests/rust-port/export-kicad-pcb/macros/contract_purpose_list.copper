@@ -1,0 +1,19 @@
+// Rust-port corpus input: a list as a width contract purpose; not a circuit.
+board ContractPurposeListBoard {
+    import parts "./parts";
+    import layout "./assets/contract_purpose_list.json";
+    component U1: parts.Pair;
+    component C1: parts.Pair;
+    component R1: parts.Pair;
+    net SIG { U1.B; C1.A; R1.A; }
+    net GND { U1.A; C1.B; R1.B; }
+    constraint fixed_placement(U1) { x = 20 mm; y = 20 mm; rotation = 0; }
+    constraint fixed_placement(C1) { x = 24 mm; y = 20 mm; rotation = 0; }
+    constraint routing(SIG) { width = 0.3 mm; }
+    physical_macro SET: layout {
+        member chip = U1;
+        member cap = C1;
+        net sig = SIG;
+        net gnd = GND;
+    }
+}

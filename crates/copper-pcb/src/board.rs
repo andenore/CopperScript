@@ -557,6 +557,15 @@ pub struct MacroPlaneReturn {
     pub dedicated_contacts: Vec<(PadReference, Point)>,
 }
 
+/// `MacroTrackWidthContract`: an evidence-bearing minimum for one local track segment.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MacroTrackWidthContract {
+    pub track_index: usize,
+    pub minimum_width_nm: i64,
+    pub purpose: String,
+    pub evidence: String,
+}
+
 /// `PhysicalHardMacro`: immutable owner copper bound to a rigid cluster.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PhysicalHardMacro {
@@ -572,7 +581,54 @@ pub struct PhysicalHardMacro {
     pub zones: Vec<CopperZone>,
     pub plane_returns: Vec<MacroPlaneReturn>,
     pub polygons: Vec<CopperPolygon>,
-    pub width_contracts: usize,
+    pub width_contracts: Vec<MacroTrackWidthContract>,
+}
+
+impl PhysicalHardMacro {
+    /// `PhysicalHardMacro.__post_init__`.
+    pub fn validate(&self) -> Result<()> {
+        if self.cluster.is_empty()
+            || self.asset_sha256.len() != 64
+            || !self.asset_sha256.chars().all(|c| "0123456789abcdef".contains(c))
+        {
+            return fail("hard macro requires a cluster and SHA-256 asset identity");
+        }
+        if self.tracks.is_empty() && self.vias.is_empty() && self.polygons.is_empty() {
+            return fail("hard macro requires explicit copper");
+        }
+        let unique = |ids: Vec<&str>| !crate::has_duplicates(&ids);
+        if !unique(self.ports.iter().map(|p| p.name.as_str()).collect()) {
+            return fail("hard macro port names must be unique");
+        }
+        if !unique(self.protected_regions.iter().map(|r| r.id.as_str()).collect()) {
+            return fail("hard macro protected region IDs must be unique");
+        }
+        if !unique(self.zones.iter().map(|z| z.id.as_str()).collect()) {
+            return fail("hard macro zone IDs must be unique");
+        }
+        if !unique(self.polygons.iter().map(|p| p.id.as_str()).collect()) {
+            return fail("hard macro polygon IDs must be unique");
+        }
+        if self.protected_regions.iter().any(|r| !r.block_tracks || !r.block_vias) {
+            return fail("macro access reservations require solid track/via-blocking polygons");
+        }
+        let indexes: Vec<usize> = self.width_contracts.iter().map(|c| c.track_index).collect();
+        if crate::has_duplicates(&indexes) {
+            return fail("duplicate macro width contract track index");
+        }
+        for contract in &self.width_contracts {
+            let Some(track) = self.tracks.get(contract.track_index) else {
+                return fail("macro width contract track index is out of range");
+            };
+            if track.width_nm < contract.minimum_width_nm {
+                return fail("macro track is narrower than its width contract");
+            }
+            if self.tracks.iter().filter(|t| *t == track).count() != 1 {
+                return fail("ambiguous duplicate macro width contract geometry");
+            }
+        }
+        Ok(())
+    }
 }
 
 /// `PlacementRegion`: a named area some components must stay inside.

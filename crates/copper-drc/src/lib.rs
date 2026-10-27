@@ -496,12 +496,32 @@ fn check_connectivity(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Res
 fn check_track_rules(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Result<()> {
     let rules: IndexMap<&str, &NetRoutingRule> = board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
     let spacing = rules.values().any(|r| r.breakout_width_nm.is_some()).then(|| BreakoutSpacing::new(board));
-    // Width contracts are bound only by assets this rewrite rejects, so none apply.
+    let contracts = copper_pcb::hard_macros::materialized_track_width_contracts(board)?;
     for (index, track) in board.tracks.iter().enumerate() {
         let rule = rules.get(track.net.as_str());
         let required = board.rules.minimum_track_width_nm.max(rule.and_then(|r| r.width_nm).unwrap_or(0));
         let mut relaxed = required;
-        if let (Some(spacing), Some(rule)) = (&spacing, rule)
+        if let Some((hard, contract)) = contracts.get(&index) {
+            relaxed = board.rules.minimum_track_width_nm.max(contract.minimum_width_nm);
+            findings.push(
+                Finding::new(
+                    "DRC-MACRO-WIDTH-CONTRACT",
+                    Severity::Info,
+                    format!(
+                        "track {index}: immutable macro {}, asset {}, purpose {}; host minimum {required} nm; {}",
+                        copper_json::python_str_repr(&hard.cluster),
+                        hard.asset_sha256,
+                        copper_json::python_str_repr(&contract.purpose),
+                        contract.evidence
+                    ),
+                )
+                .objects([format!("track:{index}")])
+                .nets([track.net.as_str()])
+                .layers([track.layer.value()])
+                .required(relaxed)
+                .measured(track.width_nm),
+            );
+        } else if let (Some(spacing), Some(rule)) = (&spacing, rule)
             && let Some(width) = rule.breakout_width_nm
             && spacing.land(&track.net, &[track.start, track.end]).is_some()
         {

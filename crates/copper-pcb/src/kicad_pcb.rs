@@ -545,7 +545,7 @@ pub fn generate(board: &PhysicalBoard) -> Result<Manifest> {
             return fail("cannot export a hard macro without its immutable copper");
         }
         warnings.push("Experimental physical hard macros are not RF or manufacturing qualification.".to_owned());
-        if board.hard_macros.iter().any(|m| m.width_contracts > 0) {
+        if board.hard_macros.iter().any(|m| !m.width_contracts.is_empty()) {
             warnings.push(
                 "Scoped macro widths require authoritative CopperScript owner validation; native KiCad edits do not preserve these contracts or qualify current capacity."
                     .to_owned(),

@@ -1138,10 +1138,7 @@ pub fn placement_rejection_reasons(board: &PhysicalBoard, placements: &Poses) ->
     if placements.len() != original.len() || !placements.keys().all(|k| original.contains_key(k)) {
         return Ok(vec!["component inventory differs from physical source".to_owned()]);
     }
-    if board.rigid_clusters.iter().any(|c| !c.edge_openings.is_empty()) {
-        return copper_pcb::not_implemented("macro edge-opening acceptance");
-    }
-    let mut errors: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = copper_pcb::hard_macros::cluster_edge_opening_rejections(board, placements)?;
     let mut sorted: Vec<(&String, &Placement)> = placements.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
     let all_rules = rules(board);

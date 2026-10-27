@@ -1,0 +1,18 @@
+// Rust-port corpus input: a macro keepout edge that does not reach the perimeter; not a circuit.
+board EdgeClosedBoard {
+    import parts "../parts";
+    import layouts "../layouts";
+    component U1: parts.Pair;
+    component C1: parts.Pair;
+    component R1: parts.Pair;
+    net SIG { U1.B; C1.A; R1.A; }
+    net GND { U1.A; C1.B; R1.B; }
+    constraint fixed_placement(U1) { x = 20 mm; y = 3 mm; rotation = 0; }
+    constraint fixed_placement(C1) { x = 24 mm; y = 3 mm; rotation = 0; }
+    physical_macro SET: layouts.EdgeClosed {
+        member chip = U1;
+        member cap = C1;
+        net sig = SIG;
+        net gnd = GND;
+    }
+}

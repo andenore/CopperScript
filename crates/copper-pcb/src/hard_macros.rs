@@ -58,6 +58,32 @@ fn int(value: &Json) -> Option<i64> {
     }
 }
 
+/// Python's `type(value).__name__` for JSON values.
+fn python_type(value: &Json) -> &'static str {
+    match value {
+        Json::Null => "NoneType",
+        Json::Bool(_) => "bool",
+        Json::Int(_) => "int",
+        Json::Float(_) => "float",
+        Json::Str(_) => "str",
+        Json::Array(_) => "list",
+        Json::Object(_) => "dict",
+    }
+}
+
+/// Python truthiness of a JSON value.
+fn truthy(value: &Json) -> bool {
+    match value {
+        Json::Null => false,
+        Json::Bool(flag) => *flag,
+        Json::Int(number) => number.to_string() != "0",
+        Json::Float(number) => *number != 0.0,
+        Json::Str(text) => !text.is_empty(),
+        Json::Array(items) => !items.is_empty(),
+        Json::Object(object) => !object.is_empty(),
+    }
+}
+
 /// `_keys`: exactly the expected fields.
 fn keys(row: &Json, expected: &str) -> Result<()> {
     let expected: IndexSet<&str> = expected.split_whitespace().collect();
@@ -152,6 +178,33 @@ fn macro_footprint_digest(footprint: &PhysicalFootprint, reference: &str, asset:
         return None;
     }
     Some(normalized(footprint))
+}
+
+/// `MacroTrackWidthContract(...)` with its `__post_init__` checks.
+fn width_contract(
+    track_index: usize,
+    minimum: &Json,
+    purpose: &Json,
+    evidence: &Json,
+) -> Result<MacroTrackWidthContract> {
+    let Some(minimum_width_nm) = int(minimum).filter(|m| *m > 0) else {
+        return fail("macro width contract requires a positive integer minimum");
+    };
+    let purpose = match purpose {
+        Json::Array(_) => return Err(invalid("unhashable type: 'list'".to_owned())),
+        Json::Object(_) => return Err(invalid("unhashable type: 'dict'".to_owned())),
+        Json::Str(text)
+            if ["pin_entry", "control_supply", "output_sense", "enable", "main_power"].contains(&text.as_str()) =>
+        {
+            text.clone()
+        }
+        _ => return fail("unsupported macro width contract purpose"),
+    };
+    let evidence = match evidence {
+        Json::Str(text) if !crate::py_strip(text).is_empty() => text.clone(),
+        _ => return fail("macro width contract requires evidence"),
+    };
+    Ok(MacroTrackWidthContract { track_index, minimum_width_nm, purpose, evidence })
 }
 
 /// `bind_hard_macro`: bind pinned asset data to placed members and nets.
@@ -318,7 +371,7 @@ pub fn bind_hard_macro(
         Ok(keepout)
     };
     let mut tracks = Vec::new();
-    let mut track_rows = 0usize;
+    let mut track_ranges: Vec<std::ops::Range<usize>> = Vec::new();
     for row in list(field(&data, "tracks")?)? {
         keys(row, "net width_nm layer points")?;
         let Some(width) = int(field(row, "width_nm")?) else { return fail("macro widths require integer nanometres") };
@@ -337,6 +390,7 @@ pub fn bind_hard_macro(
             }
         }
         let layer = layer(field(row, "layer")?)?;
+        track_ranges.push(tracks.len()..tracks.len() + points.len() - 1);
         for pair in points.windows(2) {
             if pair[0] == pair[1] {
                 return fail("track segment cannot have zero length");
@@ -346,15 +400,27 @@ pub fn bind_hard_macro(
             }
             tracks.push(TrackSegment { net: net.clone(), start: pair[0], end: pair[1], width_nm: width, layer });
         }
-        track_rows += 1;
     }
-    let width_contracts = match data.get("width_contracts") {
-        Some(rows) if !list(rows)?.is_empty() => {
-            let _ = track_rows;
-            return Err(Error::NotImplemented("hard-macro track width contracts".to_owned()));
+    let mut width_contracts = Vec::new();
+    let mut contracted_rows: Vec<usize> = Vec::new();
+    for row in data.get("width_contracts").map_or(Ok(&[][..]), list)? {
+        keys(row, "track_index minimum_width_nm purpose evidence")?;
+        let index =
+            int(field(row, "track_index")?).and_then(|i| usize::try_from(i).ok()).filter(|i| *i < track_ranges.len());
+        let Some(index) = index else { return fail("macro width contract track index is out of range") };
+        if contracted_rows.contains(&index) {
+            return fail("duplicate macro width contract track index");
         }
-        _ => 0,
-    };
+        contracted_rows.push(index);
+        for track_index in track_ranges[index].clone() {
+            width_contracts.push(width_contract(
+                track_index,
+                field(row, "minimum_width_nm")?,
+                field(row, "purpose")?,
+                field(row, "evidence")?,
+            )?);
+        }
+    }
     let mut vias = Vec::new();
     for row in list(field(&data, "vias")?)? {
         let finish = row.get("finish").map_or(Ok("standard"), text)?.to_owned();
@@ -486,13 +552,27 @@ pub fn bind_hard_macro(
     let mut edge_openings = Vec::new();
     for row in data.get("edge_openings").map_or(Ok(&[][..]), list)? {
         keys(row, "keepout edge_indices")?;
-        let indices: Vec<i64> = list(field(row, "edge_indices")?)?.iter().filter_map(int).collect();
-        let keepout = text(field(row, "keepout")?)?.to_owned();
-        if keepout.is_empty() || indices.is_empty() || indices.iter().any(|i| *i < 0) || crate::has_duplicates(&indices)
+        let keepout = field(row, "keepout")?;
+        // `tuple(edge_indices)`: strings and objects iterate their characters or keys.
+        let items: Vec<Json> = match field(row, "edge_indices")? {
+            Json::Array(items) => items.clone(),
+            Json::Str(text) => text.chars().map(|c| Json::Str(c.to_string())).collect(),
+            Json::Object(object) => object.keys().map(|k| Json::Str(k.clone())).collect(),
+            other => return Err(invalid(format!("'{}' object is not iterable", python_type(other)))),
+        };
+        let indices: Vec<Option<i64>> = items.iter().map(int).collect();
+        if !truthy(keepout)
+            || indices.is_empty()
+            || indices.iter().any(|i| i.is_none_or(|i| i < 0))
+            || crate::has_duplicates(&indices)
         {
             return fail("macro edge opening requires unique nonnegative integer edge indices");
         }
-        edge_openings.push(MacroEdgeOpening { keepout, edge_indices: indices });
+        let Json::Str(keepout) = keepout else {
+            return Err(Error::NotImplemented("a non-string macro edge-opening keepout".to_owned()));
+        };
+        edge_openings
+            .push(MacroEdgeOpening { keepout: keepout.clone(), edge_indices: indices.into_iter().flatten().collect() });
     }
     let source = match field(&data, "source")? {
         Json::Str(text) => text.clone(),
@@ -526,8 +606,7 @@ pub fn bind_hard_macro(
         .iter()
         .map(|row| pad_pair(row).and_then(|(reference, pad)| Ok(PadReference::new(binding(&reference)?, &pad))))
         .collect::<Result<_>>()?;
-    board.rigid_clusters.push(cluster);
-    board.hard_macros.push(PhysicalHardMacro {
+    let hard = PhysicalHardMacro {
         cluster: name.to_owned(),
         asset_sha256: expected_sha256.to_owned(),
         tracks,
@@ -541,7 +620,10 @@ pub fn bind_hard_macro(
         plane_returns,
         polygons,
         width_contracts,
-    });
+    };
+    hard.validate()?;
+    board.rigid_clusters.push(cluster);
+    board.hard_macros.push(hard);
     board.placement_rules = rules.into_values().collect();
     board.metadata.insert("physical_hard_macros".to_owned(), "experimental-unqualified".to_owned());
     board.metadata.insert("fabrication_ready".to_owned(), "false".to_owned());
@@ -1053,6 +1135,48 @@ fn validate_materialized(board: &PhysicalBoard) -> Result<()> {
     Ok(())
 }
 
+/// `materialized_track_width_contracts`: exact board-track occurrences mapped to owner contracts.
+pub fn materialized_track_width_contracts(
+    board: &PhysicalBoard,
+) -> Result<IndexMap<usize, (&PhysicalHardMacro, &MacroTrackWidthContract)>> {
+    let active: Vec<&PhysicalHardMacro> = board
+        .hard_macros
+        .iter()
+        .filter(|m| board.materialized_macros.contains(&m.cluster) && !m.width_contracts.is_empty())
+        .collect();
+    if active.is_empty() {
+        return Ok(IndexMap::new());
+    }
+    validate_hard_macros(board)?;
+    let poses = crate::keepouts::placement_map(board);
+    let mut owned_tracks = Vec::new();
+    for hard in board.hard_macros.iter().filter(|m| board.materialized_macros.contains(&m.cluster)) {
+        owned_tracks.extend(resolved_macro_geometry(board, hard, &poses)?.tracks);
+    }
+    let owned = counts(&owned_tracks);
+    let mut pending: IndexMap<TrackSegment, (&PhysicalHardMacro, &MacroTrackWidthContract)> = IndexMap::new();
+    for hard in active {
+        let tracks = resolved_macro_geometry(board, hard, &poses)?.tracks;
+        for contract in &hard.width_contracts {
+            let track = &tracks[contract.track_index];
+            if owned.get(track).copied().unwrap_or(0) != 1 {
+                return fail("ambiguous duplicate macro width contract geometry");
+            }
+            pending.insert(track.clone(), (hard, contract));
+        }
+    }
+    let mut result = IndexMap::new();
+    for (index, track) in board.tracks.iter().enumerate() {
+        if let Some(entry) = pending.shift_remove(track) {
+            result.insert(index, entry);
+        }
+    }
+    if !pending.is_empty() {
+        return fail("immutable hard-macro width contract copper was removed");
+    }
+    Ok(result)
+}
+
 /// `cluster_placements`: the poses a rigid cluster prescribes from its anchor.
 fn cluster_placements(
     cluster: &RigidPlacementCluster,
@@ -1091,10 +1215,87 @@ pub fn cluster_placement_matches(board: &PhysicalBoard, placements: &IndexMap<St
             return Ok(false);
         }
     }
-    if board.rigid_clusters.iter().any(|c| !c.edge_openings.is_empty()) {
-        return crate::not_implemented("macro edge-opening acceptance");
+    Ok(cluster_edge_opening_rejections(board, placements)?.is_empty())
+}
+
+/// Shapely's `exterior.covers(LineString([a, b]))`: collinear ring edges cover the segment.
+fn ring_covers_segment(ring: &[Point], a: Point, b: Point) -> bool {
+    let (dx, dy) = (i128::from(b.x_nm - a.x_nm), i128::from(b.y_nm - a.y_nm));
+    let length = dx * dx + dy * dy;
+    let along = |p: Point| i128::from(p.x_nm - a.x_nm) * dx + i128::from(p.y_nm - a.y_nm) * dy;
+    let mut spans: Vec<(i128, i128)> = Vec::new();
+    for (c, d) in ring_edges(ring) {
+        if copper_physical::geometry::orientation(a, b, c) != 0 || copper_physical::geometry::orientation(a, b, d) != 0
+        {
+            continue;
+        }
+        let (low, high) = (along(c).min(along(d)), along(c).max(along(d)));
+        if high < 0 || low > length {
+            continue;
+        }
+        spans.push((low.max(0), high.min(length)));
     }
-    Ok(true)
+    spans.sort_unstable();
+    let mut covered = 0;
+    for (low, high) in spans {
+        if low > covered {
+            return false;
+        }
+        covered = covered.max(high);
+    }
+    covered >= length
+}
+
+/// `cluster_edge_opening_rejections`: declared keepout edges open to the outer board perimeter.
+///
+/// Shapely's `covers` on these integer polygons is exact: the host has no
+/// holes, so a simple ring whose every edge lies in the closed host polygon
+/// lies wholly inside it.
+pub fn cluster_edge_opening_rejections(
+    board: &PhysicalBoard,
+    placements: &IndexMap<String, Placement>,
+) -> Result<Vec<String>> {
+    let required: Vec<&RigidPlacementCluster> =
+        board.rigid_clusters.iter().filter(|c| !c.edge_openings.is_empty()).collect();
+    if required.is_empty() {
+        return Ok(Vec::new());
+    }
+    if board.outline.circular_boundary.is_some() || board.outline.boundary_path.is_some() {
+        return Ok(required
+            .iter()
+            .map(|c| format!("{}: macro edge openings require a straight polygonal host outline", c.name))
+            .collect());
+    }
+    let host = &board.outline.vertices;
+    let resolved: IndexMap<String, CopperKeepout> =
+        crate::keepouts::resolved_cluster_keepouts(board, placements).into_iter().map(|k| (k.id.clone(), k)).collect();
+    let mut errors = Vec::new();
+    for cluster in required {
+        for opening in &cluster.edge_openings {
+            let Some(region) = resolved.get(&format!("cluster/{}/{}", cluster.name, opening.keepout)) else {
+                errors.push(format!("{}: missing anchor for edge opening {}", cluster.name, opening.keepout));
+                continue;
+            };
+            let vertices = &region.vertices;
+            if !ring_edges(vertices).iter().all(|(a, b)| segment_in_polygon(*a, *b, host)) {
+                errors.push(format!(
+                    "{}: edge-opening keepout {} extends outside the host",
+                    cluster.name, opening.keepout
+                ));
+            }
+            for index in &opening.edge_indices {
+                let index = *index as usize;
+                let (a, b) = (vertices[index], vertices[(index + 1) % vertices.len()]);
+                if !ring_covers_segment(host, a, b) {
+                    errors.push(format!(
+                        "{}: keepout {} edge {index} must fully open to the outer board perimeter",
+                        cluster.name, opening.keepout
+                    ));
+                }
+            }
+        }
+    }
+    Ok(errors)
 }
 
 /// `apply_source_macros`: bind every source-selected physical macro.

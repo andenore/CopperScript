@@ -1,0 +1,277 @@
+{
+  "allowed_rotations": [
+    0,
+    90,
+    180,
+    270
+  ],
+  "anchor": "chip",
+  "edge_openings": [],
+  "internal_clearance_nm": 0,
+  "isolated_pads": [],
+  "keepouts": [],
+  "members": [
+    {
+      "center_nm": [
+        0,
+        0
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "pair.kicad_mod",
+      "footprint_digest": "371d7f89a1ebf18f2ba8f975e1d1736a16f0b6699ca273490bb9ca5fa9b30ea7",
+      "reference": "chip",
+      "rotation_degrees": "0"
+    },
+    {
+      "center_nm": [
+        4000000,
+        0
+      ],
+      "edge_clearance_nm": 250000,
+      "footprint": "pair.kicad_mod",
+      "footprint_digest": "371d7f89a1ebf18f2ba8f975e1d1736a16f0b6699ca273490bb9ca5fa9b30ea7",
+      "reference": "cap",
+      "rotation_degrees": "0"
+    }
+  ],
+  "pad_nets": [
+    [
+      "chip",
+      "2",
+      "sig"
+    ],
+    [
+      "cap",
+      "1",
+      "sig"
+    ],
+    [
+      "chip",
+      "1",
+      "gnd"
+    ],
+    [
+      "cap",
+      "2",
+      "gnd"
+    ]
+  ],
+  "plane_returns": [],
+  "polygons": [
+    {
+      "id": "bridge",
+      "layer": "F.Cu",
+      "net": "sig",
+      "vertices": [
+        [
+          1500000,
+          -300000
+        ],
+        [
+          2500000,
+          -300000
+        ],
+        [
+          2500000,
+          300000
+        ],
+        [
+          1500000,
+          300000
+        ]
+      ]
+    }
+  ],
+  "ports": [
+    {
+      "layer": "F.Cu",
+      "name": "signal",
+      "net": "sig",
+      "pads": [
+        [
+          "chip",
+          "2"
+        ],
+        [
+          "cap",
+          "1"
+        ]
+      ],
+      "point": {
+        "pad": [
+          "chip",
+          "2"
+        ]
+      }
+    },
+    {
+      "layer": "B.Cu",
+      "name": "ground",
+      "net": "gnd",
+      "pads": [
+        [
+          "chip",
+          "1"
+        ],
+        [
+          "cap",
+          "2"
+        ]
+      ],
+      "point": [
+        2000000,
+        1500000
+      ]
+    }
+  ],
+  "production_publishable": false,
+  "protected_regions": [
+    {
+      "block_tracks": true,
+      "block_vias": true,
+      "block_zones": true,
+      "id": "core",
+      "layers": [
+        "F.Cu",
+        "B.Cu"
+      ],
+      "vertices": [
+        [
+          900000,
+          -1100000
+        ],
+        [
+          3100000,
+          -1100000
+        ],
+        [
+          3100000,
+          900000
+        ],
+        [
+          900000,
+          900000
+        ]
+      ]
+    }
+  ],
+  "required_layers": [
+    "F.Cu",
+    "B.Cu"
+  ],
+  "schema": "copperlib-physical-hard-macro/v0.5",
+  "source": "Synthetic owner-copper fixture",
+  "tracks": [
+    {
+      "layer": "F.Cu",
+      "net": "sig",
+      "points": [
+        {
+          "pad": [
+            "chip",
+            "2"
+          ]
+        },
+        {
+          "pad": [
+            "cap",
+            "1"
+          ]
+        }
+      ],
+      "width_nm": 200000
+    },
+    {
+      "layer": "F.Cu",
+      "net": "gnd",
+      "points": [
+        {
+          "pad": [
+            "chip",
+            "1"
+          ]
+        },
+        [
+          -500000,
+          1500000
+        ],
+        [
+          4500000,
+          1500000
+        ],
+        {
+          "pad": [
+            "cap",
+            "2"
+          ]
+        }
+      ],
+      "width_nm": 300000
+    }
+  ],
+  "unresolved": [
+    "Not a qualified circuit or fabrication asset"
+  ],
+  "vias": [
+    {
+      "drill_nm": 300000,
+      "finish": "standard",
+      "from_layer": "F.Cu",
+      "net": "gnd",
+      "position_nm": [
+        2000000,
+        1500000
+      ],
+      "size_nm": 600000,
+      "technology": null,
+      "to_layer": "B.Cu"
+    }
+  ],
+  "width_contracts": [
+    {
+      "evidence": "Synthetic pad-entry neck",
+      "minimum_width_nm": 150000,
+      "purpose": "pin_entry",
+      "track_index": 0
+    },
+    {
+      "evidence": "Synthetic return width",
+      "minimum_width_nm": 200000,
+      "purpose": [
+        "pin_entry"
+      ],
+      "track_index": 1
+    }
+  ],
+  "zones": [
+    {
+      "clearance_nm": 200000,
+      "id": "shield",
+      "layers": [
+        "B.Cu"
+      ],
+      "minimum_width_nm": 200000,
+      "net": "gnd",
+      "pad_connection": "solid",
+      "priority": 1,
+      "vertices": [
+        [
+          1000000,
+          -1000000
+        ],
+        [
+          3000000,
+          -1000000
+        ],
+        [
+          3000000,
+          800000
+        ],
+        [
+          1000000,
+          800000
+        ]
+      ]
+    }
+  ]
+}

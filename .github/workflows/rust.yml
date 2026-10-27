@@ -96,6 +96,9 @@ jobs:
           done
       - name: Compare the binary with the Python CLI
         run: python scripts/compare_implementations.py --jobs 4 --report build/compare/report.json --markdown build/compare/report.md
+      - name: Install the macro edge-opening oracle dependency
+        # Python proves macro edge openings with shapely (the qualification extra).
+        run: python -m pip install "shapely==2.1.2"
       - name: Compare the finished M2 commands
         # Gated ahead of M2's acceptance so they cannot regress meanwhile.
         run: >-
@@ -104,6 +107,7 @@ jobs:
           --suite check-footprint --suite check-footprint-strict
           --suite export-kicad-pcb --suite export-kicad-pcb-proxy --suite export-kicad-pcb-fixtures
           --suite export-kicad-pcb-options --suite export-kicad-pcb-resolved --suite export-kicad-pcb-macros
+          --suite export-kicad-pcb-edge-openings
           --report build/compare/report-m2.json --markdown build/compare/report-m2.md
       - name: Publish the comparison summary
         if: always()

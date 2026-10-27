@@ -5842,6 +5842,24 @@
    "mutations": 10
   },
   {
+   "name": "export-kicad-pcb-edge-openings",
+   "milestone": "M2",
+   "inputs": [
+    "tests/rust-port/export-kicad-pcb/macros/edges/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "export-kicad-pcb",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--no-check",
+    "-o",
+    "{out}/board.kicad_pcb"
+   ],
+   "mutations": 10
+  },
+  {
    "name": "export-kicad-pcb-options",
    "milestone": "M2",
    "cases": [

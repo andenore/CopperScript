@@ -1,0 +1,23 @@
+// Rust-port corpus input: a macro edge opening across a notch in the outline; not a circuit.
+board EdgeNotchBoard {
+    import parts "../parts";
+    import layouts "../layouts";
+    component U1: parts.Pair;
+    component C1: parts.Pair;
+    component R1: parts.Pair;
+    net SIG { U1.B; C1.A; R1.A; }
+    net GND { U1.A; C1.B; R1.B; }
+    constraint fixed_placement(U1) { x = 20 mm; y = 3 mm; rotation = 0; }
+    constraint fixed_placement(C1) { x = 24 mm; y = 3 mm; rotation = 0; }
+    physical_macro SET: layouts.EdgeOpen {
+        member chip = U1;
+        member cap = C1;
+        net sig = SIG;
+        net gnd = GND;
+    }
+    mechanical {
+        outline polygon {
+            vertices = [(0mm,0mm), (21mm,0mm), (21mm,1mm), (23mm,1mm), (23mm,0mm), (60mm,0mm), (60mm,45mm), (0mm,45mm)];
+        }
+    }
+}
