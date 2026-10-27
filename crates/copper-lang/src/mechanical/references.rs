@@ -141,7 +141,8 @@ fn asset_path(filename: &str, relative: &Value) -> Lower<PathBuf> {
     let mut chain: Vec<&Path> = target.ancestors().skip(1).collect();
     chain.push(&target);
     for candidate in chain {
-        let info = std::fs::symlink_metadata(candidate).map_err(|failure| os_error(&failure, candidate))?;
+        let info = std::fs::symlink_metadata(candidate)
+            .map_err(|failure| Fail::Value(paths::python_os_call_error(&failure, Some(&paths::display(candidate)))))?;
         #[cfg(windows)]
         let reparse = {
             use std::os::windows::fs::MetadataExt;

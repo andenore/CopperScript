@@ -99,18 +99,16 @@ pub fn extension(name: &str) -> &str {
     if name[..dot].chars().all(|character| character == '.') { "" } else { &name[dot..] }
 }
 
-/// Python's `str(OSError)`: `"[Errno 2] No such file or directory: 'path'"`.
+/// Python's `str(OSError)` for `open()` and file reads and writes:
+/// `"[Errno 2] No such file or directory: 'path'"`.
 pub fn python_os_error(error: &std::io::Error, filename: Option<&str>) -> String {
-    let text = error.to_string();
-    let message = match text.rfind(" (os error ") {
-        Some(index) => text[..index].to_owned(),
-        None => text,
-    };
-    match (error.raw_os_error(), filename) {
-        (Some(code), Some(name)) => format!("[Errno {code}] {message}: {}", copper_json::python_str_repr(name)),
-        (Some(code), None) => format!("[Errno {code}] {message}"),
-        (None, _) => message,
-    }
+    copper_json::oserror::python_os_error(error, filename, copper_json::oserror::Call::Open)
+}
+
+/// Python's `str(OSError)` for an `os` function (`mkdir`, `unlink`, `lstat`),
+/// which Windows reports as `[WinError N] ...`.
+pub fn python_os_call_error(error: &std::io::Error, filename: Option<&str>) -> String {
+    copper_json::oserror::python_os_error(error, filename, copper_json::oserror::Call::Os)
 }
 
 #[cfg(test)]

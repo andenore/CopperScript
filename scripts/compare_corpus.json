@@ -5729,10 +5729,6 @@
       "--offline",
       "-o",
       "examples/valid_board/board.copper/board.kicad_sch"
-     ],
-     "compare": [
-      "exit",
-      "files"
      ]
     },
     {

@@ -6,6 +6,7 @@
 //! like `ensure_ascii`. See [`Dumps`] for the serializer options.
 
 mod float;
+pub mod oserror;
 mod parse;
 mod serialize;
 pub mod text;

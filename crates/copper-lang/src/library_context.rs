@@ -905,7 +905,7 @@ pub fn write_index(catalog: &Catalog, output: &Path) -> Result<()> {
     }
     let os = |e: std::io::Error| paths::python_os_error(&e, Some(&paths::display(output)));
     if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(os)?;
+        std::fs::create_dir_all(parent).map_err(|e| paths::python_os_call_error(&e, Some(&paths::display(output))))?;
     }
     let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output).map_err(os)?;
     std::io::Write::write_all(&mut file, format!("{}\n", to_json(&catalog.index())).as_bytes()).map_err(os)

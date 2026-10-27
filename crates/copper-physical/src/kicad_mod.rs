@@ -111,12 +111,7 @@ pub fn load_kicad_mod(path: &Path, display: &str, strict: bool) -> Result<Footpr
 }
 
 fn os_error(failure: &std::io::Error, filename: &str) -> String {
-    let text = failure.to_string();
-    let message = text.rfind(" (os error ").map_or(text.clone(), |index| text[..index].to_owned());
-    match failure.raw_os_error() {
-        Some(code) => format!("[Errno {code}] {message}: {}", repr(filename)),
-        None => message,
-    }
+    copper_json::oserror::python_os_error(failure, Some(filename), copper_json::oserror::Call::Open)
 }
 
 fn tag(node: &List) -> Option<&str> {

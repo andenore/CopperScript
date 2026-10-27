@@ -68,7 +68,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let display = pypath::display(&output);
         let os = |failure: std::io::Error| paths::python_os_error(&failure, Some(&display));
         if let Some(parent) = Path::new(&output).parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            std::fs::create_dir_all(parent).map_err(os)?;
+            std::fs::create_dir_all(parent).map_err(|failure| paths::python_os_call_error(&failure, Some(&display)))?;
         }
         std::fs::write(&output, canonical_macro_bytes(&data)).map_err(os)?;
         Ok(inputs.len())

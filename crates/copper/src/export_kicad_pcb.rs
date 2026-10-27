@@ -215,10 +215,20 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             physicalize(&design, Footprints::Resolved(&mut resolver), &options, locked, offline)?
         };
         if let Some(scene) = &parsed.placement_templates {
-            board_physical = templates::apply_placement_templates(board_physical, Path::new(scene), locked, offline)?;
+            board_physical = templates::apply_placement_templates(
+                board_physical,
+                Path::new(&pypath::display(scene)),
+                locked,
+                offline,
+            )?;
         }
         for scene in &parsed.hard_macros {
-            board_physical = hard_macros::apply_hard_macro_scene(board_physical, Path::new(scene), locked, offline)?;
+            board_physical = hard_macros::apply_hard_macro_scene(
+                board_physical,
+                Path::new(&pypath::display(scene)),
+                locked,
+                offline,
+            )?;
         }
         let board_physical = copper_drc::macros::materialize_hard_macros(board_physical)?;
         kicad_pcb::generate(&board_physical)
@@ -232,7 +242,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
     };
     let output = parsed.output.clone().unwrap_or_else(|| manifest.artifacts[0].name.clone());
-    if let Err(message) = project::write_kicad_project(&manifest, Path::new(&output)) {
+    if let Err(message) = project::write_kicad_project(&manifest, Path::new(&pypath::display(&output))) {
         let _ = text::print(out, &format!("OUTPUT ERROR: {message}"));
         return 2;
     }

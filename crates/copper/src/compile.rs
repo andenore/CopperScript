@@ -87,19 +87,18 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     match output {
         Some(output) => {
             let path = Path::new(&output);
+            let shown = pypath::display(&output);
             let written = path
                 .parent()
                 .filter(|parent| !parent.as_os_str().is_empty())
                 .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| text::write_text(path, &json));
-            if let Err(failure) = written {
-                let _ = text::print(
-                    out,
-                    &format!(
-                        "OUTPUT ERROR: {}",
-                        copper_lang::paths::python_os_error(&failure, Some(&pypath::display(&output)))
-                    ),
-                );
+                .map_err(|failure| copper_lang::paths::python_os_call_error(&failure, Some(&shown)))
+                .and_then(|()| {
+                    text::write_text(path, &json)
+                        .map_err(|failure| copper_lang::paths::python_os_error(&failure, Some(&shown)))
+                });
+            if let Err(message) = written {
+                let _ = text::print(out, &format!("OUTPUT ERROR: {message}"));
                 return 2;
             }
             let _ = text::print(out, &format!("Compiled {} -> {}", design.electrical.name, pypath::display(&output)));

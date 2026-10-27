@@ -31,6 +31,11 @@ fn os_error(error: &std::io::Error, path: &Path) -> String {
     paths::python_os_error(error, Some(&paths::display(path)))
 }
 
+/// An `os.mkdir` or `os.unlink` failure, which Windows reports as `[WinError N]`.
+fn os_call_error(error: &std::io::Error, path: &Path) -> String {
+    paths::python_os_call_error(error, Some(&paths::display(path)))
+}
+
 fn casefold(path: &Path) -> String {
     paths::display(&paths::resolve(path)).to_lowercase()
 }
@@ -99,10 +104,10 @@ pub fn write_kicad_project(manifest: &Manifest, output: &Path) -> WriteResult<Ve
         return Err("refusing to overwrite an unrelated via-process sidecar".to_owned());
     }
     if stale {
-        std::fs::remove_file(&rules).map_err(|e| os_error(&e, &rules))?;
+        std::fs::remove_file(&rules).map_err(|e| os_call_error(&e, &rules))?;
     }
     if generated_process && !destinations.contains(&process) {
-        std::fs::remove_file(&process).map_err(|e| os_error(&e, &process))?;
+        std::fs::remove_file(&process).map_err(|e| os_call_error(&e, &process))?;
     }
     for (artifact, path) in manifest.artifacts.iter().zip(&destinations) {
         if let Some(directory) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
@@ -138,7 +143,7 @@ fn create_directories(directory: &Path) -> WriteResult<()> {
         if let Err(error) = std::fs::create_dir(&current)
             && !current.is_dir()
         {
-            return Err(os_error(&error, &current));
+            return Err(os_call_error(&error, &current));
         }
     }
     Ok(())

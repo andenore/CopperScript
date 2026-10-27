@@ -665,7 +665,8 @@ pub fn write_schematic(manifest: &SchematicManifest, output: &Path) -> Result<Ve
             continue; // Preserve an existing PCB project's rules and settings.
         }
         if let Some(directory) = path.parent().filter(|directory| !directory.as_os_str().is_empty()) {
-            std::fs::create_dir_all(directory).map_err(|error| os_error(error, directory))?;
+            std::fs::create_dir_all(directory)
+                .map_err(|error| paths::python_os_call_error(&error, Some(&paths::display(directory))))?;
         }
         let content = if project { project_json(&name) } else { artifact.content.clone() };
         std::fs::write(path, content.as_bytes()).map_err(|error| os_error(error, path))?;
