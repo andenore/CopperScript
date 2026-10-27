@@ -883,7 +883,8 @@ fn courtyard_polygon(graphics: &[FootprintGraphic]) -> Vec<Point> {
             }
             FootprintGraphic::Arc { start, midpoint, end, .. } => points.extend([*start, *end, *midpoint]),
             FootprintGraphic::Circle { center, end, .. } => {
-                let radius = round_int(((end.x_nm - center.x_nm) as f64).hypot((end.y_nm - center.y_nm) as f64));
+                let radius =
+                    round_int(crate::pyfloat::hypot((end.x_nm - center.x_nm) as f64, (end.y_nm - center.y_nm) as f64));
                 points.push(Point::new(center.x_nm - radius, center.y_nm - radius));
                 points.push(Point::new(center.x_nm + radius, center.y_nm + radius));
             }

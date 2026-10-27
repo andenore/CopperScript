@@ -17,6 +17,7 @@ mod export_kicad;
 mod export_kicad_pcb;
 mod library;
 mod lock;
+mod plan_layout;
 mod power_check;
 mod pypath;
 mod query;

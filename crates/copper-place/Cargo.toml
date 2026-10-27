@@ -1,0 +1,20 @@
+[package]
+name = "copper-place"
+description = "Deterministic, constraint-aware component placement and the plan-layout report"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+copper-drc.workspace = true
+copper-json.workspace = true
+copper-lang.workspace = true
+copper-pcb.workspace = true
+copper-physical.workspace = true
+copper-units.workspace = true
+indexmap.workspace = true
+
+[lints]
+workspace = true

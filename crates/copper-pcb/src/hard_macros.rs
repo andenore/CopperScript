@@ -1178,7 +1178,7 @@ pub fn materialized_track_width_contracts(
 }
 
 /// `cluster_placements`: the poses a rigid cluster prescribes from its anchor.
-fn cluster_placements(
+pub fn cluster_placements(
     cluster: &RigidPlacementCluster,
     anchor: &Placement,
     placements: &IndexMap<String, Placement>,

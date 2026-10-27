@@ -43,7 +43,7 @@ impl std::fmt::Display for PadReference {
 }
 
 /// `Placement`: one component pose.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Placement {
     pub reference: String,
     pub footprint: String,
@@ -643,7 +643,7 @@ text_enum!(RelativePlacementKind { MaxDistance = "max_distance", MinDistance = "
 text_enum!(AlignmentAxis { X = "x", Y = "y" });
 
 /// `PlacementTarget`: a component, or one of its pads.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct PlacementTarget {
     pub reference: String,
     pub pad: Option<String>,

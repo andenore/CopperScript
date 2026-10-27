@@ -29,7 +29,7 @@ use copper_physical::geometry::{
     shapes_touch_or_overlap,
 };
 use copper_physical::mechanical::{hole_shape, shape_in_outline, slot_shape};
-use copper_physical::pyfloat::round_int;
+use copper_physical::pyfloat::{hypot, round_int};
 use copper_physical::{BoardSide, CopperLayer, Point};
 
 use crate::breakout::BreakoutSpacing;
@@ -463,7 +463,7 @@ fn routed_length(board: &PhysicalBoard, net: &str) -> i64 {
         .tracks
         .iter()
         .filter(|t| t.net == net)
-        .map(|t| round_int(((t.end.x_nm - t.start.x_nm) as f64).hypot((t.end.y_nm - t.start.y_nm) as f64)))
+        .map(|t| round_int(hypot((t.end.x_nm - t.start.x_nm) as f64, (t.end.y_nm - t.start.y_nm) as f64)))
         .sum()
 }
 

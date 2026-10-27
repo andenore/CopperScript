@@ -486,7 +486,7 @@ fn mechanical_export_board(board: &PhysicalBoard) -> Result<PhysicalBoard> {
             return fail("generated slot reference conflicts with a component");
         }
         let (dx, dy) = ((slot.end.x_nm - slot.start.x_nm) as f64, (slot.end.y_nm - slot.start.y_nm) as f64);
-        let length = copper_physical::pyfloat::round_int(dx.hypot(dy));
+        let length = copper_physical::pyfloat::round_int(copper_physical::pyfloat::hypot(dx, dy));
         let size = Size::new(length + slot.width_nm, slot.width_nm)?;
         let name = format!("__mechanical_slot_{}_{}", size.width_nm, size.height_nm);
         let graphic = FootprintGraphic::Rectangle {
@@ -558,6 +558,12 @@ pub fn generate(board: &PhysicalBoard) -> Result<Manifest> {
     if board.metadata.get("prototype_placement").map(String::as_str) == Some("true") {
         warnings.push(
             "Components use deterministic draft placement; review and constrain placement before fabrication."
+                .to_owned(),
+        );
+    }
+    if board.metadata.get("planned_placement").map(String::as_str) == Some("true") {
+        warnings.push(
+            "Components use an automated placement candidate with coarse routability estimation; review constraints before routing."
                 .to_owned(),
         );
     }

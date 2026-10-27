@@ -21,6 +21,94 @@ pub fn ratio_to_f64(value: &BigRational) -> f64 {
     big_ratio_to_f64(value.numer(), value.denom())
 }
 
+/// `a + b` and its exact rounding error, for `|a| >= |b|` (`dl_fast_sum`).
+fn fast_two_sum(a: f64, b: f64) -> (f64, f64) {
+    let x = a + b;
+    (x, (a - x) + b)
+}
+
+/// `x * y` and its exact rounding error (`dl_mul`, with a fused multiply-add).
+fn two_product(x: f64, y: f64) -> (f64, f64) {
+    let z = x * y;
+    (z, x.mul_add(y, -z))
+}
+
+/// Python's `math.hypot(x, y)`: CPython's `vector_norm`, not the C library's
+/// `hypot`, whose last bit can differ.
+pub fn hypot(x: f64, y: f64) -> f64 {
+    let coordinates = [x.abs(), y.abs()];
+    if coordinates.iter().any(|c| c.is_infinite()) {
+        return f64::INFINITY;
+    }
+    if coordinates.iter().any(|c| c.is_nan()) {
+        return f64::NAN;
+    }
+    vector_norm(coordinates, coordinates[0].max(coordinates[1]))
+}
+
+fn vector_norm(mut coordinates: [f64; 2], max: f64) -> f64 {
+    if max == 0.0 {
+        return max;
+    }
+    let max_e = frexp_exponent(max);
+    if max_e < -1023 {
+        // Subnormals: scale to normal numbers first.
+        for value in &mut coordinates {
+            *value /= f64::MIN_POSITIVE;
+        }
+        return f64::MIN_POSITIVE * vector_norm(coordinates, max / f64::MIN_POSITIVE);
+    }
+    let scale = 2f64.powi(-max_e);
+    let (mut csum, mut frac1, mut frac2) = (1.0f64, 0.0f64, 0.0f64);
+    for value in coordinates {
+        let scaled = value * scale;
+        let (hi, lo) = two_product(scaled, scaled);
+        let (sum, error) = fast_two_sum(csum, hi);
+        csum = sum;
+        frac1 += lo;
+        frac2 += error;
+    }
+    let mut h = (csum - 1.0 + (frac1 + frac2)).sqrt();
+    let (hi, lo) = two_product(-h, h);
+    let (sum, error) = fast_two_sum(csum, hi);
+    csum = sum;
+    frac1 += lo;
+    frac2 += error;
+    let x = csum - 1.0 + (frac1 + frac2);
+    h += x / (2.0 * h);
+    h / scale
+}
+
+/// The exponent `frexp` returns for a positive finite value.
+fn frexp_exponent(value: f64) -> i32 {
+    let bits = value.to_bits();
+    let biased = ((bits >> 52) & 0x7ff) as i32;
+    if biased == 0 {
+        // Subnormal: normalize the mantissa.
+        let mantissa = bits & ((1u64 << 52) - 1);
+        return -1022 - (mantissa.leading_zeros() as i32 - 12);
+    }
+    biased - 1022
+}
+
+/// Python's built-in `sum` of floats: Neumaier-compensated since 3.12.
+pub fn sum(values: impl IntoIterator<Item = f64>) -> f64 {
+    let (mut total, mut compensation) = (0.0f64, 0.0f64);
+    for value in values {
+        let next = total + value;
+        if total.abs() >= value.abs() {
+            compensation += (total - next) + value;
+        } else {
+            compensation += (value - next) + total;
+        }
+        total = next;
+    }
+    if compensation != 0.0 && compensation.is_finite() {
+        total += compensation;
+    }
+    total
+}
+
 /// Python's `int / int`: the correctly rounded quotient.
 pub fn big_ratio_to_f64(numerator: &BigInt, denominator: &BigInt) -> f64 {
     if numerator.is_zero() {

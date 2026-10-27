@@ -130,7 +130,7 @@ pub fn write_kicad_project(manifest: &Manifest, output: &Path) -> WriteResult<Ve
 }
 
 /// `Path.mkdir(parents=True, exist_ok=True)`, reporting the failing directory.
-fn create_directories(directory: &Path) -> WriteResult<()> {
+pub fn create_directories(directory: &Path) -> WriteResult<()> {
     if directory.is_dir() {
         return Ok(());
     }

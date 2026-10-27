@@ -26,6 +26,7 @@ copper-json = { path = "crates/copper-json" }
 copper-lang = { path = "crates/copper-lang" }
 copper-drc = { path = "crates/copper-drc" }
 copper-pcb = { path = "crates/copper-pcb" }
+copper-place = { path = "crates/copper-place" }
 copper-physical = { path = "crates/copper-physical" }
 copper-state = { path = "crates/copper-state" }
 copper-units = { path = "crates/copper-units" }
