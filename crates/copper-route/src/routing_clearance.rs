@@ -281,6 +281,10 @@ pub struct RoutingClearanceIndex<'b> {
     pub rules: IndexMap<String, NetRoutingRule>,
     /// Breakout regions relax width, gap and clearance next to terminal lands.
     pub breakout: BreakoutRegions,
+    /// `pair_search._PairAccessIndex`: local pair paths emit exactly the
+    /// differential profile's width pieces and only octilinear legs.
+    /// PENDING: owned by rust-m4-critical (a subclass in Python).
+    pub pair_access: bool,
     macro_regions: Vec<(Vec<CopperLayer>, RoundedConvexShape)>,
     // Bins hold stable slot ids; `remove` leaves `None` in a slot until compaction.
     slots: Vec<Option<CopperObject>>,
@@ -386,6 +390,7 @@ impl<'b> RoutingClearanceIndex<'b> {
             breakout_active: breakout.any(),
             rules,
             breakout,
+            pair_access: false,
             macro_regions,
             slots: Vec::new(),
             hole_slots: Vec::new(),
@@ -548,6 +553,10 @@ impl<'b> RoutingClearanceIndex<'b> {
         width_nm: i64,
         layer: CopperLayer,
     ) -> Result<Vec<TrackSegment>> {
+        if self.pair_access {
+            let tracks = vec![TrackSegment { net: net.to_owned(), start, end, width_nm, layer }];
+            return Ok(self.breakout.split_tracks(&tracks, Some(width_nm)));
+        }
         if !self.breakout.ordinary.contains(net) {
             let tracks = vec![TrackSegment { net: net.to_owned(), start, end, width_nm, layer }];
             // Exact local/global terminal access uses the authored critical
@@ -578,6 +587,18 @@ impl<'b> RoutingClearanceIndex<'b> {
 
     /// `can_route`: `can_track` for each piece ordinary routing emits.
     pub fn can_route(&self, net: &str, start: Point, end: Point, width_nm: i64, layer: CopperLayer) -> Result<bool> {
+        if self.pair_access {
+            let (dx, dy) = (end.x_nm - start.x_nm, end.y_nm - start.y_nm);
+            if dx != 0 && dy != 0 && dx.abs() != dy.abs() {
+                return Ok(false);
+            }
+            for piece in self.route_pieces(net, start, end, width_nm, layer)? {
+                if !self.can_track(net, piece.start, piece.end, piece.width_nm, layer)? {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
         if !self.breakout.declared.contains(net) {
             return self.can_track(net, start, end, width_nm, layer);
         }

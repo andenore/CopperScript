@@ -202,3 +202,36 @@ pub fn surface_path(
     }
     Ok(None)
 }
+
+/// `via_inside_board`: the via's annulus, with the edge clearance, lies in board material.
+pub fn via_inside_board(board: &PhysicalBoard, position: Point, size_nm: i64) -> Result<bool> {
+    let outline = &board.outline;
+    if outline.circular_boundary.is_some()
+        || outline.boundary_path.is_some()
+        || !outline.cutouts.is_empty()
+        || !board.mechanical_holes.is_empty()
+        || !board.mechanical_slots.is_empty()
+    {
+        let shape = RoundedConvexShape::new(vec![position], (size_nm + 1).div_euclid(2))?;
+        return shape_in_board(board, &shape, board.rules.minimum_clearance_nm, board.rules.minimum_hole_clearance_nm);
+    }
+    let vertices = &outline.vertices;
+    if let Some(rectangle) = rectangle_bounds(vertices) {
+        return Ok(rectangle_capsule_inside(
+            rectangle,
+            position,
+            position,
+            size_nm + 2 * board.rules.minimum_clearance_nm,
+        ));
+    }
+    if !point_in_polygon(position, vertices) {
+        return Ok(false);
+    }
+    let required_twice = i128::from(size_nm + 2 * board.rules.minimum_clearance_nm);
+    let limit = num_rational::BigRational::from_integer((required_twice * required_twice).into());
+    Ok((0..vertices.len()).all(|index| {
+        let (first, second) = (vertices[index], vertices[(index + 1) % vertices.len()]);
+        let distance = copper_physical::geometry::point_segment_distance_squared(position, first, second);
+        distance * num_rational::BigRational::from_integer(4.into()) >= limit
+    }))
+}
