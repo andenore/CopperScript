@@ -787,20 +787,33 @@ pub fn run_routing_pipeline(
             detailed,
             drc,
             deferred_nets: routed.deferred,
-            payload: (plane_stitch, duplicate_stitch),
+            payload: (plane_stitch, duplicate_stitch, None),
         };
+        // Each trial routes from its own placement, so it must not overwrite
+        // the replay inputs of the run that is kept: trials save beside them,
+        // and only the accepted trial's file replaces them.
+        let inputs_path = unified_options.save_inputs_path.clone();
+        let trial_inputs = std::cell::RefCell::new(Vec::<String>::new());
         let mut rerun = |trial_board: &PhysicalBoard,
                          trial_global: &GlobalRoutingResult,
                          progress: &mut Option<ProgressCallback<'_>>|
          -> Result<FeedbackState<TailPayload>> {
-            if unified_options.save_inputs_path.is_some() {
-                return copper_pcb::not_implemented("congestion trials beside --unified-save-inputs");
+            let mut trial_options = unified_options.clone();
+            let saved = inputs_path.as_ref().map(|path| {
+                let mut list = trial_inputs.borrow_mut();
+                let name = format!("{path}.trial-{}", list.len() + 1);
+                list.push(name);
+                list.last().expect("trial inputs").clone()
+            });
+            if saved.is_some() {
+                trial_options.save_inputs_path = saved.clone();
             }
+            let trial_tail = TailInputs { unified_options: &trial_options, ..tail };
             let mut trial = placement.clone();
             trial.board = trial_board.clone();
             trial.global_route = trial_global.clone();
             let (trial_plans, _) = plan_array_frames(trial_board, escape_plan_options, progress)?;
-            let routed = route_tail(&trial, trial_plans.as_ref(), &tail, progress)?;
+            let routed = route_tail(&trial, trial_plans.as_ref(), &trial_tail, progress)?;
             Ok(FeedbackState {
                 board: trial_board.clone(),
                 global_route: trial_global.clone(),
@@ -808,11 +821,11 @@ pub fn run_routing_pipeline(
                 detailed: routed.detailed,
                 drc: routed.drc,
                 deferred_nets: routed.deferred,
-                payload: (routed.plane_stitch, routed.duplicate),
+                payload: (routed.plane_stitch, routed.duplicate, saved),
             })
         };
         let score = |state: &FeedbackState<TailPayload>| feedback_score(&state.critical, &state.detailed, &state.drc);
-        let (best, outcome) = crate::congestion_feedback::run_placement_feedback(
+        let looped = crate::congestion_feedback::run_placement_feedback(
             state,
             feedback_budget,
             options.detailed_feedback_movement_nm,
@@ -821,14 +834,36 @@ pub fn run_routing_pipeline(
             &mut rerun,
             &score,
             &mut on_progress,
-        )?;
+        );
+        let accepted = looped.and_then(|(best, outcome)| {
+            if outcome.accepted_moves != 0
+                && let (Some(path), Some(accepted)) = (&inputs_path, &best.payload.2)
+            {
+                std::fs::rename(accepted, path).map_err(|failure| {
+                    Error::NotImplemented(format!("an OSError moving the accepted trial's inputs ({failure})"))
+                })?;
+                // The accepted trial's ball-grid fanout sidecar goes with it.
+                let (source, target) = (format!("{accepted}.bga.json"), format!("{path}.bga.json"));
+                if std::fs::rename(&source, &target).is_err() {
+                    let _ = std::fs::remove_file(&target);
+                }
+            }
+            Ok((best, outcome))
+        });
+        for leftover in trial_inputs.borrow().iter() {
+            // Rejected trials' inputs are not this run's; never leave them behind.
+            for stale in [leftover.clone(), format!("{leftover}.bga.json")] {
+                let _ = std::fs::remove_file(stale);
+            }
+        }
+        let (best, outcome) = accepted?;
         if outcome.accepted_moves != 0 {
             placement.board = best.board;
             placement.global_route = best.global_route;
             placement.placement_candidate = format!("{}-congestion", placement.placement_candidate);
         }
         (critical, detailed, drc) = (best.critical, best.detailed, best.drc);
-        (plane_stitch, duplicate_stitch) = best.payload;
+        (plane_stitch, duplicate_stitch, _) = best.payload;
         Some(outcome)
     } else {
         None
@@ -868,8 +903,8 @@ struct TailInputs<'a> {
     drc_policy: Policy,
 }
 
-/// The plane stitch and duplicate-pad stitch of one tail pass.
-type TailPayload = (Option<PlaneStitchResult>, DuplicatePadStitchResult);
+/// The plane stitch, duplicate-pad stitch and saved-inputs path of one tail pass.
+type TailPayload = (Option<PlaneStitchResult>, DuplicatePadStitchResult, Option<String>);
 
 struct TailResult {
     critical: CriticalRoutingResult,

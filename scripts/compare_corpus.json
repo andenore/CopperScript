@@ -18224,6 +18224,29 @@
       "--report",
       "{out}/route.json"
      ]
+    },
+    {
+     "id": "route-board-feedback/hierarchical_board/states-300-save-inputs",
+     "args": [
+      "route-board",
+      "examples/hierarchical_board/board.copper",
+      "--allow-proxy-footprints",
+      "--candidates",
+      "1",
+      "--no-fanout",
+      "--unified-iterations",
+      "1",
+      "--locked",
+      "--offline",
+      "--unified-search-states",
+      "300",
+      "--unified-save-inputs",
+      "{out}/unified.state.json",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
     }
    ]
   },
