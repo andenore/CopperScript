@@ -443,3 +443,125 @@ pub fn surface_path_to_via(
     }
     Ok(None)
 }
+
+/// `surface_path_between`: bounded local octilinear A* with exact, possibly
+/// off-grid terminals (no vias, no movable-obstacle exemptions). The bounds
+/// are computational, not electrical limits. Without a progress observer.
+#[allow(clippy::too_many_arguments)]
+pub fn surface_path_between(
+    board: &PhysicalBoard,
+    clearance: &crate::routing_clearance::RoutingClearanceIndex<'_>,
+    net: &str,
+    start: Point,
+    end: Point,
+    width_nm: i64,
+    layer: copper_physical::CopperLayer,
+    step_nm: i64,
+    maximum_detour_nm: i64,
+    state_budget: i64,
+) -> Result<Option<Vec<copper_pcb::board::TrackSegment>>> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    if step_nm <= 0 || maximum_detour_nm < 0 || state_budget <= 0 {
+        return Err(crate::Error::Value("surface terminal-search bounds are invalid".to_owned()));
+    }
+    const DIRECTIONS: [(i64, i64); 8] = [(1, 0), (1, -1), (0, -1), (-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1)];
+    let (left, right) = (start.x_nm.min(end.x_nm), start.x_nm.max(end.x_nm));
+    let (top, bottom) = (start.y_nm.min(end.y_nm), start.y_nm.max(end.y_nm));
+    let heuristic = |point: Point| {
+        let (dx, dy) = ((point.x_nm - end.x_nm).abs(), (point.y_nm - end.y_nm).abs());
+        10 * dx.max(dy) + 4 * dx.min(dy)
+    };
+    let at = |x: i64, y: i64| Point::new(start.x_nm + x * step_nm, start.y_nm + y * step_nm);
+    type State = (i64, i64, i64);
+    let initial: State = (0, 0, -1);
+    let mut queue = BinaryHeap::new();
+    queue.push(Reverse((heuristic(start), 0i64, 0i64, 0i64, -1i64)));
+    let mut best: indexmap::IndexMap<State, i64> = indexmap::IndexMap::new();
+    let mut parent: indexmap::IndexMap<State, Option<State>> = indexmap::IndexMap::new();
+    best.insert(initial, 0);
+    parent.insert(initial, None);
+    let mut expanded = 0;
+    while expanded < state_budget {
+        let Some(Reverse((_, cost, x, y, heading))) = queue.pop() else { break };
+        let state = (x, y, heading);
+        if best.get(&state) != Some(&cost) {
+            continue;
+        }
+        expanded += 1;
+        let point = at(x, y);
+        if (point.x_nm - end.x_nm).abs().max((point.y_nm - end.y_nm).abs()) <= 2 * step_nm {
+            let tail = crate::pin_escape::checked_access_paths(
+                board, clearance, net, point, end, width_nm, layer, false, true, None, true,
+            )?
+            .into_iter()
+            .next();
+            if let Some(tail) = tail {
+                let mut nodes = Vec::new();
+                let mut cursor = Some(state);
+                while let Some(current) = cursor {
+                    nodes.push(at(current.0, current.1));
+                    cursor = parent[&current];
+                }
+                nodes.reverse();
+                let mut turns = vec![nodes[0]];
+                for i in 1..nodes.len().saturating_sub(1) {
+                    let (a, b, c) = (nodes[i - 1], nodes[i], nodes[i + 1]);
+                    if i128::from(b.x_nm - a.x_nm) * i128::from(c.y_nm - b.y_nm)
+                        != i128::from(b.y_nm - a.y_nm) * i128::from(c.x_nm - b.x_nm)
+                    {
+                        turns.push(b);
+                    }
+                }
+                if nodes.last() != turns.last() {
+                    turns.push(*nodes.last().expect("nodes"));
+                }
+                let mut pieces = Vec::new();
+                for pair in turns.windows(2) {
+                    pieces.extend(clearance.route_pieces(net, pair[0], pair[1], width_nm, layer)?);
+                }
+                let mut legal = true;
+                for t in &pieces {
+                    if !track_inside_board(board, t.start, t.end, t.width_nm)?
+                        || !clearance.can_track(net, t.start, t.end, t.width_nm, layer)?
+                    {
+                        legal = false;
+                        break;
+                    }
+                }
+                if legal {
+                    pieces.extend(tail);
+                    return Ok(Some(pieces));
+                }
+            }
+        }
+        for (next_heading, (dx, dy)) in DIRECTIONS.iter().enumerate() {
+            let next_heading = next_heading as i64;
+            let (nx, ny) = (x + dx, y + dy);
+            let neighbor = at(nx, ny);
+            if !(left - maximum_detour_nm <= neighbor.x_nm
+                && neighbor.x_nm <= right + maximum_detour_nm
+                && top - maximum_detour_nm <= neighbor.y_nm
+                && neighbor.y_nm <= bottom + maximum_detour_nm)
+            {
+                continue;
+            }
+            if !track_inside_board(board, point, neighbor, width_nm)?
+                || !clearance.can_route(net, point, neighbor, width_nm, layer)?
+            {
+                continue;
+            }
+            let difference = if heading >= 0 { (next_heading - heading).abs() } else { 0 };
+            let turn = difference.min(8 - difference);
+            let candidate = cost + ((if *dx != 0 && *dy != 0 { 14 } else { 10 }) + 7 * turn) * step_nm;
+            let next_state = (nx, ny, next_heading);
+            if candidate >= *best.get(&next_state).unwrap_or(&(1 << 62)) {
+                continue;
+            }
+            best.insert(next_state, candidate);
+            parent.insert(next_state, Some(state));
+            queue.push(Reverse((candidate + heuristic(neighbor), candidate, nx, ny, next_heading)));
+        }
+    }
+    Ok(None)
+}

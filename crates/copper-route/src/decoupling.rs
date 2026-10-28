@@ -312,9 +312,28 @@ pub fn route_decouplers(
         }
         let mut candidates = surface_candidates(board, &index, link, target, cap, width, layer)?;
         candidates.sort_by(|a, b| path_length(a).total_cmp(&path_length(b)).then(a.len().cmp(&b.len())));
-        let Some(path) = candidates.into_iter().find(|p| !escape_paths_cross(p, &tracks)) else {
-            // `surface_path_between` (a bounded detour search) is not rewritten.
-            return copper_pcb::not_implemented("decoupler surface detour (surface_path_between)");
+        let path = match candidates.into_iter().find(|p| !escape_paths_cross(p, &tracks)) {
+            Some(path) => Some(path),
+            None => {
+                let start = transformed_pad_position(board, target, &link.target.pad)?;
+                crate::surface_path::surface_path_between(
+                    board,
+                    &index,
+                    &link.net,
+                    start,
+                    end,
+                    width,
+                    layer,
+                    crate::nm_from_mm(1) / 10,
+                    crate::nm_from_mm(1),
+                    4000,
+                )?
+                .filter(|path| !escape_paths_cross(path, &tracks))
+            }
+        };
+        let Some(path) = path else {
+            pending.push((link.clone(), "bounded surface candidates blocked".to_owned()));
+            continue;
         };
         let created: Vec<TrackSegment> =
             path.into_iter().filter(|t| !board.tracks.contains(t) && !tracks.contains(t)).collect();

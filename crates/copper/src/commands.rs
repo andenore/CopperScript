@@ -70,8 +70,8 @@ const USAGE: &str = "usage: copper COMMAND [ARGS]";
 
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     // Placement's decoupling-access pass runs the decoupler router (copper-route).
-    copper_place::planner::register_decoupling_pass(|board, placements, options| {
-        copper_route::decoupling::improve_decoupling_placement(board, placements, options, None)
+    copper_place::planner::register_decoupling_pass(|board, placements, options, progress| {
+        copper_route::decoupling::improve_decoupling_placement(board, placements, options, progress)
     });
     let Some(command) = args.first() else {
         let _ = writeln!(err, "{USAGE}\ncopper: error: the following arguments are required: command");

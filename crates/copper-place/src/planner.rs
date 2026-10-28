@@ -17,7 +17,7 @@ use crate::legalize::{Legalized, legalize, local_failure_details};
 use crate::metrics::{PlacementMetrics, dominates, placement_metrics};
 use crate::options::PlannerOptions;
 use crate::refine::{detailed_refine, repair_relative_constraints, spread_escape_components};
-use crate::scene::{Poses, Scene};
+use crate::scene::{PlacementProgress, Poses, Scene};
 use crate::seed::{analytical_place, initial_seed};
 
 /// `PlacementSeedFailure`: a discarded bounded attempt, never a partial placement certificate.
@@ -63,7 +63,8 @@ fn repr(text: &str) -> String {
 /// `(bypass_board, refined, phase options) -> (poses, moves)`. It runs the
 /// decoupler router, which lives in `copper-route` (a dependent of this crate),
 /// so the binary registers it.
-pub type DecouplingPass = fn(&PhysicalBoard, &Poses, &PlannerOptions) -> Result<(Poses, i64)>;
+pub type DecouplingPass =
+    fn(&PhysicalBoard, &Poses, &PlannerOptions, Option<&mut dyn FnMut(&str)>) -> Result<(Poses, i64)>;
 
 static DECOUPLING_PASS: OnceLock<DecouplingPass> = OnceLock::new();
 
@@ -99,17 +100,28 @@ fn improve_decoupling_placement(scene: &Scene, refined: &Poses, options: &Planne
     };
     let mut bypass_board = board.clone();
     bypass_board.placements = board.placements.iter().map(|p| refined[&p.reference].clone()).collect();
-    pass(&bypass_board, refined, options)
+    let mut observe = |stage: &str| scene.progress(stage);
+    pass(&bypass_board, refined, options, if scene.observed() { Some(&mut observe) } else { None })
 }
 
 /// `generate_placement_candidates`: a deterministic Pareto frontier of legal candidates.
 pub fn generate_placement_candidates(board: &PhysicalBoard, options: &PlannerOptions) -> Result<Vec<Candidate>> {
+    generate_placement_candidates_with_progress(board, options, None)
+}
+
+/// `generate_placement_candidates(progress=)`: `progress(stage, seed, seed_count)`
+/// observes each seed's phases.
+pub fn generate_placement_candidates_with_progress<'a>(
+    board: &'a PhysicalBoard,
+    options: &PlannerOptions,
+    progress: Option<PlacementProgress<'a>>,
+) -> Result<Vec<Candidate>> {
     if !board.tracks.is_empty() || !board.vias.is_empty() {
         return error(
             "placement planning requires an unrouted board; existing copper cannot be moved safely".to_owned(),
         );
     }
-    let scene = Scene::new(board, options.policy());
+    let scene = Scene::new(board, options.policy()).with_progress(progress);
     let placements = placement_map(board);
     let mut unknown: Vec<&String> = options.fixed_references.iter().filter(|r| !placements.contains_key(*r)).collect();
     unknown.sort();
@@ -186,8 +198,10 @@ pub fn generate_placement_candidates(board: &PhysicalBoard, options: &PlannerOpt
     let mut closest_rejected: Option<(i64, Poses)> = None;
     let mut failures: Vec<SeedFailure> = Vec::new();
     for seed in 0..seeds {
+        scene.progress_at("analytical", seed, seeds);
         let continuous = initial_seed(&scene, &placements, options, seed)?;
         let continuous = analytical_place(&scene, &continuous, options, &spacing)?;
+        scene.progress("legalization");
         let (continuous, seeded_original, phase) =
             place_rigid_clusters(&scene, &continuous, &placements, options, &spacing)?;
         let (legalized, exact_repairs) = match legalize(&scene, &continuous, &seeded_original, &phase, &spacing, seed)?
@@ -200,10 +214,12 @@ pub fn generate_placement_candidates(board: &PhysicalBoard, options: &PlannerOpt
                     accepted_count: failure.accepted.len() as i64,
                     reason: failure.message,
                 });
+                scene.progress("legalization_failed");
                 continue;
             }
         };
         let (legalized, relative_before) = repair_relative_constraints(&scene, &legalized, &phase, &spacing)?;
+        scene.progress("refinement");
         let refined = detailed_refine(&scene, &legalized, &phase, &spacing)?;
         let (mut moves, swaps, feedback_passes) = (refined.moves, refined.swaps, refined.feedback_passes);
         let (refined, relative_after) = repair_relative_constraints(&scene, &refined.placements, &phase, &spacing)?;
@@ -213,15 +229,20 @@ pub fn generate_placement_candidates(board: &PhysicalBoard, options: &PlannerOpt
             if closest_rejected.as_ref().is_none_or(|(best, _)| penalty < *best) {
                 closest_rejected = Some((penalty, refined));
             }
+            scene.progress("constraints_rejected");
             continue;
         }
+        scene.progress("cluster_refinement");
         let (refined, cluster_moves) = refine_rigid_clusters(&scene, &refined, options, &spacing)?;
         moves += cluster_moves;
+        scene.progress("escape_spacing");
         let (refined, spacing_moves) = spread_escape_components(&scene, &refined, options, &spacing)?;
         moves += spacing_moves;
+        scene.progress("decoupling_access");
         let (refined, bypass_moves) = improve_decoupling_placement(&scene, &refined, &phase)?;
         moves += bypass_moves;
         if options.support_pattern_trials != 0 {
+            scene.progress("support_patterns");
             return copper_pcb::not_implemented("support-pattern placement trials");
         }
         if options.package_support_trials != 0 {
@@ -287,6 +308,7 @@ pub fn generate_placement_candidates(board: &PhysicalBoard, options: &PlannerOpt
         .map(|(_, candidate)| candidate.clone())
         .collect();
     frontier.sort_by_key(|c| (c.metrics.quality_vector(), c.seed));
+    scene.progress_at("finished", seeds, seeds);
     frontier.truncate(options.candidate_count as usize);
     Ok(frontier)
 }

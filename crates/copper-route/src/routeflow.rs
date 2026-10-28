@@ -8,7 +8,7 @@ use copper_pcb::transform::transformed_local_point;
 use copper_pcb::{Error, Result};
 use copper_physical::Point;
 use copper_place::PlannerOptions;
-use copper_place::planner::{Candidate, generate_placement_candidates};
+use copper_place::planner::{Candidate, generate_placement_candidates, generate_placement_candidates_with_progress};
 use copper_units::Decimal;
 
 use crate::progress::{ProgressCallback, emit, int, text};
@@ -124,7 +124,12 @@ pub fn optimize_placement_for_routing(
     feedback_options: &PlacementRoutingFeedbackOptions,
     mut on_progress: Option<ProgressCallback<'_>>,
 ) -> Result<PlacementRoutingResult> {
-    let candidates = generate_placement_candidates(board, placement_options)?;
+    let candidates = if on_progress.is_some() {
+        let observe = std::cell::RefCell::new(crate::progress::placement_progress(&mut on_progress));
+        generate_placement_candidates_with_progress(board, placement_options, Some(&observe))?
+    } else {
+        generate_placement_candidates(board, placement_options)?
+    };
     let mut evaluated = Vec::with_capacity(candidates.len());
     for candidate in candidates {
         evaluated.push(evaluate_candidate(board, candidate, router_options, observer(&mut on_progress))?);

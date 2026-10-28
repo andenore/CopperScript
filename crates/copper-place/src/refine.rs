@@ -137,7 +137,7 @@ pub fn detailed_refine(
     let fixed: IndexSet<String> = scene.fixed_placements(source, &options.fixed_references).into_keys().collect();
     let adjacency = adjacency(scene);
     let (mut move_count, mut swap_count, mut feedback_passes) = (0, 0, 0);
-    for _ in 0..options.refinement_passes {
+    for pass_index in 0..options.refinement_passes {
         let snapshot = placements.clone();
         let before = placement_metrics(scene, &snapshot, options, spacing)?;
         let mut changed = false;
@@ -147,6 +147,7 @@ pub fn detailed_refine(
             if fixed.contains(reference) {
                 continue;
             }
+            scene.progress(&format!("refine:{}:{reference}", pass_index + 1));
             let current = placements[reference].clone();
             let others = without(&placements, reference);
             let obstacles = local_obstacles(scene, reference, &others);
@@ -210,6 +211,7 @@ pub fn detailed_refine(
                 }
             }
         }
+        scene.progress(&format!("refine_swaps:{}", pass_index + 1));
         let budget = 8.max(placements.len());
         for (left, right) in pairs.into_iter().take(budget) {
             let (a, b) = (placements[&left].clone(), placements[&right].clone());
@@ -373,6 +375,7 @@ pub fn spread_escape_components(
             if cluster.iter().any(|r| fixed.contains(r)) {
                 continue;
             }
+            scene.progress(&format!("escape_unit:{reference}"));
             let relevant: Vec<crate::escape::EscapeChannel> = spacing
                 .channels(&placements, false)
                 .into_iter()
