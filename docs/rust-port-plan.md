@@ -541,15 +541,16 @@ do not shrink as much.
   proposal conflicts, exact commit, rip-in repair rounds over the shared
   index, plane nets with the pour re-check, `route_smoothing`,
   `plane_estimate` (raster pour estimate), `route_summary`, budgets and the
-  congestion export, and `power_islands` (`--power-islands`); plus a typed codec for `--unified-save-inputs` states
+  congestion export, and `power_islands` (`--power-islands`); plus a typed
+  codec for `--unified-save-inputs` states
   and `--save-result` results with Python's `StateError`, `ValueError` and
   uncaught-exception texts.
 - `copper replay-unified` is rewritten: every option, error path, summary,
   `--report`, `--save-result`, `-o` and `--progress`.
-- Inputs: `tests/rust-port/unified/` (seven `route-board
+- Inputs: `tests/rust-port/unified/` (eight `route-board
   --unified-save-inputs` states, malformed and valid variants;
   `generate.py`, README). Corpus: `replay-unified` (states and mutations),
-  `-options`, `-errors`, `-malformed`, `-output`: 107 byte-identical, 1
+  `-options`, `-errors`, `-malformed`, `-output`: 110 byte-identical, 1
   pending. Replays compare the result state, the report's `unrouted`, the
   KiCad output, exit status and stderr, never the `seconds` or `PROGRESS`
   timing. No case sets a time budget (the default is none); a

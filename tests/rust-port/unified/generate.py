@@ -38,6 +38,7 @@ BOARDS = {
     "six_layer": ["tests/rust-port/export-kicad-pcb/six_layer.copper", *PROXY, "--layers", "6",
                   "--fab-profile", "jlcpcb-six-layer"],
     "zones": ["tests/rust-port/export-kicad-pcb/zones.copper", *PROXY, "--layers", "4"],
+    "dphy": ["tests/rust-port/si-check/dphy.copper", *PROXY, "--layers", "6", "--fab-profile", "jlcpcb-six-layer"],
     # The benchmark ladder's arguments (bench/ladder.json); round_led_ring resolves footprints online.
     "round_led_ring": ["examples/round_led_ring/board.copper", "--locked", "--layers", "2",
                        "--fab-profile", "generic", "--candidates", "1", "--feedback-iterations", "1",
