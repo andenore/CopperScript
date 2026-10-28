@@ -935,6 +935,8 @@ fn route(
             board_path,
             diagnostics,
             physical_board: &editor_source_board,
+            plane_options: &plane_options,
+            early_options: early_options.as_ref(),
             stitch_enabled,
             direct_unified,
         };
@@ -975,6 +977,8 @@ struct TailContext<'a> {
     board_path: &'a str,
     diagnostics: &'a [copper_lang::erc::Diagnostic],
     physical_board: &'a PhysicalBoard,
+    plane_options: &'a PlaneStitchOptions,
+    early_options: Option<&'a PlaneStitchOptions>,
     stitch_enabled: bool,
     direct_unified: bool,
 }
@@ -1064,14 +1068,31 @@ fn finish(
     if !stopped {
         emit(progress, "final_contacts_native_drc", "started", Vec::new());
     }
-    if !stopped && context.stitch_enabled && !context.direct_unified {
-        return copper_pcb::not_implemented("plane.stitch_zone_pads");
+    let mut stitch = if !stopped && context.stitch_enabled && !context.direct_unified {
+        Some(copper_route::plane::stitch_zone_pads(result.board(), Some(context.plane_options))?)
+    } else {
+        result.plane_stitch.clone()
+    };
+    let mut plane_repair: Option<Value> = None;
+    if let Some(current) = stitch.take() {
+        if context.stitch_enabled && !context.direct_unified && !current.board.zones.is_empty() && !stopped {
+            // Routing after stitching can wall a pour-contact pad off; re-stitch those explicitly.
+            let before = current.added_track_count + current.added_via_count;
+            let (repaired, still_cut_off) =
+                copper_route::plane::repair_cut_off_plane_pads(current, context.plane_options, 2)?;
+            plane_repair = Some(object_of(vec![
+                ("added_copper", Value::from(repaired.added_track_count + repaired.added_via_count - before)),
+                ("still_cut_off", pads_value(&still_cut_off)),
+            ]));
+            stitch = Some(repaired);
+        } else {
+            stitch = Some(current);
+        }
     }
-    let stitch = result.plane_stitch.clone();
-    if stitch.is_some() {
-        return copper_pcb::not_implemented("the plane-stitch report");
-    }
-    let output_board = result.board().clone();
+    let output_board = match &stitch {
+        Some(stitch) if context.stitch_enabled && !stopped => stitch.board.clone(),
+        _ => result.board().clone(),
+    };
     let duplicate_stitch = if stopped {
         copper_route::pad_stitch::DuplicatePadStitchResult {
             board: output_board.clone(),
@@ -1100,7 +1121,11 @@ fn finish(
     } else {
         copper_route::route_cleanup::trim_dangling_overhangs(&output_board, &fixed)?
     };
-    let output_drc = if !stopped && (duplicate_stitch.added_track_count != 0 || trimmed_overhangs) {
+    let output_drc = if !stopped
+        && ((context.stitch_enabled && stitch.is_some())
+            || duplicate_stitch.added_track_count != 0
+            || trimmed_overhangs)
+    {
         copper_route::drc_report::run_physical_drc(&output_board, copper_drc::Policy::default())?
     } else {
         result.drc.clone()
@@ -1111,7 +1136,11 @@ fn finish(
     }
     let (duplicate_pending, duplicate_verified) =
         copper_route::route_closure::reconcile_zone_lands(&output_board, &duplicate_stitch.pending, None)?;
-    let plane_pending: Vec<PadReference> = Vec::new();
+    let (plane_pending, plane_verified) = copper_route::route_closure::reconcile_zone_lands(
+        &output_board,
+        stitch.as_ref().map_or(&[][..], |stitch| &stitch.pending_pads),
+        None,
+    )?;
     // `routing_complete_with_fill` without native evidence.
     let complete_with_fill =
         result.status == PhysicalFlowStatus::Pass && output_drc.decision() == copper_drc::Decision::Pass;
@@ -1316,6 +1345,54 @@ fn finish(
             Value::from(result.duplicate_pad_stitch.as_ref().map_or(0, |item| item.added_track_count)),
         ),
     ]);
+    if let Some(stitch) = &stitch {
+        let options = context.plane_options;
+        let optional = |value: Option<i64>| value.map_or(Value::Null, Value::from);
+        let preferred: Vec<PadReference> = options.preferred_ground_pads.iter().flatten().cloned().collect();
+        let mut entries = vec![
+            ("stitched_pads", pads_value(&stitch.stitched_pads)),
+            ("pending_pads", pads_value(&plane_pending)),
+            ("surface_pending_pads", pads_value(&stitch.pending_pads)),
+            ("explicit_feeder_pads", pads_value(&stitch.explicit_feeder_pads)),
+            ("zone_verified_pads", pads_value(&plane_verified)),
+            ("added_track_count", Value::from(stitch.added_track_count)),
+            ("added_via_count", Value::from(stitch.added_via_count)),
+            ("step_nm", Value::from(options.step_nm)),
+            ("maze_step_nm", Value::from(options.maze_step_nm)),
+            ("maze_state_budget", Value::from(options.maze_state_budget)),
+            ("maximum_radius_nm", Value::from(options.maximum_radius_nm)),
+            ("maximum_contact_radius_nm", Value::from(options.maximum_contact_radius_nm)),
+            ("maximum_detour_nm", Value::from(options.maximum_detour_nm)),
+            ("escape_width_nm", optional(options.escape_width_nm)),
+            ("ground_via_in_pad", Value::Bool(options.ground_via_in_pad)),
+            ("include_surface_zones", Value::Bool(options.include_surface_zones)),
+            ("preferred_ground_pads", pads_value(&preferred)),
+            (
+                "filled_capped_via_count",
+                Value::from(stitch.board.vias.iter().filter(|via| via.finish == "filled-capped").count() as i64),
+            ),
+            ("zone_fill_verified", Value::Bool(false)),
+        ];
+        if let Some(repair) = &plane_repair {
+            entries.push(("cut_off_repair", repair.clone()));
+        }
+        report.insert("plane_stitch".to_owned(), object_of(entries));
+    }
+    if let Some(early) = &result.plane_stitch {
+        let selected = match context.early_options.and_then(|options| options.only_pads.as_ref()) {
+            Some(pads) if !pads.is_empty() => pads_value(&pads.iter().cloned().collect::<Vec<_>>()),
+            _ => Value::from("all"),
+        };
+        report.insert(
+            "early_plane_stitch".to_owned(),
+            object_of(vec![
+                ("selected_pads", selected),
+                ("stitched_pads", pads_value(&early.stitched_pads)),
+                ("pending_pads", pads_value(&early.pending_pads)),
+                ("added_via_count", Value::from(early.added_via_count)),
+            ]),
+        );
+    }
     report.insert("duplicate_pad_stitch".to_owned(), object_of(duplicate));
     let evidence = copper_place::requirements::RouteEvidence {
         drc_board_digest: Some(output_drc.token.board_digest.clone()),

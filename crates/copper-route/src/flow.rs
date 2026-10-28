@@ -437,10 +437,11 @@ fn complete_critical_stage(
         }
         critical.board = bga.board;
     }
-    if plane_stitch_options.is_some() {
-        return copper_pcb::not_implemented("plane.stitch_zone_pads");
-    }
-    Ok((critical, None))
+    let plane_stitch = match plane_stitch_options {
+        Some(options) => Some(crate::plane::stitch_zone_pads(&critical.board, Some(options))?),
+        None => None,
+    };
+    Ok((critical, plane_stitch))
 }
 
 /// `_route_ordinary_stage`: ordinary routing then land closure and DRC.

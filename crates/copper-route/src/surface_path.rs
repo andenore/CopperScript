@@ -242,3 +242,204 @@ pub fn surface_path_detour(
     }
     Ok(None)
 }
+
+/// `via_inside_board`: the via's copper, with the edge clearance, lies in board material.
+pub fn via_inside_board(board: &PhysicalBoard, position: Point, size_nm: i64) -> Result<bool> {
+    let outline = &board.outline;
+    if outline.circular_boundary.is_some()
+        || outline.boundary_path.is_some()
+        || !outline.cutouts.is_empty()
+        || !board.mechanical_holes.is_empty()
+        || !board.mechanical_slots.is_empty()
+    {
+        let shape = RoundedConvexShape::new(vec![position], (size_nm + 1).div_euclid(2))?;
+        return shape_in_board(board, &shape, board.rules.minimum_clearance_nm, board.rules.minimum_hole_clearance_nm);
+    }
+    let vertices = &outline.vertices;
+    if let Some(rectangle) = rectangle_bounds(vertices) {
+        return Ok(rectangle_capsule_inside(
+            rectangle,
+            position,
+            position,
+            size_nm + 2 * board.rules.minimum_clearance_nm,
+        ));
+    }
+    if !point_in_polygon(position, vertices) {
+        return Ok(false);
+    }
+    let required_twice = i128::from(size_nm + 2 * board.rules.minimum_clearance_nm);
+    let limit = num_rational::BigRational::from_integer((required_twice * required_twice).into());
+    Ok((0..vertices.len()).all(|index| {
+        let (first, second) = (vertices[index], vertices[(index + 1) % vertices.len()]);
+        let distance = copper_physical::geometry::point_segment_distance_squared(position, first, second);
+        distance * num_rational::BigRational::from_integer(4.into()) >= limit
+    }))
+}
+
+/// The bounds of `surface_path_to_via`.
+pub struct ViaSearch<'a> {
+    pub step_nm: i64,
+    pub radius_nm: i64,
+    pub via_size_nm: i64,
+    pub via_drill_nm: i64,
+    pub via_layers: (copper_physical::CopperLayer, copper_physical::CopperLayer),
+    pub accept_via: &'a dyn Fn(Point) -> bool,
+    pub via_targets: &'a [Point],
+    pub state_budget: i64,
+}
+
+/// `surface_path_to_via`: bounded octilinear package escape to any
+/// exact-clearance legal via site.
+#[allow(clippy::too_many_arguments)]
+pub fn surface_path_to_via(
+    board: &PhysicalBoard,
+    clearance: &crate::routing_clearance::RoutingClearanceIndex<'_>,
+    net: &str,
+    start: Point,
+    width_nm: i64,
+    layer: copper_physical::CopperLayer,
+    search: &ViaSearch<'_>,
+) -> Result<Option<(Vec<copper_pcb::board::TrackSegment>, Point)>> {
+    use indexmap::IndexMap;
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    let step = search.step_nm;
+    if step <= 0 || search.radius_nm <= 0 || search.state_budget <= 0 {
+        return Err(copper_pcb::Error::Value("surface via-search bounds must be positive".to_owned()));
+    }
+    const DIRECTIONS: [(i64, i64); 8] = [(1, 0), (1, -1), (0, -1), (-1, -1), (-1, 0), (-1, 1), (0, 1), (1, 1)];
+    let targets: indexmap::IndexSet<Point> = search
+        .via_targets
+        .iter()
+        .copied()
+        .filter(|p| (p.x_nm - start.x_nm).rem_euclid(step) == 0 && (p.y_nm - start.y_nm).rem_euclid(step) == 0)
+        .collect();
+    let mut ordered: Vec<Point> = targets.iter().copied().collect();
+    ordered.sort_by_key(|p| (p.x_nm, p.y_nm));
+    let goals: Vec<(i64, i64)> = ordered
+        .iter()
+        .map(|p| ((p.x_nm - start.x_nm).div_euclid(step), (p.y_nm - start.y_nm).div_euclid(step)))
+        .collect();
+    let heuristic = |x: i64, y: i64| -> i64 {
+        goals
+            .iter()
+            .map(|(gx, gy)| {
+                let (a, b) = ((gx - x).abs(), (gy - y).abs());
+                10 * a.max(b) + 4 * a.min(b)
+            })
+            .min()
+            .unwrap_or(0)
+    };
+    let mut queue = BinaryHeap::from([Reverse((heuristic(0, 0), 0i64, 0i64, 0i64, 0i64, -1i64))]);
+    let mut best: IndexMap<(i64, i64, i64), i64> = IndexMap::from_iter([((0, 0, -1), 0)]);
+    let mut parent: IndexMap<(i64, i64, i64), Option<(i64, i64, i64)>> = IndexMap::from_iter([((0, 0, -1), None)]);
+    let radius_squared = i128::from(search.radius_nm) * i128::from(search.radius_nm);
+    let mut via_legal: IndexMap<(i64, i64), bool> = IndexMap::new();
+    let mut edge_legal: IndexMap<(i64, i64, i64, i64), bool> = IndexMap::new();
+    let at = |x: i64, y: i64| Point::new(start.x_nm + x * step, start.y_nm + y * step);
+    let mut expanded = 0;
+    while expanded < search.state_budget {
+        let Some(Reverse((_, cost, _, x, y, heading))) = queue.pop() else { break };
+        let state = (x, y, heading);
+        if best.get(&state) != Some(&cost) {
+            continue;
+        }
+        expanded += 1;
+        let point = at(x, y);
+        if (x != 0 || y != 0) && (targets.is_empty() || targets.contains(&point)) {
+            let legal = match via_legal.get(&(x, y)) {
+                Some(legal) => *legal,
+                None => {
+                    let legal = (search.accept_via)(point)
+                        && via_inside_board(board, point, search.via_size_nm)?
+                        && clearance.can_via(
+                            net,
+                            point,
+                            search.via_size_nm,
+                            search.via_layers.0,
+                            search.via_layers.1,
+                            Some(search.via_drill_nm),
+                            false,
+                            None,
+                        )?;
+                    via_legal.insert((x, y), legal);
+                    legal
+                }
+            };
+            if legal {
+                let mut nodes: Vec<Point> = Vec::new();
+                let mut cursor = Some(state);
+                while let Some(current) = cursor {
+                    nodes.push(at(current.0, current.1));
+                    cursor = parent[&current];
+                }
+                nodes.reverse();
+                let mut turns = vec![nodes[0]];
+                for index in 1..nodes.len().saturating_sub(1) {
+                    let (before, current, after) = (nodes[index - 1], nodes[index], nodes[index + 1]);
+                    if (current.x_nm - before.x_nm) * (after.y_nm - current.y_nm)
+                        != (current.y_nm - before.y_nm) * (after.x_nm - current.x_nm)
+                    {
+                        turns.push(current);
+                    }
+                }
+                turns.push(nodes[nodes.len() - 1]);
+                let mut pieces = Vec::new();
+                for pair in turns.windows(2) {
+                    pieces.extend(clearance.route_pieces(net, pair[0], pair[1], width_nm, layer)?);
+                }
+                let mut legal = true;
+                for t in &pieces {
+                    if !track_inside_board(board, t.start, t.end, t.width_nm)?
+                        || !clearance.can_track(net, t.start, t.end, t.width_nm, layer)?
+                    {
+                        legal = false;
+                        break;
+                    }
+                }
+                if legal {
+                    return Ok(Some((pieces, point)));
+                }
+            }
+        }
+        for (next_heading, (dx, dy)) in DIRECTIONS.iter().enumerate() {
+            let next_heading = next_heading as i64;
+            let (nx, ny) = (x + dx, y + dy);
+            if i128::from(nx * step) * i128::from(nx * step) + i128::from(ny * step) * i128::from(ny * step)
+                > radius_squared
+            {
+                continue;
+            }
+            let edge = (x, y, *dx, *dy);
+            let legal = match edge_legal.get(&edge) {
+                Some(legal) => *legal,
+                None => {
+                    let neighbor = at(nx, ny);
+                    let legal = track_inside_board(board, point, neighbor, width_nm)?
+                        && clearance.can_route(net, point, neighbor, width_nm, layer)?;
+                    edge_legal.insert(edge, legal);
+                    legal
+                }
+            };
+            if !legal {
+                continue;
+            }
+            let turn_steps = if heading >= 0 {
+                let difference = (next_heading - heading).abs();
+                difference.min(8 - difference)
+            } else {
+                0
+            };
+            let step_cost = (if *dx != 0 && *dy != 0 { 14 } else { 10 }) + 7 * turn_steps;
+            let candidate = cost + step_cost;
+            let next_state = (nx, ny, next_heading);
+            if candidate >= *best.get(&next_state).unwrap_or(&(1 << 60)) {
+                continue;
+            }
+            best.insert(next_state, candidate);
+            parent.insert(next_state, Some(state));
+            queue.push(Reverse((candidate + heuristic(nx, ny), candidate, turn_steps, nx, ny, next_heading)));
+        }
+    }
+    Ok(None)
+}

@@ -17702,6 +17702,27 @@
    ]
   },
   {
+   "name": "route-board-nofanout-boards",
+   "milestone": "M4",
+   "boards": "*",
+   "args": [
+    "route-board",
+    "{input}",
+    "--locked",
+    "--offline",
+    "{physical}",
+    "--candidates",
+    "1",
+    "--no-fanout",
+    "--congestion-feedback-trials",
+    "0",
+    "-o",
+    "{out}/routed.kicad_pcb",
+    "--report",
+    "{out}/route.json"
+   ]
+  },
+  {
    "name": "explain",
    "milestone": "M5",
    "cases": [

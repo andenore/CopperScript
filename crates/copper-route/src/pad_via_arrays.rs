@@ -172,3 +172,12 @@ pub fn via_in_pad_array_report(board: &PhysicalBoard) -> Result<Vec<Value>> {
     }
     Ok(records)
 }
+
+/// `materialize_via_in_pad_arrays` when every required array is already
+/// committed (idempotent); committing new arrays is not ported yet.
+pub fn materialize_via_in_pad_arrays(board: &PhysicalBoard) -> Result<PhysicalBoard> {
+    if array_rules(board).is_empty() || via_in_pad_arrays_present(board)? {
+        return Ok(board.clone());
+    }
+    copper_pcb::not_implemented("committing via-in-pad arrays (pad_via_arrays.materialize_via_in_pad_arrays)")
+}
