@@ -887,3 +887,30 @@ and asset-tracker with `--verify-plane-fill` (CI's real KiCad) reach
 `filled_feedback.improve_filled_copper` bridge trials when native DRC
 reports zone opens; those trials (with `dependency_reroute`,
 `native_stub_cleanup` and shapely-backed `filled_connectivity`) still exit 3.
+
+### M4 filled-copper feedback (`rust-m4-filled`, 2026-10-28)
+
+Ported the native `--verify-plane-fill` repair path: `filled_feedback`
+bridge trials (round-robin proposals over fill fragments and copper
+components, the rejection cache, partitioned clearance, surface bridge
+search with sampled blocker records), `dependency_reroute`
+(`reroute_local_dependencies`, `merge_local_detail` with Python's `repr`
+fingerprint), `native_stub_cleanup` (`remove_native_dangling_tracks`),
+`plane_verify.remove_native_dangling_copper`, fill-fragment contacts in
+`filled_connectivity`, and `rf_geometry` (`native_fill_polygon` slit
+decoding and `reference_coverage` for the routing-quality report). The
+shapely areas are float clipping (convex Sutherland-Hodgman, ring overlap by
+boundary integral) under D6; topologies shapely would node or heal
+differently (rings touching at a vertex, overlapping reference fills) exit 3.
+
+Stand-in: `tests/rust-port/routing/kicad-cli` gains `zone-open`,
+`zone-open-always`, `dangling` and `zone-open-dangling` (the manufacturing
+stand-in reports a zone-net pad pair and/or a dangling segment on a fixed
+verification schedule). New `route-board-native` cases drive them on
+round_led_ring and cm4_baseboard: accepted bridges with dependency
+reroutes, rejected trials, in-trial dangling removal and stub cleanup; all
+equal. With the zone-open stand-in (Python vs Rust seconds): led-ring equal
+(15 vs 3; one accepted three-net trial), asset-tracker equal (1513 vs 184;
+eight trials, budget exhausted). The stand-in has no fill polygons, so
+fragment contacts and reference coverage on real fills are covered by unit
+tests against shapely only; CI's real-KiCad `ladder` job is the check.

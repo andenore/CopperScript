@@ -161,9 +161,37 @@ pub fn routing_quality(board: &PhysicalBoard, native: Option<&PlaneVerification>
             references.push(Value::Object(entry));
             continue;
         }
-        // `rf_geometry.reference_coverage` belongs to the independent RF checks
-        // that stay on the Python CLI (plan decision D4).
-        return copper_pcb::not_implemented("reference coverage of a natively filled board (rf_geometry)");
+        let native = native.expect("current native fill");
+        let layers: Vec<String> = board.stackup.copper_layers.iter().map(|l| l.value().to_owned()).collect();
+        let tracks: Vec<crate::rf_geometry::CoverageTrack> = board
+            .tracks
+            .iter()
+            .map(|t| crate::rf_geometry::CoverageTrack {
+                net: t.net.clone(),
+                layer: t.layer.value().to_owned(),
+                width_nm: t.width_nm,
+                start: (t.start.x_nm, t.start.y_nm),
+                end: (t.end.x_nm, t.end.y_nm),
+            })
+            .collect();
+        let fills: Vec<(&str, &str, &[(i64, i64)])> = native
+            .filled_regions
+            .iter()
+            .map(|f| (f.net.as_str(), f.layer.as_str(), f.vertices_nm.as_slice()))
+            .collect();
+        let result = crate::rf_geometry::reference_coverage(
+            &layers,
+            &tracks,
+            &fills,
+            &format!("reference:{}", rule.net),
+            &rule.net,
+            rule.return_via_net.as_deref().expect("return via net"),
+            rule.shared_reference_layer.expect("reference layer").value(),
+        )?;
+        let mut entry = Object::new();
+        entry.insert("net".to_owned(), Value::from(rule.net.as_str()));
+        entry.extend(result);
+        references.push(Value::Object(entry));
     }
     let mut angles = Object::new();
     angles.insert("straight_nm".to_owned(), Value::from(straight));

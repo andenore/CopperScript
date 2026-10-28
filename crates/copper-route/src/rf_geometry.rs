@@ -1,4 +1,5 @@
-//! Native filled-polygon decoding (`pcbir.rf_geometry.native_fill_polygon`)
+//! Native filled-polygon decoding (`pcbir.rf_geometry.native_fill_polygon`),
+//! reference-plane coverage (`reference_coverage`)
 //! and the positive-area overlap tests the fill-fragment contacts need.
 //!
 //! Python builds these with shapely. Here a decoded fill is its outer ring and
@@ -24,8 +25,9 @@ pub struct FillPolygon {
 #[derive(Clone, Debug)]
 pub enum NativeFill {
     Polygon(FillPolygon),
-    /// A valid decode whose union is not one polygon (`MultiPolygon`).
-    Multiple,
+    /// A valid decode whose union is not one polygon (`MultiPolygon`): its
+    /// disjoint faces.
+    Multiple(Vec<FillPolygon>),
     /// `ValueError`: an unsupported or invalid representation.
     Invalid,
 }
@@ -200,8 +202,149 @@ pub fn native_fill_polygon(vertices: &[(i64, i64)]) -> Result<NativeFill> {
             outer: floats(&rings[*outer]),
             holes: (0..rings.len()).filter(|&i| depths[i] == 1).map(|i| floats(&rings[i])).collect(),
         })),
-        _ => Ok(NativeFill::Multiple),
+        _ => Ok(NativeFill::Multiple(
+            outers
+                .iter()
+                .map(|&outer| FillPolygon {
+                    outer: floats(&rings[outer]),
+                    holes: (0..rings.len())
+                        .filter(|&i| depths[i] == depths[outer] + 1 && point_in_ring(rings[i][0], &rings[outer]))
+                        .map(|i| floats(&rings[i]))
+                        .collect(),
+                })
+                .collect(),
+        )),
     }
+}
+
+/// A straight track as `reference_coverage` reads it.
+pub struct CoverageTrack {
+    pub net: String,
+    pub layer: String,
+    pub width_nm: i64,
+    pub start: (i64, i64),
+    pub end: (i64, i64),
+}
+
+/// `qualification.check(identifier, status, detail, **metrics)`.
+fn check(identifier: &str, status: &str, detail: &str, metrics: copper_json::Object) -> copper_json::Object {
+    let mut document = copper_json::Object::new();
+    document.insert("id".to_owned(), copper_json::Value::from(identifier));
+    document.insert("status".to_owned(), copper_json::Value::from(status));
+    document.insert("stage".to_owned(), copper_json::Value::from("design"));
+    document.insert("detail".to_owned(), copper_json::Value::from(detail));
+    document.insert("metrics".to_owned(), copper_json::Value::Object(metrics));
+    document
+}
+
+/// `reference_coverage` (margin 0): whether each signal track's square-capped
+/// envelope lies inside the adjacent reference layer's native fill.
+pub fn reference_coverage(
+    layers: &[String],
+    tracks: &[CoverageTrack],
+    fills: &[(&str, &str, &[(i64, i64)])],
+    identifier: &str,
+    net: &str,
+    reference_net: &str,
+    reference_layer: &str,
+) -> Result<copper_json::Object> {
+    use copper_json::{Object, Value};
+    let unique: IndexSet<&String> = layers.iter().collect();
+    let Some(reference) = layers.iter().position(|layer| layer == reference_layer) else {
+        return Err(copper_pcb::Error::Value("invalid reference layer/order".to_owned()));
+    };
+    if unique.len() != layers.len() {
+        return Err(copper_pcb::Error::Value("invalid reference layer/order".to_owned()));
+    }
+    let own: Vec<&CoverageTrack> = tracks.iter().filter(|track| track.net == net).collect();
+    if own.is_empty() {
+        return Ok(check(identifier, "incomplete", &format!("No supported straight tracks for {net}"), Object::new()));
+    }
+    if own.iter().any(|track| {
+        layers.iter().position(|layer| *layer == track.layer).is_none_or(|index| index.abs_diff(reference) != 1)
+    }) {
+        return Ok(check(
+            identifier,
+            "fail",
+            "Signal tracks do not share the declared adjacent reference",
+            Object::new(),
+        ));
+    }
+    let selected: Vec<&[(i64, i64)]> = fills
+        .iter()
+        .filter(|(fill_net, layer, _)| *fill_net == reference_net && *layer == reference_layer)
+        .map(|(_, _, vertices)| *vertices)
+        .collect();
+    if selected.is_empty() {
+        return Ok(check(
+            identifier,
+            "incomplete",
+            "No native filled reference copper; zone outlines are not evidence",
+            Object::new(),
+        ));
+    }
+    let mut polygons: Vec<FillPolygon> = Vec::new();
+    for vertices in selected {
+        match native_fill_polygon(vertices)? {
+            NativeFill::Polygon(polygon) => polygons.push(polygon),
+            NativeFill::Multiple(faces) => polygons.extend(faces),
+            NativeFill::Invalid => {
+                return Ok(check(
+                    identifier,
+                    "incomplete",
+                    "Unsupported/invalid filled polygon; no automatic healing",
+                    Object::new(),
+                ));
+            }
+        }
+    }
+    // The union's area is the faces' sum only while they do not overlap.
+    for index in 0..polygons.len() {
+        for other in 0..index {
+            if polygons[index].overlap(&polygons[other]) > 0.0 {
+                return copper_pcb::not_implemented("overlapping native reference fills (shapely unary_union)");
+            }
+        }
+    }
+    let mut uncovered = Vec::new();
+    let mut length = 0.0;
+    for (index, track) in own.iter().enumerate() {
+        if track.width_nm <= 0 {
+            return Err(copper_pcb::Error::Value("invalid track width".to_owned()));
+        }
+        if track.start == track.end {
+            return Err(copper_pcb::Error::Value("zero-length RF track".to_owned()));
+        }
+        let (dx, dy) = ((track.end.0 - track.start.0) as f64, (track.end.1 - track.start.1) as f64);
+        let span = dx.hypot(dy);
+        length += span;
+        // Square caps/miter joins conservatively contain the rounded conductor.
+        let half = track.width_nm as f64 / 2.0;
+        let (ux, uy) = (dx / span * half, dy / span * half);
+        let (sx, sy) = (track.start.0 as f64 - ux, track.start.1 as f64 - uy);
+        let (ex, ey) = (track.end.0 as f64 + ux, track.end.1 as f64 + uy);
+        let envelope = Convex(vec![(sx + uy, sy - ux), (ex + uy, ey - ux), (ex - uy, ey + ux), (sx - uy, sy + ux)]);
+        let envelope =
+            Convex(if signed_area(&envelope.0) < 0.0 { envelope.0.into_iter().rev().collect() } else { envelope.0 });
+        let area = envelope.area();
+        let covered: f64 = polygons.iter().map(|polygon| polygon.convex_overlap(&envelope)).sum();
+        if area - covered > area * 1e-9 {
+            uncovered.push(Value::from(index as i64));
+        }
+    }
+    let mut metrics = Object::new();
+    let failed = !uncovered.is_empty();
+    metrics.insert("unsupported_segment_indices".to_owned(), Value::Array(uncovered));
+    metrics.insert("track_count".to_owned(), Value::from(own.len() as i64));
+    metrics.insert("total_segment_length_nm".to_owned(), Value::Float(length));
+    metrics.insert("reference_layer".to_owned(), Value::from(reference_layer));
+    metrics.insert("margin_nm".to_owned(), Value::from(0i64));
+    Ok(check(
+        identifier,
+        if failed { "fail" } else { "pass" },
+        "Projected conductor coverage only; no electrical/impedance proof",
+        metrics,
+    ))
 }
 
 fn signed_area(ring: &[P]) -> f64 {
@@ -481,5 +624,44 @@ mod tests {
     fn invalid_walks_are_rejected() {
         // A bow tie crosses itself and has no reversed slit.
         assert!(matches!(native_fill_polygon(&[(0, 0), (10, 10), (10, 0), (0, 10)]).unwrap(), NativeFill::Invalid));
+    }
+
+    #[test]
+    fn reference_coverage_matches_shapely() {
+        let outer = [
+            (0, 0),
+            (100, 0),
+            (100, 100),
+            (0, 100),
+            (0, 50),
+            (40, 50),
+            (40, 60),
+            (60, 60),
+            (60, 40),
+            (40, 40),
+            (40, 50),
+            (0, 50),
+        ];
+        let track =
+            |start, end| CoverageTrack { net: "RF".to_owned(), layer: "F.Cu".to_owned(), width_nm: 4, start, end };
+        let tracks = [track((10, 10), (90, 10)), track((10, 45), (90, 45)), track((3, 80), (97, 80))];
+        let layers = ["F.Cu".to_owned(), "In1.Cu".to_owned()];
+        let result = reference_coverage(
+            &layers,
+            &tracks,
+            &[("GND", "In1.Cu", &outer[..])],
+            "reference:RF",
+            "RF",
+            "GND",
+            "In1.Cu",
+        )
+        .unwrap();
+        let text = copper_json::Dumps::new().dumps(&copper_json::Value::Object(result));
+        assert_eq!(
+            text,
+            "{\"id\": \"reference:RF\", \"status\": \"fail\", \"stage\": \"design\", \"detail\": \"Projected conductor \
+             coverage only; no electrical/impedance proof\", \"metrics\": {\"unsupported_segment_indices\": [1], \
+             \"track_count\": 3, \"total_segment_length_nm\": 254.0, \"reference_layer\": \"In1.Cu\", \"margin_nm\": 0}}"
+        );
     }
 }
