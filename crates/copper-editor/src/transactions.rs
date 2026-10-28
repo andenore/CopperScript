@@ -236,9 +236,19 @@ impl Workspace {
 
     /// `save`: commit the reviewed bytes under a cooperative lock with a final byte check.
     pub fn save(&self, review: &ReviewedSource) -> Result<()> {
-        self.check_inputs()?;
-        verify_reference_assets(&review.board.mechanical_references).map_err(Error::Value)?;
-        let source = &self.source;
+        let check = || {
+            self.check_inputs()?;
+            verify_reference_assets(&review.board.mechanical_references).map_err(Error::Value)
+        };
+        save_reviewed(&self.source, &review.before.raw, &review.after.raw, &check)
+    }
+}
+
+/// `SourceWorkspace.save`: write `after` over `source` under a cooperative
+/// lock, only while it still holds `before`; `check` re-verifies the inputs.
+pub fn save_reviewed(source: &Path, before: &[u8], after: &[u8], check: &dyn Fn() -> Result<()>) -> Result<()> {
+    {
+        check()?;
         if source.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
             return value("source was replaced with a symbolic link");
         }
@@ -261,7 +271,7 @@ impl Workspace {
         let result = (|| -> Result<()> {
             marker.write_all(token.as_bytes()).and_then(|()| marker.flush()).map_err(|e| os(&e, &lock))?;
             let read = |path: &Path| std::fs::read(path).map_err(|e| os(&e, path));
-            if read(source)? != review.before.raw {
+            if read(source)? != before {
                 return value("source changed since review; reload before saving");
             }
             let permissions = std::fs::metadata(source).map_err(|e| os(&e, source))?.permissions();
@@ -273,12 +283,11 @@ impl Workspace {
                 })
                 .ok_or_else(|| Error::Os("[Errno 17] No usable temporary file name found".to_owned()))?;
             temporary = Some(path.clone());
-            stream.write_all(&review.after.raw).and_then(|()| stream.sync_all()).map_err(|e| os(&e, &path))?;
+            stream.write_all(after).and_then(|()| stream.sync_all()).map_err(|e| os(&e, &path))?;
             drop(stream);
             std::fs::set_permissions(&path, permissions).map_err(|e| os(&e, &path))?;
-            self.check_inputs()?;
-            verify_reference_assets(&review.board.mechanical_references).map_err(Error::Value)?;
-            if read(source)? != review.before.raw {
+            check()?;
+            if read(source)? != before {
                 return value("source changed during save; no edit committed");
             }
             std::fs::rename(&path, source).map_err(|e| os(&e, source))?;

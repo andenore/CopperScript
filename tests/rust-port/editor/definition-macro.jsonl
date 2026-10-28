@@ -1,0 +1,40 @@
+# Definition session of a macro document: reviewed edits, save, history, reload and errors.
+{"get": "/api/scene"}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "track", "name": "link", "parameters": {"net": "signal", "layer": "\"F.Cu\"", "width": "0.25 mm", "points": "[chip.\"1\", passive.\"1\"]"}}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "wrong"}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "properties", "name": "", "parameters": {"source": "\"Edited demonstration\"", "anchor": "chip", "allowed_rotations": "[0 deg, 90 deg]", "required_layers": "[\"F.Cu\", \"B.Cu\"]"}}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "undo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "redo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "redo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_features", "revision": "{revision}", "features": [{"category": "macro", "kind": "net", "name": "spare", "parameters": {}}, {"category": "macro", "kind": "via", "name": "v1", "parameters": {"net": "signal", "at": "(1 mm, 0 mm)", "size": "0.6 mm", "drill": "0.3 mm", "from_layer": "\"F.Cu\"", "to_layer": "\"B.Cu\""}, "editable": true}]}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "protected_region", "name": "private", "parameters": {}, "remove": true}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "pad", "name": "passive.1", "parameters": {"member": "passive", "pad": "\"1\"", "net": "signal"}, "remove": true}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "isolated", "name": "passive.2", "parameters": {"member": "passive", "pad": "\"2\""}}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "port", "name": "access", "parameters": {}, "remove": true}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "profile", "kind": "hole", "name": "H1", "parameters": {}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": 3, "name": "x", "parameters": {}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "net", "name": "spare", "parameters": {"a": "1"}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "pad", "name": "chip.2", "parameters": {"member": "chip"}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "properties", "name": "", "parameters": {"bogus": "1"}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "contact", "name": "c1", "parent": "nope", "parameters": {}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "track", "name": "link", "shape": "rectangle", "parameters": {"net": "signal", "layer": "\"F.Cu\"", "width": "0.2 mm", "points": "[chip.\"1\", passive.\"1\"]"}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "track", "name": "gone", "parameters": {}, "remove": true}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "track", "name": "link", "parameters": {"net": "signal; } track x { net = signal"}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "track", "name": "link", "parameters": {}, "bogus": 1}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "macro", "kind": "track", "parameters": {}}}
+{"post": "/api/operation", "json": {"action": "review_features", "revision": "{revision}", "features": []}}
+{"post": "/api/operation", "json": {"action": "review_features", "revision": "{revision}", "features": [], "extra": 1}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}", "extra": 1}}
+{"post": "/api/operation", "json": {"action": "move", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": 0, "category": "macro", "kind": "net", "name": "x", "parameters": {}}}
+{"post": "/api/operation", "json": {"action": "reload_source", "revision": 0}}
+{"post": "/api/operation", "json": {"action": "reload_source", "revision": "{revision}", "x": 1}}
+{"post": "/api/operation", "json": {"action": "reload_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "undo_source", "revision": "{revision}"}}
+{"post": "/api/open-definition", "json": {"feature_index": 0}}

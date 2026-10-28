@@ -1042,6 +1042,8 @@ impl EditorSession {
         let references: BTreeSet<String> = board.placements.iter().map(|p| p.reference.clone()).collect();
         let reference = match &request["reference"] {
             Value::Str(reference) if references.contains(reference) => reference.clone(),
+            Value::Array(_) => return editor("unhashable type: 'list'"),
+            Value::Object(_) => return editor("unhashable type: 'dict'"),
             _ => return editor("unknown component reference"),
         };
         let owners = metadata_object(board, "mechanical_attachment_owners")?;

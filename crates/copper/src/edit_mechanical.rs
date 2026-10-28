@@ -163,7 +163,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             None => None,
         };
         progress(out, "Opening board: resolving footprints and building the physical board...");
-        let mut session = document_session(&board, &settings, overlay)?;
+        let mut session = document_session(&board, &settings, overlay, project.as_deref())?;
         progress(out, "Opening board: editor session ready.");
         let Some(scene_output) = &scene_output else {
             server = Some(copper_editor::server::create_server(session, &port.into())?);
@@ -190,11 +190,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
                 if !parsed.has("--no-browser") {
                     open_browser(&server.url());
                 }
-                copper_editor::server::serve(server, &|what| {
-                    let _ = std::io::stdout().flush();
-                    eprintln!("copper: {NOT_IMPLEMENTED_MARKER}: edit-mechanical ({what})");
-                    std::process::exit(i32::from(NOT_IMPLEMENTED_EXIT));
-                });
+                copper_editor::server::serve(server, &exit_not_implemented);
                 0
             }
             (None, Some(scene_output)) => {
@@ -212,6 +208,13 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             2
         }
     }
+}
+
+/// A request reached behaviour the rewrite lacks: exit 3 with the marker.
+fn exit_not_implemented(what: &str) {
+    let _ = std::io::stdout().flush();
+    eprintln!("copper: {NOT_IMPLEMENTED_MARKER}: edit-mechanical ({what})");
+    std::process::exit(i32::from(NOT_IMPLEMENTED_EXIT));
 }
 
 /// `webbrowser.open`: best effort, silent.

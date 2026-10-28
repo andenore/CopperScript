@@ -494,9 +494,8 @@ fn type_name(value: &Value) -> &'static str {
 /// `kind in CONSTRAINTS` (or `ARTWORK`): a list or dict is unhashable.
 fn member(kind: &Value, set: &[&str]) -> Result<bool> {
     match kind {
-        Value::Array(_) | Value::Object(_) => {
-            Err(Error::Uncaught(format!("TypeError: unhashable type: '{}'", type_name(kind))))
-        }
+        // The HTTP transport answers a `TypeError` like a `ValueError`.
+        Value::Array(_) | Value::Object(_) => Err(Error::Value(format!("unhashable type: '{}'", type_name(kind)))),
         Value::Str(s) => Ok(set.contains(&s.as_str())),
         _ => Ok(false),
     }

@@ -16,6 +16,7 @@ use copper_pcb::physicalize::{Footprints, physicalize};
 use copper_pcb::templates::apply_placement_templates;
 
 use crate::configuration::physical_options;
+use crate::definition_session::DefinitionSession;
 use crate::dependencies::read_source;
 use crate::overlay::RoutedOverlay;
 use crate::session::{EditorSession, Workspace};
@@ -110,12 +111,35 @@ fn source_macro_input_paths(board: &PhysicalBoard) -> Result<Vec<PathBuf>> {
     Ok(result)
 }
 
-/// `document_session`: the editor session of a board read from disk.
+/// An opened document: a board session or a definition session.
+pub enum Session {
+    Board(Box<EditorSession>),
+    Definition(Box<DefinitionSession>),
+}
+
+impl Session {
+    pub fn scene(&mut self) -> Result<copper_json::Object> {
+        match self {
+            Session::Board(session) => session.scene(),
+            Session::Definition(session) => session.scene(),
+        }
+    }
+
+    pub fn operation(&mut self, request: &copper_json::Object) -> Result<copper_json::Object> {
+        match self {
+            Session::Board(session) => session.operation(request),
+            Session::Definition(session) => session.operation(request),
+        }
+    }
+}
+
+/// `document_session`: the editor session of a document read from disk.
 pub fn document_session(
     source: &Path,
     settings: &BuildSettings,
     overlay: Option<RoutedOverlay>,
-) -> Result<EditorSession> {
+    project: Option<&Path>,
+) -> Result<Session> {
     let source = paths::resolve(source);
     let filename = paths::display(&source);
     let raw = read_source(&source)?;
@@ -125,7 +149,7 @@ pub fn document_session(
         if overlay.is_some() || settings.templates.is_some() || !settings.macros.is_empty() {
             return value("board overlays and placement assets require a board document");
         }
-        return Err(Error::NotImplemented("edit-mechanical definition sessions (macro and board_profile)".to_owned()));
+        return Ok(Session::Definition(Box::new(DefinitionSession::new(&source, project)?)));
     }
     if document.kind != DocumentKind::Board {
         return value("physical editor supports board, macro and board_profile documents");
@@ -153,5 +177,5 @@ pub fn document_session(
     );
     inputs.extend(source_macro_input_paths(&board)?);
     let workspace = Workspace::new(&source, &design, inputs, settings.clone())?;
-    EditorSession::new(board, &source, Some(workspace), overlay)
+    Ok(Session::Board(Box::new(EditorSession::new(board, &source, Some(workspace), overlay)?)))
 }

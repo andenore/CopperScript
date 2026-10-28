@@ -168,6 +168,11 @@ fn asset_reference(
     }
 }
 
+/// `_load_imports(document, resolver, ())`: one document's imported packages.
+pub fn document_imports(document: &Document, resolver: &mut PackageResolver) -> Result<PackageContents> {
+    load_imports(document, resolver, &[], "")
+}
+
 /// `_load_imports`.
 fn load_imports(
     document: &Document,

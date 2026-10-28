@@ -1,0 +1,34 @@
+# Reviews without saving on a hierarchical board: nested references and constraint identities.
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "PWR/U1", "x_nm": 10000000, "y_nm": 10000000, "rotation": 0, "side": "front", "locks": ["position"]}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "PS1", "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "front", "locks": []}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "U1", "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "back", "locks": ["side"]}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_features", "revision": "{revision}", "features": [{"category": "constraint", "kind": "max_distance", "name": "constraint:17", "parameters": {"distance": "20 mm"}, "targets": ["U2", "C1"]}]}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_features", "revision": "{revision}", "features": [{"category": "constraint", "kind": "max_distance", "name": "constraint:17", "parameters": {}, "remove": true}, {"category": "constraint", "kind": "min_distance", "name": "", "parameters": {"distance": "1 mm"}, "targets": ["R1", "R2"]}]}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_features", "revision": "{revision}", "features": [{"category": "constraint", "kind": "max_distance", "name": "constraint:3", "parameters": {}}]}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "constraint", "kind": "max_distance", "name": "constraint:17", "targets": ["U2"], "parameters": {}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "constraint", "kind": "max_distance", "name": "", "targets": ["U1", "NOPE"], "parameters": {"distance": "5 mm"}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "constraint", "kind": "max_distance", "name": "", "targets": ["U1", "C1"], "parameters": {"distance": "1 um"}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "artwork", "kind": "logo", "name": "LOGO", "parameters": {"position": "(5 mm, 5 mm)", "size": "3 mm"}}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "move", "revision": "{revision}", "reference": "R1", "x_nm": 5000000, "y_nm": 5000000, "rotation": 0, "side": "front"}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "R1", "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "front", "locks": ["side"]}}
+{"post": "/api/operation", "json": {"action": "prepare_placement", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "discard", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "auto_place", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_placement", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "reload_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": 5}}
+{"post": "/api/operation", "json": {"action": "undo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": ["U1"], "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "front", "locks": []}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "constraint", "kind": ["max_distance"], "name": "", "parameters": {}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "artwork", "kind": {"a": 1}, "name": "", "parameters": {}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "stackup", "kind": "stackup", "name": "stackup", "parameters": {"declaration": "stackup {}", "x": "1"}}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "hole", "name": "H1", "shape": "", "parameters": {"position": "(5mm,5mm)", "diameter": "1mm"}, "remove": 0}}
+{"post": "/api/open-definition", "json": {"feature_index": 0}}
+{"post": "/api/open-definition", "json": {"feature_index": "0"}}
