@@ -324,3 +324,217 @@ fn lattice_queries_match_python() {
     let shown: Vec<&String> = failures.iter().take(12).collect();
     assert!(failures.is_empty(), "{} lattice queries differ:\n{shown:#?}", failures.len());
 }
+
+// --------------------------------------------------------------------------- escape planning
+
+mod escape {
+    use std::path::Path;
+
+    use copper_json::{Dumps, Object, Value};
+    use copper_lang::footprints::FootprintResolver;
+    use copper_pcb::board::PadReference;
+    use copper_pcb::physicalize::{Footprints, PhysicalOptions, physicalize};
+    use copper_route::escape_plan::{
+        EscapePlanOptions, escape_diagnostics, pad_fields, plan_array_escapes, plan_two_end_escapes,
+    };
+
+    fn int(value: i64) -> Value {
+        Value::Int(value.into())
+    }
+
+    fn text(value: &str) -> Value {
+        Value::Str(value.to_owned())
+    }
+
+    fn pad(pad: &PadReference) -> Value {
+        text(&format!("{}.{}", pad.component, pad.pad))
+    }
+
+    fn list(values: Vec<Value>) -> Value {
+        Value::Array(values)
+    }
+
+    fn object(entries: Vec<(String, Value)>) -> Value {
+        Value::Object(entries.into_iter().collect::<Object>())
+    }
+
+    fn options(name: &str) -> EscapePlanOptions {
+        match name {
+            "default" => EscapePlanOptions::default(),
+            "bus" => EscapePlanOptions {
+                bus_layers: true,
+                corridor_margin_nm: 250_000,
+                layer_bias_rate: 7,
+                ..EscapePlanOptions::default()
+            },
+            _ => EscapePlanOptions {
+                cluster_pair_minimum_nets: 1,
+                field_spacing_factor: 1,
+                field_spacing_minimum_nm: 0,
+                ..EscapePlanOptions::default()
+            },
+        }
+    }
+
+    const FLOWS: [&[((&str, &str), i64)]; 6] = [
+        &[],
+        &[(("W", "E"), 1)],
+        &[(("N", "S"), 2)],
+        &[(("W", "NE"), 1), (("S", "E"), 1)],
+        &[(("NW", "SE"), 1)],
+        &[(("W", "E"), 1), (("N", "S"), 1)],
+    ];
+
+    #[test]
+    fn escape_plans_match_python() {
+        let document = copper_json::parse(include_str!("fixtures/escape.json")).expect("fixture is JSON");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut failures = Vec::new();
+        let mut boards: Vec<((&str, i64), copper_pcb::board::PhysicalBoard)> = Vec::new();
+        for case in document.get("cases").and_then(Value::as_array).expect("cases") {
+            let source = case.get("board").and_then(Value::as_str).expect("board");
+            let layers: i64 = Dumps::new().dumps(case.get("layers").expect("layers")).parse().expect("layers");
+            let profile = case.get("profile").and_then(Value::as_str).expect("profile");
+            let variant = case.get("options").and_then(Value::as_str).expect("options");
+            // One board per (source, layers): the option variants follow each other.
+            if boards.last().is_none_or(|(key, _)| key != &(source, layers)) {
+                let path = root.join(source);
+                let design = copper_lang::compiler::load_design(&path, true, true).expect("board");
+                let base = copper_lang::paths::resolve(&path).parent().expect("directory").to_path_buf();
+                let mut resolver = FootprintResolver::new(&base, &[], false, true, true);
+                let physical = PhysicalOptions::new(100.0, 80.0, layers, profile).expect("options");
+                let board =
+                    physicalize(&design, Footprints::Resolved(&mut resolver), &physical, true, true).expect("physical");
+                boards.push(((source, layers), board));
+            }
+            let board = &boards.last().expect("board").1;
+            let options = options(variant);
+            let diagnostics = escape_diagnostics(board, &options).expect("diagnostics");
+            let plan = plan_two_end_escapes(board, &options, Some(&diagnostics)).expect("plan");
+            let arrays = plan_array_escapes(board, &options).expect("arrays");
+            let mut fields = Vec::new();
+            let mut placements: Vec<&String> = board.placements.iter().map(|p| &p.reference).collect();
+            placements.sort();
+            for reference in placements {
+                let cluster = diagnostics.clusters.iter().find(|c| &c.component == reference).expect("cluster");
+                let (width, clearance) = cluster.rules;
+                let mut entries = Vec::new();
+                for field in pad_fields(board, reference, &options).expect("fields") {
+                    let gaps = field
+                        .gaps
+                        .iter()
+                        .map(|gap| {
+                            list(vec![
+                                pad(&gap.first),
+                                pad(&gap.second),
+                                text(&gap.kind),
+                                int(gap.gap_nm),
+                                list(gap.layers.iter().map(|l| text(l.value())).collect()),
+                            ])
+                        })
+                        .collect();
+                    let tiles = field
+                        .tiles
+                        .iter()
+                        .map(|tile| {
+                            let mut admits = Vec::new();
+                            for flow in FLOWS {
+                                for layer in board.stackup.copper_layers.iter().take(2) {
+                                    let admitted = tile.admits(flow, *layer, width, clearance).expect("flow");
+                                    admits.push(Value::Bool(admitted));
+                                }
+                            }
+                            list(vec![
+                                int(tile.column),
+                                int(tile.row),
+                                list(tile.corners.iter().map(|c| c.as_ref().map_or(Value::Null, pad)).collect()),
+                                list(vec![int(tile.centre.x_nm), int(tile.centre.y_nm)]),
+                                Value::Bool(tile.via_site),
+                                list(admits),
+                            ])
+                        })
+                        .collect();
+                    entries.push(object(vec![
+                        ("report".to_owned(), field.report(width, clearance)),
+                        ("pads".to_owned(), list(field.pads.iter().map(pad).collect())),
+                        ("gaps".to_owned(), list(gaps)),
+                        ("tiles".to_owned(), list(tiles)),
+                    ]));
+                }
+                fields.push((reference.clone(), list(entries)));
+            }
+            let causes = diagnostics
+                .net_causes()
+                .into_iter()
+                .map(|(net, values)| (net, list(values.iter().map(|v| text(v)).collect())))
+                .collect();
+            let overflow = diagnostics.clusters.iter().map(|c| (c.component.clone(), int(c.overflow()))).collect();
+            let pairs = diagnostics
+                .pairs
+                .iter()
+                .map(|item| {
+                    list(vec![
+                        text(&item.first),
+                        text(&item.second),
+                        list(item.order.iter().map(|n| text(n)).collect()),
+                        list(
+                            item.second_keys
+                                .iter()
+                                .map(|k| list(vec![Value::Float(k.0), Value::Float(k.1), pad(&k.2)]))
+                                .collect(),
+                        ),
+                    ])
+                })
+                .collect();
+            let biases = plan
+                .layer_biases
+                .iter()
+                .map(|b| {
+                    let a = b.area;
+                    list(vec![
+                        text(&b.net),
+                        text(b.layer.value()),
+                        list(vec![int(a.min_x), int(a.min_y), int(a.max_x), int(a.max_y)]),
+                        int(b.rate),
+                    ])
+                })
+                .collect();
+            let arrays = arrays
+                .iter()
+                .map(|item| {
+                    let Value::Object(mut report) = item.report() else { unreachable!() };
+                    report.insert("surface_pads".to_owned(), list(item.surface.iter().map(pad).collect()));
+                    report.insert("via_pads".to_owned(), list(item.vias.iter().map(pad).collect()));
+                    let loads =
+                        item.tile_load.iter().map(|((c, r), l)| list(vec![int(*c), int(*r), int(*l)])).collect();
+                    report.insert("tile_load".to_owned(), list(loads));
+                    Value::Object(report)
+                })
+                .collect();
+            let actual = [
+                ("diagnostics", diagnostics.report()),
+                ("net_causes", object(causes)),
+                ("overflow", object(overflow)),
+                ("pairs", list(pairs)),
+                ("plan", plan.report()),
+                ("biases", list(biases)),
+                ("arrays", list(arrays)),
+                ("fields", object(fields)),
+            ];
+            for (key, value) in actual {
+                let python = Dumps::new().sort_keys(true).dumps(case.get(key).expect(key));
+                let rust = Dumps::new().sort_keys(true).dumps(&value);
+                if python != rust {
+                    let at = python.bytes().zip(rust.bytes()).position(|(a, b)| a != b).unwrap_or(0);
+                    let start = at.saturating_sub(200);
+                    failures.push(format!(
+                        "{source} {layers} {variant} {key} at {at}:\n  Python ...{}\n  Rust   ...{}",
+                        &python[start..(at + 200).min(python.len())],
+                        &rust[start..(at + 200).min(rust.len())]
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{} escape results differ:\n{}", failures.len(), failures.join("\n"));
+    }
+}

@@ -374,6 +374,77 @@ def lattice_fixture() -> dict:
     return {"schema": SCHEMA, "seed": SEED, "cases": cases}
 
 
+ESCAPE_BOARDS = (("examples/full_vertical/board.copper", 6, "jlcpcb-six-layer"),
+                 ("examples/round_led_ring/board.copper", 2, "generic"),
+                 ("examples/round_led_ring/board.copper", 4, "generic"),
+                 ("examples/mechanical_curves/board.copper", 2, "generic"),
+                 ("examples/mechanical_reference/board.copper", 2, "generic"),
+                 ("examples/tps62130a_macro/board.copper", 6, "jlcpcb-six-layer"))
+
+
+def escape_fixture() -> dict:
+    """Escape diagnostics, plans and pad fields of boards whose footprints resolve from the repository."""
+    from pcbir.escape_plan import (EscapePlanOptions, escape_diagnostics, pad_fields, plan_array_escapes,
+                                   plan_two_end_escapes)
+    from pcbir.footprints import FootprintResolver
+    from pcbir.loader import load_design
+    from pcbir.physicalize import PrototypePhysicalOptions, resolved_physicalize
+
+    variants = (("default", EscapePlanOptions()),
+                ("bus", EscapePlanOptions(bus_layers=True, corridor_margin_nm=250_000, layer_bias_rate=7)),
+                ("fine", EscapePlanOptions(cluster_pair_minimum_nets=1, field_spacing_factor=1,
+                                           field_spacing_minimum_nm=0)))
+    flows = ({}, {("W", "E"): 1}, {("N", "S"): 2}, {("W", "NE"): 1, ("S", "E"): 1}, {("NW", "SE"): 1},
+             {("W", "E"): 1, ("N", "S"): 1})
+    cases = []
+    for source, layers, profile in ESCAPE_BOARDS:
+        path = ROOT / source
+        design = load_design(path, locked=True, offline=True)
+        resolver = FootprintResolver(base_directory=path.parent, locked=True, offline=True)
+        board = resolved_physicalize(design, resolver, PrototypePhysicalOptions(
+            copper_layers=layers, fabrication_profile=profile, board_width_mm=100, board_height_mm=80))
+        for name, options in variants:
+            diagnostics = escape_diagnostics(board, options)
+            plan = plan_two_end_escapes(board, options, diagnostics)
+            arrays = plan_array_escapes(board, options)
+            fields = {}
+            for placement in sorted(board.placements, key=lambda item: item.reference):
+                cluster = next(item for item in diagnostics.clusters if item.component == placement.reference)
+                entries = []
+                for field in pad_fields(board, placement.reference, options):
+                    width, clearance = cluster.rules
+                    entries.append({
+                        "report": field.report(width, clearance),
+                        "pads": [_pad(pad) for pad in field.pads],
+                        "gaps": [[_pad(gap.first), _pad(gap.second), gap.kind, gap.gap_nm,
+                                  [layer.value for layer in gap.layers]] for gap in field.gaps],
+                        "tiles": [[tile.column, tile.row, [None if c is None else _pad(c) for c in tile.corners],
+                                   [tile.centre.x_nm, tile.centre.y_nm], tile.via_site,
+                                   [tile.admits(flow, layer, width, clearance)
+                                    for flow in flows for layer in board.stackup.copper_layers[:2]]]
+                                  for tile in field.tiles]})
+                fields[placement.reference] = entries
+            cases.append({
+                "board": source, "layers": layers, "profile": profile, "options": name,
+                "diagnostics": diagnostics.report(), "net_causes": diagnostics.net_causes(),
+                "overflow": {item.component: item.overflow for item in diagnostics.clusters},
+                "pairs": [[item.first, item.second, list(item.order),
+                           [[key[0], key[1], _pad(key[2])] for key in item.second_keys]] for item in diagnostics.pairs],
+                "plan": plan.report(),
+                "biases": [[bias.net, bias.layer.value, [bias.area.min_x, bias.area.min_y, bias.area.max_x,
+                                                         bias.area.max_y], bias.rate] for bias in plan.layer_biases],
+                "arrays": [{**item.report(), "surface_pads": [_pad(p) for p in item.surface],
+                            "via_pads": [_pad(p) for p in item.vias],
+                            "tile_load": [[c, r, load] for (c, r), load in sorted(item.tile_load.items())]}
+                           for item in arrays],
+                "fields": fields})
+    return {"schema": SCHEMA, "cases": cases}
+
+
+def _pad(pad) -> str:
+    return f"{pad.component}.{pad.pad}"
+
+
 def outputs() -> dict[Path, bytes]:
     crates = ROOT / "crates"
     result = {
@@ -382,6 +453,7 @@ def outputs() -> dict[Path, bytes]:
         crates / "copper-json/tests/fixtures/python-json.json": _write(None, json_fixture()),
         crates / "copper-lang/tests/fixtures/parse.json": _write(None, parse_fixture()),
         crates / "copper-route/tests/fixtures/lattice.json": _write(None, lattice_fixture()),
+        crates / "copper-route/tests/fixtures/escape.json": _write(None, escape_fixture()),
         # Not a fixture: the guide text the binary embeds, copied from the oracle
         # until cutover makes the Rust copy the source.
         crates / "copper/src/agent_guide_topics.json": _write(None, agent_guide_topics()),

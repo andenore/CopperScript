@@ -13,12 +13,28 @@ use crate::routing::{GlobalRouterOptions, Graph, GridNode, PinAccess, neighbors,
 use crate::routing_clearance::RoutingClearanceIndex;
 
 /// `admit_fixed_prefix`: admit immutable extra copper, never a placement/contract replacement.
-///
-/// The Python check compares the two boards' complete dataclass records; the
-/// physical IR carries no such equality, so an explicit fixed prefix is not
-/// rewritten yet. No command reaches it.
-pub fn admit_fixed_prefix(_source: &PhysicalBoard, _held: &PhysicalBoard) -> Result<String> {
-    Err(Error::NotImplemented("fixed global routing prefix admission".to_owned()))
+pub fn admit_fixed_prefix(source: &PhysicalBoard, held: &PhysicalBoard) -> Result<String> {
+    let mut frame = held.clone();
+    frame.tracks = source.tracks.clone();
+    frame.vias = source.vias.clone();
+    frame.metadata = source.metadata.clone();
+    if frame != *source
+        || source.metadata.iter().any(|(key, value)| held.metadata.get(key) != Some(value))
+        || !held.tracks.starts_with(&source.tracks)
+        || !held.vias.starts_with(&source.vias)
+    {
+        return Err(Error::Value(
+            "fixed global prefix changes source contracts, immutable copper or required arrays".to_owned(),
+        ));
+    }
+    let report = copper_drc::run_physical_drc(held, copper_drc::Policy::default())?;
+    if let Some(hard) = report.findings.iter().find(|finding| {
+        finding.severity == copper_drc::Severity::Error
+            && !["DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"].contains(&finding.code.as_str())
+    }) {
+        return Err(Error::Value(format!("fixed global prefix fails fresh physical DRC: {}", hard.code)));
+    }
+    Ok(copper_drc::digest::physical_board_digest(held))
 }
 
 /// `reserved_pin_access_candidates`: graph entrances through an owned, verified port.
