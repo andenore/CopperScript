@@ -180,9 +180,14 @@ dependencies = [
  "copper-lang",
  "copper-pcb",
  "copper-physical",
+ "copper-place",
  "copper-state",
  "copper-units",
  "indexmap",
+ "num-bigint",
+ "num-integer",
+ "num-rational",
+ "num-traits",
  "sha2",
 ]
 

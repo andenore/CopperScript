@@ -100,8 +100,8 @@ pub fn routing_quality(board: &PhysicalBoard, native: Option<&PlaneVerification>
                 name: link.net.clone(),
                 pads: vec![link.capacitor.clone(), link.target.clone()],
             });
-        let a = transformed_pad_position(board, cap, &link.capacitor.pad).map_err(copper_pcb::Error::Value)?;
-        let b = transformed_pad_position(board, target, &link.target.pad).map_err(copper_pcb::Error::Value)?;
+        let a = transformed_pad_position(board, cap, &link.capacitor.pad)?;
+        let b = transformed_pad_position(board, target, &link.target.pad)?;
         let roots: IndexSet<&str> = surface
             .pad_nodes
             .get(&link.capacitor)

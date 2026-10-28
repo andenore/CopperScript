@@ -11,47 +11,26 @@ use std::time::Instant;
 
 use copper_json::{Dumps, Object, Value};
 
-/// `ProgressCallback`: observes `(phase, event, details)`.
+/// A progress observer: `(phase, event, details)`, details in keyword order.
 pub trait Progress {
-    fn observe(&mut self, phase: &str, event: &str, details: &Object);
+    fn observe(&mut self, phase: &str, event: &str, details: Vec<(&'static str, Value)>);
 }
 
-impl<F: FnMut(&str, &str, &Object)> Progress for F {
-    fn observe(&mut self, phase: &str, event: &str, details: &Object) {
-        self(phase, event, details)
-    }
-}
+pub type ProgressCallback<'a> = &'a mut dyn Progress;
 
-/// `emit(callback, phase, event, **details)`: nothing without a callback.
-pub fn emit(callback: Option<&mut dyn Progress>, phase: &str, event: &str, details: Object) {
+/// `emit`: forward one event when an observer is installed.
+pub fn emit(callback: &mut Option<ProgressCallback<'_>>, phase: &str, event: &str, details: Vec<(&'static str, Value)>) {
     if let Some(callback) = callback {
-        callback.observe(phase, event, &details);
+        callback.observe(phase, event, details);
     }
 }
 
-/// Builds the `details` mapping of an event in the order the keywords were written.
-#[macro_export]
-macro_rules! details {
-    () => { $crate::progress::Details::new().0 };
-    ($($key:ident = $value:expr),+ $(,)?) => {{
-        let mut details = $crate::progress::Details::new();
-        $(details.push(stringify!($key), $value);)+
-        details.0
-    }};
+pub fn int(value: i64) -> Value {
+    Value::Int(num_bigint::BigInt::from(value))
 }
 
-/// Helper behind [`details!`].
-pub struct Details(pub Object);
-
-impl Details {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        Details(Object::new())
-    }
-
-    pub fn push(&mut self, key: &str, value: impl Into<Value>) {
-        self.0.insert(key.to_owned(), value.into());
-    }
+pub fn text(value: &str) -> Value {
+    Value::Str(value.to_owned())
 }
 
 /// Python's `round(x, 3)` for the elapsed seconds: correctly rounded, as `%.3f` is.
@@ -71,18 +50,22 @@ impl<W: Write> ConsoleProgress<W> {
     }
 
     /// The JSON line of one event at `elapsed` seconds (sorted keys, Python's defaults).
-    pub fn line(phase: &str, event: &str, elapsed: f64, details: &Object) -> String {
+    pub fn line(phase: &str, event: &str, elapsed: f64, details: Vec<(&'static str, Value)>) -> String {
+        let mut fields = Object::new();
+        for (key, value) in details {
+            fields.insert(key.to_owned(), value);
+        }
         let mut document = Object::new();
         document.insert("phase".to_owned(), Value::from(phase));
         document.insert("event".to_owned(), Value::from(event));
         document.insert("elapsed_seconds".to_owned(), Value::Float(round_seconds(elapsed)));
-        document.insert("details".to_owned(), Value::Object(details.clone()));
+        document.insert("details".to_owned(), Value::Object(fields));
         format!("PROGRESS {}", Dumps::new().sort_keys(true).dumps(&Value::Object(document)))
     }
 }
 
 impl<W: Write> Progress for ConsoleProgress<W> {
-    fn observe(&mut self, phase: &str, event: &str, details: &Object) {
+    fn observe(&mut self, phase: &str, event: &str, details: Vec<(&'static str, Value)>) {
         let elapsed = self.started.elapsed().as_secs_f64();
         let _ = copper_json::text::print(&mut self.out, &Self::line(phase, event, elapsed, details));
         let _ = self.out.flush();
@@ -95,8 +78,8 @@ mod tests {
 
     #[test]
     fn console_lines_sort_keys_and_round_seconds() {
-        let details = details!(nets = 3i64, status = "finished");
-        let line = ConsoleProgress::<Vec<u8>>::line("ordinary_area", "finished", 1.23456, &details);
+        let details = vec![("nets", int(3)), ("status", text("finished"))];
+        let line = ConsoleProgress::<Vec<u8>>::line("ordinary_area", "finished", 1.23456, details);
         assert_eq!(
             line,
             "PROGRESS {\"details\": {\"nets\": 3, \"status\": \"finished\"}, \"elapsed_seconds\": 1.235, \
@@ -104,6 +87,9 @@ mod tests {
         );
         assert_eq!(round_seconds(0.0005), 0.001);
         assert_eq!(round_seconds(2.0), 2.0);
-        assert_eq!(ConsoleProgress::<Vec<u8>>::line("a", "b", 2.0, &details!()), "PROGRESS {\"details\": {}, \"elapsed_seconds\": 2.0, \"event\": \"b\", \"phase\": \"a\"}");
+        assert_eq!(
+            ConsoleProgress::<Vec<u8>>::line("a", "b", 2.0, Vec::new()),
+            "PROGRESS {\"details\": {}, \"elapsed_seconds\": 2.0, \"event\": \"b\", \"phase\": \"a\"}"
+        );
     }
 }

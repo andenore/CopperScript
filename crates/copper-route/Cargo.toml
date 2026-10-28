@@ -1,6 +1,6 @@
 [package]
 name = "copper-route"
-description = "Pin access, planes, the routing pipeline and the benchmark ladder (M4)"
+description = "Routing: exact clearance index, global router, layer assignment, escape planning, pin access, planes, the routing pipeline and the benchmark ladder (M4)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,9 +13,14 @@ copper-json.workspace = true
 copper-lang.workspace = true
 copper-pcb.workspace = true
 copper-physical.workspace = true
+copper-place.workspace = true
 copper-state.workspace = true
 copper-units.workspace = true
 indexmap.workspace = true
+num-bigint.workspace = true
+num-integer.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
 sha2.workspace = true
 
 [lints]
