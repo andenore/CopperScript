@@ -17,8 +17,6 @@ use copper_physical::CopperLayer;
 use copper_physical::pyfloat::round_int;
 use copper_units::Decimal;
 use indexmap::{IndexMap, IndexSet};
-use num_bigint::BigInt;
-use num_traits::{Signed, ToPrimitive, Zero};
 
 const SI_IMPEDANCE: &str = "SI-IMPEDANCE";
 const SI_NO_STACKUP: &str = "SI-NO-STACKUP";
@@ -59,34 +57,9 @@ fn ohm(value: &Decimal) -> String {
     format!("{} ohm", value.quantize(-1).to_sci_string())
 }
 
-/// Python's `round(value, ndigits)` for a finite float: the exact binary
-/// value rounded half to even, then the nearest float.
+/// Python's `round(value, ndigits)`.
 fn round_digits(value: f64, ndigits: u32) -> f64 {
-    let bits = value.to_bits();
-    let negative = bits >> 63 == 1;
-    let exponent = ((bits >> 52) & 0x7ff) as i64;
-    let fraction = bits & ((1 << 52) - 1);
-    let (mantissa, power) = if exponent == 0 { (fraction, -1074) } else { (fraction | 1 << 52, exponent - 1075) };
-    let scale = BigInt::from(10u8).pow(ndigits);
-    // value * 10^ndigits = mantissa * 2^power * scale, rounded to an integer.
-    let numerator = BigInt::from(mantissa) * &scale;
-    let rounded = if power >= 0 {
-        numerator << power as usize
-    } else {
-        let denominator = BigInt::from(1u8) << (-power) as usize;
-        let quotient = &numerator / &denominator;
-        let remainder = &numerator - &quotient * &denominator;
-        let twice = remainder * 2u8;
-        if twice > denominator || (twice == denominator && (&quotient % 2u8) == BigInt::from(1u8)) {
-            quotient + 1u8
-        } else {
-            quotient
-        }
-    };
-    let digits = if rounded.is_zero() { "0".to_owned() } else { rounded.abs().to_string() };
-    let result: f64 = format!("{digits}e-{ndigits}").parse().expect("decimal digits");
-    let _ = rounded.to_f64();
-    if negative { -result } else { result }
+    copper_physical::pyfloat::round_digits(value, ndigits)
 }
 
 /// `_ohms`: `Decimal(str(round(value, 9)))`.

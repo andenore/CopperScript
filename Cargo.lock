@@ -171,6 +171,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "copper-route"
+version = "0.1.0"
+dependencies = [
+ "copper-drc",
+ "copper-json",
+ "copper-lang",
+ "copper-pcb",
+ "copper-physical",
+ "copper-state",
+ "copper-units",
+ "indexmap",
+ "num-bigint",
+ "num-rational",
+ "num-traits",
+ "sha2",
+]
+
+[[package]]
 name = "copper-state"
 version = "0.1.0"
 dependencies = [
