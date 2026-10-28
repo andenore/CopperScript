@@ -30,7 +30,7 @@ use crate::syntax::{Declaration, Document, Location, MechanicalItem, MechanicalI
 pub use anchors::MechanicalAttachment;
 pub use assembly::{AssemblyAccess, AssemblyEnvelope, BodyOverhang, ComponentHeight};
 pub use profiles::{MechanicalFeatureSource, MechanicalProfileInstance, expand_mechanical_items};
-pub use references::{MechanicalReference, ReferenceEntity, reference_scene};
+pub use references::{MechanicalReference, ReferenceEntity, reference_scene, verify_reference_assets};
 pub use stackup::{MechanicalStackup, lower_stackup};
 
 /// The code of the placeholder error for rewrite gaps.

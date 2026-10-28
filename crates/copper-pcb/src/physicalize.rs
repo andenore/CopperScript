@@ -373,7 +373,7 @@ pub(crate) fn natural_key(value: &str) -> Vec<(u8, String)> {
 }
 
 /// `_physical_pin_number`: a package pin, or a unit terminal bonded to exactly one pin.
-pub(crate) fn physical_pin_number(
+pub fn physical_pin_number(
     component: &ComponentInstance,
     part: &PartDefinition,
     devices: &IndexMap<String, DeviceDefinition>,

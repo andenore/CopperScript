@@ -4,8 +4,9 @@ use std::io::Write;
 
 use crate::{
     agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compile, compile_macro,
-    explain, export_kicad, export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout,
-    power_check, query, replay_critical, replay_unified, route_board, route_global, si_check, state, summarize, view,
+    edit_mechanical, editor_overlay, explain, export_kicad, export_kicad_pcb, export_manufacturing, issues, library,
+    lock, lsp, plan_layout, power_check, query, replay_critical, replay_unified, route_board, route_global, si_check,
+    state, summarize, view,
 };
 
 /// Exit status of a command the Rust rewrite does not implement yet.
@@ -18,8 +19,6 @@ pub const NOT_IMPLEMENTED_MARKER: &str = "not implemented in the Rust rewrite";
 pub enum Plan {
     /// Implemented in this binary.
     Done,
-    /// Planned for the named milestone of docs/rust-port-plan.md.
-    Milestone(&'static str),
     /// An independent check that stays on the Python CLI in the first iteration.
     Python,
 }
@@ -32,9 +31,9 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("library", Plan::Done),
     ("summarize", Plan::Done),
     ("benchmark-routing", Plan::Done),
-    ("editor-overlay", Plan::Milestone("M6")),
-    ("edit-mechanical", Plan::Milestone("M3")),
-    ("edit", Plan::Milestone("M3")),
+    ("editor-overlay", Plan::Done),
+    ("edit-mechanical", Plan::Done),
+    ("edit", Plan::Done),
     ("export-manufacturing", Plan::Done),
     ("audit-cam", Plan::Python),
     ("assess-engineering", Plan::Python),
@@ -81,7 +80,6 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
             for (name, plan) in COMMANDS {
                 let status = match plan {
                     Plan::Done => "rewritten".to_owned(),
-                    Plan::Milestone(milestone) => format!("planned for {milestone}"),
                     Plan::Python => "stays on the Python CLI".to_owned(),
                 };
                 let _ = writeln!(out, "  {name:<22} {status}");
@@ -116,11 +114,9 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "benchmark-routing" => benchmark_routing::run(rest, out, err),
         "route-global" => route_global::run(rest, out, err),
         "replay-unified" => replay_unified::run(rest, out, err),
+        "editor-overlay" => editor_overlay::run(rest, out, err),
+        "edit-mechanical" | "edit" => edit_mechanical::run(rest, out, err),
         _ => match plan(command) {
-            Some(Plan::Milestone(milestone)) => {
-                let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");
-                NOT_IMPLEMENTED_EXIT
-            }
             Some(Plan::Python) => {
                 let _ = writeln!(
                     err,
@@ -155,13 +151,10 @@ mod tests {
     }
 
     #[test]
-    fn unported_commands_report_their_milestone() {
-        let (code, out, err) = call(&["editor-overlay", "board.copper"]);
+    fn python_only_commands_point_at_the_python_cli() {
+        let (code, out, err) = call(&["audit-cam"]);
         assert_eq!((code, out.as_str()), (NOT_IMPLEMENTED_EXIT, ""));
-        assert!(err.contains(NOT_IMPLEMENTED_MARKER) && err.contains("M6"), "{err}");
-        let (code, _, err) = call(&["audit-cam"]);
-        assert_eq!(code, NOT_IMPLEMENTED_EXIT);
-        assert!(err.contains("python -m copperscript audit-cam"), "{err}");
+        assert!(err.contains(NOT_IMPLEMENTED_MARKER) && err.contains("python -m copperscript audit-cam"), "{err}");
     }
 
     #[test]

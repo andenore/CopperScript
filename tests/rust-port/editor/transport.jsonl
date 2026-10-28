@@ -1,0 +1,29 @@
+# Assets, routing and the capability checks (loopback Host, same Origin, token).
+{"get": "/"}
+{"get": "/editor.js"}
+{"get": "/editor.css"}
+{"get": "/copper-logo.svg"}
+{"get": "/missing"}
+{"get": "/api/missing"}
+{"get": "/api/scene", "token": false}
+{"get": "/api/scene", "headers": {"Host": "localhost:{port}"}}
+{"get": "/api/scene", "headers": {"Origin": "http://evil.example"}}
+{"get": "/api/scene", "headers": {"Origin": "http://127.0.0.1:{port}"}}
+{"get": "/api/scene?x=1"}
+{"post": "/api/operation", "json": {"action": "discard", "revision": 0}, "token": false}
+{"post": "/api/other", "json": {"action": "discard", "revision": 0}}
+{"post": "/api/operation", "raw": "{\"action\": \"discard\", \"revision\": 0}", "headers": {"Content-Type": "text/plain"}}
+{"post": "/api/operation", "raw": "{\"action\": \"discard\", \"action\": \"undo\", \"revision\": 0}"}
+{"post": "/api/operation", "raw": "{\"action\": \"discard\", \"revision\": NaN}"}
+{"post": "/api/operation", "raw": "[1, 2]"}
+{"post": "/api/operation", "raw": "{\"action\": "}
+{"post": "/api/operation", "raw": "﻿{}"}
+{"post": "/api/operation", "json": {"action": "fly", "revision": 0}}
+{"post": "/api/operation", "json": {"action": "discard"}}
+{"post": "/api/operation", "json": {"action": "discard", "revision": 0, "extra": 1}}
+{"post": "/api/operation", "json": {"action": "discard", "revision": 7}}
+{"post": "/api/operation", "json": {"action": "discard", "revision": true}}
+{"post": "/api/operation", "json": {"action": "undo", "revision": 0}}
+{"post": "/api/open-definition", "json": {"feature_index": 0}}
+{"post": "/api/open-definition", "json": {"feature_index": "0"}}
+{"post": "/api/open-definition", "json": {"feature_index": 99}}
