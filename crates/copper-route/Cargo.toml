@@ -21,5 +21,8 @@ num-rational.workspace = true
 num-traits.workspace = true
 sha2.workspace = true
 
+[dev-dependencies]
+copper-lang.workspace = true
+
 [lints]
 workspace = true

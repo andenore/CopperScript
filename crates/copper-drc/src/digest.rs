@@ -1185,16 +1185,16 @@ pub mod reprs {
         )
     }
 
+    /// A permission-only rule keeps its historical repr (no array fields).
     pub fn via_in_pad_rule(item: &PadViaInPadRule) -> String {
-        dc(
-            "PadViaInPadRule",
-            &[
-                ("pad", pad(&item.pad)),
-                ("process", s("filled-capped")),
+        let mut fields = vec![("pad", pad(&item.pad)), ("process", s("filled-capped"))];
+        if item.rows.is_some() {
+            fields.extend([
                 ("rows", opt_int(item.rows)),
                 ("columns", opt_int(item.columns)),
                 ("pitch_nm", opt_int(item.pitch_nm)),
-            ],
-        )
+            ]);
+        }
+        dc("PadViaInPadRule", &fields)
     }
 }

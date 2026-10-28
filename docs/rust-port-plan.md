@@ -529,3 +529,26 @@ do not shrink as much.
 - Windows: Python digests the report it wrote with CRLF, so the summary's
   `report_sha256` differs from the Rust binary's LF report there; it needs
   recording once a Windows run has the digests.
+
+**M4 stream: routing foundation and `route-global` (branch `rust-m4-global`).**
+
+- `copper-route` is the base crate of the M4 routing streams: one module
+  per Python module (`routing_clearance`, `routing_lattice`, `routing`,
+  `layer_assignment`, `routeflow` and their helpers). `route-global`
+  reuses plan-layout's physical pipeline and option parsing, then runs
+  the transactional placement/global-routing feedback loop and writes
+  the `copperscript-global-route/v0.1` guides and the optional placed PCB.
+- `routing_lattice` (uniform and nested lattices) is checked against a
+  Python-generated fixture (`crates/copper-route/tests/fixtures/lattice.json`):
+  every recorded query is identical, floats bit for bit.
+- Corpus: six `route-global*` suites (every corpus board with its
+  `{physical}` args, proxy inputs, fixtures, macros, options, error paths)
+  with 456 cases: 435 byte-identical (guides, PCB project and stdout), 13
+  recorded Python crashes on unknown parts (D-0096 to D-0108) and 8
+  pending. No case depends on timing; route-global prints no progress.
+- Not implemented (exit 3): what plan-layout lacks (the decoupling-access
+  phase with a movable decoupler), `admit_fixed_prefix` (fixed copper
+  prefixes, used by route-board); `escape_plan` is not ported yet.
+- cm4 and nrf52 need the KiCad footprint repository in their package
+  cache; where it is missing both implementations report the same
+  offline cache miss.

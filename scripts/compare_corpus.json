@@ -8273,6 +8273,1033 @@
    ]
   },
   {
+   "name": "route-global",
+   "milestone": "M4",
+   "boards": "*",
+   "args": [
+    "route-global",
+    "{input}",
+    "--locked",
+    "--offline",
+    "{physical}",
+    "--candidates",
+    "1",
+    "-o",
+    "{out}/route.json",
+    "--pcb-output",
+    "{out}/placed.kicad_pcb"
+   ],
+   "timeout_s": 1800
+  },
+  {
+   "name": "route-global-proxy",
+   "milestone": "M4",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "route-global",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--no-check",
+    "--candidates",
+    "1",
+    "-o",
+    "{out}/route.json",
+    "--pcb-output",
+    "{out}/placed.kicad_pcb"
+   ],
+   "mutations": 5,
+   "timeout_s": 1800
+  },
+  {
+   "name": "route-global-fixtures",
+   "milestone": "M4",
+   "inputs": [
+    "tests/rust-port/export-kicad-pcb/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "route-global",
+    "{input}",
+    "--allow-proxy-footprints",
+    "--no-check",
+    "--layers",
+    "6",
+    "--fab-profile",
+    "jlcpcb-six-layer",
+    "-o",
+    "{out}/route.json",
+    "--pcb-output",
+    "{out}/placed.kicad_pcb"
+   ],
+   "mutations": 10,
+   "timeout_s": 1800
+  },
+  {
+   "name": "route-global-macros",
+   "milestone": "M4",
+   "inputs": [
+    "tests/rust-port/export-kicad-pcb/macros/*.copper",
+    "tests/rust-port/export-kicad-pcb/macros/edges/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "route-global",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--no-check",
+    "--layers",
+    "4",
+    "--fab-profile",
+    "jlcpcb-four-layer",
+    "-o",
+    "{out}/route.json",
+    "--pcb-output",
+    "{out}/placed.kicad_pcb"
+   ],
+   "mutations": 5,
+   "timeout_s": 1800
+  },
+  {
+   "name": "route-global-options",
+   "milestone": "M4",
+   "cases": [
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--candidates",
+      "3",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "4",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--tile-size-mm",
+      "2",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--tile-size-mm",
+      "2.5",
+      "--router-iterations",
+      "3",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--tile-size-mm",
+      "1",
+      "--router-iterations",
+      "1",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--router-iterations",
+      "1",
+      "--feedback-iterations",
+      "1",
+      "--feedback-trials",
+      "2",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--feedback-trials",
+      "0",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--pin-access-step-mm",
+      "0.25",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--critical-pin-access-step-mm",
+      "0.1",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--width-mm",
+      "40",
+      "--height-mm",
+      "30",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--width-mm",
+      "24",
+      "--tile-size-mm",
+      "2",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-grid-mm",
+      "0.5",
+      "--placement-seeds",
+      "3",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--escape-margin-mm",
+      "1",
+      "--escape-transit-lanes",
+      "2",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--power-domain-weight",
+      "0",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--decoupling-placement-trials",
+      "0",
+      "--placement-refinement-passes",
+      "0",
+      "--escape-spacing-passes",
+      "0",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--cand",
+      "2",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--tile",
+      "3",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "timeout_s": 1800
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--tile-size-mm",
+      "3",
+      "--feedback-iterations",
+      "2",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "timeout_s": 1800
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--footprint-root",
+      "tests/fixtures/footprints",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "route-global-errors",
+   "milestone": "M4",
+   "cases": [
+    {
+     "args": [
+      "route-global",
+      "examples/invalid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/invalid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/missing/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/managed_footprints/board.copper",
+      "--locked",
+      "--offline",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--tile-size-mm",
+      "0",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--tile-size-mm",
+      "-1",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--tile-size-mm",
+      "nan",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--router-iterations",
+      "0",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--router-iterations",
+      "-2",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--feedback-iterations",
+      "0",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--feedback-trials",
+      "-1",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--tile-size-mm",
+      "0.4",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--candidates",
+      "0",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--power-domain-weight",
+      "2",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--hard-macro",
+      "examples/missing-scene.json",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--hard-macro",
+      "scripts/compare_corpus.json",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-templates",
+      "examples/missing-templates.json",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-templates",
+      "scripts/compare_corpus.json",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "examples/valid_board/board.copper/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/missing-dir/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "examples/valid_board/board.copper/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/nested/deeper/placed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--pin-access-step-mm",
+      "0",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--pin-access-step-mm",
+      "x",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--critical-pin-access-step-mm",
+      "-1",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--router-iterations",
+      "x",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--feedback-trials",
+      "1.5",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "3",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--fab-profile",
+      "jlcpcb",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--bogus",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--width-mm",
+      "wide",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-seeds",
+      "0",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/route.json",
+      "--pcb-output",
+      "{out}/placed.kicad_pcb"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "args": [
+      "route-global",
+      "--help"
+     ],
+     "compare": [
+      "exit"
+     ]
+    }
+   ]
+  },
+  {
    "name": "assembly-snapshot",
    "milestone": "M3",
    "inputs": [

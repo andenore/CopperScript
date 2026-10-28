@@ -11,6 +11,7 @@
 #![allow(clippy::type_complexity)]
 
 pub mod escape_plan;
+pub mod fine_regions;
 pub mod global_keepouts;
 pub mod global_reserved_access;
 pub mod global_terminals;

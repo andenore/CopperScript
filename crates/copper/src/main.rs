@@ -28,6 +28,7 @@ mod power_check;
 mod pypath;
 mod query;
 mod report_args;
+mod route_global;
 mod si_check;
 mod state;
 mod summarize;
