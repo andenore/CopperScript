@@ -15,7 +15,27 @@
 // Rank tuples spell out Python's sort keys field by field.
 #![allow(clippy::type_complexity)]
 
+/// A `str` enum: `value()` is the Python member's value, `parse` its inverse.
+macro_rules! text_enum {
+    ($name:ident { $($variant:ident = $text:literal),+ $(,)? }) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        pub enum $name { $($variant),+ }
+
+        impl $name {
+            pub fn value(self) -> &'static str {
+                match self { $($name::$variant => $text),+ }
+            }
+
+            pub fn parse(text: &str) -> Option<$name> {
+                match text { $($text => Some($name::$variant),)+ _ => None }
+            }
+        }
+    };
+}
+
 pub mod bench;
+pub mod congestion_feedback;
+pub mod detailed;
 pub mod drc_report;
 pub mod escape_assignment;
 pub mod escape_plan;
@@ -28,12 +48,17 @@ pub mod global_terminals;
 pub mod iteration_checkpoints;
 pub mod ladder;
 pub mod layer_assignment;
+pub mod package_patterns;
 pub mod pin_access;
 pub mod pin_escape;
 pub mod plane;
+pub mod plane_estimate;
 pub mod plane_verify;
+pub mod power_islands;
 pub mod progress;
 pub mod pypath;
+pub mod route_smoothing;
+pub mod route_summary;
 pub mod routeflow;
 pub mod routing;
 pub mod routing_acceptance;
@@ -43,8 +68,11 @@ pub mod routing_lattice;
 pub mod routing_layers;
 pub mod routing_metrics;
 pub mod routing_vias;
+pub mod state_codec;
 pub mod surface_path;
 pub mod terminal_preferences;
+pub mod unified_error;
+pub mod unified_router;
 
 pub use copper_pcb::{Error, Result};
 pub use progress::{Progress, emit};

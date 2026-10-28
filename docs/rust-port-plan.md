@@ -583,3 +583,35 @@ do not shrink as much.
   `route-board-errors` and `route-board-mutations`: 54 equal, 26 pending.
   `--unified-time-budget-s` defaults to no budget; a case that sets it would
   be wall-time dependent and stays out of the corpus.
+
+**M4 stream: unified router and `replay-unified` (branch `rust-m4-unified`).**
+
+- `copper-route` (on `rust-m4-global`'s foundation) gained the unified
+  router: options (`__post_init__`, `--set`/`--unified-set` overrides),
+  `fine_regions`, the uniform lattice (`routing_lattice`, PENDING
+  `rust-m4-global`), legality rasters, the native A* kernel (`astar.c`) with
+  its heap tie-breaking, net specs and attach candidates (checked,
+  extended and local lead-ins, necks), PathFinder negotiation with exact
+  proposal conflicts, exact commit, rip-in repair rounds over the shared
+  index, plane nets with the pour re-check, `route_smoothing`,
+  `plane_estimate` (raster pour estimate), `route_summary`, budgets and the
+  congestion export, and `power_islands` (`--power-islands`); plus a typed
+  codec for `--unified-save-inputs` states
+  and `--save-result` results with Python's `StateError`, `ValueError` and
+  uncaught-exception texts.
+- `copper replay-unified` is rewritten: every option, error path, summary,
+  `--report`, `--save-result`, `-o` and `--progress`.
+- Inputs: `tests/rust-port/unified/` (nine `route-board
+  --unified-save-inputs` states, malformed and valid variants;
+  `generate.py`, README). Corpus: `replay-unified` (states and mutations),
+  `-options`, `-errors`, `-malformed`, `-output`: 119 byte-identical, 1
+  pending. Replays compare the result state, the report's `unrouted`, the
+  KiCad output, exit status and stderr, never the `seconds` or `PROGRESS`
+  timing. No case sets a time budget (the default is none); a
+  `time_budget_s` deadline reports not implemented.
+- Not implemented (exit 3): nested lattices (fine-region patches on ball
+  arrays), bus bundles and bus skew tuning (`critical_tuning`; the bus
+  phase and its skew notes are rewritten), via technologies, required return vias,
+  guide costs, exit reservations, ball-field via sites, ball-grid supply
+  islands (`power_islands_ball_grid_only`), `--refanout`, `--exact-escape`, via-in-pad arrays and a dynamically typed
+  state value (a text pitch).

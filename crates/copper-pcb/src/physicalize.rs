@@ -951,6 +951,7 @@ fn to_stackup(
         copper_layers: layers,
         thickness_nm: declared.layers.iter().map(|layer| layer.thickness_nm).sum(),
         physical_layers: declared.layers.clone(),
+        via_technologies: Vec::new(),
     })
 }
 
