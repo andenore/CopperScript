@@ -64,10 +64,11 @@ impl<'a> Fields<'a> {
         self.fields.get(name)
     }
 
-    /// A field without a Python default.
+    /// A field without a Python default. Python's `cls(**fields)` raises a
+    /// `TypeError` (a crash, not a caught error) without it.
     pub fn required(&self, name: &str) -> Result<&'a StateValue> {
         self.fields.get(name).ok_or_else(|| {
-            Error::Value(format!("{}.__init__() missing 1 required positional argument: '{name}'", self.type_name))
+            Error::NotImplemented(format!("a saved {} without its required field {name:?}", self.type_name))
         })
     }
 }

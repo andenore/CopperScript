@@ -36,7 +36,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     let kicad_cli = parsed.value("--kicad-cli").map(pypath::display);
     // The pipeline the cases run through belongs to the routing streams that
     // have not landed yet: the first case reports not implemented.
-    let mut route = |_board: &copper_pcb::board::PhysicalBoard| copper_pcb::not_implemented("the routing pipeline (route_case)");
+    let mut route =
+        |_board: &copper_pcb::board::PhysicalBoard| copper_pcb::not_implemented("the routing pipeline (route_case)");
     match run_acceptance(Path::new(&output), kicad_cli.as_deref().map(Path::new), &mut route) {
         Ok(report) => {
             let status = report.get("status").and_then(|v| v.as_str()).unwrap_or("incomplete");

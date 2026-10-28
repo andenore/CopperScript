@@ -1448,7 +1448,8 @@ pub fn macro_routing_ports(board: &PhysicalBoard, net_name: &str) -> Result<Inde
                         .any(|pad| transformed_local_point(pose, pad.position) == port.position)
                 })
                 .collect();
-            let key = if at_port.len() == 1 { at_port[0].clone() } else { port.pads.iter().min().cloned().expect("pads") };
+            let key =
+                if at_port.len() == 1 { at_port[0].clone() } else { port.pads.iter().min().cloned().expect("pads") };
             result.insert(key, port);
         }
     }
@@ -1480,7 +1481,10 @@ pub fn macro_port_layers(board: &PhysicalBoard, port: &MacroPort) -> Result<Vec<
 
 /// `macro_source`: recover an unrouted source; never discard ordinary or critical copper.
 pub fn macro_source(board: PhysicalBoard) -> Result<PhysicalBoard> {
-    if board.tracks.is_empty() && board.vias.is_empty() && board.polygons.is_empty() && board.materialized_macros.is_empty()
+    if board.tracks.is_empty()
+        && board.vias.is_empty()
+        && board.polygons.is_empty()
+        && board.materialized_macros.is_empty()
     {
         return Ok(board);
     }

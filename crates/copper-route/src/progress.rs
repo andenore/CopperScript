@@ -129,6 +129,9 @@ mod tests {
         );
         assert_eq!(round_seconds(0.0005), 0.001);
         assert_eq!(round_seconds(2.0), 2.0);
-        assert_eq!(ConsoleProgress::<Vec<u8>>::line("a", "b", 2.0, &details!()), "PROGRESS {\"details\": {}, \"elapsed_seconds\": 2.0, \"event\": \"b\", \"phase\": \"a\"}");
+        assert_eq!(
+            ConsoleProgress::<Vec<u8>>::line("a", "b", 2.0, &details!()),
+            "PROGRESS {\"details\": {}, \"elapsed_seconds\": 2.0, \"event\": \"b\", \"phase\": \"a\"}"
+        );
     }
 }

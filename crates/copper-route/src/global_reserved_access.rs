@@ -44,7 +44,8 @@ pub fn reserved_pin_access_candidates(
         match anchor {
             Anchor::Access(access) => {
                 let chain = verified_routing_access(board, pad, net, access, clearance)?;
-                let retained = board.vias.iter().find(|v| v.net == net && v.position == access.launch_position).cloned();
+                let retained =
+                    board.vias.iter().find(|v| v.net == net && v.position == access.launch_position).cloned();
                 (chain, access.position, vec![access.layer], retained)
             }
             Anchor::Point(point) => {
@@ -52,7 +53,8 @@ pub fn reserved_pin_access_candidates(
                 let Some(retained) = board.vias.iter().find(|v| v.net == net && v.position == *point).cloned() else {
                     return Ok(Vec::new());
                 };
-                let (a, b) = (crate::layer_index(stack, retained.from_layer), crate::layer_index(stack, retained.to_layer));
+                let (a, b) =
+                    (crate::layer_index(stack, retained.from_layer), crate::layer_index(stack, retained.to_layer));
                 (chain, *point, stack[a.min(b)..=a.max(b)].to_vec(), Some(retained))
             }
         };
@@ -90,12 +92,15 @@ pub fn reserved_pin_access_candidates(
             let endpoint = graph.point(*node);
             // Most owned launches need only an exact octilinear corner to a
             // nearby guide. Do not spend a maze budget before trying it.
-            let mut path = checked_access_path(board, clearance, net, position, endpoint, width, *layer, false, true, None)?;
+            let mut path =
+                checked_access_path(board, clearance, net, position, endpoint, width, *layer, false, true, None)?;
             if path.is_none() {
                 path = local_access_path(board, clearance, net, position, endpoint, *layer, width, bounds, None, None)?;
             }
             let regional = path.is_none();
-            if regional && ((endpoint.x_nm - position.x_nm).abs() > half || (endpoint.y_nm - position.y_nm).abs() > half) {
+            if regional
+                && ((endpoint.x_nm - position.x_nm).abs() > half || (endpoint.y_nm - position.y_nm).abs() > half)
+            {
                 continue;
             }
             // The regional form is the established checked physical exit into a
@@ -107,7 +112,8 @@ pub fn reserved_pin_access_candidates(
                     tracks.push(track.clone());
                 }
             }
-            let mut access = PinAccess::new(pad.clone(), pad_position, *node, if regional { position } else { endpoint }, *layer);
+            let mut access =
+                PinAccess::new(pad.clone(), pad_position, *node, if regional { position } else { endpoint }, *layer);
             access.tracks = tracks;
             access.region_only = regional;
             access.retained_via = retained_via.clone();

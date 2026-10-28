@@ -183,7 +183,7 @@ pub fn local_access_path(
             queue.push(Reverse((candidate_cost + remaining, remaining, candidate_cost, serial, neighbor)));
         }
     }
-    if let Some(stats) = stats.as_deref_mut() {
+    if let Some(stats) = stats {
         stats.expanded_states = expanded;
         stats.discovered_nodes = previous.len() as i64;
         stats.outcome = if previous.contains_key(&target) {

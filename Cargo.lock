@@ -45,6 +45,7 @@ dependencies = [
  "copper-route",
  "copper-state",
  "copper-units",
+ "indexmap",
  "sha2",
 ]
 

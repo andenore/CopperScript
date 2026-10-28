@@ -147,7 +147,9 @@ pub fn load_ladder(path: &Path) -> Result<Vec<Board>, String> {
             Some(Value::Int(number)) => number.to_string().parse().unwrap_or(1800.0),
             Some(Value::Float(number)) => *number,
             Some(Value::Bool(flag)) => f64::from(u8::from(*flag)),
-            Some(Value::Str(text)) => text.trim().parse().map_err(|_| format!("could not convert string to float: '{text}'"))?,
+            Some(Value::Str(text)) => {
+                text.trim().parse().map_err(|_| format!("could not convert string to float: '{text}'"))?
+            }
             _ => 1800.0,
         };
         let native = match entry.get("native") {
@@ -198,7 +200,8 @@ impl Runner {
                 (command, 1)
             }
             Runner::Python(python) => {
-                let mut command = vec![python.clone(), "-m".to_owned(), "copperscript".to_owned(), "route-board".to_owned()];
+                let mut command =
+                    vec![python.clone(), "-m".to_owned(), "copperscript".to_owned(), "route-board".to_owned()];
                 command.extend(args.iter().cloned());
                 (command, 2)
             }
@@ -274,8 +277,8 @@ pub fn run_board(board: &Board, out: &Path, options: &RunOptions) -> Result<Obje
     let (command, skip) = options.runner.command(&args);
     let started = Instant::now();
     let log_path = directory.join("route.log");
-    let mut log = std::fs::File::create(&log_path)
-        .map_err(|e| paths::python_os_error(&e, Some(&paths::display(&log_path))))?;
+    let mut log =
+        std::fs::File::create(&log_path).map_err(|e| paths::python_os_error(&e, Some(&paths::display(&log_path))))?;
     let _ = writeln!(log, "{}", command.join(" "));
     let _ = log.flush();
     let outcome = run_logged(&command, &board.project, &log, Duration::from_secs_f64(board.timeout_s.max(0.0)));
@@ -287,7 +290,8 @@ pub fn run_board(board: &Board, out: &Path, options: &RunOptions) -> Result<Obje
     };
     record.insert("exit_code".to_owned(), code.map_or(Value::Null, |code| Value::from(i64::from(code))));
     record.insert("elapsed_s".to_owned(), Value::Float(elapsed));
-    record.insert("command".to_owned(), Value::Array(command[skip..].iter().map(|c| Value::from(c.as_str())).collect()));
+    record
+        .insert("command".to_owned(), Value::Array(command[skip..].iter().map(|c| Value::from(c.as_str())).collect()));
     if status == "timeout" {
         record.insert("status".to_owned(), Value::from(status));
         return Ok(record);
@@ -297,7 +301,8 @@ pub fn run_board(board: &Board, out: &Path, options: &RunOptions) -> Result<Obje
         record.insert("reason".to_owned(), Value::from(last_line(&log_path)));
         return Ok(record);
     }
-    let text = std::fs::read_to_string(&report).map_err(|e| paths::python_os_error(&e, Some(&paths::display(&report))))?;
+    let text =
+        std::fs::read_to_string(&report).map_err(|e| paths::python_os_error(&e, Some(&paths::display(&report))))?;
     let document = copper_json::parse(&text).map_err(|e| e.to_string())?;
     let Some(summary) = document.get("summary").filter(|v| !matches!(v, Value::Null)) else {
         record.insert("status".to_owned(), Value::from("error"));
@@ -385,8 +390,7 @@ fn last_line(path: &Path) -> String {
     let text = String::from_utf8_lossy(&bytes);
     text.lines()
         .map(|line| line.trim_matches(copper_json::python_isspace))
-        .filter(|line| !line.is_empty())
-        .last()
+        .rfind(|line| !line.is_empty())
         .map(|line| line.chars().take(300).collect())
         .unwrap_or_default()
 }
@@ -579,12 +583,7 @@ pub fn utc_now_iso() -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}+00:00",
-        rest / 3600,
-        (rest % 3600) / 60,
-        rest % 60
-    )
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}+00:00", rest / 3600, (rest % 3600) / 60, rest % 60)
 }
 
 const USAGE: &str = "usage: copper bench [-h] --out OUT [--only ONLY] [--tags TAGS] [--label LABEL] \
@@ -747,9 +746,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(err, "{}", paths::python_os_call_error(&error, Some(&paths::display(&out_dir))));
         return 1;
     }
-    let label = parsed.last("--label").cloned().unwrap_or_else(|| {
-        out_dir.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
-    });
+    let label = parsed
+        .last("--label")
+        .cloned()
+        .unwrap_or_else(|| out_dir.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default());
     let mut document = Object::new();
     document.insert("schema".to_owned(), Value::from(SCHEMA));
     document.insert("label".to_owned(), Value::from(label));
@@ -770,7 +770,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             }
         },
     };
-    let extra_args: Vec<String> = parsed.values.iter().filter(|(k, _)| *k == "--extra-arg").map(|(_, v)| v.clone()).collect();
+    let extra_args: Vec<String> =
+        parsed.values.iter().filter(|(k, _)| *k == "--extra-arg").map(|(_, v)| v.clone()).collect();
     let placements = parsed.last("--placements").map(|text| PathBuf::from(crate::pypath_display(text)));
     let options = RunOptions {
         kicad_cli: parsed.last("--kicad-cli").map(String::as_str),
@@ -946,7 +947,10 @@ mod tests {
             markdown(&document(), Some(&problems)),
             format!("{TABLE}\n## Regressions against baseline\n\n- c: run error (baseline completed)\n")
         );
-        assert_eq!(markdown(&document(), Some(&[])).trim_end(), format!("{TABLE}\n## Regressions against baseline\n\nNone.").as_str());
+        assert_eq!(
+            markdown(&document(), Some(&[])).trim_end(),
+            format!("{TABLE}\n## Regressions against baseline\n\nNone.").as_str()
+        );
     }
 
     #[test]

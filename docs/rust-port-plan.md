@@ -529,3 +529,36 @@ do not shrink as much.
 - Windows: Python digests the report it wrote with CRLF, so the summary's
   `report_sha256` differs from the Rust binary's LF report there; it needs
   recording once a Windows run has the digests.
+
+**M4 stream: critical and pair routing, `replay-critical` (branch `rust-m4-critical`).**
+
+- `copper replay-critical` is wired (`crates/copper/src/replay_critical.rs`):
+  arguments, `load_state` (schema, digest, decode, Python's messages),
+  critical inputs dicts and placement checkpoints, the report (critical
+  document, DRC report, route summary), `-o` and stdout. `copper-route`
+  `critical` ports the stage's guards, `promote_planar_nets`, the job order,
+  `--only` selection, hard-macro and asymmetric-rule results, the batch
+  intersection check, lane delays (Python `Decimal.sqrt` in `copper-units`),
+  fingerprints and documents; `route_summary`, `routing_state` (global route
+  decoding, PENDING rust-m4-unified) and the report types of `pair_search`,
+  `pair_terminals` and `critical_bundles`. `copper-drc` gained breakout
+  relaxation records, now part of the DRC report document.
+- Checkpoints of every board with critical rules and derived error inputs
+  are under `tests/rust-port/critical/` (`generate.py`, README). The harness
+  `json` option takes several key paths and a `without` form, so reports
+  carrying wall time compare everything but `seconds` and
+  `local_preparation.elapsed_seconds`.
+- Coupled pairs: terminal preparation (source terminals), the coarse
+  aligned-pair candidate with its budgets, coupled length and atomic DRC
+  validation, length-match outcomes within limits, and the route summary's
+  plane estimate (`plane_estimate`, PENDING rust-m4-unified) are ported;
+  five `--only` pair replays route byte-identically.
+- Corpus (6 `replay-critical*` suites): the trivial, hard-macro,
+  asymmetric-pair and aligned-pair replays, options, error paths, malformed
+  inputs and mutations are byte-identical. Not implemented (exit 3): the
+  joint pair search (`pair_search`, `pair_vias`, `pair_refine`), offset
+  guides and guide vias, intra-pair skew tuning, local contact branches,
+  single-ended routing (unified router cohort), bundles and repairs,
+  package-access reservations, plane contacts and length-match tuning over
+  the limit.
+

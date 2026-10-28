@@ -3,9 +3,9 @@
 use std::io::Write;
 
 use crate::{
-    agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compile, compile_macro, explain, export_kicad,
-    export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout, power_check, query, si_check,
-    state, summarize, view,
+    agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compile, compile_macro,
+    explain, export_kicad, export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout,
+    power_check, query, replay_critical, si_check, state, summarize, view,
 };
 
 /// Exit status of a command the Rust rewrite does not implement yet.
@@ -47,7 +47,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("view", Plan::Done),
     ("state", Plan::Done),
     ("replay-unified", Plan::Milestone("M4")),
-    ("replay-critical", Plan::Milestone("M4")),
+    ("replay-critical", Plan::Done),
     ("query", Plan::Done),
     ("si-check", Plan::Done),
     ("lock", Plan::Done),
@@ -108,6 +108,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "summarize" => summarize::run(rest, out, err),
         "assembly" => assembly::run(rest, out, err),
         "si-check" => si_check::run(rest, out, err),
+        "replay-critical" => replay_critical::run(rest, out, err),
         "export-manufacturing" => export_manufacturing::run(rest, out, err),
         "plan-layout" => plan_layout::run(rest, out, err),
         "bench" => copper_route::ladder::run(rest, out, err),

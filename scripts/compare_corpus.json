@@ -15403,6 +15403,562 @@
    }
   },
   {
+   "name": "replay-critical",
+   "milestone": "M4",
+   "inputs": [
+    "tests/rust-port/critical/*.state.json",
+    "tests/rust-port/reports/states/*.state.json"
+   ],
+   "args": [
+    "replay-critical",
+    "{input}",
+    "--report",
+    "{out}/critical-report.json",
+    "-o",
+    "{out}/board.kicad_pcb"
+   ],
+   "mutations": 2,
+   "compare": [
+    "exit",
+    "stderr",
+    "files"
+   ],
+   "files": [
+    "board.kicad_pcb",
+    "board.kicad_pro",
+    "board.kicad_dru",
+    "fp-lib-table"
+   ],
+   "json": {
+    "critical-report.json": {
+     "without": [
+      [
+       "seconds"
+      ],
+      [
+       "critical",
+       "nets",
+       "*",
+       "local_preparation",
+       "elapsed_seconds"
+      ]
+     ]
+    }
+   },
+   "timeout_s": 1800
+  },
+  {
+   "name": "replay-critical-only",
+   "milestone": "M4",
+   "compare": [
+    "exit",
+    "stderr",
+    "files"
+   ],
+   "files": [
+    "board.kicad_pcb",
+    "board.kicad_pro",
+    "board.kicad_dru",
+    "fp-lib-table"
+   ],
+   "json": {
+    "critical-report.json": {
+     "without": [
+      [
+       "seconds"
+      ],
+      [
+       "critical",
+       "nets",
+       "*",
+       "local_preparation",
+       "elapsed_seconds"
+      ]
+     ]
+    }
+   },
+   "timeout_s": 1800,
+   "cases": [
+    {
+     "id": "replay-critical-only/routing/D_N",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/routing.state.json",
+      "--only",
+      "D_N",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/routing/V3V3",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/routing.state.json",
+      "--only",
+      "V3V3",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-dphy/CKN",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-dphy.state.json",
+      "--only",
+      "CKN",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-dphy/D0P",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-dphy.state.json",
+      "--only",
+      "D0P",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-four-layer/CKP",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-four-layer.state.json",
+      "--only",
+      "CKP",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-four-layer/D0N",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-four-layer.state.json",
+      "--only",
+      "D0N",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-four-layer/RF",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-four-layer.state.json",
+      "--only",
+      "RF",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-layer-groups/D0N",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-layer-groups.state.json",
+      "--only",
+      "D0N",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-no-stackup/D0N",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-no-stackup.state.json",
+      "--only",
+      "D0N",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-reference-planes/CKN",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-reference-planes.state.json",
+      "--only",
+      "CKN",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-reference-planes/D0P",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-reference-planes.state.json",
+      "--only",
+      "D0P",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-single-ended/CKP",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-single-ended.state.json",
+      "--only",
+      "CKP",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-two-layer/CKN",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-two-layer.state.json",
+      "--only",
+      "CKN",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/si-two-layer/RF",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-two-layer.state.json",
+      "--only",
+      "RF",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/routing/both-members",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/routing.state.json",
+      "--only",
+      "D_P",
+      "--only",
+      "D_N",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/asymmetric-pair",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/derived/asymmetric-pair.state.json",
+      "--only",
+      "D_N",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-only/asymmetric-pair-partner",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/derived/asymmetric-pair.state.json",
+      "--only",
+      "D_P",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "replay-critical-options",
+   "milestone": "M4",
+   "compare": [
+    "exit",
+    "stderr",
+    "files"
+   ],
+   "files": [
+    "board.kicad_pcb",
+    "board.kicad_pro",
+    "board.kicad_dru",
+    "fp-lib-table"
+   ],
+   "json": {
+    "critical-report.json": {
+     "without": [
+      [
+       "seconds"
+      ],
+      [
+       "critical",
+       "nets",
+       "*",
+       "local_preparation",
+       "elapsed_seconds"
+      ]
+     ]
+    }
+   },
+   "timeout_s": 1800,
+   "cases": [
+    {
+     "id": "replay-critical-options/pair-states-1",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/routing.state.json",
+      "--only",
+      "D_N",
+      "--pair-states",
+      "1",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-options/pair-states-200",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/si-dphy.state.json",
+      "--only",
+      "CKN",
+      "--pair-states",
+      "200",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-options/pair-states-plus",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "--pair-states",
+      " +12 ",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-options/report-only",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "--report",
+      "{out}/critical-report.json"
+     ]
+    },
+    {
+     "id": "replay-critical-options/nested-report",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/placement.state.json",
+      "--report",
+      "{out}/a/b/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-options/output-only",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/nrf-antenna-macro.state.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-options/abbreviated",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "--pair",
+      "7",
+      "--rep",
+      "{out}/critical-report.json",
+      "--out",
+      "{out}/board.kicad_pcb"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "replay-critical-errors",
+   "milestone": "M4",
+   "cases": [
+    {
+     "id": "replay-critical-errors/pair-states-0",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "--pair-states",
+      "0"
+     ]
+    },
+    {
+     "id": "replay-critical-errors/unknown-only",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "--only",
+      "NOPE",
+      "--only",
+      "ALSO"
+     ]
+    },
+    {
+     "id": "replay-critical-errors/unknown-only-routing",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/routing.state.json",
+      "--only",
+      "D_N",
+      "--only",
+      "NOPE"
+     ]
+    },
+    {
+     "id": "replay-critical-errors/missing-file",
+     "args": [
+      "replay-critical",
+      "build/missing-critical.state.json",
+      "--report",
+      "{out}/critical-report.json"
+     ]
+    },
+    {
+     "id": "replay-critical-errors/directory",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/bad"
+     ]
+    },
+    {
+     "id": "replay-critical-errors/final-board",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/final-board.state.json"
+     ]
+    },
+    {
+     "id": "replay-critical-errors/not-state",
+     "args": [
+      "replay-critical",
+      "bench/ladder.json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "replay-critical-usage",
+   "milestone": "M4",
+   "compare": [
+    "exit",
+    "stdout"
+   ],
+   "cases": [
+    {
+     "id": "replay-critical-usage/no-state",
+     "args": [
+      "replay-critical"
+     ]
+    },
+    {
+     "id": "replay-critical-usage/negative-pair-states",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "--pair-states=-1"
+     ]
+    },
+    {
+     "id": "replay-critical-usage/text-pair-states",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "--pair-states",
+      "many"
+     ]
+    },
+    {
+     "id": "replay-critical-usage/two-states",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "tests/rust-port/reports/states/placement.state.json"
+     ]
+    },
+    {
+     "id": "replay-critical-usage/unknown-option",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "--fast"
+     ]
+    },
+    {
+     "id": "replay-critical-usage/report-without-value",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/reports/states/critical-inputs.state.json",
+      "--report"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "replay-critical-bad",
+   "milestone": "M4",
+   "inputs": [
+    "tests/rust-port/critical/bad/*.json"
+   ],
+   "args": [
+    "replay-critical",
+    "{input}"
+   ]
+  },
+  {
    "name": "explain",
    "milestone": "M5",
    "cases": [

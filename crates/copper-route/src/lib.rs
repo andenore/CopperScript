@@ -14,6 +14,8 @@
 // Rank tuples spell out Python's sort keys field by field.
 #![allow(clippy::type_complexity)]
 
+pub mod critical;
+pub mod critical_bundles;
 pub mod drc_report;
 pub mod escape_plan;
 pub mod global_keepouts;
@@ -21,11 +23,15 @@ pub mod global_reserved_access;
 pub mod global_terminals;
 pub mod ladder;
 pub mod layer_assignment;
+pub mod pair_search;
+pub mod pair_terminals;
 pub mod pin_access;
 pub mod pin_escape;
+pub mod plane_estimate;
 pub mod plane_verify;
 pub mod progress;
 pub mod pypath;
+pub mod route_summary;
 pub mod routeflow;
 pub mod routing;
 pub mod routing_acceptance;
@@ -34,6 +40,7 @@ pub mod routing_costs;
 pub mod routing_lattice;
 pub mod routing_layers;
 pub mod routing_metrics;
+pub mod routing_state;
 pub mod routing_vias;
 pub mod surface_path;
 pub mod terminal_preferences;

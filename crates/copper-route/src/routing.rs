@@ -16,8 +16,11 @@ use copper_drc::breakout::BreakoutRegions;
 use copper_drc::connectivity::{Candidate, Connectivity, explicit_copper_connectivity};
 use copper_drc::digest::reprs;
 use copper_drc::legality::{point_in_material, shape_in_board};
+use copper_json::{Dumps, Value as Json};
 use copper_pcb::board::{NetRoutingRule, PadReference, PhysicalBoard, RouteKind, TrackSegment, Via};
-use copper_pcb::hard_macros::{macro_port_layers, macro_reservations, macro_routing_pads, macro_routing_ports, macro_source};
+use copper_pcb::hard_macros::{
+    macro_port_layers, macro_reservations, macro_routing_pads, macro_routing_ports, macro_source,
+};
 use copper_pcb::keepouts::resolved_copper_keepouts;
 use copper_pcb::transform::{placed_pad_shape, transformed_local_point, transformed_pad_position};
 use copper_pcb::zones::{ZoneRoutingReservations, deferred_zone_nets, routing_layers};
@@ -25,7 +28,6 @@ use copper_pcb::{Error, Result};
 use copper_physical::footprint::PadKind;
 use copper_physical::geometry::{point_in_polygon, point_segment_distance_squared};
 use copper_physical::{BoardSide, CopperLayer, Point, RoundedConvexShape};
-use copper_json::{Dumps, Value as Json};
 
 use crate::global_keepouts::GlobalTrackKeepout;
 use crate::global_reserved_access::{admit_fixed_prefix, reserved_pin_access_candidates};
@@ -88,7 +90,13 @@ pub struct PinAccess {
 }
 
 impl PinAccess {
-    pub fn new(pad: PadReference, pad_position: Point, node: GridNode, access_position: Point, layer: CopperLayer) -> Self {
+    pub fn new(
+        pad: PadReference,
+        pad_position: Point,
+        node: GridNode,
+        access_position: Point,
+        layer: CopperLayer,
+    ) -> Self {
         PinAccess {
             pad,
             pad_position,
@@ -475,7 +483,11 @@ impl Graph {
     }
 
     /// `search_steps`: exact static costs/edges only; never congestion or path answers.
-    pub fn search_steps(&self, node: GridNode, options: &GlobalRouterOptions) -> Vec<(GridNode, Resource, Direction, i64)> {
+    pub fn search_steps(
+        &self,
+        node: GridNode,
+        options: &GlobalRouterOptions,
+    ) -> Vec<(GridNode, Resource, Direction, i64)> {
         let key = (node, options.via_cost, options.layer_preference_cost, options.direction_preference_cost);
         if let Some(cached) = self.step_cache.borrow().get(&key) {
             return cached.clone();
@@ -503,7 +515,11 @@ impl Graph {
     }
 
     /// `replace(graph, resources=..., via_sites=...)`: a fresh snapshot with fresh derived data.
-    pub fn with(&self, resources: IndexMap<(GridNode, GridNode), Resource>, via_sites: IndexMap<String, Vec<Point>>) -> Graph {
+    pub fn with(
+        &self,
+        resources: IndexMap<(GridNode, GridNode), Resource>,
+        via_sites: IndexMap<String, Vec<Point>>,
+    ) -> Graph {
         Graph {
             layers: self.layers.clone(),
             xs: self.xs.clone(),
@@ -566,7 +582,10 @@ pub fn route_global(
         &mut on_progress,
         "global_graph",
         "finished",
-        vec![("node_count", int(graph.legal_nodes.len() as i64)), ("resource_count", int(graph.resources.len() as i64))],
+        vec![
+            ("node_count", int(graph.legal_nodes.len() as i64)),
+            ("resource_count", int(graph.resources.len() as i64)),
+        ],
     );
     emit(&mut on_progress, "global_pin_access", "started", Vec::new());
     let rules: IndexMap<String, NetRoutingRule> =
@@ -603,7 +622,9 @@ pub fn route_global(
                     Some(anchor) => reserved_pin_access_candidates(
                         board, graph, &pad, &net.name, &layers, rule, &clearance, options, anchor,
                     )?,
-                    None => global_pin_access_candidates(board, graph, &pad, &net.name, &layers, rule, &clearance, options)?,
+                    None => {
+                        global_pin_access_candidates(board, graph, &pad, &net.name, &layers, rule, &clearance, options)?
+                    }
                 };
                 result.insert((net.name.clone(), pad), candidates);
             }
@@ -689,9 +710,14 @@ pub fn route_global(
             owner_graph.as_ref(),
             &zone_nets,
         )?;
-        if let Some(refined) =
-            refine_overflowed_via_sites(board, &graph, &attempt.usage, &clearance, options.tile_size_nm, &mut refined_via_resources)?
-        {
+        if let Some(refined) = refine_overflowed_via_sites(
+            board,
+            &graph,
+            &attempt.usage,
+            &clearance,
+            options.tile_size_nm,
+            &mut refined_via_resources,
+        )? {
             graph = refined;
             capacities = graph.resources.values().map(|r| (r.identifier.clone(), r.capacity)).collect();
             attempt = measure_attempt(&graph, attempt.routes, iteration, &demands);
@@ -727,7 +753,14 @@ pub fn route_global(
     }
     let mut best = best.expect("at least one iteration");
     if options.layer_assignment_passes != 0 {
-        let assigned = crate::layer_assignment::assign_ordinary_layers(board, &graph, &best.routes, &rules, &access_options, options)?;
+        let assigned = crate::layer_assignment::assign_ordinary_layers(
+            board,
+            &graph,
+            &best.routes,
+            &rules,
+            &access_options,
+            options,
+        )?;
         if assigned != best.routes {
             best = measure_attempt(&graph, assigned, best.metrics.iterations, &demands);
         }
@@ -848,7 +881,11 @@ impl PlanarDemand<'_> {
 }
 
 impl<'b> NetDemands<'b> {
-    fn new(board: &'b PhysicalBoard, rules: &'b IndexMap<String, NetRoutingRule>, options: &'b GlobalRouterOptions) -> Result<Self> {
+    fn new(
+        board: &'b PhysicalBoard,
+        rules: &'b IndexMap<String, NetRoutingRule>,
+        options: &'b GlobalRouterOptions,
+    ) -> Result<Self> {
         let needs_regions = rules.values().any(|rule| {
             rule.kind == RouteKind::General && rule.breakout_length_nm.is_some() && rule.breakout_width_nm.is_some()
         });
@@ -904,7 +941,8 @@ fn route_iteration(
 ) -> Result<Attempt> {
     let mut usage: IndexMap<String, i64> = graph.resources.values().map(|r| (r.identifier.clone(), 0)).collect();
     let mut routes = Vec::new();
-    let mut ordered_nets: Vec<&copper_pcb::board::PhysicalNet> = board.nets.iter().filter(|n| n.pads.len() >= 2).collect();
+    let mut ordered_nets: Vec<&copper_pcb::board::PhysicalNet> =
+        board.nets.iter().filter(|n| n.pads.len() >= 2).collect();
     ordered_nets.sort_by_key(|net| net_order(&net.name, rules.get(&net.name)));
     for net in ordered_nets {
         if owner_graph.is_some_and(|graph| graph.net_connected(net)) {
@@ -978,10 +1016,14 @@ fn measure_attempt(graph: &Graph, routes: Vec<GlobalNetRoute>, iteration: i64, d
             contributors.get_mut(&identifier).expect("routed resource").push(route.net.clone());
         }
     }
-    let capacities: IndexMap<String, i64> = graph.resources.values().map(|r| (r.identifier.clone(), r.capacity)).collect();
+    let capacities: IndexMap<String, i64> =
+        graph.resources.values().map(|r| (r.identifier.clone(), r.capacity)).collect();
     let overflows: Vec<i64> = capacities.iter().map(|(key, capacity)| (usage[key] - capacity).max(0)).collect();
-    let maximum_utilization =
-        capacities.iter().map(|(key, capacity)| (usage[key] * 1_000_000).div_euclid((*capacity).max(1))).max().unwrap_or(0);
+    let maximum_utilization = capacities
+        .iter()
+        .map(|(key, capacity)| (usage[key] * 1_000_000).div_euclid((*capacity).max(1)))
+        .max()
+        .unwrap_or(0);
     let metrics = GlobalRoutingMetrics {
         routed_net_count: routes.iter().filter(|r| r.connected).count() as i64,
         unrouted_net_count: routes.iter().filter(|r| !r.connected && !r.deferred_to_zone).count() as i64,
@@ -992,7 +1034,8 @@ fn measure_attempt(graph: &Graph, routes: Vec<GlobalNetRoute>, iteration: i64, d
         total_length_nm: routes.iter().map(|r| r.length_nm).sum(),
         proposed_via_count: routes.iter().map(|r| r.vias.len() as i64).sum(),
         iterations: iteration,
-        region_only_access_count: routes.iter().flat_map(|r| r.accesses.iter()).filter(|a| a.region_only).count() as i64,
+        region_only_access_count: routes.iter().flat_map(|r| r.accesses.iter()).filter(|a| a.region_only).count()
+            as i64,
         deferred_net_count: routes.iter().filter(|r| r.deferred_to_zone).count() as i64,
     };
     for value in contributors.values_mut() {
@@ -1049,7 +1092,10 @@ fn terminal_via_cost(
         }
     }
     positions.extend(
-        route_resources.values().filter(|item| item.layer.is_none() && item.identifier == identifier).map(|item| graph.point(item.first)),
+        route_resources
+            .values()
+            .filter(|item| item.layer.is_none() && item.identifier == identifier)
+            .map(|item| graph.point(item.first)),
     );
     for (a, b) in path {
         let item = &graph.resources[&edge_key(*a, *b)];
@@ -1088,7 +1134,10 @@ fn route_net(
     if !reservations.zones.is_empty() {
         for resource in graph.resources.values() {
             if let Some(layer) = resource.layer {
-                let shape = RoundedConvexShape::new(vec![graph.point(resource.first), graph.point(resource.second)], width.div_euclid(2))?;
+                let shape = RoundedConvexShape::new(
+                    vec![graph.point(resource.first), graph.point(resource.second)],
+                    width.div_euclid(2),
+                )?;
                 if !reservations.can_area(net, &shape, layer) {
                     blocked_resources.insert(resource.identifier.clone());
                 }
@@ -1111,8 +1160,9 @@ fn route_net(
             ));
         }
     }
-    let root_pad = *by_pad.keys().min_by_key(|pad| (by_pad[*pad].len(), (*pad).clone())).expect("pads");
-    let root = by_pad[root_pad].iter().min_by_key(|item| (item.estimated_cost_nm(), item.node)).expect("choices").clone();
+    let root_pad = *by_pad.keys().min_by_key(|pad| (by_pad[*pad].len(), *pad)).expect("pads");
+    let root =
+        by_pad[root_pad].iter().min_by_key(|item| (item.estimated_cost_nm(), item.node)).expect("choices").clone();
     let mut accesses = vec![root.clone()];
     let mut tree_nodes: IndexSet<GridNode> = IndexSet::from([root.node]);
     let mut remaining: Vec<&PadReference> = by_pad.keys().copied().filter(|pad| *pad != root_pad).collect();
@@ -1132,10 +1182,8 @@ fn route_net(
             .expect("remaining");
         let mut found: Vec<(i64, &PinAccess, Vec<(GridNode, GridNode)>)> = Vec::new();
         for candidate in by_pad[target_pad] {
-            let allowance = match rule.and_then(|r| r.max_vias) {
-                None => None,
-                Some(max_vias) => Some(max_vias - via_count - candidate.via.is_some() as i64),
-            };
+            let allowance =
+                rule.and_then(|r| r.max_vias).map(|max_vias| max_vias - via_count - candidate.via.is_some() as i64);
             let path = search(
                 graph,
                 &tree_nodes,
@@ -1171,9 +1219,17 @@ fn route_net(
                     + graph_preference_cost(graph, *a, *b, options)
                     + resource_congestion_cost(resource, resource_demand, usage, history, present, options);
             }
-            let Some(terminal_cost) =
-                terminal_via_cost(graph, candidate, &accesses, &route_resources, &path, usage, history, present, options)
-            else {
+            let Some(terminal_cost) = terminal_via_cost(
+                graph,
+                candidate,
+                &accesses,
+                &route_resources,
+                &path,
+                usage,
+                history,
+                present,
+                options,
+            ) else {
                 continue;
             };
             found.push((path_cost + 10 * candidate.estimated_cost_nm() + terminal_cost, candidate, path));
@@ -1284,7 +1340,8 @@ fn search(
     blocked_resources: &IndexSet<String>,
     planar_demand: Option<&PlanarDemand<'_>>,
 ) -> Option<Vec<(GridNode, GridNode)>> {
-    let allowed_indexes: IndexSet<i64> = allowed_layers.iter().filter_map(|layer| graph.layer_position(*layer)).collect();
+    let allowed_indexes: IndexSet<i64> =
+        allowed_layers.iter().filter_map(|layer| graph.layer_position(*layer)).collect();
     // (estimate, cost, heuristic, node, direction, vias, serial): a total
     // order, so the pop sequence is heapq's.
     let mut queue: BinaryHeap<Reverse<(i64, i64, i64, GridNode, Direction, i64, u64)>> = BinaryHeap::new();
@@ -1354,7 +1411,15 @@ fn search(
             best.insert(candidate, candidate_cost);
             previous.insert(candidate, Some(state));
             let estimate = heuristic(graph, neighbor, target);
-            queue.push(Reverse((candidate_cost + estimate, candidate_cost, estimate, neighbor, next_direction, next_vias, serial)));
+            queue.push(Reverse((
+                candidate_cost + estimate,
+                candidate_cost,
+                estimate,
+                neighbor,
+                next_direction,
+                next_vias,
+                serial,
+            )));
             serial += 1;
         }
     }
@@ -1383,7 +1448,14 @@ pub fn graph_preference_cost(graph: &Graph, first: GridNode, second: GridNode, o
         Some(preferred) if *preferred != heading => options.direction_preference_cost,
         _ => 0,
     };
-    preference_cost(graph.point(first), graph.point(second), graph.layer_ranks[&layer], options.layer_preference_cost, wrong_way, false)
+    preference_cost(
+        graph.point(first),
+        graph.point(second),
+        graph.layer_ranks[&layer],
+        options.layer_preference_cost,
+        wrong_way,
+        false,
+    )
 }
 
 /// `_build_graph`: the coarse capacity graph over the board's tiles.
@@ -1437,7 +1509,12 @@ pub fn build_graph(board: &PhysicalBoard, options: &GlobalRouterOptions, edge_st
         let radius = via.size_nm.div_euclid(2);
         pad_obstacles.push((
             stack[a.min(b)..=a.max(b)].to_vec(),
-            (via.position.x_nm - radius, via.position.y_nm - radius, via.position.x_nm + radius, via.position.y_nm + radius),
+            (
+                via.position.x_nm - radius,
+                via.position.y_nm - radius,
+                via.position.x_nm + radius,
+                via.position.y_nm + radius,
+            ),
         ));
     }
     let mut legal: IndexSet<GridNode> = IndexSet::new();
@@ -1501,7 +1578,8 @@ pub fn build_graph(board: &PhysicalBoard, options: &GlobalRouterOptions, edge_st
             if !legal.contains(&neighbor) {
                 continue;
             }
-            let Some(span) = physical_via_span(board, stack[node.layer_index as usize], stack[other_index as usize]) else {
+            let Some(span) = physical_via_span(board, stack[node.layer_index as usize], stack[other_index as usize])
+            else {
                 continue;
             };
             let span_start = crate::layer_index(stack, span.0);
@@ -1582,7 +1660,8 @@ pub fn planar_capacity(
     band: Option<(i64, i64)>,
 ) -> i64 {
     let horizontal = first.y_nm == second.y_nm;
-    let crossing = if horizontal { (first.x_nm + second.x_nm).div_euclid(2) } else { (first.y_nm + second.y_nm).div_euclid(2) };
+    let crossing =
+        if horizontal { (first.x_nm + second.x_nm).div_euclid(2) } else { (first.y_nm + second.y_nm).div_euclid(2) };
     let center = if horizontal { first.y_nm } else { first.x_nm };
     let (low, high) = band.unwrap_or((center - tile_size_nm.div_euclid(2), center + tile_size_nm.div_euclid(2)));
     let mut blocked: Vec<(i64, i64)> = Vec::new();
@@ -1749,7 +1828,8 @@ fn legal_via_sites(
             points.push(Point::new(center.x_nm + dx * pitch, center.y_nm + dy * pitch));
         }
     }
-    points.sort_by_key(|item| ((item.x_nm - center.x_nm).abs() + (item.y_nm - center.y_nm).abs(), item.x_nm, item.y_nm));
+    points
+        .sort_by_key(|item| ((item.x_nm - center.x_nm).abs() + (item.y_nm - center.y_nm).abs(), item.x_nm, item.y_nm));
     let outline = &board.outline.vertices;
     let margin_squared = BigRational::from_integer((i128::from(edge_margin) * i128::from(edge_margin)).into());
     let mut result = Vec::new();
@@ -1811,8 +1891,18 @@ pub fn pin_access_candidates(
         let mut found = Vec::new();
         for node in nearby {
             let layer = graph.layers[node.layer_index as usize];
-            let path =
-                local_access_path(board, clearance, net, port.position, graph.point(node), layer, width, bounds, None, None)?;
+            let path = local_access_path(
+                board,
+                clearance,
+                net,
+                port.position,
+                graph.point(node),
+                layer,
+                width,
+                bounds,
+                None,
+                None,
+            )?;
             if let Some(path) = path {
                 let mut access = PinAccess::new(pad.clone(), port.position, node, graph.point(node), layer);
                 access.tracks = path;
@@ -1875,7 +1965,8 @@ pub fn pin_access_candidates(
     // A legal local stem is not a usable graph entrance when its node has no
     // resource on this net's allowed layers. Prefer existing graph exits
     // before deciding whether the original bounded local fallback is needed.
-    let allowed_indexes: IndexSet<i64> = allowed_layers.iter().filter_map(|layer| graph.layer_position(*layer)).collect();
+    let allowed_indexes: IndexSet<i64> =
+        allowed_layers.iter().filter_map(|layer| graph.layer_position(*layer)).collect();
     let has_graph_exit = |node: GridNode| !neighbors(graph, node, &allowed_indexes).is_empty();
     let (found_with_exit, stranded): (Vec<PinAccess>, Vec<PinAccess>) =
         found.into_iter().partition(|access| has_graph_exit(access.node));
@@ -1888,7 +1979,8 @@ pub fn pin_access_candidates(
                 continue;
             }
             let point = graph.point(*item);
-            let local_width = clearance.breakout.track_width_nm(net, clearance.breakout.region(net, &[point]).as_deref(), width);
+            let local_width =
+                clearance.breakout.track_width_nm(net, clearance.breakout.region(net, &[point]).as_deref(), width);
             if clearance.can_track(net, point, point, local_width, layer)? {
                 local_nodes.push(*item);
             }
@@ -1897,7 +1989,8 @@ pub fn pin_access_candidates(
         for node in local_nodes.iter().take(limit) {
             let layer = graph.layers[node.layer_index as usize];
             let endpoint = graph.point(*node);
-            let tracks = local_access_path(board, clearance, net, position, endpoint, layer, width, bounds, None, None)?;
+            let tracks =
+                local_access_path(board, clearance, net, position, endpoint, layer, width, bounds, None, None)?;
             if let Some(tracks) = tracks {
                 let mut access = PinAccess::new(pad.clone(), position, *node, endpoint, layer);
                 access.tracks = tracks;
@@ -1954,7 +2047,8 @@ pub fn pin_access_candidates(
                                 && (graph.point(*node).y_nm - anchor.y_nm).abs() <= half
                         })
                         .collect();
-                    let Some(node) = nodes.iter().copied().min_by_key(|item| (node_distance_nm(graph.point(*item), anchor), *item))
+                    let Some(node) =
+                        nodes.iter().copied().min_by_key(|item| (node_distance_nm(graph.point(*item), anchor), *item))
                     else {
                         continue;
                     };
@@ -2140,7 +2234,11 @@ pub fn net_order(net: &str, rule: Option<&NetRoutingRule>) -> (i64, i64, String)
 }
 
 /// `_route_resource_demands`: trace width consumes lanes; each distinct via position one site.
-pub fn route_resource_demands(route: &GlobalNetRoute, planar_demand: i64, local_demand: Option<&PlanarDemand<'_>>) -> IndexMap<String, i64> {
+pub fn route_resource_demands(
+    route: &GlobalNetRoute,
+    planar_demand: i64,
+    local_demand: Option<&PlanarDemand<'_>>,
+) -> IndexMap<String, i64> {
     let mut result: IndexMap<String, i64> = IndexMap::new();
     for segment in &route.segments {
         let demand = match local_demand {
@@ -2168,7 +2266,11 @@ pub fn net_demand(board: &PhysicalBoard, rule: Option<&NetRoutingRule>, _options
     (((width + clearance) as f64 / pitch as f64).ceil() as i64).max(1)
 }
 
-fn hotspots(graph: &Graph, usage: &IndexMap<String, i64>, contributors: &IndexMap<String, Vec<String>>) -> Vec<RoutingHotspot> {
+fn hotspots(
+    graph: &Graph,
+    usage: &IndexMap<String, i64>,
+    contributors: &IndexMap<String, Vec<String>>,
+) -> Vec<RoutingHotspot> {
     let mut sorted: Vec<&Resource> = graph.resources.values().collect();
     sorted.sort_by(|a, b| a.identifier.cmp(&b.identifier));
     let mut result = Vec::new();
@@ -2244,7 +2346,9 @@ pub fn direction(first: GridNode, second: GridNode) -> Direction {
 }
 
 fn node_distance(first: GridNode, second: GridNode) -> i64 {
-    (first.x_index - second.x_index).abs() + (first.y_index - second.y_index).abs() + (first.layer_index - second.layer_index).abs()
+    (first.x_index - second.x_index).abs()
+        + (first.y_index - second.y_index).abs()
+        + (first.layer_index - second.layer_index).abs()
 }
 
 fn heuristic(graph: &Graph, first: GridNode, second: GridNode) -> i64 {
@@ -2291,7 +2395,10 @@ pub fn placement_fingerprint(board: &PhysicalBoard) -> String {
     document.push(("outline", Json::Array(board.outline.vertices.iter().map(|p| j_point(*p)).collect())));
     document.push(("circular_boundary", j_text(&reprs::circular_boundary(&board.outline))));
     document.push(("boundary_path", j_text(&reprs::boundary_path(&board.outline))));
-    document.push(("cutouts", Json::Array(board.outline.cutouts.iter().map(|c| j_text(&reprs::board_cutout(c))).collect())));
+    document.push((
+        "cutouts",
+        Json::Array(board.outline.cutouts.iter().map(|c| j_text(&reprs::board_cutout(c))).collect()),
+    ));
     document.push(("mechanical_holes", j_strings(&board.mechanical_holes, |h| h.id.clone(), reprs::mechanical_hole)));
     document.push(("mechanical_slots", j_strings(&board.mechanical_slots, |s| s.id.clone(), reprs::mechanical_slot)));
     document.push((

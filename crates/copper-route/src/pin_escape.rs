@@ -292,7 +292,9 @@ pub fn verified_land_path(
     let vias: Vec<&Via> = board
         .vias
         .iter()
-        .filter(|v| v.net == net && v.position == anchor && stack.contains(&v.from_layer) && stack.contains(&v.to_layer))
+        .filter(|v| {
+            v.net == net && v.position == anchor && stack.contains(&v.from_layer) && stack.contains(&v.to_layer)
+        })
         .collect();
     let side = if placement.side == BoardSide::Front { CopperLayer::Front } else { CopperLayer::Back };
     let layers: Vec<CopperLayer> = if terminal.kind == PadKind::Smd { vec![side] } else { stack.clone() };
@@ -301,8 +303,18 @@ pub fn verified_land_path(
         let via = vias.iter().find(|v| index(v.from_layer) <= index(layer) && index(layer) <= index(v.to_layer));
         if require_via {
             let Some(via) = via else { continue };
-            if target_layer.is_some_and(|target| !(index(via.from_layer) <= index(target) && index(target) <= index(via.to_layer)))
-                || !clearance.can_via(net, anchor, via.size_nm, via.from_layer, via.to_layer, Some(via.drill_nm), false, None)?
+            if target_layer
+                .is_some_and(|target| !(index(via.from_layer) <= index(target) && index(target) <= index(via.to_layer)))
+                || !clearance.can_via(
+                    net,
+                    anchor,
+                    via.size_nm,
+                    via.from_layer,
+                    via.to_layer,
+                    Some(via.drill_nm),
+                    false,
+                    None,
+                )?
             {
                 continue;
             }
