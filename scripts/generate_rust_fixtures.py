@@ -465,6 +465,15 @@ def outputs() -> dict[Path, bytes]:
     return result
 
 
+def _rounding_only(current: bytes, data: bytes) -> bool:
+    """Whether two fixture documents differ only in float rounding, as the harness judges it."""
+    from compare_implementations import _values_close
+    try:
+        return _values_close(json.loads(current), json.loads(data))
+    except ValueError:
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--check", action="store_true", help="fail if any committed fixture differs")
@@ -494,7 +503,9 @@ def main(argv: list[str] | None = None) -> int:
     stale = []
     for path, data in outputs().items():
         current = path.read_bytes() if path.is_file() else None
-        if current == data:
+        # Float rounding is not a change (decision D6): a fixture regenerated
+        # with another platform's C library (np.hypot) stays as committed.
+        if current == data or (current is not None and _rounding_only(current, data)):
             continue
         stale.append(path.relative_to(ROOT).as_posix())
         if not args.check:
