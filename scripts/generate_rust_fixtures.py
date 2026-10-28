@@ -294,6 +294,157 @@ def parse_fixture() -> dict:
     return {"schema": SCHEMA, "cases": cases}
 
 
+def lattice_fixture() -> dict:
+    """Queries on uniform, windowed and nested search lattices over a proxy board."""
+    from pcbir.fine_regions import FinePatch, FineRegionPlan
+    from pcbir.loader import load_design
+    from pcbir.physical import Point
+    from pcbir.physicalize import PrototypePhysicalOptions, prototype_physicalize
+    from pcbir.routing_lattice import NestedLattice, UniformLattice
+
+    design = load_design(ROOT / "examples/valid_board/board.copper")
+    board = prototype_physicalize(design, PrototypePhysicalOptions(copper_layers=4, fabrication_profile="generic"))
+    rng = random.Random(SEED)
+    pitch = 250_000
+    patches = (FinePatch(10_000_000, 10_000_000, 12_000_000, 13_000_000, 2, ("U1",), "test"),
+               FinePatch(30_000_000, 20_000_000, 31_000_000, 20_750_000, 5, ("U2",), "test"))
+    plan = FineRegionPlan(pitch, patches, 0, 0, 0)
+    lattices = [("uniform", UniformLattice(board, pitch)),
+                ("window", UniformLattice(board, 333_333, (5_000_000, 7_000_000, 41_000_000, 33_000_000))),
+                ("nested", NestedLattice(board, pitch, plan))]
+    offsets = [(0, 0), (1, 0), (-2, 1), (3, -3), (0, 5)]
+
+    def ints(values):
+        return [int(v) for v in values]
+
+    def sample(values):
+        # Every 97th entry and the length: whole tables would dwarf the fixture.
+        values = list(values)
+        return {"length": len(values), "every_97th": values[::97]}
+
+    cases = []
+    for name, lattice in lattices:
+        queries = []
+        x0, y0 = lattice.x0, lattice.y0
+        span_x, span_y = lattice.nx * lattice.pitch, lattice.ny * lattice.pitch
+        points = [(10_000_000, 10_000_000), (12_000_000, 11_500_000), (30_200_000, 20_250_000),
+                  (x0 - 1_000_000, y0 - 1_000_000)]
+        points += [(x0 + rng.randrange(-span_x // 10, span_x + span_x // 10),
+                    y0 + rng.randrange(-span_y // 10, span_y + span_y // 10)) for _ in range(24)]
+        for px, py in points:
+            point = Point(px, py)
+            layer = rng.randrange(lattice.nl)
+            radius = rng.choice([0.0, 125_000.0, 400_000.5, 1_000_000.0])
+            near = lattice.nearest(layer, point)
+            queries.append({"op": "point", "layer": layer, "x": px, "y": py, "radius": radius,
+                            "node_at": lattice.node_at(layer, point), "snap": lattice.snap(layer, point),
+                            "nearest": near, "nearest_point": [lattice.point(near).x_nm, lattice.point(near).y_nm],
+                            "step": lattice.step_nm(near), "decode": list(lattice.decode(near)),
+                            "neighbours": [[n, s] for n, s in lattice.neighbours(near)],
+                            "orthogonal": [[n, s] for n, s in lattice.neighbours(near, False)],
+                            "offset_nodes": ints(lattice.offset_nodes(near, offsets)),
+                            "columns_around": ints(lattice.columns_around(point, offsets)),
+                            "nodes_in": ints(lattice.nodes_in(layer, px - radius, py - radius, px + radius, py + radius)),
+                            "cover": [list(c) for c in lattice.cover(px - radius, py - 2 * radius, px + radius, py)]})
+            other = lattice.nearest(layer, Point(px + rng.randrange(-3_000_000, 3_000_000),
+                                                 py + rng.randrange(-3_000_000, 3_000_000)))
+            end = lattice.point(other)
+            queries.append({"op": "pair", "a": near, "b": other,
+                            "delta": list(lattice.delta(near, other)),
+                            "diagonal_cell": lattice.diagonal_cell(near, other),
+                            "box_of": list(lattice.box_of([near, other])),
+                            "grow_box": list(lattice.grow_box(lattice.box_of([near, other]), 3)),
+                            "segment": [[n, d] for n, d in lattice.segment_nodes(layer, point, end, radius + 1.5)]})
+        summary = {"signature": json.loads(json.dumps(lattice.signature())), "size": lattice.size,
+                   "plane": lattice.plane, "pitch_nm": lattice.pitch_nm, "full_box": list(lattice.full_box()),
+                   "moves": [list(m) for m in lattice.move_deltas()]}
+        if name == "nested":
+            summary.update(node_count=lattice.node_count, shadowed=sample(ints(lattice.shadowed)),
+                           shadowed_cells=sample(ints(lattice.shadowed_cells)),
+                           portal_pairs=[ints(lattice.portal_pairs[0]), ints(lattice.portal_pairs[1])],
+                           block_moves=[[list(m) for m in lattice.block_moves(i)] for i in range(len(lattice.blocks))],
+                           search_tables=[sample(t) for t in lattice.search_tables()])
+            for px, py in points[:12]:
+                point = Point(px, py)
+                queries.append({"op": "nested", "x": px, "y": py,
+                                "within": ints(lattice.columns_within(point, 700_000.0)),
+                                "local": [[n, d, w] for n, d, w in lattice.segment_nodes_local(
+                                    1, point, Point(px + 1_234_567, py - 765_432), 0.5, 10.0)]})
+        cases.append({"name": name, "summary": summary, "queries": queries})
+    return {"schema": SCHEMA, "seed": SEED, "cases": cases}
+
+
+ESCAPE_BOARDS = (("examples/full_vertical/board.copper", 6, "jlcpcb-six-layer"),
+                 ("examples/round_led_ring/board.copper", 2, "generic"),
+                 ("examples/round_led_ring/board.copper", 4, "generic"),
+                 ("examples/mechanical_curves/board.copper", 2, "generic"),
+                 ("examples/mechanical_reference/board.copper", 2, "generic"),
+                 ("examples/tps62130a_macro/board.copper", 6, "jlcpcb-six-layer"))
+
+
+def escape_fixture() -> dict:
+    """Escape diagnostics, plans and pad fields of boards whose footprints resolve from the repository."""
+    from pcbir.escape_plan import (EscapePlanOptions, escape_diagnostics, pad_fields, plan_array_escapes,
+                                   plan_two_end_escapes)
+    from pcbir.footprints import FootprintResolver
+    from pcbir.loader import load_design
+    from pcbir.physicalize import PrototypePhysicalOptions, resolved_physicalize
+
+    variants = (("default", EscapePlanOptions()),
+                ("bus", EscapePlanOptions(bus_layers=True, corridor_margin_nm=250_000, layer_bias_rate=7)),
+                ("fine", EscapePlanOptions(cluster_pair_minimum_nets=1, field_spacing_factor=1,
+                                           field_spacing_minimum_nm=0)))
+    flows = ({}, {("W", "E"): 1}, {("N", "S"): 2}, {("W", "NE"): 1, ("S", "E"): 1}, {("NW", "SE"): 1},
+             {("W", "E"): 1, ("N", "S"): 1})
+    cases = []
+    for source, layers, profile in ESCAPE_BOARDS:
+        path = ROOT / source
+        design = load_design(path, locked=True, offline=True)
+        resolver = FootprintResolver(base_directory=path.parent, locked=True, offline=True)
+        board = resolved_physicalize(design, resolver, PrototypePhysicalOptions(
+            copper_layers=layers, fabrication_profile=profile, board_width_mm=100, board_height_mm=80))
+        for name, options in variants:
+            diagnostics = escape_diagnostics(board, options)
+            plan = plan_two_end_escapes(board, options, diagnostics)
+            arrays = plan_array_escapes(board, options)
+            fields = {}
+            for placement in sorted(board.placements, key=lambda item: item.reference):
+                cluster = next(item for item in diagnostics.clusters if item.component == placement.reference)
+                entries = []
+                for field in pad_fields(board, placement.reference, options):
+                    width, clearance = cluster.rules
+                    entries.append({
+                        "report": field.report(width, clearance),
+                        "pads": [_pad(pad) for pad in field.pads],
+                        "gaps": [[_pad(gap.first), _pad(gap.second), gap.kind, gap.gap_nm,
+                                  [layer.value for layer in gap.layers]] for gap in field.gaps],
+                        "tiles": [[tile.column, tile.row, [None if c is None else _pad(c) for c in tile.corners],
+                                   [tile.centre.x_nm, tile.centre.y_nm], tile.via_site,
+                                   [tile.admits(flow, layer, width, clearance)
+                                    for flow in flows for layer in board.stackup.copper_layers[:2]]]
+                                  for tile in field.tiles]})
+                fields[placement.reference] = entries
+            cases.append({
+                "board": source, "layers": layers, "profile": profile, "options": name,
+                "diagnostics": diagnostics.report(), "net_causes": diagnostics.net_causes(),
+                "overflow": {item.component: item.overflow for item in diagnostics.clusters},
+                "pairs": [[item.first, item.second, list(item.order),
+                           [[key[0], key[1], _pad(key[2])] for key in item.second_keys]] for item in diagnostics.pairs],
+                "plan": plan.report(),
+                "biases": [[bias.net, bias.layer.value, [bias.area.min_x, bias.area.min_y, bias.area.max_x,
+                                                         bias.area.max_y], bias.rate] for bias in plan.layer_biases],
+                "arrays": [{**item.report(), "surface_pads": [_pad(p) for p in item.surface],
+                            "via_pads": [_pad(p) for p in item.vias],
+                            "tile_load": [[c, r, load] for (c, r), load in sorted(item.tile_load.items())]}
+                           for item in arrays],
+                "fields": fields})
+    return {"schema": SCHEMA, "cases": cases}
+
+
+def _pad(pad) -> str:
+    return f"{pad.component}.{pad.pad}"
+
+
 def outputs() -> dict[Path, bytes]:
     crates = ROOT / "crates"
     result = {
@@ -301,6 +452,8 @@ def outputs() -> dict[Path, bytes]:
         crates / "copper-units/tests/fixtures/quantities.json": _write(None, quantity_fixture()),
         crates / "copper-json/tests/fixtures/python-json.json": _write(None, json_fixture()),
         crates / "copper-lang/tests/fixtures/parse.json": _write(None, parse_fixture()),
+        crates / "copper-route/tests/fixtures/lattice.json": _write(None, lattice_fixture()),
+        crates / "copper-route/tests/fixtures/escape.json": _write(None, escape_fixture()),
         # Not a fixture: the guide text the binary embeds, copied from the oracle
         # until cutover makes the Rust copy the source.
         crates / "copper/src/agent_guide_topics.json": _write(None, agent_guide_topics()),

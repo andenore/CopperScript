@@ -30,6 +30,7 @@ mod pypath;
 mod query;
 mod report_args;
 mod route_board;
+mod route_global;
 mod si_check;
 mod state;
 mod summarize;

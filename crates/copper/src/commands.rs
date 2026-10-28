@@ -5,7 +5,7 @@ use std::io::Write;
 use crate::{
     agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compile, compile_macro,
     explain, export_kicad, export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout,
-    power_check, query, route_board, si_check, state, summarize, view,
+    power_check, query, route_board, route_global, si_check, state, summarize, view,
 };
 
 /// Exit status of a command the Rust rewrite does not implement yet.
@@ -56,7 +56,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("export-kicad", Plan::Done),
     ("export-kicad-pcb", Plan::Done),
     ("plan-layout", Plan::Done),
-    ("route-global", Plan::Milestone("M4")),
+    ("route-global", Plan::Done),
     ("route-board", Plan::Done),
     ("check-footprint", Plan::Done),
     ("audit-footprints", Plan::Done),
@@ -113,6 +113,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "plan-layout" => plan_layout::run(rest, out, err),
         "bench" => copper_route::ladder::run(rest, out, err),
         "benchmark-routing" => benchmark_routing::run(rest, out, err),
+        "route-global" => route_global::run(rest, out, err),
         _ => match plan(command) {
             Some(Plan::Milestone(milestone)) => {
                 let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");

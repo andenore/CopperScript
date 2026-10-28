@@ -58,24 +58,24 @@ const VALUED: [&str; 20] = [
 ];
 
 #[derive(Default)]
-struct Arguments {
+pub(crate) struct Arguments {
     flags: Vec<&'static str>,
     values: Vec<(&'static str, String)>,
-    positionals: Vec<String>,
+    pub(crate) positionals: Vec<String>,
 }
 
 impl Arguments {
     /// The last value given for an option (argparse's `store`).
-    fn last(&self, name: &str) -> Option<&String> {
+    pub(crate) fn last(&self, name: &str) -> Option<&String> {
         self.values.iter().rev().find(|(key, _)| *key == name).map(|(_, value)| value)
     }
 
     /// Every value given for an option (argparse's `append`).
-    fn all(&self, name: &str) -> Vec<&String> {
+    pub(crate) fn all(&self, name: &str) -> Vec<&String> {
         self.values.iter().filter(|(key, _)| *key == name).map(|(_, value)| value).collect()
     }
 
-    fn flag(&self, name: &str) -> bool {
+    pub(crate) fn flag(&self, name: &str) -> bool {
         self.flags.contains(&name)
     }
 }
@@ -86,10 +86,19 @@ fn looks_negative(value: &str) -> bool {
 
 /// argparse for this command: abbreviations, `--option=value` and `-oVALUE`.
 fn parse(arguments: &[String]) -> Result<Arguments, String> {
+    parse_options(arguments, &FLAGS, &VALUED)
+}
+
+/// argparse for a command with these flags and valued options (`-o` is `--output`).
+pub(crate) fn parse_options(
+    arguments: &[String],
+    flag_options: &[&'static str],
+    valued_options: &[&'static str],
+) -> Result<Arguments, String> {
     let mut parsed = Arguments::default();
     let mut index = 0;
     let mut only_positionals = false;
-    let mut options: Vec<&'static str> = FLAGS.iter().chain(VALUED.iter()).copied().collect();
+    let mut options: Vec<&'static str> = flag_options.iter().chain(valued_options.iter()).copied().collect();
     options.dedup();
     while index < arguments.len() {
         let arg = &arguments[index];
@@ -122,14 +131,14 @@ fn parse(arguments: &[String]) -> Result<Arguments, String> {
             };
             (option, value)
         };
-        if let Some(flag) = FLAGS.iter().copied().find(|f| *f == name) {
+        if let Some(flag) = flag_options.iter().copied().find(|f| *f == name) {
             if inline.is_some() {
                 return Err(format!("argument {flag}: ignored explicit argument"));
             }
             parsed.flags.push(flag);
             continue;
         }
-        let option = VALUED.iter().copied().find(|v| *v == name).expect("a valued option");
+        let option = valued_options.iter().copied().find(|v| *v == name).expect("a valued option");
         let value = match inline {
             Some(value) => value,
             None => match arguments.get(index) {
@@ -146,7 +155,7 @@ fn parse(arguments: &[String]) -> Result<Arguments, String> {
 }
 
 /// Python's `int(text)`: surrounding whitespace, a sign and single underscores between digits.
-fn python_int(text: &str) -> Option<i64> {
+pub(crate) fn python_int(text: &str) -> Option<i64> {
     let trimmed = text.trim_matches(copper_json::python_isspace);
     let (negative, digits) = match trimmed.strip_prefix('-') {
         Some(rest) => (true, rest),
@@ -164,7 +173,7 @@ fn python_int(text: &str) -> Option<i64> {
 }
 
 /// Python's `float(text)`, including underscores between digits.
-fn python_float(text: &str) -> Option<f64> {
+pub(crate) fn python_float(text: &str) -> Option<f64> {
     let trimmed = text.trim_matches(copper_json::python_isspace);
     let chars: Vec<char> = trimmed.chars().collect();
     for (index, c) in chars.iter().enumerate() {
@@ -193,7 +202,7 @@ fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
 }
 
 /// Parsed planner options: argparse type checks, then `PlacementPlannerOptions` fields.
-struct PlannerArguments {
+pub(crate) struct PlannerArguments {
     candidates: i64,
     grid_mm: String,
     escape_margin_mm: String,
@@ -207,7 +216,7 @@ struct PlannerArguments {
     spacing_passes: i64,
 }
 
-fn planner_arguments(parsed: &Arguments) -> Result<PlannerArguments, String> {
+pub(crate) fn planner_arguments(parsed: &Arguments) -> Result<PlannerArguments, String> {
     let int = |name: &str, default: i64| -> Result<i64, String> {
         match parsed.last(name) {
             None => Ok(default),
@@ -255,13 +264,13 @@ fn planner_arguments(parsed: &Arguments) -> Result<PlannerArguments, String> {
 }
 
 /// How `_planner_options` fails: a `ValueError` (`LAYOUT ERROR`) or an uncaught crash.
-enum OptionsError {
+pub(crate) enum OptionsError {
     Value(String),
     Crash(String),
 }
 
 /// `_planner_options`.
-fn planner_options(arguments: &PlannerArguments) -> Result<PlannerOptions, OptionsError> {
+pub(crate) fn planner_options(arguments: &PlannerArguments) -> Result<PlannerOptions, OptionsError> {
     let grid = copper_pcb::nm_from_mm_text(arguments.grid_mm.trim_matches(copper_json::python_isspace))
         .map_err(|e| OptionsError::Value(e.to_string()))?;
     let margin_text = arguments.escape_margin_mm.trim_matches(copper_json::python_isspace);

@@ -20,6 +20,7 @@ pub mod drc_report;
 pub mod escape_assignment;
 pub mod escape_plan;
 pub mod fanout;
+pub mod fine_regions;
 pub mod flow;
 pub mod global_keepouts;
 pub mod global_reserved_access;

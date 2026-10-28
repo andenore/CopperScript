@@ -17,8 +17,8 @@ changes its behaviour.
 | `copper-report` | Run diagnostics and reports: diagnostic explanations, a run's issues grouped by cause, board window views (scene reader, legend and SVG) and engineering summaries (M5) |
 | `copper-assembly` | Assembly locks and checks, BOM/CPL and hand-assembly/ordering CSVs, and native KiCad manufacturing files (`zipfile`-exact archives with a zlib-exact DEFLATE) (M3) |
 | `copper-place` | The placement planner behind `plan-layout`: seeds, legalization, rigid clusters, refinement, escape spacing, candidate selection, requirement verification and the engineering summary (M3) |
-| `copper-route` | Routing (M4, in progress): exact clearance index, global router and layer assignment; the `route-board` command line and routing pipeline stage machine, pin-access/plane/fanout options, the `bench` ladder runner, `benchmark-routing` acceptance cases and report helpers |
-| `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` (M0); `check`, `compile`, `query`, `power-check`, `audit-footprints`, `lock`, `compile-macro`, `library` (M1); `check-footprint`, `export-kicad`, `export-kicad-pcb` (M2); `plan-layout`, `assembly`, `si-check`, `export-manufacturing` (M3); `explain`, `issues`, `view`, `summarize` (M5); `lsp` (M6) |
+| `copper-route` | Routing (M4, in progress): exact clearance index, search lattices, the negotiated-congestion global router, layer assignment, the placement/routing feedback controller behind `route-global`, escape planning; the `route-board` command line and routing pipeline stage machine, pin-access/plane/fanout options, the `bench` ladder runner, `benchmark-routing` acceptance cases and report helpers |
+| `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` (M0); `check`, `compile`, `query`, `power-check`, `audit-footprints`, `lock`, `compile-macro`, `library` (M1); `check-footprint`, `export-kicad`, `export-kicad-pcb` (M2); `plan-layout`, `assembly`, `si-check`, `export-manufacturing` (M3); `route-global`, `route-board`, `bench`, `benchmark-routing` (M4); `explain`, `issues`, `view`, `summarize` (M5); `lsp` (M6) |
 
 ## Build and test
 

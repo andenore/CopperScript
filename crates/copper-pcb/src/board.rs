@@ -758,7 +758,7 @@ pub struct PhysicalAttachment {
 }
 
 /// `PhysicalBoard`: the fields this export reads or validates.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PhysicalBoard {
     pub name: String,
     pub outline: BoardOutline,
