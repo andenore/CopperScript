@@ -4,7 +4,7 @@ use std::io::Write;
 
 use crate::{
     agent_guide, assembly, audit_footprints, check, check_footprint, compile, compile_macro, explain, export_kicad,
-    export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout, power_check, query, si_check,
+    export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout, power_check, query, replay_unified, si_check,
     state, summarize, view,
 };
 
@@ -46,7 +46,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("issues", Plan::Done),
     ("view", Plan::Done),
     ("state", Plan::Done),
-    ("replay-unified", Plan::Milestone("M4")),
+    ("replay-unified", Plan::Done),
     ("replay-critical", Plan::Milestone("M4")),
     ("query", Plan::Done),
     ("si-check", Plan::Done),
@@ -110,6 +110,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "si-check" => si_check::run(rest, out, err),
         "export-manufacturing" => export_manufacturing::run(rest, out, err),
         "plan-layout" => plan_layout::run(rest, out, err),
+        "replay-unified" => replay_unified::run(rest, out, err),
         _ => match plan(command) {
             Some(Plan::Milestone(milestone)) => {
                 let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");

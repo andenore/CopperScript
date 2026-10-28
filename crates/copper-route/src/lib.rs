@@ -1,18 +1,11 @@
-//! Detailed routing of the M4 `rust-m4-unified` stream: the unified
-//! negotiated-congestion router (`pcbir.unified_router`), supply islands
-//! (`pcbir.power_islands`), bus skew tuning (`pcbir.critical_tuning`) and
-//! the typed reading and writing of their state files, behind
-//! `copper replay-unified`.
+//! The routing foundation (`pcbir.routing_clearance`, `routing_lattice`,
+//! `routing`, `layer_assignment`, `routeflow`, `escape_plan` and the small
+//! modules they build on).
 //!
-//! Modules mirror the Python modules one to one. Those owned by other M4
-//! streams (`routing_clearance`, `routing_lattice`, `routing`,
-//! `routing_costs` by `rust-m4-global`; `progress` by `rust-m4-flow`) hold the
-//! minimum this crate needs and are marked `PENDING`; the coordinator takes
-//! the owner's file at merge.
-//!
-//! Errors carry the Python exception: a `ValueError` or `StateError` message
-//! (`REPLAY ERROR`), a crash the CLI does not catch, or behaviour this
-//! rewrite does not cover yet ([`Error::NotImplemented`]).
+//! Global routes are capacity reservations and guides, not exact copper.
+//! Every module keeps Python's iteration order, tie-breaking and float
+//! operations, so the routing guides, fingerprints and reports agree byte for
+//! byte with the Python CLI.
 
 // Rank tuples spell out Python's sort keys field by field.
 #![allow(clippy::type_complexity)]
@@ -35,84 +28,41 @@ macro_rules! text_enum {
     };
 }
 
+pub mod congestion_feedback;
 pub mod detailed;
+pub mod escape_plan;
 pub mod fine_regions;
+pub mod global_keepouts;
+pub mod global_reserved_access;
+pub mod global_terminals;
+pub mod layer_assignment;
+pub mod package_patterns;
+pub mod pin_access;
 pub mod pin_escape;
 pub mod progress;
+pub mod routeflow;
 pub mod routing;
+pub mod routing_clearance;
 pub mod routing_costs;
+pub mod routing_lattice;
+pub mod routing_layers;
+pub mod routing_vias;
 pub mod state_codec;
+pub mod surface_path;
+pub mod terminal_preferences;
+pub mod unified_error;
 pub mod unified_router;
 
-/// How a Python call ends: a caught `ValueError`/`StateError`/`OSError`
-/// (`REPLAY ERROR: message`), an uncaught exception (a traceback, exit 1),
-/// or behaviour the rewrite does not implement (exit 3, never a wrong answer).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Error {
-    /// A `ValueError` (or `StateError`, `OSError`) by its message.
-    Value(String),
-    /// An uncaught exception: its class (as the traceback's last line names
-    /// it) and `str(exception)`.
-    Crash(String, String),
-    NotImplemented(String),
+pub use copper_pcb::{Error, Result};
+pub use routing::{GlobalRouterOptions, GlobalRoutingResult, GlobalRoutingStatus, route_global};
+pub use routing_clearance::RoutingClearanceIndex;
+
+/// `nm_from_mm` for an integer millimetre count.
+pub const fn nm_from_mm(mm: i64) -> i64 {
+    mm * 1_000_000
 }
 
-impl Error {
-    pub fn value(message: impl Into<String>) -> Self {
-        Error::Value(message.into())
-    }
-
-    pub fn type_error(message: impl Into<String>) -> Self {
-        Error::Crash("TypeError".to_owned(), message.into())
-    }
-
-    pub fn not_implemented(what: impl Into<String>) -> Self {
-        Error::NotImplemented(what.into())
-    }
-
-    /// The last line of Python's traceback for a crash.
-    pub fn crash_line(&self) -> String {
-        match self {
-            Error::Crash(kind, message) if message.is_empty() => kind.clone(),
-            Error::Crash(kind, message) => format!("{kind}: {message}"),
-            Error::Value(message) => format!("ValueError: {message}"),
-            Error::NotImplemented(what) => what.clone(),
-        }
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::Value(message) | Error::NotImplemented(message) => formatter.write_str(message),
-            Error::Crash(kind, message) => write!(formatter, "{kind}: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
-
-impl From<copper_pcb::Error> for Error {
-    fn from(error: copper_pcb::Error) -> Self {
-        match error {
-            copper_pcb::Error::Value(message) => Error::Value(message),
-            copper_pcb::Error::NotImplemented(message) => Error::NotImplemented(message),
-        }
-    }
-}
-
-impl From<String> for Error {
-    fn from(message: String) -> Self {
-        Error::Value(message)
-    }
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
-
-pub(crate) fn fail<T>(message: impl Into<String>) -> Result<T> {
-    Err(Error::Value(message.into()))
-}
-
-pub(crate) fn not_implemented<T>(what: impl Into<String>) -> Result<T> {
-    Err(Error::NotImplemented(what.into()))
+/// Python's `len(layers)`-style index of a copper layer in the stackup.
+pub(crate) fn layer_index(layers: &[copper_physical::CopperLayer], layer: copper_physical::CopperLayer) -> usize {
+    layers.iter().position(|l| *l == layer).expect("layer in stackup")
 }

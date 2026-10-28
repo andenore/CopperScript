@@ -62,7 +62,7 @@ pub struct DetailedRoutingResult {
     pub locked_via_count: i64,
     pub global_routing_fingerprint: String,
     pub routing_fingerprint: String,
-    pub congestion: Option<crate::unified_router::CongestionMap>,
+    pub congestion: Option<crate::congestion_feedback::CongestionMap>,
 }
 
 /// `_fingerprint`: the SHA-256 of the key-sorted JSON of the global

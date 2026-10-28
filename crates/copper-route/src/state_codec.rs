@@ -36,8 +36,9 @@ use crate::fine_regions::FineRegionOptions;
 use crate::pin_escape::RoutingAccess;
 use crate::routing::*;
 use crate::routing_costs::LayerBias;
-use crate::unified_router::{CongestionMap, UnifiedRouterOptions};
-use crate::{Error, Result, fail, not_implemented};
+use crate::congestion_feedback::CongestionMap;
+use crate::unified_router::UnifiedRouterOptions;
+use crate::unified_error::{Error, Result, fail, not_implemented};
 
 /// The dict `route_unified` saves under `save_inputs_path` and
 /// `replay_unified` loads.
@@ -126,16 +127,16 @@ impl<'a> Reader<'a> {
 /// Reads the fields of one dataclass value: each declared field into its
 /// slot (`None` when absent), the rest as unknown.
 macro_rules! dataclass {
-    ($value:expr, $type:literal, { $($field:literal => $slot:ident = $decode:expr;)* }) => {
-        let (mut reader, fields) = Reader::new($value, $type)?;
+    ($reader:ident, $value:expr, $type:literal, { $($field:literal => $slot:ident = $decode:expr;)* }) => {
+        let (mut $reader, fields) = Reader::new($value, $type)?;
         $(let mut $slot = None;)*
         for (name, item) in fields {
             match name.as_str() {
                 $($field => $slot = Some($decode(item)?),)*
-                other => reader.unknown.push(other.to_owned()),
+                other => $reader.unknown.push(other.to_owned()),
             }
         }
-        reader.check_unknown()?;
+        $reader.check_unknown()?;
     };
 }
 
@@ -269,7 +270,7 @@ fn text_map(value: &StateValue) -> Result<IndexMap<String, String>> {
 }
 
 fn point(value: &StateValue) -> Result<Point> {
-    dataclass!(value, "pcbir.physical:Point", {
+    dataclass!(reader, value, "pcbir.physical:Point", {
         "x_nm" => x = int;
         "y_nm" => y = int;
     });
@@ -278,7 +279,7 @@ fn point(value: &StateValue) -> Result<Point> {
 }
 
 fn size(value: &StateValue) -> Result<Size> {
-    dataclass!(value, "pcbir.physical:Size", {
+    dataclass!(reader, value, "pcbir.physical:Size", {
         "width_nm" => width = int;
         "height_nm" => height = int;
     });
@@ -287,7 +288,7 @@ fn size(value: &StateValue) -> Result<Size> {
 }
 
 fn pad_reference(value: &StateValue) -> Result<PadReference> {
-    dataclass!(value, "pcbir.physical:PadReference", {
+    dataclass!(reader, value, "pcbir.physical:PadReference", {
         "component" => component = text;
         "pad" => pad = text;
     });
@@ -300,7 +301,7 @@ fn points(value: &StateValue) -> Result<Vec<Point>> {
 }
 
 fn polygon_ring(value: &StateValue) -> Result<Vec<Point>> {
-    dataclass!(value, "pcbir.physical:PolygonRing", {
+    dataclass!(reader, value, "pcbir.physical:PolygonRing", {
         "vertices" => vertices = points;
     });
     reader.required(&[("vertices", vertices.is_none())])?;
@@ -309,7 +310,7 @@ fn polygon_ring(value: &StateValue) -> Result<Vec<Point>> {
 
 /// `PolygonWithHoles` as `(outer, holes)`.
 fn polygon_with_holes(value: &StateValue) -> Result<(Vec<Point>, Vec<Vec<Point>>)> {
-    dataclass!(value, "pcbir.physical:PolygonWithHoles", {
+    dataclass!(reader, value, "pcbir.physical:PolygonWithHoles", {
         "outer" => outer = polygon_ring;
         "holes" => holes = |v| list(v, polygon_ring);
     });
@@ -318,7 +319,7 @@ fn polygon_with_holes(value: &StateValue) -> Result<(Vec<Point>, Vec<Vec<Point>>
 }
 
 fn board_cutout(value: &StateValue) -> Result<BoardCutout> {
-    dataclass!(value, "pcbir.physical:BoardCutout", {
+    dataclass!(reader, value, "pcbir.physical:BoardCutout", {
         "id" => id = text;
         "vertices" => vertices = points;
     });
@@ -327,7 +328,7 @@ fn board_cutout(value: &StateValue) -> Result<BoardCutout> {
 }
 
 fn circular_boundary(value: &StateValue) -> Result<CircularBoardBoundary> {
-    dataclass!(value, "pcbir.physical:CircularBoardBoundary", {
+    dataclass!(reader, value, "pcbir.physical:CircularBoardBoundary", {
         "center" => center = point;
         "radius_nm" => radius = int;
         "maximum_chord_error_nm" => chord = int;
@@ -340,7 +341,7 @@ fn boundary_segment(value: &StateValue) -> Result<BoundarySegment> {
     if let StateValue::Dataclass { name, .. } = value
         && name == "pcbir.physical:BoundaryArc"
     {
-        dataclass!(value, "pcbir.physical:BoundaryArc", {
+        dataclass!(reader, value, "pcbir.physical:BoundaryArc", {
             "id" => id = text;
             "start" => start = point;
             "mid" => mid = point;
@@ -349,7 +350,7 @@ fn boundary_segment(value: &StateValue) -> Result<BoundarySegment> {
         reader.required(&[("id", id.is_none()), ("start", start.is_none()), ("mid", mid.is_none()), ("end", end.is_none())])?;
         return Ok(BoundarySegment::arc(&id.expect("required"), start.expect("required"), mid.expect("required"), end.expect("required"))?);
     }
-    dataclass!(value, "pcbir.physical:BoundaryLine", {
+    dataclass!(reader, value, "pcbir.physical:BoundaryLine", {
         "id" => id = text;
         "start" => start = point;
         "end" => end = point;
@@ -359,7 +360,7 @@ fn boundary_segment(value: &StateValue) -> Result<BoundarySegment> {
 }
 
 fn boundary_path(value: &StateValue) -> Result<BoardBoundaryPath> {
-    dataclass!(value, "pcbir.physical:BoardBoundaryPath", {
+    dataclass!(reader, value, "pcbir.physical:BoardBoundaryPath", {
         "segments" => segments = |v| list(v, boundary_segment);
         "maximum_chord_error_nm" => chord = int;
     });
@@ -368,7 +369,7 @@ fn boundary_path(value: &StateValue) -> Result<BoardBoundaryPath> {
 }
 
 fn board_outline(value: &StateValue) -> Result<BoardOutline> {
-    dataclass!(value, "pcbir.physical:BoardOutline", {
+    dataclass!(reader, value, "pcbir.physical:BoardOutline", {
         "vertices" => vertices = points;
         "cutouts" => cutouts = |v| list(v, board_cutout);
         "circular_boundary" => circular = |v| optional(v, circular_boundary);
@@ -384,7 +385,7 @@ fn board_outline(value: &StateValue) -> Result<BoardOutline> {
 }
 
 fn copper_keepout(value: &StateValue) -> Result<CopperKeepout> {
-    dataclass!(value, "pcbir.physical:CopperKeepout", {
+    dataclass!(reader, value, "pcbir.physical:CopperKeepout", {
         "id" => id = text;
         "layers" => layers = |v| list(v, copper_layer);
         "outline" => outline = polygon_with_holes;
@@ -421,35 +422,35 @@ fn footprint_graphic(value: &StateValue) -> Result<FootprintGraphic> {
     let StateValue::Dataclass { name, .. } = value else { return dynamic("a footprint graphic", value) };
     Ok(match name.as_str() {
         "pcbir.physical:FootprintLine" => {
-            dataclass!(value, "pcbir.physical:FootprintLine", {
+            dataclass!(reader, value, "pcbir.physical:FootprintLine", {
                 "start" => start = point; "end" => end = point; "width_nm" => width = int; "layer" => layer = footprint_layer;
             });
             reader.required(&[("start", start.is_none()), ("end", end.is_none()), ("width_nm", width.is_none()), ("layer", layer.is_none())])?;
             FootprintGraphic::Line { start: start.expect("required"), end: end.expect("required"), width_nm: width.expect("required"), layer: layer.expect("required") }
         }
         "pcbir.physical:FootprintRectangle" => {
-            dataclass!(value, "pcbir.physical:FootprintRectangle", {
+            dataclass!(reader, value, "pcbir.physical:FootprintRectangle", {
                 "start" => start = point; "end" => end = point; "width_nm" => width = int; "layer" => layer = footprint_layer; "filled" => filled = boolean;
             });
             reader.required(&[("start", start.is_none()), ("end", end.is_none()), ("width_nm", width.is_none()), ("layer", layer.is_none())])?;
             FootprintGraphic::Rectangle { start: start.expect("required"), end: end.expect("required"), width_nm: width.expect("required"), layer: layer.expect("required"), filled: filled.unwrap_or(false) }
         }
         "pcbir.physical:FootprintCircle" => {
-            dataclass!(value, "pcbir.physical:FootprintCircle", {
+            dataclass!(reader, value, "pcbir.physical:FootprintCircle", {
                 "center" => center = point; "end" => end = point; "width_nm" => width = int; "layer" => layer = footprint_layer; "filled" => filled = boolean;
             });
             reader.required(&[("center", center.is_none()), ("end", end.is_none()), ("width_nm", width.is_none()), ("layer", layer.is_none())])?;
             FootprintGraphic::Circle { center: center.expect("required"), end: end.expect("required"), width_nm: width.expect("required"), layer: layer.expect("required"), filled: filled.unwrap_or(false) }
         }
         "pcbir.physical:FootprintArc" => {
-            dataclass!(value, "pcbir.physical:FootprintArc", {
+            dataclass!(reader, value, "pcbir.physical:FootprintArc", {
                 "start" => start = point; "midpoint" => midpoint = point; "end" => end = point; "width_nm" => width = int; "layer" => layer = footprint_layer;
             });
             reader.required(&[("start", start.is_none()), ("midpoint", midpoint.is_none()), ("end", end.is_none()), ("width_nm", width.is_none()), ("layer", layer.is_none())])?;
             FootprintGraphic::Arc { start: start.expect("required"), midpoint: midpoint.expect("required"), end: end.expect("required"), width_nm: width.expect("required"), layer: layer.expect("required") }
         }
         "pcbir.physical:FootprintPolygon" => {
-            dataclass!(value, "pcbir.physical:FootprintPolygon", {
+            dataclass!(reader, value, "pcbir.physical:FootprintPolygon", {
                 "points" => pts = points; "width_nm" => width = int; "layer" => layer = footprint_layer; "filled" => filled = boolean;
             });
             reader.required(&[("points", pts.is_none()), ("width_nm", width.is_none()), ("layer", layer.is_none())])?;
@@ -461,7 +462,7 @@ fn footprint_graphic(value: &StateValue) -> Result<FootprintGraphic> {
 }
 
 fn footprint_pad(value: &StateValue) -> Result<FootprintPad> {
-    dataclass!(value, "pcbir.physical:FootprintPad", {
+    dataclass!(reader, value, "pcbir.physical:FootprintPad", {
         "number" => number = text;
         "position" => position = point;
         "size" => pad_size = size;
@@ -498,7 +499,7 @@ fn footprint_pad(value: &StateValue) -> Result<FootprintPad> {
 }
 
 fn internal_pad_group(value: &StateValue) -> Result<InternalPadGroup> {
-    dataclass!(value, "pcbir.pad_connections:InternalPadGroup", {
+    dataclass!(reader, value, "pcbir.pad_connections:InternalPadGroup", {
         "numbers" => numbers = |v| list(v, text);
     });
     reader.required(&[("numbers", numbers.is_none())])?;
@@ -506,7 +507,7 @@ fn internal_pad_group(value: &StateValue) -> Result<InternalPadGroup> {
 }
 
 fn physical_footprint(value: &StateValue) -> Result<PhysicalFootprint> {
-    dataclass!(value, "pcbir.physical:PhysicalFootprint", {
+    dataclass!(reader, value, "pcbir.physical:PhysicalFootprint", {
         "name" => name = text;
         "pads" => pads = |v| list(v, footprint_pad);
         "body_size" => body = size;
@@ -541,7 +542,7 @@ fn physical_footprint(value: &StateValue) -> Result<PhysicalFootprint> {
 }
 
 fn placement(value: &StateValue) -> Result<Placement> {
-    dataclass!(value, "pcbir.physical:Placement", {
+    dataclass!(reader, value, "pcbir.physical:Placement", {
         "reference" => reference = text;
         "footprint" => footprint = text;
         "position" => position = point;
@@ -567,7 +568,7 @@ fn placement(value: &StateValue) -> Result<Placement> {
 }
 
 fn physical_net(value: &StateValue) -> Result<PhysicalNet> {
-    dataclass!(value, "pcbir.physical:PhysicalNet", {
+    dataclass!(reader, value, "pcbir.physical:PhysicalNet", {
         "name" => name = text;
         "pads" => pads = |v| list(v, pad_reference);
     });
@@ -580,7 +581,7 @@ fn physical_net(value: &StateValue) -> Result<PhysicalNet> {
 }
 
 fn stackup_layer(value: &StateValue) -> Result<StackupLayer> {
-    dataclass!(value, "pcbir.physical:StackupLayer", {
+    dataclass!(reader, value, "pcbir.physical:StackupLayer", {
         "id" => id = text;
         "kind" => kind = |v| enumeration(v, "pcbir.physical:StackupLayerKind", |t| match t { "copper" => Some(true), "dielectric" => Some(false), _ => None });
         "thickness_nm" => thickness = int;
@@ -624,7 +625,7 @@ fn stackup_layer(value: &StateValue) -> Result<StackupLayer> {
 }
 
 fn via_technology(value: &StateValue) -> Result<ViaTechnology> {
-    dataclass!(value, "pcbir.physical:ViaTechnology", {
+    dataclass!(reader, value, "pcbir.physical:ViaTechnology", {
         "id" => id = text;
         "kind" => kind = |v| enumeration(v, "pcbir.physical:ViaKind", ViaKind::parse);
         "from_layer" => from = copper_layer;
@@ -656,7 +657,7 @@ fn via_technology(value: &StateValue) -> Result<ViaTechnology> {
 }
 
 fn stackup(value: &StateValue) -> Result<Stackup> {
-    dataclass!(value, "pcbir.physical:Stackup", {
+    dataclass!(reader, value, "pcbir.physical:Stackup", {
         "copper_layers" => layers = |v| list(v, copper_layer);
         "thickness_nm" => thickness = int;
         "physical_layers" => physical = |v| list(v, stackup_layer);
@@ -723,7 +724,7 @@ fn validate_stackup(stackup: &Stackup) -> Result<()> {
 }
 
 fn design_rules(value: &StateValue) -> Result<DesignRules> {
-    dataclass!(value, "pcbir.physical:DesignRules", {
+    dataclass!(reader, value, "pcbir.physical:DesignRules", {
         "minimum_clearance_nm" => clearance = int;
         "minimum_hole_clearance_nm" => hole_clearance = int;
         "minimum_track_width_nm" => minimum_track = int;
@@ -751,7 +752,7 @@ fn design_rules(value: &StateValue) -> Result<DesignRules> {
 }
 
 fn track_segment(value: &StateValue) -> Result<TrackSegment> {
-    dataclass!(value, "pcbir.physical:TrackSegment", {
+    dataclass!(reader, value, "pcbir.physical:TrackSegment", {
         "net" => net = text;
         "start" => start = point;
         "end" => end = point;
@@ -770,7 +771,7 @@ fn track_segment(value: &StateValue) -> Result<TrackSegment> {
 }
 
 fn via(value: &StateValue) -> Result<Via> {
-    dataclass!(value, "pcbir.physical:Via", {
+    dataclass!(reader, value, "pcbir.physical:Via", {
         "net" => net = text;
         "position" => position = point;
         "size_nm" => size_nm = int;
@@ -800,7 +801,7 @@ fn via(value: &StateValue) -> Result<Via> {
 }
 
 fn copper_zone(value: &StateValue) -> Result<CopperZone> {
-    dataclass!(value, "pcbir.physical:CopperZone", {
+    dataclass!(reader, value, "pcbir.physical:CopperZone", {
         "id" => id = text;
         "net" => net = text;
         "layers" => layers = |v| list(v, copper_layer);
@@ -843,7 +844,7 @@ fn copper_zone(value: &StateValue) -> Result<CopperZone> {
 
 /// `ThermalReliefSettings` as `(gap, spoke width)`; the spoke count must be the default.
 fn thermal_relief(value: &StateValue) -> Result<(i64, i64)> {
-    dataclass!(value, "pcbir.physical:ThermalReliefSettings", {
+    dataclass!(reader, value, "pcbir.physical:ThermalReliefSettings", {
         "gap_nm" => gap = int;
         "spoke_width_nm" => spoke = int;
         "spoke_count" => count = int;
@@ -862,7 +863,7 @@ fn thermal_relief(value: &StateValue) -> Result<(i64, i64)> {
 }
 
 fn component_placement_rule(value: &StateValue) -> Result<ComponentPlacementRule> {
-    dataclass!(value, "pcbir.physical:ComponentPlacementRule", {
+    dataclass!(reader, value, "pcbir.physical:ComponentPlacementRule", {
         "reference" => reference = text;
         "region" => region = |v| optional(v, text);
         "allowed_orientations" => orientations = |v| list(v, decimal);
@@ -889,7 +890,7 @@ fn component_placement_rule(value: &StateValue) -> Result<ComponentPlacementRule
 }
 
 fn net_routing_rule(value: &StateValue) -> Result<NetRoutingRule> {
-    dataclass!(value, "pcbir.physical:NetRoutingRule", {
+    dataclass!(reader, value, "pcbir.physical:NetRoutingRule", {
         "net" => net = text;
         "kind" => kind = |v| enumeration(v, "pcbir.physical:RouteKind", RouteKind::parse);
         "priority" => priority = int;
@@ -965,7 +966,7 @@ fn net_routing_rule(value: &StateValue) -> Result<NetRoutingRule> {
 }
 
 fn copper_polygon(value: &StateValue) -> Result<CopperPolygon> {
-    dataclass!(value, "pcbir.physical:CopperPolygon", {
+    dataclass!(reader, value, "pcbir.physical:CopperPolygon", {
         "id" => id = text;
         "net" => net = text;
         "layer" => layer = copper_layer;
@@ -985,7 +986,7 @@ fn copper_polygon(value: &StateValue) -> Result<CopperPolygon> {
 }
 
 fn placement_target(value: &StateValue) -> Result<PlacementTarget> {
-    dataclass!(value, "pcbir.physical:PlacementTarget", {
+    dataclass!(reader, value, "pcbir.physical:PlacementTarget", {
         "reference" => reference = text;
         "pad" => pad = |v| optional(v, text);
     });
@@ -994,7 +995,7 @@ fn placement_target(value: &StateValue) -> Result<PlacementTarget> {
 }
 
 fn placement_region(value: &StateValue) -> Result<PlacementRegion> {
-    dataclass!(value, "pcbir.physical:PlacementRegion", {
+    dataclass!(reader, value, "pcbir.physical:PlacementRegion", {
         "name" => name = text;
         "outline" => outline = board_outline;
         "side" => side = |v| optional(v, board_side);
@@ -1004,7 +1005,7 @@ fn placement_region(value: &StateValue) -> Result<PlacementRegion> {
 }
 
 fn placement_keepout(value: &StateValue) -> Result<PlacementKeepout> {
-    dataclass!(value, "pcbir.physical:PlacementKeepout", {
+    dataclass!(reader, value, "pcbir.physical:PlacementKeepout", {
         "name" => name = text;
         "outline" => outline = board_outline;
         "side" => side = |v| optional(v, board_side);
@@ -1015,7 +1016,7 @@ fn placement_keepout(value: &StateValue) -> Result<PlacementKeepout> {
 }
 
 fn relative_placement_rule(value: &StateValue) -> Result<RelativePlacementRule> {
-    dataclass!(value, "pcbir.physical:RelativePlacementRule", {
+    dataclass!(reader, value, "pcbir.physical:RelativePlacementRule", {
         "kind" => kind = |v| enumeration(v, "pcbir.physical:RelativePlacementKind", RelativePlacementKind::parse);
         "targets" => targets = |v| list(v, placement_target);
         "distance_nm" => distance = |v| optional(v, int);
@@ -1035,7 +1036,7 @@ fn relative_placement_rule(value: &StateValue) -> Result<RelativePlacementRule> 
 }
 
 fn placement_group(value: &StateValue) -> Result<PlacementGroup> {
-    dataclass!(value, "pcbir.physical:PlacementGroup", {
+    dataclass!(reader, value, "pcbir.physical:PlacementGroup", {
         "name" => name = text;
         "references" => references = |v| list(v, text);
         "anchor" => anchor = |v| optional(v, text);
@@ -1053,7 +1054,7 @@ fn placement_group(value: &StateValue) -> Result<PlacementGroup> {
 }
 
 fn power_domain(value: &StateValue) -> Result<PhysicalPowerDomain> {
-    dataclass!(value, "pcbir.physical:PhysicalPowerDomain", {
+    dataclass!(reader, value, "pcbir.physical:PhysicalPowerDomain", {
         "net" => net = text;
         "members" => members = |v| list(v, pad_reference);
         "sources" => sources = |v| list(v, pad_reference);
@@ -1080,7 +1081,7 @@ fn power_domain(value: &StateValue) -> Result<PhysicalPowerDomain> {
 }
 
 fn power_feed(value: &StateValue) -> Result<PowerFeedBoundary> {
-    dataclass!(value, "pcbir.physical:PowerFeedBoundary", {
+    dataclass!(reader, value, "pcbir.physical:PowerFeedBoundary", {
         "net" => net = text;
         "terminal" => terminal = pad_reference;
         "upstream_net" => upstream = text;
@@ -1098,7 +1099,7 @@ fn power_feed(value: &StateValue) -> Result<PowerFeedBoundary> {
 }
 
 fn decoupling_link(value: &StateValue) -> Result<DecouplingLink> {
-    dataclass!(value, "pcbir.physical:DecouplingLink", {
+    dataclass!(reader, value, "pcbir.physical:DecouplingLink", {
         "capacitor" => capacitor = pad_reference;
         "target" => target = pad_reference;
         "return_pad" => return_pad = pad_reference;
@@ -1116,7 +1117,7 @@ fn decoupling_link(value: &StateValue) -> Result<DecouplingLink> {
 }
 
 fn net_match_group(value: &StateValue) -> Result<NetMatchGroup> {
-    dataclass!(value, "pcbir.physical:NetMatchGroup", {
+    dataclass!(reader, value, "pcbir.physical:NetMatchGroup", {
         "id" => id = text;
         "nets" => nets = |v| list(v, text);
         "max_skew_nm" => skew = int;
@@ -1126,7 +1127,7 @@ fn net_match_group(value: &StateValue) -> Result<NetMatchGroup> {
 }
 
 fn component_hole_clearance(value: &StateValue) -> Result<ComponentHoleClearance> {
-    dataclass!(value, "pcbir.physical:ComponentHoleClearance", {
+    dataclass!(reader, value, "pcbir.physical:ComponentHoleClearance", {
         "reference" => reference = text;
         "clearance_nm" => clearance = int;
         "reason" => reason = text;
@@ -1136,7 +1137,7 @@ fn component_hole_clearance(value: &StateValue) -> Result<ComponentHoleClearance
 }
 
 fn via_in_pad_rule(value: &StateValue) -> Result<PadViaInPadRule> {
-    dataclass!(value, "pcbir.physical:PadViaInPadRule", {
+    dataclass!(reader, value, "pcbir.physical:PadViaInPadRule", {
         "pad" => pad = pad_reference;
         "process" => process = text;
         "rows" => rows = |v| optional(v, int);
@@ -1151,7 +1152,7 @@ fn via_in_pad_rule(value: &StateValue) -> Result<PadViaInPadRule> {
 }
 
 fn mechanical_hole(value: &StateValue) -> Result<MechanicalHole> {
-    dataclass!(value, "pcbir.physical:MechanicalHole", {
+    dataclass!(reader, value, "pcbir.physical:MechanicalHole", {
         "id" => id = text;
         "position" => position = point;
         "diameter_nm" => diameter = int;
@@ -1162,7 +1163,7 @@ fn mechanical_hole(value: &StateValue) -> Result<MechanicalHole> {
 }
 
 fn mechanical_slot(value: &StateValue) -> Result<MechanicalSlot> {
-    dataclass!(value, "pcbir.physical:MechanicalSlot", {
+    dataclass!(reader, value, "pcbir.physical:MechanicalSlot", {
         "id" => id = text;
         "start" => start = point;
         "end" => end = point;
@@ -1173,7 +1174,7 @@ fn mechanical_slot(value: &StateValue) -> Result<MechanicalSlot> {
 }
 
 fn board_datum(value: &StateValue) -> Result<BoardDatum> {
-    dataclass!(value, "pcbir.physical:BoardDatum", {
+    dataclass!(reader, value, "pcbir.physical:BoardDatum", {
         "id" => id = text;
         "position" => position = point;
         "relative_to" => relative = |v| optional(v, text);
@@ -1189,7 +1190,7 @@ fn board_datum(value: &StateValue) -> Result<BoardDatum> {
 }
 
 fn board_edge(value: &StateValue) -> Result<BoardEdge> {
-    dataclass!(value, "pcbir.physical:BoardEdge", {
+    dataclass!(reader, value, "pcbir.physical:BoardEdge", {
         "id" => id = text;
         "start" => start = point;
         "end" => end = point;
@@ -1199,7 +1200,7 @@ fn board_edge(value: &StateValue) -> Result<BoardEdge> {
 }
 
 fn attachment(value: &StateValue) -> Result<PhysicalAttachment> {
-    dataclass!(value, "pcbir.physical:PhysicalAttachment", {
+    dataclass!(reader, value, "pcbir.physical:PhysicalAttachment", {
         "id" => id = text;
         "reference" => reference = text;
         "target" => target = |v| optional(v, text);
@@ -1235,7 +1236,7 @@ fn attachment(value: &StateValue) -> Result<PhysicalAttachment> {
 }
 
 fn body_overhang(value: &StateValue) -> Result<BodyOverhang> {
-    dataclass!(value, "pcbir.physical:BodyOverhang", {
+    dataclass!(reader, value, "pcbir.physical:BodyOverhang", {
         "id" => id = text;
         "reference" => reference = text;
         "edge" => edge = text;
@@ -1265,7 +1266,7 @@ fn body_overhang(value: &StateValue) -> Result<BodyOverhang> {
 }
 
 fn component_height(value: &StateValue) -> Result<ComponentHeight> {
-    dataclass!(value, "pcbir.physical:ComponentHeight", {
+    dataclass!(reader, value, "pcbir.physical:ComponentHeight", {
         "id" => id = text;
         "reference" => reference = text;
         "height_nm" => height = int;
@@ -1275,7 +1276,7 @@ fn component_height(value: &StateValue) -> Result<ComponentHeight> {
 }
 
 fn assembly_envelope(value: &StateValue) -> Result<AssemblyEnvelope> {
-    dataclass!(value, "pcbir.physical:AssemblyEnvelope", {
+    dataclass!(reader, value, "pcbir.physical:AssemblyEnvelope", {
         "id" => id = text;
         "outline" => outline = board_outline;
         "side" => side = board_side;
@@ -1286,7 +1287,7 @@ fn assembly_envelope(value: &StateValue) -> Result<AssemblyEnvelope> {
 }
 
 fn assembly_access(value: &StateValue) -> Result<AssemblyAccess> {
-    dataclass!(value, "pcbir.physical:AssemblyAccess", {
+    dataclass!(reader, value, "pcbir.physical:AssemblyAccess", {
         "id" => id = text;
         "reference" => reference = text;
         "outline" => outline = board_outline;
@@ -1314,7 +1315,7 @@ fn artwork_material(value: &StateValue) -> Result<ArtworkMaterial> {
 fn silkscreen(value: &StateValue) -> Result<Artwork> {
     let StateValue::Dataclass { name, .. } = value else { return dynamic("silkscreen artwork", value) };
     if name == "pcbir.silkscreen:SilkscreenText" {
-        dataclass!(value, "pcbir.silkscreen:SilkscreenText", {
+        dataclass!(reader, value, "pcbir.silkscreen:SilkscreenText", {
             "id" => id = text;
             "text" => body = text;
             "position" => position = point;
@@ -1338,7 +1339,7 @@ fn silkscreen(value: &StateValue) -> Result<Artwork> {
             exposed: exposed.unwrap_or(false),
         });
     }
-    dataclass!(value, "pcbir.silkscreen:SilkscreenGraphic", {
+    dataclass!(reader, value, "pcbir.silkscreen:SilkscreenGraphic", {
         "id" => id = text;
         "graphic" => graphic = footprint_graphic;
         "side" => side = board_side;
@@ -1367,7 +1368,7 @@ fn silkscreen(value: &StateValue) -> Result<Artwork> {
 }
 
 fn rigid_member(value: &StateValue) -> Result<RigidPlacementMember> {
-    dataclass!(value, "pcbir.physical:RigidPlacementMember", {
+    dataclass!(reader, value, "pcbir.physical:RigidPlacementMember", {
         "reference" => reference = text;
         "footprint" => footprint = text;
         "footprint_digest" => digest = text;
@@ -1385,7 +1386,7 @@ fn rigid_member(value: &StateValue) -> Result<RigidPlacementMember> {
 }
 
 fn edge_opening(value: &StateValue) -> Result<MacroEdgeOpening> {
-    dataclass!(value, "pcbir.physical:MacroEdgeOpening", {
+    dataclass!(reader, value, "pcbir.physical:MacroEdgeOpening", {
         "keepout" => keepout = text;
         "edge_indices" => indices = |v| list(v, int);
     });
@@ -1394,7 +1395,7 @@ fn edge_opening(value: &StateValue) -> Result<MacroEdgeOpening> {
 }
 
 fn rigid_cluster(value: &StateValue) -> Result<RigidPlacementCluster> {
-    dataclass!(value, "pcbir.physical:RigidPlacementCluster", {
+    dataclass!(reader, value, "pcbir.physical:RigidPlacementCluster", {
         "name" => name = text;
         "anchor" => anchor = placement_target;
         "members" => members = |v| list(v, rigid_member);
@@ -1421,7 +1422,7 @@ fn rigid_cluster(value: &StateValue) -> Result<RigidPlacementCluster> {
 }
 
 fn macro_port(value: &StateValue) -> Result<MacroPort> {
-    dataclass!(value, "pcbir.physical:MacroPort", {
+    dataclass!(reader, value, "pcbir.physical:MacroPort", {
         "name" => name = text;
         "net" => net = text;
         "position" => position = point;
@@ -1437,7 +1438,7 @@ fn macro_port(value: &StateValue) -> Result<MacroPort> {
 }
 
 fn pad_binding(value: &StateValue) -> Result<(PadReference, String)> {
-    dataclass!(value, "pcbir.physical:MacroPadBinding", {
+    dataclass!(reader, value, "pcbir.physical:MacroPadBinding", {
         "pad" => pad = pad_reference;
         "net" => net = text;
     });
@@ -1446,7 +1447,7 @@ fn pad_binding(value: &StateValue) -> Result<(PadReference, String)> {
 }
 
 fn plane_return(value: &StateValue) -> Result<MacroPlaneReturn> {
-    dataclass!(value, "pcbir.physical:MacroPlaneReturn", {
+    dataclass!(reader, value, "pcbir.physical:MacroPlaneReturn", {
         "net" => net = text;
         "layers" => layers = |v| list(v, copper_layer);
         "pads" => pads = |v| list(v, pad_reference);
@@ -1460,7 +1461,7 @@ fn plane_return(value: &StateValue) -> Result<MacroPlaneReturn> {
 }
 
 fn width_contract(value: &StateValue) -> Result<MacroTrackWidthContract> {
-    dataclass!(value, "pcbir.physical:MacroTrackWidthContract", {
+    dataclass!(reader, value, "pcbir.physical:MacroTrackWidthContract", {
         "track_index" => index = int;
         "minimum_width_nm" => width = int;
         "purpose" => purpose = text;
@@ -1475,7 +1476,7 @@ fn width_contract(value: &StateValue) -> Result<MacroTrackWidthContract> {
 }
 
 fn hard_macro(value: &StateValue) -> Result<PhysicalHardMacro> {
-    dataclass!(value, "pcbir.physical:PhysicalHardMacro", {
+    dataclass!(reader, value, "pcbir.physical:PhysicalHardMacro", {
         "cluster" => cluster = text;
         "asset_sha256" => asset = text;
         "tracks" => tracks = |v| list(v, track_segment);
@@ -1513,18 +1514,18 @@ fn hard_macro(value: &StateValue) -> Result<PhysicalHardMacro> {
 /// `PhysicalBoard(**fields)`: the dataclass and the checks of its
 /// `__post_init__` and `_validate_references` the rewrite covers.
 pub fn physical_board(value: &StateValue) -> Result<PhysicalBoard> {
-    dataclass!(value, "pcbir.physical:PhysicalBoard", {
+    dataclass!(reader, value, "pcbir.physical:PhysicalBoard", {
         "name" => name = text;
         "outline" => outline = board_outline;
-        "footprints" => footprints = |v| match v {
+        "footprints" => footprints = |v: &StateValue| match v {
             StateValue::Map { entries, .. } => {
                 let mut map = IndexMap::new();
                 for (key, item) in entries {
-                    map.insert(text(key)?, physical_footprint(item)?);
+                    map.insert(text(&key)?, physical_footprint(&item)?);
                 }
                 Ok(map)
             }
-            other => dynamic("a footprint mapping", other),
+            other => dynamic("a footprint mapping", &other),
         };
         "placements" => placements = |v| list(v, placement);
         "nets" => nets = |v| list(v, physical_net);
@@ -1652,7 +1653,7 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
     unique_ids("assembly_envelopes", board.assembly_envelopes.iter().map(|d| d.id.as_str()).collect())?;
     unique_ids("assembly_access", board.assembly_access.iter().map(|d| d.id.as_str()).collect())?;
     unique_ids("mechanical_slots", board.mechanical_slots.iter().map(|d| d.id.as_str()).collect())?;
-    copper_physical::mechanical::validate_mechanical_holes(&board.mechanical_holes, &board.mechanical_slots, &board.outline, &board.rules)?;
+    copper_physical::mechanical::validate_mechanical_holes(&board.outline, &board.mechanical_holes, &board.mechanical_slots, &board.rules)?;
     let references: Vec<&str> = board.placements.iter().map(|p| p.reference.as_str()).collect();
     if references.iter().collect::<IndexSet<_>>().len() != references.len() {
         return fail("physical placement references must be unique");
@@ -1807,7 +1808,7 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
 // The router's own types
 
 fn grid_node(value: &StateValue) -> Result<GridNode> {
-    dataclass!(value, "pcbir.routing:GridNode", {
+    dataclass!(reader, value, "pcbir.routing:GridNode", {
         "layer_index" => layer = int;
         "x_index" => x = int;
         "y_index" => y = int;
@@ -1817,7 +1818,7 @@ fn grid_node(value: &StateValue) -> Result<GridNode> {
 }
 
 fn pin_access(value: &StateValue) -> Result<PinAccess> {
-    dataclass!(value, "pcbir.routing:PinAccess", {
+    dataclass!(reader, value, "pcbir.routing:PinAccess", {
         "pad" => pad = pad_reference;
         "pad_position" => pad_position = point;
         "node" => node = grid_node;
@@ -1843,7 +1844,7 @@ fn pin_access(value: &StateValue) -> Result<PinAccess> {
 }
 
 fn route_segment(value: &StateValue) -> Result<GlobalRouteSegment> {
-    dataclass!(value, "pcbir.routing:GlobalRouteSegment", {
+    dataclass!(reader, value, "pcbir.routing:GlobalRouteSegment", {
         "net" => net = text;
         "layer" => layer = copper_layer;
         "start" => start = point;
@@ -1863,7 +1864,7 @@ fn route_segment(value: &StateValue) -> Result<GlobalRouteSegment> {
 }
 
 fn via_proposal(value: &StateValue) -> Result<GlobalViaProposal> {
-    dataclass!(value, "pcbir.routing:GlobalViaProposal", {
+    dataclass!(reader, value, "pcbir.routing:GlobalViaProposal", {
         "net" => net = text;
         "position" => position = point;
         "from_layer" => from = copper_layer;
@@ -1881,7 +1882,7 @@ fn via_proposal(value: &StateValue) -> Result<GlobalViaProposal> {
 }
 
 fn net_route(value: &StateValue) -> Result<GlobalNetRoute> {
-    dataclass!(value, "pcbir.routing:GlobalNetRoute", {
+    dataclass!(reader, value, "pcbir.routing:GlobalNetRoute", {
         "net" => net = text;
         "connected" => connected = boolean;
         "accesses" => accesses = |v| list(v, pin_access);
@@ -1905,7 +1906,7 @@ fn net_route(value: &StateValue) -> Result<GlobalNetRoute> {
 }
 
 fn hotspot(value: &StateValue) -> Result<RoutingHotspot> {
-    dataclass!(value, "pcbir.routing:RoutingHotspot", {
+    dataclass!(reader, value, "pcbir.routing:RoutingHotspot", {
         "resource_id" => resource = text;
         "layer" => layer = |v| optional(v, copper_layer);
         "start" => start = point;
@@ -1938,7 +1939,7 @@ fn hotspot(value: &StateValue) -> Result<RoutingHotspot> {
 }
 
 fn routing_metrics(value: &StateValue) -> Result<GlobalRoutingMetrics> {
-    dataclass!(value, "pcbir.routing:GlobalRoutingMetrics", {
+    dataclass!(reader, value, "pcbir.routing:GlobalRoutingMetrics", {
         "routed_net_count" => routed = int;
         "unrouted_net_count" => unrouted = int;
         "total_overflow" => total_overflow = int;
@@ -1978,8 +1979,13 @@ fn routing_metrics(value: &StateValue) -> Result<GlobalRoutingMetrics> {
 }
 
 pub fn global_routing_result(value: &StateValue) -> Result<GlobalRoutingResult> {
-    dataclass!(value, "pcbir.routing:GlobalRoutingResult", {
-        "status" => status = |v| enumeration(v, "pcbir.routing:GlobalRoutingStatus", GlobalRoutingStatus::parse);
+    dataclass!(reader, value, "pcbir.routing:GlobalRoutingResult", {
+        "status" => status = |v| enumeration(v, "pcbir.routing:GlobalRoutingStatus", |text| match text {
+            "success" => Some(GlobalRoutingStatus::Success),
+            "overflow" => Some(GlobalRoutingStatus::Overflow),
+            "unreachable" => Some(GlobalRoutingStatus::Unreachable),
+            _ => None,
+        });
         "routes" => routes = |v| list(v, net_route);
         "hotspots" => hotspots = |v| list(v, hotspot);
         "metrics" => metrics = routing_metrics;
@@ -2007,7 +2013,7 @@ pub fn global_routing_result(value: &StateValue) -> Result<GlobalRoutingResult> 
 }
 
 fn bounds(value: &StateValue) -> Result<Bounds> {
-    dataclass!(value, "pcbir.geometry:Bounds", {
+    dataclass!(reader, value, "pcbir.geometry:Bounds", {
         "min_x" => min_x = int;
         "min_y" => min_y = int;
         "max_x" => max_x = int;
@@ -2018,7 +2024,7 @@ fn bounds(value: &StateValue) -> Result<Bounds> {
 }
 
 fn layer_bias(value: &StateValue) -> Result<LayerBias> {
-    dataclass!(value, "pcbir.routing_costs:LayerBias", {
+    dataclass!(reader, value, "pcbir.routing_costs:LayerBias", {
         "net" => net = text;
         "layer" => layer = copper_layer;
         "area" => area = bounds;
@@ -2029,7 +2035,7 @@ fn layer_bias(value: &StateValue) -> Result<LayerBias> {
 }
 
 fn fine_region_options(value: &StateValue) -> Result<FineRegionOptions> {
-    dataclass!(value, "pcbir.fine_regions:FineRegionOptions", {
+    dataclass!(reader, value, "pcbir.fine_regions:FineRegionOptions", {
         "pad_pitch_threshold_nm" => threshold = int;
         "margin_nm" => margin = int;
         "maximum_factor" => factor = int;
@@ -2063,7 +2069,7 @@ fn strict_int(value: &StateValue, message: &str) -> Result<i64> {
 
 pub fn unified_router_options(value: &StateValue) -> Result<UnifiedRouterOptions> {
     let defaults = UnifiedRouterOptions::default();
-    dataclass!(value, "pcbir.unified_router:UnifiedRouterOptions", {
+    dataclass!(reader, value, "pcbir.unified_router:UnifiedRouterOptions", {
         "pitch_nm" => pitch_nm = |v| optional(v, int);
         "maximum_iterations" => maximum_iterations = int;
         "stall_iterations" => stall_iterations = int;
@@ -2232,14 +2238,14 @@ pub fn unified_router_options(value: &StateValue) -> Result<UnifiedRouterOptions
 }
 
 fn routing_access(value: &StateValue) -> Result<RoutingAccess> {
-    dataclass!(value, "pcbir.pin_escape:RoutingAccess", {
+    dataclass!(reader, value, "pcbir.pin_escape:RoutingAccess", {
         "position" => position = point;
         "layer" => layer = copper_layer;
         "launch_position" => launch = point;
         "path" => path = |v| list(v, track_segment);
     });
     reader.required(&[("position", position.is_none()), ("layer", layer.is_none()), ("launch_position", launch.is_none()), ("path", path.is_none())])?;
-    RoutingAccess::new(position.expect("required"), layer.expect("required"), launch.expect("required"), path.expect("required"))
+    RoutingAccess::new(position.expect("required"), layer.expect("required"), launch.expect("required"), path.expect("required")).map_err(Error::from)
 }
 
 /// A `dict[PadReference, RoutingAccess]`.

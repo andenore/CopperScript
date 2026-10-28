@@ -7,5 +7,7 @@
 //! check with the clearance index decides every track and via written.
 
 mod options;
+mod replay;
 
 pub use options::*;
+pub use replay::*;

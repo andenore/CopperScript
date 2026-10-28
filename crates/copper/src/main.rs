@@ -27,6 +27,7 @@ mod plan_layout;
 mod power_check;
 mod pypath;
 mod query;
+mod replay_unified;
 mod report_args;
 mod si_check;
 mod state;

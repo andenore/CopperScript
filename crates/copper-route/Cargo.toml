@@ -1,6 +1,6 @@
 [package]
 name = "copper-route"
-description = "The unified negotiated-congestion router, supply islands and bus skew tuning behind replay-unified"
+description = "Routing foundation: exact clearance index, search lattice, the global router, layer assignment, placement/routing feedback and escape planning"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,10 +13,12 @@ copper-json.workspace = true
 copper-lang.workspace = true
 copper-pcb.workspace = true
 copper-physical.workspace = true
+copper-place.workspace = true
 copper-state.workspace = true
 copper-units.workspace = true
 indexmap.workspace = true
 num-bigint.workspace = true
+num-integer.workspace = true
 num-rational.workspace = true
 num-traits.workspace = true
 sha2.workspace = true

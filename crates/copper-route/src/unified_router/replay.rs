@@ -1,0 +1,95 @@
+//! `replay_unified`: route the inputs saved by `save_inputs_path` again,
+//! with option overrides and a narrowed net selection.
+
+use indexmap::IndexSet;
+
+use copper_json::Value;
+use copper_physical::CopperLayer;
+
+use crate::detailed::DetailedRoutingResult;
+use crate::progress::ProgressCallback;
+use crate::state_codec::{SavedInputs, load_inputs};
+use crate::unified_error::{Result, fail, not_implemented};
+
+/// The keyword arguments of `replay_unified` besides the state path.
+#[derive(Clone, Debug, Default)]
+pub struct ReplayRequest {
+    pub only_nets: Option<IndexSet<String>>,
+    pub only_components: Option<IndexSet<String>>,
+    /// `bga_fanout`: `plan_bga_fanouts` keyword arguments (`{}` for its defaults).
+    pub bga_fanout: Option<Vec<(String, Value)>>,
+    pub power_islands: Option<String>,
+    pub exact_escape: Option<String>,
+    pub overrides: Vec<(String, Value)>,
+}
+
+fn sorted_names(names: impl IntoIterator<Item = String>) -> String {
+    let mut names: Vec<String> = names.into_iter().collect();
+    names.sort();
+    names.join(", ")
+}
+
+/// The saved inputs after the option, net and component narrowing
+/// `replay_unified` applies before any stage runs.
+pub fn prepare_replay(text: &str, path: &str, request: &ReplayRequest) -> Result<SavedInputs> {
+    let mut saved = load_inputs(text, path)?;
+    saved.options = saved.options.with_overrides(&request.overrides)?;
+    let mut only_nets = request.only_nets.clone();
+    if let Some(components) = &request.only_components {
+        let touching: IndexSet<String> = saved
+            .board
+            .nets
+            .iter()
+            .filter(|net| net.pads.iter().any(|pad| components.contains(&pad.component)))
+            .map(|net| net.name.clone())
+            .collect();
+        only_nets = Some(match only_nets {
+            None => touching,
+            Some(nets) => nets.union(&touching).cloned().collect(),
+        });
+    }
+    if let Some(only) = only_nets {
+        let known: IndexSet<&str> = saved.board.nets.iter().map(|net| net.name.as_str()).collect();
+        let unknown: Vec<String> = only.iter().filter(|net| !known.contains(net.as_str())).cloned().collect();
+        if !unknown.is_empty() {
+            return fail(format!("unknown replay nets: {}", sorted_names(unknown)));
+        }
+        if let Some(saved_nets) = &saved.only_nets {
+            let excluded: Vec<String> = only.iter().filter(|net| !saved_nets.contains(*net)).cloned().collect();
+            if !excluded.is_empty() {
+                return fail(format!("nets outside saved replay selection: {}", sorted_names(excluded)));
+            }
+        }
+        saved.only_nets = Some(match &saved.only_nets {
+            None => only,
+            Some(saved_nets) => saved_nets.iter().filter(|net| only.contains(*net)).cloned().collect(),
+        });
+    }
+    Ok(saved)
+}
+
+/// `replay_unified(path, on_progress, ...)` on the state file's text.
+pub fn replay_unified(
+    text: &str,
+    path: &str,
+    request: &ReplayRequest,
+    _on_progress: Option<ProgressCallback<'_>>,
+) -> Result<DetailedRoutingResult> {
+    let _saved = prepare_replay(text, path, request)?;
+    if let Some(islands) = &request.power_islands
+        && islands != "auto"
+        && CopperLayer::parse(islands).is_none()
+    {
+        return fail(format!("{} is not a valid CopperLayer", copper_json::python_str_repr(islands)));
+    }
+    if request.power_islands.is_some() {
+        return not_implemented("replay-unified --power-islands (pcbir.power_islands)");
+    }
+    if request.bga_fanout.is_some() {
+        return not_implemented("replay-unified --refanout (pcbir.bga_fanout)");
+    }
+    if request.exact_escape.is_some() {
+        return not_implemented("replay-unified --exact-escape (pcbir.exact_escape)");
+    }
+    not_implemented("replay-unified routing (pcbir.unified_router.route_unified)")
+}

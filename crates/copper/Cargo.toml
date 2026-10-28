@@ -21,8 +21,10 @@ copper-drc.workspace = true
 copper-pcb.workspace = true
 copper-place.workspace = true
 copper-report.workspace = true
+copper-route.workspace = true
 copper-units.workspace = true
 copper-state.workspace = true
+indexmap.workspace = true
 sha2.workspace = true
 
 [lints]

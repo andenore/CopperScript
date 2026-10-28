@@ -31,6 +31,7 @@ copper-pcb = { path = "crates/copper-pcb" }
 copper-place = { path = "crates/copper-place" }
 copper-physical = { path = "crates/copper-physical" }
 copper-report = { path = "crates/copper-report" }
+copper-route = { path = "crates/copper-route" }
 copper-state = { path = "crates/copper-state" }
 copper-units = { path = "crates/copper-units" }
 

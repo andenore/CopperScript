@@ -7,7 +7,7 @@ use num_traits::ToPrimitive;
 
 use crate::fine_regions::FineRegionOptions;
 use crate::routing_costs::LayerBias;
-use crate::{Error, Result, fail};
+use crate::unified_error::{Error, Result, fail};
 
 /// `FINE_REGION_MODES` (`"auto"` is an alias of `"dense"`).
 pub const FINE_REGION_MODES: [&str; 3] = ["off", "arrays", "dense"];
@@ -97,7 +97,7 @@ pub struct UnifiedRouterOptions {
 }
 
 /// The dataclass field names, in order (`fields(UnifiedRouterOptions)`).
-pub const FIELDS: [&str; 81] = [
+pub const FIELDS: &[&str] = &[
     "pitch_nm",
     "maximum_iterations",
     "stall_iterations",

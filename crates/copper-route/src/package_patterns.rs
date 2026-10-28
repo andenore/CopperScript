@@ -8,7 +8,7 @@ use copper_physical::footprint::{PadKind, PadShape};
 use copper_physical::Point;
 use copper_physical::pyfloat::round_int;
 
-use crate::{Result, fail};
+use crate::unified_error::{Result, fail};
 
 /// `CircularArray`: a complete square-pitch array in footprint-local coordinates.
 #[derive(Clone, Debug, PartialEq, Eq)]

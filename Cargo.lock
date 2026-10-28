@@ -42,8 +42,10 @@ dependencies = [
  "copper-physical",
  "copper-place",
  "copper-report",
+ "copper-route",
  "copper-state",
  "copper-units",
+ "indexmap",
  "sha2",
 ]
 
@@ -179,10 +181,12 @@ dependencies = [
  "copper-lang",
  "copper-pcb",
  "copper-physical",
+ "copper-place",
  "copper-state",
  "copper-units",
  "indexmap",
  "num-bigint",
+ "num-integer",
  "num-rational",
  "num-traits",
  "sha2",
