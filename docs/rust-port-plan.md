@@ -547,17 +547,17 @@ do not shrink as much.
   uncaught-exception texts.
 - `copper replay-unified` is rewritten: every option, error path, summary,
   `--report`, `--save-result`, `-o` and `--progress`.
-- Inputs: `tests/rust-port/unified/` (eight `route-board
+- Inputs: `tests/rust-port/unified/` (nine `route-board
   --unified-save-inputs` states, malformed and valid variants;
   `generate.py`, README). Corpus: `replay-unified` (states and mutations),
-  `-options`, `-errors`, `-malformed`, `-output`: 110 byte-identical, 1
+  `-options`, `-errors`, `-malformed`, `-output`: 119 byte-identical, 1
   pending. Replays compare the result state, the report's `unrouted`, the
   KiCad output, exit status and stderr, never the `seconds` or `PROGRESS`
   timing. No case sets a time budget (the default is none); a
   `time_budget_s` deadline reports not implemented.
 - Not implemented (exit 3): nested lattices (fine-region patches on ball
-  arrays), the bus phase (`buses_first` with match groups) and bus skew
-  tuning (`critical_tuning`), via technologies, required return vias,
+  arrays), bus bundles and bus skew tuning (`critical_tuning`; the bus
+  phase and its skew notes are rewritten), via technologies, required return vias,
   guide costs, exit reservations, ball-field via sites, ball-grid supply
   islands (`power_islands_ball_grid_only`), `--refanout`, `--exact-escape`, via-in-pad arrays and a dynamically typed
   state value (a text pitch).

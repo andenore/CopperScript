@@ -19475,6 +19475,78 @@
       "--report",
       "{out}/report.json"
      ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/layer_groups.state.json",
+      "--set",
+      "direct=true",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/layer_groups.state.json",
+      "--set",
+      "buses_first=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/layer_groups.state.json",
+      "--set",
+      "bus_skew_tuning=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/layer_groups.state.json",
+      "--set",
+      "bus_length_budget=true",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/layer_groups.state.json",
+      "--set",
+      "route_smoothing=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/dphy.state.json",
+      "--set",
+      "direct=true",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
     }
    ]
   },

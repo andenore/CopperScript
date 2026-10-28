@@ -136,6 +136,7 @@ fn neighbour_nets(board: &PhysicalBoard, nets: &[&PhysicalNet], accepted: &Accep
 /// `_SharedIndex`: one exact index of a base board plus a chosen part of this call's copper.
 struct Shared {
     held: IndexMap<String, (Vec<TrackSegment>, Vec<Via>)>,
+    frozen: IndexSet<String>,
 }
 
 impl Shared {
@@ -145,6 +146,13 @@ impl Shared {
             entry.0.extend(tracks.iter().cloned());
             entry.1.extend(vias.iter().cloned());
         }
+    }
+
+    /// `freeze`: the copper held now becomes part of the base.
+    fn freeze(&mut self) {
+        let names: Vec<String> = self.held.keys().cloned().collect();
+        self.frozen.extend(names);
+        self.held.clear();
     }
 
     fn hold(&mut self, index: &mut RoutingClearanceIndex<'_>, target: &Accepted) -> Result<()> {
@@ -157,6 +165,12 @@ impl Shared {
             let new = target.get(&name).unwrap_or(&empty);
             if old == new {
                 continue;
+            }
+            if self.frozen.contains(&name) {
+                return Err(crate::unified_error::Error::Crash(
+                    "AssertionError".to_owned(),
+                    format!("net {name} has frozen copper in the shared index"),
+                ));
             }
             index.remove(&name);
             if index.owned_count(&name) != 0 {
@@ -364,7 +378,9 @@ pub fn route_unified(
             already.push(net);
         }
     }
-    let mut bus_names: IndexSet<&str> = board
+    let original_board = board;
+    let all_nets = nets.clone();
+    let bus_names: IndexSet<&str> = board
         .match_groups
         .iter()
         .flat_map(|g| g.nets.iter().map(String::as_str))
@@ -373,17 +389,77 @@ pub fn route_unified(
     if options.buses_first && options.bus_bundles && !bus_names.is_empty() {
         return not_implemented("unified router bus bundles");
     }
-    if options.buses_first && !bus_names.is_empty() && bus_names.len() < nets.len() {
-        return not_implemented("unified router bus phase (buses_first with match groups)");
-    }
-    bus_names.clear();
-    let mut events: Vec<Event> = Vec::new();
-    emit(&mut on_progress, "unified_setup", "started", vec![("nets", int(nets.len() as i64))]);
     if !options.share_commit_index {
         return not_implemented("unified router without share_commit_index");
     }
-    let index = RoutingClearanceIndex::new(board)?;
-    let mut shared = Shared { held: IndexMap::new() };
+    let mut events: Vec<Event> = Vec::new();
+    let mut shared = Shared { held: IndexMap::new(), frozen: IndexSet::new() };
+    let mut bus_accepted: Accepted = IndexMap::new();
+    let mut bus_complete: IndexSet<String> = IndexSet::new();
+    let mut bus_skew_notes: Vec<String> = Vec::new();
+    let mut index = RoutingClearanceIndex::new(board)?;
+    let bus_board;
+    let mut board: &PhysicalBoard = original_board;
+    if options.buses_first && !bus_names.is_empty() && bus_names.len() < nets.len() {
+        let mut bus_options = options.clone();
+        if options.bus_length_budget {
+            bus_options.length_priority = true;
+        }
+        let bus_nets: Vec<&PhysicalNet> =
+            nets.iter().copied().filter(|n| bus_names.contains(n.name.as_str())).collect();
+        let mut bus_router = Router::new(board, &bus_options, &bus_nets, IndexSet::new(), required_accesses, index)?;
+        let (bus_routes, bus_conflicts, used) = bus_router.negotiate(None, &mut events)?;
+        forward(&mut on_progress, &mut events);
+        let (accepted_bus, _, complete_bus) = bus_router.commit(&bus_routes, &bus_conflicts)?;
+        index = bus_router.clearance.take().expect("index");
+        drop(bus_router);
+        bus_accepted = accepted_bus;
+        bus_complete = complete_bus;
+        shared.added(&bus_accepted);
+        let mut over_length: IndexSet<String> = IndexSet::new();
+        if options.bus_length_budget {
+            for name in &bus_complete {
+                if let Some(rule) = rules.get(name.as_str())
+                    && let Some(max_length) = rule.max_length_nm
+                {
+                    let tracks = bus_accepted.get(name).map_or(&[][..], |c| c.0.as_slice());
+                    if net_track_length(board, name, tracks) > max_length {
+                        over_length.insert(name.clone());
+                    }
+                }
+            }
+            bus_complete.retain(|name| !over_length.contains(name));
+        }
+        bus_accepted.retain(|name, _| bus_complete.contains(name));
+        let mut skew_notes: Vec<String> = Vec::new();
+        if options.bus_skew_tuning && !bus_accepted.is_empty() {
+            if options.route_smoothing {
+                bus_accepted = smoothed(board, &bus_accepted)?;
+            }
+            skew_notes = tune_bus_skew(board, &bus_accepted, &rules)?;
+        }
+        shared.hold(&mut index, &bus_accepted)?;
+        shared.freeze();
+        emit(
+            &mut on_progress,
+            "unified_buses",
+            "finished",
+            vec![
+                ("nets", int(bus_names.len() as i64)),
+                ("complete", int(bus_complete.len() as i64)),
+                ("over_length", int(over_length.len() as i64)),
+                ("iterations", int(used)),
+                ("skew_notes", Value::Array(skew_notes.iter().map(|n| Value::from(n.as_str())).collect())),
+            ],
+        );
+        bus_skew_notes = skew_notes;
+        if !bus_accepted.is_empty() {
+            bus_board = with_copper(board, &bus_accepted);
+            board = &bus_board;
+            nets.retain(|n| !bus_complete.contains(&n.name));
+        }
+    }
+    emit(&mut on_progress, "unified_setup", "started", vec![("nets", int(nets.len() as i64))]);
     let mut router = Router::new(board, options, &nets, IndexSet::new(), required_accesses, index)?;
     if options.export_congestion && options.congestion_tile_nm < router.pitch {
         return fail("congestion_tile_nm must be at least the router pitch");
@@ -510,7 +586,7 @@ pub fn route_unified(
         }
     }
     if options.pour_recheck && !plane_nets.is_empty() {
-        let mut index = router.clearance.take().expect("index");
+        let mut slot = router.clearance.take();
         let (adopted, adopted_complete, report) = recheck_pours(
             board,
             &nets,
@@ -520,19 +596,37 @@ pub fn route_unified(
             options,
             required_accesses,
             &mut shared,
-            &mut index,
+            &mut slot,
             &mut events,
         )?;
-        router.clearance = Some(index);
+        router.clearance = slot;
         forward(&mut on_progress, &mut events);
         accepted = adopted;
         complete = adopted_complete;
         iterations += report.0;
         emit(&mut on_progress, "unified_pour_recheck", "finished", report.1);
     }
-    let spec_names: IndexSet<String> = router.specs.iter().map(|s| s.name.clone()).collect();
+    if !bus_accepted.is_empty() {
+        accepted = merge(&bus_accepted, &accepted);
+        complete.extend(bus_complete.iter().cloned());
+        board = original_board;
+        nets = all_nets.clone();
+    }
+    let mut spec_names: IndexSet<String> = router.specs.iter().map(|s| s.name.clone()).collect();
+    spec_names.extend(bus_complete.iter().cloned());
     if options.route_smoothing && !accepted.is_empty() {
-        accepted = smoothed(board, &accepted)?;
+        let held: Accepted = if options.bus_skew_tuning {
+            accepted.iter().filter(|(n, _)| bus_complete.contains(*n)).map(|(n, c)| (n.clone(), c.clone())).collect()
+        } else {
+            IndexMap::new()
+        };
+        let rest: Accepted =
+            accepted.iter().filter(|(n, _)| !held.contains_key(*n)).map(|(n, c)| (n.clone(), c.clone())).collect();
+        let mut merged = if rest.is_empty() { IndexMap::new() } else { smoothed(&with_copper(board, &held), &rest)? };
+        for (name, copper) in held {
+            merged.insert(name, copper);
+        }
+        accepted = merged;
     }
     let mut budget_errors: IndexMap<String, String> = IndexMap::new();
     let mut budget_warnings: IndexMap<String, String> = IndexMap::new();
@@ -601,6 +695,9 @@ pub fn route_unified(
         ("fabrication_ready", "false"),
     ] {
         routed.metadata.insert(key.to_owned(), value.to_owned());
+    }
+    if !bus_skew_notes.is_empty() {
+        routed.metadata.insert("bus_skew".to_owned(), bus_skew_notes.join(" | "));
     }
     let mut results = Vec::new();
     for net in &all {
@@ -721,15 +818,15 @@ fn strings(values: &[String]) -> Value {
 /// from their pour. Returns (accepted, complete, (iterations, report)).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn recheck_pours<'b>(
-    board: &'b PhysicalBoard,
-    nets: &[&'b PhysicalNet],
+    board: &PhysicalBoard,
+    nets: &[&PhysicalNet],
     plane_nets: &IndexSet<String>,
     accepted: &Accepted,
     mut complete: IndexSet<String>,
     options: &UnifiedRouterOptions,
     required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
     shared: &mut Shared,
-    index: &mut RoutingClearanceIndex<'b>,
+    slot: &mut Option<RoutingClearanceIndex<'b>>,
     events: &mut Vec<Event>,
 ) -> Result<(Accepted, IndexSet<String>, (i64, Vec<(&'static str, Value)>))> {
     let before = pour_estimate(board, accepted)?;
@@ -755,14 +852,14 @@ fn recheck_pours<'b>(
     let mut current = (accepted.clone(), before);
     let mut adopted = false;
     // Step 1: plane nets only, everything else fixed.
-    shared.hold(index, &current.0)?;
+    shared.hold(slot.as_mut().expect("index"), &current.0)?;
     let partial = with_copper(board, &current.0);
-    let taken = std::mem::replace(index, RoutingClearanceIndex::new(board)?);
+    let taken = slot.take().expect("index");
     let mut step = Router::new(&partial, options, &plane_list, IndexSet::new(), required_accesses, taken)?;
     let (routes, conflicts, used) = step.negotiate(None, events)?;
     iterations += used;
     let (more, _, _) = step.commit(&routes, &conflicts)?;
-    *index = step.clearance.take().expect("index");
+    *slot = step.clearance.take();
     drop(step);
     shared.added(&more);
     let candidate = merge(&current.0, &more);
@@ -807,9 +904,9 @@ fn recheck_pours<'b>(
         let ripped: Accepted =
             current.0.iter().filter(|(name, _)| !crowd.contains(*name)).map(|(n, c)| (n.clone(), c.clone())).collect();
         let still_nets: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| still.contains_key(&n.name)).collect();
-        shared.hold(index, &ripped)?;
+        shared.hold(slot.as_mut().expect("index"), &ripped)?;
         let partial = with_copper(board, &ripped);
-        let taken = std::mem::replace(index, RoutingClearanceIndex::new(board)?);
+        let taken = slot.take().expect("index");
         let mut first = Router::new(&partial, options, &still_nets, pads, required_accesses, taken)?;
         let (routes, conflicts, used) = first.negotiate(None, events)?;
         iterations += used;
@@ -829,19 +926,19 @@ fn recheck_pours<'b>(
             );
         }
         explicit_report = Some(Value::Object(explicit));
-        *index = first.clearance.take().expect("index");
+        *slot = first.clearance.take();
         drop(first);
         shared.added(&plane_more);
         let candidate = merge(&ripped, &plane_more);
         let crowd_nets: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| crowd.contains(&n.name)).collect();
-        shared.hold(index, &candidate)?;
+        shared.hold(slot.as_mut().expect("index"), &candidate)?;
         let partial = with_copper(board, &candidate);
-        let taken = std::mem::replace(index, RoutingClearanceIndex::new(board)?);
+        let taken = slot.take().expect("index");
         let mut second = Router::new(&partial, options, &crowd_nets, IndexSet::new(), required_accesses, taken)?;
         let (routes, conflicts, used) = second.negotiate(None, events)?;
         iterations += used;
         let (signal_more, _, signal_complete) = second.commit(&routes, &conflicts)?;
-        *index = second.clearance.take().expect("index");
+        *slot = second.clearance.take();
         drop(second);
         shared.added(&signal_more);
         let candidate = merge(&candidate, &signal_more);
@@ -864,7 +961,7 @@ fn recheck_pours<'b>(
             adopted = true;
         }
     }
-    shared.hold(index, &current.0)?;
+    shared.hold(slot.as_mut().expect("index"), &current.0)?;
     let mut still_cut: Vec<String> = current
         .1
         .open_pads
@@ -881,4 +978,49 @@ fn recheck_pours<'b>(
     report.push(("adopted", Value::Bool(adopted)));
     report.push(("still_cut_off", strings(&still_cut)));
     Ok((current.0, complete, (iterations, report)))
+}
+
+/// `_tune_bus_skew` up to the tuner: the notes for members left over each
+/// group's `max_skew`. Lengthening a member (`critical_tuning.UnitTuner`)
+/// is not rewritten yet.
+fn tune_bus_skew(
+    board: &PhysicalBoard,
+    accepted: &Accepted,
+    rules: &IndexMap<&str, &copper_pcb::board::NetRoutingRule>,
+) -> Result<Vec<String>> {
+    let mut notes = Vec::new();
+    for group in &board.match_groups {
+        let max_skew = group.max_skew_nm;
+        let lengths: IndexMap<&str, i64> = group
+            .nets
+            .iter()
+            .map(|name| {
+                let tracks = accepted.get(name).map_or(&[][..], |c| c.0.as_slice());
+                (name.as_str(), net_track_length(board, name, tracks))
+            })
+            .collect();
+        if lengths.values().any(|length| *length == 0) {
+            continue;
+        }
+        let longest = *lengths.values().max().expect("members");
+        let mut members: Vec<&str> = group.nets.iter().map(String::as_str).collect();
+        members.sort_by_key(|name| (lengths[name], name.to_string()));
+        for name in members {
+            let need = longest - max_skew - lengths[name];
+            if need <= 0 {
+                continue;
+            }
+            if !accepted.contains_key(name) {
+                notes.push(format!("{}: {name} is {need} nm short; its copper is not the bus router's", group.id));
+                continue;
+            }
+            let rule = rules.get(name);
+            if rule.is_none_or(|r| r.tuning_amplitude_limit_nm.is_none()) {
+                notes.push(format!("{}: {name} is {need} nm short; no tuning_amplitude_limit is declared", group.id));
+                continue;
+            }
+            return not_implemented("unified router bus skew tuning (critical_tuning.UnitTuner)");
+        }
+    }
+    Ok(notes)
 }
