@@ -17676,6 +17676,64 @@
       "--report",
       "{out}/route.json"
      ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-fanout",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--unified-direct",
+      "--no-fanout",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--no-fanout",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-fanout",
+      "--routing-profile",
+      "balanced",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
     }
    ]
   },

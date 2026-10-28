@@ -107,6 +107,8 @@ pub struct RoutingPipelineResult {
     pub stopped_after: Option<String>,
     /// The router's options, for later transactional dependency repairs.
     pub unified_options: UnifiedRouterOptions,
+    /// The congestion-driven placement feedback loop (None when not enabled).
+    pub placement_feedback: Option<FeedbackOutcome>,
 }
 
 impl RoutingPipelineResult {
@@ -678,6 +680,7 @@ pub fn run_routing_pipeline(
             duplicate_pad_stitch: None,
             stopped_after: Some("placement".to_owned()),
             unified_options,
+            placement_feedback: None,
         });
     }
     let escape_plan_options = options.escape_plan_options.as_ref();
@@ -747,13 +750,12 @@ pub fn run_routing_pipeline(
     )?;
     let feedback_budget =
         options.placement_feedback_trials.max(options.detailed_feedback_trials + options.critical_feedback_trials);
-    if feedback_budget != 0 {
-        // The loop costs nothing when every net routes, but its entry still
-        // differs; not rewritten yet.
-        return copper_pcb::not_implemented(
-            "congestion-driven placement feedback (congestion_feedback.run_placement_feedback)",
-        );
-    }
+    let placement_feedback = if feedback_budget != 0 {
+        let deferred = copper_pcb::zones::deferred_zone_nets(&pre_detailed)?;
+        Some(placement_feedback_entry(&critical, &detailed, &drc, &deferred, feedback_budget, &mut on_progress)?)
+    } else {
+        None
+    };
     let critical = if unified_options.direct {
         unified_profile_review(&detailed, &placement.global_route, &drc)?
     } else {
@@ -773,5 +775,145 @@ pub fn run_routing_pipeline(
         duplicate_pad_stitch: Some(duplicate_stitch),
         stopped_after: None,
         unified_options,
+        placement_feedback,
     })
+}
+
+/// Meaning of each acceptance score component (`_feedback_score`); lower is better.
+pub const SCORE_ORDER: [&str; 7] = [
+    "hard_drc_errors",
+    "open_signal_nets",
+    "critical_failures",
+    "unrouted_nets",
+    "conflict_overflow",
+    "total_length_nm",
+    "vias",
+];
+
+/// `congestion_feedback.FeedbackOutcome` of a loop that ran no trial.
+#[derive(Clone, Debug)]
+pub struct FeedbackOutcome {
+    pub stop_reason: String,
+    pub score: Vec<i64>,
+    pub failed_nets: Vec<String>,
+}
+
+impl FeedbackOutcome {
+    /// `report()`.
+    pub fn report(&self) -> Value {
+        let ints = |items: &[i64]| Value::Array(items.iter().map(|v| Value::from(*v)).collect());
+        let texts = |items: &[String]| Value::Array(items.iter().map(|v| Value::from(v.as_str())).collect());
+        Value::Object(
+            [
+                ("accepted_moves", Value::from(0i64)),
+                ("reruns", Value::from(0i64)),
+                ("rounds", Value::from(0i64)),
+                ("stop_reason", Value::from(self.stop_reason.as_str())),
+                ("score_order", Value::Array(SCORE_ORDER.iter().map(|s| Value::from(*s)).collect())),
+                ("initial_score", ints(&self.score)),
+                ("final_score", ints(&self.score)),
+                ("initial_failed_nets", texts(&self.failed_nets)),
+                ("final_failed_nets", texts(&self.failed_nets)),
+                ("map_source", Value::Null),
+                ("trials", Value::Array(Vec::new())),
+                ("hot_tiles", Value::Array(Vec::new())),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v))
+            .collect(),
+        )
+    }
+}
+
+/// `_feedback_score`: the acceptance tuple of the placement feedback loop.
+fn feedback_score(
+    critical: &CriticalRoutingResult,
+    detailed: &DetailedRoutingResult,
+    drc: &DrcReport,
+) -> Result<Vec<i64>> {
+    let hard = drc
+        .findings()
+        .iter()
+        .filter(|f| {
+            !["DRC-OPEN-NET", "DRC-ROUTE-INCOMPLETE"].contains(&f.code.as_str())
+                && f.severity == copper_drc::Severity::Error
+        })
+        .count() as i64;
+    let zone_nets = copper_pcb::zones::deferred_zone_nets(&detailed.board)?;
+    let opens: IndexSet<&String> = drc
+        .findings()
+        .iter()
+        .filter(|f| f.code == "DRC-OPEN-NET")
+        .flat_map(|f| f.nets.iter())
+        .filter(|net| !zone_nets.contains(*net))
+        .collect();
+    let critical_failures =
+        critical.nets.iter().filter(|item| !item.connected || !item.diagnostics.is_empty()).count() as i64;
+    let m = &detailed.metrics;
+    Ok(vec![
+        hard,
+        opens.len() as i64,
+        critical_failures,
+        m.unrouted_net_count,
+        m.total_conflict_overflow,
+        m.total_length_nm,
+        m.via_count,
+    ])
+}
+
+/// `run_placement_feedback` up to its first round: with no failed nets the
+/// loop stops at once; moving parts is not rewritten yet.
+fn placement_feedback_entry(
+    critical: &CriticalRoutingResult,
+    detailed: &DetailedRoutingResult,
+    drc: &DrcReport,
+    deferred: &IndexSet<String>,
+    trials: i64,
+    on_progress: &mut Option<ProgressCallback<'_>>,
+) -> Result<FeedbackOutcome> {
+    let score = feedback_score(critical, detailed, drc)?;
+    let mut failed: IndexSet<String> = detailed
+        .nets
+        .iter()
+        .filter(|item| !item.connected && !deferred.contains(&item.net))
+        .map(|item| item.net.clone())
+        .collect();
+    for item in &critical.nets {
+        if !item.connected || !item.diagnostics.is_empty() {
+            failed.extend(item.nets.iter().filter(|net| !net.starts_with('<')).cloned());
+        }
+    }
+    for finding in drc.findings() {
+        if finding.code == "DRC-OPEN-NET" {
+            failed.extend(finding.nets.iter().filter(|net| !deferred.contains(*net)).cloned());
+        }
+    }
+    let mut failed: Vec<String> = failed.into_iter().collect();
+    failed.sort();
+    let ints = |items: &[i64]| Value::Array(items.iter().map(|v| Value::from(*v)).collect());
+    let texts = |items: &[String]| Value::Array(items.iter().map(|v| text(v)).collect());
+    emit(
+        on_progress,
+        "placement_feedback",
+        "started",
+        vec![("trials", int(trials)), ("failed_nets", texts(&failed)), ("score", ints(&score))],
+    );
+    if !failed.is_empty() {
+        return copper_pcb::not_implemented(
+            "congestion-driven placement moves (congestion_feedback.run_placement_feedback)",
+        );
+    }
+    emit(
+        on_progress,
+        "placement_feedback",
+        "finished",
+        vec![
+            ("stop_reason", text("no_failed_nets")),
+            ("trials", int(0)),
+            ("accepted_moves", int(0)),
+            ("score", ints(&score)),
+            ("failed_nets", texts(&failed)),
+        ],
+    );
+    Ok(FeedbackOutcome { stop_reason: "no_failed_nets".to_owned(), score, failed_nets: failed })
 }

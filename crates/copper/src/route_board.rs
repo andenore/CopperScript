@@ -1232,6 +1232,10 @@ fn finish(
         }
     };
     report.insert("fine_regions".to_owned(), fine);
+    if let Some(feedback) = &result.placement_feedback {
+        // Congestion-driven placement feedback (trials, moves, hot tiles).
+        report.insert("placement_feedback".to_owned(), feedback.report());
+    }
     let zone_nets = copper_pcb::zones::distribution_zone_nets(&output_board);
     let ordinary: Vec<_> = result.detailed.nets.iter().filter(|item| !zone_nets.contains(&item.net)).collect();
     let mut unrouted: Vec<String> = ordinary.iter().filter(|i| !i.connected).map(|i| i.net.clone()).collect();
