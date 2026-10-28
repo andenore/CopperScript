@@ -548,17 +548,20 @@ do not shrink as much.
   `json` option takes several key paths and a `without` form, so reports
   carrying wall time compare everything but `seconds` and
   `local_preparation.elapsed_seconds`.
-- Coupled pairs: terminal preparation (source terminals), the coarse
-  aligned-pair candidate with its budgets, coupled length and atomic DRC
-  validation, length-match outcomes within limits, and the route summary's
-  plane estimate (`plane_estimate`, PENDING rust-m4-unified) are ported;
-  five `--only` pair replays route byte-identically.
-- Corpus (6 `replay-critical*` suites): the trivial, hard-macro,
-  asymmetric-pair and aligned-pair replays, options, error paths, malformed
-  inputs and mutations are byte-identical. Not implemented (exit 3): the
-  joint pair search (`pair_search`, `pair_vias`, `pair_refine`), offset
-  guides and guide vias, intra-pair skew tuning, local contact branches,
-  single-ended routing (unified router cohort), bundles and repairs,
-  package-access reservations, plane contacts and length-match tuning over
-  the limit.
+- Routed paths ported: pair terminal preparation (source terminals), the
+  coarse aligned-pair and offset-guide candidates with pin stubs and
+  checked access lead-ins, budgets, coupled length, atomic DRC validation,
+  the joint search tiers when no searcher expands a state; single-ended
+  guides, pin stubs and local surface trees (`local_critical`,
+  `surface_path`, `route_style`); length-match outcomes within limits;
+  the route summary's plane estimate (`plane_estimate`, PENDING
+  rust-m4-unified).
+- Corpus (6 `replay-critical*` suites, 90 cases): 77 byte-identical, 13
+  not implemented, none different. Not implemented (exit 3): the joint
+  pair search proper (`pair_search` ports and spine search, `pair_vias`
+  transitions, `pair_refine`, resumed frontiers), guide vias
+  (`physical_via_span` is a rust-m4-global stub), intra-pair skew tuning,
+  local contact branches, the unified router (single-ended cohorts, exact
+  searches; rust-m4-unified), bundles and repairs, package-access
+  reservations, plane contacts and length-match tuning over the limit.
 
