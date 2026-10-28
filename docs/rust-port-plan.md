@@ -166,7 +166,18 @@ completion time) may differ within the recorded entries.
   Windows; the harness reads the Python outputs' CRLF as LF on Windows before
   comparing, so this is a policy, not a per-case recorded difference.
 - Float code (`hypot`, `atan2`, cost weights) keeps the same operations in
-  the same order unless a recorded difference says otherwise.
+  the same order where that is natural, but floating-point rounding is not
+  reproduced bit for bit (decision D6): no Python or numpy numeric algorithm
+  is ported only to match its last bit. The harness reports outputs that
+  differ only in float rounding as `close` (a pass): exit statuses equal,
+  text equal outside its numbers, integers equal, floats within a relative
+  1e-9, JSON compared as values; `--exact` shows the byte comparison. The
+  exact helpers already written (`pyfloat`) stay in use.
+- Where a rounding difference changes a decision (a routing tie, a legality
+  threshold), outputs diverge beyond `close`. For routing commands the
+  acceptance is then quality, not identity: the Rust result must route as
+  completely, pass DRC, and be no worse on the benchmark ladder's metrics
+  (completion, length, vias); such cases are recorded with those metrics.
 - Iteration order is deterministic everywhere: `BTreeMap`/`IndexMap`, no
   `HashMap` iteration feeding output, stable sorts with the same keys. The
   binary must reproduce its own output bit for bit across runs and platforms.
@@ -272,6 +283,11 @@ do not shrink as much.
   commands on a reduced, frozen package (section 5).
 - **D5 Identity bar: reviewed differences allowed.** Byte identity is the
   default; every deviation is recorded in the differences log (section 4).
+- **D6 Floats: rounding is not reproduced (recorded 2026-10-28).** Backwards
+  compatibility will break anyway, so bit-exact float parity is not worth
+  porting numeric algorithms for. Differences only in float rounding pass as
+  `close`; routing that diverges because of them is judged on quality
+  (section 4, numerics).
 
 ## 9. Next steps
 

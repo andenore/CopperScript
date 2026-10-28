@@ -6,6 +6,10 @@ default expectation ([plan, section 4](rust-port-plan.md#4-approach-clean-rewrit
 A case whose outputs differ blocks its milestone unless this table records the
 difference.
 
+Float rounding is not a difference either (decision D6): outputs that agree
+outside their numbers, with equal integers and floats within a relative
+1e-9, are reported as `close` and pass without a row.
+
 An entry applies to exactly one pair of outputs: the harness matches the case
 id and both result digests from its report. When either output changes, the
 entry no longer applies and the case is reviewed again.
@@ -21,7 +25,7 @@ To record a difference:
 
 An uncaught Python exception is compared by its final exception line only
 (`python crash: KeyError: 'X'`): the traceback's paths and line numbers differ
-per checkout and platform.Line endings
+per checkout and platform. Line endings
 are not differences: the Rust binary writes LF everywhere and the harness
 reads Python's Windows CRLF as LF.
 
