@@ -40,6 +40,13 @@ server notifications arrive in a deterministic order. Strings may use
 and ``{input_text}``. The transcript's digest is part of the oracle cache key.
 LSP output is binary on both implementations (CRLF headers by protocol), so
 its stdout is compared without the Windows CRLF reading.
+
+A suite or case may ``stage`` inputs: a map of output-relative names to
+repository paths (files or directories) copied into the fresh output directory
+before each implementation runs, for commands that rewrite their inputs in
+place (``editor-overlay`` binds the overlay into the sibling ``run.json``;
+the editor saves source). Both implementations then start from identical
+copies and the staged tree is compared like any other output.
 """
 
 from __future__ import annotations
@@ -94,6 +101,8 @@ class Case:
     # A client transcript piped to stdin, and the suite input it is about.
     stdin: str | None = None
     stdin_input: str | None = None
+    # Output-relative name -> repository path copied into the output directory first.
+    stage: dict[str, str] = field(default_factory=dict)
 
 
 def milestone_number(name: str) -> int:
@@ -192,7 +201,8 @@ def load_corpus(path: Path, kicad_cli: str | None = None) -> tuple[dict, list[Ca
         name, milestone = suite["name"], suite["milestone"]
         milestone_number(milestone)
         base = {"suite": name, "milestone": milestone, "compare": tuple(suite.get("compare", CHANNELS)),
-                "files": tuple(suite["files"]) if "files" in suite else None, "json_keys": suite.get("json", {})}
+                "files": tuple(suite["files"]) if "files" in suite else None, "json_keys": suite.get("json", {}),
+                "stage": dict(suite.get("stage", {}))}
         timeout = float(suite.get("timeout_s", DEFAULT_TIMEOUT_S))
         if "ladder" in suite:
             cases.extend(_ladder_cases(suite, base, kicad_cli))
@@ -202,9 +212,10 @@ def load_corpus(path: Path, kicad_cli: str | None = None) -> tuple[dict, list[Ca
             # A case may narrow the compared channels, e.g. to exit status
             # for a usage error, whose argparse wording is not reproduced.
             channels = {"compare": tuple(case["compare"])} if "compare" in case else {}
+            stage = {"stage": {**base["stage"], **case["stage"]}} if "stage" in case else {}
             cases.append(Case(id=case_id, args=list(case["args"]), cwd=ROOT,
                               timeout_s=float(case.get("timeout_s", timeout)), stdin=case.get("stdin"),
-                              **{**base, **channels}))
+                              **{**base, **channels, **stage}))
         for source in _inputs(suite.get("inputs", []), suite.get("declares")):
             stdin = suite.get("stdin")
             cases.append(Case(id=f"{name}/{source}", args=_expand(suite["args"], {"input": source}), cwd=ROOT,
@@ -382,6 +393,13 @@ def run_one(command: list[str], case: Case, out: Path, environment: dict[str, st
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True)
+    for name, source in sorted(case.stage.items()):
+        target = out / name
+        if (ROOT / source).is_dir():
+            shutil.copytree(ROOT / source, target)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / source, target)
     args = _expand(case.args, {"out": str(out), "root": str(ROOT)})
     started = time.perf_counter()
     if case.stdin:
@@ -433,7 +451,7 @@ class OracleCache:
         self.hits = 0
 
     def _path(self, case: Case) -> Path:
-        parts = [case.id, case.args, str(case.cwd), case.timeout_s, case.mutation]
+        parts = [case.id, case.args, str(case.cwd), case.timeout_s, case.mutation, sorted(case.stage.items())]
         if case.stdin:
             parts.append(_sha256((ROOT / case.stdin).read_bytes()))
         key = json.dumps(parts)

@@ -18,6 +18,7 @@ copper-lsp.workspace = true
 copper-physical.workspace = true
 copper-assembly.workspace = true
 copper-drc.workspace = true
+copper-editor.workspace = true
 copper-pcb.workspace = true
 copper-place.workspace = true
 copper-report.workspace = true

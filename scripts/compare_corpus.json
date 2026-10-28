@@ -18892,6 +18892,549 @@
    ],
    "stdin": "tests/rust-port/lsp/board.jsonl",
    "timeout_s": 120
+  },
+  {
+   "name": "editor-overlay",
+   "milestone": "M6",
+   "timeout_s": 120,
+   "cases": [
+    {
+     "id": "editor-overlay/flat",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/rear",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/rear"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/demo",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/demo"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/valid",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/valid"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/verified",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/verified"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/remaining",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/remaining"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/filled",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/filled"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/drc-unbound",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/drc-unbound"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/drc-units",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/drc-units"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/intent-schema",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/intent-schema"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/unbound",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/unbound"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/pcb-changed",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/pcb-changed"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/pose-mismatch",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/pose-mismatch"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/copper-mismatch",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/copper-mismatch"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/duplicate-key",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/duplicate-key"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/nonfinite",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/nonfinite"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/bad-json",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/bad-json"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/missing-intent",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/missing-intent"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/manifest-list",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/manifest-list"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "editor-overlay-options",
+   "milestone": "M6",
+   "timeout_s": 120,
+   "cases": [
+    {
+     "id": "editor-overlay-options/elsewhere",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/elsewhere/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/evidence-name",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/route-report.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/not-json",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/overlay.txt"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/existing-output",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/board.editor-intent.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/short-output",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o{out}/run/reference.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/long-output",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "--output={out}/run/reference.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/abbreviated",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-py",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "--out",
+      "{out}/run/reference.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/failing-probe",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/failing-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/garbled-probe",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/garbled-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/missing-interpreter",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/absent-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/missing-manifest",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/absent.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/directory-manifest",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/help",
+     "stage": {},
+     "args": [
+      "editor-overlay",
+      "--help"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/no-run",
+     "stage": {},
+     "args": [
+      "editor-overlay",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/x.json"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/no-output",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/no-interpreter",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "-o",
+      "{out}/run/x.json"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/extra-positional",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "extra",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/x.json"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/unknown-option",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/x.json",
+      "--bogus"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    }
+   ]
   }
  ]
 }

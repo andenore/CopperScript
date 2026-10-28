@@ -14,6 +14,7 @@ mod check_footprint;
 mod commands;
 mod compile;
 mod compile_macro;
+mod editor_overlay;
 mod explain;
 mod export_kicad;
 mod export_kicad_pcb;
