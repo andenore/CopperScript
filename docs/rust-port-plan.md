@@ -848,3 +848,15 @@ do not shrink as much.
   `fanout.FanoutResult` state decoder and
   `bypass_reservations`), the ball-grid fanout sidecar
   (`PATH.bga.json`) and trial input files of placement feedback.
+
+### M4 acceptance run (CI `ladder` job, 2026-10-28)
+
+The `ladder` job in `.github/workflows/rust.yml` runs every `bench/ladder.json`
+board on both implementations on pushes to `rust-m2` and on demand: the
+examples plus the consumer boards (CopperLedRing and CopperAssetTracker
+checked out beside the repository; CopperProbe, which is private, when a
+`COPPER_BOARDS_TOKEN` secret can read it), with pinned KiCad 10
+(`scripts/ci_install_kicad10.sh`) so native boards pass `--verify-plane-fill`
+to real `kicad-cli`. A differing board fails the job; a board the binary
+does not route yet is reported as pending. Python and Rust seconds per board
+are in the job summary.
