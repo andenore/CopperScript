@@ -315,7 +315,7 @@ fn routing(
             (f.severity == copper_drc::Severity::Error || BUDGET_CODES.contains(&f.code.as_str())) && touches(&f.nets)
         })
         .collect();
-    let optional = |value: Option<i64>| value.map_or(Value::Null, |v| Value::from(v));
+    let optional = |value: Option<i64>| value.map_or(Value::Null, Value::from);
     let measurements: Vec<Value> = errors
         .iter()
         .map(|f| {
