@@ -41,6 +41,12 @@ and ``{input_text}``. The transcript's digest is part of the oracle cache key.
 LSP output is binary on both implementations (CRLF headers by protocol), so
 its stdout is compared without the Windows CRLF reading.
 
+A case may name an ``http`` client transcript for a server that prints its
+loopback URL (``edit-mechanical``): JSON lines of ``get``/``post`` requests,
+replayed in order once the URL appears; the responses are written to
+``{out}/http.jsonl`` with the random port and capability token masked (in
+stdout too), then the server is terminated. See ``_run_http``.
+
 A suite or case may ``stage`` inputs: a map of output-relative names to
 repository paths (files or directories) copied into the fresh output directory
 before each implementation runs, for commands that rewrite their inputs in
@@ -103,6 +109,8 @@ class Case:
     stdin_input: str | None = None
     # Output-relative name -> repository path copied into the output directory first.
     stage: dict[str, str] = field(default_factory=dict)
+    # An HTTP client transcript for a server that prints its URL (the editor).
+    http: str | None = None
 
 
 def milestone_number(name: str) -> int:
@@ -215,7 +223,7 @@ def load_corpus(path: Path, kicad_cli: str | None = None) -> tuple[dict, list[Ca
             stage = {"stage": {**base["stage"], **case["stage"]}} if "stage" in case else {}
             cases.append(Case(id=case_id, args=list(case["args"]), cwd=ROOT,
                               timeout_s=float(case.get("timeout_s", timeout)), stdin=case.get("stdin"),
-                              **{**base, **channels, **stage}))
+                              http=case.get("http"), **{**base, **channels, **stage}))
         for source in _inputs(suite.get("inputs", []), suite.get("declares")):
             stdin = suite.get("stdin")
             cases.append(Case(id=f"{name}/{source}", args=_expand(suite["args"], {"input": source}), cwd=ROOT,
@@ -389,6 +397,137 @@ def _run_transcript(argv: list[str], case: Case, environment: dict[str, str]) ->
     return (None if timed_out else process.returncode), bytes(output["stdout"]), bytes(output["stderr"]), timed_out
 
 
+_EDITOR_URL = re.compile(rb"http://127\.0\.0\.1:(\d+)/#token=([A-Za-z0-9_-]+)")
+
+
+def _mask_http(value, port: str, token: str):
+    """Replace the server's random port and token; drop placement job timings."""
+    if isinstance(value, str):
+        return value.replace(token, "{token}").replace(f"127.0.0.1:{port}", "127.0.0.1:{port}")
+    if isinstance(value, list):
+        return [_mask_http(item, port, token) for item in value]
+    if isinstance(value, dict):
+        masked = {key: _mask_http(item, port, token) for key, item in value.items()}
+        if isinstance(masked.get("elapsed_seconds"), (int, float)) and "input_revision" in masked:
+            masked["elapsed_seconds"] = None
+            masked["profile"] = None
+        return masked
+    return value
+
+
+def _run_http(argv: list[str], case: Case, out: Path, environment: dict[str, str]) -> tuple:
+    """Start a server that prints its URL, replay ``case.http`` and stop it.
+
+    JSON lines, each a request: ``{"get": PATH}`` or ``{"post": PATH}`` with a
+    ``json`` value or ``raw`` body text, optional ``headers`` (added, or
+    replacing the defaults: ``Host``, ``X-Copper-Token`` and for a body
+    ``Content-Type: application/json``; a null value removes one), and
+    ``"token": false`` to send no capability. Each response is recorded in
+    ``{out}/http.jsonl`` as its status, ``Content-Type``, ``Cache-Control``
+    and JSON body (other bodies by SHA-256), with the random port and token
+    masked; stdout masks them too. The server is then terminated.
+    """
+    import http.client
+    deadline = time.monotonic() + case.timeout_s
+    process = subprocess.Popen(argv, cwd=case.cwd, env=environment, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+
+    def drain(name: str) -> None:
+        stream = getattr(process, name)
+        while chunk := stream.read1(65536):
+            output[name].extend(chunk)
+
+    readers = [threading.Thread(target=drain, args=(name,), daemon=True) for name in output]
+    for reader in readers:
+        reader.start()
+    timed_out, port, token, records, revision = False, None, None, [], 0
+
+    def with_revision(value):
+        if value == "{revision}":
+            return revision
+        if isinstance(value, list):
+            return [with_revision(item) for item in value]
+        if isinstance(value, dict):
+            return {key: with_revision(item) for key, item in value.items()}
+        return value
+
+    while process.poll() is None and time.monotonic() < deadline:
+        match = _EDITOR_URL.search(bytes(output["stdout"]))
+        if match:
+            port, token = match.group(1).decode(), match.group(2).decode()
+            break
+        time.sleep(0.01)
+    if port is None and process.poll() is None:
+        timed_out = True
+    if port is not None:
+        for line in (ROOT / case.http).read_text(encoding="utf-8").splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            step = json.loads(line)
+            method = "GET" if "get" in step else "POST"
+            path = step.get("get", step.get("post"))
+            body = (json.dumps(with_revision(step["json"])).encode("utf-8") if "json" in step
+                    else step["raw"].encode("utf-8") if "raw" in step else None)
+            headers = {"Host": f"127.0.0.1:{port}"}
+            if step.get("token", True):
+                headers["X-Copper-Token"] = token
+            if body is not None:
+                headers["Content-Type"] = "application/json"
+            for key, value in step.get("headers", {}).items():
+                if value is None:
+                    headers.pop(key, None)
+                else:
+                    headers[key] = value.replace("{port}", port)
+            connection = http.client.HTTPConnection("127.0.0.1", int(port),
+                                                    timeout=max(1.0, deadline - time.monotonic()))
+            try:
+                connection.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+                for key, value in headers.items():
+                    connection.putheader(key, value)
+                if body is not None:
+                    connection.putheader("Content-Length", str(len(body)))
+                connection.endheaders(body)
+                response = connection.getresponse()
+                data = response.read()
+                record = {"status": response.status, "content_type": response.getheader("Content-Type"),
+                          "cache_control": response.getheader("Cache-Control")}
+                try:
+                    parsed = json.loads(data)
+                    record["json"] = _mask_http(parsed, port, token)
+                    if isinstance(parsed, dict):
+                        latest = parsed.get("scene") or parsed.get("preview") or parsed
+                        if isinstance(latest, dict) and isinstance(latest.get("revision"), int):
+                            revision = latest["revision"]
+                except ValueError:
+                    record["sha256"] = _sha256(data)
+            except (OSError, http.client.HTTPException) as exc:
+                record = {"error": type(exc).__name__}
+            finally:
+                connection.close()
+            records.append(record)
+            if time.monotonic() >= deadline:
+                timed_out = True
+                break
+    if process.poll() is None:
+        process.terminate()
+    try:
+        process.wait(timeout=max(1.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
+        timed_out = True
+    for reader in readers:
+        reader.join()
+    (out / "http.jsonl").write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in records),
+                                    encoding="utf-8", newline="\n")
+    stdout = bytes(output["stdout"])
+    if port is not None:
+        stdout = stdout.replace(token.encode(), b"{token}").replace(f"127.0.0.1:{port}".encode(), b"127.0.0.1:{port}")
+    # A terminated server's exit status is the signal, the same for both.
+    return (None if timed_out else process.returncode), stdout, bytes(output["stderr"]), timed_out
+
+
 def run_one(command: list[str], case: Case, out: Path, environment: dict[str, str]) -> Run:
     if out.exists():
         shutil.rmtree(out)
@@ -402,6 +541,9 @@ def run_one(command: list[str], case: Case, out: Path, environment: dict[str, st
             shutil.copyfile(ROOT / source, target)
     args = _expand(case.args, {"out": str(out), "root": str(ROOT)})
     started = time.perf_counter()
+    if case.http:
+        code, stdout, stderr, timed_out = _run_http([*command, *args], case, out, environment)
+        return Run(code, round(time.perf_counter() - started, 3), stdout, stderr, _collect_files(out), timed_out)
     if case.stdin:
         code, stdout, stderr, timed_out = _run_transcript([*command, *args], case, environment)
         return Run(code, round(time.perf_counter() - started, 3), stdout, stderr, _collect_files(out), timed_out)
@@ -454,6 +596,8 @@ class OracleCache:
         parts = [case.id, case.args, str(case.cwd), case.timeout_s, case.mutation, sorted(case.stage.items())]
         if case.stdin:
             parts.append(_sha256((ROOT / case.stdin).read_bytes()))
+        if case.http:
+            parts.append(_sha256((ROOT / case.http).read_bytes()))
         key = json.dumps(parts)
         return self.directory / hashlib.sha256(key.encode()).hexdigest()
 

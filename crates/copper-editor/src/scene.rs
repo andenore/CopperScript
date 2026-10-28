@@ -917,8 +917,7 @@ pub fn board_scene(
             ),
         ),
         ("power_nets", Value::Array(Vec::new())),
-        ("net_costs", net_costs(&ratsnest_edges)),
-        ("ratsnest", Value::Array(ratsnest_edges)),
+        ("ratsnest", Value::Array(ratsnest_edges.clone())),
         ("warnings", Value::Object(warnings)),
         (
             "placement_constraints",
@@ -950,6 +949,7 @@ pub fn board_scene(
             ]),
         ),
         ("notice", Value::from("Session preview only: source is read-only; no routing or manufacturing signoff.")),
+        ("net_costs", net_costs(&ratsnest_edges)),
     ];
     match object(scene) {
         Value::Object(map) => Ok(map),

@@ -19842,6 +19842,54 @@
     "{out}/scene.json"
    ],
    "mutations": 2
+  },
+  {
+   "name": "edit-mechanical-http",
+   "milestone": "M3",
+   "timeout_s": 240,
+   "cases": [
+    {
+     "id": "edit-mechanical-http/transport",
+     "http": "tests/rust-port/editor/transport.jsonl",
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "examples/mechanical_editor_demo/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-http/placement",
+     "http": "tests/rust-port/editor/placement.jsonl",
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "examples/mechanical_editor_demo/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-http/placement-cm4",
+     "http": "tests/rust-port/editor/placement.jsonl",
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "examples/cm4_baseboard/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-http/port-range",
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "examples/mechanical_outline/board.copper",
+      "--port",
+      "70000"
+     ]
+    }
+   ]
   }
  ]
 }

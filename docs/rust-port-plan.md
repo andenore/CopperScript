@@ -549,9 +549,30 @@ do not shrink as much.
   carries that message as `macro_copper_not_materialized`, and the rewrite
   reproduces it.
 - `copper edit-mechanical` / `copper edit` with `--scene-output`: four M3
-  suites (`edit-mechanical`, `-proxy`, `-macros`, `-options`), 277 cases:
-  272 byte-identical, 5 pending.
-- Not implemented (exit 3): the loopback HTTP editor (every run without
-  `--scene-output`), definition sessions (macro and board_profile
-  documents), via-in-pad via arrays in macro previews, and the macro
-  preview of a board whose nets all stay inside its macros.
+  suites (`edit-mechanical`, `-proxy`, `-macros`, `-options`).
+- The loopback HTTP editor: a std-only HTTP/1.0 server with Python's
+  Host/Origin/capability checks, bounded strict JSON bodies, the bundled
+  assets (embedded from `pcbir/editor/assets`), and the placement
+  operations (`lock`, `move`, `move_group`, `apply`, `discard`, `undo`,
+  `redo`, `auto_place`, `start_auto_place`, `cancel_auto_place`). The
+  harness gained an `http` transcript kind (requests replayed against the
+  printed URL, responses recorded as `http.jsonl` with the random port and
+  token masked, `placement_job.elapsed_seconds`/`profile` dropped); suite
+  `edit-mechanical-http`. Five M3 suites, 281 cases: 276 byte-identical, 5
+  pending.
+- Browser smokes: `tests/browser/run-editor-smokes.py` runs the binary
+  with `COPPER_TEST_EDITOR_BINARY`; `ui`, `keyboard`, `invalid` and
+  `artwork` pass against it. `save`, `layout-save`, `curves`, `anchors`
+  and `references` need source transactions; `placement` fails on the
+  Python package too (its notice assertion is out of date).
+- Differences not covered by the corpus: the background placement job runs
+  on a thread (a cancelled run's result is discarded when it arrives) and
+  `copper-place` reports no phases, so `placement_job.progress` stays at
+  `starting`; Python's `profile` (cProfile text) is `null`.
+- Not implemented (exit 3): source transactions (`prepare_*`,
+  `review_feature(s)`, `save_source`, `discard_source`, `undo_source`,
+  `redo_source`, `reload_source`), `open-definition` and definition
+  sessions (macro and board_profile documents), via-in-pad via arrays in
+  macro previews, and the macro preview of a board whose nets all stay
+  inside its macros. The HTTP server exits 3 with the marker on stderr
+  when a request reaches one of them.

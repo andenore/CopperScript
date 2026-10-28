@@ -127,9 +127,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         [] => return usage_error(err, "the following arguments are required: board"),
         [_, extra, ..] => return usage_error(err, &format!("unrecognized arguments: {extra}")),
     };
-    let Some(scene_output) = parsed.last("--scene-output").map(|p| PathBuf::from(pypath::display(p))) else {
-        return not_implemented(err, "the loopback HTTP editor");
-    };
+    let scene_output = parsed.last("--scene-output").map(|p| PathBuf::from(pypath::display(p)));
+    let port = parsed.last("--port").and_then(python_int).unwrap_or(0);
     let path_list =
         |name: &str| -> Vec<PathBuf> { parsed.all(name).iter().map(|p| PathBuf::from(pypath::display(p))).collect() };
     let settings = BuildSettings {
@@ -142,19 +141,35 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     let project = parsed.last("--project").map(|p| PathBuf::from(pypath::display(p)));
     let overlay = parsed.last("--overlay").map(|p| PathBuf::from(pypath::display(p)));
+    let serving = scene_output.is_none();
+    let progress = |out: &mut dyn Write, message: &str| {
+        if serving {
+            let _ = text::print(out, message);
+            let _ = out.flush();
+        }
+    };
+    let mut server = None;
     let outcome = (|| -> copper_editor::Result<()> {
+        progress(out, "Opening board: checking source and dependencies...");
         copper_editor::dependencies::prepare_editor_dependencies(
             &board,
             parsed.has("--offline"),
             parsed.has("--locked"),
             project.as_deref(),
-            &mut |_| {},
+            &mut |message| progress(out, message),
         )?;
         let overlay = match &overlay {
             Some(path) => Some(RoutedOverlay::load(path)?),
             None => None,
         };
+        progress(out, "Opening board: resolving footprints and building the physical board...");
         let mut session = document_session(&board, &settings, overlay)?;
+        progress(out, "Opening board: editor session ready.");
+        let Some(scene_output) = &scene_output else {
+            server = Some(copper_editor::server::create_server(session, &port.into())?);
+            return Ok(());
+        };
+        let scene_output = scene_output.clone();
         if paths::resolve(&scene_output) == paths::resolve(&board) {
             return Err(Error::Value("scene output cannot overwrite the source board".to_owned()));
         }
@@ -164,19 +179,56 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         file.write_all(body.as_bytes()).map_err(|error| os(error, &scene_output))
     })();
     match outcome {
-        Ok(()) => {
-            let _ = text::print(
-                out,
-                &format!("Derived editor scene -> {}; source unchanged", paths::display(&scene_output)),
-            );
-            0
-        }
+        Ok(()) => match (server, &scene_output) {
+            (Some(server), _) => {
+                let _ = text::print(out, &format!("Physical editor (reviewed source editing): {}", server.url()));
+                let _ = text::print(
+                    out,
+                    "Placement previews are temporary; source changes require explicit review/save. Ctrl+C stops the local service.",
+                );
+                let _ = out.flush();
+                if !parsed.has("--no-browser") {
+                    open_browser(&server.url());
+                }
+                copper_editor::server::serve(server, &|what| {
+                    let _ = std::io::stdout().flush();
+                    eprintln!("copper: {NOT_IMPLEMENTED_MARKER}: edit-mechanical ({what})");
+                    std::process::exit(i32::from(NOT_IMPLEMENTED_EXIT));
+                });
+                0
+            }
+            (None, Some(scene_output)) => {
+                let _ = text::print(
+                    out,
+                    &format!("Derived editor scene -> {}; source unchanged", paths::display(scene_output)),
+                );
+                0
+            }
+            (None, None) => unreachable!("a server or a scene"),
+        },
         Err(Error::NotImplemented(what)) => not_implemented(err, &what),
         Err(error) => {
             let _ = text::print(out, &format!("MECHANICAL EDITOR ERROR: {error}"));
             2
         }
     }
+}
+
+/// `webbrowser.open`: best effort, silent.
+fn open_browser(url: &str) {
+    let command = if cfg!(windows) {
+        ("cmd", vec!["/C", "start", "", url])
+    } else if cfg!(target_os = "macos") {
+        ("open", vec![url])
+    } else {
+        ("xdg-open", vec![url])
+    };
+    let _ = std::process::Command::new(command.0)
+        .args(command.1)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 fn os(error: std::io::Error, path: &Path) -> Error {
