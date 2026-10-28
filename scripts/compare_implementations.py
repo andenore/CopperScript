@@ -865,6 +865,7 @@ def _summary(run: Run | None) -> dict | None:
         return None
     return {"exit": run.exit, "seconds": run.seconds, "timed_out": run.timed_out,
             "stdout_head": run.stdout[:160].decode("utf-8", "replace"),
+            "stdout_tail": run.stdout[-400:].decode("utf-8", "replace"),
             "stdout_sha256": _sha256(run.stdout), "stderr_sha256": _sha256(run.stderr),
             "files": {name: _sha256(data) for name, data in run.files.items()}}
 
@@ -962,12 +963,20 @@ def markdown(report: dict) -> str:
                      + f" | {suite['python_seconds']:.2f} | {suite['rust_seconds']:.2f} |")
     ladder = [case for case in report["cases"] if case["suite"] == "ladder"]
     if ladder:
-        lines += ["", "## Ladder timing", "", "| Board | Status | Python s | Rust s |", "|---|---|---:|---:|"]
+        lines += ["", "## Ladder timing", "", "| Board | Status | Python s | Rust s | Detail |",
+                  "|---|---|---:|---:|---|"]
         for case in ladder:
             python = (case.get("python") or {}).get("seconds")
             rust = (case.get("rust") or {}).get("seconds")
+            # Why a board is not equal: what Rust does not implement, why it was skipped, what differs.
+            detail = ", ".join(case.get("differences", [])) or case.get("reason", "")
+            errors = [line for line in ((case.get("rust") or {}).get("stdout_tail") or "").splitlines()
+                      if "ERROR" in line]
+            if case["status"] == "pending" and errors:
+                detail += f" ({errors[-1].strip()})"
+            detail = detail.replace("|", "\\|").replace("\n", " ")[:300]
             lines.append(f"| {case['id'].split('/', 1)[1]} | {case['status']} | "
-                         f"{'-' if python is None else python} | {'-' if rust is None else rust} |")
+                         f"{'-' if python is None else python} | {'-' if rust is None else rust} | {detail} |")
     bad = [case for case in report["cases"] if case["status"] in ("different", "error") or
            (case["gated"] and case["status"] == "pending")]
     if bad:
