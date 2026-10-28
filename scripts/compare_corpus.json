@@ -19813,15 +19813,6 @@
       "--scene-output",
       "{out}/scene.json"
      ]
-    },
-    {
-     "id": "edit-mechanical-options/serve",
-     "args": [
-      "edit",
-      "examples/mechanical_outline/board.copper",
-      "--offline",
-      "--no-browser"
-     ]
     }
    ]
   },

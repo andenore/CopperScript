@@ -558,8 +558,7 @@ do not shrink as much.
   harness gained an `http` transcript kind (requests replayed against the
   printed URL, responses recorded as `http.jsonl` with the random port and
   token masked, `placement_job.elapsed_seconds`/`profile` dropped); suite
-  `edit-mechanical-http`. Five M3 suites, 281 cases: 276 byte-identical, 5
-  pending.
+  `edit-mechanical-http`. Five M3 suites, 280 cases, all byte-identical.
 - Browser smokes: `tests/browser/run-editor-smokes.py` runs the binary
   with `COPPER_TEST_EDITOR_BINARY`; `ui`, `keyboard`, `invalid` and
   `artwork` pass against it. `save`, `layout-save`, `curves`, `anchors`
