@@ -75,3 +75,23 @@ impl PlaneStitchOptions {
         Ok(self)
     }
 }
+
+/// `PlaneStitchResult` (`copper_uses` are not modelled yet).
+#[derive(Clone, Debug)]
+pub struct PlaneStitchResult {
+    pub board: copper_pcb::board::PhysicalBoard,
+    pub stitched_pads: Vec<PadReference>,
+    pub pending_pads: Vec<PadReference>,
+    pub added_track_count: i64,
+    pub added_via_count: i64,
+    /// Remote pads of explicitly regional routing reservations remain
+    /// ordinary feeder obligations; not a connected-pad inventory.
+    pub explicit_feeder_pads: Vec<PadReference>,
+}
+
+impl PlaneStitchResult {
+    /// `complete`: all local targets have prospective contacts.
+    pub fn complete(&self) -> bool {
+        self.pending_pads.is_empty()
+    }
+}

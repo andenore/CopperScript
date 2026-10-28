@@ -103,6 +103,24 @@ pub fn surface_path(
     layer: copper_physical::CopperLayer,
     committed: &[copper_pcb::board::TrackSegment],
 ) -> Result<Option<Vec<copper_pcb::board::TrackSegment>>> {
+    surface_path_detour(board, clearance, net, start, end, width_nm, layer, committed, 0, 500_000)
+}
+
+/// `surface_path(..., maximum_detour_nm=, detour_step_nm=)`: also three-leg
+/// detours offset by multiples of the step.
+#[allow(clippy::too_many_arguments)]
+pub fn surface_path_detour(
+    board: &PhysicalBoard,
+    clearance: &crate::routing_clearance::RoutingClearanceIndex<'_>,
+    net: &str,
+    start: Point,
+    end: Point,
+    width_nm: i64,
+    layer: copper_physical::CopperLayer,
+    committed: &[copper_pcb::board::TrackSegment],
+    maximum_detour_nm: i64,
+    detour_step_nm: i64,
+) -> Result<Option<Vec<copper_pcb::board::TrackSegment>>> {
     use std::collections::VecDeque;
     if start == end {
         return Ok(Some(Vec::new()));
@@ -159,6 +177,28 @@ pub fn surface_path(
         paths.push(vec![start, Point::new(end.x_nm, start.y_nm), end]);
     }
     let mut paths = clearance.terminal_preferences.ordered(net, layer, paths);
+    if maximum_detour_nm != 0 {
+        if maximum_detour_nm < 0 || detour_step_nm <= 0 {
+            return Err(copper_pcb::Error::Value("surface-path detour bounds must be positive".to_owned()));
+        }
+        let mut offset = detour_step_nm;
+        while offset <= maximum_detour_nm {
+            for sign in [-1, 1] {
+                if start.y_nm == end.y_nm {
+                    let y = start.y_nm + sign * offset;
+                    paths.push(vec![start, Point::new(start.x_nm, y), Point::new(end.x_nm, y), end]);
+                } else if start.x_nm == end.x_nm {
+                    let x = start.x_nm + sign * offset;
+                    paths.push(vec![start, Point::new(x, start.y_nm), Point::new(x, end.y_nm), end]);
+                } else {
+                    let (x, y) = (start.x_nm + sign * offset, start.y_nm + sign * offset);
+                    paths.push(vec![start, Point::new(x, start.y_nm), Point::new(x, end.y_nm), end]);
+                    paths.push(vec![start, Point::new(start.x_nm, y), Point::new(end.x_nm, y), end]);
+                }
+            }
+            offset += detour_step_nm;
+        }
+    }
     if !paths.contains(&vec![start, end]) {
         paths.push(vec![start, end]);
     }

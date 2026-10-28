@@ -34,6 +34,7 @@ macro_rules! text_enum {
 }
 
 pub mod bench;
+pub mod bga_fanout;
 pub mod congestion_feedback;
 pub mod critical;
 pub mod critical_bundles;
@@ -52,6 +53,7 @@ pub mod ladder;
 pub mod layer_assignment;
 pub mod local_critical;
 pub mod package_patterns;
+pub mod pad_stitch;
 pub mod pair_search;
 pub mod pair_terminals;
 pub mod pair_vias;
@@ -63,6 +65,7 @@ pub mod plane_verify;
 pub mod power_islands;
 pub mod progress;
 pub mod pypath;
+pub mod route_closure;
 pub mod route_smoothing;
 pub mod route_style;
 pub mod route_summary;

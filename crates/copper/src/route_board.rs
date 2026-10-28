@@ -25,12 +25,13 @@ use copper_place::PlannerOptions;
 use copper_route::bench::unified_overrides;
 use copper_route::escape_plan::EscapePlanOptions;
 use copper_route::fanout::FanoutOptions;
-use copper_route::flow::{RoutingPipelineOptions, STOP_STAGES, UnifiedPipelineOptions, run_routing_pipeline};
+use copper_route::flow::{RoutingPipelineOptions, STOP_STAGES, run_routing_pipeline};
 use copper_route::iteration_checkpoints::{StageState, StageTracker, write_error_record};
 use copper_route::plane::PlaneStitchOptions;
 use copper_route::progress::{ConsoleProgress, Progress, emit, int, text as text_value};
 use copper_route::routeflow::PlacementRoutingFeedbackOptions;
 use copper_route::routing::GlobalRouterOptions;
+use copper_route::unified_router::UnifiedRouterOptions;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::option_parser::{self, Parsed, Spec, flag, short_value, value};
@@ -553,7 +554,7 @@ fn unified_flag_notes(arguments: &Arguments) -> (Vec<String>, Vec<String>) {
 
 /// `_unified_options`, as far as this rewrite builds `UnifiedRouterOptions`.
 // PENDING: owned by rust-m4-unified (UnifiedRouterOptions).
-fn unified_options(arguments: &Arguments) -> Result<UnifiedPipelineOptions, Stop> {
+fn unified_options(arguments: &Arguments) -> Result<UnifiedRouterOptions, Stop> {
     let pitch_nm = match &arguments.unified_pitch_mm {
         // `Decimal(text)` is falsy for zero, which keeps the default pitch.
         Some(text) => {
@@ -566,29 +567,29 @@ fn unified_options(arguments: &Arguments) -> Result<UnifiedPipelineOptions, Stop
         }
         None => None,
     };
-    let overrides = unified_overrides(&arguments.texts("--unified-set")).map_err(value_error)?;
-    if !overrides.is_empty() {
-        return Err(Stop::Pending("--unified-set (UnifiedRouterOptions, rust-m4-unified)".to_owned()));
-    }
-    let limit = arguments.unified_pair_states;
-    if limit.is_some_and(|limit| limit <= 0) {
-        return Err(fail("critical pair state limit must be a positive integer or None".to_owned()));
-    }
-    if pitch_nm.is_some_and(|pitch| pitch <= 0)
-        || arguments.int("--unified-iterations") <= 0
-        || arguments.int("--unified-search-states") <= 0
-    {
-        return Err(fail("unified router pitch, iterations and search states must be positive".to_owned()));
-    }
-    if pitch_nm.is_some_and(|pitch| pitch > 1_000_000) {
-        return Err(fail("congestion_tile_nm must be a positive integer of at least one pitch".to_owned()));
-    }
-    let _ = arguments.unified_time_budget_s;
     let direct = arguments.flag("--unified-direct");
-    Ok(UnifiedPipelineOptions {
-        critical_pair_state_limit: limit,
+    let power_islands = arguments.text("--power-islands").unwrap_or("off");
+    let base = UnifiedRouterOptions {
+        pitch_nm,
+        retain_escape_copper: arguments.flag("--unified-retain-escape-copper"),
+        maximum_iterations: arguments.int("--unified-iterations"),
+        maximum_expansions: arguments.int("--unified-search-states"),
+        time_budget_s: arguments.unified_time_budget_s,
+        critical_pair_state_limit: arguments.unified_pair_states,
+        fine_regions: arguments.text("--fine-regions").unwrap_or("arrays").to_owned(),
+        power_islands: (power_islands != "off").then(|| power_islands.to_owned()),
+        pre_route_decouplers: !arguments.flag("--unified-no-decouplers") && !direct,
         direct,
+        route_smoothing: !arguments.flag("--no-route-smoothing"),
         save_inputs_path: arguments.path("--unified-save-inputs"),
+        ..UnifiedRouterOptions::default()
+    };
+    // --unified-set reaches every option; it wins over the dedicated flags above.
+    let overrides: Vec<(String, Value)> =
+        unified_overrides(&arguments.texts("--unified-set")).map_err(value_error)?.into_iter().collect();
+    base.with_overrides(&overrides).map_err(|error| match error {
+        copper_route::unified_error::Error::Value(message) => fail(message),
+        other => Stop::Pending(other.crash_line()),
     })
 }
 

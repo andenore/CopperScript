@@ -602,7 +602,7 @@ fn within(a: Point, point: Point, b: Point) -> bool {
 
 /// `_fingerprint`: the digest of the guides, the stage's copper and the
 /// results' routing identity (`json.dumps(..., sort_keys=True)`).
-fn fingerprint(global: &str, tracks: &[TrackSegment], vias: &[Via], results: &[CriticalNetResult]) -> String {
+pub fn fingerprint(global: &str, tracks: &[TrackSegment], vias: &[Via], results: &[CriticalNetResult]) -> String {
     let track_rows = tracks
         .iter()
         .map(|item| {
