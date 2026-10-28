@@ -1160,7 +1160,7 @@ fn route_net(
             ));
         }
     }
-    let root_pad = *by_pad.keys().min_by_key(|pad| (by_pad[*pad].len(), (**pad).clone())).expect("pads");
+    let root_pad = *by_pad.keys().min_by_key(|pad| (by_pad[*pad].len(), *pad)).expect("pads");
     let root =
         by_pad[root_pad].iter().min_by_key(|item| (item.estimated_cost_nm(), item.node)).expect("choices").clone();
     let mut accesses = vec![root.clone()];
