@@ -649,12 +649,7 @@ pub fn verify_filled_planes(
         };
         filled_regions(text, &objects)?
     };
-    if !board.decoupling_links.is_empty() {
-        return Err(NativeError::Pcb(copper_pcb::Error::NotImplemented(
-            "native decoupling fill assessment (decoupling_fill.assess_decoupling_fill)".to_owned(),
-        )));
-    }
-    Ok(PlaneVerification {
+    let mut evidence = PlaneVerification {
         passed: findings.is_empty(),
         board_digest: copper_drc::digest::physical_board_digest(board),
         export_digest,
@@ -670,7 +665,9 @@ pub fn verify_filled_planes(
         artifact_directory: artifact_directory.map(|_| copper_lang::paths::display(&stage)),
         filled_regions: filled,
         decoupling_assessments: Vec::new(),
-    })
+    };
+    evidence.decoupling_assessments = crate::decoupling_fill::assess_decoupling_fill(board, &evidence)?;
+    Ok(evidence)
 }
 
 /// `tempfile.TemporaryDirectory(prefix=...)`, removed on drop.

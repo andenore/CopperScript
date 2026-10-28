@@ -744,8 +744,13 @@ fn route(
         }
         _ => Stop::from(error),
     };
+    // Proxy physicalization raises only `ValueError` (and the unknown part's KeyError).
+    let proxy_error = |error: Error| match unknown_part(error) {
+        Stop::Value { message, .. } => Stop::Value { error_type: Some("ValueError"), message },
+        other => other,
+    };
     let mut board = if arguments.flag("--allow-proxy-footprints") {
-        physicalize(design, Footprints::Proxy, &options, locked, offline).map_err(unknown_part)?
+        physicalize(design, Footprints::Proxy, &options, locked, offline).map_err(proxy_error)?
     } else {
         let base = paths::resolve(Path::new(board_path)).parent().map(Path::to_path_buf).unwrap_or_default();
         let roots: Vec<PathBuf> =

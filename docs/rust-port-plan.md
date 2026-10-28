@@ -575,29 +575,46 @@ do not shrink as much.
 **M4 stream: pin access, planes, the routing pipeline and `route-board`
 (branch `rust-m4-flow`).**
 
-- Built on `rust-m4-global` (merged: clearance index, global router, layer
-  assignment). `copper-route` adds `progress` (`ConsoleProgress` on the
-  global stream's `emit`), `ladder` (`copper bench`), `routing_acceptance`
-  (`copper benchmark-routing`), `drc_report`, `plane_verify`,
-  `routing_metrics`, `iteration_checkpoints` (stage tracker, `.error.json`
-  record), `flow` (`STOP_STAGES`, `run_routing_pipeline` up to the
-  placement stage), the options of `fanout`, `plane`, `escape_assignment`,
-  and `bench.unified_overrides`. `PlacementRoutingFeedbackOptions`,
-  `EscapePlanOptions` and the `UnifiedRouterOptions` checks route-board
-  needs are minimal `PENDING` copies for `rust-m4-global` and
-  `rust-m4-unified`.
-- `copper route-board`: all 90 options (`allow_abbrev=False`), routing
-  profiles, the ERC gate, physicalization, templates, hard macros and every
-  option check before the pipeline, with Python's `ROUTING ERROR` lines and
-  error records. The pipeline reports not implemented (exit 3) at the
-  placement stage (`routeflow.optimize_placement_for_routing`,
-  `rust-m4-global`), and so do `--reuse-placement`, typed `--unified-set`
-  values, `--debug` tracebacks, Python crashes and error records of error
-  classes the Rust errors do not name.
-- Corpus: `route-board` (11 boards with `{physical}`), `route-board-options`
-  (profiles, stop stage, `--unified-save-inputs`, `--progress`, ...),
-  `route-board-errors` and `route-board-mutations`: 54 equal, 26 pending.
-  `--unified-time-budget-s` defaults to no budget; a case that sets it would
+- `flow.run_routing_pipeline` runs every stage: placement and global
+  routing (`routeflow`), array frames, two-end escape plans, ordinary escape
+  reservations (escapes first, the critical retry, planned escapes joined as
+  copper), bypass reservations (`_plan_decouplers` without escape swaps,
+  witness refresh, admission as copper through
+  `bypass_reservations.verified_bypass_reservations`), critical routing,
+  held copper, the late bypass pass, power islands, ball-grid dogbones,
+  plane stitch, ordinary routing with the fanout escape seeder, land
+  closure, DRC, the unified profile review, and the congestion-driven
+  placement feedback (`congestion_feedback`: RUDY estimate, proposals,
+  screening, reruns of the pipeline tail, saved-input trials).
+- `copper route-board` writes the routed board, report, summary, KiCad
+  project and editor intent; `--verify-plane-fill` refills through
+  kicad-cli (`plane_verify.verify_filled_planes`, the verification outcomes
+  of `filled_feedback.improve_filled_copper`, `decoupling_fill` on
+  fill-free evidence); `--progress` prints Python's stream, placement
+  stages included (`copper-place` takes a stage observer).
+  `copper benchmark-routing` runs its eight cases through the pipeline,
+  with or without kicad-cli.
+- numpy is reproduced exactly where it decides output (pairwise `sum`,
+  linear `percentile`). The congestion gradient's plane fit is solved
+  exactly and rounded once; LAPACK's `lstsq` can differ in the last bits,
+  which only feeds grid-snapped moves (48,000 sampled fits snapped alike).
+- Corpus (all 0 different): `route-board*` (fanout, no-fanout, direct,
+  stopped, options, errors, mutations, native with fake kicad-cli wrappers
+  under `tests/rust-port/routing/kicad-cli`, feedback), `benchmark-routing`,
+  `benchmark-routing-native`, and the `ladder` suite: cm4, nrf52 and
+  round-led-ring are byte-identical to Python; full-vertical exits 3 in the
+  critical router ("critical candidate validation on a board with hard
+  macros"); the three external boards are skipped here.
+- Still exit 3: filled-copper bridge trials (`dependency_reroute`),
+  eligible native dangling-end cleanup (`native_stub_cleanup`), native fill
+  fragment contacts (shapely areas), bypass reservation swaps beside escape
+  reservations and their revalidation/re-siting, the via lattice,
+  `--checkpoint-dir`/`--reuse-placement` (the placement checkpoint encoder;
+  its code digest and timestamp cannot match Python's), `--debug`
+  tracebacks. The critical router's failed package-reservation preflight
+  and `reserved_accesses` beyond admission are `PENDING` for
+  `rust-m4-critical`.
+- `--unified-time-budget-s` defaults to no budget; a case that sets it would
   be wall-time dependent and stays out of the corpus.
 
 **M4 stream: unified router and `replay-unified` (branch `rust-m4-unified`).**

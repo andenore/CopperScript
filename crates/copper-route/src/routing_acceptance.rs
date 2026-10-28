@@ -480,8 +480,34 @@ pub fn run_acceptance(
         let drc_path = directory.join("physical-drc.json");
         copper_json::text::write_text(&drc_path, &result.drc.to_json())
             .map_err(|e| AcceptanceError::Message(paths::python_os_error(&e, Some(&paths::display(&drc_path)))))?;
-        if kicad_cli.is_some() {
-            return Err(AcceptanceError::NotImplemented("native verification of acceptance cases".to_owned()));
+        if let Some(kicad_cli) = kicad_cli {
+            use crate::plane_verify::{NativeError, verify_filled_planes};
+            match verify_filled_planes(&result.board, kicad_cli, 10, Some(&directory.join("native"))) {
+                Ok(native) => {
+                    let mut entry = Object::new();
+                    entry.insert("passed".to_owned(), Value::from(native.passed));
+                    entry.insert("version".to_owned(), Value::from(native.kicad_version.as_str()));
+                    entry.insert("unconnected".to_owned(), Value::from(native.unconnected_count));
+                    entry.insert("violations".to_owned(), Value::from(native.other_violation_count));
+                    entry.insert("report_digest".to_owned(), Value::from(native.report_digest.as_str()));
+                    entry.insert("filled_board_digest".to_owned(), Value::from(native.filled_board_digest.as_str()));
+                    row.insert("native".to_owned(), Value::Object(entry));
+                    // Expected failures must have native opens; unrelated
+                    // violations remain regressions, even in a blocked fixture.
+                    let expected = if case.expect_connected {
+                        native.passed
+                    } else {
+                        native.unconnected_count > 0 && native.other_violation_count == 0
+                    };
+                    row.insert("native_status".to_owned(), Value::from(if expected { "pass" } else { "fail" }));
+                }
+                Err(NativeError::Pcb(copper_pcb::Error::NotImplemented(what))) => {
+                    return Err(AcceptanceError::NotImplemented(what));
+                }
+                Err(error) => {
+                    row.insert("native_reason".to_owned(), Value::from(error.to_string()));
+                }
+            }
         }
         if let Some(Value::Array(cases)) = report.get_mut("cases") {
             cases.push(Value::Object(row));

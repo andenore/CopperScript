@@ -350,7 +350,7 @@ fn route_critical_stage(
     pair_state_limit: Option<i64>,
     plane_stitch_options: Option<&PlaneStitchOptions>,
     on_progress: &mut Option<ProgressCallback<'_>>,
-) -> Result<(CriticalRoutingResult, Option<Reserved>)> {
+) -> Result<(CriticalRoutingResult, Option<Reserved>, Option<Held>, bool)> {
     let board = &placement.board;
     let planar = crate::critical::promote_planar_nets(board).1;
     if !planar.is_empty() {
@@ -370,22 +370,70 @@ fn route_critical_stage(
         }
         _ => None,
     };
+    let mut held: Option<Held> = None;
     if !board.decoupling_links.is_empty() && unified_options.pre_route_decouplers {
-        return copper_pcb::not_implemented("bypass reservations (flow._plan_decouplers)");
+        // Bypasses route before critical nets (as package access did), so
+        // a critical route cannot take a capacitor's short surface feed.
+        let (planned, kept) = plan_decouplers(board, reserved.take(), on_progress, &halos, unified_fanout)?;
+        reserved = kept;
+        if reserved.is_some() && !planned.released.is_empty() {
+            return copper_pcb::not_implemented(
+                "revalidating released escape reservations (flow._revalidate_released_escapes)",
+            );
+        }
+        // The witnesses were admitted in the planning context; the critical
+        // router's context has only the final reservations.
+        let (planned, reason) = refresh_bypass_witnesses(board, reserved.as_ref(), planned)?;
+        if let Some(reason) = reason {
+            emit(on_progress, "bypass_reservation", "witnesses_stale", vec![("reason", text(&reason))]);
+        }
+        held = Some(planned);
     }
     let critical_inputs = |keepouts: &[copper_physical::CopperKeepout],
-                           on_progress: &mut Option<ProgressCallback<'_>>| {
+                           previous: Option<bool>,
+                           on_progress: &mut Option<ProgressCallback<'_>>|
+     -> Result<(PhysicalBoard, Option<crate::bypass_reservations::BypassReservation>)> {
         let mut source = board.clone();
         source.copper_keepouts.extend(keepouts.iter().cloned());
-        emit(on_progress, "bypass_reservation", "bound", vec![("mode", text("keepouts")), ("reason", Value::Null)]);
-        source
+        let (accesses, reason) = match &held {
+            Some(held) => crate::bypass_reservations::bypass_copper_reservations(
+                &source,
+                &held.tracks,
+                &held.vias,
+                &held.witnesses,
+            )?,
+            None => (None, None),
+        };
+        if accesses.is_none() && previous == Some(true) {
+            return copper_pcb::not_implemented(
+                "rebinding bypass copper after a keepout release (rebind_bypass_keepout_removal)",
+            );
+        }
+        if let (Some(held), None) = (&held, &accesses) {
+            // Unsupported/ambiguous ownership keeps its original conservative
+            // reservation. Never drop it or infer semantic authority by net.
+            source.copper_keepouts.extend(held.keepouts.iter().cloned());
+        }
+        emit(
+            on_progress,
+            "bypass_reservation",
+            "bound",
+            vec![
+                ("mode", text(if accesses.is_some() { "copper" } else { "keepouts" })),
+                ("reason", reason.as_deref().map_or(Value::Null, text)),
+            ],
+        );
+        Ok((source, accesses))
     };
-    let source = critical_inputs(reserved.as_ref().map_or(&[][..], |r| &r.2[..]), on_progress);
+    let (source, bypass_accesses) =
+        critical_inputs(reserved.as_ref().map_or(&[][..], |r| &r.2[..]), None, on_progress)?;
+    let mut held_as_copper = bypass_accesses.is_some();
     let return_options = critical_return_plane_options(&source, plane_stitch_options, &halos);
     let options = crate::critical::CriticalOptions {
         pair_state_limit,
         plane_stitch_options: return_options.as_ref(),
         unified_options: Some(unified_options),
+        reserved_accesses: bypass_accesses.as_ref(),
         ..Default::default()
     };
     let mut critical =
@@ -397,7 +445,7 @@ fn route_critical_stage(
             // Critical nets come first: free the reservations around the pads
             // of any critical net they blocked and route again; keep whichever
             // attempt connects more critical nets.
-            let kept = release_reservations(board, &planned.2, &failed, crate::nm_from_mm(2));
+            let kept = release_reservations(board, &planned.2, &failed, crate::nm_from_mm(2), &[]);
             if kept.len() < planned.2.len() {
                 if unified_options.retain_escape_copper {
                     return copper_pcb::not_implemented(
@@ -415,11 +463,14 @@ fn route_critical_stage(
                         ("keepouts", int((planned.2.len() - kept.len()) as i64)),
                     ],
                 );
-                let retry_source = critical_inputs(&kept, on_progress);
+                let (retry_source, retry_accesses) =
+                    critical_inputs(&kept, Some(bypass_accesses.is_some()), on_progress)?;
+                let retry_options =
+                    crate::critical::CriticalOptions { reserved_accesses: retry_accesses.as_ref(), ..options };
                 let retry = crate::critical::route_critical_nets(
                     retry_source,
                     &placement.global_route,
-                    &options,
+                    &retry_options,
                     reborrow(on_progress),
                 )?;
                 let failures =
@@ -427,23 +478,34 @@ fn route_critical_stage(
                 if failures(&retry) < failures(&critical) {
                     critical = retry;
                     planned.2 = kept;
+                    held_as_copper = retry_accesses.is_some();
                 }
             }
         }
     }
-    Ok((critical, reserved))
+    Ok((critical, reserved, held, held_as_copper))
 }
 
 /// `_complete_critical_stage` for a run without reservations or held copper.
+#[allow(clippy::too_many_arguments)]
 fn complete_critical_stage(
     mut critical: CriticalRoutingResult,
+    reserved: Option<&Reserved>,
+    held: Option<&Held>,
+    held_as_copper: bool,
     unified_options: &UnifiedRouterOptions,
     plane_stitch_options: Option<&PlaneStitchOptions>,
     on_progress: &mut Option<ProgressCallback<'_>>,
     array_plans: Option<&IndexMap<String, ArrayEscape>>,
+    fanout_options: Option<&FanoutOptions>,
 ) -> Result<(CriticalRoutingResult, Option<PlaneStitchResult>)> {
+    if let Some(held) = held.filter(|_| !held_as_copper) {
+        // The critical router kept clear of the reserved bypass copper, so it
+        // joins the board unchanged.
+        critical.board = join_reserved_copper(&critical.board, &held.tracks, &held.vias, &held.keepouts)?;
+    }
     if !critical.board.decoupling_links.is_empty() && !unified_options.direct && unified_options.pre_route_decouplers {
-        return copper_pcb::not_implemented("bypass completion (decoupling.route_decouplers)");
+        complete_bypasses(&mut critical, reserved, on_progress, fanout_options)?;
     }
     if let Some(choice) = &unified_options.power_islands {
         let layer = if choice == "auto" {
@@ -923,8 +985,8 @@ fn route_tail(
     tail: &TailInputs<'_>,
     on_progress: &mut Option<ProgressCallback<'_>>,
 ) -> Result<TailResult> {
-    let (critical, reserved) = if tail.unified_options.direct {
-        (direct_critical(placement)?, None)
+    let (critical, reserved, held, held_as_copper) = if tail.unified_options.direct {
+        (direct_critical(placement)?, None, None, false)
     } else {
         route_critical_stage(
             placement,
@@ -935,8 +997,17 @@ fn route_tail(
             on_progress,
         )?
     };
-    let (mut critical, mut plane_stitch) =
-        complete_critical_stage(critical, tail.unified_options, tail.plane_stitch_options, on_progress, array_plans)?;
+    let (mut critical, mut plane_stitch) = complete_critical_stage(
+        critical,
+        reserved.as_ref(),
+        held.as_ref(),
+        held_as_copper,
+        tail.unified_options,
+        tail.plane_stitch_options,
+        on_progress,
+        array_plans,
+        tail.unified_fanout,
+    )?;
     let pre_detailed = plane_stitch.as_ref().map_or(&critical.board, |stitch| &stitch.board).clone();
     let deferred = copper_pcb::zones::deferred_zone_nets(&pre_detailed)?;
     let pre_detailed = release_escape_masks(
@@ -1230,19 +1301,19 @@ fn release_reservations(
     keepouts: &[copper_physical::CopperKeepout],
     nets: &IndexSet<String>,
     margin_nm: i64,
+    pads: &[&copper_pcb::board::PadReference],
 ) -> Vec<copper_physical::CopperKeepout> {
     let poses: IndexMap<&str, _> = board.placements.iter().map(|p| (p.reference.as_str(), p)).collect();
+    let place = |pad: &copper_pcb::board::PadReference| {
+        let pose = poses[pad.component.as_str()];
+        let land = board.footprints[&pose.footprint].pads.iter().find(|l| l.number == pad.pad).expect("land");
+        copper_pcb::transform::transformed_local_point(pose, land.position)
+    };
+    let mut groups: Vec<Vec<Point>> =
+        board.nets.iter().filter(|n| nets.contains(&n.name)).map(|net| net.pads.iter().map(place).collect()).collect();
+    groups.extend(pads.iter().map(|pad| vec![place(pad)]));
     let mut boxes = Vec::new();
-    for net in board.nets.iter().filter(|n| nets.contains(&n.name)) {
-        let points: Vec<Point> = net
-            .pads
-            .iter()
-            .map(|pad| {
-                let pose = poses[pad.component.as_str()];
-                let land = board.footprints[&pose.footprint].pads.iter().find(|l| l.number == pad.pad).expect("land");
-                copper_pcb::transform::transformed_local_point(pose, land.position)
-            })
-            .collect();
+    for points in groups {
         if !points.is_empty() {
             boxes.push((
                 points.iter().map(|p| p.x_nm).min().expect("points") - margin_nm,
@@ -1380,4 +1451,187 @@ fn release_escape_masks(
         pre_detailed = joined;
     }
     Ok(pre_detailed)
+}
+
+// ---------------------------------------------------------------------------
+// Bypass reservations
+
+/// `held`: bypass copper routed before critical nets, the keepouts that hold
+/// it, the escape reservations it released, and its admitted witnesses.
+#[derive(Clone, Debug)]
+struct Held {
+    tracks: Vec<TrackSegment>,
+    vias: Vec<Via>,
+    keepouts: Vec<copper_physical::CopperKeepout>,
+    released: Vec<copper_physical::CopperKeepout>,
+    witnesses: Vec<crate::decoupling_paths::DecouplingCrossLayerWitness>,
+}
+
+/// `_link_name`.
+fn link_name(link: &copper_pcb::board::DecouplingLink) -> String {
+    format!("{}.{}->{}.{}", link.capacitor.component, link.capacitor.pad, link.target.component, link.target.pad)
+}
+
+fn pending_links(pending: &[(copper_pcb::board::DecouplingLink, String)]) -> Value {
+    Value::Array(
+        pending
+            .iter()
+            .map(|(link, reason)| {
+                Value::Object(
+                    [("link", text(&link_name(link))), ("reason", text(reason))]
+                        .into_iter()
+                        .map(|(k, v)| (k.to_owned(), v))
+                        .collect(),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// `_plan_decouplers`: bypass copper routed before critical nets on the macro
+/// frame (respecting the escape reservations), held as keepouts meanwhile.
+fn plan_decouplers(
+    board: &PhysicalBoard,
+    reserved: Option<Reserved>,
+    on_progress: &mut Option<ProgressCallback<'_>>,
+    extra_keepouts: &[copper_physical::CopperKeepout],
+    fanout_options: Option<&FanoutOptions>,
+) -> Result<(Held, Option<Reserved>)> {
+    emit(on_progress, "bypass_reservation", "started", vec![("links", int(board.decoupling_links.len() as i64))]);
+    let keepouts: Vec<copper_physical::CopperKeepout> = reserved.as_ref().map_or_else(Vec::new, |r| r.2.clone());
+    let base = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
+    // `extra_keepouts` (macro port halos) bind every attempt and are never
+    // released for a pending link, unlike the escape reservations.
+    let mut frame = base.clone();
+    frame.copper_keepouts.extend(extra_keepouts.iter().cloned());
+    frame.copper_keepouts.extend(keepouts.iter().cloned());
+    let result = crate::decoupling::route_decouplers(&frame, None, fanout_options, None, None)?;
+    let current = result.board;
+    let pending = result.pending;
+    let witnesses = result.admitted_path_witnesses;
+    if !keepouts.is_empty() {
+        for (link, reason) in &pending {
+            if reason == "native_plane_return_pending" {
+                continue;
+            }
+            let pads = [&link.capacitor, &link.target, &link.return_pad];
+            let kept = release_reservations(board, &keepouts, &IndexSet::new(), 1_500_000, &pads);
+            if kept.len() < keepouts.len() {
+                return copper_pcb::not_implemented("bypass reservation swaps (flow._plan_decouplers)");
+            }
+        }
+    }
+    let tracks = added_elements(&current.tracks, &base.tracks);
+    let vias = added_elements(&current.vias, &base.vias);
+    emit(
+        on_progress,
+        "bypass_reservation",
+        "finished",
+        vec![
+            ("tracks", int(tracks.len() as i64)),
+            ("vias", int(vias.len() as i64)),
+            ("pending", int(pending.len() as i64)),
+            ("released", int(0)),
+            ("swapped", Value::Array(Vec::new())),
+            ("rejected", Value::Array(Vec::new())),
+            ("pending_links", pending_links(&pending)),
+        ],
+    );
+    let held_keepouts = copper_keepouts(board, &tracks, &vias, "bypass-reserve", Some(&base));
+    Ok((Held { tracks, vias, keepouts: held_keepouts, released: Vec::new(), witnesses }, reserved))
+}
+
+/// `_refresh_bypass_witnesses`: the admitted witnesses verified again in the
+/// keepout context critical routing sees; a failure keeps `held` and names why.
+fn refresh_bypass_witnesses(
+    board: &PhysicalBoard,
+    reserved: Option<&Reserved>,
+    held: Held,
+) -> Result<(Held, Option<String>)> {
+    if held.witnesses.is_empty() {
+        return Ok((held, None));
+    }
+    let frame = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
+    let mut context = frame;
+    context.tracks.extend(held.tracks.iter().cloned());
+    context.vias.extend(held.vias.iter().cloned());
+    context.copper_keepouts = board.copper_keepouts.clone();
+    if let Some(reserved) = reserved {
+        context.copper_keepouts.extend(reserved.2.iter().cloned());
+    }
+    let fresh = crate::routing_clearance::RoutingClearanceIndex::new(&context)?;
+    let mut witnesses = Vec::new();
+    for witness in &held.witnesses {
+        let checked = crate::decoupling_paths::verify_crosslayer_decoupling(
+            &context,
+            &witness.link,
+            Some(&witness.return_target),
+            10_000,
+            Some(&fresh),
+        )?;
+        match checked.witness {
+            Some(witness) => witnesses.push(witness),
+            None => return Ok((held, Some(checked.reason))),
+        }
+    }
+    Ok((Held { witnesses, ..held }, None))
+}
+
+/// The late bypass pass of `_complete_critical_stage`: the links left pending
+/// at planning get the stage's launch options beside the critical copper.
+fn complete_bypasses(
+    critical: &mut CriticalRoutingResult,
+    reserved: Option<&Reserved>,
+    on_progress: &mut Option<ProgressCallback<'_>>,
+    fanout_options: Option<&FanoutOptions>,
+) -> Result<()> {
+    let before: IndexSet<copper_pcb::board::DecouplingLink> = critical.board.decoupling_links.iter().cloned().collect();
+    emit(on_progress, "bypass_completion", "started", vec![("links", int(before.len() as i64))]);
+    let bypass = crate::decoupling::route_decouplers(&critical.board, None, fanout_options, None, None)?;
+    critical.board = bypass.board.clone();
+    let mut pending: IndexSet<copper_pcb::board::DecouplingLink> =
+        bypass.pending.iter().map(|(l, _)| l.clone()).collect();
+    let mut reasons: IndexMap<copper_pcb::board::DecouplingLink, String> = bypass.pending.iter().cloned().collect();
+    if let Some(reserved) = reserved.filter(|_| !pending.is_empty()) {
+        // A bypass the reservations blocked gets them released around its
+        // own capacitor and target pad only, then one more attempt.
+        let pads: Vec<&copper_pcb::board::PadReference> =
+            pending.iter().flat_map(|l| [&l.capacitor, &l.target, &l.return_pad]).collect();
+        let kept = release_reservations(&critical.board, &reserved.2, &IndexSet::new(), 500_000, &pads);
+        if kept.len() < reserved.2.len() {
+            let kept_ids: IndexSet<&str> = kept.iter().map(|k| k.id.as_str()).collect();
+            let temporary: IndexSet<&str> =
+                reserved.2.iter().map(|k| k.id.as_str()).filter(|id| !kept_ids.contains(id)).collect();
+            let board = critical.board.clone();
+            let mut released = board.clone();
+            released.copper_keepouts.retain(|k| !temporary.contains(k.id.as_str()));
+            let retry = crate::decoupling::route_decouplers(&released, None, fanout_options, Some(&pending), None)?;
+            if retry.pending.len() < pending.len() {
+                critical.board = retry.board.clone();
+                critical.board.copper_keepouts = board.copper_keepouts.clone();
+                pending = retry.pending.iter().map(|(l, _)| l.clone()).collect();
+                reasons = retry.pending.iter().cloned().collect();
+            }
+        }
+    }
+    let mut connected: Vec<String> = before
+        .iter()
+        .filter(|link| !pending.contains(*link) && bypass.connected_pads.contains(&link.capacitor))
+        .map(link_name)
+        .collect();
+    connected.sort();
+    let mut remaining: Vec<(copper_pcb::board::DecouplingLink, String)> =
+        pending.iter().map(|link| (link.clone(), reasons[link].clone())).collect();
+    remaining.sort_by_key(|(link, _)| link_name(link));
+    emit(
+        on_progress,
+        "bypass_completion",
+        "finished",
+        vec![
+            ("pending", int(pending.len() as i64)),
+            ("connected", Value::Array(connected.iter().map(|n| text(n)).collect())),
+            ("pending_links", pending_links(&remaining)),
+        ],
+    );
+    Ok(())
 }

@@ -686,6 +686,11 @@ pub struct CriticalOptions<'a> {
     pub unified_options: Option<&'a crate::unified_router::UnifiedRouterOptions>,
     /// `pair_state_escalation` (None: the unified options' value).
     pub pair_state_escalation: Option<i64>,
+    /// `reserved_accesses`: verified ordinary bypass copper the critical
+    /// router keeps clear of and returns on its board.
+    /// PENDING: owned by rust-m4-critical (the admission only; a reservation
+    /// that fails physical DRC exits 3).
+    pub reserved_accesses: Option<&'a crate::bypass_reservations::BypassReservation>,
 }
 
 impl Default for CriticalOptions<'_> {
@@ -697,8 +702,91 @@ impl Default for CriticalOptions<'_> {
             plane_stitch_options: None,
             unified_options: None,
             pair_state_escalation: None,
+            reserved_accesses: None,
         }
     }
+}
+
+/// The `reserved_accesses` preflight of `route_critical_nets`: current
+/// guides, the exact source prefix, fresh bypass admission, and no
+/// critical or zone copper beyond the admitted feeds.
+fn admit_reserved_accesses(
+    board: &PhysicalBoard,
+    global_route: &GlobalRoutingResult,
+    reserved: &crate::bypass_reservations::BypassReservation,
+) -> Result<()> {
+    if global_route.placement_fingerprint != placement_fingerprint(board) {
+        return Err(Error::Value("package-access critical guides are stale".to_owned()));
+    }
+    let mut intent = reserved.board.clone();
+    intent.tracks = board.tracks.clone();
+    intent.vias = board.vias.clone();
+    let prefix_tracks: Vec<TrackSegment> = board.tracks.iter().chain(reserved.created_tracks.iter()).cloned().collect();
+    let prefix_vias: Vec<Via> = board.vias.iter().chain(reserved.created_vias.iter()).cloned().collect();
+    if intent != *board || reserved.board.tracks != prefix_tracks || reserved.board.vias != prefix_vias {
+        return Err(Error::Value("package-access reservations are stale or contain unowned copper".to_owned()));
+    }
+    let mut protected: IndexSet<String> =
+        board.net_routing_rules.iter().filter(|r| r.kind != RouteKind::General).map(|r| r.net.clone()).collect();
+    let regional: IndexSet<&str> = board.zones.iter().filter(|z| z.reserve_routing).map(|z| z.net.as_str()).collect();
+    protected.extend(
+        copper_pcb::zones::distribution_zone_nets(board).into_iter().filter(|n| !regional.contains(n.as_str())),
+    );
+    let (bypass_tracks, bypass_vias, reason) =
+        crate::bypass_reservations::verified_bypass_reservations(board, reserved)?;
+    if let Some(reason) = reason {
+        return Err(Error::Value(format!("invalid package-access bypass reservations: {reason}")));
+    }
+    let mut track_exemptions: IndexMap<&TrackSegment, i64> = IndexMap::new();
+    for track in &bypass_tracks {
+        *track_exemptions.entry(track).or_insert(0) += 1;
+    }
+    let mut via_exemptions: IndexMap<&Via, i64> = IndexMap::new();
+    for via in &bypass_vias {
+        *via_exemptions.entry(via).or_insert(0) += 1;
+    }
+    let refused =
+        || Err(Error::Value("ordinary package-access reservations cannot contain critical or zone copper".to_owned()));
+    for track in &reserved.created_tracks {
+        if protected.contains(&track.net) {
+            match track_exemptions.get_mut(track) {
+                Some(count) if *count > 0 => *count -= 1,
+                _ => return refused(),
+            }
+        }
+    }
+    for via in &reserved.created_vias {
+        if protected.contains(&via.net) {
+            match via_exemptions.get_mut(via) {
+                Some(count) if *count > 0 => *count -= 1,
+                _ => return refused(),
+            }
+        }
+    }
+    let hard = |checked: &PhysicalBoard| -> Result<Vec<String>> {
+        let report = crate::drc_report::run_physical_drc(checked, copper_drc::Policy::default())?;
+        Ok(report
+            .report
+            .findings
+            .iter()
+            .filter(|f| {
+                f.severity == copper_drc::Severity::Error
+                    && f.code != "DRC-OPEN-NET"
+                    && f.code != "DRC-ROUTE-INCOMPLETE"
+            })
+            .map(|f| {
+                format!("{:?}", (&f.code, &f.message, &f.objects, &f.nets, &f.layers, f.required_nm, f.measured_nm))
+            })
+            .collect())
+    };
+    let fatal = hard(&reserved.board)?;
+    if !fatal.is_empty() {
+        let baseline: IndexSet<String> = hard(board)?.into_iter().collect();
+        if fatal.iter().any(|f| !baseline.contains(f)) {
+            return copper_pcb::not_implemented("a failed package-reservation preflight (route_critical_nets)");
+        }
+    }
+    Ok(())
 }
 
 /// `on_progress(event, nets, result)` of `route_critical_nets`, forwarded as
@@ -763,6 +851,11 @@ pub fn route_critical_nets(
     }
     let mut tracks: Vec<TrackSegment> = board.tracks.clone();
     let mut vias: Vec<Via> = board.vias.clone();
+    if let Some(reserved) = options.reserved_accesses {
+        admit_reserved_accesses(&board, global_route, reserved)?;
+        tracks.extend(reserved.created_tracks.iter().cloned());
+        vias.extend(reserved.created_vias.iter().cloned());
+    }
     let mut plane_reservations = None;
     if let Some(plane_options) = options.plane_stitch_options {
         if global_route.placement_fingerprint != placement_fingerprint(&board) {
@@ -771,6 +864,8 @@ pub fn route_critical_nets(
         // The options' keepouts (pair launch corridors beyond macro ports)
         // bind the stitch only; the pairs route without them.
         let mut stitch_board = board.clone();
+        stitch_board.tracks = tracks.clone();
+        stitch_board.vias = vias.clone();
         stitch_board.copper_keepouts.extend(plane_options.keepouts.iter().cloned());
         let stitched = crate::plane::stitch_zone_pads(&stitch_board, Some(plane_options))?;
         tracks = stitched.board.tracks.clone();
@@ -1004,8 +1099,8 @@ pub fn route_critical_nets(
         nets: results,
         global_routing_fingerprint: global_route.routing_fingerprint.clone(),
         routing_fingerprint,
-        reserved_track_count: 0,
-        reserved_via_count: 0,
+        reserved_track_count: options.reserved_accesses.map_or(0, |r| r.created_tracks.len() as i64),
+        reserved_via_count: options.reserved_accesses.map_or(0, |r| r.created_vias.len() as i64),
         bundles: Vec::new(),
         match_tuning: match_tuning.iter().map(match_tuning_document).collect(),
         plane_reservation_track_count: plane_reservations.as_ref().map_or(0, |stitched| stitched.added_track_count),
