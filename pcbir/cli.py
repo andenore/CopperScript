@@ -1821,8 +1821,32 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise
             # Export a stopped run's exact stage geometry; no later copper mutation.
             native_cli = None if result.stopped_after else args.verify_plane_fill
+            swept_single_layer_vias = False
             if not result.stopped_after:
                 emit(progress, "final_contacts_native_drc", "started")
+            if not result.stopped_after and not direct_unified:
+                # Escape vias the ordinary routes did not use would otherwise
+                # stay as drills and take the room plane pins need for their
+                # stitching vias, so they go before the stitch below. (Direct
+                # unified runs stitch inside the pipeline.)
+                from collections import Counter
+                from dataclasses import replace as replace_result
+                from .hard_macros import resolved_macro_geometry
+                from .pad_via_arrays import via_in_pad_array_vias
+                from .route_cleanup import remove_single_layer_vias
+                kept_vias = Counter(physical_board.vias) + Counter(via_in_pad_array_vias(result.board))
+                kept_tracks = Counter(physical_board.tracks)
+                for macro in result.board.hard_macros:
+                    if macro.cluster in result.board.materialized_macros:
+                        geometry = resolved_macro_geometry(result.board, macro)
+                        kept_tracks.update(geometry[0])
+                        kept_vias.update(geometry[1])
+                swept_vias = remove_single_layer_vias(result.board, kept_vias, kept_tracks)
+                if swept_vias is not result.board:
+                    emit(progress, "single_layer_vias", "removed",
+                         vias=len(result.board.vias) - len(swept_vias.vias))
+                    result = replace_result(result, detailed=replace_result(result.detailed, board=swept_vias))
+                    swept_single_layer_vias = True
             stitch = (result.plane_stitch if result.stopped_after
                       else stitch_zone_pads(result.board, plane_options) if stitch_enabled and not direct_unified
                       else result.plane_stitch)
@@ -1854,7 +1878,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 run_physical_drc(output_board)
                 if not result.stopped_after and ((stitch_enabled and stitch is not None)
                 or duplicate_stitch.added_track_count
-                or trimmed_overhangs)
+                or trimmed_overhangs or swept_single_layer_vias)
                 else result.drc
             )
             if not result.stopped_after:

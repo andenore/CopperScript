@@ -394,6 +394,158 @@ def trim_dangling_overhangs(board: PhysicalBoard, protected: Counter) -> Physica
     return replace(board, tracks=tuple(tracks))
 
 
+def remove_single_layer_vias(board: PhysicalBoard, protected: Counter,
+                             protected_tracks: Counter | None = None) -> PhysicalBoard:
+    """Delete ordinary vias whose copper meets only one layer, and their dead stubs.
+
+    A planned escape joins the ordinary stage as copper (tracks and a via);
+    when the net is then routed on to the escape's own layer, or away from
+    the land along another path, the via joins nothing on any other layer.
+    It is a needless drill that also takes the room next to the lands, where
+    a plane pin may still need its stitching via. A via goes when its tracks
+    and lands touch fewer than two layers and the net stays connected without
+    it; the escape track that only led to it goes too (``prune_track_stubs``).
+    ``protected`` vias and ``protected_tracks`` (input, hard-macro and
+    via-in-pad copper) and critical, zone and incomplete nets never change.
+    """
+    from .drc import explicit_copper_connectivity
+    from .physical import RouteKind
+
+    protected_tracks = protected_tracks or Counter()
+    skip = {zone.net for zone in board.zones} | {
+        rule.net for rule in board.net_routing_rules if rule.kind is not RouteKind.GENERAL}
+    nets = {net.name: net for net in board.nets}
+    order = {layer: index for index, layer in enumerate(board.stackup.copper_layers)}
+    tracks_by_net: dict[str, list[TrackSegment]] = defaultdict(list)
+    for track in board.tracks:
+        tracks_by_net[track.net].append(track)
+    owned = Counter(board.vias) - protected
+    replaced: dict[str, tuple[list[TrackSegment], list[Via]]] = {}
+    for name in sorted({via.net for via in owned}):
+        if name in skip or name not in nets:
+            continue
+        settle = _Settler(board, name, nets[name], _net_pad_shapes(board, name), order, None,
+                          Counter(), Counter())
+        tracks = tracks_by_net[name]
+        vias = [via for via in board.vias if via.net == name]
+        dead = Counter({via: min(owned[via], count) for via, count in Counter(vias).items()
+                        if owned[via] and len(settle.via_layers(via, tracks)) < 2})
+        if not dead:
+            continue
+        only = frozenset((name,))
+        if not explicit_copper_connectivity(board, only_nets=only).net_connected(nets[name]):
+            continue
+        kept_vias = list((Counter(vias) - dead).elements())
+        others = tuple(v for v in board.vias if v.net != name)
+        trial = replace(board, vias=(*others, *kept_vias))
+        if not explicit_copper_connectivity(trial, only_nets=only).net_connected(nets[name]):
+            continue
+        # Only the copper that led to a removed via may go: a track whose end
+        # at a freed point touches nothing, and whose body touches other
+        # copper only at its far end, then frees that far end in turn. A
+        # track that other copper meets part way along is cut back to the
+        # contact nearest the freed end instead (``_cut_back``).
+        kept_tracks = list(tracks)
+        freed = {via.position for via in dead}
+        while freed:
+            loose = [(track, point) for track in kept_tracks if not protected_tracks[track]
+                     for point in (track.start, track.end) if point in freed]
+            if not loose:
+                break
+            for track, point in loose:
+                far = track.end if point == track.start else track.start
+                candidate = list(kept_tracks)
+                index = candidate.index(track)
+                if _dead_end(settle, track, point, kept_tracks, kept_vias):
+                    candidate.pop(index)
+                    successor = far
+                else:
+                    shorter = _cut_back(settle, track, point, kept_tracks, kept_vias)
+                    if shorter is None:
+                        freed.discard(point)
+                        break
+                    candidate[index] = shorter
+                    successor = None
+                trimmed = replace(trial, tracks=(*(t for t in board.tracks if t.net != name), *candidate))
+                freed.discard(point)
+                if explicit_copper_connectivity(trimmed, only_nets=only).net_connected(nets[name]):
+                    kept_tracks = candidate
+                    if successor is not None:
+                        freed.add(successor)
+                break
+        replaced[name] = (kept_tracks, kept_vias)
+    if not replaced:
+        return board
+    return replace(board,
+        tracks=(*(t for t in board.tracks if t.net not in replaced),
+                *(t for name in sorted(replaced) for t in replaced[name][0])),
+        vias=(*(v for v in board.vias if v.net not in replaced),
+              *(v for name in sorted(replaced) for v in replaced[name][1])))
+
+
+def _dead_end(settle: "_Settler", track: TrackSegment, point: Point,
+              tracks: list[TrackSegment], vias: list[Via]) -> bool:
+    """``track`` ends at ``point`` in nothing, and touches other copper only at its far end."""
+    far = track.end if point == track.start else track.start
+    shape = _robust_shape(track)
+    near = RoundedConvexShape((point,), max(1, track.width_nm // 2 - CONTACT_MARGIN_NM))
+    end = RoundedConvexShape((far,), max(1, track.width_nm // 2 - CONTACT_MARGIN_NM))
+    others = [_robust_shape(other) for other in tracks if other is not track and other.layer is track.layer]
+    others += [_robust_via(via) for via in vias if settle.covers(via, track.layer)]
+    lands = [pad for layers, pad in settle.pads if track.layer in layers]
+    if any(not shapes_clear(near, other, 1) for other in (*others, *lands)):
+        return False
+    # Lands may lie under the track; other copper only where it meets the far end.
+    return all(shapes_clear(shape, other, 1) or not shapes_clear(end, other, 1) for other in others)
+
+
+def _cut_back(settle: "_Settler", track: TrackSegment, point: Point,
+              tracks: list[TrackSegment], vias: list[Via]) -> TrackSegment | None:
+    """``track`` shortened from its open end ``point`` to the nearest copper on it.
+
+    Contacts are other tracks, vias and lands touching its body, each taken
+    where its nearest end or centre projects onto the track (in whole
+    octilinear steps, as ``_trimmed_to_land`` cuts). None when the track is
+    not octilinear, nothing touches it, or a track crosses it with neither
+    end on it.
+    """
+    dx, dy = track.end.x_nm - track.start.x_nm, track.end.y_nm - track.start.y_nm
+    steps = max(abs(dx), abs(dy))
+    if not steps or (dx and dy and abs(dx) != abs(dy)):
+        return None
+    ux, uy = (dx > 0) - (dx < 0), (dy > 0) - (dy < 0)
+    shape = _robust_shape(track)
+
+    def along(target: Point) -> int:
+        return ((target.x_nm - track.start.x_nm) * ux + (target.y_nm - track.start.y_nm) * uy) // (abs(ux) + abs(uy))
+
+    contacts = []
+    for other in tracks:
+        if other is track or other.layer is not track.layer or shapes_clear(shape, _robust_shape(other), 1):
+            continue
+        ends = [end for end in (other.start, other.end)
+                if not shapes_clear(shape, RoundedConvexShape((end,), max(1, other.width_nm // 2)), 1)]
+        if not ends:
+            return None
+        contacts.extend(along(end) for end in ends)
+    contacts += [along(via.position) for via in vias
+                 if settle.covers(via, track.layer) and not shapes_clear(shape, _robust_via(via), 1)]
+    for layers, pad in settle.pads:
+        if track.layer in layers and not shapes_clear(shape, pad, 1):
+            contacts.append(along(Point(sum(p.x_nm for p in pad.spine) // len(pad.spine),
+                                        sum(p.y_nm for p in pad.spine) // len(pad.spine))))
+    contacts = [max(0, min(steps, position)) for position in contacts]
+    open_at = steps if point == track.end else 0
+    inner = [position for position in contacts if position != open_at]
+    if not inner:
+        return None
+    cut = max(inner) if open_at else min(inner)
+    if cut == open_at or cut == steps - open_at:
+        return None
+    end = Point(track.start.x_nm + ux * cut, track.start.y_nm + uy * cut)
+    return replace(track, end=end) if open_at else replace(track, start=end)
+
+
 def _trimmed_to_land(settle: "_Settler", track: TrackSegment) -> list[TrackSegment]:
     """``track`` cut back to the centre of each same-net land it crosses.
 

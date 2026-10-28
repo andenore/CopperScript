@@ -87,3 +87,44 @@ def test_the_ordinary_stage_fanout_reuses_the_joined_planned_escapes() -> None:
     assert again.accesses == planned.accesses
     assert not again.created_tracks and not again.created_vias
     assert again.board == pre
+
+
+def test_fine_pitch_plane_pins_keep_a_via_site_free_from_planned_escapes() -> None:
+    from pcbir import (BoardOutline, CopperZone, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet,
+                       Placement, PolygonRing, PolygonWithHoles, Stackup)
+    from pcbir.flow import _plane_pin_halos
+
+    # A 0.5 mm row on the right edge of a package: P's plane is on B.Cu only,
+    # so P needs a stitching via in front of its land; G has a pour on its
+    # own layer and S is a signal.
+    pads = tuple(FootprintPad(str(i + 1), Point.mm("1.4", y), Size.mm("0.6", "0.25"))
+                 for i, y in enumerate(("-0.5", "0", "0.5")))
+    package = PhysicalFootprint("test/row", pads, Size.mm(3, 3))
+    outline = BoardOutline.rectangle(20, 20)
+    plane = PolygonWithHoles(PolygonRing(outline.vertices))
+    board = PhysicalBoard(
+        "PlanePins", outline, {package.name: package}, (Placement("U1", package.name, Point.mm(10, 10)),),
+        (PhysicalNet("S", (PadReference("U1", "1"),)), PhysicalNet("P", (PadReference("U1", "2"),)),
+         PhysicalNet("G", (PadReference("U1", "3"),))),
+        stackup=Stackup(copper_layers=(CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2,
+                                       CopperLayer.BACK)),
+        zones=(CopperZone("p-plane", "P", (CopperLayer.BACK,), plane),
+               CopperZone("g-pour", "G", (CopperLayer.FRONT, CopperLayer.INTERNAL_1), plane)))
+    # With 0.8 mm vias and 0.2 mm clearance a via in front of P would block
+    # its neighbours' straight escapes at this pitch: no halo.
+    assert _plane_pin_halos(board) == ()
+    from pcbir.physical import DesignRules
+    board = replace(board, rules=DesignRules(minimum_clearance_nm=nm_from_mm("0.1"),
+                                             minimum_track_width_nm=nm_from_mm("0.1"),
+                                             default_track_width_nm=nm_from_mm("0.15"),
+                                             default_via_size_nm=nm_from_mm("0.45"),
+                                             default_via_drill_nm=nm_from_mm("0.2")))
+    (halo,) = _plane_pin_halos(board)
+    assert halo.layers == (CopperLayer.FRONT,) and halo.block_vias and halo.block_tracks
+    vertices = halo.outline.outer.vertices
+    xs, ys = {v.x_nm for v in vertices}, {v.y_nm for v in vertices}
+    gap, via = board.rules.minimum_clearance_nm, board.rules.default_via_size_nm
+    # From one clearance past P's outer edge (x = 11.7 mm), a via and a
+    # clearance outward, one via plus clearance either side of its centre.
+    assert (min(xs), max(xs)) == (nm_from_mm("11.7") + gap, nm_from_mm("11.7") + 2 * gap + via)
+    assert (min(ys), max(ys)) == (nm_from_mm(10) - via // 2 - gap, nm_from_mm(10) + via // 2 + gap)
