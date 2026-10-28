@@ -99,7 +99,9 @@ impl ViaTechnology {
         if self.id.is_empty() || self.from_layer == self.to_layer {
             return fail("via technology requires an id and distinct span");
         }
-        if self.minimum_drill_nm <= 0 || self.minimum_annular_ring_nm <= 0 || !(self.maximum_aspect_ratio > Decimal::zero())
+        if self.minimum_drill_nm <= 0
+            || self.minimum_annular_ring_nm <= 0
+            || !(self.maximum_aspect_ratio > Decimal::zero())
         {
             return fail("via technology limits must be positive");
         }

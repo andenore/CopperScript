@@ -4,8 +4,8 @@
 use indexmap::{IndexMap, IndexSet};
 
 use copper_pcb::board::PhysicalBoard;
-use copper_physical::footprint::{PadKind, PadShape};
 use copper_physical::Point;
+use copper_physical::footprint::{PadKind, PadShape};
 use copper_physical::pyfloat::round_int;
 
 use crate::unified_error::{Result, fail};
@@ -28,9 +28,9 @@ pub fn circular_array(board: &PhysicalBoard, component: &str) -> Result<Option<C
     let pads = &board.footprints[&pose.footprint].pads;
     let numbers: IndexSet<&str> = pads.iter().map(|p| p.number.as_str()).collect();
     if pads.is_empty()
-        || pads.iter().any(|p| {
-            p.kind != PadKind::Smd || p.shape != PadShape::Circle || p.size.width_nm != p.size.height_nm
-        })
+        || pads
+            .iter()
+            .any(|p| p.kind != PadKind::Smd || p.shape != PadShape::Circle || p.size.width_nm != p.size.height_nm)
         || numbers.len() != pads.len()
     {
         return Ok(None);
@@ -40,8 +40,7 @@ pub fn circular_array(board: &PhysicalBoard, component: &str) -> Result<Option<C
     let mut ys: Vec<i64> = points.iter().map(|p| p.y_nm).collect::<IndexSet<_>>().into_iter().collect();
     xs.sort_unstable();
     ys.sort_unstable();
-    let pitches: IndexSet<i64> =
-        xs.windows(2).chain(ys.windows(2)).map(|pair| pair[1] - pair[0]).collect();
+    let pitches: IndexSet<i64> = xs.windows(2).chain(ys.windows(2)).map(|pair| pair[1] - pair[0]).collect();
     let sizes: IndexSet<i64> = pads.iter().map(|p| p.size.width_nm).collect();
     if xs.len().min(ys.len()) < 3
         || points.len() != xs.len() * ys.len()

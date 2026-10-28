@@ -4,8 +4,8 @@ use std::io::Write;
 
 use crate::{
     agent_guide, assembly, audit_footprints, check, check_footprint, compile, compile_macro, explain, export_kicad,
-    export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout, power_check, query, replay_unified, si_check,
-    state, summarize, view,
+    export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout, power_check, query,
+    replay_unified, si_check, state, summarize, view,
 };
 
 /// Exit status of a command the Rust rewrite does not implement yet.

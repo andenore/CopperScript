@@ -18892,6 +18892,451 @@
    ],
    "stdin": "tests/rust-port/lsp/board.jsonl",
    "timeout_s": 120
+  },
+  {
+   "name": "replay-unified",
+   "milestone": "M4",
+   "inputs": [
+    "tests/rust-port/unified/*.state.json",
+    "tests/rust-port/unified/variants/*.state.json"
+   ],
+   "args": [
+    "replay-unified",
+    "{input}",
+    "--save-result",
+    "{out}/result.state.json",
+    "--report",
+    "{out}/report.json"
+   ],
+   "compare": [
+    "exit",
+    "stderr",
+    "files"
+   ],
+   "files": [
+    "result.state.json"
+   ],
+   "json": {
+    "report.json": [
+     "unrouted"
+    ]
+   },
+   "mutations": 2,
+   "timeout_s": 900
+  },
+  {
+   "name": "replay-unified-options",
+   "milestone": "M4",
+   "compare": [
+    "exit",
+    "stderr",
+    "files"
+   ],
+   "files": [
+    "result.state.json"
+   ],
+   "json": {
+    "report.json": [
+     "unrouted"
+    ]
+   },
+   "cases": [
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "maximum_iterations=3",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "route_smoothing=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "pour_recheck=false",
+      "--set",
+      "commit_rounds=1",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "fine_regions=off",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "fine_regions=dense",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "present_factor=0.6",
+      "--set",
+      "history_increment=2",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "attach_candidates=3",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "buses_first=false",
+      "--set",
+      "length_priority=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--only",
+      "GND",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--only",
+      "I2C_SCL",
+      "--only",
+      "I2C_SDA",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--component",
+      "U3",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--progress",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/variants/selection.state.json",
+      "--only",
+      "GND",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/routing.state.json",
+      "--set",
+      "maximum_iterations=10",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/placement.state.json",
+      "--set",
+      "route_smoothing=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "replay-unified-errors",
+   "milestone": "M4",
+   "cases": [
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "bogus=1"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "maximum_iterations"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "=3"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "maximum_iterations=0"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "stall_iterations=-1"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "fine_regions=everywhere"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "grid_window_nm=[1,2,3]"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "grid_window_nm=[4,3,2,1]"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "congestion_tile_nm=0"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--fanout-set",
+      "bogus=1"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--fanout-set",
+      "surface_rings"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--fanout-set",
+      "surface_rings=junk"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--only",
+      "NOPE"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--only",
+      "NOPE",
+      "--only",
+      "ALSO_NOPE",
+      "--only",
+      "GND"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/variants/selection.state.json",
+      "--only",
+      "I2C_SDA"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/variants/selection.state.json",
+      "--only",
+      "NOPE",
+      "--only",
+      "V3V3"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--power-islands",
+      "X.Cu"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--save-result",
+      "tests/rust-port/unified/valid_board.state.json"
+     ]
+    },
+    {
+     "id": "replay-unified-errors/missing-state",
+     "args": [
+      "replay-unified",
+      "build/missing.state.json"
+     ]
+    },
+    {
+     "id": "replay-unified-errors/directory-state",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified"
+     ]
+    },
+    {
+     "id": "replay-unified-errors/not-a-state-file",
+     "args": [
+      "replay-unified",
+      "bench/ladder.json"
+     ]
+    },
+    {
+     "id": "replay-unified-errors/no-state",
+     "args": [
+      "replay-unified"
+     ],
+     "compare": [
+      "exit"
+     ]
+    },
+    {
+     "id": "replay-unified-errors/two-states",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "tests/rust-port/unified/valid_board.state.json"
+     ],
+     "compare": [
+      "exit"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "replay-unified-malformed",
+   "milestone": "M4",
+   "inputs": [
+    "tests/rust-port/unified/malformed/*.state.json"
+   ],
+   "args": [
+    "replay-unified",
+    "{input}"
+   ]
   }
  ]
 }

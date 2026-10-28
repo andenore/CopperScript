@@ -14,8 +14,8 @@ use copper_pcb::board::{NetRoutingRule, PhysicalBoard, RouteKind};
 use copper_pcb::zones::routing_layers;
 
 use crate::routing::{
-    AccessOptions, GlobalNetRoute, GlobalRouteSegment, GlobalRouterOptions, GlobalViaProposal, Graph, GridNode, PinAccess,
-    Resource, edge_key, graph_preference_cost, net_demand, route_resource_demands,
+    AccessOptions, GlobalNetRoute, GlobalRouteSegment, GlobalRouterOptions, GlobalViaProposal, Graph, GridNode,
+    PinAccess, Resource, edge_key, graph_preference_cost, net_demand, route_resource_demands,
 };
 use crate::routing_costs::{COST_UNIT, demand_cost};
 
@@ -80,7 +80,16 @@ pub fn assign_ordinary_layers(
     }
     let mut runs: Vec<Run> = Vec::new();
     for (index, route) in routes.iter().enumerate() {
-        runs.extend(find_runs(board, graph, index, route, &edges_by_route[index], rules.get(&route.net), access_options, demands[index]));
+        runs.extend(find_runs(
+            board,
+            graph,
+            index,
+            route,
+            &edges_by_route[index],
+            rules.get(&route.net),
+            access_options,
+            demands[index],
+        ));
     }
     runs.sort_by(|a, b| (-a.length_nm, &a.net, a.layer, &a.edges).cmp(&(-b.length_nm, &b.net, b.layer, &b.edges)));
     let mut layers: Vec<i64> = runs.iter().map(|run| run.layer).collect();
@@ -168,7 +177,11 @@ fn find_runs(
     access_options: &AccessOptions,
     demand: i64,
 ) -> Vec<Run> {
-    if !route.connected || route.deferred_to_zone || edges.is_empty() || rule.is_some_and(|r| r.kind != RouteKind::General) {
+    if !route.connected
+        || route.deferred_to_zone
+        || edges.is_empty()
+        || rule.is_some_and(|r| r.kind != RouteKind::General)
+    {
         return Vec::new();
     }
     let mut allowed: Vec<i64> =
@@ -229,7 +242,10 @@ fn find_runs(
             if access_vias.contains(&(via.position, via.from_layer, via.to_layer)) {
                 continue;
             }
-            let pair = (graph.layer_position(via.from_layer).expect("layer"), graph.layer_position(via.to_layer).expect("layer"));
+            let pair = (
+                graph.layer_position(via.from_layer).expect("layer"),
+                graph.layer_position(via.to_layer).expect("layer"),
+            );
             let node = nodes.iter().find(|n| graph.point(**n) == via.position);
             if node.is_some() && (pair.0 == layer || pair.1 == layer) {
                 let other = if pair.0 == layer { pair.1 } else { pair.0 };
@@ -237,8 +253,13 @@ fn find_runs(
                 excluded.insert(other);
             }
         }
-        let accesses: Vec<usize> =
-            route.accesses.iter().enumerate().filter(|(_, access)| nodes.contains(&access.node)).map(|(i, _)| i).collect();
+        let accesses: Vec<usize> = route
+            .accesses
+            .iter()
+            .enumerate()
+            .filter(|(_, access)| nodes.contains(&access.node))
+            .map(|(i, _)| i)
+            .collect();
         // Keep inner-to-inner transitions and non-via pin accesses as built:
         // relabelling both sides of one transition could merge or orphan it.
         if accesses.iter().any(|i| route.accesses[*i].via.is_none())
@@ -258,7 +279,9 @@ fn find_runs(
                 continue;
             }
             if !vias.iter().all(|(i, o)| {
-                graph.resources.contains_key(&edge_key(at(graph, &route.vias[*i], *o), at(graph, &route.vias[*i], *other)))
+                graph
+                    .resources
+                    .contains_key(&edge_key(at(graph, &route.vias[*i], *o), at(graph, &route.vias[*i], *other)))
             }) {
                 continue;
             }
@@ -277,7 +300,8 @@ fn find_runs(
                     + (graph.ys[a.y_index as usize] - graph.ys[b.y_index as usize]).abs()
             })
             .sum();
-        let mut straight: Vec<(i64, i64, &'static str)> = straight_passes(members).into_iter().map(|(_, x, y, axis)| (x, y, axis)).collect();
+        let mut straight: Vec<(i64, i64, &'static str)> =
+            straight_passes(members).into_iter().map(|(_, x, y, axis)| (x, y, axis)).collect();
         straight.sort();
         let mut sorted_members = members.clone();
         sorted_members.sort();
@@ -310,14 +334,26 @@ fn at(graph: &Graph, via: &GlobalViaProposal, layer: i64) -> GridNode {
 }
 
 /// `_access_on`: the same pad, physical via and tile on another layer, if legal.
-fn access_on<'a>(access: &PinAccess, layer: i64, net: &str, access_options: &'a AccessOptions) -> Option<&'a PinAccess> {
+fn access_on<'a>(
+    access: &PinAccess,
+    layer: i64,
+    net: &str,
+    access_options: &'a AccessOptions,
+) -> Option<&'a PinAccess> {
     let via = access.via.as_ref()?;
     access_options.get(&(net.to_owned(), access.pad.clone()))?.iter().find(|item| {
         item.via.as_ref().is_some_and(|other| other.position == via.position) && item.node == on(access.node, layer)
     })
 }
 
-fn apply(graph: &Graph, run: &Run, layer: i64, usage: &mut IndexMap<String, i64>, passes: &mut IndexMap<Pass, i64>, sign: i64) {
+fn apply(
+    graph: &Graph,
+    run: &Run,
+    layer: i64,
+    usage: &mut IndexMap<String, i64>,
+    passes: &mut IndexMap<Pass, i64>,
+    sign: i64,
+) {
     for (a, b) in &run.edges {
         let identifier = &graph.resources[&edge_key(on(*a, layer), on(*b, layer))].identifier;
         *usage.entry(identifier.clone()).or_insert(0) += sign * run.demand;
@@ -346,7 +382,8 @@ fn run_cost(
         if layer != current && used + run.demand > resource.capacity {
             return None;
         }
-        let capacity = if graph.demand_lanes != 0 { resource.capacity.min(graph.demand_lanes) } else { resource.capacity };
+        let capacity =
+            if graph.demand_lanes != 0 { resource.capacity.min(graph.demand_lanes) } else { resource.capacity };
         cost += graph_preference_cost(graph, first, second, options)
             + demand_cost(graph.point(first), graph.point(second), options.local_demand_cost, used, capacity);
     }
@@ -357,7 +394,12 @@ fn run_cost(
     Some(cost)
 }
 
-fn relabel(graph: &Graph, route: &GlobalNetRoute, moves: &[(&Run, i64)], access_options: &AccessOptions) -> Result<GlobalNetRoute> {
+fn relabel(
+    graph: &Graph,
+    route: &GlobalNetRoute,
+    moves: &[(&Run, i64)],
+    access_options: &AccessOptions,
+) -> Result<GlobalNetRoute> {
     let mut segment_layer: IndexMap<Edge, i64> = IndexMap::new();
     let mut vias: IndexMap<usize, GlobalViaProposal> = IndexMap::new();
     let mut accesses: IndexMap<usize, PinAccess> = IndexMap::new();
@@ -380,7 +422,8 @@ fn relabel(graph: &Graph, route: &GlobalNetRoute, moves: &[(&Run, i64)], access_
             );
         }
         for index in &run.accesses {
-            let replacement = access_on(&route.accesses[*index], *layer, &route.net, access_options).expect("checked candidate");
+            let replacement =
+                access_on(&route.accesses[*index], *layer, &route.net, access_options).expect("checked candidate");
             accesses.insert(*index, replacement.clone());
         }
     }

@@ -6,7 +6,10 @@
 //! of node legality per width class drive the search, and an exact commit
 //! check with the clearance index decides every track and via written.
 
+pub mod astar;
+pub mod geometry;
 mod options;
+pub mod rasters;
 mod replay;
 
 pub use options::*;

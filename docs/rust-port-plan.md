@@ -529,3 +529,23 @@ do not shrink as much.
 - Windows: Python digests the report it wrote with CRLF, so the summary's
   `report_sha256` differs from the Rust binary's LF report there; it needs
   recording once a Windows run has the digests.
+
+**M4 stream: unified router and `replay-unified` (branch `rust-m4-unified`).**
+
+- `copper-route` (on `rust-m4-global`'s foundation) gained
+  `unified_router` options (`UnifiedRouterOptions`, `__post_init__`, the
+  `--set`/`--unified-set` overrides), `fine_regions` (the fine-patch
+  planner), `package_patterns` (ball-array detection), `detailed` result
+  types, `congestion_feedback` `CongestionMap` and a typed decoder of the
+  `--unified-save-inputs` state with Python's `StateError`, `ValueError`
+  and uncaught-exception texts (`unified_error`).
+- `copper replay-unified` parses every option, decodes the state, applies
+  overrides and the `--only`/`--component` selection with Python's errors;
+  routing, `--power-islands`, `--refanout` and `--exact-escape` report not
+  implemented (exit 3).
+- Inputs: `tests/rust-port/unified/` (seven `route-board
+  --unified-save-inputs` states, malformed and valid variants;
+  `generate.py`, README). Corpus: `replay-unified` (states and mutations),
+  `-options`, `-errors`, `-malformed`; replays compare the result state,
+  the report's `unrouted`, exit status and stderr, never the `seconds` or
+  `PROGRESS` timing. No case sets a time budget (the default is none).

@@ -87,8 +87,11 @@ impl GlobalTrackKeepout {
         }
         let mut result = Vec::new();
         for triangle in &self.triangles {
-            let mut values: Vec<BigRational> =
-                triangle.iter().filter(|p| low <= along(**p) && along(**p) <= high).map(|p| rational(across(*p))).collect();
+            let mut values: Vec<BigRational> = triangle
+                .iter()
+                .filter(|p| low <= along(**p) && along(**p) <= high)
+                .map(|p| rational(across(*p)))
+                .collect();
             for index in 0..3 {
                 let (a, b) = (triangle[index], triangle[(index + 1) % 3]);
                 let (av, bv) = (along(a), along(b));

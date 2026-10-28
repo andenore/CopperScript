@@ -291,7 +291,8 @@ impl UnifiedRouterOptions {
         if escalation != Kind::Int || self.critical_pair_state_escalation < 1 {
             return fail("critical pair state escalation must be an integer of at least 1");
         }
-        if self.pitch_nm.is_some_and(|pitch| pitch <= 0) || self.maximum_iterations <= 0 || self.maximum_expansions <= 0 {
+        if self.pitch_nm.is_some_and(|pitch| pitch <= 0) || self.maximum_iterations <= 0 || self.maximum_expansions <= 0
+        {
             return fail("unified router pitch, iterations and search states must be positive");
         }
         if self.escape_layer_biases.iter().any(|bias| bias.rate < 0) {
@@ -367,9 +368,11 @@ impl UnifiedRouterOptions {
             let float = |value: &Value| -> Result<f64> {
                 match value {
                     Value::Float(number) => Ok(*number),
-                    Value::Int(number) => {
-                        number.to_i64().filter(|n| n.abs() < 1 << 53).map(|n| n as f64).ok_or_else(|| unsupported("a large integer in a float field"))
-                    }
+                    Value::Int(number) => number
+                        .to_i64()
+                        .filter(|n| n.abs() < 1 << 53)
+                        .map(|n| n as f64)
+                        .ok_or_else(|| unsupported("a large integer in a float field")),
                     _ => Err(unsupported("not a number")),
                 }
             };
@@ -501,7 +504,11 @@ impl UnifiedRouterOptions {
                 "attach_extension_steps_nm" => {
                     options.attach_extension_steps_nm = match value {
                         Value::Array(items) => {
-                            steps = if items.iter().all(|item| matches!(item, Value::Int(_))) { Kind::Int } else { Kind::Other };
+                            steps = if items.iter().all(|item| matches!(item, Value::Int(_))) {
+                                Kind::Int
+                            } else {
+                                Kind::Other
+                            };
                             if steps == Kind::Int { items.iter().map(int).collect::<Result<_>>()? } else { vec![1] }
                         }
                         _ => return fail("attach_extension_steps_nm requires positive integer nanometre steps"),

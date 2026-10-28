@@ -12,7 +12,12 @@ pub trait Progress {
 pub type ProgressCallback<'a> = &'a mut dyn Progress;
 
 /// `emit`: forward one event when an observer is installed.
-pub fn emit(callback: &mut Option<ProgressCallback<'_>>, phase: &str, event: &str, details: Vec<(&'static str, Value)>) {
+pub fn emit(
+    callback: &mut Option<ProgressCallback<'_>>,
+    phase: &str,
+    event: &str,
+    details: Vec<(&'static str, Value)>,
+) {
     if let Some(callback) = callback {
         callback.observe(phase, event, details);
     }

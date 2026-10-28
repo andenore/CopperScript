@@ -24,21 +24,21 @@ use copper_physical::footprint::{
     ZoneConnection,
 };
 use copper_physical::{
-    BoardCutout, BoardDatum, BoardEdge, BoardOutline, BoardSide, Bounds, BoundarySegment, BoardBoundaryPath,
+    BoardBoundaryPath, BoardCutout, BoardDatum, BoardEdge, BoardOutline, BoardSide, BoundarySegment, Bounds,
     CircularBoardBoundary, CopperKeepout, CopperLayer, DesignRules, MechanicalHole, MechanicalSlot, PlacementKeepout,
     Point,
 };
 use copper_state::{NdArray, StateDocument, StateError, StateValue};
 use copper_units::Decimal;
 
+use crate::congestion_feedback::CongestionMap;
 use crate::detailed::{DetailedNetResult, DetailedRoutingMetrics, DetailedRoutingResult, DetailedRoutingStatus};
 use crate::fine_regions::FineRegionOptions;
 use crate::pin_escape::RoutingAccess;
 use crate::routing::*;
 use crate::routing_costs::LayerBias;
-use crate::congestion_feedback::CongestionMap;
-use crate::unified_router::UnifiedRouterOptions;
 use crate::unified_error::{Error, Result, fail, not_implemented};
+use crate::unified_router::UnifiedRouterOptions;
 
 /// The dict `route_unified` saves under `save_inputs_path` and
 /// `replay_unified` loads.
@@ -59,7 +59,7 @@ pub struct SavedInputs {
 pub fn load_inputs(text: &str, path: &str) -> Result<SavedInputs> {
     let document = StateDocument::read(text).map_err(|error| match error {
         StateError::Json(error) => Error::Value(error.python_message(text)),
-        StateError::NotAStateFile => Error::Value(format!("{path}: not a {}", copper_state::STATE_SCHEMA)),
+        StateError::NotAStateFile => Error::Value(format!("{path}: not a {} file", copper_state::STATE_SCHEMA)),
         StateError::DigestMismatch => Error::Value(format!("{path}: content digest mismatch")),
         other => Error::Value(other.to_string()),
     })?;
@@ -88,7 +88,9 @@ impl<'a> Reader<'a> {
             StateValue::Dataclass { name, .. } => {
                 not_implemented(format!("a {class} field holds a {name} value, which Python would use dynamically"))
             }
-            other => not_implemented(format!("a {class} field holds a {}, which Python would use dynamically", kind(other))),
+            other => {
+                not_implemented(format!("a {class} field holds a {}, which Python would use dynamically", kind(other)))
+            }
         }
     }
 
@@ -162,7 +164,10 @@ fn kind(value: &StateValue) -> &'static str {
 }
 
 fn dynamic<T>(what: &str, value: &StateValue) -> Result<T> {
-    not_implemented(format!("a state file holds a {} where {what} belongs, which Python would use dynamically", kind(value)))
+    not_implemented(format!(
+        "a state file holds a {} where {what} belongs, which Python would use dynamically",
+        kind(value)
+    ))
 }
 
 fn int(value: &StateValue) -> Result<i64> {
@@ -189,9 +194,11 @@ fn boolean(value: &StateValue) -> Result<bool> {
 fn float(value: &StateValue) -> Result<f64> {
     match value {
         StateValue::Float(number) => Ok(*number),
-        StateValue::Int(number) => {
-            number.to_i64().filter(|n| n.abs() < 1 << 53).map(|n| n as f64).ok_or_else(|| Error::not_implemented("a large integer in a float field"))
-        }
+        StateValue::Int(number) => number
+            .to_i64()
+            .filter(|n| n.abs() < 1 << 53)
+            .map(|n| n as f64)
+            .ok_or_else(|| Error::not_implemented("a large integer in a float field")),
         other => dynamic("a float", other),
     }
 }
@@ -201,7 +208,9 @@ fn decimal(value: &StateValue) -> Result<Decimal> {
     match value {
         StateValue::Decimal(number) => Ok(number.clone()),
         StateValue::Int(number) => Ok(Decimal::parse(&number.to_string()).expect("integer text")),
-        StateValue::Str(text) => Decimal::parse(text).map_err(|_| Error::not_implemented("a decimal that Python's Decimal() rejects")),
+        StateValue::Str(text) => {
+            Decimal::parse(text).map_err(|_| Error::not_implemented("a decimal that Python's Decimal() rejects"))
+        }
         other => dynamic("a decimal", other),
     }
 }
@@ -347,8 +356,18 @@ fn boundary_segment(value: &StateValue) -> Result<BoundarySegment> {
             "mid" => mid = point;
             "end" => end = point;
         });
-        reader.required(&[("id", id.is_none()), ("start", start.is_none()), ("mid", mid.is_none()), ("end", end.is_none())])?;
-        return Ok(BoundarySegment::arc(&id.expect("required"), start.expect("required"), mid.expect("required"), end.expect("required"))?);
+        reader.required(&[
+            ("id", id.is_none()),
+            ("start", start.is_none()),
+            ("mid", mid.is_none()),
+            ("end", end.is_none()),
+        ])?;
+        return Ok(BoundarySegment::arc(
+            &id.expect("required"),
+            start.expect("required"),
+            mid.expect("required"),
+            end.expect("required"),
+        )?);
     }
     dataclass!(reader, value, "pcbir.physical:BoundaryLine", {
         "id" => id = text;
@@ -376,12 +395,7 @@ fn board_outline(value: &StateValue) -> Result<BoardOutline> {
         "boundary_path" => path = |v| optional(v, boundary_path);
     });
     reader.required(&[("vertices", vertices.is_none())])?;
-    Ok(BoardOutline::new(
-        vertices.expect("required"),
-        cutouts.unwrap_or_default(),
-        circular.flatten(),
-        path.flatten(),
-    )?)
+    Ok(BoardOutline::new(vertices.expect("required"), cutouts.unwrap_or_default(), circular.flatten(), path.flatten())?)
 }
 
 fn copper_keepout(value: &StateValue) -> Result<CopperKeepout> {
@@ -551,7 +565,11 @@ fn placement(value: &StateValue) -> Result<Placement> {
         "value" => part_value = text;
         "source_path" => source = |v| optional(v, text);
     });
-    reader.required(&[("reference", reference.is_none()), ("footprint", footprint.is_none()), ("position", position.is_none())])?;
+    reader.required(&[
+        ("reference", reference.is_none()),
+        ("footprint", footprint.is_none()),
+        ("position", position.is_none()),
+    ])?;
     let reference = reference.expect("required");
     if reference.is_empty() {
         return fail("placement reference cannot be empty");
@@ -683,9 +701,14 @@ fn validate_stackup(stackup: &Stackup) -> Result<()> {
         return fail("stackup copper layers must be unique");
     }
     if layers.len() > 2 {
-        let inner: Vec<CopperLayer> =
-            CopperLayer::ALL.iter().copied().filter(|l| !matches!(l, CopperLayer::Front | CopperLayer::Back)).take(layers.len() - 2).collect();
-        let expected: Vec<CopperLayer> = std::iter::once(CopperLayer::Front).chain(inner).chain(std::iter::once(CopperLayer::Back)).collect();
+        let inner: Vec<CopperLayer> = CopperLayer::ALL
+            .iter()
+            .copied()
+            .filter(|l| !matches!(l, CopperLayer::Front | CopperLayer::Back))
+            .take(layers.len() - 2)
+            .collect();
+        let expected: Vec<CopperLayer> =
+            std::iter::once(CopperLayer::Front).chain(inner).chain(std::iter::once(CopperLayer::Back)).collect();
         if *layers != expected {
             return fail("multilayer stackups use contiguous F.Cu/In1.Cu.../B.Cu order");
         }
@@ -707,9 +730,10 @@ fn validate_stackup(stackup: &Stackup) -> Result<()> {
         return fail("via technology ids must be unique");
     }
     for technology in &stackup.via_technologies {
-        let (Some(low), Some(high)) =
-            (layers.iter().position(|l| *l == technology.from_layer), layers.iter().position(|l| *l == technology.to_layer))
-        else {
+        let (Some(low), Some(high)) = (
+            layers.iter().position(|l| *l == technology.from_layer),
+            layers.iter().position(|l| *l == technology.to_layer),
+        ) else {
             return fail("via technology span must be in the stackup");
         };
         let (low, high) = (low.min(high), low.max(high));
@@ -759,7 +783,13 @@ fn track_segment(value: &StateValue) -> Result<TrackSegment> {
         "width_nm" => width = int;
         "layer" => layer = copper_layer;
     });
-    reader.required(&[("net", net.is_none()), ("start", start.is_none()), ("end", end.is_none()), ("width_nm", width.is_none()), ("layer", layer.is_none())])?;
+    reader.required(&[
+        ("net", net.is_none()),
+        ("start", start.is_none()),
+        ("end", end.is_none()),
+        ("width_nm", width.is_none()),
+        ("layer", layer.is_none()),
+    ])?;
     let (start, end, width) = (start.expect("required"), end.expect("required"), width.expect("required"));
     if start == end {
         return fail("track segment cannot have zero length");
@@ -781,7 +811,12 @@ fn via(value: &StateValue) -> Result<Via> {
         "technology" => technology = |v| optional(v, text);
         "finish" => finish = text;
     });
-    reader.required(&[("net", net.is_none()), ("position", position.is_none()), ("size_nm", size_nm.is_none()), ("drill_nm", drill.is_none())])?;
+    reader.required(&[
+        ("net", net.is_none()),
+        ("position", position.is_none()),
+        ("size_nm", size_nm.is_none()),
+        ("drill_nm", drill.is_none()),
+    ])?;
     let (size_nm, drill) = (size_nm.expect("required"), drill.expect("required"));
     if size_nm <= 0 || drill <= 0 {
         return fail("via size and drill must be positive");
@@ -797,7 +832,16 @@ fn via(value: &StateValue) -> Result<Via> {
     if finish != "standard" && finish != "filled-capped" {
         return fail("unsupported via finish");
     }
-    Ok(Via { net: net.expect("required"), position: position.expect("required"), size_nm, drill_nm: drill, from_layer: from, to_layer: to, technology: technology.flatten(), finish })
+    Ok(Via {
+        net: net.expect("required"),
+        position: position.expect("required"),
+        size_nm,
+        drill_nm: drill,
+        from_layer: from,
+        to_layer: to,
+        technology: technology.flatten(),
+        finish,
+    })
 }
 
 fn copper_zone(value: &StateValue) -> Result<CopperZone> {
@@ -817,7 +861,12 @@ fn copper_zone(value: &StateValue) -> Result<CopperZone> {
         "reserve_routing" => reserve = boolean;
         "allow_same_net_hard_macro_overlap" => overlap = boolean;
     });
-    reader.required(&[("id", id.is_none()), ("net", net.is_none()), ("layers", layers.is_none()), ("outline", outline.is_none())])?;
+    reader.required(&[
+        ("id", id.is_none()),
+        ("net", net.is_none()),
+        ("layers", layers.is_none()),
+        ("outline", outline.is_none()),
+    ])?;
     let _ = fill_mode;
     let (outer, holes) = outline.expect("required");
     let (gap, spoke) = thermal.unwrap_or((300_000, 300_000));
@@ -972,7 +1021,12 @@ fn copper_polygon(value: &StateValue) -> Result<CopperPolygon> {
         "layer" => layer = copper_layer;
         "outline" => outline = polygon_ring;
     });
-    reader.required(&[("id", id.is_none()), ("net", net.is_none()), ("layer", layer.is_none()), ("outline", outline.is_none())])?;
+    reader.required(&[
+        ("id", id.is_none()),
+        ("net", net.is_none()),
+        ("layer", layer.is_none()),
+        ("outline", outline.is_none()),
+    ])?;
     let (id, net) = (id.expect("required"), net.expect("required"));
     if id.is_empty() || net.is_empty() {
         return fail("fixed copper polygon requires an id and net");
@@ -1088,7 +1142,12 @@ fn power_feed(value: &StateValue) -> Result<PowerFeedBoundary> {
         "upstream_terminal" => upstream_terminal = pad_reference;
         "provenance" => provenance = text;
     });
-    reader.required(&[("net", net.is_none()), ("terminal", terminal.is_none()), ("upstream_net", upstream.is_none()), ("upstream_terminal", upstream_terminal.is_none())])?;
+    reader.required(&[
+        ("net", net.is_none()),
+        ("terminal", terminal.is_none()),
+        ("upstream_net", upstream.is_none()),
+        ("upstream_terminal", upstream_terminal.is_none()),
+    ])?;
     Ok(PowerFeedBoundary {
         net: net.expect("required"),
         terminal: terminal.expect("required"),
@@ -1106,7 +1165,13 @@ fn decoupling_link(value: &StateValue) -> Result<DecouplingLink> {
         "net" => net = text;
         "return_net" => return_net = text;
     });
-    reader.required(&[("capacitor", capacitor.is_none()), ("target", target.is_none()), ("return_pad", return_pad.is_none()), ("net", net.is_none()), ("return_net", return_net.is_none())])?;
+    reader.required(&[
+        ("capacitor", capacitor.is_none()),
+        ("target", target.is_none()),
+        ("return_pad", return_pad.is_none()),
+        ("net", net.is_none()),
+        ("return_net", return_net.is_none()),
+    ])?;
     Ok(DecouplingLink {
         capacitor: capacitor.expect("required"),
         target: target.expect("required"),
@@ -1132,8 +1197,16 @@ fn component_hole_clearance(value: &StateValue) -> Result<ComponentHoleClearance
         "clearance_nm" => clearance = int;
         "reason" => reason = text;
     });
-    reader.required(&[("reference", reference.is_none()), ("clearance_nm", clearance.is_none()), ("reason", reason.is_none())])?;
-    Ok(ComponentHoleClearance { reference: reference.expect("required"), clearance_nm: clearance.expect("required"), reason: reason.expect("required") })
+    reader.required(&[
+        ("reference", reference.is_none()),
+        ("clearance_nm", clearance.is_none()),
+        ("reason", reason.is_none()),
+    ])?;
+    Ok(ComponentHoleClearance {
+        reference: reference.expect("required"),
+        clearance_nm: clearance.expect("required"),
+        reason: reason.expect("required"),
+    })
 }
 
 fn via_in_pad_rule(value: &StateValue) -> Result<PadViaInPadRule> {
@@ -1148,7 +1221,12 @@ fn via_in_pad_rule(value: &StateValue) -> Result<PadViaInPadRule> {
     if process.is_some_and(|p| p != "filled-capped") {
         return not_implemented("a via-in-pad rule with a process other than filled-capped");
     }
-    Ok(PadViaInPadRule { pad: pad.expect("required"), rows: rows.flatten(), columns: columns.flatten(), pitch_nm: pitch.flatten() })
+    Ok(PadViaInPadRule {
+        pad: pad.expect("required"),
+        rows: rows.flatten(),
+        columns: columns.flatten(),
+        pitch_nm: pitch.flatten(),
+    })
 }
 
 fn mechanical_hole(value: &StateValue) -> Result<MechanicalHole> {
@@ -1159,7 +1237,12 @@ fn mechanical_hole(value: &StateValue) -> Result<MechanicalHole> {
         "head_clearance_radius_nm" => head = int;
     });
     reader.required(&[("id", id.is_none()), ("position", position.is_none()), ("diameter_nm", diameter.is_none())])?;
-    Ok(MechanicalHole::new(&id.expect("required"), position.expect("required"), diameter.expect("required"), head.unwrap_or(0))?)
+    Ok(MechanicalHole::new(
+        &id.expect("required"),
+        position.expect("required"),
+        diameter.expect("required"),
+        head.unwrap_or(0),
+    )?)
 }
 
 fn mechanical_slot(value: &StateValue) -> Result<MechanicalSlot> {
@@ -1169,8 +1252,18 @@ fn mechanical_slot(value: &StateValue) -> Result<MechanicalSlot> {
         "end" => end = point;
         "width_nm" => width = int;
     });
-    reader.required(&[("id", id.is_none()), ("start", start.is_none()), ("end", end.is_none()), ("width_nm", width.is_none())])?;
-    Ok(MechanicalSlot::new(&id.expect("required"), start.expect("required"), end.expect("required"), width.expect("required"))?)
+    reader.required(&[
+        ("id", id.is_none()),
+        ("start", start.is_none()),
+        ("end", end.is_none()),
+        ("width_nm", width.is_none()),
+    ])?;
+    Ok(MechanicalSlot::new(
+        &id.expect("required"),
+        start.expect("required"),
+        end.expect("required"),
+        width.expect("required"),
+    )?)
 }
 
 fn board_datum(value: &StateValue) -> Result<BoardDatum> {
@@ -1272,7 +1365,11 @@ fn component_height(value: &StateValue) -> Result<ComponentHeight> {
         "height_nm" => height = int;
     });
     reader.required(&[("id", id.is_none()), ("reference", reference.is_none()), ("height_nm", height.is_none())])?;
-    Ok(ComponentHeight { id: id.expect("required"), reference: reference.expect("required"), height_nm: height.expect("required") })
+    Ok(ComponentHeight {
+        id: id.expect("required"),
+        reference: reference.expect("required"),
+        height_nm: height.expect("required"),
+    })
 }
 
 fn assembly_envelope(value: &StateValue) -> Result<AssemblyEnvelope> {
@@ -1282,8 +1379,18 @@ fn assembly_envelope(value: &StateValue) -> Result<AssemblyEnvelope> {
         "side" => side = board_side;
         "maximum_height_nm" => height = int;
     });
-    reader.required(&[("id", id.is_none()), ("outline", outline.is_none()), ("side", side.is_none()), ("maximum_height_nm", height.is_none())])?;
-    Ok(AssemblyEnvelope { id: id.expect("required"), outline: outline.expect("required"), side: side.expect("required"), maximum_height_nm: height.expect("required") })
+    reader.required(&[
+        ("id", id.is_none()),
+        ("outline", outline.is_none()),
+        ("side", side.is_none()),
+        ("maximum_height_nm", height.is_none()),
+    ])?;
+    Ok(AssemblyEnvelope {
+        id: id.expect("required"),
+        outline: outline.expect("required"),
+        side: side.expect("required"),
+        maximum_height_nm: height.expect("required"),
+    })
 }
 
 fn assembly_access(value: &StateValue) -> Result<AssemblyAccess> {
@@ -1294,7 +1401,13 @@ fn assembly_access(value: &StateValue) -> Result<AssemblyAccess> {
         "side" => side = text;
         "purpose" => purpose = text;
     });
-    reader.required(&[("id", id.is_none()), ("reference", reference.is_none()), ("outline", outline.is_none()), ("side", side.is_none()), ("purpose", purpose.is_none())])?;
+    reader.required(&[
+        ("id", id.is_none()),
+        ("reference", reference.is_none()),
+        ("outline", outline.is_none()),
+        ("side", side.is_none()),
+        ("purpose", purpose.is_none()),
+    ])?;
     Ok(AssemblyAccess {
         id: id.expect("required"),
         reference: reference.expect("required"),
@@ -1353,8 +1466,12 @@ fn silkscreen(value: &StateValue) -> Result<Artwork> {
     }
     let graphic = match graphic {
         FootprintGraphic::Line { start, end, width_nm, .. } => Graphic::Line { start, end, width_nm },
-        FootprintGraphic::Rectangle { start, end, width_nm, filled, .. } => Graphic::Rectangle { start, end, width_nm, filled },
-        FootprintGraphic::Circle { center, end, width_nm, filled, .. } => Graphic::Circle { center, end, width_nm, filled },
+        FootprintGraphic::Rectangle { start, end, width_nm, filled, .. } => {
+            Graphic::Rectangle { start, end, width_nm, filled }
+        }
+        FootprintGraphic::Circle { center, end, width_nm, filled, .. } => {
+            Graphic::Circle { center, end, width_nm, filled }
+        }
         FootprintGraphic::Arc { start, midpoint, end, width_nm, .. } => Graphic::Arc { start, midpoint, end, width_nm },
         FootprintGraphic::Polygon { points, width_nm, filled, .. } => Graphic::Polygon { points, width_nm, filled },
     };
@@ -1375,7 +1492,12 @@ fn rigid_member(value: &StateValue) -> Result<RigidPlacementMember> {
         "position" => position = point;
         "rotation_degrees" => rotation = decimal;
     });
-    reader.required(&[("reference", reference.is_none()), ("footprint", footprint.is_none()), ("footprint_digest", digest.is_none()), ("position", position.is_none())])?;
+    reader.required(&[
+        ("reference", reference.is_none()),
+        ("footprint", footprint.is_none()),
+        ("footprint_digest", digest.is_none()),
+        ("position", position.is_none()),
+    ])?;
     Ok(RigidPlacementMember::new(
         &reference.expect("required"),
         &footprint.expect("required"),
@@ -1405,7 +1527,12 @@ fn rigid_cluster(value: &StateValue) -> Result<RigidPlacementCluster> {
         "internal_clearance_nm" => clearance = |v| optional(v, int);
         "edge_openings" => openings = |v| list(v, edge_opening);
     });
-    reader.required(&[("name", name.is_none()), ("anchor", anchor.is_none()), ("members", members.is_none()), ("source", source.is_none())])?;
+    reader.required(&[
+        ("name", name.is_none()),
+        ("anchor", anchor.is_none()),
+        ("members", members.is_none()),
+        ("source", source.is_none()),
+    ])?;
     let anchor = anchor.expect("required");
     Ok(RigidPlacementCluster {
         name: name.expect("required"),
@@ -1413,7 +1540,8 @@ fn rigid_cluster(value: &StateValue) -> Result<RigidPlacementCluster> {
         anchor_pad: anchor.pad,
         members: members.expect("required"),
         source: source.expect("required"),
-        allowed_rotations: rotations.unwrap_or_else(|| [0, 90, 180, 270].iter().map(|v| Decimal::from_i64(*v)).collect()),
+        allowed_rotations: rotations
+            .unwrap_or_else(|| [0, 90, 180, 270].iter().map(|v| Decimal::from_i64(*v)).collect()),
         keepouts: keepouts.unwrap_or_default(),
         internal_clearance_nm: clearance.flatten(),
         edge_openings: openings.unwrap_or_default(),
@@ -1429,12 +1557,23 @@ fn macro_port(value: &StateValue) -> Result<MacroPort> {
         "layer" => layer = copper_layer;
         "pads" => pads = |v| list(v, pad_reference);
     });
-    reader.required(&[("name", name.is_none()), ("net", net.is_none()), ("position", position.is_none()), ("layer", layer.is_none())])?;
+    reader.required(&[
+        ("name", name.is_none()),
+        ("net", net.is_none()),
+        ("position", position.is_none()),
+        ("layer", layer.is_none()),
+    ])?;
     let (name, net) = (name.expect("required"), net.expect("required"));
     if name.is_empty() || net.is_empty() {
         return fail("macro port requires a name and net");
     }
-    Ok(MacroPort { name, net, position: position.expect("required"), layer: layer.expect("required"), pads: pads.unwrap_or_default() })
+    Ok(MacroPort {
+        name,
+        net,
+        position: position.expect("required"),
+        layer: layer.expect("required"),
+        pads: pads.unwrap_or_default(),
+    })
 }
 
 fn pad_binding(value: &StateValue) -> Result<(PadReference, String)> {
@@ -1457,7 +1596,12 @@ fn plane_return(value: &StateValue) -> Result<MacroPlaneReturn> {
         });
     });
     reader.required(&[("net", net.is_none()), ("layers", layers.is_none()), ("pads", pads.is_none())])?;
-    Ok(MacroPlaneReturn { net: net.expect("required"), layers: layers.expect("required"), pads: pads.expect("required"), dedicated_contacts: contacts.unwrap_or_default() })
+    Ok(MacroPlaneReturn {
+        net: net.expect("required"),
+        layers: layers.expect("required"),
+        pads: pads.expect("required"),
+        dedicated_contacts: contacts.unwrap_or_default(),
+    })
 }
 
 fn width_contract(value: &StateValue) -> Result<MacroTrackWidthContract> {
@@ -1467,12 +1611,22 @@ fn width_contract(value: &StateValue) -> Result<MacroTrackWidthContract> {
         "purpose" => purpose = text;
         "evidence" => evidence = text;
     });
-    reader.required(&[("track_index", index.is_none()), ("minimum_width_nm", width.is_none()), ("purpose", purpose.is_none()), ("evidence", evidence.is_none())])?;
+    reader.required(&[
+        ("track_index", index.is_none()),
+        ("minimum_width_nm", width.is_none()),
+        ("purpose", purpose.is_none()),
+        ("evidence", evidence.is_none()),
+    ])?;
     let index = index.expect("required");
     if index < 0 {
         return fail("macro width contract track index is out of range");
     }
-    Ok(MacroTrackWidthContract { track_index: index as usize, minimum_width_nm: width.expect("required"), purpose: purpose.expect("required"), evidence: evidence.expect("required") })
+    Ok(MacroTrackWidthContract {
+        track_index: index as usize,
+        minimum_width_nm: width.expect("required"),
+        purpose: purpose.expect("required"),
+        evidence: evidence.expect("required"),
+    })
 }
 
 fn hard_macro(value: &StateValue) -> Result<PhysicalHardMacro> {
@@ -1491,7 +1645,11 @@ fn hard_macro(value: &StateValue) -> Result<PhysicalHardMacro> {
         "polygons" => polygons = |v| list(v, copper_polygon);
         "width_contracts" => contracts = |v| list(v, width_contract);
     });
-    reader.required(&[("cluster", cluster.is_none()), ("asset_sha256", asset.is_none()), ("tracks", tracks.is_none())])?;
+    reader.required(&[
+        ("cluster", cluster.is_none()),
+        ("asset_sha256", asset.is_none()),
+        ("tracks", tracks.is_none()),
+    ])?;
     let item = PhysicalHardMacro {
         cluster: cluster.expect("required"),
         asset_sha256: asset.expect("required"),
@@ -1521,11 +1679,11 @@ pub fn physical_board(value: &StateValue) -> Result<PhysicalBoard> {
             StateValue::Map { entries, .. } => {
                 let mut map = IndexMap::new();
                 for (key, item) in entries {
-                    map.insert(text(&key)?, physical_footprint(&item)?);
+                    map.insert(text(key)?, physical_footprint(item)?);
                 }
                 Ok(map)
             }
-            other => dynamic("a footprint mapping", &other),
+            other => dynamic("a footprint mapping", other),
         };
         "placements" => placements = |v| list(v, placement);
         "nets" => nets = |v| list(v, physical_net);
@@ -1653,15 +1811,29 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
     unique_ids("assembly_envelopes", board.assembly_envelopes.iter().map(|d| d.id.as_str()).collect())?;
     unique_ids("assembly_access", board.assembly_access.iter().map(|d| d.id.as_str()).collect())?;
     unique_ids("mechanical_slots", board.mechanical_slots.iter().map(|d| d.id.as_str()).collect())?;
-    copper_physical::mechanical::validate_mechanical_holes(&board.outline, &board.mechanical_holes, &board.mechanical_slots, &board.rules)?;
+    copper_physical::mechanical::validate_mechanical_holes(
+        &board.outline,
+        &board.mechanical_holes,
+        &board.mechanical_slots,
+        &board.rules,
+    )?;
     let references: Vec<&str> = board.placements.iter().map(|p| p.reference.as_str()).collect();
     if references.iter().collect::<IndexSet<_>>().len() != references.len() {
         return fail("physical placement references must be unique");
     }
-    if !board.datums.is_empty() || !board.boundary_edges.is_empty() || !board.attachments.is_empty() || !board.body_overhangs.is_empty() {
+    if !board.datums.is_empty()
+        || !board.boundary_edges.is_empty()
+        || !board.attachments.is_empty()
+        || !board.body_overhangs.is_empty()
+    {
         return not_implemented("a board with datums, named edges, attachments or body overhangs");
     }
-    for feature in board.component_heights.iter().map(|f| f.reference.as_str()).chain(board.assembly_access.iter().map(|f| f.reference.as_str())) {
+    for feature in board
+        .component_heights
+        .iter()
+        .map(|f| f.reference.as_str())
+        .chain(board.assembly_access.iter().map(|f| f.reference.as_str()))
+    {
         if !references.contains(&feature) {
             return fail("component_heights requires unique known component owners");
         }
@@ -1684,7 +1856,11 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
     let layers = &board.stackup.copper_layers;
     for zone in &board.zones {
         if !net_names.contains(&zone.net.as_str()) {
-            return fail(format!("copper zone {} references unknown net {}", python_str_repr(&zone.id), python_str_repr(&zone.net)));
+            return fail(format!(
+                "copper zone {} references unknown net {}",
+                python_str_repr(&zone.id),
+                python_str_repr(&zone.net)
+            ));
         }
         if !zone.layers.iter().all(|l| layers.contains(l)) {
             return fail(format!("copper zone {} references a layer outside the stackup", python_str_repr(&zone.id)));
@@ -1698,7 +1874,10 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
     copper_pcb::zones::validate_routing_reservations(&board.zones)?;
     for keepout in &board.copper_keepouts {
         if !keepout.layers.iter().all(|l| layers.contains(l)) {
-            return fail(format!("copper keepout {} references a layer outside the stackup", python_str_repr(&keepout.id)));
+            return fail(format!(
+                "copper keepout {} references a layer outside the stackup",
+                python_str_repr(&keepout.id)
+            ));
         }
     }
     let mut pads_by_component: IndexMap<&str, IndexMap<&str, &FootprintPad>> = IndexMap::new();
@@ -1716,13 +1895,25 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
     for net in &board.nets {
         for pad in &net.pads {
             let Some(pads) = pads_by_component.get(pad.component.as_str()) else {
-                return fail(format!("net {} references unknown placement {}", python_str_repr(&net.name), python_str_repr(&pad.component)));
+                return fail(format!(
+                    "net {} references unknown placement {}",
+                    python_str_repr(&net.name),
+                    python_str_repr(&pad.component)
+                ));
             };
             let Some(physical) = pads.get(pad.pad.as_str()) else {
-                return fail(format!("net {} references unknown pad {}.{}", python_str_repr(&net.name), pad.component, pad.pad));
+                return fail(format!(
+                    "net {} references unknown pad {}.{}",
+                    python_str_repr(&net.name),
+                    pad.component,
+                    pad.pad
+                ));
             };
             if matches!(physical.kind, PadKind::NonPlatedThroughHole | PadKind::Aperture) {
-                return fail(format!("non-electrical pad {}.{} cannot belong to an electrical net", pad.component, pad.pad));
+                return fail(format!(
+                    "non-electrical pad {}.{} cannot belong to an electrical net",
+                    pad.component, pad.pad
+                ));
             }
             if let Some(previous) = assigned.get(pad) {
                 return fail(format!(
@@ -1746,8 +1937,11 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
     }
     for placement in &board.placements {
         for group in &board.footprints[&placement.footprint].internal_pad_groups {
-            let nets: IndexSet<Option<&str>> =
-                group.numbers.iter().map(|n| assigned.get(&PadReference::new(&placement.reference, n)).copied()).collect();
+            let nets: IndexSet<Option<&str>> = group
+                .numbers
+                .iter()
+                .map(|n| assigned.get(&PadReference::new(&placement.reference, n)).copied())
+                .collect();
             let known = nets.iter().filter(|n| n.is_some()).count();
             if known > 1 {
                 return fail("internally connected pads belong to different nets");
@@ -1768,7 +1962,8 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
             return fail(format!("track uses unavailable layer {}", python_str_repr(track.layer.value())));
         }
     }
-    let technologies: IndexMap<&str, &ViaTechnology> = board.stackup.via_technologies.iter().map(|t| (t.id.as_str(), t)).collect();
+    let technologies: IndexMap<&str, &ViaTechnology> =
+        board.stackup.via_technologies.iter().map(|t| (t.id.as_str(), t)).collect();
     for via in &board.vias {
         if !net_names.contains(&via.net.as_str()) {
             return fail(format!("via references unknown net {}", python_str_repr(&via.net)));
@@ -1829,7 +2024,13 @@ fn pin_access(value: &StateValue) -> Result<PinAccess> {
         "region_only" => region = boolean;
         "retained_via" => retained = |v| optional(v, via);
     });
-    reader.required(&[("pad", pad.is_none()), ("pad_position", pad_position.is_none()), ("node", node.is_none()), ("access_position", access.is_none()), ("layer", layer.is_none())])?;
+    reader.required(&[
+        ("pad", pad.is_none()),
+        ("pad_position", pad_position.is_none()),
+        ("node", node.is_none()),
+        ("access_position", access.is_none()),
+        ("layer", layer.is_none()),
+    ])?;
     Ok(PinAccess {
         pad: pad.expect("required"),
         pad_position: pad_position.expect("required"),
@@ -1852,7 +2053,14 @@ fn route_segment(value: &StateValue) -> Result<GlobalRouteSegment> {
         "guide_half_width_nm" => half = int;
         "resource_id" => resource = text;
     });
-    reader.required(&[("net", net.is_none()), ("layer", layer.is_none()), ("start", start.is_none()), ("end", end.is_none()), ("guide_half_width_nm", half.is_none()), ("resource_id", resource.is_none())])?;
+    reader.required(&[
+        ("net", net.is_none()),
+        ("layer", layer.is_none()),
+        ("start", start.is_none()),
+        ("end", end.is_none()),
+        ("guide_half_width_nm", half.is_none()),
+        ("resource_id", resource.is_none()),
+    ])?;
     Ok(GlobalRouteSegment {
         net: net.expect("required"),
         layer: layer.expect("required"),
@@ -1871,7 +2079,13 @@ fn via_proposal(value: &StateValue) -> Result<GlobalViaProposal> {
         "to_layer" => to = copper_layer;
         "resource_id" => resource = text;
     });
-    reader.required(&[("net", net.is_none()), ("position", position.is_none()), ("from_layer", from.is_none()), ("to_layer", to.is_none()), ("resource_id", resource.is_none())])?;
+    reader.required(&[
+        ("net", net.is_none()),
+        ("position", position.is_none()),
+        ("from_layer", from.is_none()),
+        ("to_layer", to.is_none()),
+        ("resource_id", resource.is_none()),
+    ])?;
     Ok(GlobalViaProposal {
         net: net.expect("required"),
         position: position.expect("required"),
@@ -1892,7 +2106,14 @@ fn net_route(value: &StateValue) -> Result<GlobalNetRoute> {
         "diagnostics" => diagnostics = |v| list(v, text);
         "deferred_to_zone" => deferred = boolean;
     });
-    reader.required(&[("net", net.is_none()), ("connected", connected.is_none()), ("accesses", accesses.is_none()), ("segments", segments.is_none()), ("vias", vias.is_none()), ("length_nm", length.is_none())])?;
+    reader.required(&[
+        ("net", net.is_none()),
+        ("connected", connected.is_none()),
+        ("accesses", accesses.is_none()),
+        ("segments", segments.is_none()),
+        ("vias", vias.is_none()),
+        ("length_nm", length.is_none()),
+    ])?;
     Ok(GlobalNetRoute {
         net: net.expect("required"),
         connected: connected.expect("required"),
@@ -2019,8 +2240,18 @@ fn bounds(value: &StateValue) -> Result<Bounds> {
         "max_x" => max_x = int;
         "max_y" => max_y = int;
     });
-    reader.required(&[("min_x", min_x.is_none()), ("min_y", min_y.is_none()), ("max_x", max_x.is_none()), ("max_y", max_y.is_none())])?;
-    Ok(Bounds { min_x: min_x.expect("required"), min_y: min_y.expect("required"), max_x: max_x.expect("required"), max_y: max_y.expect("required") })
+    reader.required(&[
+        ("min_x", min_x.is_none()),
+        ("min_y", min_y.is_none()),
+        ("max_x", max_x.is_none()),
+        ("max_y", max_y.is_none()),
+    ])?;
+    Ok(Bounds {
+        min_x: min_x.expect("required"),
+        min_y: min_y.expect("required"),
+        max_x: max_x.expect("required"),
+        max_y: max_y.expect("required"),
+    })
 }
 
 fn layer_bias(value: &StateValue) -> Result<LayerBias> {
@@ -2030,8 +2261,18 @@ fn layer_bias(value: &StateValue) -> Result<LayerBias> {
         "area" => area = bounds;
         "rate" => rate = int;
     });
-    reader.required(&[("net", net.is_none()), ("layer", layer.is_none()), ("area", area.is_none()), ("rate", rate.is_none())])?;
-    Ok(LayerBias { net: net.expect("required"), layer: layer.expect("required"), area: area.expect("required"), rate: rate.expect("required") })
+    reader.required(&[
+        ("net", net.is_none()),
+        ("layer", layer.is_none()),
+        ("area", area.is_none()),
+        ("rate", rate.is_none()),
+    ])?;
+    Ok(LayerBias {
+        net: net.expect("required"),
+        layer: layer.expect("required"),
+        area: area.expect("required"),
+        rate: rate.expect("required"),
+    })
 }
 
 fn fine_region_options(value: &StateValue) -> Result<FineRegionOptions> {
@@ -2194,7 +2435,8 @@ pub fn unified_router_options(value: &StateValue) -> Result<UnifiedRouterOptions
         time_budget_s: time_budget_s.flatten(),
         grid_window_nm: grid_window_nm.flatten(),
         critical_pair_state_limit: critical_pair_state_limit.flatten(),
-        critical_pair_state_escalation: critical_pair_state_escalation.unwrap_or(defaults.critical_pair_state_escalation),
+        critical_pair_state_escalation: critical_pair_state_escalation
+            .unwrap_or(defaults.critical_pair_state_escalation),
         power_islands: power_islands.flatten(),
         power_islands_ball_grid_only: power_islands_ball_grid_only.unwrap_or(defaults.power_islands_ball_grid_only),
         plane_fill_width: plane_fill_width.unwrap_or(defaults.plane_fill_width),
@@ -2244,8 +2486,19 @@ fn routing_access(value: &StateValue) -> Result<RoutingAccess> {
         "launch_position" => launch = point;
         "path" => path = |v| list(v, track_segment);
     });
-    reader.required(&[("position", position.is_none()), ("layer", layer.is_none()), ("launch_position", launch.is_none()), ("path", path.is_none())])?;
-    RoutingAccess::new(position.expect("required"), layer.expect("required"), launch.expect("required"), path.expect("required")).map_err(Error::from)
+    reader.required(&[
+        ("position", position.is_none()),
+        ("layer", layer.is_none()),
+        ("launch_position", launch.is_none()),
+        ("path", path.is_none()),
+    ])?;
+    RoutingAccess::new(
+        position.expect("required"),
+        layer.expect("required"),
+        launch.expect("required"),
+        path.expect("required"),
+    )
+    .map_err(Error::from)
 }
 
 /// A `dict[PadReference, RoutingAccess]`.
@@ -2432,7 +2685,12 @@ fn e_outline(outline: &BoardOutline) -> StateValue {
                                     ),
                                     BoundarySegment::Arc { id, start, mid, end } => dc(
                                         "pcbir.physical:BoundaryArc",
-                                        vec![("id", s(id)), ("start", e_point(start)), ("mid", e_point(mid)), ("end", e_point(end))],
+                                        vec![
+                                            ("id", s(id)),
+                                            ("start", e_point(start)),
+                                            ("mid", e_point(mid)),
+                                            ("end", e_point(end)),
+                                        ],
                                     ),
                                 }),
                             ),
@@ -2469,7 +2727,12 @@ fn e_graphic(graphic: &FootprintGraphic) -> StateValue {
     match graphic {
         FootprintGraphic::Line { start, end, width_nm, layer } => dc(
             "pcbir.physical:FootprintLine",
-            vec![("start", e_point(start)), ("end", e_point(end)), ("width_nm", i(*width_nm)), ("layer", e_footprint_layer(*layer))],
+            vec![
+                ("start", e_point(start)),
+                ("end", e_point(end)),
+                ("width_nm", i(*width_nm)),
+                ("layer", e_footprint_layer(*layer)),
+            ],
         ),
         FootprintGraphic::Rectangle { start, end, width_nm, layer, filled } => dc(
             "pcbir.physical:FootprintRectangle",
@@ -2538,7 +2801,10 @@ fn e_footprint(footprint: &PhysicalFootprint) -> StateValue {
                             ("roundrect_ratio_ppm", i(pad.roundrect_ratio_ppm)),
                             ("has_solder_mask", b(pad.has_solder_mask)),
                             ("has_solder_paste", b(pad.has_solder_paste)),
-                            ("zone_connection", opt(&pad.zone_connection, |c| en("pcbir.physical:ZoneConnection", c.value()))),
+                            (
+                                "zone_connection",
+                                opt(&pad.zone_connection, |c| en("pcbir.physical:ZoneConnection", c.value())),
+                            ),
                             ("heatsink", b(pad.heatsink)),
                             ("remove_unused_layers", b(pad.remove_unused_layers)),
                             ("connector_contact", b(pad.connector_contact)),
@@ -2611,7 +2877,11 @@ fn e_zone(zone: &CopperZone) -> StateValue {
                 "thermal",
                 dc(
                     "pcbir.physical:ThermalReliefSettings",
-                    vec![("gap_nm", i(zone.thermal_gap_nm)), ("spoke_width_nm", i(zone.thermal_spoke_width_nm)), ("spoke_count", i(4))],
+                    vec![
+                        ("gap_nm", i(zone.thermal_gap_nm)),
+                        ("spoke_width_nm", i(zone.thermal_spoke_width_nm)),
+                        ("spoke_count", i(4)),
+                    ],
                 ),
             ),
             ("island_policy", en("pcbir.physical:IslandPolicy", zone.island_policy.value())),
@@ -2626,7 +2896,12 @@ fn e_zone(zone: &CopperZone) -> StateValue {
 fn e_polygon_copper(polygon: &CopperPolygon) -> StateValue {
     dc(
         "pcbir.physical:CopperPolygon",
-        vec![("id", s(&polygon.id)), ("net", s(&polygon.net)), ("layer", e_layer(&polygon.layer)), ("outline", e_ring(&polygon.vertices))],
+        vec![
+            ("id", s(&polygon.id)),
+            ("net", s(&polygon.net)),
+            ("layer", e_layer(&polygon.layer)),
+            ("outline", e_ring(&polygon.vertices)),
+        ],
     )
 }
 
@@ -2678,27 +2953,35 @@ fn e_rule(rule: &NetRoutingRule) -> StateValue {
 fn e_artwork(artwork: &Artwork) -> StateValue {
     let material = |m: &ArtworkMaterial| en("pcbir.silkscreen:ArtworkMaterial", m.value());
     match artwork {
-        Artwork::Text { id, text, position, size_nm, thickness_nm, rotation_degrees, side, material: m, exposed } => dc(
-            "pcbir.silkscreen:SilkscreenText",
-            vec![
-                ("id", s(id)),
-                ("text", s(text)),
-                ("position", e_point(position)),
-                ("size_nm", i(*size_nm)),
-                ("thickness_nm", i(*thickness_nm)),
-                ("rotation_degrees", dec(rotation_degrees)),
-                ("side", e_side(side)),
-                ("material", material(m)),
-                ("exposed", b(*exposed)),
-            ],
-        ),
+        Artwork::Text { id, text, position, size_nm, thickness_nm, rotation_degrees, side, material: m, exposed } => {
+            dc(
+                "pcbir.silkscreen:SilkscreenText",
+                vec![
+                    ("id", s(id)),
+                    ("text", s(text)),
+                    ("position", e_point(position)),
+                    ("size_nm", i(*size_nm)),
+                    ("thickness_nm", i(*thickness_nm)),
+                    ("rotation_degrees", dec(rotation_degrees)),
+                    ("side", e_side(side)),
+                    ("material", material(m)),
+                    ("exposed", b(*exposed)),
+                ],
+            )
+        }
         Artwork::Graphic { id, graphic, side, material: m, exposed } => {
             let layer = FootprintLayer::Silkscreen;
             let graphic = match graphic {
-                Graphic::Line { start, end, width_nm } => FootprintGraphic::Line { start: *start, end: *end, width_nm: *width_nm, layer },
-                Graphic::Rectangle { start, end, width_nm, filled } => {
-                    FootprintGraphic::Rectangle { start: *start, end: *end, width_nm: *width_nm, layer, filled: *filled }
+                Graphic::Line { start, end, width_nm } => {
+                    FootprintGraphic::Line { start: *start, end: *end, width_nm: *width_nm, layer }
                 }
+                Graphic::Rectangle { start, end, width_nm, filled } => FootprintGraphic::Rectangle {
+                    start: *start,
+                    end: *end,
+                    width_nm: *width_nm,
+                    layer,
+                    filled: *filled,
+                },
                 Graphic::Circle { center, end, width_nm, filled } => {
                     FootprintGraphic::Circle { center: *center, end: *end, width_nm: *width_nm, layer, filled: *filled }
                 }
@@ -2711,7 +2994,13 @@ fn e_artwork(artwork: &Artwork) -> StateValue {
             };
             dc(
                 "pcbir.silkscreen:SilkscreenGraphic",
-                vec![("id", s(id)), ("graphic", e_graphic(&graphic)), ("side", e_side(side)), ("material", material(m)), ("exposed", b(*exposed))],
+                vec![
+                    ("id", s(id)),
+                    ("graphic", e_graphic(&graphic)),
+                    ("side", e_side(side)),
+                    ("material", material(m)),
+                    ("exposed", b(*exposed)),
+                ],
             )
         }
     }
@@ -2751,7 +3040,10 @@ pub fn encode_board(board: &PhysicalBoard) -> StateValue {
             (
                 "nets",
                 tuple(&board.nets, |n| {
-                    dc("pcbir.physical:PhysicalNet", vec![("name", s(&n.name)), ("pads", tuple(&n.pads, e_pad_reference))])
+                    dc(
+                        "pcbir.physical:PhysicalNet",
+                        vec![("name", s(&n.name)), ("pads", tuple(&n.pads, e_pad_reference))],
+                    )
                 }),
             ),
             (
@@ -2926,7 +3218,10 @@ pub fn encode_board(board: &PhysicalBoard) -> StateValue {
                             ("name", s(&c.name)),
                             (
                                 "anchor",
-                                e_target(&PlacementTarget { reference: c.anchor_reference.clone(), pad: c.anchor_pad.clone() }),
+                                e_target(&PlacementTarget {
+                                    reference: c.anchor_reference.clone(),
+                                    pad: c.anchor_pad.clone(),
+                                }),
                             ),
                             (
                                 "members",
@@ -2952,7 +3247,10 @@ pub fn encode_board(board: &PhysicalBoard) -> StateValue {
                                 tuple(&c.edge_openings, |o| {
                                     dc(
                                         "pcbir.physical:MacroEdgeOpening",
-                                        vec![("keepout", s(&o.keepout)), ("edge_indices", tuple(&o.edge_indices, |x| i(*x)))],
+                                        vec![
+                                            ("keepout", s(&o.keepout)),
+                                            ("edge_indices", tuple(&o.edge_indices, |x| i(*x))),
+                                        ],
                                     )
                                 }),
                             ),
@@ -2990,7 +3288,10 @@ pub fn encode_board(board: &PhysicalBoard) -> StateValue {
                             (
                                 "pad_bindings",
                                 tuple(&m.pad_bindings, |(pad, net)| {
-                                    dc("pcbir.physical:MacroPadBinding", vec![("pad", e_pad_reference(pad)), ("net", s(net))])
+                                    dc(
+                                        "pcbir.physical:MacroPadBinding",
+                                        vec![("pad", e_pad_reference(pad)), ("net", s(net))],
+                                    )
                                 }),
                             ),
                             ("isolated_pads", tuple(&m.isolated_pads, e_pad_reference)),
@@ -3080,7 +3381,10 @@ pub fn encode_board(board: &PhysicalBoard) -> StateValue {
             (
                 "boundary_edges",
                 tuple(&board.boundary_edges, |e| {
-                    dc("pcbir.physical:BoardEdge", vec![("id", s(&e.id)), ("start", e_point(&e.start)), ("end", e_point(&e.end))])
+                    dc(
+                        "pcbir.physical:BoardEdge",
+                        vec![("id", s(&e.id)), ("start", e_point(&e.start)), ("end", e_point(&e.end))],
+                    )
                 }),
             ),
             (
@@ -3186,7 +3490,11 @@ pub fn encode_board(board: &PhysicalBoard) -> StateValue {
                 tuple(&board.component_hole_clearances, |c| {
                     dc(
                         "pcbir.physical:ComponentHoleClearance",
-                        vec![("reference", s(&c.reference)), ("clearance_nm", i(c.clearance_nm)), ("reason", s(&c.reason))],
+                        vec![
+                            ("reference", s(&c.reference)),
+                            ("clearance_nm", i(c.clearance_nm)),
+                            ("reason", s(&c.reason)),
+                        ],
                     )
                 }),
             ),

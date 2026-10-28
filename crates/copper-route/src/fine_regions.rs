@@ -13,7 +13,7 @@ use indexmap::IndexMap;
 use num_integer::Integer;
 
 use copper_json::{Object, Value};
-use copper_pcb::board::{Placement, PhysicalBoard};
+use copper_pcb::board::{PhysicalBoard, Placement};
 use copper_pcb::transform::transformed_local_point;
 use copper_physical::footprint::{FootprintPad, PadKind, PadShape, PhysicalFootprint};
 use copper_physical::pyfloat::{round_digits, round_int};
@@ -167,11 +167,7 @@ impl FineRegionPlan {
     pub fn report(&self) -> Object {
         let total = self.total_nodes();
         let int = |value: i64| Value::Int(value.into());
-        let ratio = if total != 0 {
-            round_digits(self.uniform_nodes_at_finest as f64 / total as f64, 3)
-        } else {
-            0.0
-        };
+        let ratio = if total != 0 { round_digits(self.uniform_nodes_at_finest as f64 / total as f64, 3) } else { 0.0 };
         let patches = self
             .patches
             .iter()
@@ -181,7 +177,10 @@ impl FineRegionPlan {
                     Some(layers) => Value::Array(layers.iter().map(|l| Value::from(l.value())).collect()),
                 };
                 Value::Object(Object::from([
-                    ("references".to_owned(), Value::Array(p.references.iter().map(|r| Value::from(r.as_str())).collect())),
+                    (
+                        "references".to_owned(),
+                        Value::Array(p.references.iter().map(|r| Value::from(r.as_str())).collect()),
+                    ),
                     ("reason".to_owned(), Value::from(p.reason.as_str())),
                     ("factor".to_owned(), int(p.factor)),
                     ("pitch_mm".to_owned(), Value::Float(mm(p.pitch_nm(self.base_pitch_nm)))),
@@ -324,10 +323,8 @@ fn pad_extent(pose: &Placement, pad: &FootprintPad) -> (i64, i64, i64, i64) {
     let mut xs = Vec::new();
     let mut ys = Vec::new();
     for (ox, oy) in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)] {
-        let local = Point::new(
-            pad.position.x_nm + round_int(ox * c - oy * s),
-            pad.position.y_nm + round_int(ox * s + oy * c),
-        );
+        let local =
+            Point::new(pad.position.x_nm + round_int(ox * c - oy * s), pad.position.y_nm + round_int(ox * s + oy * c));
         let point = transformed_local_point(pose, local);
         xs.push(point.x_nm);
         ys.push(point.y_nm);
@@ -392,8 +389,7 @@ fn package_need(
     let footprint = &board.footprints[&pose.footprint];
     let array = circular_array(board, &pose.reference).ok().flatten();
     let (spacing, aligned, kind): (i64, Box<dyn Fn(i64) -> bool>, String) = if let Some(array) = &array {
-        let kind =
-            format!("{}x{} ball array at {}", array.xs_nm.len(), array.ys_nm.len(), mm_text(array.pitch_nm));
+        let kind = format!("{}x{} ball array at {}", array.xs_nm.len(), array.ys_nm.len(), mm_text(array.pitch_nm));
         (array.pitch_nm, Box::new(array_alignment(array, pose)), kind)
     } else {
         let key = (pose.footprint.clone(), options.pad_pitch_threshold_nm);
@@ -404,11 +400,8 @@ fn package_need(
         let Some(local) = local.filter(|local| local.pin_count >= options.minimum_pads) else {
             return (None, None);
         };
-        let points: IndexMap<usize, Point> = local
-            .dense_pads
-            .iter()
-            .map(|&i| (i, transformed_local_point(pose, footprint.pads[i].position)))
-            .collect();
+        let points: IndexMap<usize, Point> =
+            local.dense_pads.iter().map(|&i| (i, transformed_local_point(pose, footprint.pads[i].position))).collect();
         let kind = format!("{} pins at {}", local.pin_count, mm_text(local.spacing_nm));
         let pairs = local.pairs.clone();
         (local.spacing_nm, Box::new(move |fine| dense_aligned(&points, &pairs, fine)), kind)
@@ -438,7 +431,8 @@ fn package_need(
         box_,
     });
     if need.is_none() {
-        let k = factors.iter().copied().find(|k| 2 * base.div_euclid(*k) <= spacing).unwrap_or(*factors.last().unwrap());
+        let k =
+            factors.iter().copied().find(|k| 2 * base.div_euclid(*k) <= spacing).unwrap_or(*factors.last().unwrap());
         let reason = if 2 * base.div_euclid(k) <= spacing {
             format!(
                 "{kind}: no exact k up to {}; fallback k={k}, pitch {} at most half the spacing",
@@ -531,8 +525,11 @@ fn group_factor(needs: &[(Need, Rect)], base: i64, maximum: i64) -> (i64, String
         return (lcm, String::new());
     }
     let k = *factors.last().expect("factors");
-    let mut lost: Vec<&str> =
-        needs.iter().filter(|(need, _)| k.rem_euclid(need.factor) != 0).map(|(need, _)| need.reference.as_str()).collect();
+    let mut lost: Vec<&str> = needs
+        .iter()
+        .filter(|(need, _)| k.rem_euclid(need.factor) != 0)
+        .map(|(need, _)| need.reference.as_str())
+        .collect();
     lost.sort_unstable();
     (
         k,
@@ -610,11 +607,8 @@ pub fn plan_fine_regions(
         let mut reasons =
             ordered.iter().map(|need| format!("{}: {}", need.reference, need.reason)).collect::<Vec<_>>().join("; ");
         if group.needs.len() > 1 {
-            reasons = format!(
-                "merged {} packages within {}; {reasons}",
-                group.needs.len(),
-                mm_text(options.merge_gap_nm)
-            );
+            reasons =
+                format!("merged {} packages within {}; {reasons}", group.needs.len(), mm_text(options.merge_gap_nm));
         }
         patches.push(FinePatch {
             x0_nm: x0,

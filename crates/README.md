@@ -17,6 +17,7 @@ changes its behaviour.
 | `copper-report` | Run diagnostics and reports: diagnostic explanations, a run's issues grouped by cause, board window views (scene reader, legend and SVG) and engineering summaries (M5) |
 | `copper-assembly` | Assembly locks and checks, BOM/CPL and hand-assembly/ordering CSVs, and native KiCad manufacturing files (`zipfile`-exact archives with a zlib-exact DEFLATE) (M3) |
 | `copper-place` | The placement planner behind `plan-layout`: seeds, legalization, rigid clusters, refinement, escape spacing, candidate selection, requirement verification and the engineering summary (M3) |
+| `copper-route` | Routing (M4): exact clearance index, global router and layer assignment (`rust-m4-global`); the unified detailed router's options, fine-region planning, typed `--unified-save-inputs` state codec and `replay-unified` (`rust-m4-unified`, routing pending) |
 | `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` (M0); `check`, `compile`, `query`, `power-check`, `audit-footprints`, `lock`, `compile-macro`, `library` (M1); `check-footprint`, `export-kicad`, `export-kicad-pcb` (M2); `plan-layout`, `assembly`, `si-check`, `export-manufacturing` (M3); `explain`, `issues`, `view`, `summarize` (M5); `lsp` (M6) |
 
 ## Build and test
