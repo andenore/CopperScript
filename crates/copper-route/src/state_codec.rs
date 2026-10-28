@@ -3033,6 +3033,41 @@ fn e_artwork(artwork: &Artwork) -> StateValue {
     }
 }
 
+fn e_mechanical_reference(reference: &copper_lang::mechanical::MechanicalReference) -> StateValue {
+    dc(
+        "pcbir.mechanical_references:MechanicalReference",
+        vec![
+            ("id", s(&reference.id)),
+            ("file", s(&reference.file)),
+            ("sha256", s(&reference.sha256)),
+            ("units", s(&reference.units)),
+            ("frame", s(&reference.frame)),
+            ("position", e_point(&reference.position)),
+            ("rotation_degrees", dec(&reference.rotation_degrees)),
+            ("mirror_x", b(reference.mirror_x)),
+            ("side", s(&reference.side)),
+            ("purpose", s(&reference.purpose)),
+            (
+                "entities",
+                tuple(&reference.entities, |entity| {
+                    dc(
+                        "pcbir.mechanical_references:ReferenceEntity",
+                        vec![
+                            ("kind", s(entity.kind)),
+                            ("points", tuple(&entity.points, e_point)),
+                            ("radius_nm", i(entity.radius_nm)),
+                            ("start_degrees", dec(&entity.start_degrees)),
+                            ("sweep_degrees", dec(&entity.sweep_degrees)),
+                            ("closed", b(entity.closed)),
+                        ],
+                    )
+                }),
+            ),
+            ("asset_path", s(&reference.asset_path)),
+        ],
+    )
+}
+
 /// `encode(board)`: the `PhysicalBoard` dataclass.
 pub fn encode_board(board: &PhysicalBoard) -> StateValue {
     dc(
@@ -3502,7 +3537,7 @@ pub fn encode_board(board: &PhysicalBoard) -> StateValue {
                     )
                 }),
             ),
-            ("mechanical_references", StateValue::Tuple(Vec::new())),
+            ("mechanical_references", tuple(&board.mechanical_references, e_mechanical_reference)),
             (
                 "match_groups",
                 tuple(&board.match_groups, |g| {
@@ -3666,3 +3701,289 @@ pub fn status_value(status: DetailedRoutingStatus) -> &'static str {
 
 #[allow(dead_code)]
 fn unused(_: &DetailedNetResult, _: &DetailedRoutingMetrics) {}
+
+// ---------------------------------------------------------------------------
+// Writing the router's inputs (`save_inputs_path`)
+
+fn f(value: f64) -> StateValue {
+    StateValue::Float(value)
+}
+
+fn e_grid_node(node: &GridNode) -> StateValue {
+    dc(
+        "pcbir.routing:GridNode",
+        vec![("layer_index", i(node.layer_index)), ("x_index", i(node.x_index)), ("y_index", i(node.y_index))],
+    )
+}
+
+fn e_pin_access(access: &PinAccess) -> StateValue {
+    dc(
+        "pcbir.routing:PinAccess",
+        vec![
+            ("pad", e_pad_reference(&access.pad)),
+            ("pad_position", e_point(&access.pad_position)),
+            ("node", e_grid_node(&access.node)),
+            ("access_position", e_point(&access.access_position)),
+            ("layer", e_layer(&access.layer)),
+            ("tracks", tuple(&access.tracks, e_track)),
+            ("via", opt(&access.via, e_via)),
+            ("region_only", b(access.region_only)),
+            ("retained_via", opt(&access.retained_via, e_via)),
+        ],
+    )
+}
+
+fn e_net_route(route: &GlobalNetRoute) -> StateValue {
+    dc(
+        "pcbir.routing:GlobalNetRoute",
+        vec![
+            ("net", s(&route.net)),
+            ("connected", b(route.connected)),
+            ("accesses", tuple(&route.accesses, e_pin_access)),
+            (
+                "segments",
+                tuple(&route.segments, |segment| {
+                    dc(
+                        "pcbir.routing:GlobalRouteSegment",
+                        vec![
+                            ("net", s(&segment.net)),
+                            ("layer", e_layer(&segment.layer)),
+                            ("start", e_point(&segment.start)),
+                            ("end", e_point(&segment.end)),
+                            ("guide_half_width_nm", i(segment.guide_half_width_nm)),
+                            ("resource_id", s(&segment.resource_id)),
+                        ],
+                    )
+                }),
+            ),
+            (
+                "vias",
+                tuple(&route.vias, |via| {
+                    dc(
+                        "pcbir.routing:GlobalViaProposal",
+                        vec![
+                            ("net", s(&via.net)),
+                            ("position", e_point(&via.position)),
+                            ("from_layer", e_layer(&via.from_layer)),
+                            ("to_layer", e_layer(&via.to_layer)),
+                            ("resource_id", s(&via.resource_id)),
+                        ],
+                    )
+                }),
+            ),
+            ("length_nm", i(route.length_nm)),
+            ("diagnostics", tuple(&route.diagnostics, |d| s(d))),
+            ("deferred_to_zone", b(route.deferred_to_zone)),
+        ],
+    )
+}
+
+fn e_hotspot(hotspot: &RoutingHotspot) -> StateValue {
+    dc(
+        "pcbir.routing:RoutingHotspot",
+        vec![
+            ("resource_id", s(&hotspot.resource_id)),
+            ("layer", opt(&hotspot.layer, e_layer)),
+            ("start", e_point(&hotspot.start)),
+            ("end", e_point(&hotspot.end)),
+            ("capacity", i(hotspot.capacity)),
+            ("usage", i(hotspot.usage)),
+            ("overflow", i(hotspot.overflow)),
+            ("contributors", tuple(&hotspot.contributors, |c| s(c))),
+        ],
+    )
+}
+
+/// `encode(global_route)`: the `GlobalRoutingResult` dataclass.
+pub fn encode_global_route(route: &GlobalRoutingResult) -> StateValue {
+    let metrics = &route.metrics;
+    dc(
+        "pcbir.routing:GlobalRoutingResult",
+        vec![
+            ("status", en("pcbir.routing:GlobalRoutingStatus", route.status.value())),
+            ("routes", tuple(&route.routes, e_net_route)),
+            ("hotspots", tuple(&route.hotspots, e_hotspot)),
+            (
+                "metrics",
+                dc(
+                    "pcbir.routing:GlobalRoutingMetrics",
+                    vec![
+                        ("routed_net_count", i(metrics.routed_net_count)),
+                        ("unrouted_net_count", i(metrics.unrouted_net_count)),
+                        ("total_overflow", i(metrics.total_overflow)),
+                        ("maximum_overflow", i(metrics.maximum_overflow)),
+                        ("overfull_resource_count", i(metrics.overfull_resource_count)),
+                        ("maximum_utilization_ppm", i(metrics.maximum_utilization_ppm)),
+                        ("total_length_nm", i(metrics.total_length_nm)),
+                        ("proposed_via_count", i(metrics.proposed_via_count)),
+                        ("iterations", i(metrics.iterations)),
+                        ("region_only_access_count", i(metrics.region_only_access_count)),
+                        ("deferred_net_count", i(metrics.deferred_net_count)),
+                    ],
+                ),
+            ),
+            ("placement_fingerprint", s(&route.placement_fingerprint)),
+            ("routing_fingerprint", s(&route.routing_fingerprint)),
+            ("fixed_prefix_digest", opt_text(&route.fixed_prefix_digest)),
+        ],
+    )
+}
+
+fn e_bounds(bounds: &Bounds) -> StateValue {
+    dc(
+        "pcbir.geometry:Bounds",
+        vec![
+            ("min_x", i(bounds.min_x)),
+            ("min_y", i(bounds.min_y)),
+            ("max_x", i(bounds.max_x)),
+            ("max_y", i(bounds.max_y)),
+        ],
+    )
+}
+
+/// `encode(options)`: the `UnifiedRouterOptions` dataclass, every field.
+pub fn encode_unified_options(o: &UnifiedRouterOptions) -> StateValue {
+    let fine = |options: &FineRegionOptions| {
+        dc(
+            "pcbir.fine_regions:FineRegionOptions",
+            vec![
+                ("pad_pitch_threshold_nm", i(options.pad_pitch_threshold_nm)),
+                ("margin_nm", i(options.margin_nm)),
+                ("maximum_factor", i(options.maximum_factor)),
+                ("merge_gap_nm", i(options.merge_gap_nm)),
+                ("minimum_area_nm2", i(options.minimum_area_nm2)),
+                ("minimum_pads", i(options.minimum_pads)),
+                ("enabled", b(options.enabled)),
+                ("dense_packages", b(options.dense_packages)),
+            ],
+        )
+    };
+    let bias = |bias: &LayerBias| {
+        dc(
+            "pcbir.routing_costs:LayerBias",
+            vec![
+                ("net", s(&bias.net)),
+                ("layer", e_layer(&bias.layer)),
+                ("area", e_bounds(&bias.area)),
+                ("rate", i(bias.rate)),
+            ],
+        )
+    };
+    dc(
+        "pcbir.unified_router:UnifiedRouterOptions",
+        vec![
+            ("pitch_nm", opt_int(o.pitch_nm)),
+            ("maximum_iterations", i(o.maximum_iterations)),
+            ("stall_iterations", i(o.stall_iterations)),
+            ("present_factor", f(o.present_factor)),
+            ("present_growth", f(o.present_growth)),
+            ("history_increment", f(o.history_increment)),
+            ("via_cost_mm", f(o.via_cost_mm)),
+            ("wrong_way_cost", f(o.wrong_way_cost)),
+            ("outer_layer_cost", f(o.outer_layer_cost)),
+            ("attach_radius_nm", i(o.attach_radius_nm)),
+            ("neck_radius_nm", i(o.neck_radius_nm)),
+            ("attach_candidates", i(o.attach_candidates)),
+            ("window_margin_nm", i(o.window_margin_nm)),
+            ("present_limit", f(o.present_limit)),
+            ("window_growth_limit", i(o.window_growth_limit)),
+            ("maximum_expansions", i(o.maximum_expansions)),
+            ("commit_rounds", i(o.commit_rounds)),
+            ("pour_recheck", b(o.pour_recheck)),
+            ("buses_first", b(o.buses_first)),
+            ("bus_length_budget", b(o.bus_length_budget)),
+            ("bus_skew_tuning", b(o.bus_skew_tuning)),
+            ("length_priority", b(o.length_priority)),
+            ("full_reroute_every", i(o.full_reroute_every)),
+            ("rejection_marker_cost", f(o.rejection_marker_cost)),
+            ("route_smoothing", b(o.route_smoothing)),
+            ("ball_field_cost", f(o.ball_field_cost)),
+            ("reuse_plane_vias", b(o.reuse_plane_vias)),
+            ("ball_field_via_sites", b(o.ball_field_via_sites)),
+            ("ball_field_band", i(o.ball_field_band)),
+            ("ball_field_exact", b(o.ball_field_exact)),
+            ("ball_field_exact_reach_nm", opt_int(o.ball_field_exact_reach_nm)),
+            ("exit_reservation_cost", f(o.exit_reservation_cost)),
+            ("bus_bundles", b(o.bus_bundles)),
+            ("bga_fanout", b(o.bga_fanout)),
+            ("raster_margin_nm", opt_int(o.raster_margin_nm)),
+            ("time_budget_s", o.time_budget_s.map_or(StateValue::Null, f)),
+            (
+                "grid_window_nm",
+                o.grid_window_nm
+                    .map_or(StateValue::Null, |(x0, y0, x1, y1)| StateValue::Tuple(vec![i(x0), i(y0), i(x1), i(y1)])),
+            ),
+            ("critical_pair_state_limit", opt_int(o.critical_pair_state_limit)),
+            ("critical_pair_state_escalation", i(o.critical_pair_state_escalation)),
+            ("power_islands", opt_text(&o.power_islands)),
+            ("power_islands_ball_grid_only", b(o.power_islands_ball_grid_only)),
+            ("plane_fill_width", b(o.plane_fill_width)),
+            ("implicit_neck_nm", i(o.implicit_neck_nm)),
+            ("local_escape_radius_nm", i(o.local_escape_radius_nm)),
+            ("local_escape_step_nm", i(o.local_escape_step_nm)),
+            ("save_inputs_path", opt_text(&o.save_inputs_path)),
+            ("local_escape_limit", i(o.local_escape_limit)),
+            ("pre_route_decouplers", b(o.pre_route_decouplers)),
+            ("direct", b(o.direct)),
+            ("escapes_first", b(o.escapes_first)),
+            ("escape_net_order", tuple(&o.escape_net_order, |n| s(n))),
+            ("escape_layer_biases", tuple(&o.escape_layer_biases, bias)),
+            ("retain_escape_copper", b(o.retain_escape_copper)),
+            ("planned_escapes_as_copper", b(o.planned_escapes_as_copper)),
+            ("share_commit_index", b(o.share_commit_index)),
+            ("failed_retry_every", i(o.failed_retry_every)),
+            ("failed_retry_limit", i(o.failed_retry_limit)),
+            ("failed_retry_before_exit", b(o.failed_retry_before_exit)),
+            ("outward_axis_threshold_nm", i(o.outward_axis_threshold_nm)),
+            ("attach_extension_steps_nm", tuple(&o.attach_extension_steps_nm, |n| i(*n))),
+            ("attach_extension_reach_nm", i(o.attach_extension_reach_nm)),
+            ("local_escape_detour_nm", i(o.local_escape_detour_nm)),
+            ("local_escape_states", i(o.local_escape_states)),
+            ("open_flood_limit", i(o.open_flood_limit)),
+            ("open_space_area_nm2", i(o.open_space_area_nm2)),
+            ("plane_piece_area_nm2", i(o.plane_piece_area_nm2)),
+            ("plane_piece_fraction", f(o.plane_piece_fraction)),
+            ("repair_neighbour_reach_nm", i(o.repair_neighbour_reach_nm)),
+            ("via_budget_factor", f(o.via_budget_factor)),
+            ("via_overrun_factor", f(o.via_overrun_factor)),
+            ("bend_cost", f(o.bend_cost)),
+            ("guide_cost", f(o.guide_cost)),
+            ("guide_margin_nm", i(o.guide_margin_nm)),
+            ("congestion_tile_nm", i(o.congestion_tile_nm)),
+            ("export_congestion", b(o.export_congestion)),
+            ("fine_regions", s(&o.fine_regions)),
+            ("fine_region_options", opt(&o.fine_region_options, fine)),
+        ],
+    )
+}
+
+/// `save_state(options.save_inputs_path, {...}, note="route_unified inputs")`:
+/// the file text of the router's inputs. Only the inputs the pipeline passes
+/// are written; saved fanout accesses or a net selection report not
+/// implemented.
+pub fn inputs_state_text(
+    board: &PhysicalBoard,
+    global_route: &GlobalRoutingResult,
+    options: &UnifiedRouterOptions,
+    only_nets: Option<&IndexSet<String>>,
+    has_accesses: bool,
+) -> Result<String> {
+    if has_accesses {
+        return not_implemented("unified router save_inputs_path with fanout or required accesses");
+    }
+    let mut saved = options.clone();
+    saved.save_inputs_path = None;
+    let only = only_nets.map_or(StateValue::Null, |names| StateValue::FrozenSet(names.iter().map(|n| s(n)).collect()));
+    let entries = vec![
+        (s("board"), encode_board(board)),
+        (s("global_route"), encode_global_route(global_route)),
+        (s("options"), encode_unified_options(&saved)),
+        (s("fanout_accesses"), StateValue::Null),
+        (s("fanout_created_vias"), StateValue::Null),
+        (s("fanout_created_tracks"), StateValue::Null),
+        (s("only_nets"), only),
+        (s("required_accesses"), StateValue::Null),
+    ];
+    let metadata = Object::from([("note".to_owned(), Value::from("route_unified inputs"))]);
+    Ok(StateDocument::new("builtins:dict", metadata, StateValue::Map { entries, proxy: false }).to_text())
+}

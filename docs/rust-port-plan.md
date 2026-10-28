@@ -752,3 +752,36 @@ do not shrink as much.
   `surface_path_between` detour fallback of `route_decouplers`, and
   via-in-pad arrays (`_source_array_owner`, the materialized-macro
   context's array vias).
+**M4 stream: unified- and critical-router hooks for `route-board` (branch `rust-m4-hooks`).**
+
+- `route_unified` takes Python's `escape_seeder(board, net names)`: with a
+  seeder each repair round tries the unseeded and the seeded rip-in
+  attempt and adopts the better (`repair_attempt`, `_same_but_copper`,
+  the shared commit index or a fresh one). Flow's ordinary stage seeds
+  with `fanout.route_fanout` (`_route_unified_compat`); replay passes none.
+- `save_inputs_path` (`--unified-save-inputs`) writes Python's state file
+  (`state_codec.inputs_state_text`: the board, now with mechanical
+  references, the global route and every `UnifiedRouterOptions` field);
+  saved fanout or required accesses report not implemented.
+- `route_critical_nets` takes `on_progress` (the `critical_group`
+  started/finished events of `progress.critical_progress`),
+  `plane_stitch_options` (early return-plane contacts as a locked prefix,
+  their counts and metadata in the result; `replay-critical` decodes saved
+  `PlaneStitchOptions`) and `unified_options` (the pair state escalation;
+  the joint searches that would use it, and the unified-router cohort and
+  exact searches, still report not implemented). Flow's three stand-ins for
+  them are gone, and the joint pair search escalates by the option's
+  factor.
+- `critical_review` is ported whole (lane spacing, coupled length, bends,
+  pair skew, match groups with their tuning status) with
+  `lane_review_line`, which route-board prints.
+- Corpus: new `route-board-save-inputs-boards` (the saved state of every
+  corpus board, `--no-fanout`): 10 byte-identical, 1 pending. After merging
+  `rust-m4-flow`, no case is different: the ten `route-board*` suites 150
+  equal, 8 pending; `replay-unified*` 119 equal, 1 pending;
+  `replay-critical*` 81 equal, 9 pending (full-vertical now passes its
+  return-plane contacts and stops at hard-macro candidate validation).
+  Not implemented (exit 3): `reserved_accesses` (needs a
+  `fanout.FanoutResult` state decoder and
+  `bypass_reservations`), the ball-grid fanout sidecar
+  (`PATH.bga.json`) and trial input files of placement feedback.

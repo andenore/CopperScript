@@ -299,6 +299,14 @@ fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::Copper
     Ok(halos)
 }
 
+/// The installed progress observer, reborrowed for one call.
+fn reborrow<'a>(on_progress: &'a mut Option<ProgressCallback<'_>>) -> Option<ProgressCallback<'a>> {
+    match on_progress {
+        Some(callback) => Some(&mut **callback),
+        None => None,
+    }
+}
+
 /// `critical_return_plane_options`: declared return contacts before a
 /// critical search needs them, or None.
 pub fn critical_return_plane_options(
@@ -374,37 +382,14 @@ fn route_critical_stage(
     };
     let source = critical_inputs(reserved.as_ref().map_or(&[][..], |r| &r.2[..]), on_progress);
     let return_options = critical_return_plane_options(&source, plane_stitch_options, &halos);
-    if return_options.is_some() {
-        return copper_pcb::not_implemented(
-            "critical return-plane contacts (route_critical_nets plane_stitch_options)",
-        );
-    }
-    let jobs = crate::critical::critical_jobs(&{
-        let mut promoted = board.clone();
-        if let (Some(rules), _) = crate::critical::promote_planar_nets(board) {
-            promoted.net_routing_rules = rules;
-        }
-        promoted
-    });
-    let defaults = UnifiedRouterOptions::default();
-    if !jobs.is_empty() {
-        if on_progress.is_some() {
-            return copper_pcb::not_implemented("critical_group progress events");
-        }
-        if unified_options.critical_pair_state_escalation != defaults.critical_pair_state_escalation
-            || unified_options.maximum_iterations < 16
-            || unified_options.commit_rounds < 2
-            || unified_options.time_budget_s.is_some()
-        {
-            return copper_pcb::not_implemented("unified options passed to route_critical_nets");
-        }
-    }
     let options = crate::critical::CriticalOptions {
-        only_nets: None,
         pair_state_limit,
-        bundle_repair_limit: crate::critical_bundles::BUNDLE_REPAIR_LIMIT,
+        plane_stitch_options: return_options.as_ref(),
+        unified_options: Some(unified_options),
+        ..Default::default()
     };
-    let mut critical = crate::critical::route_critical_nets(source, &placement.global_route, &options)?;
+    let mut critical =
+        crate::critical::route_critical_nets(source, &placement.global_route, &options, reborrow(on_progress))?;
     if let Some(planned) = reserved.as_mut() {
         let failed: IndexSet<String> =
             critical.nets.iter().filter(|item| !item.connected).flat_map(|item| item.nets.iter().cloned()).collect();
@@ -431,7 +416,12 @@ fn route_critical_stage(
                     ],
                 );
                 let retry_source = critical_inputs(&kept, on_progress);
-                let retry = crate::critical::route_critical_nets(retry_source, &placement.global_route, &options)?;
+                let retry = crate::critical::route_critical_nets(
+                    retry_source,
+                    &placement.global_route,
+                    &options,
+                    reborrow(on_progress),
+                )?;
                 let failures =
                     |result: &CriticalRoutingResult| result.nets.iter().filter(|item| !item.connected).count();
                 if failures(&retry) < failures(&critical) {
@@ -506,20 +496,24 @@ fn route_ordinary_stage(
     on_progress: &mut Option<ProgressCallback<'_>>,
 ) -> Result<(DetailedRoutingResult, DrcReport, DuplicatePadStitchResult)> {
     emit(on_progress, "ordinary_area", "started", Vec::new());
-    let seeder = fanout_options.is_some() && !unified_options.direct;
-    let progress: Option<&mut dyn crate::progress::Progress> = match on_progress {
-        Some(callback) => Some(&mut **callback),
-        None => None,
+    // `_route_unified_compat`: failed signal nets get pad escapes
+    // (`route_fanout`) in the seeded repair attempts.
+    let mut seeder = |partial: &PhysicalBoard, nets: &IndexSet<String>| {
+        crate::fanout::route_fanout(partial, fanout_options, Some(nets))
+            .map(|fanout| fanout.board)
+            .map_err(crate::unified_error::Error::from)
     };
-    let detailed = crate::unified_router::route::route_unified_seeded(
+    let escape_seeder: Option<&mut crate::unified_router::route::EscapeSeeder<'_>> =
+        if fanout_options.is_some() && !unified_options.direct { Some(&mut seeder) } else { None };
+    let detailed = crate::unified_router::route::route_unified(
         pre_detailed,
         global_route,
         unified_options,
         None,
         None,
         None,
-        progress,
-        seeder,
+        escape_seeder,
+        reborrow(on_progress),
     )
     .map_err(|error| match error {
         crate::unified_error::Error::Value(message) => Error::Value(message),
