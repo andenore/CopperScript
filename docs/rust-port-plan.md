@@ -603,8 +603,11 @@ do not shrink as much.
   under `tests/rust-port/routing/kicad-cli`, feedback), `benchmark-routing`,
   `benchmark-routing-native`, and the `ladder` suite: cm4, nrf52 and
   round-led-ring are byte-identical to Python; full-vertical exits 3 in the
-  critical router ("critical candidate validation on a board with hard
-  macros"); the three external boards are skipped here.
+  critical router's pair refinement (`_improve_pair_spine`,
+  `pair_refine.paired_shortcuts`, rust-m4-critical); the three external
+  boards are skipped here. Two minimal critical stand-ins (`PENDING` for
+  rust-m4-critical) got it that far: hard-macro protection of candidate
+  copper in `_validate_candidate` and `_bounded_surface_maze`.
 - Still exit 3: filled-copper bridge trials (`dependency_reroute`),
   eligible native dangling-end cleanup (`native_stub_cleanup`), native fill
   fragment contacts (shapely areas), bypass reservation swaps beside escape

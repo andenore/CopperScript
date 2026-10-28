@@ -460,6 +460,36 @@ pub fn surface_path_between(
     maximum_detour_nm: i64,
     state_budget: i64,
 ) -> Result<Option<Vec<copper_pcb::board::TrackSegment>>> {
+    Ok(surface_path_between_counted(
+        board,
+        clearance,
+        net,
+        start,
+        end,
+        width_nm,
+        layer,
+        step_nm,
+        maximum_detour_nm,
+        state_budget,
+    )?
+    .0)
+}
+
+/// `surface_path_between` and the states it expanded (its finished event's
+/// `expanded_states`).
+#[allow(clippy::too_many_arguments)]
+pub fn surface_path_between_counted(
+    board: &PhysicalBoard,
+    clearance: &crate::routing_clearance::RoutingClearanceIndex<'_>,
+    net: &str,
+    start: Point,
+    end: Point,
+    width_nm: i64,
+    layer: copper_physical::CopperLayer,
+    step_nm: i64,
+    maximum_detour_nm: i64,
+    state_budget: i64,
+) -> Result<(Option<Vec<copper_pcb::board::TrackSegment>>, i64)> {
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
     if step_nm <= 0 || maximum_detour_nm < 0 || state_budget <= 0 {
@@ -531,7 +561,7 @@ pub fn surface_path_between(
                 }
                 if legal {
                     pieces.extend(tail);
-                    return Ok(Some(pieces));
+                    return Ok((Some(pieces), expanded));
                 }
             }
         }
@@ -563,5 +593,5 @@ pub fn surface_path_between(
             queue.push(Reverse((candidate + heuristic(neighbor), candidate, nx, ny, next_heading)));
         }
     }
-    Ok(None)
+    Ok((None, expanded))
 }

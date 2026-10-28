@@ -1419,12 +1419,26 @@ fn validate_candidate(
     if tracks.is_empty() && vias.is_empty() {
         return Ok((result, Vec::new(), Vec::new()));
     }
-    if !board.hard_macros.is_empty() {
-        // PENDING: PhysicalBoard.__post_init__ hard-macro protection of candidate copper.
-        return copper_pcb::not_implemented("critical candidate validation on a board with hard macros");
-    }
     let all_tracks: Vec<TrackSegment> = committed_tracks.iter().chain(&tracks).cloned().collect();
     let all_vias: Vec<Via> = committed_vias.iter().chain(&vias).cloned().collect();
+    if !board.hard_macros.is_empty() {
+        // `replace(board, tracks=..., vias=...)` runs PhysicalBoard.__post_init__,
+        // whose hard-macro protection rejects candidate copper.
+        // PENDING: owned by rust-m4-critical (the board's other __post_init__ checks).
+        match copper_pcb::hard_macros::validate_hard_macros(&board_with(board, &all_tracks, &all_vias)) {
+            Ok(()) => {}
+            Err(Error::Value(message)) if message.contains("hard-macro") => {
+                let mut rejected = result;
+                rejected.connected = false;
+                rejected.track_count = 0;
+                rejected.via_count = 0;
+                rejected.diagnostics.push(message);
+                rejected.candidate_rejected = true;
+                return Ok((rejected, Vec::new(), Vec::new()));
+            }
+            Err(error) => return Err(error),
+        }
+    }
     let hard = |checked: &PhysicalBoard| -> Result<Vec<copper_drc::Finding>> {
         let report = crate::drc_report::run_physical_drc(checked, copper_drc::Policy::default())?;
         Ok(report
