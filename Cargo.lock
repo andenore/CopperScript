@@ -177,6 +177,7 @@ version = "0.1.0"
 dependencies = [
  "copper-drc",
  "copper-json",
+ "copper-lang",
  "copper-pcb",
  "copper-physical",
  "copper-place",
