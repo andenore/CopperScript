@@ -17801,6 +17801,247 @@
    ]
   },
   {
+   "name": "route-board-native",
+   "milestone": "M4",
+   "compare": [
+    "exit",
+    "stdout",
+    "stderr",
+    "files"
+   ],
+   "cases": [
+    {
+     "id": "route-board-native/valid_board",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli.sh",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-native/round_led_ring",
+     "args": [
+      "route-board",
+      "examples/round_led_ring/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "2",
+      "--fab-profile",
+      "generic",
+      "--candidates",
+      "1",
+      "--no-fanout",
+      "--congestion-feedback-trials",
+      "0",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli.sh",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-native/cm4_baseboard",
+     "args": [
+      "route-board",
+      "examples/cm4_baseboard/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "--candidates",
+      "1",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli.sh",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-native/valid_board/drc-violations",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli-drc-violations.sh",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-native/valid_board/drc-fails",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli-drc-fails.sh",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-native/valid_board/drc-not-json",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli-drc-not-json.sh",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-native/valid_board/drc-missing-key",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli-drc-missing-key.sh",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-native/valid_board/drc-silent",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli-drc-silent.sh",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-native/valid_board/version-fails",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli-version-fails.sh",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-native/valid_board/version-nine",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli-version-nine.sh",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-native/valid_board/manufacturing-fake",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/manufacturing/kicad-cli/fake-kicad-cli.sh",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-native/valid_board/missing-tool",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--verify-plane-fill",
+      "{root}/tests/rust-port/routing/kicad-cli/missing-kicad-cli",
+      "--native-evidence-directory",
+      "{out}/native",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    }
+   ]
+  },
+  {
    "name": "explain",
    "milestone": "M5",
    "cases": [

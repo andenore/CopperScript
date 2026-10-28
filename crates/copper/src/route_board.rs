@@ -669,6 +669,11 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
             let _ = text::print(out, &format!("OUTPUT ERROR: {message}"));
             2
         }
+        Ok(Finished::PlaneError { .. }) if debug => not_implemented(err, "--debug tracebacks"),
+        Ok(Finished::PlaneError { message }) => {
+            let _ = text::print(out, &format!("PLANE VERIFICATION ERROR: {message}"));
+            2
+        }
         Err(Stop::Pending(what)) => not_implemented(err, &what),
         Err(Stop::Value { .. }) if debug => not_implemented(err, "--debug tracebacks"),
         Err(Stop::Value { error_type, message }) => {
@@ -966,8 +971,18 @@ fn zone_and_ground_pads(board: &PhysicalBoard) -> (Vec<PadReference>, Vec<PadRef
 
 /// How the report tail ends: the lines printed after the progress stream.
 enum Finished {
-    Done { lines: Vec<String>, exit: u8 },
-    OutputError { lines: Vec<String>, message: String },
+    Done {
+        lines: Vec<String>,
+        exit: u8,
+    },
+    OutputError {
+        lines: Vec<String>,
+        message: String,
+    },
+    /// `PLANE VERIFICATION ERROR` (a native refill/DRC exception).
+    PlaneError {
+        message: String,
+    },
 }
 
 /// What the report tail reads besides the pipeline result.
@@ -989,6 +1004,18 @@ fn pads_value(pads: &[PadReference]) -> Value {
 
 fn parse_document(text: &str) -> Value {
     copper_json::parse(text).expect("a JSON document")
+}
+
+/// `uuid4().hex[:count]`: fresh random hex digits.
+fn random_hex(count: usize) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    hasher.update(now.as_nanos().to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    let local = 0u8;
+    hasher.update((&local as *const u8 as usize).to_le_bytes());
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>()[..count].to_owned()
 }
 
 fn object_of(entries: Vec<(&str, Value)>) -> Value {
@@ -1062,9 +1089,6 @@ fn finish(
     let arguments = context.arguments;
     let stopped = result.stopped_after.is_some();
     let native_cli = if stopped { None } else { arguments.path("--verify-plane-fill") };
-    if native_cli.is_some() {
-        return copper_pcb::not_implemented("--verify-plane-fill (native refill and filled-copper feedback)");
-    }
     if !stopped {
         emit(progress, "final_contacts_native_drc", "started", Vec::new());
     }
@@ -1134,19 +1158,140 @@ fn finish(
     if !stopped {
         emit(progress, "final_contacts_native_drc", "finished", vec![("decision", text_value(decision))]);
     }
-    let (duplicate_pending, duplicate_verified) =
-        copper_route::route_closure::reconcile_zone_lands(&output_board, &duplicate_stitch.pending, None)?;
+    let mut output_board = output_board;
+    let mut output_drc = output_drc;
+    let mut filled_feedback = None;
+    let mut native_cleanup: Option<Value> = None;
+    let mut plane_verification: Option<copper_route::plane_verify::PlaneVerification> = None;
+    if let Some(native_cli) = &native_cli {
+        use copper_route::plane_verify::NativeError;
+        emit(progress, "independent_kicad", "started", Vec::new());
+        let report_location = PathBuf::from(
+            arguments
+                .path("--report")
+                .unwrap_or_else(|| format!("{}.route-report.json", context.design.electrical.name)),
+        );
+        let evidence_directory = match arguments.path("--native-evidence-directory") {
+            Some(directory) => PathBuf::from(directory),
+            None => sibling(&report_location, &format!(".native-{}", random_hex(12))),
+        };
+        let options = copper_route::filled_feedback::FilledCopperFeedbackOptions {
+            maximum_trials: arguments.filled_copper_trials,
+            maximum_search_states: arguments.filled_copper_search_states,
+            maximum_blockers: arguments.int("--maximum-ripup-blockers"),
+            maximum_dependency_expansions: arguments.int("--zone-dependency-expansions"),
+        };
+        let outcome = options.validate().map_err(NativeError::Pcb).and_then(|()| {
+            copper_route::filled_feedback::improve_filled_copper(
+                &result,
+                &output_board,
+                Path::new(native_cli),
+                &options,
+                Some(&evidence_directory),
+            )
+        });
+        let feedback = match outcome {
+            Ok(feedback) => feedback,
+            Err(NativeError::Pcb(copper_pcb::Error::NotImplemented(what))) => {
+                return Err(copper_pcb::Error::NotImplemented(what));
+            }
+            Err(error) => return Ok(Finished::PlaneError { message: error.to_string() }),
+        };
+        output_board = feedback.board.clone();
+        plane_verification = feedback.verification.clone();
+        output_drc = copper_route::drc_report::run_physical_drc(&output_board, copper_drc::Policy::default())?;
+        if let Some(verification) = &plane_verification {
+            // `remove_native_dangling_tracks`: native_stub_candidate declines
+            // evidence without exactly identified dangling ends.
+            let findings = &verification.native_findings;
+            let eligible = verification.matches(&output_board)?
+                && verification.unconnected_count == 0
+                && verification.island_count == 0
+                && !findings.is_empty()
+                && findings.len() <= 64
+                && findings.len() as i64 == verification.other_violation_count
+                && findings.iter().all(|f| {
+                    f.category == "violation"
+                        && (f.kind == "track_dangling" || f.kind == "via_dangling")
+                        && f.items.len() == 1
+                });
+            if eligible {
+                return copper_pcb::not_implemented("native dangling-copper cleanup (native_stub_cleanup)");
+            }
+            let mut protected = fixed.clone();
+            let prefix = result.plane_stitch.as_ref().map_or(&result.critical.board, |stitch| &stitch.board);
+            for track in &prefix.tracks {
+                let count = protected.entry(track.clone()).or_insert(0);
+                let in_prefix = prefix.tracks.iter().filter(|t| *t == track).count() as i64;
+                *count = (*count).max(in_prefix);
+            }
+            let mut protected_vias: indexmap::IndexMap<&copper_pcb::board::Via, i64> = indexmap::IndexMap::new();
+            for via in context.physical_board.vias.iter() {
+                *protected_vias.entry(via).or_insert(0) += 1;
+            }
+            let mut prefix_vias: indexmap::IndexMap<&copper_pcb::board::Via, i64> = indexmap::IndexMap::new();
+            for via in prefix.vias.iter() {
+                *prefix_vias.entry(via).or_insert(0) += 1;
+            }
+            for (via, count) in prefix_vias {
+                let entry = protected_vias.entry(via).or_insert(0);
+                *entry = (*entry).max(count);
+            }
+            native_cleanup = Some(object_of(vec![
+                ("status", Value::from("unchanged")),
+                ("before_digest", Value::from(verification.board_digest.as_str())),
+                ("after_digest", Value::from(verification.board_digest.as_str())),
+                (
+                    "before_artifact_directory",
+                    verification.artifact_directory.as_deref().map_or(Value::Null, Value::from),
+                ),
+                (
+                    "after_artifact_directory",
+                    verification.artifact_directory.as_deref().map_or(Value::Null, Value::from),
+                ),
+                ("removed_track_occurrences", Value::from(0i64)),
+                ("added_track_occurrences", Value::from(0i64)),
+                ("removed_via_occurrences", Value::from(0i64)),
+                (
+                    "diagnostics",
+                    Value::Array(vec![object_of(vec![("reason", Value::from("native_evidence_not_eligible"))])]),
+                ),
+                ("protected_tracks", Value::from(protected.values().sum::<i64>())),
+                ("protected_vias", Value::from(protected_vias.values().sum::<i64>())),
+            ]));
+            emit(
+                progress,
+                "independent_kicad",
+                "finished",
+                vec![
+                    ("passed", Value::Bool(verification.passed)),
+                    ("unconnected", Value::from(verification.unconnected_count)),
+                    ("other_violations", Value::from(verification.other_violation_count)),
+                ],
+            );
+        }
+        filled_feedback = Some(feedback);
+    }
+    let (duplicate_pending, duplicate_verified) = copper_route::route_closure::reconcile_zone_lands(
+        &output_board,
+        &duplicate_stitch.pending,
+        plane_verification.as_ref(),
+    )?;
     let (plane_pending, plane_verified) = copper_route::route_closure::reconcile_zone_lands(
         &output_board,
         stitch.as_ref().map_or(&[][..], |stitch| &stitch.pending_pads),
-        None,
+        plane_verification.as_ref(),
     )?;
-    // `routing_complete_with_fill` without native evidence.
-    let complete_with_fill =
-        result.status == PhysicalFlowStatus::Pass && output_drc.decision() == copper_drc::Decision::Pass;
+    let complete_with_fill = copper_route::route_closure::routing_complete_with_fill(
+        &result,
+        &output_board,
+        &output_drc,
+        plane_verification.as_ref(),
+    )?;
+    let verified = plane_verification.as_ref().is_some_and(|v| v.passed);
     let closure_status = if !stopped
         && complete_with_fill
-        && arguments.text("--verify-plane-fill").is_none()
+        && (arguments.text("--verify-plane-fill").is_none() || verified)
         && duplicate_pending.is_empty()
         && plane_pending.is_empty()
     {
@@ -1183,8 +1328,19 @@ fn finish(
     put("critical", parse_document(&result.critical.to_json()?));
     put("detailed", parse_document(&result.detailed.to_json()));
     put("drc", parse_document(&output_drc.to_json()));
-    let summary = copper_route::route_summary::connection_summary(&output_board, Some(&output_drc.report))
+    let mut summary = copper_route::route_summary::connection_summary(&output_board, Some(&output_drc.report))
         .map_err(|error| copper_pcb::Error::NotImplemented(error.crash_line()))?;
+    if let Some(native) = &plane_verification {
+        summary.push((
+            "native".to_owned(),
+            object_of(vec![
+                ("passed", Value::Bool(native.passed)),
+                ("unconnected", Value::from(native.unconnected_count)),
+                ("islands", Value::from(native.island_count)),
+                ("violations", Value::from(native.other_violation_count)),
+            ]),
+        ));
+    }
     put("summary", Value::Object(summary.into_iter().collect()));
     let findings = copper_place::layout::placement_intent_findings(placement_board)?
         .into_iter()
@@ -1250,13 +1406,17 @@ fn finish(
     deferred.sort();
     let routed_count = ordinary.iter().filter(|i| i.connected).count() as i64;
     let strings = |items: &[String]| Value::Array(items.iter().map(|item| Value::from(item.as_str())).collect());
+    let native_fill_verified = match &plane_verification {
+        Some(native) => native.passed && native.matches(&output_board)?,
+        None => false,
+    };
     report.insert(
         "connectivity".to_owned(),
         object_of(vec![
             ("routed_ordinary_net_count", Value::from(routed_count)),
             ("unrouted_ordinary_nets", strings(&unrouted)),
             ("deferred_zone_nets", strings(&deferred)),
-            ("native_fill_verified", Value::Bool(false)),
+            ("native_fill_verified", Value::Bool(native_fill_verified)),
         ]),
     );
     let mut lengths: indexmap::IndexMap<&str, i64> =
@@ -1375,8 +1535,12 @@ fn finish(
                 "filled_capped_via_count",
                 Value::from(stitch.board.vias.iter().filter(|via| via.finish == "filled-capped").count() as i64),
             ),
-            ("zone_fill_verified", Value::Bool(false)),
+            ("zone_fill_verified", Value::Bool(plane_verification.as_ref().is_some_and(|v| v.passed))),
         ];
+        if let Some(native) = &plane_verification {
+            entries
+                .push(("zone_connectivity_verified", Value::Bool(native.zone_connectivity_verified(&output_board)?)));
+        }
         if let Some(repair) = &plane_repair {
             entries.push(("cut_off_repair", repair.clone()));
         }
@@ -1398,9 +1562,22 @@ fn finish(
         );
     }
     report.insert("duplicate_pad_stitch".to_owned(), object_of(duplicate));
+    if let Some(native) = &plane_verification {
+        report.insert("plane_verification".to_owned(), parse_document(&native.to_json()));
+    }
+    if let Some(cleanup) = native_cleanup {
+        report.insert("native_cleanup".to_owned(), cleanup);
+    }
+    if let Some(feedback) = &filled_feedback {
+        report.insert("filled_copper_feedback".to_owned(), parse_document(&feedback.to_json()));
+    }
+    let native = match &plane_verification {
+        Some(native) => Some((native.matches(&output_board)?, native.passed, native.report_digest.clone())),
+        None => None,
+    };
     let evidence = copper_place::requirements::RouteEvidence {
         drc_board_digest: Some(output_drc.token.board_digest.clone()),
-        native: None,
+        native,
         drc: Some(output_drc.report.clone()),
         via_arrays_present: Some(copper_route::pad_via_arrays::via_in_pad_arrays_present),
     };
@@ -1409,7 +1586,10 @@ fn finish(
     let requirements_complete = requirements.get("complete").cloned().unwrap_or(Value::Bool(false));
     report.insert("requirements".to_owned(), requirements);
     report.insert("requirements_complete".to_owned(), requirements_complete.clone());
-    report.insert("routing_quality".to_owned(), copper_route::routing_metrics::routing_quality(&output_board, None)?);
+    report.insert(
+        "routing_quality".to_owned(),
+        copper_route::routing_metrics::routing_quality(&output_board, plane_verification.as_ref())?,
+    );
     let lines = Vec::new();
     emit(progress, "export", "started", Vec::new());
     let exported = (|| -> Result<(PathBuf, Vec<String>), String> {
@@ -1463,13 +1643,15 @@ fn finish(
         lines.push(format!("STOPPED after {stage} (--stop-after): partial run, open nets below are expected"));
     }
     lines.push(format!(
-        "BOARD ROUTE: {} - ordinary routed={}, unrouted={}; deferred zone nets={}, native fill verified=False; \
-         explicit-copper DRC={}; native filled-board DRC=not passed",
+        "BOARD ROUTE: {} - ordinary routed={}, unrouted={}; deferred zone nets={}, native fill verified={}; \
+         explicit-copper DRC={}; native filled-board DRC={}",
         closure_status.value(),
         routed_count,
         unrouted.len(),
         deferred.len(),
-        decision
+        if native_fill_verified { "True" } else { "False" },
+        decision,
+        if verified { "pass" } else { "not passed" }
     ));
     lines.push(format!("Report -> {}", paths::display(&report_path)));
     lines.extend(summary);
@@ -1479,6 +1661,7 @@ fn finish(
     }
     let passed = closure_status == PhysicalFlowStatus::Pass
         && !copper_lang::erc::has_errors(context.diagnostics)
-        && (!arguments.flag("--require-verified-intent") || requirements_complete == Value::Bool(true));
+        && (!arguments.flag("--require-verified-intent") || requirements_complete == Value::Bool(true))
+        && plane_verification.as_ref().is_none_or(|v| v.passed);
     Ok(Finished::Done { lines, exit: if passed { 0 } else { 1 } })
 }

@@ -376,6 +376,10 @@ pub fn summarize_report(report: &Value, report_path: &str, report_digest: &str) 
 }
 
 /// `summary_lines`.
+fn field_of(summary: &Value, key: &str) -> String {
+    summary.get(key).map_or_else(|| "None".to_owned(), py_str)
+}
+
 pub fn summary_lines(summary: &Value) -> Vec<String> {
     let field = |a: &str, b: &str| summary.get(a).and_then(|v| v.get(b)).map_or_else(|| "None".to_owned(), py_str);
     let mut lines = vec![format!(
@@ -396,6 +400,19 @@ pub fn summary_lines(summary: &Value) -> Vec<String> {
             "Copper: {millimetres} mm; {} tracks; {} vias",
             field("quality", "track_count"),
             field("quality", "via_count")
+        ));
+    }
+    if truthy(summary.get("native_reconciled_explicit_findings")) {
+        lines.push(format!(
+            "Native fill resolves {} deferred explicit-copper observations",
+            field_of(summary, "native_reconciled_explicit_findings")
+        ));
+    }
+    if truthy(summary.get("decoupling").and_then(|d| d.get("total"))) {
+        lines.push(format!(
+            "Bypasses: {}/{} verified surface connections",
+            field("decoupling", "surface_connected"),
+            field("decoupling", "total")
         ));
     }
     let issues = list(summary.get("issues"));

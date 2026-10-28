@@ -50,6 +50,7 @@ pub mod drc_report;
 pub mod escape_assignment;
 pub mod escape_plan;
 pub mod fanout;
+pub mod filled_feedback;
 pub mod fine_regions;
 pub mod flow;
 pub mod global_keepouts;

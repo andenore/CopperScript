@@ -102,7 +102,7 @@ pub fn kicad_reference(value: &str) -> String {
 }
 
 /// `_stable_uuid`: a version-4 UUID from the namespaced parts.
-fn stable_uuid(parts: &[&str]) -> String {
+pub fn stable_uuid(parts: &[&str]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(UUID_SEED);
     hasher.update(parts.join("\0").as_bytes());

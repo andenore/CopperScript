@@ -140,3 +140,80 @@ pub fn close_detailed_lands(
     closed.routing_fingerprint = fingerprint;
     Ok((closed, drc, stitch))
 }
+
+/// `routing_complete_with_fill`: routing completion (not signoff). Deferred-zone
+/// findings are accepted only after exact-export-bound native refill proves
+/// zero opens and violations.
+pub fn routing_complete_with_fill(
+    pipeline: &crate::flow::RoutingPipelineResult,
+    board: &PhysicalBoard,
+    drc: &DrcReport,
+    evidence: Option<&PlaneVerification>,
+) -> Result<bool> {
+    use copper_pcb::board::RouteKind;
+    if let Some(evidence) = evidence
+        && !(evidence.passed
+            && evidence.matches(board)?
+            && evidence.findings.is_empty()
+            && evidence.unconnected_count == 0
+            && evidence.island_count == 0
+            && evidence.other_violation_count == 0)
+    {
+        return Ok(false);
+    }
+    if pipeline.status == crate::flow::PhysicalFlowStatus::Pass && drc.decision() == copper_drc::Decision::Pass {
+        return Ok(true);
+    }
+    if evidence.is_none() || board.zones.is_empty() {
+        return Ok(false);
+    }
+    if pipeline.critical.status == crate::critical::CriticalRoutingStatus::Failed
+        || pipeline.detailed.metrics.total_conflict_overflow != 0
+    {
+        return Ok(false);
+    }
+    let zones: IndexSet<&str> = board.zones.iter().map(|z| z.net.as_str()).collect();
+    let rules: IndexMap<&str, _> = board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
+    let results: IndexMap<&str, _> = pipeline.detailed.nets.iter().map(|n| (n.net.as_str(), n)).collect();
+    let required = board.nets.iter().filter(|n| {
+        n.pads.len() >= 2
+            && !zones.contains(n.name.as_str())
+            && rules.get(n.name.as_str()).is_none_or(|rule| rule.kind == RouteKind::General)
+    });
+    if !pipeline.placement_and_global.full_route_certified {
+        let global_route = &pipeline.placement_and_global.global_route;
+        let mut connected: IndexSet<&str> =
+            pipeline.detailed.nets.iter().filter(|n| n.connected).map(|n| n.net.as_str()).collect();
+        for item in pipeline.critical.nets.iter().filter(|item| item.connected) {
+            connected.extend(item.nets.iter().map(String::as_str));
+        }
+        if global_route.metrics.total_overflow != 0
+            || global_route.routes.iter().any(|route| {
+                !route.connected && !connected.contains(route.net.as_str()) && !zones.contains(route.net.as_str())
+            })
+        {
+            return Ok(false);
+        }
+    }
+    for net in required {
+        if results.get(net.name.as_str()).is_none_or(|result| !result.connected) {
+            return Ok(false);
+        }
+    }
+    if pipeline.detailed.nets.iter().any(|n| !n.connected && !zones.contains(n.net.as_str())) {
+        return Ok(false);
+    }
+    for finding in &drc.report.findings {
+        if finding.severity != copper_drc::Severity::Error || finding.code == "DRC-ROUTE-INCOMPLETE" {
+            continue;
+        }
+        if finding.code == "DRC-OPEN-NET"
+            && !finding.nets.is_empty()
+            && finding.nets.iter().all(|net| zones.contains(net.as_str()))
+        {
+            continue;
+        }
+        return Ok(false);
+    }
+    Ok(true)
+}
