@@ -36,6 +36,7 @@ macro_rules! text_enum {
 pub mod access_sites;
 pub mod bench;
 pub mod bga_fanout;
+pub mod boundary_access;
 pub mod congestion_feedback;
 pub mod copper_ownership;
 pub mod critical;
@@ -69,8 +70,10 @@ pub mod plane_verify;
 pub mod power_islands;
 pub mod progress;
 pub mod pypath;
+pub mod return_paths;
 pub mod route_cleanup;
 pub mod route_closure;
+pub mod route_quality;
 pub mod route_smoothing;
 pub mod route_style;
 pub mod route_summary;
