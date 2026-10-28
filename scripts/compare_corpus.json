@@ -21782,6 +21782,134 @@
    ]
   },
   {
+   "name": "edit-mechanical-source",
+   "milestone": "M3",
+   "timeout_s": 240,
+   "stage": {
+    "board.copper": "examples/mechanical_editor_demo/board.copper"
+   },
+   "cases": [
+    {
+     "id": "edit-mechanical-source/transactions",
+     "http": "tests/rust-port/editor/source.jsonl",
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "--allow-proxy-footprints",
+      "{out}/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-source/anchors",
+     "http": "tests/rust-port/editor/source-mechanical.jsonl",
+     "stage": {
+      "board.copper": "examples/mechanical_anchors/board.copper"
+     },
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "--footprint-root",
+      "{root}/.copper-cache/pkg/0c22bbbc033f71e79d6d",
+      "{out}/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-source/curves",
+     "http": "tests/rust-port/editor/source-mechanical.jsonl",
+     "stage": {
+      "board.copper": "examples/mechanical_curves/board.copper"
+     },
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "--footprint-root",
+      "{root}/.copper-cache/pkg/0c22bbbc033f71e79d6d",
+      "{out}/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-source/reference",
+     "http": "tests/rust-port/editor/source-mechanical.jsonl",
+     "stage": {
+      "board.copper": "examples/mechanical_reference/board.copper",
+      "mechanical-assets": "examples/mechanical_reference/mechanical-assets"
+     },
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "--footprint-root",
+      "{root}/.copper-cache/pkg/0c22bbbc033f71e79d6d",
+      "{out}/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-source/demo-footprints",
+     "http": "tests/rust-port/editor/source.jsonl",
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "--footprint-root",
+      "{root}/.copper-cache/pkg/0c22bbbc033f71e79d6d",
+      "{out}/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-source/hierarchical-review",
+     "http": "tests/rust-port/editor/source-review.jsonl",
+     "stage": {},
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "--allow-proxy-footprints",
+      "examples/hierarchical_board/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-source/definition-macro",
+     "http": "tests/rust-port/editor/definition-macro.jsonl",
+     "stage": {
+      "proj": "examples/macro_definition"
+     },
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "{out}/proj/layouts/link.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-source/definition-profile",
+     "http": "tests/rust-port/editor/definition-profile.jsonl",
+     "stage": {
+      "proj": "examples/mechanical_profile_project"
+     },
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "{out}/proj/mechanics/carrier.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-source/definition-cached",
+     "http": "tests/rust-port/editor/definition-profile.jsonl",
+     "stage": {},
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "examples/nrf52_coin_cell/.copper-cache/pkg/4aa6e2e0848860db51b0/packages/profiles/raspberry_pi/cm4/mounting.copper"
+     ]
+    }
+   ]
+  },
+  {
    "name": "replay-unified",
    "milestone": "M4",
    "inputs": [

@@ -1,0 +1,40 @@
+# Source transactions on mechanical boards: attachments, datums, slots, curves and references.
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "R1", "x_nm": 9000000, "y_nm": 11000000, "rotation": 180, "side": "front", "locks": ["position", "rotation", "side"]}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "R1", "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "front", "locks": ["side"]}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "R2", "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "front", "locks": []}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "outline", "name": "", "shape": "rectangle", "parameters": {"width": "42mm", "height": "30mm"}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "outline", "name": "", "shape": "rounded_rectangle", "parameters": {"width": "40mm", "height": "30mm", "corner_radius": "2mm"}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "slot", "name": "MOUNT", "shape": "", "parameters": {"start": "(16mm,10mm)", "end": "(24mm,10mm)", "width": "1.2mm"}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "datum", "name": "CENTER", "shape": "", "parameters": {"position": "(21mm,15mm)"}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "attach", "name": "DEBUG_PAD", "shape": "", "parameters": {"component": "R1", "target": "DEBUG", "anchor": "pad", "anchor_pad": "\"1\"", "rotation": "90", "side": "back"}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "reference", "name": "CASE", "shape": "dxf", "parameters": {"file": "\"mechanical-assets/enclosure-guide.dxf\"", "sha256": "\"0e04d50fe71d932f400ff7cdf05d84befe8703defc39540b9e258bb1a2f45509\"", "units": "mm", "frame": "cartesian", "position": "(1mm,30mm)", "rotation": "0", "mirror_x": "false", "side": "front", "purpose": "\"Moved guide\""}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "hole", "name": "H7", "shape": "", "parameters": {"position": "(20mm,15mm)", "diameter": "3mm"}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "keepout", "name": "K1", "shape": "rectangle", "parameters": {"origin": "(30mm,20mm)", "width": "4mm", "height": "4mm"}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "stackup", "kind": "stackup", "name": "stackup", "parameters": {"declaration": "stackup { copper F.Cu { thickness = 35 um; } dielectric core { thickness = 1.53 mm; er = 4.2; } copper B.Cu { thickness = 35 um; } }"}}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "stackup", "kind": "stackup", "name": "stackup", "parameters": {"declaration": "stackup { copper F.Cu { thickness = 70 um; } dielectric core { thickness = 1.53 mm; er = 4.2; } copper B.Cu { thickness = 70 um; } }"}}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "stackup", "kind": "stackup", "name": "stackup", "parameters": {}, "remove": true}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "move", "revision": "{revision}", "reference": "R2", "x_nm": 25000000, "y_nm": 20000000, "rotation": 0, "side": "front"}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "R2", "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "front", "locks": ["side"]}}
+{"post": "/api/operation", "json": {"action": "apply", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_placement", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "undo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "undo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "redo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "move", "revision": "{revision}", "reference": "R2", "x_nm": 24000000, "y_nm": 21000000, "rotation": 0, "side": "front"}}
+{"post": "/api/operation", "json": {"action": "apply", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "reload_source", "revision": "{revision}"}}
+{"get": "/api/scene"}

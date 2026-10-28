@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use copper_drc::breakout::BreakoutRegions;
 use copper_drc::legality::{corridor_reservation, rounded_distance, target_point};
-use copper_json::Value;
+use copper_json::{Object, Value};
 use copper_lang::model::Board;
 use copper_lang::syntax::{Declaration, MechanicalItem};
 use copper_lang::{Token, parse, tokenize};
@@ -13,7 +13,10 @@ use copper_pcb::board::{AlignmentAxis, PhysicalBoard, RelativePlacementKind};
 use copper_pcb::keepouts::placement_map;
 use indexmap::IndexMap;
 
-use crate::source::{DeclarationSpan, SourceSnapshot, declaration_index, declaration_spans};
+use crate::source::{
+    DeclarationSpan, SourcePatch, SourceSnapshot, assignments, checked, declaration_index, declaration_spans,
+    erase_tokens, insert_member, property_edits,
+};
 use crate::{Error, Result, object, point_value};
 
 pub const CONSTRAINTS: [&str; 12] = [
@@ -415,4 +418,310 @@ pub fn dimension_source_names(
         }
     }
     Ok(result)
+}
+
+const ARTWORK: [&str; 8] = ["branding", "text", "line", "rectangle", "circle", "arc", "polygon", "logo"];
+
+/// A constraint identity a reviewed edit may change: `(kind, targets)`.
+pub type Scope = (String, Vec<String>);
+
+/// `_inventory`'s entries of a parsed board source.
+fn inventory(document: &copper_lang::syntax::Document) -> Vec<Entry> {
+    let mut entries = Vec::new();
+    for (index, declaration) in document.declarations.iter().enumerate() {
+        match declaration {
+            Declaration::Constraint(constraint) if CONSTRAINTS.contains(&constraint.kind.as_str()) => {
+                entries.push(Entry {
+                    category: "constraint",
+                    kind: constraint.kind.clone(),
+                    name: format!("constraint:{index}"),
+                    offset: constraint.location.offset,
+                    line: constraint.location.line,
+                    targets: constraint.targets.clone(),
+                    constraint: true,
+                });
+            }
+            Declaration::Silkscreen(block) => {
+                for item in &block.items {
+                    entries.push(Entry {
+                        category: "artwork",
+                        kind: item.kind.clone(),
+                        name: item.name.clone(),
+                        offset: item.location.offset,
+                        line: item.location.line,
+                        targets: Vec::new(),
+                        constraint: false,
+                    });
+                }
+            }
+            Declaration::Mechanical(block) => {
+                for item in &block.items {
+                    if let MechanicalItem::Stackup(stackup) = item {
+                        entries.push(Entry {
+                            category: "stackup",
+                            kind: "stackup".to_owned(),
+                            name: "stackup".to_owned(),
+                            offset: stackup.location.offset,
+                            line: stackup.location.line,
+                            targets: Vec::new(),
+                            constraint: false,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    entries
+}
+
+fn source_edit<T>(message: &str) -> Result<T> {
+    Err(Error::Value(message.to_owned()))
+}
+
+fn type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "NoneType",
+        Value::Bool(_) => "bool",
+        Value::Int(_) => "int",
+        Value::Float(_) => "float",
+        Value::Str(_) => "str",
+        Value::Array(_) => "list",
+        Value::Object(_) => "dict",
+    }
+}
+
+/// `kind in CONSTRAINTS` (or `ARTWORK`): a list or dict is unhashable.
+fn member(kind: &Value, set: &[&str]) -> Result<bool> {
+    match kind {
+        // The HTTP transport answers a `TypeError` like a `ValueError`.
+        Value::Array(_) | Value::Object(_) => Err(Error::Value(format!("unhashable type: '{}'", type_name(kind)))),
+        Value::Str(s) => Ok(set.contains(&s.as_str())),
+        _ => Ok(false),
+    }
+}
+
+/// `feature_patch`: a patch plus the constraint identity it may change.
+/// `fields` are the keyword arguments: `category`, `kind`, `name`,
+/// `parameters`, `targets` and `remove`.
+pub fn feature_patch(snapshot: &SourceSnapshot, fields: &Object) -> Result<(SourcePatch, Option<Scope>)> {
+    let null = Value::Null;
+    let category = fields.get("category").unwrap_or(&null);
+    let kind = fields.get("kind").unwrap_or(&null);
+    let empty = Value::from("");
+    let mut name = fields.get("name").unwrap_or(&empty).clone();
+    let parameters = match fields.get("parameters") {
+        None | Some(Value::Null) => Value::Object(Object::new()),
+        Some(other) => other.clone(),
+    };
+    let targets = match fields.get("targets") {
+        None | Some(Value::Null) => Value::Array(Vec::new()),
+        Some(other) => other.clone(),
+    };
+    let remove = fields.get("remove").cloned().unwrap_or(Value::Bool(false));
+    if category.as_str() == Some("artwork") && kind.as_str() == Some("branding") && name.as_str() == Some("") {
+        name = Value::from("branding");
+    }
+    let bounded = match &parameters {
+        Value::Object(map) => {
+            map.len() <= 96 && map.values().all(|v| matches!(v, Value::Str(s) if s.chars().count() <= 131072))
+        }
+        _ => false,
+    };
+    let targets_ok = matches!(&targets, Value::Array(items) if items.iter().all(|t| matches!(t, Value::Str(_))));
+    let (Value::Bool(remove), Value::Str(name), true, true) = (remove, name, bounded, targets_ok) else {
+        return source_edit("feature requires bounded literal parameters and target names");
+    };
+    let parameters: Vec<(String, String)> = parameters
+        .as_object()
+        .expect("object")
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_str().expect("str").to_owned()))
+        .collect();
+    let targets: Vec<String> =
+        targets.as_array().expect("array").iter().map(|t| t.as_str().expect("str").to_owned()).collect();
+    let document = parse(&snapshot.text, &snapshot.filename)?;
+    let tokens: Vec<Token> = tokenize(&snapshot.text, &snapshot.filename)?;
+    let root = declaration_index(&tokens);
+    let entries = inventory(&document);
+    if document.kind != copper_lang::syntax::DocumentKind::Board {
+        return source_edit("board feature edits require a board source");
+    }
+    let matches: Vec<&Entry> = entries
+        .iter()
+        .filter(|e| category.as_str() == Some(e.category) && kind.as_str() == Some(e.kind.as_str()) && e.name == name)
+        .collect();
+    if matches.len() > 1 {
+        return source_edit("ambiguous feature ownership");
+    }
+    let item = matches.first().copied();
+    let category = category.as_str().unwrap_or("");
+    let (mut literal, wrapper, scope);
+    if category == "constraint" && member(kind, &CONSTRAINTS)? {
+        let kind = kind.as_str().expect("str");
+        if item.is_some_and(|item| item.targets != targets) {
+            return source_edit("existing constraint targets must remain unchanged; remove and create explicitly");
+        }
+        literal = format!("constraint {kind}({}) {{ {} }}", targets.join(", "), assignments(&parameters));
+        wrapper = literal.clone();
+        scope = Some((kind.to_owned(), targets.clone()));
+    } else if category == "artwork" && member(kind, &ARTWORK)? {
+        let kind = kind.as_str().expect("str");
+        let shown = if kind == "branding" { "" } else { name.as_str() };
+        literal = format!("{kind} {shown} {{ {} }}", assignments(&parameters));
+        wrapper = format!("silkscreen {{ {literal} }}");
+        scope = None;
+    } else if category == "stackup" && kind.as_str() == Some("stackup") && name == "stackup" {
+        let declaration = parameters.iter().find(|(k, _)| k == "declaration").map(|(_, v)| v.clone());
+        if !(parameters.len() == 1 && declaration.is_some()) && !remove {
+            return source_edit("stackup requires its complete declaration");
+        }
+        literal = declaration.unwrap_or_else(|| "stackup {}".to_owned());
+        wrapper = format!("mechanical {{ {literal} }}");
+        scope = None;
+    } else {
+        return source_edit("unsupported physical feature");
+    }
+    let kind = kind.as_str().expect("str");
+    let scratch = parse(&format!("board Candidate {{ {wrapper} }}"), "<memory>")?;
+    if scratch.declarations.len() != 1 {
+        return source_edit("feature must contain exactly one declaration");
+    }
+    let same_keys =
+        |keys: Vec<&String>| keys.len() == parameters.len() && parameters.iter().all(|(k, _)| keys.contains(&k));
+    let valid = match (&scratch.declarations[0], category) {
+        (Declaration::Constraint(c), "constraint") => {
+            c.kind == kind && same_keys(c.parameters.keys().collect()) && c.targets == targets
+        }
+        (_, "constraint") => false,
+        (Declaration::Silkscreen(block), _) if block.items.len() == 1 => {
+            let item = &block.items[0];
+            category == "artwork"
+                && item.kind == kind
+                && same_keys(item.parameters.keys().collect())
+                && item.name == name
+        }
+        (Declaration::Mechanical(block), _) if block.items.len() == 1 => {
+            matches!(block.items[0], MechanicalItem::Stackup(_)) && category == "stackup"
+        }
+        _ => {
+            return source_edit("feature must contain exactly one item");
+        }
+    };
+    if !valid {
+        return source_edit("feature literal changes its declared identity");
+    }
+    let mut edits = Vec::new();
+    if let Some(item) = item {
+        if category == "stackup" {
+            let container = root.child("mechanical").expect("mechanical block");
+            let span = container.child("stackup").expect("stackup node").span;
+            edits = erase_tokens(&tokens, span);
+            if !remove {
+                edits[0].replacement = literal;
+            }
+        } else {
+            let spans = declaration_spans(&tokens, item.offset, item.constraint);
+            edits = if remove { erase_tokens(&tokens, spans.declaration) } else { property_edits(&spans, &parameters) };
+        }
+    } else if remove || (category == "constraint" && !name.is_empty()) {
+        return source_edit("feature is not owned by this source");
+    } else {
+        let mut parent = &root;
+        if category != "constraint" {
+            let block = if category == "artwork" { "silkscreen" } else { "mechanical" };
+            let parents: Vec<&DeclarationSpan> =
+                root.children.iter().filter(|n| n.header.len() == 1 && n.header[0] == block).collect();
+            if parents.len() > 1 {
+                return source_edit("ambiguous feature container");
+            }
+            match parents.first() {
+                Some(found) => parent = found,
+                None => literal = wrapper,
+            }
+        }
+        edits.push(insert_member(snapshot, parent.span.end - 1, &literal));
+    }
+    let patch = checked(snapshot, SourcePatch { revision: snapshot.revision(), edits })?;
+    Ok((patch, scope))
+}
+
+/// `feature_batch`: an atomic batch whose identities refer to the original revision.
+pub fn feature_batch(snapshot: &SourceSnapshot, features: &Value) -> Result<(Vec<u8>, Option<Vec<Scope>>)> {
+    let Value::Array(features) = features else {
+        return source_edit("feature batch requires 1–256 edits");
+    };
+    if !(1..=256).contains(&features.len()) {
+        return source_edit("feature batch requires 1–256 edits");
+    }
+    let owned: Vec<(String, String, String)> = source_features(snapshot)?
+        .iter()
+        .map(|f| (text(f, "category").to_owned(), text(f, "kind").to_owned(), text(f, "name").to_owned()))
+        .collect();
+    let mut current = snapshot.clone();
+    let mut seen: Vec<(String, String, String, Vec<String>)> = Vec::new();
+    let mut removed: Vec<i64> = Vec::new();
+    let mut scopes: Vec<Scope> = Vec::new();
+    for feature in features {
+        let required = ["category", "kind", "name", "parameters"];
+        let fields = match feature {
+            Value::Object(map)
+                if required.iter().all(|k| map.contains_key(*k))
+                    && map.keys().all(|k| required.contains(&k.as_str()) || k == "remove" || k == "targets") =>
+            {
+                map
+            }
+            _ => return source_edit("unexpected or missing feature batch fields"),
+        };
+        let (Some(category), Some(kind), Some(name)) =
+            (fields["category"].as_str(), fields["kind"].as_str(), fields["name"].as_str())
+        else {
+            return source_edit("feature identity requires strings");
+        };
+        let targets: Vec<String> = match fields.get("targets") {
+            None => Vec::new(),
+            Some(Value::Array(items)) if items.iter().all(|t| matches!(t, Value::Str(_))) => {
+                items.iter().map(|t| t.as_str().expect("str").to_owned()).collect()
+            }
+            Some(_) => return source_edit("feature targets require a list of names"),
+        };
+        let keyed = if category == "constraint" && name.is_empty() { targets.clone() } else { Vec::new() };
+        let identity = (category.to_owned(), kind.to_owned(), name.to_owned(), keyed);
+        if seen.contains(&identity) {
+            return source_edit("batch cannot edit a feature twice");
+        }
+        seen.push(identity);
+        let mut entry = fields.clone();
+        let mut original = None;
+        if category == "constraint" && !name.is_empty() {
+            if !owned.contains(&(category.to_owned(), kind.to_owned(), name.to_owned())) {
+                return source_edit("constraint identity is not owned by the original revision");
+            }
+            let index = match name.split(':').collect::<Vec<_>>().as_slice() {
+                ["constraint", ordinal] => ordinal.parse::<i64>().ok().filter(|i| *i >= 0),
+                _ => None,
+            };
+            let Some(index) = index else { return source_edit("invalid source constraint identity") };
+            let shift = removed.iter().filter(|i| **i < index).count() as i64;
+            entry.insert("name".to_owned(), Value::from(format!("constraint:{}", index - shift)));
+            original = Some(index);
+        }
+        let (patch, scope) = feature_patch(&current, &entry)?;
+        current = SourceSnapshot::new(patch.apply(&current)?, &snapshot.filename)?;
+        if let Some(scope) = scope
+            && !scopes.contains(&scope)
+        {
+            scopes.push(scope);
+        }
+        let truthy = match entry.get("remove") {
+            Some(Value::Bool(b)) => *b,
+            _ => false,
+        };
+        if let Some(index) = original
+            && truthy
+        {
+            removed.push(index);
+        }
+    }
+    Ok((current.raw, if scopes.is_empty() { None } else { Some(scopes) }))
 }

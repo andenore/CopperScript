@@ -55,7 +55,8 @@ its stdout is compared without the Windows CRLF reading.
 
 A case may name an ``http`` client transcript for a server that prints its
 loopback URL (``edit-mechanical``): JSON lines of ``get``/``post`` requests,
-replayed in order once the URL appears; the responses are written to
+replayed in order once the URL appears (``"{revision}"`` and ``"{review_id}"``
+stand for the latest scene's revision and source review id); the responses are written to
 ``{out}/http.jsonl`` with the random port and capability token masked (in
 stdout too), then the server is terminated. See ``_run_http``.
 
@@ -575,11 +576,13 @@ def _run_http(argv: list[str], case: Case, out: Path, environment: dict[str, str
     readers = [threading.Thread(target=drain, args=(name,), daemon=True) for name in output]
     for reader in readers:
         reader.start()
-    timed_out, port, token, records, revision = False, None, None, [], 0
+    timed_out, port, token, records, revision, review_id = False, None, None, [], 0, None
 
     def with_revision(value):
         if value == "{revision}":
             return revision
+        if value == "{review_id}":
+            return review_id
         if isinstance(value, list):
             return [with_revision(item) for item in value]
         if isinstance(value, dict):
@@ -633,6 +636,8 @@ def _run_http(argv: list[str], case: Case, out: Path, environment: dict[str, str
                         latest = parsed.get("scene") or parsed.get("preview") or parsed
                         if isinstance(latest, dict) and isinstance(latest.get("revision"), int):
                             revision = latest["revision"]
+                        if isinstance(latest, dict) and isinstance(latest.get("source_review"), dict):
+                            review_id = latest["source_review"].get("id")
                 except ValueError:
                     record["sha256"] = _sha256(data)
             except (OSError, http.client.HTTPException) as exc:

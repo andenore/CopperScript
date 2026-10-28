@@ -18,11 +18,12 @@ use copper_physical::{BoardSide, Point};
 use copper_units::Decimal;
 use indexmap::IndexMap;
 
+use crate::features::Scope;
 use crate::features::{dimension_source_names, feature_catalog, physical_feature_geometry, source_features};
 use crate::overlay::{RoutedOverlay, electrical_digest};
 use crate::scene::{RatsnestCache, board_scene, net_costs, ratsnest};
 use crate::source::{SourceSnapshot, declaration_spans};
-use crate::transactions::electrical_identity;
+use crate::transactions::{ReviewedSource, electrical_identity};
 use crate::{Error, Result, object, sha256_hex, value};
 
 /// `SourceWorkspace`: the compiled source a session may rewrite.
@@ -32,6 +33,8 @@ pub struct Workspace {
     pub input_paths: Vec<PathBuf>,
     pub inputs: Vec<(String, Option<String>)>,
     pub references: Vec<MechanicalReference>,
+    /// The physical inputs every rebuild uses (`build`).
+    pub settings: crate::project::BuildSettings,
 }
 
 fn file_digest(path: &Path) -> Result<Option<String>> {
@@ -42,7 +45,12 @@ fn file_digest(path: &Path) -> Result<Option<String>> {
 }
 
 impl Workspace {
-    pub fn new(source: &Path, design: &Design, input_paths: Vec<PathBuf>) -> Result<Self> {
+    pub fn new(
+        source: &Path,
+        design: &Design,
+        input_paths: Vec<PathBuf>,
+        settings: crate::project::BuildSettings,
+    ) -> Result<Self> {
         if source.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
             return value("source saving does not follow a symbolic link");
         }
@@ -53,12 +61,13 @@ impl Workspace {
             input_paths,
             inputs: Vec::new(),
             references: design.mechanical.as_ref().map(|m| m.references.clone()).unwrap_or_default(),
+            settings,
         };
         workspace.inputs = workspace.current_inputs()?;
         Ok(workspace)
     }
 
-    fn current_inputs(&self) -> Result<Vec<(String, Option<String>)>> {
+    pub(crate) fn current_inputs(&self) -> Result<Vec<(String, Option<String>)>> {
         self.input_paths.iter().map(|p| Ok((copper_lang::paths::display(p), file_digest(p)?))).collect()
     }
 
@@ -110,7 +119,13 @@ pub struct EditorSession {
     template: Option<(Arc<PhysicalBoard>, BTreeSet<String>, Object)>,
     job: Option<crate::jobs::PlacementJob>,
     job_consumed: bool,
+    source_pending: Option<ReviewedSource>,
+    source_undo: Vec<SourceHistory>,
+    source_redo: Vec<SourceHistory>,
 }
+
+/// One source history entry: the bytes, the session state and the edit's scope.
+type SourceHistory = (Vec<u8>, State, Option<Vec<Scope>>);
 
 fn merge(target: &mut Object, entries: Vec<(&'static str, Value)>) {
     for (key, item) in entries {
@@ -156,6 +171,9 @@ impl EditorSession {
             template: None,
             job: None,
             job_consumed: false,
+            source_pending: None,
+            source_undo: Vec::new(),
+            source_redo: Vec::new(),
         })
     }
 
@@ -219,7 +237,10 @@ impl EditorSession {
         let filename = copper_lang::paths::display(&self.source);
         if let Some(overlay) = &self.overlay {
             let mut identity = self.workspace.as_ref().map(|w| electrical_digest(&w.identity));
-            let overlay_revision = sha256_hex(&self.read_source()?);
+            let mut overlay_revision = sha256_hex(&self.read_source()?);
+            if let Some(review) = self.reviewing(state) {
+                overlay_revision = review.after.revision();
+            }
             if let Some(workspace) = &self.workspace
                 && let Err(Error::Value(_)) = workspace.check_inputs()
             {
@@ -274,11 +295,20 @@ impl EditorSession {
         scene.insert("placement_unsaved".to_owned(), Value::from(poses(board) != self.source_poses));
         scene.insert("preview_editable".to_owned(), Value::from(pending && state.manual_preview));
         scene.insert("document_kind".to_owned(), Value::from("board"));
+        let feature_raw = match self.reviewing(state) {
+            Some(review) => review.after.raw.clone(),
+            None => self.source_raw.clone(),
+        };
+        let mut features =
+            if writable { source_features(&SourceSnapshot::new(feature_raw, &filename)?)? } else { Vec::new() };
         let snapshot = SourceSnapshot::new(self.source_raw.clone(), &filename)?;
-        let mut features = if writable { source_features(&snapshot)? } else { Vec::new() };
         features.extend(crate::definitions::board_macro_features(board)?);
         if let Some(workspace) = &self.workspace {
-            let dimensions = dimension_source_names(board, &workspace.identity, &features)?;
+            let electrical = match self.reviewing(state) {
+                Some(review) => &review.design.electrical,
+                None => &workspace.identity,
+            };
+            let dimensions = dimension_source_names(board, electrical, &features)?;
             if let Some(Value::Array(items)) = scene.get_mut("physical_geometry") {
                 for item in items.iter_mut() {
                     let index = item.get("rule_index").and_then(|v| match v {
@@ -301,9 +331,16 @@ impl EditorSession {
             }
         }
         scene.insert("outputs_stale".to_owned(), Value::from(self.outputs_stale));
-        scene.insert("can_source_undo".to_owned(), Value::from(false));
-        scene.insert("can_source_redo".to_owned(), Value::from(false));
-        scene.insert("source_review".to_owned(), Value::Null);
+        scene.insert("can_source_undo".to_owned(), Value::from(!self.source_undo.is_empty()));
+        scene.insert("can_source_redo".to_owned(), Value::from(!self.source_redo.is_empty()));
+        let review = self.source_pending.as_ref().map(|review| {
+            object(vec![
+                ("id", Value::from(review.id())),
+                ("diff", Value::from(review.diff.as_str())),
+                ("summary", Value::from(review.summary.as_str())),
+            ])
+        });
+        scene.insert("source_review".to_owned(), review.unwrap_or(Value::Null));
         if writable {
             scene.insert(
                 "notice".to_owned(),
@@ -402,7 +439,14 @@ impl EditorSession {
             None => Value::Null,
         };
         scene.insert("pending_preview".to_owned(), preview);
-        scene.insert("source_preview".to_owned(), Value::Null);
+        let preview = match &self.source_pending {
+            Some(review) => {
+                let state = State::new(review.board.clone(), BTreeSet::new());
+                Value::Object(self.document(&state, false)?)
+            }
+            None => Value::Null,
+        };
+        scene.insert("source_preview".to_owned(), preview);
         Ok(scene)
     }
 }
@@ -540,6 +584,7 @@ impl EditorSession {
         self.redo_stack.clear();
         self.state = State { manual_preview: false, ..state };
         self.pending = None;
+        self.source_pending = None;
         self.revision += 1;
     }
 
@@ -611,7 +656,10 @@ impl EditorSession {
             return self.accepted();
         }
         if action == "reload_source" {
-            return Err(Error::NotImplemented("the editor's reload_source operation".to_owned()));
+            if exact_int(revision) != Some(&num_bigint::BigInt::from(self.revision)) {
+                return Err(Error::Stale("session changed; reload the current scene".to_owned()));
+            }
+            return self.reload_source();
         }
         self.check(revision)?;
         if let Some(job) = &mut self.job
@@ -619,11 +667,11 @@ impl EditorSession {
         {
             job.cancel("stale", Some("session edited; old placement cancelled"));
         }
+        if self.source_pending.is_some() && action != "save_source" && action != "discard_source" {
+            return editor("save or discard the source review before another operation");
+        }
         if SOURCE_ACTIONS.contains(&action) {
-            if self.workspace.is_none() {
-                return editor("source workspace is read-only");
-            }
-            return Err(Error::NotImplemented(format!("the editor's {action} operation (source transactions)")));
+            return self.source_operation(action, request);
         }
         match action {
             "start_auto_place" => {
@@ -852,4 +900,410 @@ fn move_placement_unit(
     );
     result.extend(copper_pcb::hard_macros::cluster_placements(cluster, &anchor, placements)?);
     Ok(result)
+}
+
+fn metadata_object(board: &PhysicalBoard, key: &str) -> Result<Object> {
+    let text = board.metadata.get(key).map_or("{}", String::as_str);
+    match copper_json::parse(text) {
+        Ok(Value::Object(map)) => Ok(map),
+        Ok(_) => Ok(Object::new()),
+        Err(error) => Err(Error::Uncaught(format!("JSONDecodeError: {error}"))),
+    }
+}
+
+fn strings(values: &[String]) -> Value {
+    Value::Array(values.iter().map(|v| Value::from(v.as_str())).collect())
+}
+
+/// The fixed-placement targets an imported module (not this source) owns.
+fn imported_fixed_targets(design: &Design, source: &Path) -> Result<Vec<(Vec<String>, Vec<String>)>> {
+    let prefix = format!("{}:", copper_lang::paths::display(source));
+    let flat = copper_lang::elaborate::elaborate(&design.electrical).map_err(Error::Value)?;
+    Ok(flat
+        .constraints
+        .iter()
+        .filter(|c| {
+            c.kind == copper_lang::model::ConstraintKind::FixedPlacement
+                && c.origins.iter().any(|origin| !origin.starts_with(&prefix))
+        })
+        .map(|c| (c.targets.clone(), c.origins.clone()))
+        .collect())
+}
+
+impl EditorSession {
+    /// Whether `state` shows the pending source review's board.
+    fn reviewing(&self, state: &State) -> Option<&ReviewedSource> {
+        self.source_pending.as_ref().filter(|review| Arc::ptr_eq(&review.board, &state.board))
+    }
+
+    fn workspace(&self) -> Result<&Workspace> {
+        match &self.workspace {
+            Some(workspace) => Ok(workspace),
+            None => editor("source workspace is read-only"),
+        }
+    }
+
+    fn compile(&self, raw: &[u8]) -> Result<Design> {
+        let filename = copper_lang::paths::display(&self.source);
+        let snapshot = SourceSnapshot::new(raw.to_vec(), &filename)?;
+        Ok(copper_lang::compiler::compile_design_source(&snapshot.text, &filename, true, true)?)
+    }
+
+    fn build(&self, design: &Design) -> Result<PhysicalBoard> {
+        crate::project::build(design, &self.source, &self.workspace()?.settings)
+    }
+
+    /// `_source_operation`.
+    fn source_operation(&mut self, action: &str, request: &Object) -> Result<Object> {
+        let workspace = self.workspace()?;
+        if self.pending.is_some() && !["prepare_placement", "save_source", "discard_source"].contains(&action) {
+            return editor("apply or discard the placement preview before editing source");
+        }
+        let snapshot = SourceSnapshot::new(self.read_source()?, &copper_lang::paths::display(&self.source))?;
+        let seeds = self.state.board.clone();
+        match action {
+            "prepare_placement" => self.review_placement(&snapshot)?,
+            "review_features" => {
+                let (raw, scope) = crate::features::feature_batch(&snapshot, &request["features"])?;
+                self.source_pending = Some(workspace.review(&snapshot, raw, &seeds, scope)?);
+            }
+            "review_feature" => {
+                let fields: Object = request
+                    .iter()
+                    .filter(|(k, _)| *k != "action" && *k != "revision")
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                let (patch, scope) = crate::features::feature_patch(&snapshot, &fields)?;
+                let raw = patch.apply(&snapshot)?;
+                self.source_pending = Some(workspace.review(&snapshot, raw, &seeds, scope.map(|s| vec![s]))?);
+            }
+            "prepare_lock" => {
+                let raw = self.prepare_lock(&snapshot, request)?;
+                let review = self.workspace()?.review(&snapshot, raw, &seeds, None)?;
+                self.source_pending = Some(review);
+            }
+            "prepare_mechanical" | "prepare_mechanical_batch" => {
+                let raw = self.prepare_mechanical(&snapshot, action, request)?;
+                let review = self.workspace()?.review(&snapshot, raw, &seeds, None)?;
+                self.source_pending = Some(review);
+            }
+            "save_source" => {
+                let review = match &self.source_pending {
+                    Some(review) if request["review_id"].as_str() == Some(review.id().as_str()) => review.clone(),
+                    _ => return Err(Error::Stale("review changed; inspect the current source diff".to_owned())),
+                };
+                let (_, validated) = workspace.validate(&review.after.raw, &review.board, review.scope.as_deref())?;
+                if validated != *review.board {
+                    return editor("physical inputs changed since review; discard and prepare the edit again");
+                }
+                workspace.save(&review)?;
+                self.source_undo.push((review.before.raw.clone(), self.state.clone(), review.scope.clone()));
+                if self.source_undo.len() > 64 {
+                    self.source_undo.remove(0);
+                }
+                self.source_redo.clear();
+                self.saved(review.after.raw.clone(), &review.board)?;
+                return self.accepted();
+            }
+            "discard_source" => self.source_pending = None,
+            _ => {
+                let undo = action == "undo_source";
+                let take = if undo { &self.source_undo } else { &self.source_redo };
+                let Some((raw, state, scope)) = take.last().cloned() else {
+                    return editor("no source history available");
+                };
+                let review = workspace.review(&snapshot, raw.clone(), &state.board, scope.clone())?;
+                workspace.save(&review)?;
+                let entry = (snapshot.raw.clone(), self.state.clone(), scope);
+                if undo {
+                    self.source_undo.pop();
+                    self.source_redo.push(entry);
+                } else {
+                    self.source_redo.pop();
+                    self.source_undo.push(entry);
+                }
+                self.saved(raw, &review.board)?;
+                return self.accepted();
+            }
+        }
+        self.revision += 1;
+        let scene = self.scene()?;
+        let preview = if self.source_pending.is_some() { scene.get("source_preview").cloned() } else { None };
+        let mut entries = vec![("scene", Value::Object(scene)), ("accepted", Value::from(true))];
+        if let Some(preview) = preview {
+            entries.push(("source_preview", preview));
+        }
+        Ok(response(entries))
+    }
+
+    /// The candidate bytes of `prepare_lock`.
+    fn prepare_lock(&self, snapshot: &SourceSnapshot, request: &Object) -> Result<Vec<u8>> {
+        let board = &self.state.board;
+        let references: BTreeSet<String> = board.placements.iter().map(|p| p.reference.clone()).collect();
+        let reference = match &request["reference"] {
+            Value::Str(reference) if references.contains(reference) => reference.clone(),
+            Value::Array(_) => return editor("unhashable type: 'list'"),
+            Value::Object(_) => return editor("unhashable type: 'dict'"),
+            _ => return editor("unknown component reference"),
+        };
+        let owners = metadata_object(board, "mechanical_attachment_owners")?;
+        if let Some(owner) = owners.get(&reference).filter(|owner| truthy(owner)) {
+            return editor(format!(
+                "pose is owned by mechanical attachment {}; edit that attachment instead",
+                py_repr(owner)
+            ));
+        }
+        let current = self.compile(&snapshot.raw)?;
+        if imported_fixed_targets(&current, &self.source)?.iter().any(|(targets, _)| targets.contains(&reference)) {
+            return editor("fixed pose is owned by an imported module; edit its public mechanical binding instead");
+        }
+        let locks: Vec<&str> = match &request["locks"] {
+            Value::Array(items) if items.iter().all(|k| matches!(k, Value::Str(_))) => {
+                items.iter().map(|k| k.as_str().expect("str")).collect()
+            }
+            _ => return editor("locks must be unique position/rotation/side names"),
+        };
+        let unique: BTreeSet<&str> = locks.iter().copied().collect();
+        if unique.len() != locks.len() || unique.iter().any(|k| !["position", "rotation", "side"].contains(k)) {
+            return editor("locks must be unique position/rotation/side names");
+        }
+        let given = |key: &str| Some(request[key].clone()).filter(|v| !matches!(v, Value::Null));
+        let mut edit = crate::source::PlacementEdit::default();
+        if unique.contains("position") {
+            edit.x_nm = given("x_nm");
+            edit.y_nm = given("y_nm");
+        } else {
+            edit.clear.extend(["x", "y"]);
+        }
+        if unique.contains("rotation") {
+            edit.rotation = given("rotation").map(crate::source::Rotation::Json);
+        } else {
+            edit.clear.push("rotation");
+        }
+        if unique.contains("side") {
+            edit.side = given("side");
+        } else {
+            edit.clear.push("side");
+        }
+        crate::source::fixed_placement_patch(snapshot, &reference, &edit, &references)?.apply(snapshot)
+    }
+
+    /// The candidate bytes of `prepare_mechanical` and `prepare_mechanical_batch`.
+    fn prepare_mechanical(&self, snapshot: &SourceSnapshot, action: &str, request: &Object) -> Result<Vec<u8>> {
+        let keys = ["kind", "name", "shape", "parameters", "remove"];
+        let features: Vec<Value> = if action == "prepare_mechanical_batch" {
+            match &request["features"] {
+                Value::Array(items) if (1..=513).contains(&items.len()) => items.clone(),
+                _ => return editor("mechanical batch requires 1–513 feature edits"),
+            }
+        } else {
+            vec![Value::Object(keys.iter().map(|k| ((*k).to_owned(), request[*k].clone())).collect())]
+        };
+        let provenance = metadata_object(&self.state.board, "mechanical_provenance")?;
+        let provenance: Vec<&Value> = match provenance.get("features") {
+            Some(Value::Array(items)) => items.iter().collect(),
+            _ => Vec::new(),
+        };
+        let mut current = snapshot.clone();
+        let mut seen: Vec<(String, String)> = Vec::new();
+        for feature in &features {
+            let valid = match feature {
+                Value::Object(map) => {
+                    map.len() == keys.len()
+                        && keys.iter().all(|k| map.contains_key(*k))
+                        && matches!(&map["parameters"], Value::Object(p) if p.len() <= 32 && p.values().all(|v| matches!(v, Value::Str(_))))
+                        && ["kind", "name", "shape"].iter().all(|k| matches!(map[*k], Value::Str(_)))
+                        && matches!(map["remove"], Value::Bool(_))
+                }
+                _ => false,
+            };
+            if !valid {
+                return editor("mechanical feature requires a bounded literal property map");
+            }
+            let feature = feature.as_object().expect("object");
+            let text = |k: &str| feature[k].as_str().expect("str").to_owned();
+            let (kind, name, shape) = (text("kind"), text("name"), text("shape"));
+            let identity = (kind.clone(), name.clone());
+            if seen.contains(&identity) {
+                return editor("mechanical batch cannot edit a feature twice");
+            }
+            seen.push(identity);
+            let imported = provenance.iter().any(|f| {
+                f.get("kind").and_then(Value::as_str) == Some(kind.as_str())
+                    && f.get("name").and_then(Value::as_str) == Some(name.as_str())
+                    && f.get("profile").is_some_and(truthy)
+            });
+            if imported {
+                return editor("mechanical feature is owned by an imported profile");
+            }
+            let parameters: Vec<(String, String)> = feature["parameters"]
+                .as_object()
+                .expect("object")
+                .iter()
+                .map(|(k, v)| (k.clone(), v.as_str().expect("str").to_owned()))
+                .collect();
+            let remove = matches!(feature["remove"], Value::Bool(true));
+            let patch = crate::source::mechanical_patch(&current, &kind, &name, &shape, &parameters, remove)?;
+            current = SourceSnapshot::new(patch.apply(&current)?, &snapshot.filename)?;
+        }
+        Ok(current.raw)
+    }
+
+    /// `_review_placement`: freeze the reviewed layout as source locks.
+    fn review_placement(&mut self, snapshot: &SourceSnapshot) -> Result<()> {
+        let board = self.pending.as_ref().unwrap_or(&self.state).board.clone();
+        let current_poses = poses(&board);
+        if current_poses == self.source_poses {
+            return editor("no unsaved placement changes");
+        }
+        let placements = copper_pcb::keepouts::placement_map(&board);
+        if !copper_drc::legality::placement_solution_is_legal(&board, &placements)? {
+            let reasons = copper_drc::legality::placement_rejection_reasons(&board, &placements)?;
+            return editor(format!("placement cannot be saved: {}", reasons.join("; ")));
+        }
+        let design = self.compile(&snapshot.raw)?;
+        let imported: BTreeSet<String> =
+            imported_fixed_targets(&design, &self.source)?.into_iter().flat_map(|(targets, _)| targets).collect();
+        let attachments = metadata_object(&board, "mechanical_attachment_owners")?;
+        let members: BTreeSet<&str> =
+            board.rigid_clusters.iter().flat_map(|c| c.members.iter().map(|m| m.reference.as_str())).collect();
+        let anchors: BTreeSet<&str> = board.rigid_clusters.iter().map(|c| c.anchor_reference.as_str()).collect();
+        let references: BTreeSet<String> = current_poses.keys().cloned().collect();
+        let mut current = snapshot.clone();
+        let mut saved = 0;
+        for pose in &board.placements {
+            let reference = pose.reference.as_str();
+            if members.contains(reference) && !anchors.contains(reference) {
+                continue;
+            }
+            let rule = board.placement_rules.iter().find(|r| r.reference == reference);
+            if rule
+                .is_some_and(|r| r.fixed_position.is_some() && r.fixed_rotation_degrees.is_some() && r.side.is_some())
+            {
+                continue;
+            }
+            if imported.contains(reference) || attachments.contains_key(reference) {
+                return editor(format!(
+                    "{reference}: pose is owned by an imported module or mechanical attachment; edit its binding before saving placement"
+                ));
+            }
+            let edit = crate::source::PlacementEdit {
+                x_nm: Some(Value::from(pose.position.x_nm)),
+                y_nm: Some(Value::from(pose.position.y_nm)),
+                rotation: Some(crate::source::Rotation::Decimal(pose.rotation_degrees.clone())),
+                side: Some(Value::from(pose.side.value())),
+                clear: Vec::new(),
+            };
+            let patch = crate::source::fixed_placement_patch(&current, reference, &edit, &references)?;
+            current = SourceSnapshot::new(patch.apply(&current)?, &snapshot.filename)?;
+            saved += 1;
+        }
+        let mut review = self.workspace()?.review(snapshot, current.raw, &board, None)?;
+        if poses(&self.build(&review.design)?) != current_poses {
+            return editor("saved source does not reproduce this layout; resolve placement ownership before saving");
+        }
+        review.summary = format!(
+            "Save layout as position, rotation and side locks for {saved} placement units. To move them later, edit their Saved source locks. Routing and manufacturing outputs must be rebuilt."
+        );
+        self.source_pending = Some(review);
+        Ok(())
+    }
+
+    /// `_saved`: the session continues from the saved source.
+    fn saved(&mut self, raw: Vec<u8>, board: &PhysicalBoard) -> Result<()> {
+        let design = self.compile(&raw)?;
+        let source_poses = poses(&self.build(&design)?);
+        let workspace = self.workspace.as_mut().expect("workspace");
+        workspace.identity = electrical_identity(&design.electrical);
+        self.source_poses = source_poses;
+        self.source_revision = sha256_hex(&raw);
+        self.source_raw = raw;
+        let mut board = board.clone();
+        board.metadata.insert("fabrication_ready".to_owned(), "false".to_owned());
+        board.metadata.insert("editor_outputs_stale".to_owned(), "true".to_owned());
+        workspace.references = board.mechanical_references.clone();
+        self.state = State::new(Arc::new(board), BTreeSet::new());
+        self.pending = None;
+        self.source_pending = None;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.outputs_stale = true;
+        self.revision += 1;
+        Ok(())
+    }
+
+    /// `reload_source`: discard previews and history and continue from the source on disk.
+    fn reload_source(&mut self) -> Result<Object> {
+        self.workspace()?;
+        let draft = self.pending.as_ref().unwrap_or(&self.state).board.clone();
+        let draft_poses = poses(&draft);
+        let moved: BTreeSet<String> = draft_poses
+            .iter()
+            .filter(|(reference, pose)| self.source_poses.get(*reference) != Some(pose))
+            .map(|(reference, _)| reference.clone())
+            .collect();
+        let raw = self.read_source()?;
+        let design = self.compile(&raw)?;
+        let diagnostics = copper_lang::erc::check(&design.electrical, false).map_err(Error::Value)?;
+        if copper_lang::erc::has_errors(&diagnostics) {
+            return editor("external source fails ERC");
+        }
+        let source_board = self.build(&design)?;
+        let board = if moved.is_empty() {
+            source_board.clone()
+        } else {
+            crate::transactions::seed_placements(source_board.clone(), &draft, Some(&moved))?
+        };
+        let reloaded = poses(&board);
+        let kept: Vec<String> = moved.iter().filter(|r| reloaded.get(*r) == draft_poses.get(*r)).cloned().collect();
+        let dropped: Vec<String> = moved.iter().filter(|r| !kept.contains(r)).cloned().collect();
+        let mut invalid = Vec::new();
+        if !kept.is_empty() {
+            let placements = copper_pcb::keepouts::placement_map(&board);
+            let reasons = copper_drc::legality::placement_rejection_reasons(&board, &placements)?;
+            let named: BTreeSet<&str> =
+                reasons.iter().flat_map(|message| message.split(':').next().unwrap_or("").split(" / ")).collect();
+            invalid = kept.iter().filter(|r| named.contains(r.as_str())).cloned().collect();
+        }
+        let workspace = self.workspace.as_mut().expect("workspace");
+        workspace.identity = electrical_identity(&design.electrical);
+        workspace.inputs = workspace.current_inputs()?;
+        workspace.references = board.mechanical_references.clone();
+        self.source_revision = sha256_hex(&raw);
+        self.source_raw = raw;
+        self.state = State::new(Arc::new(board), BTreeSet::new());
+        self.source_poses = poses(&source_board);
+        self.pending = None;
+        self.source_pending = None;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.source_undo.clear();
+        self.source_redo.clear();
+        self.outputs_stale = true;
+        if let Some(job) = &mut self.job {
+            job.cancel("cancelled", None);
+        }
+        self.revision += 1;
+        let scene = self.scene()?;
+        Ok(response(vec![
+            ("scene", Value::Object(scene)),
+            ("accepted", Value::from(true)),
+            ("placement_kept", strings(&kept)),
+            ("placement_dropped", strings(&dropped)),
+            ("placement_invalid", strings(&invalid)),
+        ]))
+    }
+}
+
+/// Python truthiness of a JSON value.
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Int(n) => *n != 0.into(),
+        Value::Float(f) => *f != 0.0,
+        Value::Str(s) => !s.is_empty(),
+        Value::Array(items) => !items.is_empty(),
+        Value::Object(map) => !map.is_empty(),
+    }
 }

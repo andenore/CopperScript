@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use copper_json::{Dumps, Object, Value};
 
-use crate::session::EditorSession;
+use crate::project::Session;
 use crate::{Error, Result, object};
 
 /// Unpredictable bytes for capability tokens and temporary names.
@@ -105,7 +105,9 @@ pub struct EditorServer {
     listener: TcpListener,
     pub port: u16,
     pub token: String,
-    session: Arc<Mutex<EditorSession>>,
+    session: Arc<Mutex<Session>>,
+    /// The definition editors opened from this one, by source.
+    definitions: Arc<Mutex<indexmap::IndexMap<std::path::PathBuf, String>>>,
 }
 
 impl EditorServer {
@@ -115,7 +117,7 @@ impl EditorServer {
 }
 
 /// `create_server`.
-pub fn create_server(session: EditorSession, port: &num_bigint::BigInt) -> Result<EditorServer> {
+pub fn create_server(session: Session, port: &num_bigint::BigInt) -> Result<EditorServer> {
     let Some(port) = u16::try_from(port).ok() else {
         return Err(Error::Value("editor port must be between 0 and 65535".to_owned()));
     };
@@ -124,7 +126,7 @@ pub fn create_server(session: EditorSession, port: &num_bigint::BigInt) -> Resul
         .map_err(|error| Error::Os(copper_lang::paths::python_os_error(&error, None)))?;
     let port =
         listener.local_addr().map_err(|error| Error::Os(copper_lang::paths::python_os_error(&error, None)))?.port();
-    Ok(EditorServer { listener, port, token, session: Arc::new(Mutex::new(session)) })
+    Ok(EditorServer { listener, port, token, session: Arc::new(Mutex::new(session)), definitions: Arc::default() })
 }
 
 fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<(Request, Vec<u8>)>> {
@@ -220,7 +222,8 @@ fn python_int(text: &str) -> std::result::Result<i128, String> {
     Ok(if trimmed.starts_with('-') { -value } else { value })
 }
 
-fn post(session: &Mutex<EditorSession>, request: &Request, stream: &mut TcpStream, initial: Vec<u8>) -> Outcome {
+fn post(server: &Shared, request: &Request, stream: &mut TcpStream, initial: Vec<u8>) -> Outcome {
+    let session = &server.session;
     let endpoint = request.path.split(['?', '#']).next().unwrap_or("");
     if endpoint != "/api/operation" && endpoint != "/api/open-definition" {
         return error_body(404, "not found");
@@ -265,12 +268,30 @@ fn post(session: &Mutex<EditorSession>, request: &Request, stream: &mut TcpStrea
         if !path.ends_with(".copper") {
             return error_body(400, "this asset has no editable CopperScript definition");
         }
-        return Outcome::NotImplemented("the editor's open-definition (definition sessions)".to_owned());
+        let source = copper_lang::paths::resolve(std::path::Path::new(path));
+        let mut definitions = server.definitions.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !definitions.contains_key(&source) {
+            let opened = crate::dependencies::prepare_editor_dependencies(&source, true, true, None, &mut |_| {})
+                .and_then(|()| {
+                    crate::project::document_session(&source, &crate::project::BuildSettings::default(), None, None)
+                })
+                .and_then(|child| create_server(child, &0.into()));
+            let child = match opened {
+                Ok(child) => child,
+                Err(error) => return outcome_of(Err(error)),
+            };
+            definitions.insert(source.clone(), child.url());
+            let err_exit = server.err_exit;
+            std::thread::spawn(move || serve(child, err_exit));
+        }
+        let url = definitions[&source].clone();
+        return Outcome::Respond(200, json_body(&object(vec![("url", Value::from(url))])), "application/json");
     }
     outcome_of(session.operation(&parsed))
 }
 
-fn handle(session: &Mutex<EditorSession>, mut stream: TcpStream, port: u16, token: &str, err_exit: &dyn Fn(&str)) {
+fn handle(server: &Shared, mut stream: TcpStream, port: u16, token: &str) {
+    let (session, err_exit) = (&server.session, server.err_exit);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
     let Ok(Some((request, initial))) = read_request(&mut stream) else { return };
     let path = request.path.split(['?', '#']).next().unwrap_or("").to_owned();
@@ -292,7 +313,7 @@ fn handle(session: &Mutex<EditorSession>, mut stream: TcpStream, port: u16, toke
         },
         "POST" => match refused(&request, port, token, true) {
             Some(refusal) => refusal,
-            None => post(session, &request, &mut stream, initial),
+            None => post(server, &request, &mut stream, initial),
         },
         other => Outcome::NotImplemented(format!("HTTP {other} requests to the editor")),
     };
@@ -309,13 +330,22 @@ fn handle(session: &Mutex<EditorSession>, mut stream: TcpStream, port: u16, toke
     }
 }
 
-/// `serve`: answer requests until the process is stopped.
-pub fn serve(server: EditorServer, err_exit: &(dyn Fn(&str) + Sync)) {
+/// What every request handler of one server shares.
+struct Shared {
+    session: Arc<Mutex<Session>>,
+    definitions: Arc<Mutex<indexmap::IndexMap<std::path::PathBuf, String>>>,
+    err_exit: &'static (dyn Fn(&str) + Sync),
+}
+
+/// `serve`: answer requests until the process is stopped; `err_exit` ends
+/// the process when a request reaches behaviour the rewrite lacks.
+pub fn serve(server: EditorServer, err_exit: &'static (dyn Fn(&str) + Sync)) {
+    let shared = Shared { session: server.session.clone(), definitions: server.definitions.clone(), err_exit };
     std::thread::scope(|scope| {
         for stream in server.listener.incoming() {
             let Ok(stream) = stream else { continue };
-            let (session, token, port) = (&server.session, server.token.as_str(), server.port);
-            scope.spawn(move || handle(session, stream, port, token, err_exit));
+            let (shared, token, port) = (&shared, server.token.as_str(), server.port);
+            scope.spawn(move || handle(shared, stream, port, token));
         }
     });
 }

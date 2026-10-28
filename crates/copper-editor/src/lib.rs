@@ -10,8 +10,11 @@
 
 pub mod artwork;
 pub mod configuration;
+pub mod definition_session;
+pub mod definition_source;
 pub mod definitions;
 pub mod dependencies;
+pub mod difflib;
 pub mod features;
 pub mod islands;
 pub mod jobs;
@@ -70,6 +73,10 @@ impl From<copper_pcb::Error> for Error {
 
 impl From<CopperScriptError> for Error {
     fn from(error: CopperScriptError) -> Self {
+        // A limit of the rewrite's lowering, never a diagnostic Python reports.
+        if error.code == copper_lang::mechanical::NOT_IMPLEMENTED {
+            return Error::NotImplemented(error.message.clone());
+        }
         Error::Copper(error)
     }
 }
