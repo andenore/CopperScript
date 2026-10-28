@@ -1,9 +1,9 @@
 //! Conservative cleanup of *owned* ordinary tracks, never input copper
 //! (`pcbir.route_cleanup`).
 //!
-//! Only the final sweep (`trim_dangling_overhangs`) and the robust contact
-//! score it measures with are ported. A net whose score shows open track ends
-//! needs `_prune_open_ends` (the stub pruner), which reports not implemented.
+//! Only the final sweep (`trim_dangling_overhangs`), with the robust contact
+//! score and the open-end trimming it uses, is ported; its settler owns no
+//! mutable copper, so the stub pruner (`prune_track_stubs`) never runs there.
 
 use std::collections::BTreeMap;
 
@@ -18,7 +18,7 @@ use copper_physical::footprint::PadKind;
 use copper_physical::geometry::shapes_clear;
 use copper_physical::{BoardSide, CopperLayer, Point, RoundedConvexShape};
 
-use crate::{Error, Result};
+use crate::Result;
 
 /// Released copper must not leave connectivity that depends on a grazing
 /// touch: every contact is judged with tracks and vias shrunk by this much.
@@ -201,7 +201,7 @@ impl Settler<'_> {
 /// `trim_dangling_overhangs`: cut routed tracks back to the land they cross
 /// when their far end is open. `protected` occurrences (input and hard-macro
 /// copper) and critical, zone and incomplete nets never change.
-pub fn trim_dangling_overhangs(board: &PhysicalBoard, protected: &TrackCounter) -> Result<PhysicalBoard> {
+pub fn trim_dangling_overhangs(board: &PhysicalBoard, protected: &TrackCounter) -> Result<(PhysicalBoard, bool)> {
     let mut skip: IndexSet<&str> = board.zones.iter().map(|zone| zone.net.as_str()).collect();
     skip.extend(
         board.net_routing_rules.iter().filter(|rule| rule.kind != RouteKind::General).map(|rule| rule.net.as_str()),
@@ -211,6 +211,7 @@ pub fn trim_dangling_overhangs(board: &PhysicalBoard, protected: &TrackCounter) 
     for track in &board.tracks {
         by_net.entry(track.net.as_str()).or_default().push(track.clone());
     }
+    let mut replaced: BTreeMap<&str, Vec<TrackSegment>> = BTreeMap::new();
     for (name, tracks) in &by_net {
         let mut owned = counter(tracks);
         for (track, count) in protected {
@@ -230,10 +231,116 @@ pub fn trim_dangling_overhangs(board: &PhysicalBoard, protected: &TrackCounter) 
         if score.1 == 0 {
             continue;
         }
-        return Err(Error::NotImplemented(format!(
-            "route_cleanup._prune_open_ends (net {} has open track ends)",
-            copper_json::python_str_repr(name)
-        )));
+        let (trimmed, trimmed_score) = prune_open_ends(&settle, (tracks.clone(), vias), score, 8, &owned)?;
+        if trimmed_score.1 < score.1 {
+            replaced.insert(name, trimmed.0);
+        }
     }
-    Ok(board.clone())
+    if replaced.is_empty() {
+        return Ok((board.clone(), false));
+    }
+    let mut result = board.clone();
+    result.tracks = board.tracks.iter().filter(|track| !replaced.contains_key(track.net.as_str())).cloned().collect();
+    for tracks in replaced.values() {
+        result.tracks.extend(tracks.iter().cloned());
+    }
+    Ok((result, true))
+}
+
+type Copper = (Vec<TrackSegment>, Vec<Via>);
+type Score = (usize, usize, usize);
+
+/// `_prune_open_ends` for a settler without mutable copper (the overhang
+/// sweep): a trimmable track whose open end runs past a land of its net is
+/// cut back to the land's centre when that strictly reduces open ends.
+fn prune_open_ends(
+    settle: &Settler<'_>,
+    mut current: Copper,
+    mut score: Score,
+    rounds: usize,
+    trimmable: &TrackCounter,
+) -> Result<(Copper, Score)> {
+    let mut trimmable = trimmable.clone();
+    for _ in 0..rounds {
+        if score.1 == 0 {
+            break;
+        }
+        let mut spare = trimmable.clone();
+        let candidates: IndexSet<usize> = settle.open_track_ends(&current.0, &current.1).into_iter().collect();
+        let mut accepted: Option<(Copper, Score, TrackSegment)> = None;
+        for (index, track) in current.0.iter().enumerate() {
+            let escape = spare.get(track).is_some_and(|count| *count > 0);
+            if escape {
+                *spare.get_mut(track).expect("spare") -= 1;
+            }
+            if !escape || !candidates.contains(&index) {
+                continue;
+            }
+            let mut rest = current.0.clone();
+            rest.remove(index);
+            for piece in trimmed_to_land(settle, track) {
+                let mut tracks = rest.clone();
+                tracks.push(piece);
+                let trial = (tracks, current.1.clone());
+                if let Some(trial_score) = settle.score(&trial.0, &trial.1)?
+                    && trial_score.1 < score.1
+                    && trial_score.0 <= score.0
+                    && trial_score.1 <= score.1
+                    && trial_score.2 <= score.2
+                {
+                    accepted = Some((trial, trial_score, track.clone()));
+                    break;
+                }
+            }
+            if accepted.is_some() {
+                break;
+            }
+        }
+        let Some((trial, trial_score, track)) = accepted else { break };
+        current = trial;
+        score = trial_score;
+        if let Some(count) = trimmable.get_mut(&track) {
+            *count -= 1;
+            if *count <= 0 {
+                trimmable.shift_remove(&track);
+            }
+        }
+    }
+    Ok((current, score))
+}
+
+/// `_trimmed_to_land`: `track` cut back to the centre of each same-net land it crosses.
+fn trimmed_to_land(settle: &Settler<'_>, track: &TrackSegment) -> Vec<TrackSegment> {
+    let mut pieces: Vec<TrackSegment> = Vec::new();
+    let robust = robust_shape(track);
+    let (dx, dy) = (track.end.x_nm - track.start.x_nm, track.end.y_nm - track.start.y_nm);
+    let steps = dx.abs().max(dy.abs());
+    if steps == 0 || (dx != 0 && dy != 0 && dx.abs() != dy.abs()) {
+        return pieces;
+    }
+    for (layers, pad) in &settle.pads {
+        if !layers.contains(&track.layer) || shapes_clear(&robust, pad, 1) {
+            continue;
+        }
+        let count = pad.spine.len() as i64;
+        let cx = pad.spine.iter().map(|p| p.x_nm).sum::<i64>().div_euclid(count);
+        let cy = pad.spine.iter().map(|p| p.y_nm).sum::<i64>().div_euclid(count);
+        // Projection onto the segment, counted in octilinear steps.
+        let (ux, uy) = (dx.signum(), dy.signum());
+        let along = ((cx - track.start.x_nm) * ux + (cy - track.start.y_nm) * uy).div_euclid(ux.abs() + uy.abs());
+        if !(0 < along && along < steps) {
+            continue;
+        }
+        let cut = Point { x_nm: track.start.x_nm + ux * along, y_nm: track.start.y_nm + uy * along };
+        if shapes_clear(&shape(vec![cut], 0), pad, 1) {
+            continue; // The centre projects outside the land: an edge contact.
+        }
+        for keep in [track.start, track.end] {
+            let piece = TrackSegment { start: keep, end: cut, ..track.clone() };
+            if !pieces.contains(&piece) {
+                pieces.push(piece);
+            }
+        }
+    }
+    pieces
 }

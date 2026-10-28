@@ -1095,12 +1095,12 @@ fn finish(
             }
         }
     }
-    let output_board = if stopped {
-        output_board
+    let (output_board, trimmed_overhangs) = if stopped {
+        (output_board, false)
     } else {
         copper_route::route_cleanup::trim_dangling_overhangs(&output_board, &fixed)?
     };
-    let output_drc = if !stopped && duplicate_stitch.added_track_count != 0 {
+    let output_drc = if !stopped && (duplicate_stitch.added_track_count != 0 || trimmed_overhangs) {
         copper_route::drc_report::run_physical_drc(&output_board, copper_drc::Policy::default())?
     } else {
         result.drc.clone()
@@ -1296,7 +1296,7 @@ fn finish(
             ])]),
         );
     }
-    if !output_board.via_in_pad_rules.is_empty() {
+    if output_board.via_in_pad_rules.iter().any(|rule| rule.rows.is_some()) {
         return copper_pcb::not_implemented("the via-in-pad array report (pad_via_arrays.via_in_pad_array_report)");
     }
     let mut duplicate = Vec::new();
