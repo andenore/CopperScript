@@ -119,6 +119,7 @@ dependencies = [
  "copper-json",
  "copper-lang",
  "copper-physical",
+ "copper-state",
  "copper-units",
  "indexmap",
  "num-bigint",

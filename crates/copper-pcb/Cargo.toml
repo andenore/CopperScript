@@ -11,6 +11,7 @@ publish.workspace = true
 copper-json.workspace = true
 copper-lang.workspace = true
 copper-physical.workspace = true
+copper-state.workspace = true
 copper-units.workspace = true
 indexmap.workspace = true
 num-bigint.workspace = true
