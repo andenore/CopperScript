@@ -636,18 +636,23 @@ do not shrink as much.
   `local_preparation.elapsed_seconds`.
 - Routed paths ported: pair terminal preparation (source terminals), the
   coarse aligned-pair and offset-guide candidates with pin stubs and
-  checked access lead-ins, budgets, coupled length, atomic DRC validation,
-  the joint search tiers when no searcher expands a state; single-ended
-  guides, pin stubs and local surface trees (`local_critical`,
-  `surface_path`, `route_style`); length-match outcomes within limits;
-  the route summary's plane estimate (`plane_estimate`, PENDING
-  rust-m4-unified).
-- Corpus (6 `replay-critical*` suites, 90 cases): 77 byte-identical, 13
-  not implemented, none different. Not implemented (exit 3): the joint
-  pair search proper (`pair_search` ports and spine search, `pair_vias`
-  transitions, `pair_refine`, resumed frontiers), guide vias
-  (`physical_via_span` is a rust-m4-global stub), intra-pair skew tuning,
-  local contact branches, the unified router (single-ended cohorts, exact
-  searches; rust-m4-unified), bundles and repairs, package-access
-  reservations, plane contacts and length-match tuning over the limit.
+  checked access lead-ins, budgets, coupled length, atomic DRC validation;
+  the joint pair search (`pair_search` collars, departure preferences, the
+  resumable A* spine search, resumed frontiers, state escalation;
+  `pair_vias` transitions, local via ports and traces) with candidate
+  gates and the over-budget fallback; single-ended guides, pin stubs and
+  local surface trees (`local_critical`, `surface_path`, `route_style`);
+  length-match outcomes within limits; the route summary's plane estimate
+  (`plane_estimate`, PENDING rust-m4-unified).
+- Corpus (6 `replay-critical*` suites, 90 cases): 81 byte-identical, 9
+  not implemented, none different. Not implemented (exit 3): accepted
+  search candidates (`pair_refine` spine refinement), return vias
+  (`return_paths`), intra-pair skew tuning (`_tune_pair`,
+  `pair_tuning_spans`), local contact branches, coarse guide transitions,
+  candidate validation on boards with hard macros (copper-pcb
+  `validate_hard_macros` for materialized copper), the unified router
+  (single-ended cohorts and exact searches; rust-m4-unified), bundles and
+  repairs, package-access reservations (`FanoutResult`), plane contacts
+  (`plane.stitch_zone_pads`, rust-m4-flow) and length-match tuning over the
+  limit.
 
