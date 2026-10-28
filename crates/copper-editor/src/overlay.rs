@@ -19,7 +19,7 @@ use copper_units::{Decimal, DecimalError};
 use num_traits::ToPrimitive;
 
 use crate::transactions::electrical_identity;
-use crate::{Error, Result, sha256_hex, value};
+use crate::{Error, Result, object, point_value, sha256_hex, value};
 
 pub const SCHEMA: &str = "copperscript-editor-overlay/v0.1";
 pub const INTENT_SCHEMA: &str = "copperscript-editor-route-intent/v0.1";
@@ -45,15 +45,22 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>> {
 
 /// `bytes.decode("utf-8")` on `json.loads(bytes)`: the BOM is stripped and an
 /// invalid sequence is a `UnicodeDecodeError`.
-fn decode_utf8(raw: &[u8]) -> Result<&str> {
+pub(crate) fn decode_utf8(raw: &[u8]) -> Result<&str> {
     let body = raw.strip_prefix(b"\xef\xbb\xbf").unwrap_or(raw);
     std::str::from_utf8(body).map_err(|failure| {
         let position = failure.valid_up_to();
         let message = match failure.error_len() {
-            None => format!("'utf-8' codec can't decode byte 0x{:02x} in position {position}: unexpected end of data", body[position]),
+            None => format!(
+                "'utf-8' codec can't decode byte 0x{:02x} in position {position}: unexpected end of data",
+                body[position]
+            ),
             Some(_) => {
                 let byte = body[position];
-                let reason = if (0x80..0xC2).contains(&byte) || byte >= 0xF5 { "invalid start byte" } else { "invalid continuation byte" };
+                let reason = if (0x80..0xC2).contains(&byte) || byte >= 0xF5 {
+                    "invalid start byte"
+                } else {
+                    "invalid continuation byte"
+                };
                 format!("'utf-8' codec can't decode byte 0x{byte:02x} in position {position}: {reason}")
             }
         };
@@ -99,14 +106,6 @@ pub fn projection_digest(board: &PhysicalBoard) -> String {
 /// `electrical_digest`: the identity of the electrical design, as JSON.
 pub fn electrical_digest(board: &Board) -> String {
     digest(&Value::Object(board_value(&electrical_identity(board))))
-}
-
-fn point_value(point: Point) -> Value {
-    Value::Array(vec![Value::from(point.x_nm), Value::from(point.y_nm)])
-}
-
-fn object(entries: Vec<(&str, Value)>) -> Value {
-    Value::Object(entries.into_iter().map(|(key, value)| (key.to_owned(), value)).collect())
 }
 
 /// `pose_records`: every placement by reference.
@@ -206,9 +205,10 @@ fn point(value: &Value) -> Result<Point> {
 
 /// `CopperLayer(value)`: the enum's `ValueError` is not caught by `from_data`.
 fn layer(value: &Value) -> Result<CopperLayer> {
-    value.as_str().and_then(CopperLayer::parse).ok_or_else(|| {
-        Error::Value(format!("{} is not a valid CopperLayer", repr(value)))
-    })
+    value
+        .as_str()
+        .and_then(CopperLayer::parse)
+        .ok_or_else(|| Error::Value(format!("{} is not a valid CopperLayer", repr(value))))
 }
 
 fn side(value: &Value) -> Result<BoardSide> {
@@ -370,10 +370,7 @@ fn required<'v>(data: &'v Value, key: &str) -> Result<&'v Value> {
         Value::Object(object) => {
             object.get(key).ok_or_else(|| Error::Uncaught(format!("KeyError: {}", python_str_repr(key))))
         }
-        other => Err(Error::Uncaught(format!(
-            "TypeError: '{}' object is not subscriptable",
-            python_type(other)
-        ))),
+        other => Err(Error::Uncaught(format!("TypeError: '{}' object is not subscriptable", python_type(other)))),
     }
 }
 
@@ -406,7 +403,12 @@ fn strip(text: &str) -> &str {
 
 /// `export_overlay`: export only fixed sibling artefacts of a user-chosen
 /// build manifest; the returned path is the output as given.
-pub fn export_overlay(run_arg: &Path, kicad_python: &Path, output: &Path, runner: &mut dyn ProbeRunner) -> Result<PathBuf> {
+pub fn export_overlay(
+    run_arg: &Path,
+    kicad_python: &Path,
+    output: &Path,
+    runner: &mut dyn ProbeRunner,
+) -> Result<PathBuf> {
     let run_path = paths::resolve(run_arg);
     let folder = run_path.parent().map(Path::to_path_buf).unwrap_or_default();
     let resolved_output = paths::resolve(output);
@@ -478,7 +480,9 @@ pub fn export_overlay(run_arg: &Path, kicad_python: &Path, output: &Path, runner
         let side_text = required(&p, "side")?;
         let rotation = decimal(required(&p, "rotation")?)
             .map_err(|_| Error::Uncaught("decimal.InvalidOperation: [<class 'decimal.InvalidOperation'>]".to_owned()))?
-            .ok_or_else(|| Error::Uncaught("decimal.InvalidOperation: [<class 'decimal.ConversionSyntax'>]".to_owned()))?;
+            .ok_or_else(|| {
+                Error::Uncaught("decimal.InvalidOperation: [<class 'decimal.ConversionSyntax'>]".to_owned())
+            })?;
         let flip = if side_text == &Value::from("back") { 180 } else { 0 };
         let expected = rotation.add(&Decimal::from_i64(flip)).map_err(|e| Error::Uncaught(e.to_string()))?;
         let matches = match actual {
@@ -568,7 +572,11 @@ pub fn export_overlay(run_arg: &Path, kicad_python: &Path, output: &Path, runner
                 Value::Object(table) => {
                     table.insert(output_name, Value::from(overlay_hash));
                 }
-                _ => return Err(Error::Uncaught("TypeError: 'editor_overlays' does not support item assignment".to_owned())),
+                _ => {
+                    return Err(Error::Uncaught(
+                        "TypeError: 'editor_overlays' does not support item assignment".to_owned(),
+                    ));
+                }
             }
         }
         _ => return Err(Error::Uncaught("AttributeError: manifest has no attribute 'setdefault'".to_owned())),
@@ -580,9 +588,8 @@ pub fn export_overlay(run_arg: &Path, kicad_python: &Path, output: &Path, runner
         if read_bytes(&run_path)? != run_raw {
             return value("build manifest changed during overlay extraction; overlay not bound");
         }
-        std::fs::rename(&temporary, &run_path).map_err(|error| {
-            Error::Os(paths::python_os_call_error(&error, Some(&paths::display(&temporary))))
-        })
+        std::fs::rename(&temporary, &run_path)
+            .map_err(|error| Error::Os(paths::python_os_call_error(&error, Some(&paths::display(&temporary)))))
     });
     if temporary.exists() {
         let _ = std::fs::remove_file(&temporary);
@@ -594,11 +601,8 @@ pub fn export_overlay(run_arg: &Path, kicad_python: &Path, output: &Path, runner
 /// `open(path, "x")` then write: an existing file is a `FileExistsError`.
 pub fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| os_error(&error, path))?;
+    let mut file =
+        std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|error| os_error(&error, path))?;
     file.write_all(bytes).map_err(|error| os_error(&error, path))
 }
 
@@ -667,7 +671,8 @@ impl RoutedOverlay {
         {
             return value("unsupported routed overlay");
         }
-        let without: Object = object.iter().filter(|(k, _)| *k != "content_digest").map(|(k, v)| (k.clone(), v.clone())).collect();
+        let without: Object =
+            object.iter().filter(|(k, _)| *k != "content_digest").map(|(k, v)| (k.clone(), v.clone())).collect();
         if object.get("content_digest") != Some(&Value::from(digest(&Value::Object(without)))) {
             return value("overlay content digest does not match");
         }
@@ -742,17 +747,26 @@ impl RoutedOverlay {
         for key in ["source_revision", "physical_digest", "pcb_sha256"] {
             let text = item(data, key)?;
             let valid = match text {
-                Value::Str(text) => text.chars().count() == 64 && text.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-                other => length(other)? == 64 && iterate(other)?.iter().all(|c| {
-                    c.as_str().is_some_and(|c| c.len() == 1 && c.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()))
-                }),
+                Value::Str(text) => {
+                    text.chars().count() == 64 && text.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+                }
+                other => {
+                    length(other)? == 64
+                        && iterate(other)?.iter().all(|c| {
+                            c.as_str().is_some_and(|c| {
+                                c.len() == 1 && c.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+                            })
+                        })
+                }
             };
             if !valid {
                 return value("invalid overlay digest");
             }
         }
         let evidence = item(data, "evidence")?;
-        if !matches!(item(evidence, "verified")?, Value::Bool(_)) || !matches!(item(evidence, "remaining")?, Value::Array(_)) {
+        if !matches!(item(evidence, "verified")?, Value::Bool(_))
+            || !matches!(item(evidence, "remaining")?, Value::Array(_))
+        {
             return value("invalid native connectivity evidence");
         }
         Ok(())
@@ -800,7 +814,11 @@ impl RoutedOverlay {
             placement.rotation_degrees = rotation;
             placement.side = side;
         }
-        if Value::from(projection_digest(&candidate)) == *field(&self.data, "physical_digest") { candidate } else { board.clone() }
+        if Value::from(projection_digest(&candidate)) == *field(&self.data, "physical_digest") {
+            candidate
+        } else {
+            board.clone()
+        }
     }
 
     /// `fresh`: source, identity and physical digests all match.
@@ -814,7 +832,8 @@ impl RoutedOverlay {
     pub fn copper_board(&self, board: &PhysicalBoard) -> PhysicalBoard {
         let native = field(&self.data, "native");
         let mut result = board.clone();
-        result.tracks = field(native, "tracks").as_array().unwrap_or(&[]).iter().filter_map(|t| track(t).ok()).collect();
+        result.tracks =
+            field(native, "tracks").as_array().unwrap_or(&[]).iter().filter_map(|t| track(t).ok()).collect();
         result.vias = field(native, "vias").as_array().unwrap_or(&[]).iter().filter_map(|v| via(v).ok()).collect();
         result.hard_macros.clear();
         result.materialized_macros.clear();

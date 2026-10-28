@@ -29,8 +29,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(err, "{USAGE}\ncopper editor-overlay: error: {message}");
         2
     };
-    let options =
-        [report_args::valued("--kicad-python"), Opt { long: "--output", short: Some("-o"), valued: true }];
+    let options = [report_args::valued("--kicad-python"), Opt { long: "--output", short: Some("-o"), valued: true }];
     let parsed = match report_args::parse(arguments, &options) {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
