@@ -3,7 +3,7 @@
 use std::io::Write;
 
 use crate::{
-    agent_guide, assembly, audit_footprints, check, check_footprint, compile, compile_macro, explain, export_kicad,
+    agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compile, compile_macro, explain, export_kicad,
     export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout, power_check, query, si_check,
     state, summarize, view,
 };
@@ -31,7 +31,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("agent-guide", Plan::Done),
     ("library", Plan::Done),
     ("summarize", Plan::Done),
-    ("benchmark-routing", Plan::Milestone("M4")),
+    ("benchmark-routing", Plan::Done),
     ("editor-overlay", Plan::Milestone("M6")),
     ("edit-mechanical", Plan::Milestone("M3")),
     ("edit", Plan::Milestone("M3")),
@@ -60,7 +60,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("route-board", Plan::Milestone("M4")),
     ("check-footprint", Plan::Done),
     ("audit-footprints", Plan::Done),
-    ("bench", Plan::Milestone("M4")),
+    ("bench", Plan::Done),
 ];
 
 pub fn plan(command: &str) -> Option<Plan> {
@@ -110,6 +110,8 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "si-check" => si_check::run(rest, out, err),
         "export-manufacturing" => export_manufacturing::run(rest, out, err),
         "plan-layout" => plan_layout::run(rest, out, err),
+        "bench" => copper_route::ladder::run(rest, out, err),
+        "benchmark-routing" => benchmark_routing::run(rest, out, err),
         _ => match plan(command) {
             Some(Plan::Milestone(milestone)) => {
                 let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");

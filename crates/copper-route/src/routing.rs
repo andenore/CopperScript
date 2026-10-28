@@ -32,7 +32,7 @@ use crate::global_reserved_access::{admit_fixed_prefix, reserved_pin_access_cand
 use crate::global_terminals::{register_terminal_capacity, terminal_access_failures};
 use crate::pin_access::{LocalAccessBounds, local_access_path};
 use crate::pin_escape::Anchor;
-use crate::progress::{ProgressCallback, emit, int, text};
+use crate::progress::{ProgressCallback, emit_pairs as emit, int, text};
 use crate::routing_clearance::RoutingClearanceIndex;
 use crate::routing_costs::{COST_UNIT, length_cost, preference_cost};
 use crate::routing_layers::signal_layer_preferences;
