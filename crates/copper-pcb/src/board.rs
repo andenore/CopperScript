@@ -79,17 +79,49 @@ pub struct PhysicalNet {
     pub pads: Vec<PadReference>,
 }
 
-/// `Stackup`: copper order, thickness and the declared physical layers.
+text_enum!(ViaKind { Through = "through", Blind = "blind", Buried = "buried", Microvia = "microvia" });
+
+/// `ViaTechnology`: one declared via construction of a stackup's catalog.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViaTechnology {
+    pub id: String,
+    pub kind: ViaKind,
+    pub from_layer: CopperLayer,
+    pub to_layer: CopperLayer,
+    pub minimum_drill_nm: i64,
+    pub minimum_annular_ring_nm: i64,
+    pub maximum_aspect_ratio: Decimal,
+}
+
+impl ViaTechnology {
+    /// `ViaTechnology.__post_init__`.
+    pub fn validate(&self) -> Result<()> {
+        if self.id.is_empty() || self.from_layer == self.to_layer {
+            return fail("via technology requires an id and distinct span");
+        }
+        if self.minimum_drill_nm <= 0
+            || self.minimum_annular_ring_nm <= 0
+            || !(self.maximum_aspect_ratio > Decimal::zero())
+        {
+            return fail("via technology limits must be positive");
+        }
+        Ok(())
+    }
+}
+
+/// `Stackup`: copper order, thickness, the declared physical layers and the
+/// via technology catalog (empty: through vias only).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stackup {
     pub copper_layers: Vec<CopperLayer>,
     pub thickness_nm: i64,
     pub physical_layers: Vec<StackupLayer>,
+    pub via_technologies: Vec<ViaTechnology>,
 }
 
 impl Stackup {
     pub fn new(copper_layers: Vec<CopperLayer>) -> Self {
-        Stackup { copper_layers, thickness_nm: 1_600_000, physical_layers: Vec::new() }
+        Stackup { copper_layers, thickness_nm: 1_600_000, physical_layers: Vec::new(), via_technologies: Vec::new() }
     }
 }
 
@@ -758,7 +790,7 @@ pub struct PhysicalAttachment {
 }
 
 /// `PhysicalBoard`: the fields this export reads or validates.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PhysicalBoard {
     pub name: String,
     pub outline: BoardOutline,

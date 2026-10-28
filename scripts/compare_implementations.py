@@ -32,6 +32,13 @@ A change to the Rust side alone therefore reruns only the binary;
 One comparison runs per checkout at a time (``build/compare.lock``), because a
 run writes seeded mutations beside their sources.
 
+A suite's ``json`` option compares parts of a JSON output file instead of
+(or besides) its bytes, mapping the file name to one key path
+(``["summary"]``), several key paths (``[["status"], ["drc"]]``), or
+``{"without": [paths]}``: the whole document with those paths removed, for
+documents carrying wall time. A ``"*"`` step in a path stands for every item
+of a list (or value of an object).
+
 A case may name a client transcript as its ``stdin`` (the ``lsp`` suites):
 JSON lines, each a message to ``send`` (framed here with Content-Length),
 ``raw`` bytes, or ``wait`` for N complete messages on stdout, so debounced
@@ -87,7 +94,7 @@ class Case:
     timeout_s: float
     compare: tuple[str, ...]
     files: tuple[str, ...] | None = None
-    json_keys: dict[str, list[str]] = field(default_factory=dict)
+    json_keys: dict[str, list] = field(default_factory=dict)
     skip_reason: str | None = None
     # (repository-relative source, seed): run on a seeded mutation of the source.
     mutation: tuple[str, int] | None = None
@@ -254,12 +261,51 @@ def _collect_files(directory: Path) -> dict[str, bytes]:
 
 def _json_at(data: bytes, keys: list[str]):
     try:
-        value = json.loads(data.decode("utf-8"))
-        for key in keys:
-            value = value[key]
-        return value
+        return _json_path(json.loads(data.decode("utf-8")), keys)
     except (UnicodeDecodeError, ValueError, KeyError, TypeError, IndexError):
         return None
+
+
+def _json_path(value, keys: list[str]):
+    for index, key in enumerate(keys):
+        if key == "*":
+            items = value.values() if isinstance(value, dict) else value
+            return [_json_path(item, keys[index + 1:]) for item in items]
+        value = value[key]
+    return value
+
+
+def _json_without(value, keys: list[str]):
+    """``value`` with the item at ``keys`` removed (``"*"`` over every item)."""
+    if not keys or not isinstance(value, (dict, list)):
+        return value
+    key, rest = keys[0], keys[1:]
+    if key == "*":
+        if isinstance(value, dict):
+            return {name: _json_without(item, rest) for name, item in value.items()}
+        return [_json_without(item, rest) for item in value]
+    if not isinstance(value, dict) or key not in value:
+        return value
+    if not rest:
+        return {name: item for name, item in value.items() if name != key}
+    return {**value, key: _json_without(value[key], rest)}
+
+
+def _json_parts(name: str, data: bytes | None, spec) -> dict[str, object]:
+    """The compared digests of one ``json`` entry: see the module documentation."""
+    if isinstance(spec, dict):
+        try:
+            value = json.loads(data.decode("utf-8")) if data is not None else None
+        except (UnicodeDecodeError, ValueError):
+            value = None
+        for keys in spec["without"]:
+            value = _json_without(value, keys)
+        label = ",".join(".".join(keys) for keys in spec["without"])
+        return {f"json:{name}#without:{label}": _sha256(json.dumps(value, sort_keys=True).encode())}
+    paths = spec if spec and isinstance(spec[0], list) else [spec]
+    return {f"json:{name}#{'.'.join(keys)}":
+            _sha256(json.dumps(_json_at(data, keys) if data is not None else None, sort_keys=True).encode())
+            for keys in paths}
 
 
 @dataclass
@@ -519,9 +565,8 @@ def observed(run: Run, case: Case) -> dict:
     if "files" in case.compare:
         names = sorted(run.files) if case.files is None else list(case.files)
         parts["files"] = {name: _sha256(run.files[name]) if name in run.files else None for name in names}
-    for name, keys in case.json_keys.items():
-        value = _json_at(run.files[name], keys) if name in run.files else None
-        parts[f"json:{name}#{'.'.join(keys)}"] = _sha256(json.dumps(value, sort_keys=True).encode())
+    for name, spec in case.json_keys.items():
+        parts.update(_json_parts(name, run.files.get(name), spec))
     return parts
 
 

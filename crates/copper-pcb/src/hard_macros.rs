@@ -1402,3 +1402,124 @@ pub fn apply_hard_macro_scene(
         &mapping("net_bindings")?,
     )
 }
+
+/// Whether two multisets agree (`Counter(a) == Counter(b)`).
+fn same_multiset<T: PartialEq>(first: &[T], second: &[T]) -> bool {
+    if first.len() != second.len() {
+        return false;
+    }
+    let mut remaining: Vec<&T> = second.iter().collect();
+    for item in first {
+        let Some(index) = remaining.iter().position(|other| *other == item) else { return false };
+        remaining.swap_remove(index);
+    }
+    true
+}
+
+/// `macro_routing_ports`: pad, free-track and plated-via terminals after owner
+/// continuity proof, keyed by the pad whose routing identity stands for the port.
+pub fn macro_routing_ports(board: &PhysicalBoard, net_name: &str) -> Result<IndexMap<PadReference, MacroPort>> {
+    let mut result = IndexMap::new();
+    let mut covered: IndexSet<PadReference> = IndexSet::new();
+    let poses = crate::keepouts::placement_map(board);
+    for hard in &board.hard_macros {
+        if !board.materialized_macros.contains(&hard.cluster) {
+            continue;
+        }
+        let mut ports = resolved_macro_geometry(board, hard, &poses)?.ports;
+        ports.sort_by(|a, b| a.name.cmp(&b.name));
+        for port in ports {
+            if port.net != net_name || port.pads.is_empty() {
+                continue;
+            }
+            if port.pads.iter().any(|pad| covered.contains(pad)) {
+                return fail("overlapping macro routing port pad groups are unsupported");
+            }
+            covered.extend(port.pads.iter().cloned());
+            let at_port: Vec<&PadReference> = port
+                .pads
+                .iter()
+                .filter(|reference| {
+                    let pose = &poses[&reference.component];
+                    board.footprints[&pose.footprint]
+                        .pads
+                        .iter()
+                        .filter(|pad| pad.number == reference.pad)
+                        .any(|pad| transformed_local_point(pose, pad.position) == port.position)
+                })
+                .collect();
+            let key =
+                if at_port.len() == 1 { at_port[0].clone() } else { port.pads.iter().min().cloned().expect("pads") };
+            result.insert(key, port);
+        }
+    }
+    Ok(result)
+}
+
+/// `macro_routing_pads`: a net's pads with proved private groups collapsed to
+/// their representative; a stable routing identity, not a copper start point.
+pub fn macro_routing_pads(board: &PhysicalBoard, net: &PhysicalNet) -> Result<Vec<PadReference>> {
+    let mut remove: IndexSet<PadReference> = IndexSet::new();
+    for (representative, port) in macro_routing_ports(board, &net.name)? {
+        remove.extend(port.pads.iter().filter(|pad| **pad != representative).cloned());
+    }
+    Ok(net.pads.iter().filter(|pad| !remove.contains(*pad)).cloned().collect())
+}
+
+/// `macro_port_layers`: only actual port copper layers; a via barrel exposes its full span.
+pub fn macro_port_layers(board: &PhysicalBoard, port: &MacroPort) -> Result<Vec<CopperLayer>> {
+    let stack = &board.stackup.copper_layers;
+    let mut layers: IndexSet<CopperLayer> = IndexSet::from([port.layer]);
+    for via in &board.vias {
+        if via.net == port.net && via.position == port.position {
+            let (a, b) = (layer_index(board, via.from_layer)?, layer_index(board, via.to_layer)?);
+            layers.extend(stack[a.min(b)..=a.max(b)].iter().copied());
+        }
+    }
+    Ok(stack.iter().filter(|layer| layers.contains(*layer)).copied().collect())
+}
+
+/// `macro_source`: recover an unrouted source; never discard ordinary or critical copper.
+pub fn macro_source(board: PhysicalBoard) -> Result<PhysicalBoard> {
+    if board.tracks.is_empty()
+        && board.vias.is_empty()
+        && board.polygons.is_empty()
+        && board.materialized_macros.is_empty()
+    {
+        return Ok(board);
+    }
+    validate_hard_macros(&board)?;
+    let poses = crate::keepouts::placement_map(&board);
+    let (mut tracks, mut vias) = (Vec::new(), Vec::new());
+    for hard in &board.hard_macros {
+        if board.materialized_macros.contains(&hard.cluster) {
+            let geometry = resolved_macro_geometry(&board, hard, &poses)?;
+            tracks.extend(geometry.tracks);
+            vias.extend(geometry.vias);
+        }
+    }
+    // A committed via-in-pad array is part of the same rebuildable prefix.
+    if board.via_in_pad_rules.iter().any(|rule| rule.rows.is_some()) {
+        return crate::not_implemented("via-in-pad via arrays");
+    }
+    if !same_multiset(&board.tracks, &tracks) || !same_multiset(&board.vias, &vias) {
+        return fail("routing planning requires no copper except immutable hard macros");
+    }
+    let mut owned_zones: IndexSet<String> = IndexSet::new();
+    let mut owned_polygons: IndexSet<String> = IndexSet::new();
+    for hard in &board.hard_macros {
+        owned_zones.extend(resolved_macro_zones(&board, hard, &poses)?.into_iter().map(|z| z.id));
+        owned_polygons.extend(resolved_macro_polygons(&board, hard, &poses)?.into_iter().map(|p| p.id));
+    }
+    let polygons: IndexSet<&str> = board.polygons.iter().map(|p| p.id.as_str()).collect();
+    if polygons.len() != owned_polygons.len() || !polygons.iter().all(|id| owned_polygons.contains(*id)) {
+        return fail("routing planning requires no copper except immutable hard macros");
+    }
+    let mut source = board;
+    source.tracks.clear();
+    source.vias.clear();
+    source.zones.retain(|zone| !owned_zones.contains(&zone.id));
+    source.polygons.clear();
+    source.materialized_macros.clear();
+    Ok(source)
+}

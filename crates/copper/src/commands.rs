@@ -3,9 +3,9 @@
 use std::io::Write;
 
 use crate::{
-    agent_guide, assembly, audit_footprints, check, check_footprint, compile, compile_macro, explain, export_kicad,
-    export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout, power_check, query, si_check,
-    state, summarize, view,
+    agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compile, compile_macro,
+    explain, export_kicad, export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout,
+    power_check, query, replay_critical, replay_unified, route_board, route_global, si_check, state, summarize, view,
 };
 
 /// Exit status of a command the Rust rewrite does not implement yet.
@@ -31,7 +31,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("agent-guide", Plan::Done),
     ("library", Plan::Done),
     ("summarize", Plan::Done),
-    ("benchmark-routing", Plan::Milestone("M4")),
+    ("benchmark-routing", Plan::Done),
     ("editor-overlay", Plan::Milestone("M6")),
     ("edit-mechanical", Plan::Milestone("M3")),
     ("edit", Plan::Milestone("M3")),
@@ -46,8 +46,8 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("issues", Plan::Done),
     ("view", Plan::Done),
     ("state", Plan::Done),
-    ("replay-unified", Plan::Milestone("M4")),
-    ("replay-critical", Plan::Milestone("M4")),
+    ("replay-unified", Plan::Done),
+    ("replay-critical", Plan::Done),
     ("query", Plan::Done),
     ("si-check", Plan::Done),
     ("lock", Plan::Done),
@@ -56,11 +56,11 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("export-kicad", Plan::Done),
     ("export-kicad-pcb", Plan::Done),
     ("plan-layout", Plan::Done),
-    ("route-global", Plan::Milestone("M4")),
-    ("route-board", Plan::Milestone("M4")),
+    ("route-global", Plan::Done),
+    ("route-board", Plan::Done),
     ("check-footprint", Plan::Done),
     ("audit-footprints", Plan::Done),
-    ("bench", Plan::Milestone("M4")),
+    ("bench", Plan::Done),
 ];
 
 pub fn plan(command: &str) -> Option<Plan> {
@@ -108,8 +108,14 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "summarize" => summarize::run(rest, out, err),
         "assembly" => assembly::run(rest, out, err),
         "si-check" => si_check::run(rest, out, err),
+        "route-board" => route_board::run(rest, out, err),
+        "replay-critical" => replay_critical::run(rest, out, err),
         "export-manufacturing" => export_manufacturing::run(rest, out, err),
         "plan-layout" => plan_layout::run(rest, out, err),
+        "bench" => copper_route::ladder::run(rest, out, err),
+        "benchmark-routing" => benchmark_routing::run(rest, out, err),
+        "route-global" => route_global::run(rest, out, err),
+        "replay-unified" => replay_unified::run(rest, out, err),
         _ => match plan(command) {
             Some(Plan::Milestone(milestone)) => {
                 let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");
@@ -150,9 +156,9 @@ mod tests {
 
     #[test]
     fn unported_commands_report_their_milestone() {
-        let (code, out, err) = call(&["route-board", "board.copper"]);
+        let (code, out, err) = call(&["editor-overlay", "board.copper"]);
         assert_eq!((code, out.as_str()), (NOT_IMPLEMENTED_EXIT, ""));
-        assert!(err.contains(NOT_IMPLEMENTED_MARKER) && err.contains("M4"), "{err}");
+        assert!(err.contains(NOT_IMPLEMENTED_MARKER) && err.contains("M6"), "{err}");
         let (code, _, err) = call(&["audit-cam"]);
         assert_eq!(code, NOT_IMPLEMENTED_EXIT);
         assert!(err.contains("python -m copperscript audit-cam"), "{err}");

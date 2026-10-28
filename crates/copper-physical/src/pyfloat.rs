@@ -16,6 +16,36 @@ pub fn round_int(value: f64) -> i64 {
     value.round_ties_even() as i64
 }
 
+/// Python's `round(value, ndigits)` for a finite float and `ndigits > 0`: the
+/// exact binary value rounded half to even at that decimal place, then the
+/// nearest float.
+pub fn round_digits(value: f64, ndigits: u32) -> f64 {
+    let bits = value.to_bits();
+    let negative = bits >> 63 == 1;
+    let exponent = ((bits >> 52) & 0x7ff) as i64;
+    let fraction = bits & ((1 << 52) - 1);
+    let (mantissa, power) = if exponent == 0 { (fraction, -1074) } else { (fraction | 1 << 52, exponent - 1075) };
+    let scale = BigInt::from(10u8).pow(ndigits);
+    // value * 10^ndigits = mantissa * 2^power * scale, rounded to an integer.
+    let numerator = BigInt::from(mantissa) * &scale;
+    let rounded = if power >= 0 {
+        numerator << power as usize
+    } else {
+        let denominator = BigInt::from(1u8) << (-power) as usize;
+        let quotient = &numerator / &denominator;
+        let remainder = &numerator - &quotient * &denominator;
+        let twice = remainder * 2u8;
+        if twice > denominator || (twice == denominator && (&quotient % 2u8) == BigInt::from(1u8)) {
+            quotient + 1u8
+        } else {
+            quotient
+        }
+    };
+    let digits = if rounded.is_zero() { "0".to_owned() } else { rounded.abs().to_string() };
+    let result: f64 = format!("{digits}e-{ndigits}").parse().expect("decimal digits");
+    if negative { -result } else { result }
+}
+
 /// Python's `float(Fraction)`: the correctly rounded quotient.
 pub fn ratio_to_f64(value: &BigRational) -> f64 {
     big_ratio_to_f64(value.numer(), value.denom())

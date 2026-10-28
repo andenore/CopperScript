@@ -1108,3 +1108,93 @@ pub fn json_digest(document: &Json) -> String {
 pub fn physical_board_digest(board: &PhysicalBoard) -> String {
     json_digest(&board_document(board))
 }
+
+/// Dataclass reprs of IR records, for the fingerprints routing derives from a board.
+pub mod reprs {
+    use super::*;
+
+    /// `repr(layer)`: `<CopperLayer.FRONT: 'F.Cu'>`.
+    pub fn layer(value: CopperLayer) -> String {
+        super::layer(value)
+    }
+
+    pub fn zone(item: &CopperZone) -> String {
+        super::zone(item)
+    }
+
+    pub fn hard_macro(item: &PhysicalHardMacro) -> String {
+        super::hard_macro(item)
+    }
+
+    pub fn rigid_cluster(item: &RigidPlacementCluster) -> String {
+        super::rigid_cluster(item)
+    }
+
+    pub fn via(item: &Via) -> String {
+        super::via(item)
+    }
+
+    /// `repr(outline.circular_boundary)`, `"None"` without one.
+    pub fn circular_boundary(outline: &BoardOutline) -> String {
+        super::circular_boundary(outline)
+    }
+
+    /// `repr(outline.boundary_path)`, `"None"` without one.
+    pub fn boundary_path(outline: &BoardOutline) -> String {
+        super::boundary_path(outline)
+    }
+
+    pub fn board_cutout(item: &BoardCutout) -> String {
+        dc("BoardCutout", &[("id", s(&item.id)), ("vertices", points(&item.vertices))])
+    }
+
+    pub fn mechanical_hole(item: &copper_physical::MechanicalHole) -> String {
+        dc(
+            "MechanicalHole",
+            &[
+                ("id", s(&item.id)),
+                ("position", point(item.position)),
+                ("diameter_nm", int(item.diameter_nm)),
+                ("head_clearance_radius_nm", int(item.head_clearance_radius_nm)),
+            ],
+        )
+    }
+
+    pub fn mechanical_slot(item: &copper_physical::MechanicalSlot) -> String {
+        dc(
+            "MechanicalSlot",
+            &[
+                ("id", s(&item.id)),
+                ("start", point(item.start)),
+                ("end", point(item.end)),
+                ("width_nm", int(item.width_nm)),
+            ],
+        )
+    }
+
+    pub fn decoupling_link(item: &DecouplingLink) -> String {
+        dc(
+            "DecouplingLink",
+            &[
+                ("capacitor", pad(&item.capacitor)),
+                ("target", pad(&item.target)),
+                ("return_pad", pad(&item.return_pad)),
+                ("net", s(&item.net)),
+                ("return_net", s(&item.return_net)),
+            ],
+        )
+    }
+
+    /// A permission-only rule keeps its historical repr (no array fields).
+    pub fn via_in_pad_rule(item: &PadViaInPadRule) -> String {
+        let mut fields = vec![("pad", pad(&item.pad)), ("process", s("filled-capped"))];
+        if item.rows.is_some() {
+            fields.extend([
+                ("rows", opt_int(item.rows)),
+                ("columns", opt_int(item.columns)),
+                ("pitch_nm", opt_int(item.pitch_nm)),
+            ]);
+        }
+        dc("PadViaInPadRule", &fields)
+    }
+}

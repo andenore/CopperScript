@@ -59,7 +59,7 @@ fn inside_drill(shape: &RoundedConvexShape, drill: Option<&RoundedConvexShape>) 
 }
 
 /// `_positive_area_overlap`: a shared boundary alone is not an electrical connection.
-fn positive_area_overlap(first: &RoundedConvexShape, second: &RoundedConvexShape) -> bool {
+pub fn positive_area_overlap(first: &RoundedConvexShape, second: &RoundedConvexShape) -> bool {
     let radius = i128::from(first.radius_nm) + i128::from(second.radius_nm);
     if radius != 0 {
         return shape_distance_squared(first, second) < rational(radius * radius);

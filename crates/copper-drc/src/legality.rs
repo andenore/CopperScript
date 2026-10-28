@@ -254,6 +254,20 @@ pub fn shape_in_board(board: &PhysicalBoard, shape: &RoundedConvexShape, edge: i
         && board.mechanical_slots.iter().all(|s| shapes_clear(shape, &slot_shape(s), hole.max(1))))
 }
 
+/// `point_in_material`: a point lies in board material (outline, cutouts, holes and slots).
+pub fn point_in_material(board: &PhysicalBoard, point: Point) -> Result<bool> {
+    let outline = &board.outline;
+    if outline.circular_boundary.is_none()
+        && outline.boundary_path.is_none()
+        && outline.cutouts.is_empty()
+        && board.mechanical_holes.is_empty()
+        && board.mechanical_slots.is_empty()
+    {
+        return Ok(copper_physical::geometry::point_in_polygon(point, &outline.vertices));
+    }
+    shape_in_board(board, &copper_physical::RoundedConvexShape::new(vec![point], 0)?, 0, 0)
+}
+
 /// `body_in_material`: board material containment, with an audited body overhang.
 pub fn body_in_material(
     board: &PhysicalBoard,

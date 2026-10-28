@@ -33,6 +33,10 @@ macro_rules! text_enum {
             pub fn value(self) -> &'static str {
                 match self { $($name::$variant => $text),+ }
             }
+
+            pub fn parse(text: &str) -> Option<$name> {
+                match text { $($text => Some($name::$variant),)+ _ => None }
+            }
         }
     };
 }

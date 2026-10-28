@@ -529,3 +529,125 @@ do not shrink as much.
 - Windows: Python digests the report it wrote with CRLF, so the summary's
   `report_sha256` differs from the Rust binary's LF report there; it needs
   recording once a Windows run has the digests.
+
+**M4 stream: routing foundation and `route-global` (branch `rust-m4-global`).**
+
+- `copper-route` is the base crate of the M4 routing streams: one module
+  per Python module (`routing_clearance`, `routing_lattice`, `routing`,
+  `layer_assignment`, `routeflow`, `escape_plan` and their helpers). `route-global`
+  reuses plan-layout's physical pipeline and option parsing, then runs
+  the transactional placement/global-routing feedback loop and writes
+  the `copperscript-global-route/v0.1` guides and the optional placed PCB.
+- `routing_lattice` (uniform and nested lattices) and `escape_plan`
+  (diagnostics, pad fields, gaps and tiles, the two-end plan, bus layers,
+  array min-cost flow) are checked against Python-generated fixtures
+  (`crates/copper-route/tests/fixtures/{lattice,escape}.json`; escape
+  boards resolve from the repository, so CI needs no package cache): every
+  recorded value is identical, floats bit for bit.
+- Corpus: six `route-global*` suites (every corpus board with its
+  `{physical}` args, proxy inputs, fixtures, macros, options, error paths)
+  with 456 cases: 435 byte-identical (guides, PCB project and stdout), 13
+  recorded Python crashes on unknown parts (D-0096 to D-0108) and 8
+  pending. No case depends on timing; route-global prints no progress.
+- Not implemented (exit 3): what plan-layout lacks (the decoupling-access
+  phase with a movable decoupler), `admit_fixed_prefix` (fixed copper
+  prefixes, used by route-board).
+- cm4 and nrf52 need the KiCad footprint repository in their package
+  cache; where it is missing both implementations report the same
+  offline cache miss.
+
+**M4 stream: pin access, planes, the routing pipeline and `route-board`
+(branch `rust-m4-flow`).**
+
+- Built on `rust-m4-global` (merged: clearance index, global router, layer
+  assignment). `copper-route` adds `progress` (`ConsoleProgress` on the
+  global stream's `emit`), `ladder` (`copper bench`), `routing_acceptance`
+  (`copper benchmark-routing`), `drc_report`, `plane_verify`,
+  `routing_metrics`, `iteration_checkpoints` (stage tracker, `.error.json`
+  record), `flow` (`STOP_STAGES`, `run_routing_pipeline` up to the
+  placement stage), the options of `fanout`, `plane`, `escape_assignment`,
+  and `bench.unified_overrides`. `PlacementRoutingFeedbackOptions`,
+  `EscapePlanOptions` and the `UnifiedRouterOptions` checks route-board
+  needs are minimal `PENDING` copies for `rust-m4-global` and
+  `rust-m4-unified`.
+- `copper route-board`: all 90 options (`allow_abbrev=False`), routing
+  profiles, the ERC gate, physicalization, templates, hard macros and every
+  option check before the pipeline, with Python's `ROUTING ERROR` lines and
+  error records. The pipeline reports not implemented (exit 3) at the
+  placement stage (`routeflow.optimize_placement_for_routing`,
+  `rust-m4-global`), and so do `--reuse-placement`, typed `--unified-set`
+  values, `--debug` tracebacks, Python crashes and error records of error
+  classes the Rust errors do not name.
+- Corpus: `route-board` (11 boards with `{physical}`), `route-board-options`
+  (profiles, stop stage, `--unified-save-inputs`, `--progress`, ...),
+  `route-board-errors` and `route-board-mutations`: 54 equal, 26 pending.
+  `--unified-time-budget-s` defaults to no budget; a case that sets it would
+  be wall-time dependent and stays out of the corpus.
+
+**M4 stream: unified router and `replay-unified` (branch `rust-m4-unified`).**
+
+- `copper-route` (on `rust-m4-global`'s foundation) gained the unified
+  router: options (`__post_init__`, `--set`/`--unified-set` overrides),
+  `fine_regions`, the uniform lattice (`routing_lattice`, PENDING
+  `rust-m4-global`), legality rasters, the native A* kernel (`astar.c`) with
+  its heap tie-breaking, net specs and attach candidates (checked,
+  extended and local lead-ins, necks), PathFinder negotiation with exact
+  proposal conflicts, exact commit, rip-in repair rounds over the shared
+  index, plane nets with the pour re-check, `route_smoothing`,
+  `plane_estimate` (raster pour estimate), `route_summary`, budgets and the
+  congestion export, and `power_islands` (`--power-islands`); plus a typed
+  codec for `--unified-save-inputs` states
+  and `--save-result` results with Python's `StateError`, `ValueError` and
+  uncaught-exception texts.
+- `copper replay-unified` is rewritten: every option, error path, summary,
+  `--report`, `--save-result`, `-o` and `--progress`.
+- Inputs: `tests/rust-port/unified/` (nine `route-board
+  --unified-save-inputs` states, malformed and valid variants;
+  `generate.py`, README). Corpus: `replay-unified` (states and mutations),
+  `-options`, `-errors`, `-malformed`, `-output`: 119 byte-identical, 1
+  pending. Replays compare the result state, the report's `unrouted`, the
+  KiCad output, exit status and stderr, never the `seconds` or `PROGRESS`
+  timing. No case sets a time budget (the default is none); a
+  `time_budget_s` deadline reports not implemented.
+- Not implemented (exit 3): nested lattices (fine-region patches on ball
+  arrays), bus bundles and bus skew tuning (`critical_tuning`; the bus
+  phase and its skew notes are rewritten), via technologies, required return vias,
+  guide costs, exit reservations, ball-field via sites, ball-grid supply
+  islands (`power_islands_ball_grid_only`), `--refanout`, `--exact-escape`, via-in-pad arrays and a dynamically typed
+  state value (a text pitch).
+
+**M4 stream: critical and pair routing, `replay-critical` (branch `rust-m4-critical`).**
+
+- `copper replay-critical` is wired (`crates/copper/src/replay_critical.rs`):
+  arguments, `load_state` (schema, digest, decode, Python's messages),
+  critical inputs dicts and placement checkpoints, the report (critical
+  document, DRC report, route summary), `-o` and stdout. `copper-route`
+  `critical` ports the stage's guards, `promote_planar_nets`, the job order,
+  `--only` selection, hard-macro and asymmetric-rule results, the batch
+  intersection check, lane delays (Python `Decimal.sqrt` in `copper-units`),
+  fingerprints and documents; `route_summary`, `routing_state` (global route
+  decoding, PENDING rust-m4-unified) and the report types of `pair_search`,
+  `pair_terminals` and `critical_bundles`. `copper-drc` gained breakout
+  relaxation records, now part of the DRC report document.
+- Checkpoints of every board with critical rules and derived error inputs
+  are under `tests/rust-port/critical/` (`generate.py`, README). The harness
+  `json` option takes several key paths and a `without` form, so reports
+  carrying wall time compare everything but `seconds` and
+  `local_preparation.elapsed_seconds`.
+- Routed paths ported: pair terminal preparation (source terminals), the
+  coarse aligned-pair and offset-guide candidates with pin stubs and
+  checked access lead-ins, budgets, coupled length, atomic DRC validation,
+  the joint search tiers when no searcher expands a state; single-ended
+  guides, pin stubs and local surface trees (`local_critical`,
+  `surface_path`, `route_style`); length-match outcomes within limits;
+  the route summary's plane estimate (`plane_estimate`, PENDING
+  rust-m4-unified).
+- Corpus (6 `replay-critical*` suites, 90 cases): 77 byte-identical, 13
+  not implemented, none different. Not implemented (exit 3): the joint
+  pair search proper (`pair_search` ports and spine search, `pair_vias`
+  transitions, `pair_refine`, resumed frontiers), guide vias
+  (`physical_via_span` is a rust-m4-global stub), intra-pair skew tuning,
+  local contact branches, the unified router (single-ended cohorts, exact
+  searches; rust-m4-unified), bundles and repairs, package-access
+  reservations, plane contacts and length-match tuning over the limit.
+

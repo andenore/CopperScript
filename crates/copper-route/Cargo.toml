@@ -1,0 +1,30 @@
+[package]
+name = "copper-route"
+description = "Routing (M4): exact clearance index, global router, layer assignment, critical and pair routing, pin access, planes, the routing pipeline and the benchmark ladder"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+copper-drc.workspace = true
+copper-json.workspace = true
+copper-lang.workspace = true
+copper-pcb.workspace = true
+copper-physical.workspace = true
+copper-place.workspace = true
+copper-state.workspace = true
+copper-units.workspace = true
+indexmap.workspace = true
+num-bigint.workspace = true
+num-integer.workspace = true
+num-rational.workspace = true
+num-traits.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+copper-lang.workspace = true
+
+[lints]
+workspace = true
