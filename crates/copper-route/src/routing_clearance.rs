@@ -336,7 +336,11 @@ impl<'b> RoutingClearanceIndex<'b> {
     }
 
     /// `RoutingClearanceIndex(board, bin_size_nm, _deferred_components=...)`.
-    pub fn with_bin_size(board: &'b PhysicalBoard, bin_size_nm: i64, deferred_components: &IndexSet<String>) -> Result<Self> {
+    pub fn with_bin_size(
+        board: &'b PhysicalBoard,
+        bin_size_nm: i64,
+        deferred_components: &IndexSet<String>,
+    ) -> Result<Self> {
         if bin_size_nm <= 0 {
             return fail("clearance bin size must be positive");
         }
@@ -416,7 +420,10 @@ impl<'b> RoutingClearanceIndex<'b> {
             let known = deferred_components.iter().all(|reference| poses.contains_key(reference.as_str()));
             let smd_only = known
                 && deferred_components.iter().all(|reference| {
-                    board.footprints[&poses[reference.as_str()].footprint].pads.iter().all(|pad| pad.kind == PadKind::Smd)
+                    board.footprints[&poses[reference.as_str()].footprint]
+                        .pads
+                        .iter()
+                        .all(|pad| pad.kind == PadKind::Smd)
                 });
             if !smd_only {
                 return fail("deferred placement view requires known SMD-only components");
@@ -533,7 +540,14 @@ impl<'b> RoutingClearanceIndex<'b> {
     ///
     /// This selects copper, not permission to commit it: callers still check
     /// every returned piece.
-    pub fn route_pieces(&self, net: &str, start: Point, end: Point, width_nm: i64, layer: CopperLayer) -> Result<Vec<TrackSegment>> {
+    pub fn route_pieces(
+        &self,
+        net: &str,
+        start: Point,
+        end: Point,
+        width_nm: i64,
+        layer: CopperLayer,
+    ) -> Result<Vec<TrackSegment>> {
         if !self.breakout.ordinary.contains(net) {
             let tracks = vec![TrackSegment { net: net.to_owned(), start, end, width_nm, layer }];
             // Exact local/global terminal access uses the authored critical
@@ -624,7 +638,16 @@ impl<'b> RoutingClearanceIndex<'b> {
             let legal = if allow_movable_conflicts {
                 !self.blocking_via_nets(via)?.1
             } else {
-                self.can_via(&via.net, via.position, via.size_nm, via.from_layer, via.to_layer, Some(via.drill_nm), false, None)?
+                self.can_via(
+                    &via.net,
+                    via.position,
+                    via.size_nm,
+                    via.from_layer,
+                    via.to_layer,
+                    Some(via.drill_nm),
+                    false,
+                    None,
+                )?
             };
             if !legal {
                 return Ok(Some(via.clone()));
@@ -639,11 +662,15 @@ impl<'b> RoutingClearanceIndex<'b> {
                 let earlier_layers = self.via_layers(earlier.from_layer, earlier.to_layer);
                 if via.net != earlier.net && via_layers.iter().any(|layer| earlier_layers.contains(layer)) {
                     let earlier_shape = shape(vec![earlier.position], earlier.size_nm.div_euclid(2))?;
-                    let mut earlier_copper = CopperObject::new(&earlier.net, earlier_layers.clone(), earlier_shape.clone());
+                    let mut earlier_copper =
+                        CopperObject::new(&earlier.net, earlier_layers.clone(), earlier_shape.clone());
                     earlier_copper.breakout_land = self.breakout_land(&earlier.net, &earlier_shape);
                     let via_shape = shape(vec![via.position], via.size_nm.div_euclid(2))?;
-                    let clearance =
-                        self.rule_clearance(&via.net, self.breakout_land(&via.net, &via_shape).as_deref(), &earlier_copper);
+                    let clearance = self.rule_clearance(
+                        &via.net,
+                        self.breakout_land(&via.net, &via_shape).as_deref(),
+                        &earlier_copper,
+                    );
                     required = required
                         .max(via.drill_nm.div_euclid(2) + earlier.size_nm.div_euclid(2) + hole)
                         .max(earlier.drill_nm.div_euclid(2) + via.size_nm.div_euclid(2) + hole)
@@ -658,7 +685,12 @@ impl<'b> RoutingClearanceIndex<'b> {
     }
 
     /// `pad_copper_clear`: no pad contact, independent of net (including the full annulus).
-    pub fn pad_copper_clear(&self, shape: &RoundedConvexShape, layers: &[CopperLayer], allowed_pad: Option<&PadReference>) -> bool {
+    pub fn pad_copper_clear(
+        &self,
+        shape: &RoundedConvexShape,
+        layers: &[CopperLayer],
+        allowed_pad: Option<&PadReference>,
+    ) -> bool {
         // Include same-net and unassigned pads, and the complete annulus rather
         // than only the drill/center. A one-nanometre separation rejects contact too.
         self.overlapping_objects(shape, layers).iter().all(|other| {
@@ -690,7 +722,12 @@ impl<'b> RoutingClearanceIndex<'b> {
         // Every outline, plain polygons included: the detailed grid spans the
         // outline's bounds inclusively, so edge nodes would otherwise admit
         // copper the exported copper-to-edge clearance rejects.
-        if !shape_in_board(self.board, shape, self.board.rules.minimum_clearance_nm, self.board.rules.minimum_hole_clearance_nm)? {
+        if !shape_in_board(
+            self.board,
+            shape,
+            self.board.rules.minimum_clearance_nm,
+            self.board.rules.minimum_hole_clearance_nm,
+        )? {
             return Ok(false); // Always locked, including speculative soft rip-up.
         }
         if self.static_regions.is_empty() {
@@ -713,7 +750,8 @@ impl<'b> RoutingClearanceIndex<'b> {
             if !(if for_via { keepout.block_vias } else { keepout.block_tracks }) {
                 continue;
             }
-            let area = if keepout.clearance_nm != 0 { shape.bounds.expanded(keepout.clearance_nm) } else { shape.bounds };
+            let area =
+                if keepout.clearance_nm != 0 { shape.bounds.expanded(keepout.clearance_nm) } else { shape.bounds };
             if !area.intersects(keepout.shape.bounds) {
                 continue;
             }
@@ -862,11 +900,10 @@ impl<'b> RoutingClearanceIndex<'b> {
         }
         let first = records.iter().position(|record| doomed.contains(&record.serial)).expect("owned record");
         let kept: Vec<Addition> = records.into_iter().filter(|record| !doomed.contains(&record.serial)).collect();
-        for position in first..kept.len() {
-            if kept[position].default_occurrence {
-                let occurrence = format!("addition:{position}:{}", kept[position].kind);
-                let record = kept[position].clone();
-                self.relabel(&record, &occurrence);
+        for (position, record) in kept.iter().enumerate().skip(first) {
+            if record.default_occurrence {
+                let occurrence = format!("addition:{position}:{}", record.kind);
+                self.relabel(record, &occurrence);
             }
         }
         self.additions = kept.iter().map(|record| record.entry.clone()).collect();
@@ -877,7 +914,14 @@ impl<'b> RoutingClearanceIndex<'b> {
         serials.len()
     }
 
-    fn record(&mut self, entry: (Copper, bool), kind: &'static str, default: bool, objects: Vec<usize>, hole: Option<usize>) {
+    fn record(
+        &mut self,
+        entry: (Copper, bool),
+        kind: &'static str,
+        default: bool,
+        objects: Vec<usize>,
+        hole: Option<usize>,
+    ) {
         let serial = self.next_serial;
         self.next_serial += 1;
         if !entry.1 {
@@ -1028,8 +1072,9 @@ impl<'b> RoutingClearanceIndex<'b> {
 
     pub fn add_via(&mut self, via: Via, locked: bool, occurrence: Option<String>) -> Result<()> {
         let default = occurrence.as_deref().is_none_or(str::is_empty);
-        let occurrence =
-            occurrence.filter(|text| !text.is_empty()).unwrap_or_else(|| format!("addition:{}:via", self.additions.len()));
+        let occurrence = occurrence
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| format!("addition:{}:via", self.additions.len()));
         let entry = (Copper::Via(via.clone()), locked);
         self.additions.push(entry.clone());
         let hole = self.add_hole(DrilledHole {
@@ -1042,7 +1087,8 @@ impl<'b> RoutingClearanceIndex<'b> {
             occurrence: occurrence.clone(),
         });
         let layers = self.via_layers(via.from_layer, via.to_layer);
-        let mut annulus = CopperObject::new(&via.net, layers.clone(), shape(vec![via.position], via.size_nm.div_euclid(2))?);
+        let mut annulus =
+            CopperObject::new(&via.net, layers.clone(), shape(vec![via.position], via.size_nm.div_euclid(2))?);
         annulus.locked = locked;
         annulus.occurrence = occurrence.clone();
         let annulus = self.add(annulus);
@@ -1116,7 +1162,8 @@ impl<'b> RoutingClearanceIndex<'b> {
             if other.net == net {
                 continue;
             }
-            let required = self.rule_clearance(net, land.as_deref(), other).max(other.clearance_nm).max(clearance_floor_nm);
+            let required =
+                self.rule_clearance(net, land.as_deref(), other).max(other.clearance_nm).max(clearance_floor_nm);
             if !shapes_clear(shape, &other.shape, required) {
                 let prefix = match &other.pad_reference {
                     Some(pad) => format!("pad:{}.{}:", pad.component, pad.pad),
@@ -1152,7 +1199,13 @@ impl<'b> RoutingClearanceIndex<'b> {
         let annulus = shape(vec![via.position], via.size_nm.div_euclid(2))?;
         let mut records = self.blocker_records(&via.net, &annulus, &layers, true, 0)?;
         let drill = shape(vec![via.position], via.drill_nm.div_euclid(2))?;
-        records.extend(self.blocker_records(&via.net, &drill, &layers, true, self.board.rules.minimum_hole_clearance_nm)?);
+        records.extend(self.blocker_records(
+            &via.net,
+            &drill,
+            &layers,
+            true,
+            self.board.rules.minimum_hole_clearance_nm,
+        )?);
         let layer_values: Vec<String> = layers.iter().map(|l| l.value().to_owned()).collect();
         for other in self.overlapping_objects(&annulus, &layers) {
             if other.is_pad && !shapes_clear(&annulus, &other.shape, 1) {
@@ -1168,11 +1221,17 @@ impl<'b> RoutingClearanceIndex<'b> {
             }
         }
         let hole_clearance = self.board.rules.minimum_hole_clearance_nm;
-        for hole in self.nearby_holes(via.position, via.drill_nm.div_euclid(2) + self.max_hole_radius_nm + hole_clearance) {
+        for hole in
+            self.nearby_holes(via.position, via.drill_nm.div_euclid(2) + self.max_hole_radius_nm + hole_clearance)
+        {
             let dx = i128::from(via.position.x_nm - hole.position.x_nm);
             let dy = i128::from(via.position.y_nm - hole.position.y_nm);
             let distance = dx * dx + dy * dy;
-            if distance == 0 && hole.net == via.net && hole.reusable && hole.span == Some((via.from_layer, via.to_layer)) {
+            if distance == 0
+                && hole.net == via.net
+                && hole.reusable
+                && hole.span == Some((via.from_layer, via.to_layer))
+            {
                 continue;
             }
             let required = i128::from(via.drill_nm.div_euclid(2) + hole.radius_nm + hole_clearance);
@@ -1230,7 +1289,9 @@ impl<'b> RoutingClearanceIndex<'b> {
                 boundaries.insert(key(shape(vec![hole.position], margin)?.bounds));
             }
         }
-        for region in self.overlapping_static_regions(&shape(vec![position], radius_nm + size_nm.div_euclid(2))?, &layers) {
+        for region in
+            self.overlapping_static_regions(&shape(vec![position], radius_nm + size_nm.div_euclid(2))?, &layers)
+        {
             if region.block_vias {
                 boundaries.insert(key(region.shape.bounds.expanded(size_nm.div_euclid(2) + region.clearance_nm + 1)));
             }
@@ -1247,7 +1308,14 @@ impl<'b> RoutingClearanceIndex<'b> {
     }
 
     /// `route_blockers`: `blocking_track_nets` over the pieces of `route_pieces`.
-    pub fn route_blockers(&self, net: &str, start: Point, end: Point, width_nm: i64, layer: CopperLayer) -> Result<(IndexSet<String>, bool)> {
+    pub fn route_blockers(
+        &self,
+        net: &str,
+        start: Point,
+        end: Point,
+        width_nm: i64,
+        layer: CopperLayer,
+    ) -> Result<(IndexSet<String>, bool)> {
         if !self.breakout.ordinary.contains(net) {
             return self.blocking_track_nets(&TrackSegment { net: net.to_owned(), start, end, width_nm, layer });
         }
@@ -1273,11 +1341,17 @@ impl<'b> RoutingClearanceIndex<'b> {
         locked |= drill_locked;
         locked = locked || !self.pad_copper_clear(&annulus, &layers, None);
         let hole_clearance = self.board.rules.minimum_hole_clearance_nm;
-        for hole in self.nearby_holes(via.position, via.drill_nm.div_euclid(2) + self.max_hole_radius_nm + hole_clearance) {
+        for hole in
+            self.nearby_holes(via.position, via.drill_nm.div_euclid(2) + self.max_hole_radius_nm + hole_clearance)
+        {
             let dx = i128::from(via.position.x_nm - hole.position.x_nm);
             let dy = i128::from(via.position.y_nm - hole.position.y_nm);
             let distance_squared = dx * dx + dy * dy;
-            if distance_squared == 0 && hole.net == via.net && hole.reusable && hole.span == Some((via.from_layer, via.to_layer)) {
+            if distance_squared == 0
+                && hole.net == via.net
+                && hole.reusable
+                && hole.span == Some((via.from_layer, via.to_layer))
+            {
                 continue;
             }
             let required = i128::from(via.drill_nm.div_euclid(2) + hole.radius_nm + hole_clearance);
@@ -1313,7 +1387,8 @@ impl<'b> RoutingClearanceIndex<'b> {
             if other.net == net {
                 continue;
             }
-            let clearance = self.rule_clearance(net, land.as_deref(), other).max(other.clearance_nm).max(clearance_floor_nm);
+            let clearance =
+                self.rule_clearance(net, land.as_deref(), other).max(other.clearance_nm).max(clearance_floor_nm);
             if shapes_clear(shape, &other.shape, clearance) {
                 continue;
             }
@@ -1434,7 +1509,12 @@ impl<'b> RoutingClearanceIndex<'b> {
     ///
     /// The broad phase of every clearance query: pads, tracks, vias, via
     /// drills and non-plated holes, each once, in a deterministic order.
-    pub fn nearby_copper(&self, shape: &RoundedConvexShape, layers: &[CopperLayer], distance_nm: i64) -> Vec<&CopperObject> {
+    pub fn nearby_copper(
+        &self,
+        shape: &RoundedConvexShape,
+        layers: &[CopperLayer],
+        distance_nm: i64,
+    ) -> Vec<&CopperObject> {
         let area = shape.bounds.expanded(distance_nm);
         let mut seen: IndexSet<usize> = IndexSet::new();
         let mut result = Vec::new();

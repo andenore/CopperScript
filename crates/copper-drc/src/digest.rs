@@ -1163,7 +1163,12 @@ pub mod reprs {
     pub fn mechanical_slot(item: &copper_physical::MechanicalSlot) -> String {
         dc(
             "MechanicalSlot",
-            &[("id", s(&item.id)), ("start", point(item.start)), ("end", point(item.end)), ("width_nm", int(item.width_nm))],
+            &[
+                ("id", s(&item.id)),
+                ("start", point(item.start)),
+                ("end", point(item.end)),
+                ("width_nm", int(item.width_nm)),
+            ],
         )
     }
 

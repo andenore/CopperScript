@@ -8,7 +8,7 @@ use copper_pcb::Result;
 use copper_pcb::board::{PadReference, PhysicalBoard, Via};
 use copper_physical::{CopperLayer, Point};
 
-use crate::routing::{AccessOptions, GridNode, Graph, PinAccess, Resource, edge_key, via_resource_id};
+use crate::routing::{AccessOptions, Graph, GridNode, PinAccess, Resource, edge_key, via_resource_id};
 use crate::routing_clearance::RoutingClearanceIndex;
 
 pub const MAX_TERMINAL_CAPACITY_PROPOSALS: i64 = 4096;
@@ -120,7 +120,9 @@ pub fn register_terminal_capacity(
                     for key in self.buckets.get(&(bx, by)).into_iter().flatten() {
                         let Some(witness) = self.witnesses.get(key) else { continue };
                         let point = key.1;
-                        if (point.x_nm - via.position.x_nm).abs() > reach || (point.y_nm - via.position.y_nm).abs() > reach {
+                        if (point.x_nm - via.position.x_nm).abs() > reach
+                            || (point.y_nm - via.position.y_nm).abs() > reach
+                        {
                             continue;
                         }
                         if !self.exact.candidate_vias_clear(&[via.clone(), witness.clone()])? {
@@ -129,7 +131,7 @@ pub fn register_terminal_capacity(
                     }
                 }
             }
-            found.sort_by(|a, b| (a.1.x_nm, a.1.y_nm, span_text(a.0)).cmp(&(b.1.x_nm, b.1.y_nm, span_text(b.0))));
+            found.sort_by_key(|a| (a.1.x_nm, a.1.y_nm, span_text(a.0)));
             Ok(found)
         }
 
@@ -166,7 +168,8 @@ pub fn register_terminal_capacity(
             for displaced in self.colliding_witnesses(&capacity_via)? {
                 self.witnesses.shift_remove(&displaced);
                 for owner in self.owners.shift_remove(&displaced).expect("witness owners") {
-                    let kept: Vec<Point> = self.sites[&owner].iter().copied().filter(|point| *point != displaced.1).collect();
+                    let kept: Vec<Point> =
+                        self.sites[&owner].iter().copied().filter(|point| *point != displaced.1).collect();
                     self.sites.insert(owner.clone(), kept);
                     self.changed.insert(owner);
                 }
@@ -217,8 +220,12 @@ pub fn register_terminal_capacity(
         .iter()
         .enumerate()
         .map(|(index, (key, choices))| {
-            let kept: Vec<PinAccess> =
-                choices.iter().enumerate().filter(|(slot, _)| decided[index][*slot] == Some(true)).map(|(_, a)| a.clone()).collect();
+            let kept: Vec<PinAccess> = choices
+                .iter()
+                .enumerate()
+                .filter(|(slot, _)| decided[index][*slot] == Some(true))
+                .map(|(_, a)| a.clone())
+                .collect();
             ((*key).clone(), kept)
         })
         .collect();
@@ -257,7 +264,10 @@ pub fn register_terminal_capacity(
                 }
                 let key = edge_key(a, b);
                 if capacity != 0 {
-                    resources.insert(key, Resource { identifier: identifier.clone(), first: a, second: b, capacity, layer: None });
+                    resources.insert(
+                        key,
+                        Resource { identifier: identifier.clone(), first: a, second: b, capacity, layer: None },
+                    );
                 } else if resources.get(&key).is_some_and(|resource| resource.identifier == identifier) {
                     resources.shift_remove(&key);
                 }
@@ -271,7 +281,10 @@ pub fn register_terminal_capacity(
 ///
 /// A missing local escape and a legal escape rejected by shared transition
 /// capacity need different repairs; both counts are preserved.
-pub fn terminal_access_failures(generated: &AccessOptions, registered: &AccessOptions) -> IndexMap<(String, PadReference), (i64, i64)> {
+pub fn terminal_access_failures(
+    generated: &AccessOptions,
+    registered: &AccessOptions,
+) -> IndexMap<(String, PadReference), (i64, i64)> {
     generated
         .iter()
         .filter(|(key, _)| registered.get(*key).is_none_or(|choices| choices.is_empty()))

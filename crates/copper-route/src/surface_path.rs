@@ -38,7 +38,12 @@ pub fn rectangle_bounds(outline: &[Point]) -> Option<(i64, i64, i64, i64)> {
 }
 
 /// `_rectangle_capsule_inside`: exact erosion by half a diameter in doubled distances.
-pub fn rectangle_capsule_inside(rectangle: (i64, i64, i64, i64), start: Point, end: Point, required_twice: i64) -> bool {
+pub fn rectangle_capsule_inside(
+    rectangle: (i64, i64, i64, i64),
+    start: Point,
+    end: Point,
+    required_twice: i64,
+) -> bool {
     let (left, top, right, bottom) = rectangle;
     let nearest = [
         start.x_nm - left,
