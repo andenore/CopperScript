@@ -1403,6 +1403,7 @@ fn route_pair(
     first_rule: &NetRoutingRule,
     second_rule: &NetRoutingRule,
     routes: &IndexMap<String, GlobalNetRoute>,
+    prefer_access_tracks: bool,
     tuning_board: &PhysicalBoard,
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
     let (first, second) =
@@ -1431,13 +1432,18 @@ fn route_pair(
         return failed("pair members require identical width and gap profiles");
     };
     let offset = (first_width + gap).div_euclid(2);
-    let aligned = aligned_pair_paths(guide, partner_guide, offset);
+    let aligned = if prefer_access_tracks { None } else { aligned_pair_paths(guide, partner_guide, offset) };
     if aligned.is_none() && (guide.segments.is_empty() || partner_guide.segments.is_empty()) {
         return failed("coarse pair guide has no segments to offset");
     }
-    let Some((positive, negative)) = aligned else {
-        // PENDING: _coarse_transition_conflict, _offset_guides, _pair_pin_stubs.
-        return copper_pcb::not_implemented("critical coarse pair candidate along offset guides");
+    if !guide.vias.is_empty() {
+        // PENDING: _coarse_transition_conflict and _guide_via (routing_vias.physical_via_span).
+        return copper_pcb::not_implemented("critical coarse pair guide transitions");
+    }
+    let is_aligned = aligned.is_some();
+    let (positive, negative, junctions) = match aligned {
+        Some((positive, negative)) => (positive, negative, IndexMap::new()),
+        None => offset_guides(guide, offset),
     };
     let mut first_tracks: Vec<TrackSegment> = positive
         .iter()
@@ -1461,6 +1467,31 @@ fn route_pair(
             layer: *layer,
         })
         .collect();
+    join_offset_junctions(&first.net, first_width, 0, &junctions, &mut first_tracks);
+    join_offset_junctions(&second.net, second_width, 1, &junctions, &mut second_tracks);
+    if !is_aligned {
+        let pitch = first_width + gap;
+        first_tracks.extend(pair_pin_stubs(
+            board,
+            &first.net,
+            guide,
+            first_width,
+            &positive,
+            1,
+            pitch,
+            prefer_access_tracks,
+        )?);
+        second_tracks.extend(pair_pin_stubs(
+            board,
+            &second.net,
+            partner_guide,
+            second_width,
+            &negative,
+            0,
+            pitch,
+            prefer_access_tracks,
+        )?);
+    }
     let breakout = copper_drc::breakout::BreakoutRegions::new(board);
     if breakout.any() {
         first_tracks = breakout.split_tracks(&first_tracks, Some(first_width));
@@ -1523,7 +1554,7 @@ fn route_pair(
     result.coupled_length_nm = coupled;
     result.uncoupled_lengths_nm = uncoupled;
     result.evidence_digests = evidence;
-    result.strategy = "aligned_pair".to_owned();
+    result.strategy = if is_aligned { "aligned_pair" } else { "global_guide" }.to_owned();
     result.warnings = warnings;
     Ok((result, tracks, Vec::new()))
 }
@@ -1550,7 +1581,7 @@ fn route_pair_group(
     let prepared = crate::pair_terminals::prepare_pair_terminals(&held, first, second, routes, &mut preparation)?;
     let routes = prepared.routes;
     let mut found: IndexSet<String> = IndexSet::new();
-    let (result, pair_tracks, pair_vias) = route_pair(board, rule, partner_rule, &routes, &held)?;
+    let (result, pair_tracks, pair_vias) = route_pair(board, rule, partner_rule, &routes, false, &held)?;
     let (result, pair_tracks, pair_vias) = reject_reserved_plane_tracks(board, result, pair_tracks, pair_vias, rules);
     let (result, pair_tracks, pair_vias) =
         validate_candidate(board, result, pair_tracks, pair_vias, tracks, vias, Some(&mut found))?;
@@ -1565,8 +1596,24 @@ fn route_pair_group(
         && prepared.second_branches.is_empty()
         && [&first.net, &second.net].iter().any(|name| routes[*name].accesses.iter().any(|a| !a.tracks.is_empty()))
     {
-        // PENDING: the whole-pair proposal along the guides' checked lead-ins.
-        return copper_pcb::not_implemented("critical pair proposal along access lead-ins");
+        // A coarse guide may already carry a checked multi-leg package exit:
+        // one whole-pair proposal retains those actual lead-ins.
+        let (attempt, proposed_tracks, proposed_vias) = route_pair(board, first, second, &routes, true, &held)?;
+        let (attempt, proposed_tracks, proposed_vias) =
+            reject_reserved_plane_tracks(board, attempt, proposed_tracks, proposed_vias, rules);
+        let (attempt, proposed_tracks, proposed_vias) =
+            validate_candidate(board, attempt, proposed_tracks, proposed_vias, tracks, vias, None)?;
+        if within_budget(&attempt) {
+            let mut attempt = attempt;
+            if preparation.status != "source_terminals" {
+                attempt.local_preparation = Some(preparation);
+            }
+            return Ok((attempt, proposed_tracks, proposed_vias));
+        }
+        if attempt.connected && (!result.connected || !result.warnings.is_empty()) {
+            // PENDING: `keep` of a connected over-budget proposal as the fallback.
+            return copper_pcb::not_implemented("critical over-budget pair proposal fallback");
+        }
     }
     let supported = match (routes.get(&first.net), routes.get(&second.net)) {
         (Some(a), Some(b)) => crate::pair_terminals::terminal_partners(a, b).is_some(),
@@ -1971,4 +2018,135 @@ fn improve_single_surface(
     best.local_candidate_attempts = attempts;
     best.guide_length_nm = guide_length;
     Ok((best, best_tracks, best_vias))
+}
+
+type Junctions = IndexMap<(CopperLayer, Point), (Vec<Point>, Vec<Point>)>;
+
+/// `_offset_guides`: both lanes offset from one member's guide, and the
+/// lane points meeting at each guide junction.
+fn offset_guides(guide: &GlobalNetRoute, offset: i64) -> (Lane, Lane, Junctions) {
+    let (mut positive, mut negative) = (Vec::new(), Vec::new());
+    let mut junctions: Junctions = IndexMap::new();
+    for segment in &guide.segments {
+        let (dx, dy) = (segment.end.x_nm - segment.start.x_nm, segment.end.y_nm - segment.start.y_nm);
+        let (normal_x, normal_y) = if dx != 0 && dy != 0 {
+            (if dy > 0 { -offset } else { offset }, if dx > 0 { offset } else { -offset })
+        } else if dx != 0 {
+            (0, if dx > 0 { offset } else { -offset })
+        } else {
+            (if dy > 0 { -offset } else { offset }, 0)
+        };
+        let shift = |p: Point, s: i64| Point::new(p.x_nm + s * normal_x, p.y_nm + s * normal_y);
+        let (plus_start, plus_end) = (shift(segment.start, 1), shift(segment.end, 1));
+        let (minus_start, minus_end) = (shift(segment.start, -1), shift(segment.end, -1));
+        positive.push((segment.layer, plus_start, plus_end));
+        negative.push((segment.layer, minus_start, minus_end));
+        for (original, plus, minus) in [(segment.start, plus_start, minus_start), (segment.end, plus_end, minus_end)] {
+            let entry = junctions.entry((segment.layer, original)).or_default();
+            entry.0.push(plus);
+            entry.1.push(minus);
+        }
+    }
+    (positive, negative, junctions)
+}
+
+/// Python's `str()` of a `CopperLayer` member: `CopperLayer.FRONT`.
+fn layer_member(layer: CopperLayer) -> String {
+    match layer.value() {
+        "F.Cu" => "CopperLayer.FRONT".to_owned(),
+        "B.Cu" => "CopperLayer.BACK".to_owned(),
+        value => format!("CopperLayer.INTERNAL_{}", value.trim_start_matches("In").trim_end_matches(".Cu")),
+    }
+}
+
+/// `_join_offset_junctions`: join each lane's points that meet at one guide
+/// junction, in (layer member name, x, y) order.
+fn join_offset_junctions(
+    net: &str,
+    width: i64,
+    point_index: usize,
+    junctions: &Junctions,
+    tracks: &mut Vec<TrackSegment>,
+) {
+    let mut ordered: Vec<(&(CopperLayer, Point), &(Vec<Point>, Vec<Point>))> = junctions.iter().collect();
+    ordered.sort_by_key(|((layer, point), _)| (layer_member(*layer), point.x_nm, point.y_nm));
+    for ((layer, _), points) in ordered {
+        let selected = if point_index == 0 { &points.0 } else { &points.1 };
+        let unique: Vec<Point> = selected.iter().copied().collect::<IndexSet<Point>>().into_iter().collect();
+        for point in &unique[1..] {
+            if *point != unique[0] {
+                tracks.push(TrackSegment {
+                    net: net.to_owned(),
+                    start: unique[0],
+                    end: *point,
+                    width_nm: width,
+                    layer: *layer,
+                });
+            }
+        }
+    }
+}
+
+/// `_pair_pin_stubs`: each terminal's stub to the nearest lane end, around
+/// the outside of the lanes; with `retain_access_tracks`, the access's
+/// checked lead-in and a checked tail where one exists.
+#[allow(clippy::too_many_arguments)]
+fn pair_pin_stubs(
+    board: &PhysicalBoard,
+    net: &str,
+    guide: &GlobalNetRoute,
+    width: i64,
+    paths: &Lane,
+    lane_index: i64,
+    lane_pitch: i64,
+    retain_access_tracks: bool,
+) -> Result<Vec<TrackSegment>> {
+    let endpoints: Vec<(CopperLayer, Point)> =
+        paths.iter().flat_map(|(layer, start, end)| [(*layer, *start), (*layer, *end)]).collect();
+    let mut result = Vec::new();
+    let xs: Vec<i64> = endpoints.iter().map(|(_, p)| p.x_nm).collect();
+    let ys: Vec<i64> = endpoints.iter().map(|(_, p)| p.y_nm).collect();
+    let (min_x, max_x) = (*xs.iter().min().expect("lanes"), *xs.iter().max().expect("lanes"));
+    let (min_y, max_y) = (*ys.iter().min().expect("lanes"), *ys.iter().max().expect("lanes"));
+    let horizontal = max_x - min_x >= max_y - min_y;
+    for access in &guide.accesses {
+        let retained = retain_access_tracks && !access.tracks.is_empty();
+        let anchor = if retained { access.access_position } else { access.pad_position };
+        if retained {
+            result.extend(access.tracks.iter().cloned());
+        }
+        let (layer, point) = *endpoints
+            .iter()
+            .min_by_key(|(layer, p)| {
+                ((p.x_nm - anchor.x_nm).abs() + (p.y_nm - anchor.y_nm).abs(), layer_member(*layer), p.x_nm, p.y_nm)
+            })
+            .expect("lanes");
+        if anchor == point {
+            continue;
+        }
+        if retain_access_tracks {
+            let clearance = crate::routing_clearance::RoutingClearanceIndex::new(board)?;
+            let tail = crate::pin_escape::checked_access_path(
+                board, &clearance, net, anchor, point, width, layer, false, true, None,
+            )?;
+            if let Some(tail) = tail {
+                result.extend(tail);
+                continue;
+            }
+        }
+        let escape = (lane_index + 1) * lane_pitch.max(width);
+        let corners = if horizontal {
+            let outside = if point.x_nm <= (min_x + max_x).div_euclid(2) { min_x - escape } else { max_x + escape };
+            [anchor, Point::new(outside, anchor.y_nm), Point::new(outside, point.y_nm), point]
+        } else {
+            let outside = if point.y_nm <= (min_y + max_y).div_euclid(2) { min_y - escape } else { max_y + escape };
+            [anchor, Point::new(anchor.x_nm, outside), Point::new(point.x_nm, outside), point]
+        };
+        for pair in corners.windows(2) {
+            if pair[0] != pair[1] {
+                result.push(TrackSegment { net: net.to_owned(), start: pair[0], end: pair[1], width_nm: width, layer });
+            }
+        }
+    }
+    Ok(result)
 }
