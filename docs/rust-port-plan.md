@@ -718,3 +718,45 @@ do not shrink as much.
   macro previews, and the macro preview of a board whose nets all stay
   inside its macros. The HTTP server exits 3 with the marker on stderr
   when a request reaches one of them.
+
+**M3 stream: editor source editing (branch `rust-m3-editor-source`).**
+
+- `copper-editor` ports the reviewed source transactions of
+  `pcbir.editor`: the token patches (`fixed_placement_patch`,
+  `mechanical_patch`, `insert_member`, `feature_patch`, `feature_batch`),
+  `difflib.unified_diff` (SequenceMatcher with its popularity heuristic),
+  the workspace's validate/review (identity with constraint scopes, ERC,
+  seeded rebuild, placement legality and `placement_copper_findings`, now in
+  `copper-drc`) and its locked same-directory atomic save with stale-lock
+  breaking, and the session operations `prepare_lock`,
+  `prepare_placement`, `prepare_mechanical(_batch)`, `review_feature(s)`,
+  `save_source`, `discard_source`, `undo_source`, `redo_source` and
+  `reload_source`.
+- Definition sessions (macro and board_profile documents, opened directly
+  or from `/api/open-definition`, which serves each on its own port): the
+  definition inventory and patches, the macro scene with port continuity
+  over the explicit copper graph, the profile scene with provenance,
+  inherited features and connector roles, the catalog and the reviewed
+  history. An outline-less profile is lowered against a 2^40 nm stand-in
+  viewport (the rewrite's length limit) and then given Python's 2 km
+  viewport; if lowering fails against the stand-in it exits 3. A
+  `RUST_NOT_IMPLEMENTED` lowering limit now exits 3 in the editor instead
+  of printing as an editor error.
+- Harness: http transcripts substitute `"{review_id}"` (the latest scene's
+  source review). Suite `edit-mechanical-source` (M3, 9 cases): board
+  transactions on staged copies of the demo, anchors, curves and reference
+  boards (proxy and resolved footprints), reviews without saving on the
+  hierarchical board, staged macro and profile definition projects and a
+  read-only cached profile; saved sources are compared byte for byte. All
+  equal; the other editor suites stay equal (288 `edit-mechanical*`
+  cases).
+- Browser smokes against the binary: `ui`, `save`, `layout-save`,
+  `keyboard`, `invalid`, `curves`, `anchors`, `references`, `artwork`
+  (`run-editor-smokes.py`) and `board`, `macro`, `profile`
+  (`run-physical-smokes.py`, which gained `COPPER_TEST_EDITOR_BINARY`).
+  `placement` still fails on the Python package too.
+- Still not implemented (exit 3): via-in-pad via arrays in macro previews
+  (`pcbir.pad_via_arrays` needs the routing clearance index), and the macro
+  preview of a board whose nets all stay inside its macros (Python rebuilds
+  the board with only the macro members and reports the first
+  `PhysicalBoard` validation failure; the rewrite's validation is partial).

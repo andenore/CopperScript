@@ -247,60 +247,58 @@ impl Workspace {
 /// `SourceWorkspace.save`: write `after` over `source` under a cooperative
 /// lock, only while it still holds `before`; `check` re-verifies the inputs.
 pub fn save_reviewed(source: &Path, before: &[u8], after: &[u8], check: &dyn Fn() -> Result<()>) -> Result<()> {
-    {
-        check()?;
-        if source.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
-            return value("source was replaced with a symbolic link");
-        }
-        let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let lock = source.with_file_name(format!("{name}.editor-lock"));
-        break_stale_lock(&lock);
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
-        let token = format!("pid {} token {} at {:.0}\n", std::process::id(), random_token(16, 2), now);
-        let mut marker = match std::fs::OpenOptions::new().write(true).create_new(true).open(&lock) {
-            Ok(marker) => marker,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                return value(format!(
-                    "another editor is saving this source right now ({name}.editor-lock); retry in a moment. A lock older than {} s is removed automatically",
-                    STALE_LOCK_SECONDS as i64
-                ));
-            }
-            Err(error) => return Err(os(&error, &lock)),
-        };
-        let mut temporary: Option<PathBuf> = None;
-        let result = (|| -> Result<()> {
-            marker.write_all(token.as_bytes()).and_then(|()| marker.flush()).map_err(|e| os(&e, &lock))?;
-            let read = |path: &Path| std::fs::read(path).map_err(|e| os(&e, path));
-            if read(source)? != before {
-                return value("source changed since review; reload before saving");
-            }
-            let permissions = std::fs::metadata(source).map_err(|e| os(&e, source))?.permissions();
-            let parent = source.parent().unwrap_or(Path::new("."));
-            let (path, mut stream) = (0..100)
-                .find_map(|attempt| {
-                    let path = parent.join(format!(".copper-edit-{}", random_token(4, 3 + attempt)));
-                    std::fs::OpenOptions::new().write(true).create_new(true).open(&path).ok().map(|f| (path, f))
-                })
-                .ok_or_else(|| Error::Os("[Errno 17] No usable temporary file name found".to_owned()))?;
-            temporary = Some(path.clone());
-            stream.write_all(after).and_then(|()| stream.sync_all()).map_err(|e| os(&e, &path))?;
-            drop(stream);
-            std::fs::set_permissions(&path, permissions).map_err(|e| os(&e, &path))?;
-            check()?;
-            if read(source)? != before {
-                return value("source changed during save; no edit committed");
-            }
-            std::fs::rename(&path, source).map_err(|e| os(&e, source))?;
-            temporary = None;
-            Ok(())
-        })();
-        drop(marker);
-        if let Some(path) = temporary {
-            let _ = std::fs::remove_file(path);
-        }
-        if std::fs::read_to_string(&lock).is_ok_and(|text| text == token) {
-            let _ = std::fs::remove_file(&lock);
-        }
-        result
+    check()?;
+    if source.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+        return value("source was replaced with a symbolic link");
     }
+    let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let lock = source.with_file_name(format!("{name}.editor-lock"));
+    break_stale_lock(&lock);
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+    let token = format!("pid {} token {} at {:.0}\n", std::process::id(), random_token(16, 2), now);
+    let mut marker = match std::fs::OpenOptions::new().write(true).create_new(true).open(&lock) {
+        Ok(marker) => marker,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return value(format!(
+                "another editor is saving this source right now ({name}.editor-lock); retry in a moment. A lock older than {} s is removed automatically",
+                STALE_LOCK_SECONDS as i64
+            ));
+        }
+        Err(error) => return Err(os(&error, &lock)),
+    };
+    let mut temporary: Option<PathBuf> = None;
+    let result = (|| -> Result<()> {
+        marker.write_all(token.as_bytes()).and_then(|()| marker.flush()).map_err(|e| os(&e, &lock))?;
+        let read = |path: &Path| std::fs::read(path).map_err(|e| os(&e, path));
+        if read(source)? != before {
+            return value("source changed since review; reload before saving");
+        }
+        let permissions = std::fs::metadata(source).map_err(|e| os(&e, source))?.permissions();
+        let parent = source.parent().unwrap_or(Path::new("."));
+        let (path, mut stream) = (0..100)
+            .find_map(|attempt| {
+                let path = parent.join(format!(".copper-edit-{}", random_token(4, 3 + attempt)));
+                std::fs::OpenOptions::new().write(true).create_new(true).open(&path).ok().map(|f| (path, f))
+            })
+            .ok_or_else(|| Error::Os("[Errno 17] No usable temporary file name found".to_owned()))?;
+        temporary = Some(path.clone());
+        stream.write_all(after).and_then(|()| stream.sync_all()).map_err(|e| os(&e, &path))?;
+        drop(stream);
+        std::fs::set_permissions(&path, permissions).map_err(|e| os(&e, &path))?;
+        check()?;
+        if read(source)? != before {
+            return value("source changed during save; no edit committed");
+        }
+        std::fs::rename(&path, source).map_err(|e| os(&e, source))?;
+        temporary = None;
+        Ok(())
+    })();
+    drop(marker);
+    if let Some(path) = temporary {
+        let _ = std::fs::remove_file(path);
+    }
+    if std::fs::read_to_string(&lock).is_ok_and(|text| text == token) {
+        let _ = std::fs::remove_file(&lock);
+    }
+    result
 }

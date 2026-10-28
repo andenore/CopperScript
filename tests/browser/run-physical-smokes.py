@@ -1,4 +1,7 @@
-"""Disposable real-browser smoke for all physical-editor document kinds."""
+"""Disposable real-browser smoke for all physical-editor document kinds.
+
+COPPER_TEST_EDITOR_BINARY runs a `copper` binary (the Rust rewrite) instead of the package.
+"""
 import os
 from pathlib import Path
 from queue import Queue
@@ -33,7 +36,9 @@ stackup {
     else:
         source.write_text('board_profile Fragment { hole H1 { position = (5 mm, 5 mm); diameter = 2 mm; } }', encoding='utf-8')
     hidden = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
-    server = subprocess.Popen([sys.executable,'-u','-m','copperscript','edit',str(source),
+    binary = os.environ.get('COPPER_TEST_EDITOR_BINARY')
+    launcher = [binary] if binary else [sys.executable,'-u','-m','copperscript']
+    server = subprocess.Popen([*launcher,'edit',str(source),
         '--no-browser','--offline','--allow-proxy-footprints'],cwd=ROOT,stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,text=True,**hidden)
     lines=Queue()
