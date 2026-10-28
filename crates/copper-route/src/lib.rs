@@ -67,6 +67,7 @@ pub mod local_critical;
 pub mod package_patterns;
 pub mod pad_stitch;
 pub mod pad_via_arrays;
+pub mod pair_refine;
 pub mod pair_search;
 pub mod pair_terminals;
 pub mod pair_vias;

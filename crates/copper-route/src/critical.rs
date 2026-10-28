@@ -1815,7 +1815,7 @@ fn route_pair(
         )?);
     }
     let strategy = if is_aligned { "aligned_pair" } else { "global_guide" };
-    finish_pair(board, first, second, first_tracks, second_tracks, gap, strategy, tuning_board)
+    finish_pair(board, first, second, (first_tracks, second_tracks), gap, strategy, tuning_board, (&[], &[]))
 }
 
 /// `_route_pair(..., exact_tracks=...)` for a joint search candidate without
@@ -1828,6 +1828,7 @@ fn route_pair_exact(
     routes: &IndexMap<String, GlobalNetRoute>,
     exact: &(Vec<TrackSegment>, Vec<TrackSegment>),
     tuning_board: &PhysicalBoard,
+    transitions: (&[(Via, Via)], &[Via]),
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
     let (first, second) =
         if first_rule.net <= second_rule.net { (first_rule, second_rule) } else { (second_rule, first_rule) };
@@ -1848,7 +1849,8 @@ fn route_pair_exact(
     let Some(gap) = gap.filter(|gap| first_width == second_width && second.pair_gap_nm == Some(*gap)) else {
         return failed("pair members require identical width and gap profiles");
     };
-    finish_pair(board, first, second, exact.0.clone(), exact.1.clone(), gap, "joint_pair_search", tuning_board)
+    let strategy = if transitions.0.is_empty() { "joint_pair_search" } else { "joint_pair_via_search" };
+    finish_pair(board, first, second, exact.clone(), gap, strategy, tuning_board, transitions)
 }
 
 /// The common tail of `_route_pair`: breakout cuts, intra-pair skew,
@@ -1858,11 +1860,11 @@ fn finish_pair(
     board: &PhysicalBoard,
     first: &NetRoutingRule,
     second: &NetRoutingRule,
-    mut first_tracks: Vec<TrackSegment>,
-    mut second_tracks: Vec<TrackSegment>,
+    (mut first_tracks, mut second_tracks): (Vec<TrackSegment>, Vec<TrackSegment>),
     gap: i64,
     strategy: &str,
     tuning_board: &PhysicalBoard,
+    (via_pairs, return_vias): (&[(Via, Via)], &[Via]),
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
     let nets = vec![first.net.clone(), second.net.clone()];
     let first_width = first.width_nm.filter(|width| *width != 0).unwrap_or(board.rules.default_track_width_nm);
@@ -1892,10 +1894,86 @@ fn finish_pair(
     let center_spacing = first_width + gap;
     let coupled = coupled_length(&first_tracks, &second_tracks, center_spacing);
     let uncoupled = vec![(first_length - coupled).max(0), (second_length - coupled).max(0)];
-    let mut diagnostics = budget_diagnostics(first, &[]);
-    diagnostics.extend(budget_diagnostics(second, &[]));
+    let pair_vias: Vec<Via> = via_pairs.iter().flat_map(|(a, b)| [a.clone(), b.clone()]).collect();
+    let first_pair_vias: Vec<&Via> = pair_vias.iter().filter(|v| v.net == first.net).collect();
+    let second_pair_vias: Vec<&Via> = pair_vias.iter().filter(|v| v.net == second.net).collect();
+    let mut paired_transitions = paired_via_transitions(&first_pair_vias, &second_pair_vias, center_spacing);
+    let mut diagnostics = budget_diagnostics(first, &first_pair_vias);
+    diagnostics.extend(budget_diagnostics(second, &second_pair_vias));
     let mut warnings = budget_warnings(first, &first_refs);
     warnings.extend(budget_warnings(second, &second_refs));
+    let mut shared_references: Vec<CopperLayer> = Vec::new();
+    if !via_pairs.is_empty() {
+        // Require explicit matched transition provenance; never infer a pair
+        // from two arbitrary distant vias.
+        let pitch = crate::pair_vias::transition_spacing(board, first, second) as f64;
+        let distinct: IndexSet<&Via> = pair_vias.iter().collect();
+        let valid = via_pairs.iter().all(|(a, b)| {
+            a.net == first.net
+                && b.net == second.net
+                && (a.from_layer, a.to_layer, a.size_nm, a.drill_nm, &a.technology)
+                    == (b.from_layer, b.to_layer, b.size_nm, b.drill_nm, &b.technology)
+                && (copper_physical::pyfloat::hypot(
+                    (a.position.x_nm - b.position.x_nm) as f64,
+                    (a.position.y_nm - b.position.y_nm) as f64,
+                ) - pitch)
+                    .abs()
+                    <= 4.0
+        }) && distinct.len() == pair_vias.len();
+        paired_transitions = if valid { via_pairs.len() as i64 } else { 0 };
+        if !valid {
+            diagnostics.push("explicit differential transition geometry is not paired".to_owned());
+        }
+    }
+    if first.require_return_vias || second.require_return_vias {
+        let requested: Vec<&NetRoutingRule> = [first, second].into_iter().filter(|r| r.require_return_vias).collect();
+        let transition_pairs: Vec<(&Via, &Via)> = if via_pairs.is_empty() {
+            first_pair_vias.iter().copied().zip(second_pair_vias.iter().copied()).collect()
+        } else {
+            via_pairs.iter().map(|(a, b)| (a, b)).collect()
+        };
+        let all_tracks: Vec<TrackSegment> = first_tracks.iter().chain(&second_tracks).cloned().collect();
+        for (a, b) in transition_pairs {
+            let first_layers = crate::return_paths::transition_contact_layers(&first_tracks, a);
+            let second_layers = crate::return_paths::transition_contact_layers(&second_tracks, b);
+            let reference = if first_layers == second_layers {
+                crate::return_paths::shared_reference_plane(
+                    board,
+                    first,
+                    second,
+                    &first_layers,
+                    &[a.position, b.position],
+                )?
+            } else {
+                None
+            };
+            if let Some(reference) = reference {
+                let net = first.return_via_net.as_deref();
+                if crate::return_paths::pair_reference_intent_covers(board, reference, net, &all_tracks)? {
+                    shared_references.push(reference);
+                    continue;
+                }
+                diagnostics.push("declared shared reference does not cover the complete paired route".to_owned());
+            }
+            let distance = |v: &Via, s: &Via| {
+                copper_physical::pyfloat::hypot(
+                    (v.position.x_nm - s.position.x_nm) as f64,
+                    (v.position.y_nm - s.position.y_nm) as f64,
+                )
+            };
+            let permitted = return_vias.iter().any(|v| {
+                requested.iter().all(|r| {
+                    Some(&v.net) == r.return_via_net.as_ref()
+                        && (v.from_layer, v.to_layer) == (a.from_layer, a.to_layer)
+                        && r.maximum_return_via_distance_nm
+                            .is_some_and(|limit| distance(v, a).max(distance(v, b)) <= limit as f64)
+                })
+            });
+            if !permitted {
+                diagnostics.push("paired transition lacks a permitted nearby return via".to_owned());
+            }
+        }
+    }
     if let Some(max_skew) = max_skew
         && skew > max_skew
     {
@@ -1908,10 +1986,26 @@ fn finish_pair(
     {
         diagnostics.push(format!("pair uncoupled length {worst} nm exceeds {limit} nm"));
     }
+    if first_pair_vias.len() != second_pair_vias.len() || paired_transitions != first_pair_vias.len() as i64 {
+        diagnostics.push("differential via transitions are not geometrically paired".to_owned());
+    }
     let mut assumptions = external_assumptions(first);
     assumptions.extend(external_assumptions(second));
     assumptions.push("coupled pin fanout remains subject to authoritative physical DRC".to_owned());
-    let assumptions = dedupe(assumptions);
+    let mut assumptions = dedupe(assumptions);
+    if !via_pairs.is_empty() {
+        assumptions.push("layer transitions require layer-specific impedance and via-stub qualification".to_owned());
+        assumptions.push("reference-via placement does not verify refilled ground-plane continuity".to_owned());
+    }
+    if !shared_references.is_empty() {
+        let mut names: Vec<&str> = shared_references.iter().map(|l| l.value()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assumptions.push(format!(
+            "shared-reference transitions use declared {}; zone intent does not certify filled return-path continuity or impedance",
+            names.join(",")
+        ));
+    }
     let mut evidence = external_evidence(first);
     evidence.extend(external_evidence(second));
     let evidence = dedupe(evidence);
@@ -1920,7 +2014,7 @@ fn finish_pair(
         nets,
         diagnostics.is_empty(),
         tracks.len() as i64,
-        0,
+        (pair_vias.len() + return_vias.len()) as i64,
         vec![first_length, second_length],
         skew,
         diagnostics,
@@ -1928,10 +2022,14 @@ fn finish_pair(
     result.assumptions = assumptions;
     result.coupled_length_nm = coupled;
     result.uncoupled_lengths_nm = uncoupled;
+    result.paired_via_transitions = paired_transitions;
+    result.return_via_count = return_vias.len() as i64;
     result.evidence_digests = evidence;
     result.strategy = strategy.to_owned();
+    result.shared_reference_transition_count = shared_references.len() as i64;
     result.warnings = warnings;
-    Ok((result, tracks, Vec::new()))
+    let vias: Vec<Via> = pair_vias.iter().chain(return_vias).cloned().collect();
+    Ok((result, tracks, vias))
 }
 
 /// `_route_pair_group` up to the coarse candidate: terminal preparation,
@@ -2030,14 +2128,11 @@ fn route_pair_group(
                      rejected: &mut Vec<(String, String)>,
                      blockers: &mut IndexSet<String>|
          -> Result<bool> {
-            if !candidate.via_pairs.is_empty() || !candidate.return_vias.is_empty() {
-                // PENDING: exact paired transitions (pair_vias.transition_spacing, return_paths).
-                return copper_pcb::not_implemented("critical paired via candidates");
-            }
             let mut candidate_blockers: IndexSet<String> = IndexSet::new();
             let exact = (candidate.first.clone(), candidate.second.clone());
+            let transitions = (candidate.via_pairs.as_slice(), candidate.return_vias.as_slice());
             let (attempt, proposed_tracks, proposed_vias) =
-                route_pair_exact(board, first, second, &routes, &exact, &search_board)?;
+                route_pair_exact(board, first, second, &routes, &exact, &search_board, transitions)?;
             let (attempt, proposed_tracks, proposed_vias) =
                 reject_reserved_plane_tracks(board, attempt, proposed_tracks, proposed_vias, rules);
             let (attempt, proposed_tracks, proposed_vias) = validate_candidate(
@@ -2056,10 +2151,20 @@ fn route_pair_group(
                 // PENDING: pair_terminals._matched_local_candidates.
                 return copper_pcb::not_implemented("critical clearance-aware pair tuning retry");
             }
-            if attempt.connected {
-                // PENDING: _improve_pair_spine (pair_refine.paired_shortcuts).
-                return copper_pcb::not_implemented("critical pair spine refinement");
-            }
+            let (attempt, proposed_tracks, proposed_vias) = if attempt.connected {
+                improve_pair_spine(
+                    board,
+                    &search_board,
+                    (first, second),
+                    &routes,
+                    &candidate,
+                    (attempt, proposed_tracks, proposed_vias),
+                    tracks,
+                    vias,
+                )?
+            } else {
+                (attempt, proposed_tracks, proposed_vias)
+            };
             if within_budget(&attempt) {
                 *best = (attempt, proposed_tracks, proposed_vias);
                 return Ok(true);
@@ -2671,6 +2776,84 @@ fn pair_pin_stubs(
 }
 
 /// `_within_or_shorter`: whether `candidate` should replace `incumbent`.
+/// `_paired_via_transitions`: first-member vias matched to a partner at the
+/// exact centre spacing on the same span.
+fn paired_via_transitions(first: &[&Via], second: &[&Via], center_spacing: i64) -> i64 {
+    let mut remaining: Vec<&Via> = second.to_vec();
+    let mut count = 0;
+    for via in first {
+        let found = remaining.iter().position(|item| {
+            let (dx, dy) = (
+                i128::from(item.position.x_nm - via.position.x_nm),
+                i128::from(item.position.y_nm - via.position.y_nm),
+            );
+            item.from_layer == via.from_layer
+                && item.to_layer == via.to_layer
+                && dx * dx + dy * dy == i128::from(center_spacing) * i128::from(center_spacing)
+        });
+        if let Some(found) = found {
+            remaining.remove(found);
+            count += 1;
+        }
+    }
+    count
+}
+
+/// `_improve_pair_spine`: a rejected shortcut retains the complete accepted
+/// pair and its metrics.
+#[allow(clippy::too_many_arguments)]
+fn improve_pair_spine(
+    board: &PhysicalBoard,
+    search_board: &PhysicalBoard,
+    (first, second): (&NetRoutingRule, &NetRoutingRule),
+    routes: &IndexMap<String, GlobalNetRoute>,
+    candidate: &crate::pair_search::PairSearchCandidate,
+    incumbent: Proposal,
+    committed_tracks: &[TrackSegment],
+    committed_vias: &[Via],
+) -> Result<Proposal> {
+    let (mut incumbent, mut incumbent_tracks, mut incumbent_vias) = incumbent;
+    let mut stats = crate::pair_refine::PairRefinementStats::default();
+    let proposals = crate::pair_refine::paired_shortcuts(search_board, candidate, first, second, 256, &mut stats)?;
+    let pair_rules: IndexMap<&str, &NetRoutingRule> =
+        [(first.net.as_str(), first), (second.net.as_str(), second)].into();
+    for lanes in proposals {
+        // Never silently resize, relabel or move a pair to a forbidden layer.
+        let faithful = [(first, &lanes.0), (second, &lanes.1)].into_iter().all(|(rule, lane)| {
+            let width = rule.width_nm.filter(|w| *w != 0).unwrap_or(board.rules.default_track_width_nm);
+            let layers = crate::routing_layers::routing_layers(board, &rule.net, Some(rule));
+            lane.iter().all(|t| {
+                t.net == rule.net
+                    && (t.width_nm == width || Some(t.width_nm) == rule.breakout_width_nm)
+                    && layers.contains(&t.layer)
+            })
+        });
+        if !faithful {
+            continue;
+        }
+        let (proposed, tracks, vias) =
+            route_pair_exact(board, first, second, routes, &lanes, search_board, (&[], &[]))?;
+        let (proposed, tracks, vias) = reject_reserved_plane_tracks(board, proposed, tracks, vias, &pair_rules);
+        let (proposed, tracks, vias) =
+            validate_candidate(board, proposed, tracks, vias, committed_tracks, committed_vias, None)?;
+        // A shortcut never trades a budget the incumbent meets for length.
+        let budget = |r: &CriticalNetResult| (r.warnings.len(), if r.warnings.is_empty() { 0 } else { r.skew_nm });
+        if proposed.connected
+            && budget(&proposed) <= budget(&incumbent)
+            && proposed.lengths_nm.iter().zip(&incumbent.lengths_nm).all(|(a, b)| a <= b)
+            && (proposed.lengths_nm.iter().sum::<i64>(), tracks.len())
+                < (incumbent.lengths_nm.iter().sum::<i64>(), incumbent_tracks.len())
+        {
+            incumbent = proposed;
+            incumbent.strategy = "joint_pair_refined".to_owned();
+            (incumbent_tracks, incumbent_vias) = (tracks, vias);
+        }
+    }
+    incumbent.pair_refinement_attempts = stats.attempts;
+    incumbent.pair_refinement_candidates = stats.candidates;
+    Ok((incumbent, incumbent_tracks, incumbent_vias))
+}
+
 /// A unified-router error as this crate's (a crash names its traceback line).
 fn unified_error(error: crate::unified_error::Error) -> Error {
     match error {

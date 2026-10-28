@@ -860,3 +860,30 @@ checked out beside the repository; CopperProbe, which is private, when a
 to real `kicad-cli`. A differing board fails the job; a board the binary
 does not route yet is reported as pending. Python and Rust seconds per board
 are in the job summary.
+
+### M4 ladder stream (`rust-m4-ladder`, 2026-10-28)
+
+Ported for the ladder boards: `decoupling_paths._connections` (cross-layer
+decoupler launches: existing, fresh, cell-maze and inner-layer bridges, with
+the shared lazy work counters kept in Python's evaluation order);
+`route_fanout`'s decoupler pass with `fanout_bypass_completion`;
+`flow._plan_decouplers` reservation swaps; the critical single-ended cohort
+(`_route_critical_cohort`, its exact retry) and `_route_single_exact`;
+`pair_refine.paired_shortcuts` (`_improve_pair_spine`); exact paired via
+candidates with return vias (`_return_positions`, `_return_via`,
+`return_paths.shared_reference_plane` / `pair_reference_intent_covers`);
+explicit `local_surface_candidates` maze bounds.
+
+Decision: the unified router's `time_budget_s` is now a soft wall-clock
+deadline at Python's checkpoints (route_net, search, A* entry, negotiate,
+repair rounds, pour recheck) instead of exiting 3. A run that finishes
+inside the budget (every ladder board: the critical cohorts take seconds
+against 60 s per net) does not depend on timing; one cut short can differ
+from Python, as Python can differ from itself.
+
+Local results without `kicad-cli` (Python vs Rust seconds): asset-tracker
+equal (1991 vs 268), full-vertical equal (192 vs 31). Pending: led-ring
+and asset-tracker with `--verify-plane-fill` (CI's real KiCad) reach
+`filled_feedback.improve_filled_copper` bridge trials when native DRC
+reports zone opens; those trials (with `dependency_reroute`,
+`native_stub_cleanup` and shapely-backed `filled_connectivity`) still exit 3.

@@ -11,7 +11,7 @@ use indexmap::{IndexMap, IndexSet};
 use copper_pcb::board::{NetRoutingRule, PadReference, PhysicalBoard, TrackSegment, Via};
 use copper_physical::footprint::PadKind;
 use copper_physical::geometry::shapes_clear;
-use copper_physical::pyfloat::hypot;
+use copper_physical::pyfloat::{hypot, round_int};
 use copper_physical::{CopperLayer, Point, RoundedConvexShape};
 
 use crate::Result;
@@ -189,13 +189,211 @@ fn with_copper(board: &PhysicalBoard, tracks: &[TrackSegment], vias: &[Via]) -> 
     copy
 }
 
-/// `_return_via`: the return vias of a paired transition (none required here).
-fn return_via(first: &NetRoutingRule, second: &NetRoutingRule) -> Result<Option<Vec<Via>>> {
+/// `_circle_sites`: continuous circle intersections; rounded sites are only
+/// proposals, never proof.
+fn circle_sites(first: Point, first_radius: i64, second: Point, second_radius: i64) -> Vec<(f64, f64)> {
+    let (dx, dy) = ((second.x_nm - first.x_nm) as f64, (second.y_nm - first.y_nm) as f64);
+    let distance = hypot(dx, dy);
+    let (r1, r2) = (first_radius as f64, second_radius as f64);
+    if distance == 0.0 || distance > r1 + r2 || distance < (first_radius - second_radius).abs() as f64 {
+        return Vec::new();
+    }
+    let along =
+        ((first_radius * first_radius - second_radius * second_radius) as f64 + distance * distance) / (2.0 * distance);
+    let mut height_squared = (first_radius * first_radius) as f64 - along * along;
+    if height_squared < 0.0 {
+        // Floating cancellation at a tangent must not authorize geometry.
+        if height_squared < -1.0 {
+            return Vec::new();
+        }
+        height_squared = 0.0;
+    }
+    let height = height_squared.sqrt();
+    let (x, y) = (first.x_nm as f64 + along * dx / distance, first.y_nm as f64 + along * dy / distance);
+    vec![
+        (x - height * dy / distance, y + height * dx / distance),
+        (x + height * dy / distance, y - height * dx / distance),
+    ]
+}
+
+/// `_via_separation`: copper, drill-to-copper and drill spacing.
+fn via_separation(board: &PhysicalBoard, returned: &Via, signal: &Via, clearance: i64) -> i64 {
+    let hole = board.rules.minimum_hole_clearance_nm;
+    let half = |value: i64| value.div_euclid(2);
+    (half(returned.size_nm) + half(signal.size_nm) + clearance)
+        .max(half(returned.drill_nm) + half(signal.drill_nm) + hole)
+        .max(half(returned.drill_nm) + half(signal.size_nm) + hole)
+        .max(half(returned.size_nm) + half(signal.drill_nm) + hole)
+}
+
+/// `_return_positions`: the old axial/lattice slots still possible, with the
+/// futile ones replaced by bounded actual circle/ring sites.
+fn return_positions(
+    board: &PhysicalBoard,
+    port: &Port,
+    pair: &[Via],
+    rules: (&NetRoutingRule, &NetRoutingRule),
+    net: &str,
+    limit: i64,
+) -> Vec<Point> {
+    let (dx, dy) = HEADS[port.heading];
+    let mut legacy: IndexSet<Point> = IndexSet::new();
+    for amount in [800_000, 1_000_000, 1_250_000, 1_500_000, 2_000_000] {
+        for sign in [1, -1] {
+            legacy.insert(Point::new(port.center.x_nm + sign * dx * amount, port.center.y_nm + sign * dy * amount));
+        }
+    }
+    let step = 125_000;
+    let mut lattice: Vec<(i64, i64)> = (-16..=16).flat_map(|x| (-16..=16).map(move |y| (x, y))).collect();
+    lattice.sort_by_key(|&(x, y)| (x * x + y * y, -(x * dx + y * dy), (x, y)));
+    for (x, y) in lattice.into_iter().filter(|&(x, y)| x != 0 || y != 0) {
+        legacy.insert(Point::new(port.center.x_nm + x * step, port.center.y_nm + y * step));
+    }
+    let legacy: Vec<Point> = legacy.into_iter().collect();
+    let returned = Via { net: net.to_owned(), ..pair[0].clone() };
+    let required: Vec<i64> =
+        pair.iter().map(|signal| via_separation(board, &returned, signal, board.rules.minimum_clearance_nm)).collect();
+    let scalar_legal = |position: Point| {
+        pair.iter().zip(&required).all(|(via, minimum)| {
+            let (x, y) = (i128::from(position.x_nm - via.position.x_nm), i128::from(position.y_nm - via.position.y_nm));
+            let distance = x * x + y * y;
+            i128::from(*minimum) * i128::from(*minimum) <= distance && distance <= i128::from(limit) * i128::from(limit)
+        })
+    };
+    let retained: Vec<Point> = legacy.iter().copied().filter(|p| scalar_legal(*p)).collect();
+    let allowance = legacy.len() - retained.len();
+    if allowance == 0 {
+        return retained;
+    }
+    let return_clearance =
+        board.net_routing_rules.iter().find(|r| r.net == net).and_then(|r| r.clearance_nm).unwrap_or(0);
+    let mut radii: Vec<Vec<i64>> = Vec::new();
+    for (signal, rule) in pair.iter().zip([rules.0, rules.1]) {
+        let clearance = board.rules.minimum_clearance_nm.max(rule.clearance_nm.unwrap_or(0)).max(return_clearance);
+        let minimum = via_separation(board, &returned, signal, clearance);
+        let ring: IndexSet<i64> = [(minimum + limit).div_euclid(2), minimum + 4, limit - 4, minimum, limit]
+            .into_iter()
+            .filter(|radius| minimum <= *radius && *radius <= limit)
+            .collect();
+        radii.push(ring.into_iter().collect());
+    }
+    let mut sites: Vec<(f64, f64)> = Vec::new();
+    for a in &radii[0] {
+        for b in &radii[1] {
+            sites.extend(circle_sites(pair[0].position, *a, pair[1].position, *b));
+        }
+    }
+    // Circle tangencies along the actual pair axes also cover wide/unequal rings.
+    let (vx, vy) = (
+        (pair[1].position.x_nm - pair[0].position.x_nm) as f64,
+        (pair[1].position.y_nm - pair[0].position.y_nm) as f64,
+    );
+    let length = hypot(vx, vy);
+    if length != 0.0 {
+        let axes = [(vx / length, vy / length), (-vy / length, vx / length)];
+        for (signal, ring) in pair.iter().zip(&radii) {
+            for radius in ring {
+                for axis in axes {
+                    for sign in [1.0, -1.0] {
+                        let r = *radius as f64;
+                        sites.push((
+                            signal.position.x_nm as f64 + sign * r * axis.0,
+                            signal.position.y_nm as f64 + sign * r * axis.1,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let mut derived: Vec<Point> = Vec::new();
+    let mut seen: IndexSet<Point> = retained.iter().copied().collect();
+    // One-nanometre neighbours handle integer rounding at a true tangent.
+    let nudges = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
+    'sites: for (x, y) in sites {
+        for (nx, ny) in nudges {
+            let position = Point::new(round_int(x) + nx, round_int(y) + ny);
+            if seen.contains(&position) || !scalar_legal(position) {
+                continue;
+            }
+            seen.insert(position);
+            derived.push(position);
+            if derived.len() == allowance {
+                break 'sites;
+            }
+        }
+    }
+    // The established axial preferences, then exact boundary proposals, then
+    // every still-possible old lattice point.
+    let axial: IndexSet<Point> = legacy[..10.min(legacy.len())].iter().copied().collect();
+    let mut ordered: Vec<Point> = retained.iter().copied().filter(|p| axial.contains(p)).collect();
+    ordered.extend(derived);
+    ordered.extend(retained.iter().copied().filter(|p| !axial.contains(p)));
+    ordered
+}
+
+/// `_return_via`: the return vias of a paired transition, or none when no
+/// legal site within the profile's distance exists.
+#[allow(clippy::too_many_arguments)]
+fn return_via(
+    board: &PhysicalBoard,
+    index: &RoutingClearanceIndex<'_>,
+    port: &Port,
+    pair: &[Via],
+    (first, second): (&NetRoutingRule, &NetRoutingRule),
+    surface: CopperLayer,
+    layer: CopperLayer,
+    trace: &mut TransitionTrace,
+) -> Result<Option<Vec<Via>>> {
     if !(first.require_return_vias || second.require_return_vias) {
         return Ok(Some(Vec::new()));
     }
-    // PENDING: return via sites (_return_positions, return_paths.shared_reference_plane).
-    copper_pcb::not_implemented("critical paired transitions with return vias")
+    let span = crate::routing_vias::physical_via_span(board, surface, layer);
+    let contract = span.as_ref().is_some_and(|span| {
+        pair.len() == 2
+            && pair[0].net == first.net
+            && pair[1].net == second.net
+            && pair.iter().all(|v| (v.from_layer, v.to_layer, v.technology.clone()) == *span && v.finish == "standard")
+            && [first, second].iter().all(|r| {
+                let layers = routing_layers(board, &r.net, Some(r));
+                layers.contains(&surface) && layers.contains(&layer)
+            })
+    });
+    if !contract {
+        trace.record("return_invalid_signal_contract", &[], None, &[], &[], None)?;
+        return Ok(None);
+    }
+    // The index holds the caller's escape and signal reservations.
+    if !index.candidate_vias_clear(pair)? {
+        trace.record("return_invalid_index_or_signal_geometry", &[], None, &[], &[], None)?;
+        return Ok(None);
+    }
+    let points: Vec<Point> = pair.iter().map(|v| v.position).collect();
+    if crate::return_paths::shared_reference_plane(board, first, second, &[surface, layer], &points)?.is_some() {
+        return Ok(Some(Vec::new()));
+    }
+    let requested: Vec<&NetRoutingRule> = [first, second].into_iter().filter(|r| r.require_return_vias).collect();
+    let nets: IndexSet<&Option<String>> = requested.iter().map(|r| &r.return_via_net).collect();
+    if nets.len() != 1 {
+        return Ok(None);
+    }
+    let Some(net) = requested[0].return_via_net.clone() else { return Ok(None) };
+    if !board.nets.iter().any(|item| item.name == net) {
+        return Ok(None);
+    }
+    let Some(limit) = requested.iter().map(|r| r.maximum_return_via_distance_nm).min().flatten() else {
+        return Ok(None);
+    };
+    for position in return_positions(board, port, pair, (first, second), &net, limit) {
+        trace.count("return_sites_sampled", 1);
+        let via = Via { net: net.clone(), position, ..pair[0].clone() };
+        let mut all = pair.to_vec();
+        all.push(via.clone());
+        if via_inside_board(board, position, via.size_nm)? && index.candidate_vias_clear(&all)? {
+            return Ok(Some(vec![via]));
+        }
+        trace.record("return_site_blocked", &[position], Some(index), &[via], &[], None)?;
+    }
+    Ok(None)
 }
 
 /// `_local_via_ports`: the finite recessed-land fallback choosing legal vias
@@ -512,7 +710,8 @@ fn transitions(
                 *rejections.entry("signal_vias_blocked").or_default() += 1;
                 continue;
             }
-            let Some(returns) = return_via(first, second)? else {
+            let Some(returns) = return_via(board, &reserved, collar, &pair, (first, second), surface, layer, trace)?
+            else {
                 trace.record("return_unavailable", &sites, None, &[], &[], None)?;
                 *rejections.entry("return_via_blocked").or_default() += 1;
                 continue;
