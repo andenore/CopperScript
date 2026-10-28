@@ -22279,6 +22279,995 @@
     "replay-critical",
     "{input}"
    ]
+  },
+  {
+   "name": "editor-overlay",
+   "milestone": "M6",
+   "timeout_s": 120,
+   "cases": [
+    {
+     "id": "editor-overlay/flat",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/rear",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/rear"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/demo",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/demo"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/valid",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/valid"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/verified",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/verified"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/remaining",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/remaining"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/filled",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/filled"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/drc-unbound",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/drc-unbound"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/drc-units",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/drc-units"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/intent-schema",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/intent-schema"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/unbound",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/unbound"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/pcb-changed",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/pcb-changed"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/pose-mismatch",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/pose-mismatch"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/copper-mismatch",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/copper-mismatch"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/duplicate-key",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/duplicate-key"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/nonfinite",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/nonfinite"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/bad-json",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/bad-json"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/missing-intent",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/missing-intent"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay/manifest-list",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/manifest-list"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "editor-overlay-options",
+   "milestone": "M6",
+   "timeout_s": 120,
+   "cases": [
+    {
+     "id": "editor-overlay-options/elsewhere",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/elsewhere/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/evidence-name",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/route-report.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/not-json",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/overlay.txt"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/existing-output",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/board.editor-intent.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/short-output",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o{out}/run/reference.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/long-output",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "--output={out}/run/reference.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/abbreviated",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-py",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "--out",
+      "{out}/run/reference.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/failing-probe",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/failing-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/garbled-probe",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/garbled-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/missing-interpreter",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/absent-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/missing-manifest",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/absent.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/directory-manifest",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/editor-overlay.json"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/help",
+     "stage": {},
+     "args": [
+      "editor-overlay",
+      "--help"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/no-run",
+     "stage": {},
+     "args": [
+      "editor-overlay",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/x.json"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/no-output",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/no-interpreter",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "-o",
+      "{out}/run/x.json"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/extra-positional",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "extra",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/x.json"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    },
+    {
+     "id": "editor-overlay-options/unknown-option",
+     "stage": {
+      "run": "tests/rust-port/overlay/runs/flat"
+     },
+     "args": [
+      "editor-overlay",
+      "{out}/run/run.json",
+      "--kicad-python",
+      "tests/rust-port/overlay/kicad-python/fake-kicad-python.sh",
+      "-o",
+      "{out}/run/x.json",
+      "--bogus"
+     ],
+     "compare": [
+      "exit",
+      "stdout"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "edit-mechanical",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "edit-mechanical",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--scene-output",
+    "{out}/scene.json"
+   ],
+   "mutations": 3
+  },
+  {
+   "name": "edit-mechanical-proxy",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "edit",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--scene-output",
+    "{out}/scene.json"
+   ],
+   "mutations": 2
+  },
+  {
+   "name": "edit-mechanical-options",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "edit-mechanical-options/four-layer",
+     "args": [
+      "edit",
+      "examples/mechanical_editor_demo/board.copper",
+      "--offline",
+      "--layers",
+      "4",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/six-layer-profile",
+     "args": [
+      "edit",
+      "examples/round_led_ring/board.copper",
+      "--offline",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/four-layer-profile-two",
+     "args": [
+      "edit",
+      "examples/round_led_ring/board.copper",
+      "--offline",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "--layers",
+      "2",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/cm4-explicit-two",
+     "args": [
+      "edit",
+      "examples/cm4_baseboard/board.copper",
+      "--offline",
+      "--layers",
+      "2",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/nrf52-six",
+     "args": [
+      "edit",
+      "examples/nrf52_coin_cell/board.copper",
+      "--offline",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/footprint-root",
+     "args": [
+      "edit",
+      "examples/valid_board/board.copper",
+      "--offline",
+      "--footprint-root",
+      "tests/fixtures/footprints",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/nested-output",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/a/b/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/existing-output",
+     "stage": {
+      "scene.json": "examples/mechanical_outline/board.copper"
+     },
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/overwrite-source",
+     "stage": {
+      "board.copper": "examples/mechanical_outline/board.copper"
+     },
+     "args": [
+      "edit",
+      "{out}/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/output-is-directory",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/missing-board",
+     "args": [
+      "edit",
+      "{out}/missing.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/kicad-mod",
+     "args": [
+      "edit",
+      "examples/macro_definition/test.kicad_mod",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/not-utf8",
+     "stage": {
+      "board.copper": "site/assets/copper-logo.png"
+     },
+     "args": [
+      "edit",
+      "{out}/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/part-document",
+     "args": [
+      "edit",
+      "examples/macro_definition/parts/land.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/project-without-manifest",
+     "args": [
+      "edit",
+      "examples/macro_definition/layouts/link.copper",
+      "--offline",
+      "--project",
+      "{out}",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/board-with-project",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--offline",
+      "--project",
+      "{out}",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/invalid-layers",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--layers",
+      "3",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/invalid-profile",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--fab-profile",
+      "x",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/invalid-port",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--port",
+      "x",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/no-board",
+     "args": [
+      "edit-mechanical"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/help",
+     "args": [
+      "edit-mechanical",
+      "--help"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/artwork-fixture",
+     "args": [
+      "edit",
+      "tests/fixtures/editor-artwork/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/missing-overlay",
+     "args": [
+      "edit",
+      "examples/mechanical_editor_demo/board.copper",
+      "--offline",
+      "--overlay",
+      "{out}/missing.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/missing-templates",
+     "args": [
+      "edit",
+      "examples/mechanical_editor_demo/board.copper",
+      "--offline",
+      "--placement-templates",
+      "{out}/missing.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/templates",
+     "args": [
+      "edit",
+      "examples/full_vertical/board.copper",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--placement-templates",
+      "examples/full_vertical/placement_templates.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/templates-resolved",
+     "args": [
+      "edit",
+      "examples/full_vertical/board.copper",
+      "--offline",
+      "--placement-templates",
+      "examples/full_vertical/placement_templates.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/templates-not-json",
+     "args": [
+      "edit",
+      "examples/valid_board/board.copper",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-templates",
+      "examples/valid_board/board.copper",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/hard-macro-missing",
+     "args": [
+      "edit",
+      "examples/valid_board/board.copper",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--hard-macro",
+      "examples/missing-scene.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/hard-macro-wrong-schema",
+     "args": [
+      "edit",
+      "examples/valid_board/board.copper",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--hard-macro",
+      "scripts/compare_corpus.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "edit-mechanical-macros",
+   "milestone": "M3",
+   "inputs": [
+    "tests/rust-port/export-kicad-pcb/*.copper",
+    "tests/rust-port/export-kicad-pcb/macros/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "edit-mechanical",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--scene-output",
+    "{out}/scene.json"
+   ],
+   "mutations": 2
+  },
+  {
+   "name": "edit-mechanical-http",
+   "milestone": "M3",
+   "timeout_s": 240,
+   "cases": [
+    {
+     "id": "edit-mechanical-http/transport",
+     "http": "tests/rust-port/editor/transport.jsonl",
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "examples/mechanical_editor_demo/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-http/placement",
+     "http": "tests/rust-port/editor/placement.jsonl",
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "examples/mechanical_editor_demo/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-http/placement-cm4",
+     "http": "tests/rust-port/editor/placement.jsonl",
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "examples/cm4_baseboard/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-http/port-range",
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "examples/mechanical_outline/board.copper",
+      "--port",
+      "70000"
+     ]
+    }
+   ]
   }
  ]
 }

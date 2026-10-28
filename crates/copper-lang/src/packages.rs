@@ -456,6 +456,60 @@ fn crosses_symlink(unresolved: &Path, root: &Path) -> bool {
         .any(|candidate| candidate.symlink_metadata().is_ok_and(|meta| meta.file_type().is_symlink()))
 }
 
+/// A `prepare_dependencies` failure: a located error, or an uncaught `OSError`.
+#[derive(Debug)]
+pub enum PrepareFailure {
+    Copper(CopperScriptError),
+    Os(String),
+}
+
+impl From<CopperScriptError> for PrepareFailure {
+    fn from(error: CopperScriptError) -> Self {
+        PrepareFailure::Copper(error)
+    }
+}
+
+/// `prepare_dependencies`: resolve every declared requirement, adding missing
+/// pins without changing existing ones, and write `copper.lock` once at the
+/// end. Returns the manifest and lock paths, or `None` without a manifest.
+pub fn prepare_dependencies(
+    source: &Path,
+    offline: bool,
+    locked: bool,
+    progress: &mut dyn FnMut(&str),
+) -> std::result::Result<Option<(PathBuf, PathBuf)>, PrepareFailure> {
+    let resolved = paths::resolve(source);
+    let Some(manifest_path) = find_manifest(resolved.parent().unwrap_or(Path::new("/"))) else { return Ok(None) };
+    let manifest = read_manifest(&manifest_path)?;
+    let lock_path = manifest.root().join("copper.lock");
+    let original = std::fs::read(&lock_path).ok();
+    let manifest_bytes = std::fs::read(&manifest_path).ok();
+    let mut requirements: Vec<(String, String)> =
+        manifest.requirements.iter().map(|(module, version)| (module.clone(), version.clone())).collect();
+    requirements.sort();
+    let mut resolver = PackageResolver::new(manifest, locked, offline)?;
+    resolver.preparation = true;
+    let before = resolver.lock_entries.clone();
+    let location = Location { filename: Arc::from(paths::display(source).as_str()), offset: 0, line: 1, column: 1 };
+    for (module, version) in requirements {
+        progress(&format!("Preparing {module}@{version}"));
+        resolver.resolve(&module, &location)?;
+    }
+    let same = resolver.lock_entries.len() == before.len()
+        && resolver.lock_entries.iter().all(|(key, entry)| before.get(key) == Some(entry));
+    if !same {
+        let current = std::fs::read(&lock_path).ok();
+        if current != original || std::fs::read(&manifest_path).ok() != manifest_bytes {
+            return Err(
+                error("PKG007", "dependency inputs changed during preparation; retry opening", &location).into()
+            );
+        }
+        write_lock(&lock_path, &resolver.lock_entries)
+            .map_err(|failure| PrepareFailure::Os(paths::python_os_error(&failure, None)))?;
+    }
+    Ok(Some((manifest_path, lock_path)))
+}
+
 /// `pcbir.packages.PackageResolver`.
 pub struct PackageResolver {
     pub manifest: ModuleManifest,
@@ -469,6 +523,9 @@ pub struct PackageResolver {
     pub source_directory: PathBuf,
     /// Reads package sources instead of the filesystem (the language server).
     pub source_reader: Option<SourceReader>,
+    /// `prepare_dependencies`' resolver: new pins are recorded in memory and
+    /// a changed existing pin is an error.
+    pub preparation: bool,
 }
 
 impl PackageResolver {
@@ -486,6 +543,7 @@ impl PackageResolver {
             source_directory: paths::resolve(&root),
             manifest,
             source_reader: None,
+            preparation: false,
         })
     }
 
@@ -863,6 +921,22 @@ impl PackageResolver {
 
     fn verify_or_record_lock(&mut self, entry: LockedModule, location: &Location) -> Result<()> {
         let key = (entry.module_path.clone(), entry.version.clone());
+        if self.preparation {
+            if let Some(expected) = self.lock_entries.get(&key).filter(|expected| **expected != entry) {
+                return Err(error(
+                    "PKG008",
+                    format!(
+                        "lock mismatch for {}@{}: {}; existing pins were preserved",
+                        entry.module_path,
+                        entry.version,
+                        lock_difference(Some(expected), &entry)
+                    ),
+                    location,
+                ));
+            }
+            self.lock_entries.insert(key, entry);
+            return Ok(());
+        }
         let declared: Vec<(String, String)> =
             self.manifest.requirements.iter().map(|(module, version)| (module.clone(), version.clone())).collect();
         let expected = self.lock_entries.get(&key);

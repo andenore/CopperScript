@@ -576,6 +576,28 @@ fn round_rational(value: &BigRational) -> BigInt {
     if fraction > half || (fraction == half && (&floor % 2u8) != BigInt::zero()) { floor + 1 } else { floor }
 }
 
+/// `verify_reference_assets`: recheck each asset's authority and checksum;
+/// the error is the `ValueError` or `OSError` text.
+pub fn verify_reference_assets(references: &[MechanicalReference]) -> Result<(), String> {
+    for reference in references {
+        if reference.asset_path.is_empty() {
+            return Err("reference asset has no compiler authority".to_owned());
+        }
+        let asset = std::path::Path::new(&reference.asset_path);
+        let authority = asset.parent().unwrap_or(std::path::Path::new("")).join("authority.copper");
+        let name = asset.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        read_locked_asset(
+            &authority.to_string_lossy(),
+            &Value::Scalar(Scalar::Str(name)),
+            &Value::Scalar(Scalar::Str(reference.sha256.clone())),
+        )
+        .map_err(|failure| match failure {
+            Fail::Value(message) | Fail::Rust(message) => message,
+        })?;
+    }
+    Ok(())
+}
+
 /// `reference_scene`: read-only board-frame guides in nanometres.
 pub fn reference_scene(reference: &MechanicalReference) -> Json {
     let full = Decimal::from_i64(360);

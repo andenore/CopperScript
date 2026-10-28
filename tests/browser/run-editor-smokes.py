@@ -2,6 +2,7 @@
 
 Use the project's Python, installed Playwright/Chromium and explicit footprint roots.
 COPPER_PLAYWRIGHT_MODULE and COPPER_BROWSER_EXECUTABLE select local test tools.
+COPPER_TEST_EDITOR_BINARY runs a `copper` binary (the Rust rewrite) instead of the package.
 """
 import argparse
 import os
@@ -37,8 +38,9 @@ def run_case(name, roots):
     for asset_directory in ("assets", "mechanical-assets"):
         if (original / asset_directory).is_dir():
             shutil.copytree(original / asset_directory, output / asset_directory, dirs_exist_ok=True)
-    command = [sys.executable, "-u", "-c", "from pcbir.cli import main; raise SystemExit(main())",
-               "edit-mechanical", str(source), "--locked", "--offline", "--no-browser"]
+    binary = os.environ.get("COPPER_TEST_EDITOR_BINARY")
+    launcher = [binary] if binary else [sys.executable, "-u", "-c", "from pcbir.cli import main; raise SystemExit(main())"]
+    command = [*launcher, "edit-mechanical", str(source), "--locked", "--offline", "--no-browser"]
     for root in roots:
         command.extend(["--footprint-root", str(root)])
     hidden = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
