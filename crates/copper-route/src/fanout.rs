@@ -115,7 +115,7 @@ impl FanoutOptions {
 
 use indexmap::{IndexMap, IndexSet};
 
-use copper_pcb::board::{PhysicalBoard, Placement, RouteKind, TrackSegment, Via};
+use copper_pcb::board::{DecouplingLink, PhysicalBoard, Placement, RouteKind, TrackSegment, Via};
 use copper_pcb::transform::{placed_pad_shape, transformed_local_point};
 use copper_pcb::zones::{distribution_zone_nets, routing_layers};
 use copper_physical::footprint::{FootprintPad, PadKind};
@@ -124,6 +124,9 @@ use copper_physical::{BoardSide, CopperLayer, Point, RoundedConvexShape};
 
 use crate::access_sites::{circular_array_depth, circular_cell_sites, obstacle_boundary_sites};
 use crate::boundary_access::{BoundaryAccessOptions, package_collar, surface_escapes};
+use crate::bypass_links::verified_bypass_links;
+use crate::decoupling::DecouplingRouteResult;
+use crate::decoupling_paths::{DecouplingCrossLayerWitness, refresh_crosslayer_witnesses};
 use crate::escape_assignment::{EscapeAssignmentReport, EscapeCandidate, improve_escape_assignment};
 use crate::pin_escape::{RoutingAccess, checked_access_path, checked_access_paths};
 use crate::return_paths::existing_returns_permit;
@@ -144,6 +147,12 @@ pub struct FanoutResult {
     pub created_tracks: Vec<TrackSegment>,
     pub assignment: Option<EscapeAssignmentReport>,
     pub surface_accesses: Option<IndexMap<PadReference, RoutingAccess>>,
+    /// Exact generated semantic feeds, separate from unrelated same-net launches.
+    pub decoupling_tracks: Vec<TrackSegment>,
+    /// Exact generated semantic supply/return transitions.
+    pub decoupling_vias: Vec<Via>,
+    pub decoupling_witnesses: Vec<DecouplingCrossLayerWitness>,
+    pub decoupling_pending_links: Vec<(DecouplingLink, String)>,
 }
 
 impl FanoutResult {
@@ -158,7 +167,26 @@ impl FanoutResult {
             created_tracks: Vec::new(),
             assignment: None,
             surface_accesses: None,
+            decoupling_tracks: Vec::new(),
+            decoupling_vias: Vec::new(),
+            decoupling_witnesses: Vec::new(),
+            decoupling_pending_links: Vec::new(),
         }
+    }
+
+    /// The bypass pass's own copper and ledger on an unchanged fanout.
+    fn bypass(bypass: &DecouplingRouteResult, pending: Vec<PadReference>) -> Self {
+        let mut result = FanoutResult::unchanged(&bypass.board, pending);
+        result.accesses = bypass.accesses.clone();
+        result.added_track_count = bypass.created_tracks.len() as i64;
+        result.added_via_count = bypass.created_vias.len() as i64;
+        result.created_tracks = bypass.created_tracks.clone();
+        result.created_vias = bypass.created_vias.clone();
+        result.decoupling_tracks = bypass.created_tracks.clone();
+        result.decoupling_vias = bypass.created_vias.clone();
+        result.decoupling_witnesses = bypass.admitted_path_witnesses.clone();
+        result.decoupling_pending_links = bypass.pending.clone();
+        result
     }
 }
 
@@ -167,13 +195,13 @@ fn side_of(placement: &Placement) -> CopperLayer {
 }
 
 /// `_OutlineSites`: exact inside-and-margin tests of via sites, cached.
-struct OutlineSites {
+pub(crate) struct OutlineSites {
     vertices: Vec<Point>,
     admitted: std::cell::RefCell<IndexMap<(i64, i64, i64), bool>>,
 }
 
 impl OutlineSites {
-    fn new(vertices: &[Point]) -> Self {
+    pub(crate) fn new(vertices: &[Point]) -> Self {
         OutlineSites { vertices: vertices.to_vec(), admitted: std::cell::RefCell::new(IndexMap::new()) }
     }
 
@@ -235,7 +263,7 @@ fn ray_candidates(position: Point, center: Point, options: &FanoutOptions, diago
 }
 
 /// `_package_candidates`: diagonal dogbones before outward rays.
-fn package_candidates(
+pub(crate) fn package_candidates(
     board: &PhysicalBoard,
     placement: &Placement,
     pad: &FootprintPad,
@@ -258,7 +286,7 @@ fn package_candidates(
 }
 
 /// `_two_leg_candidates`: bounded off-ray sites on a half-step lattice.
-fn two_leg_candidates(position: Point, center: Point, options: &FanoutOptions) -> Vec<Point> {
+pub(crate) fn two_leg_candidates(position: Point, center: Point, options: &FanoutOptions) -> Vec<Point> {
     let step = 1.max(options.step_nm.div_euclid(2));
     let mut points = Vec::new();
     for ring in 1..=options.maximum_radius_nm.div_euclid(step) {
@@ -301,7 +329,7 @@ fn unique(choices: Vec<EscapeCandidate>) -> Vec<EscapeCandidate> {
 
 /// `_legal_choices`: exact-checked dogbone candidates at the given via sites.
 #[allow(clippy::too_many_arguments)]
-fn legal_choices(
+pub(crate) fn legal_choices(
     board: &PhysicalBoard,
     clearance: &RoutingClearanceIndex<'_>,
     net: &str,
@@ -512,11 +540,14 @@ pub fn route_fanout(
     if board.stackup.copper_layers.len() < 2 {
         return Ok(FanoutResult::unchanged(board, Vec::new()));
     }
-    if !board.decoupling_links.is_empty() {
-        return copper_pcb::not_implemented(
-            "package escape on a board with decoupling links (decoupling.route_decouplers)",
-        );
-    }
+    let bypass = crate::decoupling::route_decouplers(board, only_nets, Some(&options), None, None)?;
+    let board = &bypass.board;
+    let bypass_nets: IndexSet<String> = board.decoupling_links.iter().map(|l| l.net.clone()).collect();
+    let protected_bypasses = if bypass_nets.is_empty() {
+        IndexSet::new()
+    } else {
+        verified_bypass_links(board, &bypass_nets, None, None, &[])?
+    };
     let mut clearance = RoutingClearanceIndex::new(board)?;
     let mut net_by_pad: IndexMap<PadReference, String> = IndexMap::new();
     for net in &board.nets {
@@ -562,6 +593,7 @@ pub fn route_fanout(
             }
             let Some(net) = net_by_pad.get(&reference) else { continue };
             if owned.contains(&reference)
+                || bypass.connected_pads.contains(&reference)
                 || zone_nets.contains(net)
                 || only_nets.is_some_and(|only| !only.contains(net))
             {
@@ -886,12 +918,23 @@ pub fn route_fanout(
         |report: &crate::drc_report::DrcReport, code: &str| report.findings().iter().filter(|f| f.code == code).count();
     let before = crate::drc_report::run_physical_drc(board, policy)?;
     let mut after = crate::drc_report::run_physical_drc(&routed, policy)?;
-    let failed_gate =
-        |after: &crate::drc_report::DrcReport| FATAL.iter().any(|code| count(after, code) > count(&before, code));
+    let failed_gate = |after: &crate::drc_report::DrcReport, candidate: &PhysicalBoard| -> Result<bool> {
+        if FATAL.iter().any(|code| count(after, code) > count(&before, code)) {
+            return Ok(true);
+        }
+        if !protected_bypasses.is_empty() {
+            let current = verified_bypass_links(candidate, &bypass_nets, None, None, &[])?;
+            if !protected_bypasses.iter().all(|link| current.contains(link)) {
+                return Ok(true);
+            }
+        }
+        let replacing = IndexSet::new();
+        Ok(refresh_crosslayer_witnesses(candidate, &bypass.admitted_path_witnesses, None, &replacing)?.1.is_some())
+    };
     let selected_set: IndexSet<&PadReference> = selected.keys().collect();
     let access_set: IndexSet<&PadReference> = accesses.keys().collect();
     if let Some(report) = assignment.as_mut()
-        && (selected_set != access_set || failed_gate(&after))
+        && (selected_set != access_set || failed_gate(&after, &routed)?)
     {
         selected = greedy;
         report.native_accepted = false;
@@ -899,9 +942,9 @@ pub fn route_fanout(
         after = crate::drc_report::run_physical_drc(&routed, policy)?;
     }
     let pending: Vec<PadReference> = ordered_refs.iter().filter(|r| !accesses.contains_key(*r)).cloned().collect();
-    if failed_gate(&after) {
+    if failed_gate(&after, &routed)? {
         let all: Vec<PadReference> = pads.iter().map(|item| item.1.clone()).collect();
-        let mut result = FanoutResult::unchanged(board, all);
+        let mut result = FanoutResult::bypass(&bypass, all);
         result.assignment = assignment;
         return Ok(result);
     }
@@ -917,17 +960,31 @@ pub fn route_fanout(
                 .insert(reference.clone(), RoutingAccess::new(end, surface[reference], path[0].start, path.clone())?);
         }
     }
-    let plain: IndexMap<PadReference, Point> =
-        accesses.iter().filter(|(r, _)| !escapes.contains_key(*r)).map(|(r, p)| (r.clone(), *p)).collect();
-    Ok(FanoutResult {
+    let replacing = IndexSet::new();
+    let (admitted, reason) = refresh_crosslayer_witnesses(&routed, &bypass.admitted_path_witnesses, None, &replacing)?;
+    if let Some(reason) = reason {
+        return Err(Error::Value(format!("fanout lost an original admitted bypass path: {reason}")));
+    }
+    let mut plain = bypass.accesses.clone();
+    for (reference, anchor) in &accesses {
+        if !escapes.contains_key(reference) {
+            plain.insert(reference.clone(), *anchor);
+        }
+    }
+    let result = FanoutResult {
         board: routed,
         accesses: plain,
         pending_pads: pending,
-        added_track_count: tracks.len() as i64,
-        added_via_count: vias.len() as i64,
-        created_vias: vias,
-        created_tracks: tracks,
+        added_track_count: (tracks.len() + bypass.created_tracks.len()) as i64,
+        added_via_count: (vias.len() + bypass.created_vias.len()) as i64,
+        created_vias: bypass.created_vias.iter().chain(&vias).cloned().collect(),
+        created_tracks: bypass.created_tracks.iter().chain(&tracks).cloned().collect(),
         assignment,
         surface_accesses: if surface.is_empty() { None } else { Some(escapes) },
-    })
+        decoupling_tracks: bypass.created_tracks.clone(),
+        decoupling_vias: bypass.created_vias.clone(),
+        decoupling_witnesses: admitted,
+        decoupling_pending_links: bypass.pending.clone(),
+    };
+    crate::fanout_bypass_completion::complete_late_bypasses(result, &bypass.pending, &options, only_nets)
 }

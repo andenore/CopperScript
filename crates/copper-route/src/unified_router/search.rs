@@ -112,7 +112,7 @@ impl Router<'_, '_> {
                 route = direct;
             }
         }
-        if !route.connected && self.deadline_expired {
+        if !route.connected && self.expired() {
             route.reason = "time budget exhausted".to_owned();
         } else if !route.connected
             && self.specs[index].layers.len() > 1
@@ -341,7 +341,7 @@ impl Router<'_, '_> {
         targets: Targets<'_>,
         present: f64,
     ) -> Result<Option<(Vec<i64>, i64)>> {
-        if self.deadline_expired {
+        if self.expired() {
             return Ok(None);
         }
         let name = self.specs[index].name.clone();
@@ -487,7 +487,7 @@ impl Router<'_, '_> {
         bbox: IndexBox,
         tbox: IndexBox,
     ) -> Result<Option<(Vec<i64>, i64)>> {
-        if self.deadline_expired {
+        if self.expired() {
             return Ok(None);
         }
         let spec = self.specs[index].clone();

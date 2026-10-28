@@ -287,6 +287,24 @@ pub fn verified_land_path(
     target_layer: Option<CopperLayer>,
     required_width_nm: Option<i64>,
 ) -> Result<Option<Vec<TrackSegment>>> {
+    let (target, width) = (target_layer, required_width_nm);
+    verified_land_path_at(board, terminal, placement, net, anchor, clearance, require_via, target, width, false)
+}
+
+/// `_verified_land_path` with `allow_arbitrary_angles`.
+#[allow(clippy::too_many_arguments)]
+pub fn verified_land_path_at(
+    board: &PhysicalBoard,
+    terminal: &FootprintPad,
+    placement: &Placement,
+    net: &str,
+    anchor: Point,
+    clearance: &RoutingClearanceIndex<'_>,
+    require_via: bool,
+    target_layer: Option<CopperLayer>,
+    required_width_nm: Option<i64>,
+    allow_arbitrary_angles: bool,
+) -> Result<Option<Vec<TrackSegment>>> {
     let stack = &board.stackup.copper_layers;
     let start = transformed_local_point(placement, terminal.position);
     let vias: Vec<&Via> = board
@@ -328,7 +346,7 @@ pub fn verified_land_path(
                 Some(width) if width != 0 => clearance.breakout.required_width_nm(track, width),
                 _ => 0,
             };
-            if octilinear(track)
+            if (allow_arbitrary_angles || octilinear(track))
                 && track.width_nm >= board.rules.minimum_track_width_nm.max(required)
                 && track_inside_board(board, track.start, track.end, track.width_nm)?
                 && clearance.can_track(net, track.start, track.end, track.width_nm, layer)?

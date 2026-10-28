@@ -5,7 +5,7 @@
 //! transplant: cheap direct and one-corner legal paths between the actual
 //! physical lands, joined by Kruskal's minimum spanning tree. Native critical
 //! acceptance still checks the complete candidate. The optional bounded
-//! surface maze fallback is `_bounded_surface_maze` at its default bounds.
+//! surface maze fallback is `_bounded_surface_maze`.
 
 use indexmap::IndexSet;
 
@@ -30,6 +30,21 @@ fn octilinear(path: &Option<Vec<TrackSegment>>) -> bool {
     }
 }
 
+/// The computational bounds of the surface maze fallback (`maze_state_budget`,
+/// `maze_detour_nm`, `maze_phase_budget`), never copper contracts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MazeBounds {
+    pub state_budget: i64,
+    pub detour_nm: i64,
+    pub phase_budget: Option<i64>,
+}
+
+impl Default for MazeBounds {
+    fn default() -> Self {
+        MazeBounds { state_budget: 20_000, detour_nm: 2_000_000, phase_budget: None }
+    }
+}
+
 /// `local_surface_candidates(board, rule, maze=...)`: every deterministic,
 /// via-free octilinear tree for two to eight lands, one per permitted layer
 /// that joins them all.
@@ -38,6 +53,19 @@ pub fn local_surface_candidates(
     rule: &NetRoutingRule,
     maze: bool,
 ) -> Result<Vec<Vec<TrackSegment>>> {
+    local_surface_candidates_bounded(board, rule, maze, &MazeBounds::default())
+}
+
+/// `local_surface_candidates` with explicit maze bounds.
+pub fn local_surface_candidates_bounded(
+    board: &PhysicalBoard,
+    rule: &NetRoutingRule,
+    maze: bool,
+    bounds: &MazeBounds,
+) -> Result<Vec<Vec<TrackSegment>>> {
+    if bounds.state_budget <= 0 || bounds.detour_nm < 0 || bounds.phase_budget.is_some_and(|b| b <= 0) {
+        return Err(crate::Error::Value("local maze computational bounds must be positive".to_owned()));
+    }
     if !matches!(rule.kind, RouteKind::Critical | RouteKind::Clock | RouteKind::RfFeed) {
         return Ok(Vec::new());
     }
@@ -119,6 +147,7 @@ pub fn local_surface_candidates(
                         terminals[second],
                         width,
                         layer,
+                        bounds,
                     )?;
                 }
                 if !octilinear(&path) {
@@ -162,8 +191,7 @@ pub fn local_surface_candidates(
     Ok(candidates)
 }
 
-/// `_bounded_surface_maze` at its default bounds (20,000 states, 2 mm
-/// detour, no phase budget): either terminal's grid phase within one shared
+/// `_bounded_surface_maze`: either terminal's grid phase within one shared
 /// local allowance.
 #[allow(clippy::too_many_arguments)]
 fn bounded_surface_maze(
@@ -174,15 +202,28 @@ fn bounded_surface_maze(
     end: Point,
     width: i64,
     layer: CopperLayer,
+    bounds: &MazeBounds,
 ) -> Result<Option<Vec<TrackSegment>>> {
-    let (budget, detour, step) = (20_000i64, 2_000_000i64, 100_000i64);
+    let (budget, detour, step) = (bounds.state_budget, bounds.detour_nm, 100_000i64);
+    let phase = |budget: i64| bounds.phase_budget.map_or(budget, |phase| budget.min(phase));
     let (mut path, spent) = crate::surface_path::surface_path_between_counted(
-        board, clearance, net, start, end, width, layer, step, detour, budget,
+        board,
+        clearance,
+        net,
+        start,
+        end,
+        width,
+        layer,
+        step,
+        detour,
+        phase(budget),
     )?;
     if path.is_none()
         && 0 < spent
         && spent < budget
-        && ((end.x_nm - start.x_nm).rem_euclid(step) != 0 || (end.y_nm - start.y_nm).rem_euclid(step) != 0)
+        && (bounds.phase_budget.is_some()
+            || (end.x_nm - start.x_nm).rem_euclid(step) != 0
+            || (end.y_nm - start.y_nm).rem_euclid(step) != 0)
     {
         // A legal narrow channel may lie between every point of the first
         // terminal's grid. The other actual terminal supplies a second phase;
@@ -197,7 +238,7 @@ fn bounded_surface_maze(
             layer,
             step,
             detour,
-            budget - spent,
+            phase(budget - spent),
         )?;
         if let Some(reverse) = reverse {
             path = Some(reverse.into_iter().rev().map(|t| TrackSegment { start: t.end, end: t.start, ..t }).collect());

@@ -2,6 +2,8 @@
 //! loop, then rip-in repair rounds, smoothing, budgets and the congestion
 //! export.
 
+use std::time::{Duration, Instant};
+
 use indexmap::{IndexMap, IndexSet};
 
 use copper_drc::connectivity::{Candidate, explicit_copper_connectivity};
@@ -376,6 +378,7 @@ fn repair_attempt(
     shared: &mut Shared,
     seeder: Option<&mut EscapeSeeder<'_>>,
     required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
+    deadline: Option<Instant>,
     events: &mut Vec<Event>,
 ) -> Result<Option<RepairAttempt>> {
     let mut work: Accepted = accepted.clone();
@@ -450,7 +453,7 @@ fn repair_attempt(
         let taken = index.take().expect("index");
         let mut repair = Router::new(&partial, options, &remaining, IndexSet::new(), required_accesses, taken)?;
         penalised(&mut repair);
-        let (more_routes, more_conflicts, used) = repair.negotiate(None, events)?;
+        let (more_routes, more_conflicts, used) = repair.negotiate(deadline, None, events)?;
         let (more, more_rejected, more_complete) = repair.commit(&more_routes, &more_conflicts)?;
         *index = repair.clearance.take();
         shared.added(&more);
@@ -459,7 +462,7 @@ fn repair_attempt(
         let fresh = RoutingClearanceIndex::new(&partial)?;
         let mut repair = Router::new(&partial, options, &remaining, IndexSet::new(), required_accesses, fresh)?;
         penalised(&mut repair);
-        let (more_routes, more_conflicts, used) = repair.negotiate(None, events)?;
+        let (more_routes, more_conflicts, used) = repair.negotiate(deadline, None, events)?;
         let (more, more_rejected, more_complete) = repair.commit(&more_routes, &more_conflicts)?;
         (more_routes, more, more_rejected, more_complete, repair.rejections.clone(), used)
     };
@@ -536,10 +539,12 @@ pub fn route_unified(
         )?;
         save_inputs(path, &text)?;
     }
-    if options.time_budget_s.is_some_and(|budget| budget != 0.0) {
-        // A wall-clock deadline makes the result depend on timing.
-        return not_implemented("unified router time_budget_s (a wall-clock deadline)");
-    }
+    // A soft wall-clock deadline (D6: a result reached before it does not
+    // depend on timing; one cut short can differ from Python's).
+    let deadline = options
+        .time_budget_s
+        .filter(|budget| *budget != 0.0)
+        .map(|budget| Instant::now() + Duration::from_secs_f64(budget.max(0.0)));
     if !board.hard_macros.is_empty() {
         let materialized: IndexSet<&String> = board.materialized_macros.iter().collect();
         let clusters: IndexSet<&String> = board.hard_macros.iter().map(|m| &m.cluster).collect();
@@ -601,7 +606,7 @@ pub fn route_unified(
         let bus_nets: Vec<&PhysicalNet> =
             nets.iter().copied().filter(|n| bus_names.contains(n.name.as_str())).collect();
         let mut bus_router = Router::new(board, &bus_options, &bus_nets, IndexSet::new(), required_accesses, index)?;
-        let (bus_routes, bus_conflicts, used) = bus_router.negotiate(None, &mut events)?;
+        let (bus_routes, bus_conflicts, used) = bus_router.negotiate(deadline, None, &mut events)?;
         forward(&mut on_progress, &mut events);
         let (accepted_bus, _, complete_bus) = bus_router.commit(&bus_routes, &bus_conflicts)?;
         index = bus_router.clearance.take().expect("index");
@@ -668,7 +673,7 @@ pub fn route_unified(
             ("seconds", Value::Float(0.0)),
         ],
     );
-    let (routes, conflicts, mut iterations) = router.negotiate(None, &mut events)?;
+    let (routes, conflicts, mut iterations) = router.negotiate(deadline, None, &mut events)?;
     forward(&mut on_progress, &mut events);
     let (mut accepted, mut rejected, mut complete) = router.commit(&routes, &conflicts)?;
     shared.added(&accepted);
@@ -685,7 +690,7 @@ pub fn route_unified(
         ],
     );
     for round_index in 1..options.commit_rounds {
-        if nets.iter().all(|net| complete.contains(&net.name)) {
+        if nets.iter().all(|net| complete.contains(&net.name)) || deadline.is_some_and(|d| Instant::now() > d) {
             break;
         }
         let baseline = open_count(board, &nets, &accepted, &plane_nets, &complete)?;
@@ -693,6 +698,19 @@ pub fn route_unified(
         let mut best: Option<((i64, i64), RepairAttempt, bool)> = None;
         let seeds: &[bool] = if escape_seeder.is_some() { &[false, true] } else { &[false] };
         for &seed in seeds {
+            if deadline.is_some_and(|d| Instant::now() >= d) {
+                emit(
+                    &mut on_progress,
+                    "unified_repair",
+                    "skipped",
+                    vec![
+                        ("round", int(round_index + 1)),
+                        ("seeded", Value::Bool(seed)),
+                        ("reason", Value::Str("time_budget".to_owned())),
+                    ],
+                );
+                break;
+            }
             let attempt = repair_attempt(
                 board,
                 options,
@@ -705,6 +723,7 @@ pub fn route_unified(
                 &mut shared,
                 if seed { escape_seeder.as_deref_mut() } else { None },
                 required_accesses,
+                deadline,
                 &mut events,
             )?;
             forward(&mut on_progress, &mut events);
@@ -750,7 +769,7 @@ pub fn route_unified(
             break;
         }
     }
-    if options.pour_recheck && !plane_nets.is_empty() {
+    if options.pour_recheck && !plane_nets.is_empty() && deadline.is_none_or(|d| Instant::now() <= d) {
         let mut slot = router.clearance.take();
         let (adopted, adopted_complete, report) = recheck_pours(
             board,
@@ -762,6 +781,7 @@ pub fn route_unified(
             required_accesses,
             &mut shared,
             &mut slot,
+            deadline,
             &mut events,
         )?;
         router.clearance = slot;
@@ -992,6 +1012,7 @@ fn recheck_pours<'b>(
     required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
     shared: &mut Shared,
     slot: &mut Option<RoutingClearanceIndex<'b>>,
+    deadline: Option<Instant>,
     events: &mut Vec<Event>,
 ) -> Result<(Accepted, IndexSet<String>, (i64, Vec<(&'static str, Value)>))> {
     let before = pour_estimate(board, accepted)?;
@@ -1021,7 +1042,7 @@ fn recheck_pours<'b>(
     let partial = with_copper(board, &current.0);
     let taken = slot.take().expect("index");
     let mut step = Router::new(&partial, options, &plane_list, IndexSet::new(), required_accesses, taken)?;
-    let (routes, conflicts, used) = step.negotiate(None, events)?;
+    let (routes, conflicts, used) = step.negotiate(deadline, None, events)?;
     iterations += used;
     let (more, _, _) = step.commit(&routes, &conflicts)?;
     *slot = step.clearance.take();
@@ -1049,7 +1070,7 @@ fn recheck_pours<'b>(
         .map(|(n, p)| (n.clone(), p.clone()))
         .collect();
     let mut explicit_report: Option<Value> = None;
-    if !still.is_empty() {
+    if !still.is_empty() && deadline.is_none_or(|d| Instant::now() <= d) {
         let pad_of = |text: &String| {
             let (component, pad) = text.rsplit_once('.').expect("REF.PAD");
             PadReference::new(component, pad)
@@ -1073,7 +1094,7 @@ fn recheck_pours<'b>(
         let partial = with_copper(board, &ripped);
         let taken = slot.take().expect("index");
         let mut first = Router::new(&partial, options, &still_nets, pads, required_accesses, taken)?;
-        let (routes, conflicts, used) = first.negotiate(None, events)?;
+        let (routes, conflicts, used) = first.negotiate(deadline, None, events)?;
         iterations += used;
         let (plane_more, plane_rejected, _) = first.commit(&routes, &conflicts)?;
         let mut explicit = Object::new();
@@ -1100,7 +1121,7 @@ fn recheck_pours<'b>(
         let partial = with_copper(board, &candidate);
         let taken = slot.take().expect("index");
         let mut second = Router::new(&partial, options, &crowd_nets, IndexSet::new(), required_accesses, taken)?;
-        let (routes, conflicts, used) = second.negotiate(None, events)?;
+        let (routes, conflicts, used) = second.negotiate(deadline, None, events)?;
         iterations += used;
         let (signal_more, _, signal_complete) = second.commit(&routes, &conflicts)?;
         *slot = second.clearance.take();

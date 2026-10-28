@@ -914,6 +914,9 @@ pub fn route_critical_nets(
         // PENDING: plan_bundles order, crossings, nested exits and repairs.
         return copper_pcb::not_implemented("critical pair bundles");
     }
+    let default_unified = crate::unified_router::UnifiedRouterOptions::default();
+    let unified = options.unified_options.unwrap_or(&default_unified);
+    let mut cohort_candidates: IndexMap<String, Proposal> = IndexMap::new();
     for (job_index, (rule, group)) in jobs.iter().enumerate() {
         critical_progress(&mut on_progress, "started", group, None);
         if let Some(graph) = &owner_graph
@@ -1011,17 +1014,28 @@ pub fn route_critical_nets(
         }
         // Contiguous single-ended critical and clock jobs share one unified
         // negotiation (`_route_critical_cohort`).
-        if matches!(rule.kind, RouteKind::Critical | RouteKind::Clock) {
-            let cohort = jobs[job_index..]
+        if matches!(rule.kind, RouteKind::Critical | RouteKind::Clock) && !cohort_candidates.contains_key(&rule.net) {
+            let cohort: Vec<&NetRoutingRule> = jobs[job_index..]
                 .iter()
                 .take_while(|(peer, peer_group)| {
                     matches!(peer.kind, RouteKind::Critical | RouteKind::Clock) && peer_group.len() == 1
                 })
-                .count();
-            if cohort > 1 {
-                // PENDING: owned by rust-m4-unified (unified_router cohort).
-                return copper_pcb::not_implemented("critical single-ended cohort (unified router)");
+                .map(|(peer, _)| peer)
+                .collect();
+            if cohort.len() > 1 {
+                let proposals = route_critical_cohort(&stage_board, &cohort, global_route, &tracks, &vias, unified)?;
+                cohort_candidates.extend(proposals);
             }
+        }
+        if let Some((proposed, net_tracks, net_vias)) = cohort_candidates.shift_remove(&rule.net) {
+            let (result, net_tracks, net_vias) =
+                validate_candidate(&stage_board, proposed, net_tracks, net_vias, &tracks, &vias, None)?;
+            critical_progress(&mut on_progress, "finished", group, Some(&result));
+            results.push(result);
+            tracks.extend(net_tracks.iter().cloned());
+            vias.extend(net_vias.iter().cloned());
+            committed.push((group.clone(), net_tracks, net_vias));
+            continue;
         }
         let guide = routes.get(&rule.net);
         let (result, net_tracks, net_vias) = route_single(&stage_board, rule, guide)?;
@@ -1034,26 +1048,71 @@ pub fn route_critical_nets(
         let guided = guide.is_some_and(|route| route.connected);
         let point_to_point = matches!(rule.kind, RouteKind::RfFeed | RouteKind::Clock);
         let rf_tree = rule.kind == RouteKind::RfFeed && rule.topology == "tree" && rule.max_vias == Some(0);
+        let (mut result, mut net_tracks, mut net_vias) = (result, net_tracks, net_vias);
         if (!result.connected || !result.warnings.is_empty())
             && guided
             && (!point_to_point || guide.is_some_and(|route| route.accesses.len() == 2) || rf_tree)
         {
-            // PENDING: owned by rust-m4-unified (_route_single_exact).
-            return copper_pcb::not_implemented("critical exact single-ended search (unified router)");
-        }
-        if result.connected
+            let (repaired, repaired_tracks, repaired_vias) =
+                route_single_exact(&stage_board, rule, global_route, &tracks, &vias, unified)?;
+            if !result.connected || within_or_shorter(&repaired, &result) {
+                let (attempts, guide_length) = (result.local_candidate_attempts, result.guide_length_nm);
+                (result, net_tracks, net_vias) = (repaired, repaired_tracks, repaired_vias);
+                result.local_candidate_attempts = attempts;
+                result.guide_length_nm = guide_length;
+            }
+        } else if result.connected
             && result.strategy == "global_guide"
             && net_by_name.get(rule.net.as_str()).is_some_and(|net| net.pads.len() >= 3)
             && !point_to_point
         {
-            // PENDING: owned by rust-m4-unified (_route_single_exact).
-            return copper_pcb::not_implemented("critical exact single-ended tree (unified router)");
+            // A coarse-guide tree joining three or more terminals can be far
+            // from the shortest; keep the exact tree when shorter, no more vias.
+            let (exact, exact_tracks, exact_vias) =
+                route_single_exact(&stage_board, rule, global_route, &tracks, &vias, unified)?;
+            if exact.connected && exact_vias.len() <= net_vias.len() && exact.lengths_nm[0] < result.lengths_nm[0] {
+                let (attempts, guide_length) = (result.local_candidate_attempts, result.guide_length_nm);
+                (result, net_tracks, net_vias) = (exact, exact_tracks, exact_vias);
+                result.local_candidate_attempts = attempts;
+                result.guide_length_nm = guide_length;
+            }
         }
         critical_progress(&mut on_progress, "finished", group, Some(&result));
         results.push(result);
         tracks.extend(net_tracks.iter().cloned());
         vias.extend(net_vias.iter().cloned());
         committed.push((group.clone(), net_tracks, net_vias));
+    }
+    // A bounded cohort can reject one owner while committing its peers. Give
+    // that empty owner one exact retry after all accepted jobs are present.
+    for entry in committed.iter_mut() {
+        let (group, owned_tracks, owned_vias) = &*entry;
+        let Some(index) = results.iter().rposition(|r| r.nets == *group) else { continue };
+        let incumbent = &results[index];
+        if group.len() != 1
+            || incumbent.connected
+            || !owned_tracks.is_empty()
+            || !owned_vias.is_empty()
+            || incumbent.strategy != "unified_critical_cohort"
+        {
+            continue;
+        }
+        let rule = rules[group[0].as_str()];
+        if !matches!(rule.kind, RouteKind::Critical | RouteKind::Clock) {
+            continue;
+        }
+        let group = group.clone();
+        critical_progress(&mut on_progress, "retry_started", &group, None);
+        let (mut candidate, extra_tracks, extra_vias) =
+            route_single_exact(&stage_board, rule, global_route, &tracks, &vias, unified)?;
+        if candidate.connected {
+            candidate.strategy = "unified_critical_cohort_retry".to_owned();
+            tracks.extend(extra_tracks.iter().cloned());
+            vias.extend(extra_vias.iter().cloned());
+            *entry = (group.clone(), extra_tracks, extra_vias);
+            results[index] = candidate.clone();
+        }
+        critical_progress(&mut on_progress, "retry_finished", &group, Some(&candidate));
     }
     let match_tuning = tune_match_groups(&stage_board, &rules, &base_tracks, &base_vias, &committed)?;
     let conflict_diagnostics = intersection_diagnostics(&tracks, &coupled_pairs);
@@ -2612,6 +2671,238 @@ fn pair_pin_stubs(
 }
 
 /// `_within_or_shorter`: whether `candidate` should replace `incumbent`.
+/// A unified-router error as this crate's (a crash names its traceback line).
+fn unified_error(error: crate::unified_error::Error) -> Error {
+    match error {
+        crate::unified_error::Error::Value(message) => Error::Value(message),
+        other => Error::NotImplemented(other.crash_line()),
+    }
+}
+
+/// One owner's proposal: its result and new copper.
+type Proposal = (CriticalNetResult, Vec<TrackSegment>, Vec<Via>);
+
+/// The unified router's bounded critical options (`replace(unified_options,
+/// direct=True, ...)`), with `budget` seconds unless the caller's is smaller.
+fn bounded_unified(
+    unified: &crate::unified_router::UnifiedRouterOptions,
+    budget: f64,
+) -> crate::unified_router::UnifiedRouterOptions {
+    let mut options = unified.clone();
+    options.direct = true;
+    options.save_inputs_path = None;
+    options.maximum_iterations = unified.maximum_iterations.min(16);
+    options.time_budget_s = Some(budget.min(unified.time_budget_s.filter(|b| *b != 0.0).unwrap_or(budget)));
+    options.commit_rounds = unified.commit_rounds.min(2);
+    options.pre_route_decouplers = false;
+    options.escapes_first = false;
+    options
+}
+
+/// A single owner's result from the unified router's net.
+fn unified_result(
+    rule: &NetRoutingRule,
+    net: Option<&crate::detailed::DetailedNetResult>,
+    tracks: &[TrackSegment],
+    vias: &[Via],
+    absent: &str,
+) -> CriticalNetResult {
+    let track_refs: Vec<&TrackSegment> = tracks.iter().collect();
+    let via_refs: Vec<&Via> = vias.iter().collect();
+    let diagnostics = match net {
+        Some(net) => net.diagnostics.iter().cloned().chain(budget_diagnostics(rule, &via_refs)).collect(),
+        None => vec![absent.to_owned()],
+    };
+    let mut result = CriticalNetResult::new(
+        vec![rule.net.clone()],
+        net.is_some_and(|n| n.connected),
+        tracks.len() as i64,
+        vias.len() as i64,
+        vec![track_length(&track_refs)],
+        0,
+        diagnostics,
+    );
+    result.assumptions = external_assumptions(rule);
+    result.evidence_digests = external_evidence(rule);
+    result.warnings = budget_warnings(rule, &track_refs);
+    result
+}
+
+/// `_route_critical_cohort`: plan a bounded cohort with unchanged profiles and
+/// an immutable input prefix; the per-job gate checks each owner before adoption.
+fn route_critical_cohort(
+    board: &PhysicalBoard,
+    cohort: &[&NetRoutingRule],
+    global_route: &GlobalRoutingResult,
+    committed_tracks: &[TrackSegment],
+    committed_vias: &[Via],
+    unified: &crate::unified_router::UnifiedRouterOptions,
+) -> Result<IndexMap<String, Proposal>> {
+    let names: IndexSet<String> = cohort.iter().map(|rule| rule.net.clone()).collect();
+    let options = bounded_unified(unified, 60.0 * cohort.len() as f64);
+    let search_board = board_with(board, committed_tracks, committed_vias);
+    let detailed = crate::unified_router::route::route_unified(
+        &search_board,
+        global_route,
+        &options,
+        None,
+        Some(&names),
+        None,
+        None,
+        None,
+    )
+    .map_err(unified_error)?;
+    let (all_tracks, all_vias) = (&detailed.board.tracks, &detailed.board.vias);
+    let prefix_ok = all_tracks.starts_with(committed_tracks) && all_vias.starts_with(committed_vias);
+    let additions = all_tracks.get(committed_tracks.len()..).unwrap_or(&[]);
+    let new_vias = all_vias.get(committed_vias.len()..).unwrap_or(&[]);
+    let owners_ok = additions.iter().all(|t| names.contains(&t.net)) && new_vias.iter().all(|v| names.contains(&v.net));
+    let integrity: Vec<String> = if prefix_ok && owners_ok {
+        Vec::new()
+    } else {
+        vec!["unified critical cohort changed input copper or added an unselected owner".to_owned()]
+    };
+    let mut candidates = IndexMap::new();
+    for rule in cohort {
+        let net = detailed.nets.iter().rev().find(|n| n.net == rule.net);
+        let (tracks, vias): (Vec<TrackSegment>, Vec<Via>) = if integrity.is_empty() {
+            (
+                additions.iter().filter(|t| t.net == rule.net).cloned().collect(),
+                new_vias.iter().filter(|v| v.net == rule.net).cloned().collect(),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
+        let mut result = unified_result(rule, net, &tracks, &vias, "no unified critical cohort attempt");
+        result.connected = result.connected && integrity.is_empty();
+        result.diagnostics.extend(integrity.iter().cloned());
+        result.strategy = if integrity.is_empty() {
+            "unified_critical_cohort".to_owned()
+        } else {
+            "unified_critical_cohort_integrity_rejected".to_owned()
+        };
+        candidates.insert(rule.net.clone(), (result, tracks, vias));
+    }
+    Ok(candidates)
+}
+
+/// `_route_single_exact`: bounded single-net repair against immutable earlier
+/// critical copper, the net routing alone in the unified router.
+fn route_single_exact(
+    board: &PhysicalBoard,
+    rule: &NetRoutingRule,
+    global_route: &GlobalRoutingResult,
+    committed_tracks: &[TrackSegment],
+    committed_vias: &[Via],
+    unified: &crate::unified_router::UnifiedRouterOptions,
+) -> Result<Proposal> {
+    let connected_guide = global_route.routes.iter().any(|item| item.net == rule.net && item.connected);
+    let local_repair = || -> Result<Option<Proposal>> {
+        let owner_board = board_with(board, committed_tracks, committed_vias);
+        let bounds = if rule.kind == RouteKind::Clock {
+            crate::local_critical::MazeBounds { state_budget: 40_000, detour_nm: 4_000_000, phase_budget: Some(20_000) }
+        } else {
+            crate::local_critical::MazeBounds::default()
+        };
+        // The first candidate within the length budget wins; otherwise the
+        // best connected over-budget candidate (a warning) is the fallback.
+        let mut fallback: Option<Proposal> = None;
+        for tracks in crate::local_critical::local_surface_candidates_bounded(&owner_board, rule, true, &bounds)? {
+            let refs: Vec<&TrackSegment> = tracks.iter().collect();
+            let mut candidate = CriticalNetResult::new(
+                vec![rule.net.clone()],
+                true,
+                tracks.len() as i64,
+                0,
+                vec![track_length(&refs)],
+                0,
+                budget_diagnostics(rule, &[]),
+            );
+            candidate.warnings = budget_warnings(rule, &refs);
+            candidate.assumptions = external_assumptions(rule);
+            candidate.evidence_digests = external_evidence(rule);
+            candidate.strategy = "local_surface_maze".to_owned();
+            let outcome =
+                validate_candidate(board, candidate, tracks, Vec::new(), committed_tracks, committed_vias, None)?;
+            if within_budget(&outcome.0) {
+                return Ok(Some(outcome));
+            }
+            if outcome.0.connected && fallback.as_ref().is_none_or(|f| within_or_shorter(&outcome.0, &f.0)) {
+                fallback = Some(outcome);
+            }
+        }
+        Ok(fallback)
+    };
+    let local_first = connected_guide
+        && rule.max_length_nm.is_some()
+        && rule.max_vias == Some(0)
+        && board.nets.iter().any(|n| {
+            n.name == rule.net
+                && (n.pads.len() == 2
+                    || rule.kind == RouteKind::Critical && rule.topology == "tree" && n.pads.len() <= 8)
+        });
+    let mut early = None;
+    if local_first {
+        // The same bounded local corridor can already satisfy a short surface
+        // clock; an over-budget local route is kept as a fallback only.
+        early = local_repair()?;
+        if let Some(found) = &early
+            && within_budget(&found.0)
+        {
+            return Ok(early.expect("a local route"));
+        }
+    }
+    let mut guides = global_route.clone();
+    if rule.max_length_nm.is_some() && rule.max_vias == Some(0) {
+        // Guides are capacity proposals, not mandatory local geometry: only
+        // this exact repair searches without the net's coarse corridor.
+        for item in guides.routes.iter_mut().filter(|item| item.net == rule.net) {
+            item.accesses.clear();
+            item.segments.clear();
+            item.vias.clear();
+            item.length_nm = 0;
+        }
+    }
+    let search_board = board_with(board, committed_tracks, committed_vias);
+    let options = bounded_unified(unified, 60.0);
+    let only: IndexSet<String> = [rule.net.clone()].into_iter().collect();
+    let detailed = crate::unified_router::route::route_unified(
+        &search_board,
+        &guides,
+        &options,
+        None,
+        Some(&only),
+        None,
+        None,
+        None,
+    )
+    .map_err(unified_error)?;
+    let tracks = detailed.board.tracks.get(committed_tracks.len()..).unwrap_or(&[]).to_vec();
+    let vias = detailed.board.vias.get(committed_vias.len()..).unwrap_or(&[]).to_vec();
+    let net = detailed.nets.iter().find(|item| item.net == rule.net);
+    let mut result = unified_result(rule, net, &tracks, &vias, "no exact critical-net attempt");
+    result.strategy = match rule.kind {
+        RouteKind::Clock => "unified_clock",
+        RouteKind::Critical => "unified_critical",
+        _ => "unified_single_net",
+    }
+    .to_owned();
+    let mut local = None;
+    if (!result.connected || !result.warnings.is_empty()) && rule.max_vias == Some(0) && connected_guide && !local_first
+    {
+        // A board-wide fine grid can spend its whole budget far from a short
+        // surface connection: reuse the exact bounded local maze.
+        local = local_repair()?;
+    }
+    let mut validated = validate_candidate(board, result, tracks, vias, committed_tracks, committed_vias, None)?;
+    for candidate in [local, early].into_iter().flatten() {
+        if !validated.0.connected || within_or_shorter(&candidate.0, &validated.0) {
+            validated = candidate;
+        }
+    }
+    Ok(validated)
+}
+
 fn within_or_shorter(candidate: &CriticalNetResult, incumbent: &CriticalNetResult) -> bool {
     if !candidate.connected {
         return false;

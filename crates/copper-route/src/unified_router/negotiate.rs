@@ -146,10 +146,12 @@ impl Router<'_, '_> {
     /// `negotiate`: the PathFinder loop; routes persist on the router.
     pub fn negotiate(
         &mut self,
+        deadline: Option<std::time::Instant>,
         only: Option<&IndexSet<String>>,
         events: &mut Vec<Event>,
     ) -> Result<(IndexMap<String, NetRoute>, IndexSet<String>, i64)> {
         let options = self.options.clone();
+        self.deadline = deadline;
         let planned: IndexMap<&str, usize> =
             options.escape_net_order.iter().enumerate().map(|(rank, name)| (name.as_str(), rank)).collect();
         let mut order: Vec<usize> = (0..self.specs.len()).collect();
@@ -176,6 +178,9 @@ impl Router<'_, '_> {
         let mut retried = false;
         let mut next_iteration = 1;
         while next_iteration <= options.maximum_iterations {
+            if self.expired() {
+                break;
+            }
             iteration = next_iteration;
             next_iteration += 1;
             events.push((
@@ -185,11 +190,22 @@ impl Router<'_, '_> {
             ));
             retried = retried || pending.iter().any(|name| failed.contains(name));
             for name in &pending {
-                let index = by_name[name];
-                if let Some(old) = self.routes.get(name).cloned() {
-                    self.occupancy.add(&old, -1);
+                if self.expired() {
+                    break;
                 }
-                let route = self.route_net(index, present)?;
+                let index = by_name[name];
+                let old = self.routes.get(name).cloned();
+                if let Some(old) = &old {
+                    self.occupancy.add(old, -1);
+                }
+                let mut route = self.route_net(index, present)?;
+                if self.expired()
+                    && !route.connected
+                    && let Some(old) = old
+                {
+                    // Cancellation must not destroy an earlier incumbent.
+                    route = old;
+                }
                 self.occupancy.add(&route, 1);
                 self.routes.insert(name.clone(), route);
             }
@@ -233,6 +249,9 @@ impl Router<'_, '_> {
                 break;
             }
             if options.stall_iterations != 0 && iteration - best_iteration >= options.stall_iterations {
+                break;
+            }
+            if self.deadline.is_some_and(|deadline| std::time::Instant::now() > deadline) {
                 break;
             }
             self.penalise(&conflicts);

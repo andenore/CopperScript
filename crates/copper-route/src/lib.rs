@@ -52,6 +52,7 @@ pub mod drc_report;
 pub mod escape_assignment;
 pub mod escape_plan;
 pub mod fanout;
+pub mod fanout_bypass_completion;
 pub mod filled_connectivity;
 pub mod filled_feedback;
 pub mod fine_regions;

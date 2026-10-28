@@ -227,7 +227,8 @@ pub struct Router<'p, 'b> {
     pub lead_history: IndexMap<TrackSegment, f64>,
     pub present: f64,
     pub conflict_age: IndexMap<String, i64>,
-    pub deadline_expired: bool,
+    /// The soft wall-clock deadline of `time_budget_s`.
+    pub deadline: Option<std::time::Instant>,
     pub ignore_soft_costs: bool,
     pub open_cache: IndexMap<(i64, i64), Vec<bool>>,
     pub move_cache: Option<Vec<f64>>,
@@ -247,6 +248,11 @@ pub struct Router<'p, 'b> {
 }
 
 impl<'p, 'b> Router<'p, 'b> {
+    /// `_expired`: the soft deadline has passed.
+    pub fn expired(&self) -> bool {
+        self.deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         board: &'p PhysicalBoard,
@@ -345,7 +351,7 @@ impl<'p, 'b> Router<'p, 'b> {
             lead_history: IndexMap::new(),
             present: options.present_factor,
             conflict_age: IndexMap::new(),
-            deadline_expired: false,
+            deadline: None,
             ignore_soft_costs: false,
             open_cache: IndexMap::new(),
             move_cache: None,

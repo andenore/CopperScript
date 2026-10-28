@@ -1226,9 +1226,12 @@ fn route_ordinary_escapes(
     board: &PhysicalBoard,
     fanout_options: &FanoutOptions,
     nets: &IndexSet<String>,
+    prefix: (&[TrackSegment], &[Via]),
     keepouts: &[copper_physical::CopperKeepout],
 ) -> Result<(Vec<TrackSegment>, Vec<Via>, Vec<copper_physical::CopperKeepout>, Vec<copper_pcb::board::PadReference>)> {
     let mut frame = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
+    frame.tracks.extend_from_slice(prefix.0);
+    frame.vias.extend_from_slice(prefix.1);
     frame.copper_keepouts.extend(keepouts.iter().cloned());
     let escapes = crate::fanout::route_fanout(&frame, Some(fanout_options), Some(nets))?;
     let tracks = added_elements(&escapes.board.tracks, &frame.tracks);
@@ -1267,7 +1270,7 @@ fn plan_ordinary_escapes(
         return Ok(None);
     }
     emit(on_progress, "ordinary_escapes", "started", vec![("nets", int(ordinary.len() as i64))]);
-    match route_ordinary_escapes(board, fanout_options, &ordinary, keepouts) {
+    match route_ordinary_escapes(board, fanout_options, &ordinary, (&[], &[]), keepouts) {
         Err(Error::Value(message)) => {
             emit(on_progress, "ordinary_escapes", "finished", vec![("skipped", text(&message))]);
             Ok(None)
@@ -1335,7 +1338,7 @@ fn release_reservations(
 }
 
 /// `track_containment.track_is_contained`.
-fn track_is_contained(candidate: &TrackSegment, existing: &[TrackSegment]) -> bool {
+pub(crate) fn track_is_contained(candidate: &TrackSegment, existing: &[TrackSegment]) -> bool {
     existing.iter().any(|held| {
         held.net == candidate.net
             && held.layer == candidate.layer
@@ -1488,8 +1491,84 @@ fn pending_links(pending: &[(copper_pcb::board::DecouplingLink, String)]) -> Val
     )
 }
 
+/// `_reservation_pads`: the pads of `net` that the reserved escape `tracks`
+/// leave from.
+fn reservation_pads(
+    board: &PhysicalBoard,
+    net: &str,
+    tracks: &[TrackSegment],
+) -> Result<Vec<copper_pcb::board::PadReference>> {
+    let ends: IndexSet<Point> = tracks.iter().filter(|t| t.net == net).flat_map(|t| [t.start, t.end]).collect();
+    let mut pads = Vec::new();
+    for item in board.nets.iter().filter(|n| n.name == net) {
+        for pad in &item.pads {
+            let pose = board.placements.iter().find(|p| p.reference == pad.component).expect("a placed pad");
+            if ends.contains(&copper_pcb::transform::transformed_pad_position(board, pose, &pad.pad)?) {
+                pads.push(pad.clone());
+            }
+        }
+    }
+    Ok(pads)
+}
+
+/// `_legal_reservation_nets`: the `nets` whose complete escape reservation is
+/// legal beside the bypass copper, without costing it a proxy keepout.
+fn legal_reservation_nets(
+    board: &PhysicalBoard,
+    base: &PhysicalBoard,
+    bypass: (&[TrackSegment], &[Via]),
+    tracks: &[TrackSegment],
+    vias: &[Via],
+    nets: &IndexSet<String>,
+) -> Result<IndexSet<String>> {
+    let mut fixed = base.clone();
+    fixed.tracks.extend_from_slice(bypass.0);
+    fixed.vias.extend_from_slice(bypass.1);
+    let index = crate::routing_clearance::RoutingClearanceIndex::new(&fixed)?;
+    let mut legal = IndexSet::new();
+    'nets: for net in nets {
+        let own_tracks: Vec<TrackSegment> = tracks.iter().filter(|t| t.net == *net).cloned().collect();
+        let own_vias: Vec<Via> = vias.iter().filter(|v| v.net == *net).cloned().collect();
+        for t in &own_tracks {
+            if !index.can_track(&t.net, t.start, t.end, t.width_nm, t.layer)? {
+                continue 'nets;
+            }
+        }
+        for v in &own_vias {
+            let rule = board.net_routing_rules.iter().find(|r| r.net == v.net);
+            if !index.can_via(&v.net, v.position, v.size_nm, v.from_layer, v.to_layer, Some(v.drill_nm), false, None)?
+                || !crate::return_paths::existing_returns_permit(&fixed, rule, v)
+            {
+                continue 'nets;
+            }
+        }
+        if copper_keepouts(board, &own_tracks, &own_vias, "check", Some(&fixed)).len()
+            < copper_keepouts(board, &own_tracks, &own_vias, "check", Some(base)).len()
+        {
+            continue;
+        }
+        legal.insert(net.clone());
+    }
+    Ok(legal)
+}
+
+fn pad_name(pad: &copper_pcb::board::PadReference) -> String {
+    format!("{}.{}", pad.component, pad.pad)
+}
+
+fn record(fields: Vec<(&str, Value)>) -> Value {
+    Value::Object(fields.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())
+}
+
 /// `_plan_decouplers`: bypass copper routed before critical nets on the macro
 /// frame (respecting the escape reservations), held as keepouts meanwhile.
+///
+/// A link the reservations block is tried again, one link at a time, with the
+/// reservations within 1.5 mm of its pads lifted. A reservation the new copper
+/// leaves legal stays bound; every ball whose reservation the copper takes is
+/// planned again beside it (`fanout_options`), or the link stays pending,
+/// naming the ball. Without `fanout_options` the taken reservations are
+/// released for the caller.
 fn plan_decouplers(
     board: &PhysicalBoard,
     reserved: Option<Reserved>,
@@ -1497,8 +1576,10 @@ fn plan_decouplers(
     extra_keepouts: &[copper_physical::CopperKeepout],
     fanout_options: Option<&FanoutOptions>,
 ) -> Result<(Held, Option<Reserved>)> {
+    use copper_pcb::board::DecouplingLink;
     emit(on_progress, "bypass_reservation", "started", vec![("links", int(board.decoupling_links.len() as i64))]);
-    let keepouts: Vec<copper_physical::CopperKeepout> = reserved.as_ref().map_or_else(Vec::new, |r| r.2.clone());
+    let had_reserved = reserved.is_some();
+    let (tracks0, vias0, keepouts) = reserved.unwrap_or_default();
     let base = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
     // `extra_keepouts` (macro port halos) bind every attempt and are never
     // released for a pending link, unlike the escape reservations.
@@ -1506,20 +1587,109 @@ fn plan_decouplers(
     frame.copper_keepouts.extend(extra_keepouts.iter().cloned());
     frame.copper_keepouts.extend(keepouts.iter().cloned());
     let result = crate::decoupling::route_decouplers(&frame, None, fanout_options, None, None)?;
-    let current = result.board;
-    let pending = result.pending;
-    let witnesses = result.admitted_path_witnesses;
+    let mut current = result.board;
+    let mut pending: Vec<(DecouplingLink, String)> = result.pending;
+    let mut witnesses = result.admitted_path_witnesses;
+    let (mut res_tracks, mut res_vias, mut res_keepouts) = (tracks0, vias0, keepouts.clone());
+    let (mut released, mut swapped, mut rejected) = (Vec::new(), Vec::new(), Vec::new());
+    let mut owners: IndexMap<String, String> = IndexMap::new();
+    // Reservation keepouts of the current escape copper beside all bypass copper.
+    let rebuild = |owners: &mut IndexMap<String, String>,
+                   res_tracks: &[TrackSegment],
+                   res_vias: &[Via],
+                   fixed: (&[TrackSegment], &[Via])| {
+        let mut frame = base.clone();
+        frame.tracks.extend_from_slice(fixed.0);
+        frame.vias.extend_from_slice(fixed.1);
+        let fresh = copper_keepouts(board, res_tracks, res_vias, "escape-reserve", Some(&frame));
+        owners.clear();
+        owners.extend(res_tracks.iter().enumerate().map(|(i, t)| (format!("escape-reserve-track-{i}"), t.net.clone())));
+        owners.extend(res_vias.iter().enumerate().map(|(i, v)| (format!("escape-reserve-via-{i}"), v.net.clone())));
+        fresh
+    };
     if !keepouts.is_empty() {
-        for (link, reason) in &pending {
-            if reason == "native_plane_return_pending" {
+        rebuild(&mut owners, &res_tracks, &res_vias, (&[], &[]));
+    }
+    for (link, reason) in pending.clone() {
+        if res_keepouts.is_empty() {
+            break;
+        }
+        if reason == "native_plane_return_pending" {
+            continue;
+        }
+        let pads = [&link.capacitor, &link.target, &link.return_pad];
+        let kept = release_reservations(board, &res_keepouts, &IndexSet::new(), 1_500_000, &pads);
+        let kept_ids: IndexSet<&String> = kept.iter().map(|k| &k.id).collect();
+        let candidates: IndexSet<String> =
+            res_keepouts.iter().map(|k| k.id.clone()).filter(|id| !kept_ids.contains(id)).collect();
+        if candidates.is_empty() {
+            continue;
+        }
+        let mut retry_frame = current.clone();
+        retry_frame.copper_keepouts.retain(|k| !candidates.contains(&k.id));
+        let only: IndexSet<DecouplingLink> = [link.clone()].into_iter().collect();
+        let retry = crate::decoupling::route_decouplers(&retry_frame, None, fanout_options, Some(&only), None)?;
+        if retry.pending.iter().any(|(item, _)| *item == link) {
+            continue;
+        }
+        let bypass_tracks = added_elements(&retry.board.tracks, &base.tracks);
+        let bypass_vias = added_elements(&retry.board.vias, &base.vias);
+        // Exact ownership: only the groups the new copper makes illegal are taken.
+        let candidate_nets: IndexSet<String> = candidates.iter().filter_map(|k| owners.get(k).cloned()).collect();
+        let bypass = (bypass_tracks.as_slice(), bypass_vias.as_slice());
+        let legal = legal_reservation_nets(board, &base, bypass, &res_tracks, &res_vias, &candidate_nets)?;
+        let mut taken: Vec<String> = candidate_nets.iter().filter(|n| !legal.contains(*n)).cloned().collect();
+        taken.sort();
+        let mut taken_pads: Vec<String> = Vec::new();
+        for net in &taken {
+            taken_pads.extend(reservation_pads(board, net, &res_tracks)?.iter().map(pad_name));
+        }
+        taken_pads.sort();
+        taken_pads.dedup();
+        let taken_set: IndexSet<String> = taken.iter().cloned().collect();
+        let is_taken = |id: &str| owners.get(id).is_some_and(|net| taken_set.contains(net));
+        if let Some(options) = fanout_options.filter(|_| !taken.is_empty()) {
+            // The swap: every ball the copper takes is planned again beside it.
+            let mut remaining: Vec<copper_physical::CopperKeepout> =
+                res_keepouts.iter().filter(|k| !is_taken(&k.id)).cloned().collect();
+            remaining.extend(extra_keepouts.iter().cloned());
+            let (again_tracks, again_vias, lost) =
+                match route_ordinary_escapes(board, options, &taken_set, bypass, &remaining) {
+                    Ok((tracks, vias, _, pending)) => (tracks, vias, pending.iter().map(pad_name).collect()),
+                    Err(Error::Value(message)) => (Vec::new(), Vec::new(), vec![message]),
+                    Err(error) => return Err(error),
+                };
+            if !lost.is_empty() {
+                let balls = Value::Array(taken_pads.iter().map(|p| text(p)).collect());
+                let lost = Value::Array(lost.iter().map(|p: &String| text(p)).collect());
+                rejected.push(record(vec![("link", text(&link_name(&link))), ("balls", balls), ("pending", lost)]));
+                let note = taken_pads.join(", ");
+                for (item, why) in pending.iter_mut() {
+                    if *item == link {
+                        *why = format!("{why}; swap rejected: {note} would lose their site");
+                    }
+                }
                 continue;
             }
-            let pads = [&link.capacitor, &link.target, &link.return_pad];
-            let kept = release_reservations(board, &keepouts, &IndexSet::new(), 1_500_000, &pads);
-            if kept.len() < keepouts.len() {
-                return copper_pcb::not_implemented("bypass reservation swaps (flow._plan_decouplers)");
-            }
+            res_tracks.retain(|t| !taken_set.contains(&t.net));
+            res_tracks.extend(again_tracks);
+            res_vias.retain(|v| !taken_set.contains(&v.net));
+            res_vias.extend(again_vias);
+            let balls = Value::Array(taken_pads.iter().map(|p| text(p)).collect());
+            swapped.push(record(vec![("link", text(&link_name(&link))), ("balls", balls)]));
+        } else if !taken.is_empty() {
+            released.extend(res_keepouts.iter().filter(|k| is_taken(&k.id)).cloned());
+            res_tracks.retain(|t| !taken_set.contains(&t.net));
+            res_vias.retain(|v| !taken_set.contains(&v.net));
         }
+        res_keepouts = rebuild(&mut owners, &res_tracks, &res_vias, bypass);
+        current = retry.board;
+        current.copper_keepouts = base.copper_keepouts.clone();
+        current.copper_keepouts.extend(extra_keepouts.iter().cloned());
+        current.copper_keepouts.extend(res_keepouts.iter().cloned());
+        pending.retain(|(item, _)| *item != link);
+        pending.extend(retry.pending.into_iter().filter(|(item, _)| *item != link));
+        witnesses.extend(retry.admitted_path_witnesses);
     }
     let tracks = added_elements(&current.tracks, &base.tracks);
     let vias = added_elements(&current.vias, &base.vias);
@@ -1531,14 +1701,15 @@ fn plan_decouplers(
             ("tracks", int(tracks.len() as i64)),
             ("vias", int(vias.len() as i64)),
             ("pending", int(pending.len() as i64)),
-            ("released", int(0)),
-            ("swapped", Value::Array(Vec::new())),
-            ("rejected", Value::Array(Vec::new())),
+            ("released", int(released.len() as i64)),
+            ("swapped", Value::Array(swapped)),
+            ("rejected", Value::Array(rejected)),
             ("pending_links", pending_links(&pending)),
         ],
     );
     let held_keepouts = copper_keepouts(board, &tracks, &vias, "bypass-reserve", Some(&base));
-    Ok((Held { tracks, vias, keepouts: held_keepouts, released: Vec::new(), witnesses }, reserved))
+    let reserved = had_reserved.then_some((res_tracks, res_vias, res_keepouts));
+    Ok((Held { tracks, vias, keepouts: held_keepouts, released, witnesses }, reserved))
 }
 
 /// `_refresh_bypass_witnesses`: the admitted witnesses verified again in the

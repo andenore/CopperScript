@@ -78,7 +78,7 @@ fn with_copper(board: &PhysicalBoard, tracks: &[TrackSegment], vias: &[Via]) -> 
 
 /// The fingerprints (as their exact field tuple) of the hard DRC findings,
 /// except the codes in `omitted`.
-fn hard_findings(board: &PhysicalBoard, omitted: &[&str]) -> Result<IndexSet<String>> {
+pub(crate) fn hard_findings(board: &PhysicalBoard, omitted: &[&str]) -> Result<IndexSet<String>> {
     let report = crate::drc_report::run_physical_drc(board, Policy::default())?;
     Ok(report
         .findings()
