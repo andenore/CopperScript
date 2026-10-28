@@ -238,6 +238,160 @@ fn plan_array_frames(
     Ok((Some(plans), Some(surface)))
 }
 
+/// `_macro_port_halos`: keepouts beyond macro ports whose nets may change
+/// layer, for the escape and bypass planners only.
+fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::CopperKeepout>> {
+    let frame = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
+    let rules: IndexMap<&str, _> = board.net_routing_rules.iter().map(|rule| (rule.net.as_str(), rule)).collect();
+    let poses: IndexMap<&str, _> = board.placements.iter().map(|pose| (pose.reference.as_str(), pose)).collect();
+    let placements: IndexMap<String, copper_pcb::board::Placement> =
+        frame.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+    let gap = board.rules.minimum_clearance_nm;
+    let mut halos = Vec::new();
+    for hard in &frame.hard_macros {
+        if !frame.materialized_macros.contains(&hard.cluster) {
+            continue;
+        }
+        for port in copper_pcb::hard_macros::resolved_macro_geometry(&frame, hard, &placements)?.ports {
+            let Some(rule) = rules.get(port.net.as_str()) else { continue };
+            if rule.max_vias == Some(0) || port.pads.is_empty() {
+                continue;
+            }
+            let owner = port.pads.iter().min().expect("pads");
+            let centre = poses[owner.component.as_str()].position;
+            let (dx, dy) = (port.position.x_nm - centre.x_nm, port.position.y_nm - centre.y_nm);
+            let (ox, oy) =
+                if dx.abs() >= dy.abs() { (if dx > 0 { 1 } else { -1 }, 0) } else { (0, if dy > 0 { 1 } else { -1 }) };
+            let half = board.rules.default_via_size_nm
+                + gap
+                + rule.width_nm.filter(|w| *w != 0).unwrap_or(board.rules.default_track_width_nm)
+                + rule.pair_gap_nm.unwrap_or(0);
+            let (x0, y0) = (port.position.x_nm + ox * gap, port.position.y_nm + oy * gap);
+            let sorted = |a: i64, b: i64| if a <= b { (a, b) } else { (b, a) };
+            let (xs, ys) = if ox != 0 {
+                (sorted(x0, x0 + ox * 2 * half), (y0 - half, y0 + half))
+            } else {
+                ((x0 - half, x0 + half), sorted(y0, y0 + oy * 2 * half))
+            };
+            let corners = vec![
+                copper_physical::Point::new(xs.0, ys.0),
+                copper_physical::Point::new(xs.1, ys.0),
+                copper_physical::Point::new(xs.1, ys.1),
+                copper_physical::Point::new(xs.0, ys.1),
+            ];
+            halos.push(copper_physical::CopperKeepout {
+                id: format!("port-halo-{}", halos.len()),
+                layers: board.stackup.copper_layers.clone(),
+                vertices: corners,
+                block_tracks: true,
+                block_vias: true,
+                block_pads: false,
+                block_zones: false,
+                block_footprints: false,
+            });
+        }
+    }
+    Ok(halos)
+}
+
+/// `critical_return_plane_options`: declared return contacts before a
+/// critical search needs them, or None.
+pub fn critical_return_plane_options(
+    board: &PhysicalBoard,
+    options: Option<&PlaneStitchOptions>,
+    keepouts: &[copper_physical::CopperKeepout],
+) -> Option<PlaneStitchOptions> {
+    let options = options?;
+    let zone_nets: IndexSet<&str> = board.zones.iter().map(|zone| zone.net.as_str()).collect();
+    let returns: IndexSet<&str> = board
+        .net_routing_rules
+        .iter()
+        .filter(|r| r.kind != RouteKind::General && r.require_return_vias)
+        .filter_map(|r| r.return_via_net.as_deref())
+        .filter(|net| zone_nets.contains(net))
+        .collect();
+    let mut pads: std::collections::BTreeSet<copper_pcb::board::PadReference> = board
+        .nets
+        .iter()
+        .filter(|net| returns.contains(net.name.as_str()))
+        .flat_map(|net| net.pads.iter().cloned())
+        .collect();
+    if let Some(only) = &options.only_pads {
+        pads.retain(|pad| only.contains(pad));
+    }
+    if pads.is_empty() {
+        return None;
+    }
+    let mut result = options.clone();
+    result.only_pads = Some(pads);
+    result.keepouts.extend(keepouts.iter().cloned());
+    Some(result)
+}
+
+/// `_route_critical_stage` without escape or bypass reservations: planar
+/// promotion, then critical routing on the placed board.
+fn route_critical_stage(
+    placement: &PlacementRoutingResult,
+    unified_options: &UnifiedRouterOptions,
+    unified_fanout: Option<&FanoutOptions>,
+    pair_state_limit: Option<i64>,
+    plane_stitch_options: Option<&PlaneStitchOptions>,
+    on_progress: &mut Option<ProgressCallback<'_>>,
+) -> Result<CriticalRoutingResult> {
+    let board = &placement.board;
+    let planar = crate::critical::promote_planar_nets(board).1;
+    if !planar.is_empty() {
+        let mut sorted = planar.clone();
+        sorted.sort();
+        emit(
+            on_progress,
+            "planar_nets",
+            "promoted",
+            vec![("nets", Value::Array(sorted.iter().map(|n| text(n)).collect()))],
+        );
+    }
+    let halos = macro_port_halos(board)?;
+    if unified_fanout.is_some() && unified_options.escapes_first {
+        return copper_pcb::not_implemented("ordinary escape reservations (flow._plan_ordinary_escapes)");
+    }
+    if !board.decoupling_links.is_empty() && unified_options.pre_route_decouplers {
+        return copper_pcb::not_implemented("bypass reservations (flow._plan_decouplers)");
+    }
+    emit(on_progress, "bypass_reservation", "bound", vec![("mode", text("keepouts")), ("reason", Value::Null)]);
+    let return_options = critical_return_plane_options(board, plane_stitch_options, &halos);
+    if return_options.is_some() {
+        return copper_pcb::not_implemented(
+            "critical return-plane contacts (route_critical_nets plane_stitch_options)",
+        );
+    }
+    let jobs = crate::critical::critical_jobs(&{
+        let mut promoted = board.clone();
+        if let (Some(rules), _) = crate::critical::promote_planar_nets(board) {
+            promoted.net_routing_rules = rules;
+        }
+        promoted
+    });
+    let defaults = UnifiedRouterOptions::default();
+    if !jobs.is_empty() {
+        if on_progress.is_some() {
+            return copper_pcb::not_implemented("critical_group progress events");
+        }
+        if unified_options.critical_pair_state_escalation != defaults.critical_pair_state_escalation
+            || unified_options.maximum_iterations < 16
+            || unified_options.commit_rounds < 2
+            || unified_options.time_budget_s.is_some()
+        {
+            return copper_pcb::not_implemented("unified options passed to route_critical_nets");
+        }
+    }
+    let options = crate::critical::CriticalOptions {
+        only_nets: None,
+        pair_state_limit,
+        bundle_repair_limit: crate::critical_bundles::BUNDLE_REPAIR_LIMIT,
+    };
+    crate::critical::route_critical_nets(board.clone(), &placement.global_route, &options)
+}
+
 /// `_complete_critical_stage` for a run without reservations or held copper.
 fn complete_critical_stage(
     mut critical: CriticalRoutingResult,
@@ -551,8 +705,7 @@ pub fn run_routing_pipeline(
             fanout.surface_pads.extend(plan.surface_pads.iter().cloned());
         }
     }
-    // Direct mode stitches nothing early; the critical stage would.
-    let plane_stitch_options: Option<PlaneStitchOptions> = None;
+    let plane_stitch_options = if unified_options.direct { None } else { options.plane_stitch_options.clone() };
     let critical = if unified_options.direct {
         emit(
             &mut on_progress,
@@ -562,7 +715,18 @@ pub fn run_routing_pipeline(
         );
         direct_critical(&placement)?
     } else {
-        return copper_pcb::not_implemented("the critical stage (flow._route_critical_stage)");
+        let pair_state_limit = unified_options
+            .critical_pair_state_limit
+            .filter(|limit| *limit != 0)
+            .or(Some(options.critical_pair_state_limit).filter(|limit| *limit != 0));
+        route_critical_stage(
+            &placement,
+            &unified_options,
+            unified_fanout.as_ref(),
+            pair_state_limit,
+            options.plane_stitch_options.as_ref(),
+            &mut on_progress,
+        )?
     };
     let (critical, plane_stitch) = complete_critical_stage(
         critical,

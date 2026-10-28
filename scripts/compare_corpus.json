@@ -17627,7 +17627,78 @@
       "--report",
       "{out}/route.json"
      ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-fanout",
+      "--congestion-feedback-trials",
+      "0",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-fanout",
+      "--congestion-feedback-trials",
+      "0",
+      "--layers",
+      "4",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/mechanical_outline/board.copper",
+      "--locked",
+      "--offline",
+      "--no-fanout",
+      "--congestion-feedback-trials",
+      "0",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
     }
+   ]
+  },
+  {
+   "name": "route-board-direct-boards",
+   "milestone": "M4",
+   "boards": "*",
+   "args": [
+    "route-board",
+    "{input}",
+    "--locked",
+    "--offline",
+    "{physical}",
+    "--candidates",
+    "1",
+    "--unified-direct",
+    "--no-fanout",
+    "--congestion-feedback-trials",
+    "0",
+    "-o",
+    "{out}/routed.kicad_pcb",
+    "--report",
+    "{out}/route.json"
    ]
   },
   {
