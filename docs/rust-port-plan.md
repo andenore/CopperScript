@@ -718,3 +718,37 @@ do not shrink as much.
   macro previews, and the macro preview of a board whose nets all stay
   inside its macros. The HTTP server exits 3 with the marker on stderr
   when a request reaches one of them.
+
+
+**M4 stream: the decoupler router (branch `rust-m4-decoupling`).**
+
+- `copper-route` ports `pcbir.decoupling` (`route_decouplers`,
+  `improve_decoupling_placement`, `DecouplingRouteResult`),
+  `pcbir.decoupling_paths` (the witness dataclasses, `_land`,
+  `_return_targets`, `_budget_reason`, `_normal_via`, `_track_ok`,
+  `_find_path`, `verify_crosslayer_decoupling`,
+  `validate_crosslayer_witness`, `refresh_crosslayer_witnesses`, and
+  `propose_crosslayer_decoupling` up to its launch search),
+  `pcbir.bypass_links` (`verified_bypass_links`) and
+  `pcbir.route_quality` (`escape_paths_cross`). Signatures follow Python's
+  keywords in order; `propose_crosslayer_decoupling`'s numeric bounds are
+  one `ProposalBounds` value with Python's defaults; progress is an
+  optional `FnMut(&str)` stage observer.
+- `copper-place` cannot depend on `copper-route` (the reverse dependency
+  exists), so the planner exposes `register_decoupling_pass`; `copper`
+  registers `copper_route::decoupling::improve_decoupling_placement` at the
+  start of `commands::run`. Without a registration (a library user of
+  `copper-place` alone) a movable decoupler still exits 3.
+- `DecouplingLink` derives `Eq`/`Hash` (sets and witness maps). Python's
+  object-identity checks on witness edges (`edge is item`) compare values.
+  DRC finding fingerprints are compared as their exact field tuples.
+- Suites: the 8 pending `plan-layout-fixtures` and 8 pending
+  `route-global-fixtures` six-layer cases are byte-identical; every
+  plan-layout* and route-global* suite has 0 pending and 0 different.
+- Not implemented (exit 3): new opposite-surface launches
+  (`decoupling_paths._connections` and the proposal loop need fanout's
+  `_package_candidates`, `_legal_choices`, `_two_leg_candidates`,
+  `_interstitial_sites`, plus `access_sites` and `track_containment`), the
+  `surface_path_between` detour fallback of `route_decouplers`, and
+  via-in-pad arrays (`_source_array_owner`, the materialized-macro
+  context's array vias).
