@@ -55,7 +55,10 @@ pub fn package_collar(board: &PhysicalBoard, reference: &str, margin_nm: i64) ->
         return Err(Error::Value("package collar margin cannot be negative".to_owned()));
     }
     let Some(pose) = board.placements.iter().find(|p| p.reference == reference) else {
-        return Err(Error::Value(format!("unknown package collar component {}", copper_json::python_str_repr(reference))));
+        return Err(Error::Value(format!(
+            "unknown package collar component {}",
+            copper_json::python_str_repr(reference)
+        )));
     };
     let footprint = &board.footprints[&pose.footprint];
     let local: Vec<Point> = if footprint.courtyard.is_empty() {
@@ -248,8 +251,9 @@ fn maze_path(
             if next_length > maximum_length {
                 continue;
             }
-            let next_cost =
-                cost + if *dx != 0 && *dy != 0 { 14 } else { 10 } + if heading != -1 && heading != direction { 3 } else { 0 };
+            let next_cost = cost
+                + if *dx != 0 && *dy != 0 { 14 } else { 10 }
+                + if heading != -1 && heading != direction { 3 } else { 0 };
             if next_cost < *best.get(&next_state).unwrap_or(&i64::MAX) {
                 best.insert(next_state, next_cost);
                 parent.insert(next_state, Some(state));
@@ -276,9 +280,8 @@ pub fn surface_escapes(
     let rule = board.net_routing_rules.iter().find(|r| r.net == net);
     let width = rule.and_then(|r| r.width_nm).filter(|w| *w != 0).unwrap_or(board.rules.default_track_width_nm);
     let rule_clearance = rule.and_then(|r| r.clearance_nm).unwrap_or(0);
-    let extension = options
-        .collar_margin_nm
-        .max((width + 1).div_euclid(2) + board.rules.minimum_clearance_nm.max(rule_clearance));
+    let extension =
+        options.collar_margin_nm.max((width + 1).div_euclid(2) + board.rules.minimum_clearance_nm.max(rule_clearance));
     let (step, limit) = if refined {
         (options.refinement_step_nm, options.maximum_refined_ports_per_edge)
     } else {
@@ -290,31 +293,34 @@ pub fn surface_escapes(
     let mut paths: Vec<Vec<TrackSegment>> = Vec::new();
     for end in &endpoints {
         if manhattan(*end) <= nearest + options.maximum_detour_nm {
-            for path in checked_access_paths(board, clearance, net, start, *end, width, layer, false, false, None, false)? {
+            for path in
+                checked_access_paths(board, clearance, net, start, *end, width, layer, false, false, None, false)?
+            {
                 if !path.is_empty() {
                     paths.push(path);
                 }
             }
         }
     }
-    if refined && options.maze_escapes {
-        if let Some(found) = maze_path(board, clearance, net, start, width, layer, area, extension, options)? {
-            let mut pieces = Vec::new();
-            for track in &found {
-                pieces.extend(clearance.route_pieces(net, track.start, track.end, width, layer)?);
+    if refined
+        && options.maze_escapes
+        && let Some(found) = maze_path(board, clearance, net, start, width, layer, area, extension, options)?
+    {
+        let mut pieces = Vec::new();
+        for track in &found {
+            pieces.extend(clearance.route_pieces(net, track.start, track.end, width, layer)?);
+        }
+        let mut legal = true;
+        for t in &pieces {
+            if !track_inside_board(board, t.start, t.end, t.width_nm)?
+                || !clearance.can_track(net, t.start, t.end, t.width_nm, layer)?
+            {
+                legal = false;
+                break;
             }
-            let mut legal = true;
-            for t in &pieces {
-                if !track_inside_board(board, t.start, t.end, t.width_nm)?
-                    || !clearance.can_track(net, t.start, t.end, t.width_nm, layer)?
-                {
-                    legal = false;
-                    break;
-                }
-            }
-            if legal {
-                paths.push(pieces);
-            }
+        }
+        if legal {
+            paths.push(pieces);
         }
     }
     let mut unique: Vec<Vec<TrackSegment>> = Vec::new();

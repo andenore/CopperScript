@@ -10,7 +10,8 @@ pub fn proper_same_net_crossing(first: &TrackSegment, second: &TrackSegment) -> 
         return false;
     }
     let side = |a: Point, b: Point, p: Point| -> i128 {
-        i128::from(b.x_nm - a.x_nm) * i128::from(p.y_nm - a.y_nm) - i128::from(b.y_nm - a.y_nm) * i128::from(p.x_nm - a.x_nm)
+        i128::from(b.x_nm - a.x_nm) * i128::from(p.y_nm - a.y_nm)
+            - i128::from(b.y_nm - a.y_nm) * i128::from(p.x_nm - a.x_nm)
     };
     let (a, b, c, d) = (first.start, first.end, second.start, second.end);
     side(a, b, c).signum() * side(a, b, d).signum() < 0 && side(c, d, a).signum() * side(c, d, b).signum() < 0

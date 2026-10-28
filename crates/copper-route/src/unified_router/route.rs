@@ -333,7 +333,34 @@ pub fn route_unified(
     fanout_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
     only_nets: Option<&IndexSet<String>>,
     required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
+    on_progress: Option<&mut dyn Progress>,
+) -> Result<DetailedRoutingResult> {
+    route_unified_seeded(
+        board,
+        global_route,
+        options,
+        fanout_accesses,
+        only_nets,
+        required_accesses,
+        on_progress,
+        false,
+    )
+}
+
+/// `route_unified(..., escape_seeder=...)` where only the seeder's presence
+/// is known: the seeded repair attempts are not rewritten, so a run that
+/// reaches a repair round with a seeder reports not implemented.
+// PENDING: owned by rust-m4-unified (the escape_seeder repair attempts).
+#[allow(clippy::too_many_arguments)]
+pub fn route_unified_seeded(
+    board: &PhysicalBoard,
+    global_route: &GlobalRoutingResult,
+    options: &UnifiedRouterOptions,
+    fanout_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
+    only_nets: Option<&IndexSet<String>>,
+    required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
     mut on_progress: Option<&mut dyn Progress>,
+    escape_seeder: bool,
 ) -> Result<DetailedRoutingResult> {
     if let Some(fanout) = fanout_accesses
         && fanout.iter().any(|(pad, access)| required_accesses.is_none_or(|r| r.get(pad) != Some(access)))
@@ -494,6 +521,9 @@ pub fn route_unified(
     for round_index in 1..options.commit_rounds {
         if nets.iter().all(|net| complete.contains(&net.name)) {
             break;
+        }
+        if escape_seeder {
+            return not_implemented("unified repair rounds with an escape seeder (escape_seeder)");
         }
         let baseline = open_count(board, &nets, &accepted, &plane_nets, &complete)?;
         // repair_attempt(seed=False)

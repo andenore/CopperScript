@@ -195,7 +195,16 @@ impl EscapeConflicts {
             }
         }
         if let Some(v) = via {
-            return index.can_via(&v.net, v.position, v.size_nm, v.from_layer, v.to_layer, Some(v.drill_nm), false, None);
+            return index.can_via(
+                &v.net,
+                v.position,
+                v.size_nm,
+                v.from_layer,
+                v.to_layer,
+                Some(v.drill_nm),
+                false,
+                None,
+            );
         }
         Ok(true)
     }
@@ -224,9 +233,7 @@ impl EscapeConflicts {
         }
         self.checks += 1;
         for (identity, candidate) in [(a, first), (b, second)] {
-            self.copper
-                .entry(identity)
-                .or_insert_with(|| (candidate.0.clone(), candidate.1.iter().cloned().collect()));
+            self.copper.entry(identity).or_insert_with(|| (candidate.0.clone(), candidate.1.iter().cloned().collect()));
         }
         // The Python index of each candidate holds only its own copper, so a
         // fresh index per check is the same predicate.
@@ -253,7 +260,8 @@ fn finite_assignment(
     if remaining.is_empty() {
         return Ok(Some(assigned.clone()));
     }
-    let pad = remaining.iter().min_by_key(|(p, values)| (values.len(), rank[*p])).map(|(p, _)| p.clone()).expect("pads");
+    let pad =
+        remaining.iter().min_by_key(|(p, values)| (values.len(), rank[*p])).map(|(p, _)| p.clone()).expect("pads");
     let mut choices = remaining[&pad].clone();
     choices.sort_by_key(|i| (Some(i) != preferred.get(&pad), *i, *i));
     for choice in choices {
@@ -279,7 +287,9 @@ fn finite_assignment(
         }
         let mut next = assigned.clone();
         next.insert(pad.clone(), choice);
-        if let Some(answer) = finite_assignment(&filtered, &next, preferred, rank, domains, conflicts, states, maximum_states)? {
+        if let Some(answer) =
+            finite_assignment(&filtered, &next, preferred, rank, domains, conflicts, states, maximum_states)?
+        {
             return Ok(Some(answer));
         }
     }
@@ -413,11 +423,8 @@ pub fn improve_escape_assignment(
         })();
         match outcome {
             Ok((found, diagnostic)) => {
-                let searched = if diagnostic == "local cluster pin budget exceeded" && !found && states == 0 {
-                    0
-                } else {
-                    states
-                };
+                let searched =
+                    if diagnostic == "local cluster pin budget exceeded" && !found && states == 0 { 0 } else { states };
                 trials.push(EscapeAssignmentTrial {
                     pad: root.clone(),
                     cluster: cluster.iter().cloned().collect(),
@@ -435,7 +442,8 @@ pub fn improve_escape_assignment(
                     solution_found: false,
                     diagnostic: message,
                 });
-                if conflicts.checks >= options.maximum_pair_checks || conflicts.queries >= options.maximum_pair_queries {
+                if conflicts.checks >= options.maximum_pair_checks || conflicts.queries >= options.maximum_pair_queries
+                {
                     break;
                 }
             }

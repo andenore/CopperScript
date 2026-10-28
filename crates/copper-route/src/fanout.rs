@@ -235,8 +235,14 @@ fn ray_candidates(position: Point, center: Point, options: &FanoutOptions, diago
 }
 
 /// `_package_candidates`: diagonal dogbones before outward rays.
-fn package_candidates(board: &PhysicalBoard, placement: &Placement, pad: &FootprintPad, options: &FanoutOptions) -> Vec<Point> {
-    let sites = circular_cell_sites(board, placement, pad, options.maximum_neighbor_distance_nm, options.maximum_radius_nm);
+fn package_candidates(
+    board: &PhysicalBoard,
+    placement: &Placement,
+    pad: &FootprintPad,
+    options: &FanoutOptions,
+) -> Vec<Point> {
+    let sites =
+        circular_cell_sites(board, placement, pad, options.maximum_neighbor_distance_nm, options.maximum_radius_nm);
     let start = transformed_local_point(placement, pad.position);
     let diagonal = placement
         .rotation_degrees
@@ -340,7 +346,7 @@ fn legal_choices(
                 finish: "standard".to_owned(),
             })
         };
-        let checked = via.as_ref().or(existing.map(|v| *v)).expect("a via");
+        let checked = via.as_ref().or(existing.copied()).expect("a via");
         if !existing_returns_permit(board, rule, checked) {
             continue;
         }
@@ -468,7 +474,12 @@ fn reserve(
 }
 
 /// `_surface_layer`: the pad's own layer when its net may not leave it.
-fn surface_layer(board: &PhysicalBoard, net: &str, rule: Option<&copper_pcb::board::NetRoutingRule>, placement: &Placement) -> Option<CopperLayer> {
+fn surface_layer(
+    board: &PhysicalBoard,
+    net: &str,
+    rule: Option<&copper_pcb::board::NetRoutingRule>,
+    placement: &Placement,
+) -> Option<CopperLayer> {
     let side = side_of(placement);
     let allowed = routing_layers(board, net, rule);
     (allowed.contains(&side) && (allowed.len() == 1 || rule.is_some_and(|r| r.max_vias == Some(0)))).then_some(side)
@@ -476,7 +487,11 @@ fn surface_layer(board: &PhysicalBoard, net: &str, rule: Option<&copper_pcb::boa
 
 /// `route_fanout`: escape crowded ordinary-net SMD pads to legal through-vias.
 /// Boards with source decoupling links (bypass routing first) report not implemented.
-pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only_nets: Option<&IndexSet<String>>) -> Result<FanoutResult> {
+pub fn route_fanout(
+    board: &PhysicalBoard,
+    options: Option<&FanoutOptions>,
+    only_nets: Option<&IndexSet<String>>,
+) -> Result<FanoutResult> {
     if !board.hard_macros.is_empty() && board.materialized_macros.is_empty() {
         return Err(Error::Value("materialize hard macros before package escape".to_owned()));
     }
@@ -498,7 +513,9 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
         return Ok(FanoutResult::unchanged(board, Vec::new()));
     }
     if !board.decoupling_links.is_empty() {
-        return copper_pcb::not_implemented("package escape on a board with decoupling links (decoupling.route_decouplers)");
+        return copper_pcb::not_implemented(
+            "package escape on a board with decoupling links (decoupling.route_decouplers)",
+        );
     }
     let mut clearance = RoutingClearanceIndex::new(board)?;
     let mut net_by_pad: IndexMap<PadReference, String> = IndexMap::new();
@@ -511,7 +528,8 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
     }
     let rules: IndexMap<&str, _> = board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
     let regional: IndexSet<&str> = board.zones.iter().filter(|z| z.reserve_routing).map(|z| z.net.as_str()).collect();
-    let zone_nets: IndexSet<String> = distribution_zone_nets(board).into_iter().filter(|n| !regional.contains(n.as_str())).collect();
+    let zone_nets: IndexSet<String> =
+        distribution_zone_nets(board).into_iter().filter(|n| !regional.contains(n.as_str())).collect();
     let owned = crate::pair_terminals::macro_owned_pads(board);
     let mut pads: Vec<Pin<'_>> = Vec::new();
     for placement in &board.placements {
@@ -543,7 +561,10 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
                 }
             }
             let Some(net) = net_by_pad.get(&reference) else { continue };
-            if owned.contains(&reference) || zone_nets.contains(net) || only_nets.is_some_and(|only| !only.contains(net)) {
+            if owned.contains(&reference)
+                || zone_nets.contains(net)
+                || only_nets.is_some_and(|only| !only.contains(net))
+            {
                 continue;
             }
             if rules.get(net.as_str()).is_some_and(|rule| rule.kind != RouteKind::General) {
@@ -583,20 +604,41 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
     for items in pin_by_ref.values() {
         for item in items {
             if !collars.contains_key(&item.3.reference) {
-                collars.insert(item.3.reference.clone(), package_collar(board, &item.3.reference, settings.collar_margin_nm)?);
+                collars.insert(
+                    item.3.reference.clone(),
+                    package_collar(board, &item.3.reference, settings.collar_margin_nm)?,
+                );
             }
         }
     }
-    let surface_choices = |reference: &PadReference, layer: CopperLayer, index: &RoutingClearanceIndex<'_>, refined: bool| -> Result<Vec<EscapeCandidate>> {
+    let surface_choices = |reference: &PadReference,
+                           layer: CopperLayer,
+                           index: &RoutingClearanceIndex<'_>,
+                           refined: bool|
+     -> Result<Vec<EscapeCandidate>> {
         let mut choices = Vec::new();
         for (_, _, position, placement, _) in &pin_by_ref[reference] {
-            for path in surface_escapes(board, index, &net_by_pad[reference], *position, layer, collars[&placement.reference], &settings, refined)? {
+            for path in surface_escapes(
+                board,
+                index,
+                &net_by_pad[reference],
+                *position,
+                layer,
+                collars[&placement.reference],
+                &settings,
+                refined,
+            )? {
                 choices.push((path, None));
             }
         }
         Ok(unique(choices))
     };
-    let choices_for = |reference: &PadReference, index: &RoutingClearanceIndex<'_>, candidate_options: &FanoutOptions, elbows: bool, multiple_orders: bool| -> Result<Vec<EscapeCandidate>> {
+    let choices_for = |reference: &PadReference,
+                       index: &RoutingClearanceIndex<'_>,
+                       candidate_options: &FanoutOptions,
+                       elbows: bool,
+                       multiple_orders: bool|
+     -> Result<Vec<EscapeCandidate>> {
         let mut choices = Vec::new();
         for (_, _, position, placement, pad) in &pin_by_ref[reference] {
             let sites = if elbows {
@@ -604,7 +646,16 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
             } else {
                 package_candidates(board, placement, pad, candidate_options)
             };
-            choices.extend(legal_choices(board, index, &net_by_pad[reference], *position, placement, &sites, multiple_orders, &outline)?);
+            choices.extend(legal_choices(
+                board,
+                index,
+                &net_by_pad[reference],
+                *position,
+                placement,
+                &sites,
+                multiple_orders,
+                &outline,
+            )?);
         }
         Ok(unique(choices))
     };
@@ -646,7 +697,8 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
             if !allowed.contains(&side) {
                 continue;
             }
-            let seeds = circular_cell_sites(board, pose, pad, options.maximum_neighbor_distance_nm, options.maximum_radius_nm);
+            let seeds =
+                circular_cell_sites(board, pose, pad, options.maximum_neighbor_distance_nm, options.maximum_radius_nm);
             let sites = obstacle_boundary_sites(
                 &index,
                 net,
@@ -713,7 +765,10 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
         if choices.is_empty() && options.maze_escapes {
             choices = maze_choices(board, &clearance, &net_by_pad[reference], &pin_by_ref[reference], &options)?;
         }
-        if choices.is_empty() && options.surface_fallback && let Some(side) = side_allowed(reference) {
+        if choices.is_empty()
+            && options.surface_fallback
+            && let Some(side) = side_allowed(reference)
+        {
             surface.insert(reference.clone(), side);
             choices = surface_choices(reference, side, &clearance, false)?;
             if choices.is_empty() {
@@ -722,9 +777,12 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
         }
         domains.insert(reference.clone(), choices);
     }
-    let mut ordered: Vec<&Pin<'_>> = pin_by_ref.values().map(|items| items.iter().min_by_key(|item| item.0).expect("pins")).collect();
+    let mut ordered: Vec<&Pin<'_>> =
+        pin_by_ref.values().map(|items| items.iter().min_by_key(|item| item.0).expect("pins")).collect();
     ordered.sort_by(|a, b| {
-        let key = |item: &&Pin<'_>| (if options.constrained_pins_first { domains[&item.1].len() } else { 0 }, item.0, item.1.clone());
+        let key = |item: &&Pin<'_>| {
+            (if options.constrained_pins_first { domains[&item.1].len() } else { 0 }, item.0, item.1.clone())
+        };
         key(a).cmp(&key(b))
     });
     let ordered_refs: Vec<PadReference> = ordered.iter().map(|item| item.1.clone()).collect();
@@ -756,7 +814,13 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
             };
             all.extend(refine(reference)?);
             if options.maze_escapes {
-                all.extend(maze_choices(board, &RoutingClearanceIndex::new(board)?, &net_by_pad[reference], &pin_by_ref[reference], &options)?);
+                all.extend(maze_choices(
+                    board,
+                    &RoutingClearanceIndex::new(board)?,
+                    &net_by_pad[reference],
+                    &pin_by_ref[reference],
+                    &options,
+                )?);
             }
             if options.maximum_geometry_candidates != 0 {
                 all.extend(geometry_choices(reference)?);
@@ -774,8 +838,15 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
         };
         let fallback: Option<&mut dyn FnMut(&PadReference) -> Result<Vec<EscapeCandidate>>> =
             if options.surface_fallback { Some(&mut expand_surface) } else { None };
-        let (improved, report) =
-            improve_escape_assignment(board, &ordered_refs, &mut domains, &selected, &mut expand, &options.assignment_options, fallback)?;
+        let (improved, report) = improve_escape_assignment(
+            board,
+            &ordered_refs,
+            &mut domains,
+            &selected,
+            &mut expand,
+            &options.assignment_options,
+            fallback,
+        )?;
         selected = improved;
         assignment = Some(report);
     }
@@ -811,10 +882,12 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
         "DRC-VIA-PAD-OVERLAP",
     ];
     let policy = copper_drc::Policy::default();
-    let count = |report: &crate::drc_report::DrcReport, code: &str| report.findings().iter().filter(|f| f.code == code).count();
+    let count =
+        |report: &crate::drc_report::DrcReport, code: &str| report.findings().iter().filter(|f| f.code == code).count();
     let before = crate::drc_report::run_physical_drc(board, policy)?;
     let mut after = crate::drc_report::run_physical_drc(&routed, policy)?;
-    let failed_gate = |after: &crate::drc_report::DrcReport| FATAL.iter().any(|code| count(after, code) > count(&before, code));
+    let failed_gate =
+        |after: &crate::drc_report::DrcReport| FATAL.iter().any(|code| count(after, code) > count(&before, code));
     let selected_set: IndexSet<&PadReference> = selected.keys().collect();
     let access_set: IndexSet<&PadReference> = accesses.keys().collect();
     if let Some(report) = assignment.as_mut()
@@ -840,7 +913,8 @@ pub fn route_fanout(board: &PhysicalBoard, options: Option<&FanoutOptions>, only
             && via.is_none()
             && !board.vias.iter().any(|item| item.net == net_by_pad[reference] && item.position == end);
         if selected_surface {
-            escapes.insert(reference.clone(), RoutingAccess::new(end, surface[reference], path[0].start, path.clone())?);
+            escapes
+                .insert(reference.clone(), RoutingAccess::new(end, surface[reference], path[0].start, path.clone())?);
         }
     }
     let plain: IndexMap<PadReference, Point> =
