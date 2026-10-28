@@ -14,7 +14,7 @@ use copper_lang::mechanical::stackup::StackupLayer;
 use copper_pcb::Result;
 use copper_pcb::board::{NetRoutingRule, PhysicalBoard, RouteKind, Stackup};
 use copper_physical::CopperLayer;
-use copper_physical::pyfloat::round_int;
+use copper_physical::pyfloat::{hypot, round_int};
 use copper_units::Decimal;
 use indexmap::{IndexMap, IndexSet};
 
@@ -607,7 +607,7 @@ fn routed_track_length_nm(board: &PhysicalBoard, net: &str) -> i64 {
         .tracks
         .iter()
         .filter(|track| track.net == net)
-        .map(|t| round_int(((t.end.x_nm - t.start.x_nm) as f64).hypot((t.end.y_nm - t.start.y_nm) as f64)))
+        .map(|t| round_int(hypot((t.end.x_nm - t.start.x_nm) as f64, (t.end.y_nm - t.start.y_nm) as f64)))
         .sum()
 }
 

@@ -137,6 +137,24 @@ fn tuple4(value: (i64, i64, i64, i64)) -> Value {
     ints(&[value.0, value.1, value.2, value.3])
 }
 
+/// Whether a recorded value matches a recomputed one. `c_hypot` marks
+/// distances Python takes from `np.hypot`, which is the C library's `hypot`:
+/// the fixture holds glibc's results, so on Windows, where Rust and Python
+/// both get the CRT's `hypot`, those floats may differ from it by one ulp.
+/// Node ids and every other value stay exact.
+fn matches(expected: &Value, actual: &Value, c_hypot: bool) -> bool {
+    if !(c_hypot && cfg!(windows)) {
+        return Dumps::new().sort_keys(true).dumps(expected) == Dumps::new().sort_keys(true).dumps(actual);
+    }
+    match (expected, actual) {
+        (Value::Float(a), Value::Float(b)) => a == b || a.next_up() == *b || a.next_down() == *b,
+        (Value::Array(a), Value::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| matches(a, b, c_hypot))
+        }
+        _ => matches(expected, actual, false),
+    }
+}
+
 /// Every recorded field of one query, recomputed and compared.
 /// `previous` is the preceding point query's (layer, point, radius): a pair query's segment starts there.
 fn replay(
@@ -199,9 +217,10 @@ fn replay(
     }
     for (key, actual) in fields {
         let expected = query.get(key).unwrap_or_else(|| panic!("{key} in {case}"));
-        let (expected, actual) =
-            (Dumps::new().sort_keys(true).dumps(expected), Dumps::new().sort_keys(true).dumps(&actual));
-        if expected != actual {
+        // The nested lattice measures segments with np.hypot; the uniform ones with math.hypot.
+        if !matches(expected, &actual, case == "nested" && key == "segment") {
+            let (expected, actual) =
+                (Dumps::new().sort_keys(true).dumps(expected), Dumps::new().sort_keys(true).dumps(&actual));
             failures.push(format!("{case} {key}: Python {expected}\n  Rust {actual}"));
         }
     }
@@ -310,9 +329,10 @@ fn lattice_queries_match_python() {
                         ),
                     ];
                     for (key, actual) in fields {
-                        let python = Dumps::new().sort_keys(true).dumps(query.get(key).expect(key));
-                        let rust = Dumps::new().sort_keys(true).dumps(&actual);
-                        if python != rust {
+                        let expected = query.get(key).expect(key);
+                        if !matches(expected, &actual, key == "local") {
+                            let python = Dumps::new().sort_keys(true).dumps(expected);
+                            let rust = Dumps::new().sort_keys(true).dumps(&actual);
                             failures.push(format!("nested {key}: Python {python}\n  Rust {rust}"));
                         }
                     }
