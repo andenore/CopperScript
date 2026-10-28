@@ -361,37 +361,17 @@ fn route_critical_stage(
     }
     emit(on_progress, "bypass_reservation", "bound", vec![("mode", text("keepouts")), ("reason", Value::Null)]);
     let return_options = critical_return_plane_options(board, plane_stitch_options, &halos);
-    if return_options.is_some() {
-        return copper_pcb::not_implemented(
-            "critical return-plane contacts (route_critical_nets plane_stitch_options)",
-        );
-    }
-    let jobs = crate::critical::critical_jobs(&{
-        let mut promoted = board.clone();
-        if let (Some(rules), _) = crate::critical::promote_planar_nets(board) {
-            promoted.net_routing_rules = rules;
-        }
-        promoted
-    });
-    let defaults = UnifiedRouterOptions::default();
-    if !jobs.is_empty() {
-        if on_progress.is_some() {
-            return copper_pcb::not_implemented("critical_group progress events");
-        }
-        if unified_options.critical_pair_state_escalation != defaults.critical_pair_state_escalation
-            || unified_options.maximum_iterations < 16
-            || unified_options.commit_rounds < 2
-            || unified_options.time_budget_s.is_some()
-        {
-            return copper_pcb::not_implemented("unified options passed to route_critical_nets");
-        }
-    }
     let options = crate::critical::CriticalOptions {
-        only_nets: None,
         pair_state_limit,
-        bundle_repair_limit: crate::critical_bundles::BUNDLE_REPAIR_LIMIT,
+        plane_stitch_options: return_options.as_ref(),
+        unified_options: Some(unified_options),
+        ..Default::default()
     };
-    crate::critical::route_critical_nets(board.clone(), &placement.global_route, &options)
+    let progress: Option<ProgressCallback<'_>> = match on_progress {
+        Some(callback) => Some(&mut **callback),
+        None => None,
+    };
+    crate::critical::route_critical_nets(board.clone(), &placement.global_route, &options, progress)
 }
 
 /// `_complete_critical_stage` for a run without reservations or held copper.
@@ -467,6 +447,7 @@ fn route_ordinary_stage(
         pre_detailed,
         global_route,
         unified_options,
+        None,
         None,
         None,
         None,

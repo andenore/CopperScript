@@ -1308,7 +1308,13 @@ fn finish(
             ("zone_nets_deferred", strings(&zone_list)),
         ]),
     );
-    let lane_review = copper_route::critical_review::critical_lane_review(&output_board, &result.critical.nets)?;
+    let lane_review = copper_route::critical_review::critical_lane_review(
+        &output_board,
+        &result.critical.nets,
+        &result.critical.match_tuning,
+    )?;
+    let lane_line = matches!(lane_review.get("nets"), Some(Value::Array(nets)) if !nets.is_empty())
+        .then(|| copper_route::critical_review::lane_review_line(&lane_review));
     report.insert("critical_lane_review".to_owned(), Value::Object(lane_review));
     let filled = output_board.vias.iter().filter(|via| via.finish == "filled-capped").count() as i64;
     if filled != 0 {
@@ -1471,6 +1477,7 @@ fn finish(
         deferred.len(),
         decision
     ));
+    lines.extend(lane_line);
     lines.push(format!("Report -> {}", paths::display(&report_path)));
     lines.extend(summary);
     lines.push(format!("Summary -> {}", paths::display(&summary_path)));

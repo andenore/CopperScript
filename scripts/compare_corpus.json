@@ -17781,6 +17781,36 @@
    ]
   },
   {
+   "name": "route-board-save-inputs-boards",
+   "milestone": "M4",
+   "boards": "*",
+   "args": [
+    "route-board",
+    "{input}",
+    "--locked",
+    "--offline",
+    "{physical}",
+    "--candidates",
+    "1",
+    "--no-fanout",
+    "--congestion-feedback-trials",
+    "0",
+    "--unified-save-inputs",
+    "{out}/unified.state.json",
+    "-o",
+    "{out}/routed.kicad_pcb",
+    "--report",
+    "{out}/route.json"
+   ],
+   "compare": [
+    "exit",
+    "files"
+   ],
+   "files": [
+    "unified.state.json"
+   ]
+  },
+  {
    "name": "explain",
    "milestone": "M5",
    "cases": [

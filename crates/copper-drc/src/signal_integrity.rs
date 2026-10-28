@@ -657,7 +657,7 @@ pub fn verify_match_groups(board: &PhysicalBoard) -> Result<Vec<MatchGroup>> {
 }
 
 impl MatchGroup {
-    fn to_value(&self) -> Value {
+    pub fn to_value(&self) -> Value {
         let longest = self.members.iter().map(|(_, length, _)| *length).max().unwrap_or(0);
         let members = self
             .members

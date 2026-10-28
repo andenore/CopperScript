@@ -697,3 +697,35 @@ do not shrink as much.
   macro previews, and the macro preview of a board whose nets all stay
   inside its macros. The HTTP server exits 3 with the marker on stderr
   when a request reaches one of them.
+
+**M4 stream: unified- and critical-router hooks for `route-board` (branch `rust-m4-hooks`).**
+
+- `route_unified` takes Python's `escape_seeder(board, net names)`: with a
+  seeder each repair round tries the unseeded and the seeded rip-in
+  attempt and adopts the better (`repair_attempt`, `_same_but_copper`,
+  the shared commit index or a fresh one). Flow keeps its stand-in until
+  `fanout.route_fanout` lands; replay passes none.
+- `save_inputs_path` (`--unified-save-inputs`) writes Python's state file
+  (`state_codec.inputs_state_text`: the board, now with mechanical
+  references, the global route and every `UnifiedRouterOptions` field);
+  saved fanout or required accesses report not implemented.
+- `route_critical_nets` takes `on_progress` (the `critical_group`
+  started/finished events of `progress.critical_progress`),
+  `plane_stitch_options` (early return-plane contacts as a locked prefix,
+  their counts and metadata in the result; `replay-critical` decodes saved
+  `PlaneStitchOptions`) and `unified_options` (the pair state escalation;
+  the joint searches that would use it, and the unified-router cohort and
+  exact searches, still report not implemented). Flow's three stand-ins for
+  them are gone.
+- `critical_review` is ported whole (lane spacing, coupled length, bends,
+  pair skew, match groups with their tuning status) with
+  `lane_review_line`, which route-board prints.
+- Corpus: new `route-board-save-inputs-boards` (the saved state of every
+  corpus board, `--no-fanout`): 10 byte-identical, 1 pending.
+  No `route-board*` case is different (the nine suites: 121 equal, 26
+  pending); `replay-unified*` 119 equal, 1 pending; `replay-critical*` 77
+  equal, 13 pending (full-vertical now passes its return-plane contacts and
+  stops at hard-macro candidate validation). Not implemented (exit 3):
+  `reserved_accesses` (needs `fanout.FanoutResult` and
+  `bypass_reservations`), the ball-grid fanout sidecar
+  (`PATH.bga.json`) and trial input files of placement feedback.
