@@ -4,12 +4,12 @@
 use copper_drc::connectivity::{Candidate, explicit_copper_connectivity};
 use copper_drc::digest::physical_board_digest;
 use copper_json::{Object, Value};
-use copper_pcb::board::{PhysicalNet, TrackSegment};
-use copper_pcb::transform::transformed_pad_position;
 use copper_pcb::Result;
 use copper_pcb::board::PhysicalBoard;
-use copper_physical::CopperLayer;
+use copper_pcb::board::{PhysicalNet, TrackSegment};
+use copper_pcb::transform::transformed_pad_position;
 use copper_physical::BoardSide;
+use copper_physical::CopperLayer;
 use indexmap::IndexSet;
 
 use crate::plane_verify::PlaneVerification;
@@ -51,7 +51,10 @@ pub fn routing_quality(board: &PhysicalBoard, native: Option<&PlaneVerification>
         let mut entry = Object::new();
         entry.insert("track_length_nm".to_owned(), Value::from(tracks.iter().map(|t| track_length_nm(t)).sum::<i64>()));
         entry.insert("track_count".to_owned(), Value::from(tracks.len() as i64));
-        entry.insert("via_count".to_owned(), Value::from(board.vias.iter().filter(|v| v.net == net.name).count() as i64));
+        entry.insert(
+            "via_count".to_owned(),
+            Value::from(board.vias.iter().filter(|v| v.net == net.name).count() as i64),
+        );
         entry.insert("explicit_copper_connected".to_owned(), Value::from(graph.net_connected(net)));
         nets.insert(net.name.clone(), Value::Object(entry));
     }
@@ -111,13 +114,18 @@ pub fn routing_quality(board: &PhysicalBoard, native: Option<&PlaneVerification>
         let component_length: i64 = filtered
             .iter()
             .enumerate()
-            .filter(|(index, _)| surface.roots.get(&format!("track:{index}")).is_some_and(|r| roots.contains(r.as_str())))
+            .filter(|(index, _)| {
+                surface.roots.get(&format!("track:{index}")).is_some_and(|r| roots.contains(r.as_str()))
+            })
             .map(|(_, t)| track_length_nm(t))
             .sum();
         let dx = i128::from(a.x_nm - b.x_nm);
         let dy = i128::from(a.y_nm - b.y_nm);
         let mut entry = Object::new();
-        entry.insert("capacitor".to_owned(), Value::from(format!("{}.{}", link.capacitor.component, link.capacitor.pad)));
+        entry.insert(
+            "capacitor".to_owned(),
+            Value::from(format!("{}.{}", link.capacitor.component, link.capacitor.pad)),
+        );
         entry.insert("target".to_owned(), Value::from(format!("{}.{}", link.target.component, link.target.pad)));
         entry.insert("net".to_owned(), Value::from(link.net.as_str()));
         entry.insert("layer".to_owned(), Value::from(layer.value()));
@@ -167,7 +175,9 @@ pub fn routing_quality(board: &PhysicalBoard, native: Option<&PlaneVerification>
     document.insert("board_digest".to_owned(), Value::from(digest));
     document.insert(
         "scope".to_owned(),
-        Value::from("explicit track geometry and surface connectivity; no impedance, thermal or production qualification"),
+        Value::from(
+            "explicit track geometry and surface connectivity; no impedance, thermal or production qualification",
+        ),
     );
     document.insert("length_method".to_owned(), Value::from("sum of integer-nanometre segment lengths rounded down"));
     document.insert("track_count".to_owned(), Value::from(board.tracks.len() as i64));

@@ -6,8 +6,8 @@
 //! filled-copper feedback.
 
 use copper_json::{Dumps, Object, Value};
-use copper_pcb::board::{DecouplingLink, PadReference};
 use copper_pcb::board::PhysicalBoard;
+use copper_pcb::board::{DecouplingLink, PadReference};
 
 /// `NativeCopperItem`: exact export UUID binding.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -159,7 +159,10 @@ impl PlaneVerification {
                 item.insert("category".to_owned(), Value::from(finding.category.as_str()));
                 item.insert("type".to_owned(), Value::from(finding.kind.as_str()));
                 item.insert("description".to_owned(), Value::from(finding.description.as_str()));
-                item.insert("items".to_owned(), Value::Array(finding.items.iter().map(NativeCopperItem::document).collect()));
+                item.insert(
+                    "items".to_owned(),
+                    Value::Array(finding.items.iter().map(NativeCopperItem::document).collect()),
+                );
                 Value::Object(item)
             })
             .collect();
@@ -192,8 +195,14 @@ impl PlaneVerification {
                 let mut item = Object::new();
                 item.insert("link".to_owned(), Value::Object(link));
                 item.insert("status".to_owned(), Value::from(assessment.status.as_str()));
-                item.insert("supply_connected".to_owned(), assessment.supply_connected.map_or(Value::Null, Value::from));
-                item.insert("return_connected".to_owned(), assessment.return_connected.map_or(Value::Null, Value::from));
+                item.insert(
+                    "supply_connected".to_owned(),
+                    assessment.supply_connected.map_or(Value::Null, Value::from),
+                );
+                item.insert(
+                    "return_connected".to_owned(),
+                    assessment.return_connected.map_or(Value::Null, Value::from),
+                );
                 item.insert(
                     "return_targets".to_owned(),
                     Value::Array(assessment.return_targets.iter().map(pad_reference_document).collect()),

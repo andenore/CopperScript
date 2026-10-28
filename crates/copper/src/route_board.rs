@@ -1,0 +1,930 @@
+//! `copper route-board BOARD [options]`: attempt complete physical routing and
+//! run native DRC (`pcbir.cli`, the `route-board` command).
+//!
+//! The command line, the routing profiles, the ERC gate, physicalization and
+//! every option check before the pipeline are Python's, including the
+//! `ROUTING ERROR` line and the `.error.json` record next to `--report`. The
+//! pipeline itself runs as far as its stages have landed and reports not
+//! implemented (exit 3) at the first one that has not; so do the few paths
+//! whose Python behaviour this rewrite cannot reproduce yet (a crash, a
+//! `--debug` traceback, placement checkpoints, typed `--unified-set` values).
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use copper_json::{Object, Value, text};
+use copper_lang::compiler::{LoadError, load_design};
+use copper_lang::footprints::FootprintResolver;
+use copper_lang::mechanical::NOT_IMPLEMENTED;
+use copper_lang::paths;
+use copper_pcb::Error;
+use copper_pcb::board::{PadReference, PhysicalBoard};
+use copper_pcb::physicalize::{Footprints, PhysicalOptions, physicalize};
+use copper_pcb::{hard_macros, templates};
+use copper_place::PlannerOptions;
+use copper_route::bench::unified_overrides;
+use copper_route::escape_plan::EscapePlanOptions;
+use copper_route::fanout::FanoutOptions;
+use copper_route::flow::{RoutingPipelineOptions, STOP_STAGES, UnifiedPipelineOptions, run_routing_pipeline};
+use copper_route::iteration_checkpoints::{StageState, StageTracker, write_error_record};
+use copper_route::plane::PlaneStitchOptions;
+use copper_route::progress::{ConsoleProgress, Progress, emit, int, text as text_value};
+use copper_route::routeflow::PlacementRoutingFeedbackOptions;
+use copper_route::routing::GlobalRouterOptions;
+
+use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
+use crate::option_parser::{self, Parsed, Spec, flag, short_value, value};
+use crate::pypath;
+use crate::report_args::{python_float, python_int};
+
+const USAGE: &str = "usage: copper route-board [-h] [--locked] [--offline] [-o OUTPUT] [--report REPORT] \
+[--routing-profile {quick,balanced,thorough}] [--no-check] [options] board";
+
+const FLAGS: [&str; 22] = [
+    "--locked",
+    "--offline",
+    "--no-check",
+    "--allow-proxy-footprints",
+    "--require-verified-intent",
+    "--debug",
+    "--progress",
+    "--unified-direct",
+    "--unified-no-decouplers",
+    "--unified-retain-escape-copper",
+    "--fanout-maze",
+    "--no-route-smoothing",
+    "--stitch-zone-pads",
+    "--ground-via-in-pad",
+    // BooleanOptionalAction pairs.
+    "--fanout",
+    "--no-fanout",
+    "--escape-plan",
+    "--no-escape-plan",
+    "--bus-layers",
+    "--no-bus-layers",
+    "--array-flow",
+    "--no-array-flow",
+];
+
+const MORE_FLAGS: [&str; 8] = [
+    "--via-lattice",
+    "--no-via-lattice",
+    "--stitch-surface-zones",
+    "--no-stitch-surface-zones",
+    "--prefer-local-ground",
+    "--no-prefer-local-ground",
+    "--early-plane-stitch",
+    "--no-early-plane-stitch",
+];
+
+const VALUED: [&str; 66] = [
+    "--report",
+    "--routing-profile",
+    "--footprint-root",
+    "--layers",
+    "--fab-profile",
+    "--candidates",
+    "--placement-grid-mm",
+    "--escape-margin-mm",
+    "--escape-transit-lanes",
+    "--power-domain-weight",
+    "--support-pattern-trials",
+    "--package-support-trials",
+    "--decoupling-placement-trials",
+    "--placement-seeds",
+    "--placement-refinement-passes",
+    "--escape-spacing-passes",
+    "--width-mm",
+    "--height-mm",
+    "--hard-macro",
+    "--placement-templates",
+    "--placement-feedback-trials",
+    "--pin-access-step-mm",
+    "--critical-pin-access-step-mm",
+    "--placement-candidate",
+    "--tile-size-mm",
+    "--router-iterations",
+    "--feedback-iterations",
+    "--critical-feedback-trials",
+    "--pitch-mm",
+    "--maximum-ripup-blockers",
+    "--unified-pitch-mm",
+    "--fine-regions",
+    "--unified-iterations",
+    "--unified-search-states",
+    "--unified-time-budget-s",
+    "--unified-pair-states",
+    "--unified-save-inputs",
+    "--unified-set",
+    "--power-islands",
+    "--package-initial-pair-states",
+    "--fanout-step-mm",
+    "--fanout-geometry-candidates",
+    "--fanout-refinement-step-mm",
+    "--detailed-feedback-trials",
+    "--congestion-feedback-trials",
+    "--zone-dependency-expansions",
+    "--layer-preference-cost",
+    "--direction-preference-cost",
+    "--layer-assignment-passes",
+    "--local-demand-cost",
+    "--plane-stitch-step-mm",
+    "--plane-stitch-radius-mm",
+    "--plane-maze-step-mm",
+    "--plane-maze-budget",
+    "--plane-contact-radius-mm",
+    "--prefer-local-ground-pad",
+    "--plane-stitch-detour-mm",
+    "--plane-escape-width-mm",
+    "--early-plane-pad",
+    "--verify-plane-fill",
+    "--filled-copper-trials",
+    "--filled-copper-search-states",
+    "--native-evidence-directory",
+    "--stop-after",
+    "--checkpoint-dir",
+    "--reuse-placement",
+];
+
+fn specs() -> Vec<Spec> {
+    let mut specs: Vec<Spec> = FLAGS.iter().chain(MORE_FLAGS.iter()).map(|name| flag(name)).collect();
+    specs.push(short_value("--output", "-o"));
+    for name in VALUED {
+        if !specs.iter().any(|spec| spec.long == name) {
+            specs.push(value(name));
+        }
+    }
+    specs
+}
+
+/// Why the run stops before or inside the pipeline.
+enum Stop {
+    /// A `ValueError` (`ROUTING ERROR`, exit 2); `error_type` is the Python
+    /// class when this rewrite knows it.
+    Value { error_type: Option<&'static str>, message: String },
+    /// A path this rewrite does not reproduce yet.
+    Pending(String),
+}
+
+impl From<Error> for Stop {
+    fn from(error: Error) -> Self {
+        match error {
+            Error::Value(message) => Stop::Value { error_type: None, message },
+            Error::NotImplemented(what) => Stop::Pending(what),
+        }
+    }
+}
+
+/// An option check of this command or of an options dataclass: a `ValueError`.
+fn value_error(error: Error) -> Stop {
+    match error {
+        Error::Value(message) => Stop::Value { error_type: Some("ValueError"), message },
+        Error::NotImplemented(what) => Stop::Pending(what),
+    }
+}
+
+fn fail(message: String) -> Stop {
+    Stop::Value { error_type: Some("ValueError"), message }
+}
+
+/// `nm_from_mm(text)` of an unchecked option string: `int(Decimal(...))` of a
+/// NaN is a `ValueError`; other bad text crashes Python (not reproduced).
+fn nm_from_mm(text: &str, option: &str) -> Result<i64, Stop> {
+    let trimmed = text.trim_matches(copper_json::python_isspace);
+    let special = trimmed.trim_start_matches(['+', '-']).to_ascii_lowercase();
+    if special == "nan" {
+        return Err(fail("cannot convert NaN to integer".to_owned()));
+    }
+    if trimmed.contains('_') {
+        return Err(Stop::Pending(format!("{option} {}", copper_json::python_str_repr(text))));
+    }
+    copper_pcb::nm_from_mm_text(trimmed)
+        .map_err(|_| Stop::Pending(format!("{option} {} (Python crashes)", copper_json::python_str_repr(text))))
+}
+
+/// The checked option values (argparse's `type=` and `choices=`).
+struct Arguments {
+    parsed: Parsed,
+    board: String,
+    layers: i64,
+    fab_profile: String,
+    planner: PlannerArguments,
+    width_mm: f64,
+    height_mm: f64,
+    ints: Vec<(&'static str, i64)>,
+    lengths: Vec<(&'static str, String)>,
+    unified_pitch_mm: Option<String>,
+    unified_time_budget_s: Option<f64>,
+    unified_pair_states: Option<i64>,
+    critical_pin_access_step_mm: Option<String>,
+    plane_escape_width_mm: Option<String>,
+    filled_copper_trials: i64,
+    filled_copper_search_states: i64,
+}
+
+struct PlannerArguments {
+    candidates: i64,
+    grid_mm: String,
+    escape_margin_mm: String,
+    transit_lanes: i64,
+    domain_weight: f64,
+    support_trials: i64,
+    package_trials: i64,
+    decoupling_trials: i64,
+    seeds: Option<i64>,
+    refinement_passes: i64,
+    spacing_passes: i64,
+}
+
+impl Arguments {
+    fn int(&self, name: &str) -> i64 {
+        self.ints.iter().find(|(key, _)| *key == name).map(|(_, value)| *value).expect("a checked int option")
+    }
+
+    fn length(&self, name: &str) -> &str {
+        self.lengths.iter().find(|(key, _)| *key == name).map(|(_, value)| value.as_str()).expect("a length option")
+    }
+
+    fn flag(&self, name: &str) -> bool {
+        self.parsed.flag(name)
+    }
+
+    /// A `BooleanOptionalAction`: the last of `--name` and `--no-name` wins.
+    fn boolean(&self, name: &str, default: bool) -> bool {
+        let negative = format!("--no-{}", &name[2..]);
+        self.parsed
+            .options
+            .iter()
+            .rev()
+            .find(|(option, _)| *option == name || *option == negative)
+            .map_or(default, |(option, _)| *option == name)
+    }
+
+    fn text(&self, name: &str) -> Option<&str> {
+        self.parsed.value(name)
+    }
+
+    fn texts(&self, name: &str) -> Vec<&str> {
+        self.parsed.values(name)
+    }
+
+    /// An optional path option as `str(Path(value))`.
+    fn path(&self, name: &str) -> Option<String> {
+        self.parsed.value(name).map(pypath::display)
+    }
+}
+
+const INTS: [(&str, i64, IntKind); 27] = [
+    ("--candidates", 1, IntKind::Any),
+    ("--escape-transit-lanes", 1, IntKind::Any),
+    ("--support-pattern-trials", 0, IntKind::Any),
+    ("--package-support-trials", 0, IntKind::Any),
+    ("--decoupling-placement-trials", 64, IntKind::Nonnegative),
+    ("--placement-refinement-passes", 2, IntKind::Nonnegative),
+    ("--escape-spacing-passes", 2, IntKind::Nonnegative),
+    ("--placement-feedback-trials", 24, IntKind::Nonnegative),
+    ("--router-iterations", 5, IntKind::Any),
+    ("--feedback-iterations", 1, IntKind::Any),
+    ("--critical-feedback-trials", 0, IntKind::Any),
+    ("--maximum-ripup-blockers", 4, IntKind::Any),
+    ("--unified-iterations", 150, IntKind::Any),
+    ("--unified-search-states", 400_000, IntKind::Any),
+    ("--package-initial-pair-states", 6000, IntKind::Nonnegative),
+    ("--fanout-geometry-candidates", 0, IntKind::Nonnegative),
+    ("--detailed-feedback-trials", 0, IntKind::Any),
+    ("--congestion-feedback-trials", 4, IntKind::Nonnegative),
+    ("--zone-dependency-expansions", 2, IntKind::Range9),
+    ("--layer-preference-cost", 4, IntKind::Any),
+    ("--direction-preference-cost", 2, IntKind::Any),
+    ("--layer-assignment-passes", 0, IntKind::Range9),
+    ("--local-demand-cost", 0, IntKind::Any),
+    ("--plane-maze-budget", 12000, IntKind::Any),
+    ("--filled-copper-trials", 8, IntKind::Nonnegative),
+    ("--filled-copper-search-states", 4000, IntKind::Any),
+    ("--layers", 2, IntKind::Layers),
+];
+
+#[derive(Clone, Copy)]
+enum IntKind {
+    Any,
+    Nonnegative,
+    Range9,
+    Layers,
+}
+
+/// `_positive_mm` (`positive`) and `_nonnegative_mm` options with their defaults.
+const LENGTHS: [(&str, &str, bool); 9] = [
+    ("--placement-grid-mm", "1", true),
+    ("--pin-access-step-mm", "0.5", true),
+    ("--fanout-step-mm", "0.5", true),
+    ("--fanout-refinement-step-mm", "0.1", true),
+    ("--plane-stitch-step-mm", "0.5", true),
+    ("--plane-stitch-radius-mm", "3", true),
+    ("--plane-maze-step-mm", "0.1", true),
+    ("--plane-contact-radius-mm", "0", false),
+    ("--plane-stitch-detour-mm", "0", false),
+];
+
+/// `_positive_mm` / `_nonnegative_mm`: Ok(None) is a usage error.
+fn checked_length(text: &str, positive: bool) -> Result<bool, Stop> {
+    let trimmed = text.trim_matches(copper_json::python_isspace);
+    if trimmed.contains('_') {
+        return Err(Stop::Pending(format!("length {}", copper_json::python_str_repr(text))));
+    }
+    Ok(match copper_pcb::nm_from_mm_text(trimmed) {
+        Ok(nm) => {
+            if positive {
+                nm > 0
+            } else {
+                nm >= 0
+            }
+        }
+        Err(Error::NotImplemented(_)) => true,
+        Err(Error::Value(_)) => false,
+    })
+}
+
+enum Checked {
+    Usage(String),
+    Pending(String),
+}
+
+fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
+    let usage = |message: String| Err(Checked::Usage(message));
+    let mut ints = Vec::new();
+    for (name, default, kind) in INTS {
+        let value = match parsed.value(name) {
+            None => default,
+            Some(text) => {
+                let Some(value) = python_int(text) else {
+                    return usage(format!("argument {name}: invalid int value: '{text}'"));
+                };
+                let valid = match kind {
+                    IntKind::Any => true,
+                    IntKind::Nonnegative => value >= 0,
+                    IntKind::Range9 => (0..9).contains(&value),
+                    IntKind::Layers => [2, 4, 6].contains(&value),
+                };
+                if !valid {
+                    return usage(format!("argument {name}: invalid value: '{text}'"));
+                }
+                value
+            }
+        };
+        ints.push((name, value));
+    }
+    let mut lengths = Vec::new();
+    for (name, default, positive) in LENGTHS {
+        let text = parsed.value(name).unwrap_or(default).to_owned();
+        match checked_length(&text, positive) {
+            Ok(true) => lengths.push((name, text)),
+            Ok(false) => return usage(format!("argument {name}: expected a finite length in mm, got '{text}'")),
+            Err(Stop::Pending(what)) => return Err(Checked::Pending(what)),
+            Err(Stop::Value { message, .. }) => return usage(message),
+        }
+    }
+    let optional_length = |name: &str| -> Result<Option<String>, Checked> {
+        match parsed.value(name) {
+            None => Ok(None),
+            Some(text) => match checked_length(text, true) {
+                Ok(true) => Ok(Some(text.to_owned())),
+                Ok(false) => Err(Checked::Usage(format!("argument {name}: expected a positive length, got '{text}'"))),
+                Err(Stop::Pending(what)) => Err(Checked::Pending(what)),
+                Err(Stop::Value { message, .. }) => Err(Checked::Usage(message)),
+            },
+        }
+    };
+    let critical_pin_access_step_mm = optional_length("--critical-pin-access-step-mm")?;
+    let plane_escape_width_mm = optional_length("--plane-escape-width-mm")?;
+    let choices: [(&str, &[&str]); 4] = [
+        ("--routing-profile", &["quick", "balanced", "thorough"]),
+        ("--fab-profile", &["generic", "jlcpcb-four-layer", "jlcpcb-six-layer"]),
+        ("--fine-regions", &["off", "arrays", "dense"]),
+        ("--stop-after", &STOP_STAGES),
+    ];
+    for (name, allowed) in choices {
+        if let Some(text) = parsed.value(name)
+            && !allowed.contains(&text)
+        {
+            return usage(format!("argument {name}: invalid choice: '{text}'"));
+        }
+    }
+    let float = |name: &str| -> Result<Option<f64>, Checked> {
+        match parsed.value(name) {
+            None => Ok(None),
+            Some(text) => python_float(text)
+                .map(Some)
+                .ok_or_else(|| Checked::Usage(format!("argument {name}: invalid float value: '{text}'"))),
+        }
+    };
+    let width_mm = float("--width-mm")?.unwrap_or(100.0);
+    let height_mm = float("--height-mm")?.unwrap_or(80.0);
+    let domain_weight = float("--power-domain-weight")?.unwrap_or(0.25);
+    let unified_time_budget_s = float("--unified-time-budget-s")?;
+    let unified_pair_states =
+        match parsed.value("--unified-pair-states") {
+            None => None,
+            Some(text) => Some(python_int(text).ok_or_else(|| {
+                Checked::Usage(format!("argument --unified-pair-states: invalid int value: '{text}'"))
+            })?),
+        };
+    let seeds = match parsed.value("--placement-seeds") {
+        None => None,
+        Some(text) => Some(python_int(text).filter(|value| *value > 0).ok_or_else(|| {
+            Checked::Usage(format!("argument --placement-seeds: expected a positive integer, got '{text}'"))
+        })?),
+    };
+    // `type=Decimal`: bad text raises InvalidOperation, which argparse does not catch.
+    let unified_pitch_mm = match parsed.value("--unified-pitch-mm") {
+        None => None,
+        Some(text) => {
+            let trimmed = text.trim_matches(copper_json::python_isspace);
+            let special = trimmed.trim_start_matches(['+', '-']).to_ascii_lowercase();
+            if special != "nan" && (trimmed.contains('_') || copper_units::Decimal::parse(trimmed).is_err()) {
+                return Err(Checked::Pending(format!(
+                    "--unified-pitch-mm {} (Python crashes)",
+                    copper_json::python_str_repr(text)
+                )));
+            }
+            Some(text.to_owned())
+        }
+    };
+    let board = match parsed.positionals.as_slice() {
+        [board] => board.clone(),
+        [] => return usage("the following arguments are required: board".to_owned()),
+        [_, extra @ ..] => return usage(format!("unrecognized arguments: {}", extra.join(" "))),
+    };
+    let get = |name: &str| ints.iter().find(|(key, _)| *key == name).map(|(_, value)| *value).expect("int");
+    let planner = PlannerArguments {
+        candidates: get("--candidates"),
+        grid_mm: lengths[0].1.clone(),
+        escape_margin_mm: parsed.value("--escape-margin-mm").unwrap_or("0.5").to_owned(),
+        transit_lanes: get("--escape-transit-lanes"),
+        domain_weight,
+        support_trials: get("--support-pattern-trials"),
+        package_trials: get("--package-support-trials"),
+        decoupling_trials: get("--decoupling-placement-trials"),
+        seeds,
+        refinement_passes: get("--placement-refinement-passes"),
+        spacing_passes: get("--escape-spacing-passes"),
+    };
+    let layers = get("--layers");
+    let filled_copper_trials = get("--filled-copper-trials");
+    let filled_copper_search_states = get("--filled-copper-search-states");
+    let fab_profile = parsed.value("--fab-profile").unwrap_or("generic").to_owned();
+    Ok(Arguments {
+        parsed,
+        board,
+        layers,
+        fab_profile,
+        planner,
+        width_mm,
+        height_mm,
+        ints,
+        lengths,
+        unified_pitch_mm,
+        unified_time_budget_s,
+        unified_pair_states,
+        critical_pin_access_step_mm,
+        plane_escape_width_mm,
+        filled_copper_trials,
+        filled_copper_search_states,
+    })
+}
+
+/// `_apply_routing_profile`: profile bounds for the flags not given explicitly.
+fn apply_routing_profile(arguments: &mut Arguments, argv: &[String]) {
+    let Some(profile) = arguments.text("--routing-profile") else { return };
+    let (filled_trials, filled_states, decoupling_trials) = match profile {
+        "quick" => (2, 2000, 4),
+        "balanced" => (8, 4000, 16),
+        _ => (16, 12000, 64),
+    };
+    let given: Vec<&str> =
+        argv.iter().filter(|item| item.starts_with("--")).map(|item| item.split('=').next().unwrap_or(item)).collect();
+    if !given.contains(&"--filled-copper-trials") {
+        arguments.filled_copper_trials = filled_trials;
+    }
+    if !given.contains(&"--filled-copper-search-states") {
+        arguments.filled_copper_search_states = filled_states;
+    }
+    if !given.contains(&"--decoupling-placement-trials") {
+        arguments.planner.decoupling_trials = decoupling_trials;
+    }
+}
+
+/// `_planner_options`.
+fn planner_options(arguments: &PlannerArguments) -> Result<PlannerOptions, Stop> {
+    let grid = nm_from_mm(&arguments.grid_mm, "--placement-grid-mm")?;
+    let margin = nm_from_mm(&arguments.escape_margin_mm, "--escape-margin-mm")?;
+    PlannerOptions {
+        candidate_count: arguments.candidates,
+        grid_step_nm: grid,
+        escape_margin_nm: margin,
+        escape_transit_lanes: arguments.transit_lanes,
+        power_domain_weight: arguments.domain_weight,
+        support_pattern_trials: arguments.support_trials,
+        package_support_trials: arguments.package_trials,
+        decoupling_placement_trials: arguments.decoupling_trials,
+        seed_count: arguments.seeds,
+        refinement_passes: arguments.refinement_passes,
+        escape_spacing_passes: arguments.spacing_passes,
+        ..PlannerOptions::default()
+    }
+    .validated()
+    .map_err(value_error)
+}
+
+/// `_unified_flag_notes`: route-board flags this run does not apply, and flags it maps.
+fn unified_flag_notes(arguments: &Arguments) -> (Vec<String>, Vec<String>) {
+    let pitch_given = arguments.text("--pitch-mm").is_some_and(|pitch| pitch != "1");
+    let ignored = if pitch_given && arguments.int("--local-demand-cost") <= 0 {
+        vec!["--pitch-mm".to_owned()]
+    } else {
+        Vec::new()
+    };
+    let mapped = ["--detailed-feedback-trials", "--critical-feedback-trials"]
+        .into_iter()
+        .filter(|name| arguments.int(name) != 0)
+        .map(str::to_owned)
+        .collect();
+    (ignored, mapped)
+}
+
+/// `_unified_options`, as far as this rewrite builds `UnifiedRouterOptions`.
+// PENDING: owned by rust-m4-unified (UnifiedRouterOptions).
+fn unified_options(arguments: &Arguments) -> Result<UnifiedPipelineOptions, Stop> {
+    let pitch_nm = match &arguments.unified_pitch_mm {
+        // `Decimal(text)` is falsy for zero, which keeps the default pitch.
+        Some(text) => {
+            let trimmed = text.trim_matches(copper_json::python_isspace);
+            if copper_units::Decimal::parse(trimmed).is_ok_and(|decimal| decimal.is_zero()) {
+                None
+            } else {
+                Some(nm_from_mm(text, "--unified-pitch-mm")?)
+            }
+        }
+        None => None,
+    };
+    let overrides = unified_overrides(&arguments.texts("--unified-set")).map_err(value_error)?;
+    if !overrides.is_empty() {
+        return Err(Stop::Pending("--unified-set (UnifiedRouterOptions, rust-m4-unified)".to_owned()));
+    }
+    let limit = arguments.unified_pair_states;
+    if limit.is_some_and(|limit| limit <= 0) {
+        return Err(fail("critical pair state limit must be a positive integer or None".to_owned()));
+    }
+    if pitch_nm.is_some_and(|pitch| pitch <= 0)
+        || arguments.int("--unified-iterations") <= 0
+        || arguments.int("--unified-search-states") <= 0
+    {
+        return Err(fail("unified router pitch, iterations and search states must be positive".to_owned()));
+    }
+    if pitch_nm.is_some_and(|pitch| pitch > 1_000_000) {
+        return Err(fail("congestion_tile_nm must be a positive integer of at least one pitch".to_owned()));
+    }
+    let _ = arguments.unified_time_budget_s;
+    let direct = arguments.flag("--unified-direct");
+    Ok(UnifiedPipelineOptions {
+        critical_pair_state_limit: limit,
+        direct,
+        save_inputs_path: arguments.path("--unified-save-inputs"),
+    })
+}
+
+fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
+    let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: route-board ({what})");
+    NOT_IMPLEMENTED_EXIT
+}
+
+/// `str(path.parent)`.
+fn parent_text(path: &Path) -> String {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => paths::display(parent),
+        _ => ".".to_owned(),
+    }
+}
+
+pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
+    let usage_error = |err: &mut dyn Write, message: &str| {
+        let _ = writeln!(err, "{USAGE}\ncopper route-board: error: {message}");
+        2
+    };
+    let parsed = match option_parser::parse_exact(argv, &specs()) {
+        Ok(parsed) => parsed,
+        Err(message) => return usage_error(err, &message),
+    };
+    if parsed.flag("--help") {
+        let _ = writeln!(out, "{USAGE}\n\nattempt complete physical routing and run native DRC");
+        return 0;
+    }
+    let mut arguments = match check_arguments(parsed) {
+        Ok(arguments) => arguments,
+        Err(Checked::Usage(message)) => return usage_error(err, &message),
+        Err(Checked::Pending(what)) => return not_implemented(err, &what),
+    };
+    apply_routing_profile(&mut arguments, argv);
+    let debug = arguments.flag("--debug");
+    let (locked, offline) = (arguments.flag("--locked"), arguments.flag("--offline"));
+    let board_path = pypath::display(&arguments.board);
+    let design = match load_design(Path::new(&board_path), locked, offline) {
+        Ok(design) => design,
+        Err(LoadError::Compile(failure)) if failure.code == NOT_IMPLEMENTED => {
+            return not_implemented(err, &failure.message);
+        }
+        Err(_) if debug => return not_implemented(err, "--debug tracebacks"),
+        Err(failure) => {
+            let _ = text::print(out, &format!("COMPILE ERROR: {failure}"));
+            return 2;
+        }
+    };
+    let diagnostics = match copper_lang::erc::check(&design.electrical, false) {
+        Ok(diagnostics) => diagnostics,
+        Err(message) => {
+            let _ = text::print(out, &format!("COMPILE ERROR: {message}"));
+            return 2;
+        }
+    };
+    if copper_lang::erc::has_errors(&diagnostics) && !arguments.flag("--no-check") {
+        for diagnostic in &diagnostics {
+            let _ = text::print(out, &diagnostic.to_string());
+        }
+        let _ = text::print(out, "Board routing stopped because ERC reported errors.");
+        return 1;
+    }
+    let mut stage_state: Option<StageState> = None;
+    let outcome = route(&arguments, &design, &board_path, out, &mut stage_state);
+    match outcome {
+        Ok(()) => not_implemented(err, "the routed report and outputs"),
+        Err(Stop::Pending(what)) => not_implemented(err, &what),
+        Err(Stop::Value { .. }) if debug => not_implemented(err, "--debug tracebacks"),
+        Err(Stop::Value { error_type, message }) => {
+            let _ = text::print(out, &format!("ROUTING ERROR: {message}"));
+            let Some(report) = arguments.path("--report") else { return 2 };
+            let Some(error_type) = error_type else {
+                return not_implemented(err, "the error record of an error class this rewrite does not name");
+            };
+            let mut summary = Object::new();
+            let optional = |value: Option<&str>| value.map_or(Value::Null, Value::from);
+            summary.insert("stop_after".to_owned(), optional(arguments.text("--stop-after")));
+            summary.insert("reuse_placement".to_owned(), Value::Null);
+            summary.insert("routing_profile".to_owned(), optional(arguments.text("--routing-profile")));
+            let report = PathBuf::from(report);
+            if let Ok(record) = write_error_record(
+                &report,
+                &design.electrical.name,
+                error_type,
+                &message,
+                stage_state.as_ref(),
+                summary,
+            ) {
+                let _ = text::print(
+                    out,
+                    &format!(
+                        "Error record -> {} (copper issues {} lists it)",
+                        paths::display(&record),
+                        parent_text(&record)
+                    ),
+                );
+            }
+            2
+        }
+    }
+}
+
+/// The `try:` block of the Python handler, up to and including the pipeline.
+fn route(
+    arguments: &Arguments,
+    design: &copper_lang::compiler::Design,
+    board_path: &str,
+    out: &mut dyn Write,
+    stage_state: &mut Option<StageState>,
+) -> Result<(), Stop> {
+    let (locked, offline) = (arguments.flag("--locked"), arguments.flag("--offline"));
+    let mechanical = design.mechanical.is_some();
+    let options = PhysicalOptions::new(
+        if mechanical { 100.0 } else { arguments.width_mm },
+        if mechanical { 80.0 } else { arguments.height_mm },
+        arguments.layers,
+        &arguments.fab_profile,
+    )?;
+    let mut board = if arguments.flag("--allow-proxy-footprints") {
+        physicalize(design, Footprints::Proxy, &options, locked, offline)?
+    } else {
+        let base = paths::resolve(Path::new(board_path)).parent().map(Path::to_path_buf).unwrap_or_default();
+        let roots: Vec<PathBuf> =
+            arguments.texts("--footprint-root").iter().map(|root| PathBuf::from(pypath::display(root))).collect();
+        let mut resolver = FootprintResolver::new(&base, &roots, false, locked, offline);
+        physicalize(design, Footprints::Resolved(&mut resolver), &options, locked, offline)?
+    };
+    if let Some(scene) = arguments.path("--placement-templates") {
+        board = templates::apply_placement_templates(board, Path::new(&scene), locked, offline)?;
+    }
+    for scene in arguments.texts("--hard-macro") {
+        board = hard_macros::apply_hard_macro_scene(board, Path::new(&pypath::display(scene)), locked, offline)?;
+    }
+    let direct_unified = arguments.flag("--unified-direct");
+    let stitch_enabled = arguments.flag("--stitch-zone-pads") || !board.zones.is_empty();
+    let early_plane_pads = arguments.texts("--early-plane-pad");
+    let ground_via_in_pad = arguments.flag("--ground-via-in-pad");
+    if !early_plane_pads.is_empty() && !stitch_enabled {
+        return Err(fail("--early-plane-pad requires a declared copper zone".to_owned()));
+    }
+    if ground_via_in_pad && !stitch_enabled {
+        return Err(fail("--ground-via-in-pad requires a declared copper zone".to_owned()));
+    }
+    if ground_via_in_pad && arguments.fab_profile != "jlcpcb-six-layer" {
+        return Err(fail("--ground-via-in-pad requires the JLCPCB six-layer profile".to_owned()));
+    }
+    let (zone_pads, ground_pads) = zone_and_ground_pads(&board);
+    let mut preferred_ground_pads: Vec<PadReference> =
+        if arguments.boolean("--prefer-local-ground", true) { ground_pads.clone() } else { Vec::new() };
+    for value in arguments.texts("--prefer-local-ground-pad") {
+        let pad = match value.rsplit_once('.') {
+            Some((reference, number)) => PadReference { component: reference.to_owned(), pad: number.to_owned() },
+            None => PadReference { component: String::new(), pad: value.to_owned() },
+        };
+        if !value.contains('.') || !ground_pads.contains(&pad) {
+            return Err(fail(format!("preferred ground pad {} is not a GND pad", copper_json::python_str_repr(value))));
+        }
+        preferred_ground_pads.push(pad);
+    }
+    let mut early_pads = Vec::new();
+    for value in &early_plane_pads {
+        let Some((reference, number)) = value.rsplit_once('.') else {
+            return Err(fail(format!(
+                "invalid early plane pad {}; expected REF.PAD",
+                copper_json::python_str_repr(value)
+            )));
+        };
+        let pad = PadReference { component: reference.to_owned(), pad: number.to_owned() };
+        if !zone_pads.contains(&pad) {
+            return Err(fail(format!("early plane pad {} is not a zone-net pad", copper_json::python_str_repr(value))));
+        }
+        early_pads.push(pad);
+    }
+    let length = |name: &str| nm_from_mm(arguments.length(name), name);
+    let plane_options = PlaneStitchOptions {
+        step_nm: length("--plane-stitch-step-mm")?,
+        maze_step_nm: length("--plane-maze-step-mm")?,
+        maze_state_budget: arguments.int("--plane-maze-budget"),
+        maximum_radius_nm: length("--plane-stitch-radius-mm")?,
+        maximum_contact_radius_nm: length("--plane-contact-radius-mm")?,
+        maximum_detour_nm: length("--plane-stitch-detour-mm")?,
+        escape_width_nm: match &arguments.plane_escape_width_mm {
+            Some(text) => Some(nm_from_mm(text, "--plane-escape-width-mm")?),
+            None => None,
+        },
+        ground_via_in_pad,
+        include_surface_zones: arguments.boolean("--stitch-surface-zones", true),
+        preferred_ground_pads: Some(preferred_ground_pads.into_iter().collect()),
+        ..PlaneStitchOptions::default()
+    }
+    .validated()
+    .map_err(value_error)?;
+    if plane_options
+        .escape_width_nm
+        .is_some_and(|width| width < board.rules.minimum_track_width_nm.max(board.rules.minimum_clearance_nm))
+    {
+        return Err(fail("plane escape width is below this board's rule floor".to_owned()));
+    }
+    let early_options = if (arguments.boolean("--early-plane-stitch", true) && stitch_enabled) || !early_pads.is_empty()
+    {
+        Some(
+            PlaneStitchOptions {
+                only_pads: (!early_pads.is_empty()).then(|| early_pads.iter().cloned().collect()),
+                ..plane_options.clone()
+            }
+            .validated()
+            .map_err(value_error)?,
+        )
+    } else {
+        None
+    };
+    let tile_size_nm = nm_from_mm(arguments.text("--tile-size-mm").unwrap_or("5"), "--tile-size-mm")?;
+    let router_options = GlobalRouterOptions {
+        tile_size_nm,
+        escape_step_nm: length("--pin-access-step-mm")?,
+        critical_escape_step_nm: match &arguments.critical_pin_access_step_mm {
+            Some(text) => Some(nm_from_mm(text, "--critical-pin-access-step-mm")?),
+            None => None,
+        },
+        maximum_iterations: arguments.int("--router-iterations"),
+        layer_preference_cost: arguments.int("--layer-preference-cost").div_euclid(2).max(0),
+        direction_preference_cost: arguments.int("--direction-preference-cost").div_euclid(2).max(0),
+        layer_assignment_passes: arguments.int("--layer-assignment-passes"),
+        local_demand_cost: arguments.int("--local-demand-cost").max(0),
+        local_demand_pitch_nm: nm_from_mm(arguments.text("--pitch-mm").unwrap_or("1"), "--pitch-mm")?,
+        ..GlobalRouterOptions::default()
+    }
+    .validated()
+    .map_err(value_error)?;
+    let placement_options = planner_options(&arguments.planner)?;
+    let feedback_options = PlacementRoutingFeedbackOptions {
+        maximum_iterations: arguments.int("--feedback-iterations"),
+        maximum_trials_per_iteration: arguments.int("--placement-feedback-trials"),
+        initial_movement_nm: router_options.tile_size_nm,
+        preferred_candidate_id: arguments.text("--placement-candidate").map(str::to_owned),
+        ..PlacementRoutingFeedbackOptions::default()
+    }
+    .validated()
+    .map_err(value_error)?;
+    let fanout_options = if arguments.boolean("--fanout", true) {
+        Some(
+            FanoutOptions {
+                step_nm: length("--fanout-step-mm")?,
+                refinement_step_nm: length("--fanout-refinement-step-mm")?,
+                maze_escapes: arguments.flag("--fanout-maze"),
+                maximum_geometry_candidates: arguments.int("--fanout-geometry-candidates"),
+                ..FanoutOptions::default()
+            }
+            .validated()
+            .map_err(value_error)?,
+        )
+    } else {
+        None
+    };
+    let mut console = arguments.flag("--progress").then(|| ConsoleProgress::new(&mut *out));
+    let mut tracker = console.as_mut().map(|console| StageTracker::new(Some(console as &mut dyn Progress)));
+    let result = (|| -> Result<(), Stop> {
+        let mut progress: Option<&mut dyn Progress> = tracker.as_mut().map(|tracker| tracker as &mut dyn Progress);
+        let (ignored, mapped) = unified_flag_notes(arguments);
+        let strings = |items: &[String]| Value::Array(items.iter().map(|item| text_value(item)).collect());
+        if !ignored.is_empty() {
+            emit(
+                &mut progress,
+                "router_options",
+                "ignored",
+                vec![("router", text_value("unified")), ("ignored_flags", strings(&ignored))],
+            );
+        }
+        if !mapped.is_empty() {
+            let budget = arguments
+                .int("--congestion-feedback-trials")
+                .max(arguments.int("--detailed-feedback-trials") + arguments.int("--critical-feedback-trials"));
+            emit(
+                &mut progress,
+                "router_options",
+                "mapped",
+                vec![
+                    ("router", text_value("unified")),
+                    ("mapped_flags", strings(&mapped)),
+                    ("congestion_feedback_trials", int(budget)),
+                ],
+            );
+        }
+        if arguments.text("--reuse-placement").is_some() {
+            return Err(Stop::Pending("--reuse-placement (placement checkpoints)".to_owned()));
+        }
+        let unified = unified_options(arguments)?;
+        let _ = (direct_unified, arguments.filled_copper_trials, arguments.filled_copper_search_states);
+        let escape_plan = arguments.boolean("--escape-plan", false);
+        let bus_layers = arguments.boolean("--bus-layers", false);
+        let array_flow = arguments.boolean("--array-flow", false);
+        let via_lattice = arguments.boolean("--via-lattice", false);
+        let escape_plan_options = (escape_plan || bus_layers || array_flow || via_lattice).then(|| EscapePlanOptions {
+            two_end_order: escape_plan || bus_layers,
+            bus_layers,
+            array_flow,
+            via_lattice,
+            ..EscapePlanOptions::default()
+        });
+        let pipeline = RoutingPipelineOptions {
+            placement_options: Some(placement_options),
+            global_options: Some(router_options),
+            feedback_options: Some(feedback_options),
+            fanout_options,
+            plane_stitch_options: early_options,
+            detailed_feedback_trials: arguments.int("--detailed-feedback-trials"),
+            critical_feedback_trials: arguments.int("--critical-feedback-trials"),
+            placement_feedback_trials: arguments.int("--congestion-feedback-trials"),
+            critical_pair_state_limit: arguments.int("--package-initial-pair-states"),
+            unified_options: Some(unified),
+            stop_after: arguments.text("--stop-after").map(str::to_owned),
+            escape_plan_options,
+            ..RoutingPipelineOptions::default()
+        };
+        run_routing_pipeline(board, pipeline, progress).map_err(|error| match error {
+            Error::Value(message) => Stop::Value { error_type: Some("ValueError"), message },
+            Error::NotImplemented(what) => Stop::Pending(what),
+        })?;
+        Ok(())
+    })();
+    *stage_state = tracker.map(|tracker| tracker.state);
+    result
+}
+
+/// The pads of zone nets and of `GND`, in net order.
+fn zone_and_ground_pads(board: &PhysicalBoard) -> (Vec<PadReference>, Vec<PadReference>) {
+    let mut zone_pads = Vec::new();
+    let mut ground_pads = Vec::new();
+    for net in &board.nets {
+        if board.zones.iter().any(|zone| zone.net == net.name) {
+            zone_pads.extend(net.pads.iter().cloned());
+        }
+        if net.name == "GND" {
+            ground_pads.extend(net.pads.iter().cloned());
+        }
+    }
+    (zone_pads, ground_pads)
+}

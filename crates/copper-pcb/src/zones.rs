@@ -264,9 +264,8 @@ pub fn deferred_zone_nets(board: &PhysicalBoard) -> Result<indexmap::IndexSet<St
     for net in &board.nets {
         let mut points = Vec::new();
         for pad in &net.pads {
-            let pose = poses
-                .get(&pad.component)
-                .ok_or_else(|| Error::Value(copper_json::python_str_repr(&pad.component)))?;
+            let pose =
+                poses.get(&pad.component).ok_or_else(|| Error::Value(copper_json::python_str_repr(&pad.component)))?;
             points.push(crate::transform::transformed_pad_position(board, pose, &pad.pad)?);
         }
         members.insert(&net.name, points);
@@ -277,9 +276,10 @@ pub fn deferred_zone_nets(board: &PhysicalBoard) -> Result<indexmap::IndexSet<St
             continue;
         }
         let Some(points) = members.get(zone.net.as_str()).filter(|points| !points.is_empty()) else { continue };
-        if points.iter().all(|p| {
-            point_in_polygon(*p, &zone.outer) && !zone.holes.iter().any(|hole| point_in_polygon(*p, hole))
-        }) {
+        if points
+            .iter()
+            .all(|p| point_in_polygon(*p, &zone.outer) && !zone.holes.iter().any(|hole| point_in_polygon(*p, hole)))
+        {
             result.insert(zone.net.clone());
         }
     }
@@ -335,7 +335,11 @@ impl ZoneRoutingReservations {
             let in_hole = zone.holes.iter().any(|hole| {
                 ring_edges(&shape.spine).iter().all(|(a, b)| segment_in_polygon(*a, *b, hole))
                     && ring_edges(hole).iter().all(|(a, b)| {
-                        shapes_clear(shape, &copper_physical::RoundedConvexShape::new(vec![*a, *b], 0).expect("edge"), margin)
+                        shapes_clear(
+                            shape,
+                            &copper_physical::RoundedConvexShape::new(vec![*a, *b], 0).expect("edge"),
+                            margin,
+                        )
                     })
             });
             if in_hole {

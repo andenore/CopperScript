@@ -6,18 +6,18 @@
 
 use std::path::Path;
 
+use copper_drc::Severity;
 use copper_drc::connectivity::{Candidate, explicit_copper_connectivity};
 use copper_drc::digest::physical_board_digest;
-use copper_drc::Severity;
 use copper_json::{Dumps, Object, Value};
 use copper_lang::paths;
+use copper_pcb::board::RouteKind;
 use copper_pcb::board::{
     DecouplingLink, NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, Placement, ReturnViaPolicy, Stackup,
     TuningStyle,
 };
 use copper_pcb::{Result, kicad_pcb, project};
 use copper_physical::footprint::{FootprintPad, PadKind, PadShape, PhysicalFootprint, Size};
-use copper_pcb::board::RouteKind;
 use copper_physical::{BoardOutline, CopperKeepout, CopperLayer, DesignRules, Point};
 use copper_units::Decimal;
 use indexmap::IndexMap;
@@ -191,12 +191,7 @@ fn net(name: &str, refs: &[&str]) -> PhysicalNet {
 }
 
 fn rectangle(x0: i64, y0: i64, x1: i64, y1: i64) -> Vec<Point> {
-    vec![
-        Point::new(mm(x0), mm(y0)),
-        Point::new(mm(x1), mm(y0)),
-        Point::new(mm(x1), mm(y1)),
-        Point::new(mm(x0), mm(y1)),
-    ]
+    vec![Point::new(mm(x0), mm(y0)), Point::new(mm(x1), mm(y0)), Point::new(mm(x1), mm(y1)), Point::new(mm(x0), mm(y1))]
 }
 
 /// `acceptance_cases()`.
@@ -227,11 +222,8 @@ pub fn acceptance_cases() -> Result<Vec<AcceptanceCase>> {
         vec![pose("A", 4, 7, &terminal.name), pose("B", 16, 7, &terminal.name)],
         vec![net("SIGNAL", &["A", "B"])],
     ));
-    detour.net_routing_rules = vec![NetRoutingRule {
-        allowed_layers: vec![CopperLayer::Front],
-        max_vias: Some(0),
-        ..general_rule("SIGNAL")
-    }];
+    detour.net_routing_rules =
+        vec![NetRoutingRule { allowed_layers: vec![CopperLayer::Front], max_vias: Some(0), ..general_rule("SIGNAL") }];
     detour.copper_keepouts = vec![keepout("obstacle", vec![CopperLayer::Front], rectangle(9, 5, 11, 9))];
     let mut crossing = with_scope(board(
         "AcceptanceCrossing",
@@ -314,11 +306,8 @@ fn renamed_rotated(board: &PhysicalBoard) -> Result<PhysicalBoard> {
         .iter()
         .map(|n| PhysicalNet { name: rename(&n.name), pads: n.pads.iter().map(pad).collect() })
         .collect();
-    rotated.net_routing_rules = board
-        .net_routing_rules
-        .iter()
-        .map(|r| NetRoutingRule { net: rename(&r.net), ..r.clone() })
-        .collect();
+    rotated.net_routing_rules =
+        board.net_routing_rules.iter().map(|r| NetRoutingRule { net: rename(&r.net), ..r.clone() }).collect();
     rotated.copper_keepouts = board
         .copper_keepouts
         .iter()
@@ -374,10 +363,12 @@ pub fn assess_case(case: &AcceptanceCase, result: &RoutedCase, quality: &Value) 
     );
     checks.insert("truthful_pipeline_status".to_owned(), Value::from(result.status_pass == connected));
     if case.expect_connected {
-        let count = |key: &str| quality.get(key).and_then(|v| match v {
-            Value::Int(n) => n.to_string().parse::<i64>().ok(),
-            _ => None,
-        });
+        let count = |key: &str| {
+            quality.get(key).and_then(|v| match v {
+                Value::Int(n) => n.to_string().parse::<i64>().ok(),
+                _ => None,
+            })
+        };
         checks.insert("via_bound".to_owned(), Value::from(count("via_count") <= case.maximum_vias));
         checks.insert("length_bound".to_owned(), Value::from(count("track_length_nm") <= case.maximum_length_nm));
         let surface = quality
@@ -428,13 +419,16 @@ pub fn run_acceptance(
         std::fs::create_dir_all(parent)
             .map_err(|e| AcceptanceError::Message(paths::python_os_call_error(&e, Some(&paths::display(parent)))))?;
     }
-    std::fs::create_dir(&output).map_err(|e| AcceptanceError::Message(paths::python_os_call_error(&e, Some(&shown))))?;
+    std::fs::create_dir(&output)
+        .map_err(|e| AcceptanceError::Message(paths::python_os_call_error(&e, Some(&shown))))?;
     let mut report = Object::new();
     report.insert("schema".to_owned(), Value::from(SCHEMA));
     report.insert("status".to_owned(), Value::from("incomplete"));
     report.insert(
         "scope".to_owned(),
-        Value::from("bounded software acceptance; authored geometry; not an LLM success-rate or hardware qualification"),
+        Value::from(
+            "bounded software acceptance; authored geometry; not an LLM success-rate or hardware qualification",
+        ),
     );
     report.insert("python".to_owned(), Value::from(crate::not_python_version()));
     report.insert("platform".to_owned(), Value::from(crate::platform_text()));
@@ -461,8 +455,9 @@ pub fn run_acceptance(
     };
     for case in acceptance_cases()? {
         let directory = output.join(&case.id);
-        std::fs::create_dir(&directory)
-            .map_err(|e| AcceptanceError::Message(paths::python_os_call_error(&e, Some(&paths::display(&directory)))))?;
+        std::fs::create_dir(&directory).map_err(|e| {
+            AcceptanceError::Message(paths::python_os_call_error(&e, Some(&paths::display(&directory))))
+        })?;
         let result = route(&case.board)?;
         let quality = routing_quality(&result.board, None)?;
         let mut row = Object::new();

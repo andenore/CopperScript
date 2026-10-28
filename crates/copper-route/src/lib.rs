@@ -15,15 +15,21 @@
 // Rank tuples spell out Python's sort keys field by field.
 #![allow(clippy::type_complexity)]
 
+pub mod bench;
 pub mod drc_report;
+pub mod escape_assignment;
 pub mod escape_plan;
+pub mod fanout;
+pub mod flow;
 pub mod global_keepouts;
 pub mod global_reserved_access;
 pub mod global_terminals;
+pub mod iteration_checkpoints;
 pub mod ladder;
 pub mod layer_assignment;
 pub mod pin_access;
 pub mod pin_escape;
+pub mod plane;
 pub mod plane_verify;
 pub mod progress;
 pub mod pypath;
@@ -40,9 +46,9 @@ pub mod surface_path;
 pub mod terminal_preferences;
 
 pub use copper_pcb::{Error, Result};
-pub use routing::{GlobalRouterOptions, GlobalRoutingResult, GlobalRoutingStatus, route_global};
 pub use progress::{Progress, emit};
 pub use pypath::display as pypath_display;
+pub use routing::{GlobalRouterOptions, GlobalRoutingResult, GlobalRoutingStatus, route_global};
 pub use routing_clearance::RoutingClearanceIndex;
 
 /// `nm_from_mm` for an integer millimetre count.

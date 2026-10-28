@@ -146,8 +146,10 @@ impl DrcReport {
         document.insert("schema".to_owned(), Value::from(SCHEMA));
         document.insert("decision".to_owned(), Value::from(decision_value(self.report.decision)));
         document.insert("completeness".to_owned(), Value::from(completeness_value(self.report.complete)));
-        document.insert("coverage".to_owned(), Value::Array(self.report.coverage.iter().map(coverage_document).collect()));
-        document.insert("findings".to_owned(), Value::Array(self.report.findings.iter().map(finding_document).collect()));
+        document
+            .insert("coverage".to_owned(), Value::Array(self.report.coverage.iter().map(coverage_document).collect()));
+        document
+            .insert("findings".to_owned(), Value::Array(self.report.findings.iter().map(finding_document).collect()));
         if include_token {
             document.insert("token".to_owned(), self.token.document());
         }

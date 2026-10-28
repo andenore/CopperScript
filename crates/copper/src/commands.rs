@@ -3,9 +3,9 @@
 use std::io::Write;
 
 use crate::{
-    agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compile, compile_macro, explain, export_kicad,
-    export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout, power_check, query, si_check,
-    state, summarize, view,
+    agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compile, compile_macro,
+    explain, export_kicad, export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout,
+    power_check, query, route_board, si_check, state, summarize, view,
 };
 
 /// Exit status of a command the Rust rewrite does not implement yet.
@@ -57,7 +57,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("export-kicad-pcb", Plan::Done),
     ("plan-layout", Plan::Done),
     ("route-global", Plan::Milestone("M4")),
-    ("route-board", Plan::Milestone("M4")),
+    ("route-board", Plan::Done),
     ("check-footprint", Plan::Done),
     ("audit-footprints", Plan::Done),
     ("bench", Plan::Done),
@@ -108,6 +108,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "summarize" => summarize::run(rest, out, err),
         "assembly" => assembly::run(rest, out, err),
         "si-check" => si_check::run(rest, out, err),
+        "route-board" => route_board::run(rest, out, err),
         "export-manufacturing" => export_manufacturing::run(rest, out, err),
         "plan-layout" => plan_layout::run(rest, out, err),
         "bench" => copper_route::ladder::run(rest, out, err),
@@ -152,7 +153,7 @@ mod tests {
 
     #[test]
     fn unported_commands_report_their_milestone() {
-        let (code, out, err) = call(&["route-board", "board.copper"]);
+        let (code, out, err) = call(&["route-global", "board.copper"]);
         assert_eq!((code, out.as_str()), (NOT_IMPLEMENTED_EXIT, ""));
         assert!(err.contains(NOT_IMPLEMENTED_MARKER) && err.contains("M4"), "{err}");
         let (code, _, err) = call(&["audit-cam"]);

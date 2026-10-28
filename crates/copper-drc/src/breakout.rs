@@ -9,8 +9,8 @@ use num_rational::BigRational;
 use num_traits::Zero;
 
 use copper_pcb::board::{NetRoutingRule, PadReference, PhysicalBoard, RouteKind, TrackSegment};
-use copper_physical::CopperLayer;
 use copper_pcb::transform::{placed_pad_shape, transformed_local_point};
+use copper_physical::CopperLayer;
 use copper_physical::footprint::PadKind;
 use copper_physical::geometry::{Bounds, rational, shape_distance_squared};
 use copper_physical::{Point, RoundedConvexShape};
@@ -326,7 +326,14 @@ impl BreakoutRegions {
     }
 
     /// `ordinary_pieces`: the minimum-width fallback copper for one ordinary centreline.
-    pub fn ordinary_pieces(&self, net: &str, start: Point, end: Point, width_nm: i64, layer: CopperLayer) -> Vec<TrackSegment> {
+    pub fn ordinary_pieces(
+        &self,
+        net: &str,
+        start: Point,
+        end: Point,
+        width_nm: i64,
+        layer: CopperLayer,
+    ) -> Vec<TrackSegment> {
         let track = TrackSegment { net: net.to_owned(), start, end, width_nm, layer };
         if self.ordinary.contains(net) { self.split_tracks(&[track], Some(width_nm)) } else { vec![track] }
     }
@@ -339,7 +346,13 @@ impl BreakoutRegions {
                 let profile = self.width_nm(&track.net);
                 for (start, end, land) in self.split(&track.net, track.start, track.end) {
                     let width = track.width_nm.max(self.track_width_nm(&track.net, land.as_deref(), profile));
-                    result.push(TrackSegment { net: track.net.clone(), start, end, width_nm: width, layer: track.layer });
+                    result.push(TrackSegment {
+                        net: track.net.clone(),
+                        start,
+                        end,
+                        width_nm: width,
+                        layer: track.layer,
+                    });
                 }
             } else {
                 result.push(track.clone());

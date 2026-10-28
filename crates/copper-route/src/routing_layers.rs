@@ -5,8 +5,8 @@
 use indexmap::IndexMap;
 
 use copper_pcb::board::PhysicalBoard;
-use copper_physical::CopperLayer;
 pub use copper_pcb::zones::{dedicated_plane_layers, routing_layers};
+use copper_physical::CopperLayer;
 
 /// `signal_layer_preferences`: soft run-cost ranks and complementary inner-layer headings.
 ///
@@ -14,7 +14,9 @@ pub use copper_pcb::zones::{dedicated_plane_layers, routing_layers};
 /// layer with that reference gets rank one; layers without an adjacent plane
 /// get rank two. Without a full-board plane there is no preference. Headings
 /// (`"h"`/`"n"`) alternate only when at least two inner signal layers exist.
-pub fn signal_layer_preferences(board: &PhysicalBoard) -> (IndexMap<CopperLayer, i64>, IndexMap<CopperLayer, &'static str>) {
+pub fn signal_layer_preferences(
+    board: &PhysicalBoard,
+) -> (IndexMap<CopperLayer, i64>, IndexMap<CopperLayer, &'static str>) {
     let layers = &board.stackup.copper_layers;
     let planes = dedicated_plane_layers(board);
     let plane_indexes: Vec<usize> = planes.keys().map(|layer| crate::layer_index(layers, *layer)).collect();

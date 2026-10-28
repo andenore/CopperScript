@@ -58,6 +58,15 @@ fn looks_negative(text: &str) -> bool {
 
 /// Parse `arguments` against `specs` (`--help`/`-h` is always accepted).
 pub fn parse(arguments: &[String], specs: &[Spec]) -> Result<Parsed, String> {
+    parse_with(arguments, specs, true)
+}
+
+/// `parse` for a parser built with `allow_abbrev=False`: long options match exactly.
+pub fn parse_exact(arguments: &[String], specs: &[Spec]) -> Result<Parsed, String> {
+    parse_with(arguments, specs, false)
+}
+
+fn parse_with(arguments: &[String], specs: &[Spec], allow_abbrev: bool) -> Result<Parsed, String> {
     let help = flag("--help");
     let mut all: Vec<Spec> = specs.to_vec();
     all.push(help);
@@ -81,7 +90,7 @@ pub fn parse(arguments: &[String], specs: &[Spec]) -> Result<Parsed, String> {
                 None => (arg.as_str(), None),
             };
             let exact = all.iter().find(|spec| spec.long == key);
-            let matches: Vec<&Spec> = all.iter().filter(|spec| spec.long.starts_with(key)).collect();
+            let matches: Vec<&Spec> = all.iter().filter(|spec| allow_abbrev && spec.long.starts_with(key)).collect();
             let spec = match (exact, matches.as_slice()) {
                 (Some(spec), _) => *spec,
                 (None, [spec]) => **spec,

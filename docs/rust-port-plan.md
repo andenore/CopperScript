@@ -529,3 +529,31 @@ do not shrink as much.
 - Windows: Python digests the report it wrote with CRLF, so the summary's
   `report_sha256` differs from the Rust binary's LF report there; it needs
   recording once a Windows run has the digests.
+
+**M4 stream: pin access, planes, the routing pipeline and `route-board`
+(branch `rust-m4-flow`).**
+
+- Built on `rust-m4-global` (merged: clearance index, global router, layer
+  assignment). `copper-route` adds `progress` (`ConsoleProgress` on the
+  global stream's `emit`), `ladder` (`copper bench`), `routing_acceptance`
+  (`copper benchmark-routing`), `drc_report`, `plane_verify`,
+  `routing_metrics`, `iteration_checkpoints` (stage tracker, `.error.json`
+  record), `flow` (`STOP_STAGES`, `run_routing_pipeline` up to the
+  placement stage), the options of `fanout`, `plane`, `escape_assignment`,
+  and `bench.unified_overrides`. `PlacementRoutingFeedbackOptions`,
+  `EscapePlanOptions` and the `UnifiedRouterOptions` checks route-board
+  needs are minimal `PENDING` copies for `rust-m4-global` and
+  `rust-m4-unified`.
+- `copper route-board`: all 90 options (`allow_abbrev=False`), routing
+  profiles, the ERC gate, physicalization, templates, hard macros and every
+  option check before the pipeline, with Python's `ROUTING ERROR` lines and
+  error records. The pipeline reports not implemented (exit 3) at the
+  placement stage (`routeflow.optimize_placement_for_routing`,
+  `rust-m4-global`), and so do `--reuse-placement`, typed `--unified-set`
+  values, `--debug` tracebacks, Python crashes and error records of error
+  classes the Rust errors do not name.
+- Corpus: `route-board` (11 boards with `{physical}`), `route-board-options`
+  (profiles, stop stage, `--unified-save-inputs`, `--progress`, ...),
+  `route-board-errors` and `route-board-mutations`: 54 equal, 26 pending.
+  `--unified-time-budget-s` defaults to no budget; a case that sets it would
+  be wall-time dependent and stays out of the corpus.

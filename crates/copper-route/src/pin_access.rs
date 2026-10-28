@@ -95,7 +95,7 @@ pub fn local_access_path(
     layer: CopperLayer,
     width_nm: i64,
     bounds: LocalAccessBounds,
-    mut stats: Option<&mut LocalAccessStats>,
+    stats: Option<&mut LocalAccessStats>,
     mut segment_cache: Option<&mut SegmentCache>,
 ) -> Result<Option<Vec<TrackSegment>>> {
     let mut legal = |a: Point, b: Point| -> Result<bool> {
@@ -113,13 +113,13 @@ pub fn local_access_path(
         }
     };
     if start == end {
-        if let Some(stats) = stats.as_deref_mut() {
+        if let Some(stats) = stats {
             stats.outcome = "same_point".to_owned();
         }
         return Ok(Some(Vec::new()));
     }
     if legal(start, end)? {
-        if let Some(stats) = stats.as_deref_mut() {
+        if let Some(stats) = stats {
             stats.outcome = "direct".to_owned();
         }
         return Ok(Some(clearance.route_pieces(net, start, end, width_nm, layer)?));
@@ -183,7 +183,7 @@ pub fn local_access_path(
             queue.push(Reverse((candidate_cost + remaining, remaining, candidate_cost, serial, neighbor)));
         }
     }
-    if let Some(stats) = stats.as_deref_mut() {
+    if let Some(stats) = stats {
         stats.expanded_states = expanded;
         stats.discovered_nodes = previous.len() as i64;
         stats.outcome = if previous.contains_key(&target) {

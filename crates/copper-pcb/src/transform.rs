@@ -71,7 +71,11 @@ pub fn placed_pad_shape(position: Point, pad: &FootprintPad, placement: &Placeme
 }
 
 /// `transformed_pad_position`: the board position of one pad of a placed component.
-pub fn transformed_pad_position(board: &crate::board::PhysicalBoard, placement: &Placement, pad_number: &str) -> crate::Result<Point> {
+pub fn transformed_pad_position(
+    board: &crate::board::PhysicalBoard,
+    placement: &Placement,
+    pad_number: &str,
+) -> crate::Result<Point> {
     let footprint = &board.footprints[&placement.footprint];
     let pad = footprint.pads.iter().find(|pad| pad.number == pad_number).ok_or_else(|| {
         crate::Error::Value(format!(

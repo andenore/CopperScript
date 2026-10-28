@@ -15403,6 +15403,878 @@
    }
   },
   {
+   "name": "route-board",
+   "milestone": "M4",
+   "boards": "*",
+   "args": [
+    "route-board",
+    "{input}",
+    "--locked",
+    "--offline",
+    "{physical}",
+    "--candidates",
+    "1",
+    "-o",
+    "{out}/routed.kicad_pcb",
+    "--report",
+    "{out}/route.json"
+   ],
+   "compare": [
+    "exit",
+    "files"
+   ],
+   "files": [
+    "routed.kicad_pcb"
+   ],
+   "json": {
+    "route.json": [
+     "summary"
+    ]
+   }
+  },
+  {
+   "name": "route-board-options",
+   "milestone": "M4",
+   "compare": [
+    "exit",
+    "files"
+   ],
+   "files": [
+    "routed.kicad_pcb"
+   ],
+   "json": {
+    "route.json": [
+     "summary"
+    ]
+   },
+   "cases": [
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--routing-profile",
+      "quick",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--routing-profile",
+      "balanced",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--routing-profile",
+      "thorough",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--routing-profile",
+      "quick",
+      "--filled-copper-trials",
+      "1",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--stop-after",
+      "placement",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-fanout",
+      "--no-early-plane-stitch",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--unified-direct",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--escape-plan",
+      "--array-flow",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "4",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--unified-save-inputs",
+      "{out}/unified.state.json",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--unified-set",
+      "buses_first=true",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--progress",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "route-board-errors",
+   "milestone": "M4",
+   "cases": [
+    {
+     "args": [
+      "route-board",
+      "examples/invalid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/invalid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "--ground-via-in-pad",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/missing/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/managed_footprints/board.copper",
+      "--locked",
+      "--offline"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--hard-macro",
+      "examples/missing-scene.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-templates",
+      "examples/missing-templates.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--ground-via-in-pad",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--early-plane-pad",
+      "U1.1",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--prefer-local-ground-pad",
+      "X.1",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--prefer-local-ground-pad",
+      "X1",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--plane-stitch-radius-mm",
+      "0.1",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--plane-maze-budget",
+      "0",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--tile-size-mm",
+      "0.1",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--tile-size-mm",
+      "-5",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--tile-size-mm",
+      "nan",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--router-iterations",
+      "0",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--feedback-iterations",
+      "0",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--pitch-mm",
+      "-1",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--escape-margin-mm",
+      "NaN",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--candidates",
+      "0",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--fanout-refinement-step-mm",
+      "1",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--fanout-refinement-step-mm",
+      "1",
+      "--no-fanout",
+      "--stop-after",
+      "placement",
+      "--detailed-feedback-trials",
+      "-1",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--unified-set",
+      "bogus=1",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--unified-set",
+      "direct",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--unified-pair-states",
+      "0",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--unified-pitch-mm",
+      "2",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--unified-pitch-mm",
+      "-0.25",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--unified-iterations",
+      "0",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--unified-search-states",
+      "-1",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--detailed-feedback-trials",
+      "-1",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--critical-feedback-trials",
+      "-2",
+      "--routing-profile",
+      "balanced",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--stop-after",
+      "placement",
+      "--router-iterations",
+      "0",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--candidates",
+      "0"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--candidates",
+      "0",
+      "--report",
+      "{out}/nested/deep/route.json"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--candidates",
+      "0",
+      "--report",
+      "{out}/route"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--router",
+      "--report",
+      "{out}/route.json"
+     ],
+     "compare": [
+      "exit"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--router-it",
+      "5",
+      "--report",
+      "{out}/route.json"
+     ],
+     "compare": [
+      "exit"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "3",
+      "--report",
+      "{out}/route.json"
+     ],
+     "compare": [
+      "exit"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--stop-after",
+      "routing",
+      "--report",
+      "{out}/route.json"
+     ],
+     "compare": [
+      "exit"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--fine-regions",
+      "bogus",
+      "--report",
+      "{out}/route.json"
+     ],
+     "compare": [
+      "exit"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--routing-profile",
+      "fast",
+      "--report",
+      "{out}/route.json"
+     ],
+     "compare": [
+      "exit"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--decoupling-placement-trials",
+      "-1",
+      "--report",
+      "{out}/route.json"
+     ],
+     "compare": [
+      "exit"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--plane-stitch-step-mm",
+      "0",
+      "--report",
+      "{out}/route.json"
+     ],
+     "compare": [
+      "exit"
+     ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--zone-dependency-expansions",
+      "9",
+      "--report",
+      "{out}/route.json"
+     ],
+     "compare": [
+      "exit"
+     ]
+    },
+    {
+     "args": [
+      "route-board"
+     ],
+     "compare": [
+      "exit"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "route-board-mutations",
+   "milestone": "M4",
+   "inputs": [
+    "examples/valid_board/board.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "route-board",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--candidates",
+    "0",
+    "--report",
+    "{out}/route.json"
+   ],
+   "mutations": 10,
+   "compare": [
+    "exit",
+    "stdout"
+   ]
+  },
+  {
    "name": "explain",
    "milestone": "M5",
    "cases": [
