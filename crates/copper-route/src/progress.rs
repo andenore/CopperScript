@@ -77,6 +77,24 @@ impl<W: Write> Progress for ConsoleProgress<W> {
     }
 }
 
+/// `placement_progress`: the planner's raw `(stage, seed, seed_count)`
+/// stages as `placement_seed` / `placement_candidates` events.
+pub fn placement_progress<'c, 'p>(callback: &'c mut Option<ProgressCallback<'p>>) -> impl FnMut(&str, i64, i64) + 'c {
+    move |stage, seed, seed_count| {
+        if stage == "finished" {
+            emit(callback, "placement_candidates", "finished", vec![("seed_count", int(seed_count))]);
+        } else {
+            let event = if stage == "legalization_failed" { "failed" } else { "stage" };
+            emit(
+                callback,
+                "placement_seed",
+                event,
+                vec![("stage", text(stage)), ("seed", int(seed)), ("seed_count", int(seed_count))],
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

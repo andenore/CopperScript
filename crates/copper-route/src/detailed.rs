@@ -65,6 +65,67 @@ pub struct DetailedRoutingResult {
     pub congestion: Option<crate::congestion_feedback::CongestionMap>,
 }
 
+impl DetailedRoutingResult {
+    /// `to_json`: the `copperscript-detailed-route/v0.1` document (no repair
+    /// trials or search work on the unified path).
+    pub fn to_json(&self) -> String {
+        let m = &self.metrics;
+        let metrics = copper_json::Object::from_iter(
+            [
+                ("routed_net_count", m.routed_net_count),
+                ("unrouted_net_count", m.unrouted_net_count),
+                ("conflict_resource_count", m.conflict_resource_count),
+                ("total_conflict_overflow", m.total_conflict_overflow),
+                ("track_count", m.track_count),
+                ("via_count", m.via_count),
+                ("total_length_nm", m.total_length_nm),
+                ("passes", m.passes),
+            ]
+            .map(|(key, value)| (key.to_owned(), Value::from(value))),
+        );
+        let texts = |items: &[String]| Value::Array(items.iter().map(|item| Value::from(item.as_str())).collect());
+        let nets = self
+            .nets
+            .iter()
+            .map(|item| {
+                Value::Object(copper_json::Object::from_iter([
+                    ("net".to_owned(), Value::from(item.net.as_str())),
+                    ("connected".to_owned(), Value::Bool(item.connected)),
+                    ("track_count".to_owned(), Value::from(item.track_count)),
+                    ("via_count".to_owned(), Value::from(item.via_count)),
+                    ("length_nm".to_owned(), Value::from(item.length_nm)),
+                    ("guide_deviation_count".to_owned(), Value::from(item.guide_deviation_count)),
+                    ("diagnostics".to_owned(), texts(&item.diagnostics)),
+                    ("warnings".to_owned(), texts(&item.warnings)),
+                    ("orthogonal_mode_used".to_owned(), Value::Bool(item.orthogonal_mode_used)),
+                    ("search_policy".to_owned(), Value::Null),
+                    ("resumed_branch_count".to_owned(), Value::from(item.resumed_branch_count)),
+                    ("search_budget_exhausted".to_owned(), Value::Bool(item.search_budget_exhausted)),
+                    (
+                        "retry_heuristic_weight_percent".to_owned(),
+                        item.retry_heuristic_weight_percent.map_or(Value::Null, Value::from),
+                    ),
+                    ("search_stats".to_owned(), Value::Null),
+                ]))
+            })
+            .collect();
+        let document = Value::Object(copper_json::Object::from_iter([
+            ("schema".to_owned(), Value::from("copperscript-detailed-route/v0.1")),
+            ("status".to_owned(), Value::from(self.status.value())),
+            ("global_routing_fingerprint".to_owned(), Value::from(self.global_routing_fingerprint.as_str())),
+            ("routing_fingerprint".to_owned(), Value::from(self.routing_fingerprint.as_str())),
+            ("repair_trials".to_owned(), Value::Array(Vec::new())),
+            ("repair_trial_report_limit".to_owned(), Value::from(256i64)),
+            ("locked_track_count".to_owned(), Value::from(self.locked_track_count)),
+            ("locked_via_count".to_owned(), Value::from(self.locked_via_count)),
+            ("search_work".to_owned(), Value::Null),
+            ("metrics".to_owned(), Value::Object(metrics)),
+            ("nets".to_owned(), Value::Array(nets)),
+        ]));
+        Dumps::new().indent(2).sort_keys(true).dumps(&document) + "\n"
+    }
+}
+
 /// `_fingerprint`: the SHA-256 of the key-sorted JSON of the global
 /// fingerprint, every track and via, and the quality vector.
 pub fn fingerprint(global_fingerprint: &str, board: &PhysicalBoard, metrics: &DetailedRoutingMetrics) -> String {

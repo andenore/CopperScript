@@ -30,6 +30,8 @@ use crate::pair_search::{
     transition_inventory_document,
 };
 use crate::pair_terminals::{PairTerminalPreparation, preparation_document};
+use crate::plane::PlaneStitchOptions;
+use crate::progress::{ProgressCallback, emit};
 use crate::routing::{GlobalNetRoute, GlobalRoutingResult, placement_fingerprint};
 use crate::{Error, Result};
 
@@ -602,7 +604,7 @@ fn within(a: Point, point: Point, b: Point) -> bool {
 
 /// `_fingerprint`: the digest of the guides, the stage's copper and the
 /// results' routing identity (`json.dumps(..., sort_keys=True)`).
-fn fingerprint(global: &str, tracks: &[TrackSegment], vias: &[Via], results: &[CriticalNetResult]) -> String {
+pub fn fingerprint(global: &str, tracks: &[TrackSegment], vias: &[Via], results: &[CriticalNetResult]) -> String {
     let track_rows = tracks
         .iter()
         .map(|item| {
@@ -676,6 +678,151 @@ pub struct CriticalOptions<'a> {
     pub only_nets: Option<&'a IndexSet<String>>,
     pub pair_state_limit: Option<i64>,
     pub bundle_repair_limit: i64,
+    /// Early return-plane contacts, stitched ahead of the critical search
+    /// as a separate locked prefix.
+    pub plane_stitch_options: Option<&'a PlaneStitchOptions>,
+    /// The unified router's options (None: `UnifiedRouterOptions()`); they
+    /// give the pair state escalation.
+    pub unified_options: Option<&'a crate::unified_router::UnifiedRouterOptions>,
+    /// `pair_state_escalation` (None: the unified options' value).
+    pub pair_state_escalation: Option<i64>,
+    /// `reserved_accesses`: verified ordinary bypass copper the critical
+    /// router keeps clear of and returns on its board.
+    /// PENDING: owned by rust-m4-critical (the admission only; a reservation
+    /// that fails physical DRC exits 3).
+    pub reserved_accesses: Option<&'a crate::bypass_reservations::BypassReservation>,
+}
+
+impl Default for CriticalOptions<'_> {
+    fn default() -> Self {
+        CriticalOptions {
+            only_nets: None,
+            pair_state_limit: None,
+            bundle_repair_limit: crate::critical_bundles::BUNDLE_REPAIR_LIMIT,
+            plane_stitch_options: None,
+            unified_options: None,
+            pair_state_escalation: None,
+            reserved_accesses: None,
+        }
+    }
+}
+
+/// The `reserved_accesses` preflight of `route_critical_nets`: current
+/// guides, the exact source prefix, fresh bypass admission, and no
+/// critical or zone copper beyond the admitted feeds.
+fn admit_reserved_accesses(
+    board: &PhysicalBoard,
+    global_route: &GlobalRoutingResult,
+    reserved: &crate::bypass_reservations::BypassReservation,
+) -> Result<()> {
+    if global_route.placement_fingerprint != placement_fingerprint(board) {
+        return Err(Error::Value("package-access critical guides are stale".to_owned()));
+    }
+    let mut intent = reserved.board.clone();
+    intent.tracks = board.tracks.clone();
+    intent.vias = board.vias.clone();
+    let prefix_tracks: Vec<TrackSegment> = board.tracks.iter().chain(reserved.created_tracks.iter()).cloned().collect();
+    let prefix_vias: Vec<Via> = board.vias.iter().chain(reserved.created_vias.iter()).cloned().collect();
+    if intent != *board || reserved.board.tracks != prefix_tracks || reserved.board.vias != prefix_vias {
+        return Err(Error::Value("package-access reservations are stale or contain unowned copper".to_owned()));
+    }
+    let mut protected: IndexSet<String> =
+        board.net_routing_rules.iter().filter(|r| r.kind != RouteKind::General).map(|r| r.net.clone()).collect();
+    let regional: IndexSet<&str> = board.zones.iter().filter(|z| z.reserve_routing).map(|z| z.net.as_str()).collect();
+    protected.extend(
+        copper_pcb::zones::distribution_zone_nets(board).into_iter().filter(|n| !regional.contains(n.as_str())),
+    );
+    let (bypass_tracks, bypass_vias, reason) =
+        crate::bypass_reservations::verified_bypass_reservations(board, reserved)?;
+    if let Some(reason) = reason {
+        return Err(Error::Value(format!("invalid package-access bypass reservations: {reason}")));
+    }
+    let mut track_exemptions: IndexMap<&TrackSegment, i64> = IndexMap::new();
+    for track in &bypass_tracks {
+        *track_exemptions.entry(track).or_insert(0) += 1;
+    }
+    let mut via_exemptions: IndexMap<&Via, i64> = IndexMap::new();
+    for via in &bypass_vias {
+        *via_exemptions.entry(via).or_insert(0) += 1;
+    }
+    let refused =
+        || Err(Error::Value("ordinary package-access reservations cannot contain critical or zone copper".to_owned()));
+    for track in &reserved.created_tracks {
+        if protected.contains(&track.net) {
+            match track_exemptions.get_mut(track) {
+                Some(count) if *count > 0 => *count -= 1,
+                _ => return refused(),
+            }
+        }
+    }
+    for via in &reserved.created_vias {
+        if protected.contains(&via.net) {
+            match via_exemptions.get_mut(via) {
+                Some(count) if *count > 0 => *count -= 1,
+                _ => return refused(),
+            }
+        }
+    }
+    let hard = |checked: &PhysicalBoard| -> Result<Vec<String>> {
+        let report = crate::drc_report::run_physical_drc(checked, copper_drc::Policy::default())?;
+        Ok(report
+            .report
+            .findings
+            .iter()
+            .filter(|f| {
+                f.severity == copper_drc::Severity::Error
+                    && f.code != "DRC-OPEN-NET"
+                    && f.code != "DRC-ROUTE-INCOMPLETE"
+            })
+            .map(|f| {
+                format!("{:?}", (&f.code, &f.message, &f.objects, &f.nets, &f.layers, f.required_nm, f.measured_nm))
+            })
+            .collect())
+    };
+    let fatal = hard(&reserved.board)?;
+    if !fatal.is_empty() {
+        let baseline: IndexSet<String> = hard(board)?.into_iter().collect();
+        if fatal.iter().any(|f| !baseline.contains(f)) {
+            return copper_pcb::not_implemented("a failed package-reservation preflight (route_critical_nets)");
+        }
+    }
+    Ok(())
+}
+
+/// `on_progress(event, nets, result)` of `route_critical_nets`, forwarded as
+/// `critical_group` progress events (`progress.critical_progress`).
+fn critical_progress(
+    on_progress: &mut Option<ProgressCallback<'_>>,
+    event: &str,
+    nets: &[String],
+    result: Option<&CriticalNetResult>,
+) {
+    let mut details: Vec<(&'static str, Value)> =
+        vec![("nets", Value::Array(nets.iter().map(|net| Value::from(net.as_str())).collect()))];
+    if let Some(result) = result {
+        details.push(("connected", Value::Bool(result.connected)));
+        details.push(("strategy", Value::from(result.strategy.as_str())));
+        details.push(("search_states", Value::from(result.search_states)));
+        if let Some(order) = &result.pair_search_order {
+            details.push(("pair_search_order", Value::from(order.as_str())));
+        }
+        if let Some(limit) = result.pair_state_limit {
+            details.push(("pair_state_limit", Value::from(limit)));
+            details.push(("pair_budget_exhausted", Value::Bool(result.pair_budget_exhausted)));
+        }
+        if !result.rejections.is_empty() {
+            let mut rejections = Object::new();
+            for (gate, count) in &result.rejections {
+                rejections.insert(gate.clone(), Value::from(*count));
+            }
+            details.push(("rejections", Value::Object(rejections)));
+            details.push((
+                "rejection_examples",
+                Value::Array(result.rejection_examples.iter().map(|item| Value::from(item.as_str())).collect()),
+            ));
+        }
+    }
+    emit(on_progress, "critical_group", event, details);
 }
 
 /// `route_critical_nets`: route critical groups around explicit, immutable
@@ -684,8 +831,17 @@ pub fn route_critical_nets(
     board: PhysicalBoard,
     global_route: &GlobalRoutingResult,
     options: &CriticalOptions<'_>,
+    mut on_progress: Option<ProgressCallback<'_>>,
 ) -> Result<CriticalRoutingResult> {
-    // UnifiedRouterOptions() default: critical_pair_state_escalation = 4 (>= 1).
+    let escalation = options.pair_state_escalation.unwrap_or_else(|| {
+        options.unified_options.map_or_else(
+            || crate::unified_router::UnifiedRouterOptions::default().critical_pair_state_escalation,
+            |unified| unified.critical_pair_state_escalation,
+        )
+    });
+    if escalation < 1 {
+        return Err(Error::Value("pair state escalation must be at least 1".to_owned()));
+    }
     if options.pair_state_limit.is_some_and(|limit| limit <= 0) {
         return Err(Error::Value("critical pair aggregate state bound must be positive".to_owned()));
     }
@@ -695,6 +851,27 @@ pub fn route_critical_nets(
     }
     let mut tracks: Vec<TrackSegment> = board.tracks.clone();
     let mut vias: Vec<Via> = board.vias.clone();
+    if let Some(reserved) = options.reserved_accesses {
+        admit_reserved_accesses(&board, global_route, reserved)?;
+        tracks.extend(reserved.created_tracks.iter().cloned());
+        vias.extend(reserved.created_vias.iter().cloned());
+    }
+    let mut plane_reservations = None;
+    if let Some(plane_options) = options.plane_stitch_options {
+        if global_route.placement_fingerprint != placement_fingerprint(&board) {
+            return Err(Error::Value("plane-contact critical guides are stale".to_owned()));
+        }
+        // The options' keepouts (pair launch corridors beyond macro ports)
+        // bind the stitch only; the pairs route without them.
+        let mut stitch_board = board.clone();
+        stitch_board.tracks = tracks.clone();
+        stitch_board.vias = vias.clone();
+        stitch_board.copper_keepouts.extend(plane_options.keepouts.iter().cloned());
+        let stitched = crate::plane::stitch_zone_pads(&stitch_board, Some(plane_options))?;
+        tracks = stitched.board.tracks.clone();
+        vias = stitched.board.vias.clone();
+        plane_reservations = Some(stitched);
+    }
     let (base_tracks, base_vias) = (tracks.clone(), vias.clone());
     let routes: IndexMap<String, GlobalNetRoute> =
         global_route.routes.iter().map(|route| (route.net.clone(), route.clone())).collect();
@@ -738,6 +915,7 @@ pub fn route_critical_nets(
         return copper_pcb::not_implemented("critical pair bundles");
     }
     for (job_index, (rule, group)) in jobs.iter().enumerate() {
+        critical_progress(&mut on_progress, "started", group, None);
         if let Some(graph) = &owner_graph
             && stage_board.tracks.iter().any(|track| track.net == rule.net)
             && group.iter().all(|name| net_by_name.get(name.as_str()).is_some_and(|net| graph.net_connected(net)))
@@ -763,6 +941,7 @@ pub fn route_critical_nets(
             result.evidence_digests = external_evidence(rule);
             result.strategy = "immutable_hard_macro".to_owned();
             result.warnings = budget_warnings(rule, &owned_tracks);
+            critical_progress(&mut on_progress, "finished", group, Some(&result));
             results.push(result);
             continue;
         }
@@ -771,7 +950,7 @@ pub fn route_critical_nets(
             if !symmetric_pair(rule) {
                 let mut nets = vec![rule.net.clone(), partner_name];
                 nets.sort();
-                results.push(CriticalNetResult::new(
+                let result = CriticalNetResult::new(
                     nets,
                     false,
                     0,
@@ -779,7 +958,9 @@ pub fn route_critical_nets(
                     Vec::new(),
                     0,
                     vec!["differential/CAN routing rules must be symmetric".to_owned()],
-                ));
+                );
+                critical_progress(&mut on_progress, "finished", group, Some(&result));
+                results.push(result);
                 continue;
             }
             let partner_rule = rules[partner_name.as_str()];
@@ -793,6 +974,7 @@ pub fn route_critical_nets(
                 &tracks,
                 &vias,
                 options.pair_state_limit,
+                escalation,
                 &mut blockers,
             )?;
             if !result.connected {
@@ -820,6 +1002,7 @@ pub fn route_critical_nets(
                 (partner_name, rule.net.clone())
             };
             coupled_pairs.insert(key);
+            critical_progress(&mut on_progress, "finished", group, Some(&result));
             results.push(result);
             tracks.extend(pair_tracks.iter().cloned());
             vias.extend(pair_vias.iter().cloned());
@@ -866,6 +1049,7 @@ pub fn route_critical_nets(
             // PENDING: owned by rust-m4-unified (_route_single_exact).
             return copper_pcb::not_implemented("critical exact single-ended tree (unified router)");
         }
+        critical_progress(&mut on_progress, "finished", group, Some(&result));
         results.push(result);
         tracks.extend(net_tracks.iter().cloned());
         vias.extend(net_vias.iter().cloned());
@@ -895,6 +1079,9 @@ pub fn route_critical_nets(
         CriticalRoutingStatus::Success
     };
     let mut routed_board = stage_board;
+    if let Some(stitched) = &plane_reservations {
+        routed_board.metadata = stitched.board.metadata.clone();
+    }
     routed_board.metadata.insert("critical_routing".to_owned(), if failed { "failed" } else { "complete" }.to_owned());
     routed_board.metadata.insert("detailed_routing".to_owned(), "partial".to_owned());
     routed_board.metadata.insert("global_routing_fingerprint".to_owned(), global_route.routing_fingerprint.clone());
@@ -912,12 +1099,12 @@ pub fn route_critical_nets(
         nets: results,
         global_routing_fingerprint: global_route.routing_fingerprint.clone(),
         routing_fingerprint,
-        reserved_track_count: 0,
-        reserved_via_count: 0,
+        reserved_track_count: options.reserved_accesses.map_or(0, |r| r.created_tracks.len() as i64),
+        reserved_via_count: options.reserved_accesses.map_or(0, |r| r.created_vias.len() as i64),
         bundles: Vec::new(),
         match_tuning: match_tuning.iter().map(match_tuning_document).collect(),
-        plane_reservation_track_count: 0,
-        plane_reservation_via_count: 0,
+        plane_reservation_track_count: plane_reservations.as_ref().map_or(0, |stitched| stitched.added_track_count),
+        plane_reservation_via_count: plane_reservations.as_ref().map_or(0, |stitched| stitched.added_via_count),
     })
 }
 
@@ -925,6 +1112,7 @@ pub fn route_critical_nets(
 enum Saved {
     Board(Box<PhysicalBoard>),
     GlobalRoute(Box<GlobalRoutingResult>),
+    PlaneOptions(Box<PlaneStitchOptions>),
     /// `None`, or another value the replay never uses as a board or route.
     Other,
     /// A value whose decoding needs a module that has not landed.
@@ -940,7 +1128,7 @@ fn decode_value(value: &StateValue) -> Result<Saved> {
                 Ok(Saved::GlobalRoute(Box::new(crate::routing_state::global_routing_result(value)?)))
             }
             "pcbir.fanout:FanoutResult" => Ok(Saved::Pending("critical replay with package-access reservations")),
-            "pcbir.plane:PlaneStitchOptions" => Ok(Saved::Pending("critical replay with plane-contact options")),
+            "pcbir.plane:PlaneStitchOptions" => Ok(Saved::PlaneOptions(Box::new(plane_stitch_options(value)?))),
             _ => copper_pcb::not_implemented(&format!("a saved {name} value")),
         },
         StateValue::Null | StateValue::Bool(_) | StateValue::Int(_) | StateValue::Float(_) | StateValue::Str(_) => {
@@ -959,6 +1147,63 @@ fn decode_value(value: &StateValue) -> Result<Saved> {
             copper_pcb::not_implemented("a saved critical input of this kind")
         }
     }
+}
+
+/// `plane.PlaneStitchOptions(**fields)`, validated by its `__post_init__`.
+fn plane_stitch_options(value: &StateValue) -> Result<PlaneStitchOptions> {
+    use copper_pcb::state_codec::{
+        Fields, boolean, integer, optional_integer, optional_text, pad_reference, set_items,
+    };
+    let fields = Fields::of(value, "pcbir.plane:PlaneStitchOptions")?;
+    fields.allow(&[
+        "step_nm",
+        "maximum_radius_nm",
+        "maximum_contact_radius_nm",
+        "maximum_detour_nm",
+        "maze_step_nm",
+        "maze_state_budget",
+        "candidate_bias",
+        "escape_width_nm",
+        "only_pads",
+        "preferred_ground_pads",
+        "ground_via_in_pad",
+        "include_surface_zones",
+        "require_explicit",
+        "keepouts",
+    ])?;
+    let defaults = PlaneStitchOptions::default();
+    let int = |name: &str, default: i64| fields.get(name).map_or(Ok(default), integer);
+    let flag = |name: &str, default: bool| fields.get(name).map_or(Ok(default), boolean);
+    let pads = |name: &str| -> Result<Option<std::collections::BTreeSet<copper_pcb::board::PadReference>>> {
+        match fields.get(name) {
+            None | Some(StateValue::Null) => Ok(None),
+            Some(value) => Ok(Some(set_items(value)?.iter().map(pad_reference).collect::<Result<_>>()?)),
+        }
+    };
+    let keepouts = match fields.get("keepouts") {
+        None => Vec::new(),
+        Some(value) => copper_pcb::state_codec::items(value)?
+            .iter()
+            .map(copper_pcb::state_codec::copper_keepout)
+            .collect::<Result<_>>()?,
+    };
+    PlaneStitchOptions {
+        step_nm: int("step_nm", defaults.step_nm)?,
+        maximum_radius_nm: int("maximum_radius_nm", defaults.maximum_radius_nm)?,
+        maximum_contact_radius_nm: int("maximum_contact_radius_nm", defaults.maximum_contact_radius_nm)?,
+        maximum_detour_nm: int("maximum_detour_nm", defaults.maximum_detour_nm)?,
+        maze_step_nm: int("maze_step_nm", defaults.maze_step_nm)?,
+        maze_state_budget: int("maze_state_budget", defaults.maze_state_budget)?,
+        candidate_bias: optional_text(fields.get("candidate_bias"))?,
+        escape_width_nm: optional_integer(fields.get("escape_width_nm"))?,
+        only_pads: pads("only_pads")?,
+        preferred_ground_pads: pads("preferred_ground_pads")?,
+        ground_via_in_pad: flag("ground_via_in_pad", defaults.ground_via_in_pad)?,
+        include_surface_zones: flag("include_surface_zones", defaults.include_surface_zones)?,
+        require_explicit: flag("require_explicit", defaults.require_explicit)?,
+        keepouts,
+    }
+    .validated()
 }
 
 /// `routeflow.PlacementRoutingResult` (a placement checkpoint): its board
@@ -1030,11 +1275,8 @@ pub fn replay_critical(
                 route_critical_nets(
                     board,
                     &global_route,
-                    &CriticalOptions {
-                        only_nets,
-                        pair_state_limit: Some(pair_state_limit),
-                        bundle_repair_limit: crate::critical_bundles::BUNDLE_REPAIR_LIMIT,
-                    },
+                    &CriticalOptions { only_nets, pair_state_limit: Some(pair_state_limit), ..Default::default() },
+                    None,
                 )
             }
             StateValue::Dataclass { name, .. } => {
@@ -1072,20 +1314,27 @@ pub fn replay_critical(
         match (raw, decoded.get(key)) {
             (None, _) | (Some((_, StateValue::Null)), _) => {}
             (_, Some(Saved::Pending(what))) => pending = pending.or(Some(*what)),
+            (_, Some(Saved::PlaneOptions(_))) if key == "plane_stitch_options" => {}
             _ => pending = pending.or(Some("critical replay inputs of an unexpected kind")),
         }
     }
     if let Some(what) = pending {
         return copper_pcb::not_implemented(what);
     }
+    let plane_options = match decoded.remove("plane_stitch_options") {
+        Some(Saved::PlaneOptions(options)) => Some(*options),
+        _ => None,
+    };
     route_critical_nets(
         board,
         &global_route,
         &CriticalOptions {
             only_nets,
             pair_state_limit: Some(pair_state_limit),
-            bundle_repair_limit: crate::critical_bundles::BUNDLE_REPAIR_LIMIT,
+            plane_stitch_options: plane_options.as_ref(),
+            ..Default::default()
         },
+        None,
     )
 }
 
@@ -1170,12 +1419,26 @@ fn validate_candidate(
     if tracks.is_empty() && vias.is_empty() {
         return Ok((result, Vec::new(), Vec::new()));
     }
-    if !board.hard_macros.is_empty() {
-        // PENDING: PhysicalBoard.__post_init__ hard-macro protection of candidate copper.
-        return copper_pcb::not_implemented("critical candidate validation on a board with hard macros");
-    }
     let all_tracks: Vec<TrackSegment> = committed_tracks.iter().chain(&tracks).cloned().collect();
     let all_vias: Vec<Via> = committed_vias.iter().chain(&vias).cloned().collect();
+    if !board.hard_macros.is_empty() {
+        // `replace(board, tracks=..., vias=...)` runs PhysicalBoard.__post_init__,
+        // whose hard-macro protection rejects candidate copper.
+        // PENDING: owned by rust-m4-critical (the board's other __post_init__ checks).
+        match copper_pcb::hard_macros::validate_hard_macros(&board_with(board, &all_tracks, &all_vias)) {
+            Ok(()) => {}
+            Err(Error::Value(message)) if message.contains("hard-macro") => {
+                let mut rejected = result;
+                rejected.connected = false;
+                rejected.track_count = 0;
+                rejected.via_count = 0;
+                rejected.diagnostics.push(message);
+                rejected.candidate_rejected = true;
+                return Ok((rejected, Vec::new(), Vec::new()));
+            }
+            Err(error) => return Err(error),
+        }
+    }
     let hard = |checked: &PhysicalBoard| -> Result<Vec<copper_drc::Finding>> {
         let report = crate::drc_report::run_physical_drc(checked, copper_drc::Policy::default())?;
         Ok(report
@@ -1625,6 +1888,7 @@ fn route_pair_group(
     tracks: &[TrackSegment],
     vias: &[Via],
     pair_state_limit: Option<i64>,
+    pair_state_escalation: i64,
     blockers: &mut IndexSet<String>,
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
     let (first, second) = if rule.net <= partner_rule.net { (rule, partner_rule) } else { (partner_rule, rule) };
@@ -1824,9 +2088,11 @@ fn route_pair_group(
             Ok(())
         };
         tiers(limit, &mut stats, &mut best, &mut fallback, &mut rejected, blockers)?;
-        if !within_budget(&best.0) && limit.is_some_and(|value| stats.expanded_states >= value) {
-            // UnifiedRouterOptions().critical_pair_state_escalation.
-            limit = limit.map(|value| value * 10);
+        if !within_budget(&best.0)
+            && limit.is_some_and(|value| stats.expanded_states >= value)
+            && pair_state_escalation > 1
+        {
+            limit = limit.map(|value| value * pair_state_escalation);
             tiers(limit, &mut stats, &mut best, &mut fallback, &mut rejected, blockers)?;
         }
         if !within_budget(&best.0)

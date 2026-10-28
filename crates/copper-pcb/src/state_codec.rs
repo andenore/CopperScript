@@ -275,7 +275,7 @@ pub fn via(value: &StateValue) -> Result<Via> {
     Ok(via)
 }
 
-fn copper_keepout(value: &StateValue) -> Result<CopperKeepout> {
+pub fn copper_keepout(value: &StateValue) -> Result<CopperKeepout> {
     let fields = Fields::of(value, "pcbir.physical:CopperKeepout")?;
     fields.allow(&[
         "id",

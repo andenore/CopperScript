@@ -5,7 +5,7 @@
 //! transplant: cheap direct and one-corner legal paths between the actual
 //! physical lands, joined by Kruskal's minimum spanning tree. Native critical
 //! acceptance still checks the complete candidate. The optional bounded
-//! surface maze fallback reports not implemented.
+//! surface maze fallback is `_bounded_surface_maze` at its default bounds.
 
 use indexmap::IndexSet;
 
@@ -96,7 +96,7 @@ pub fn local_surface_candidates(
         let mut edges: Vec<(i64, usize, usize, Vec<TrackSegment>)> = Vec::new();
         for first in 0..terminals.len() {
             for second in first + 1..terminals.len() {
-                let path = surface_path(
+                let mut path = surface_path(
                     board,
                     &clearance,
                     &rule.net,
@@ -111,8 +111,15 @@ pub fn local_surface_candidates(
                     && (terminals.len() == 2 || rf_tree || critical_tree)
                     && rule.max_vias == Some(0)
                 {
-                    // PENDING: _bounded_surface_maze (surface_path_between).
-                    return copper_pcb::not_implemented("critical bounded surface maze");
+                    path = bounded_surface_maze(
+                        board,
+                        &clearance,
+                        &rule.net,
+                        terminals[first],
+                        terminals[second],
+                        width,
+                        layer,
+                    )?;
                 }
                 if !octilinear(&path) {
                     continue;
@@ -153,4 +160,48 @@ pub fn local_surface_candidates(
         }
     }
     Ok(candidates)
+}
+
+/// `_bounded_surface_maze` at its default bounds (20,000 states, 2 mm
+/// detour, no phase budget): either terminal's grid phase within one shared
+/// local allowance.
+#[allow(clippy::too_many_arguments)]
+fn bounded_surface_maze(
+    board: &PhysicalBoard,
+    clearance: &RoutingClearanceIndex<'_>,
+    net: &str,
+    start: Point,
+    end: Point,
+    width: i64,
+    layer: CopperLayer,
+) -> Result<Option<Vec<TrackSegment>>> {
+    let (budget, detour, step) = (20_000i64, 2_000_000i64, 100_000i64);
+    let (mut path, spent) = crate::surface_path::surface_path_between_counted(
+        board, clearance, net, start, end, width, layer, step, detour, budget,
+    )?;
+    if path.is_none()
+        && 0 < spent
+        && spent < budget
+        && ((end.x_nm - start.x_nm).rem_euclid(step) != 0 || (end.y_nm - start.y_nm).rem_euclid(step) != 0)
+    {
+        // A legal narrow channel may lie between every point of the first
+        // terminal's grid. The other actual terminal supplies a second phase;
+        // only unused states are available, and every edge keeps exact checks.
+        let (reverse, _) = crate::surface_path::surface_path_between_counted(
+            board,
+            clearance,
+            net,
+            end,
+            start,
+            width,
+            layer,
+            step,
+            detour,
+            budget - spent,
+        )?;
+        if let Some(reverse) = reverse {
+            path = Some(reverse.into_iter().rev().map(|t| TrackSegment { start: t.end, end: t.start, ..t }).collect());
+        }
+    }
+    Ok(path)
 }

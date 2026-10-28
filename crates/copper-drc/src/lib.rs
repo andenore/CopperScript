@@ -1964,3 +1964,14 @@ fn check_fixed_polygons(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> R
     }
     Ok(())
 }
+
+/// `_check_track_rules`, `_check_vias` and `_check_differential_rules` on one
+/// board, as the routing-stage requirement verifier runs them.
+pub fn routing_rule_findings(board: &PhysicalBoard) -> Result<Vec<Finding>> {
+    let mut findings = Vec::new();
+    let mut relaxations: Vec<BreakoutRelaxation> = Vec::new();
+    check_track_rules(board, &mut findings, &mut relaxations)?;
+    check_vias(board, &mut findings);
+    check_differential_rules(board, &mut findings);
+    Ok(findings)
+}

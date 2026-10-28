@@ -324,7 +324,188 @@ fn congestion_map(router: &mut Router<'_, '_>, failed: &[String], tile_nm: i64) 
     }
 }
 
-/// `route_unified` without a bus phase, plane nets or an escape seeder.
+/// `escape_seeder(board, net_names)`: a board with checked pad escapes for
+/// the named failed nets; the seeded repair attempts route from it.
+pub type EscapeSeeder<'a> = dyn FnMut(&PhysicalBoard, &IndexSet<String>) -> Result<PhysicalBoard> + 'a;
+
+/// One rip-in repair's outcome (`repair_attempt`'s tuple).
+struct RepairAttempt {
+    work: Accepted,
+    done: IndexSet<String>,
+    still: IndexMap<String, Vec<Point>>,
+    routes: IndexMap<String, super::router::NetRoute>,
+    rejections: IndexMap<String, Vec<(Point, String, Vec<String>, bool, String)>>,
+    used: i64,
+}
+
+/// `Counter(after) - Counter(before)`, elements in `after`'s first-seen order.
+fn added_items<T: Clone + Eq + std::hash::Hash>(after: &[T], before: &[T]) -> Vec<T> {
+    let mut counts: IndexMap<&T, i64> = IndexMap::new();
+    for item in after {
+        *counts.entry(item).or_default() += 1;
+    }
+    for item in before {
+        if let Some(count) = counts.get_mut(item) {
+            *count -= 1;
+        }
+    }
+    counts.into_iter().flat_map(|(item, count)| std::iter::repeat_n(item.clone(), count.max(0) as usize)).collect()
+}
+
+/// `_same_but_copper`: the boards differ at most in their tracks and vias.
+fn same_but_copper(board: &PhysicalBoard, other: &PhysicalBoard) -> bool {
+    let mut copy = other.clone();
+    copy.tracks = board.tracks.clone();
+    copy.vias = board.vias.clone();
+    &copy == board
+}
+
+/// `repair_attempt(seed)`: one rip-in repair from the adopted copper, or
+/// None for a seeded attempt with no failed signal net to seed. `index` is
+/// the shared commit index; it stays held at this attempt's copper.
+#[allow(clippy::too_many_arguments)]
+fn repair_attempt(
+    board: &PhysicalBoard,
+    options: &UnifiedRouterOptions,
+    nets: &[&PhysicalNet],
+    plane_nets: &IndexSet<String>,
+    accepted: &Accepted,
+    complete: &IndexSet<String>,
+    router: &Router<'_, '_>,
+    index: &mut Option<RoutingClearanceIndex<'_>>,
+    shared: &mut Shared,
+    seeder: Option<&mut EscapeSeeder<'_>>,
+    required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
+    events: &mut Vec<Event>,
+) -> Result<Option<RepairAttempt>> {
+    let mut work: Accepted = accepted.clone();
+    let mut done = complete.clone();
+    let remaining: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| !done.contains(&n.name)).collect();
+    // Rip up neighbours whose new copper crowds the remaining nets' pads,
+    // so they renegotiate together; everything else stays fixed.
+    let mut crowd = neighbour_nets(board, &remaining, &work, options.repair_neighbour_reach_nm);
+    // The exact check names what blocked a rejected path: rip those too.
+    let remaining_names: IndexSet<String> = remaining.iter().map(|n| n.name.clone()).collect();
+    for name in &remaining_names {
+        for (_, _, blockers, _, _) in router.rejections.get(name).into_iter().flatten() {
+            for blocker in blockers {
+                if work.contains_key(blocker) && !plane_nets.contains(blocker) {
+                    crowd.insert(blocker.clone());
+                }
+            }
+        }
+    }
+    for name in &crowd {
+        work.shift_remove(name);
+        done.shift_remove(name);
+    }
+    let remaining: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| !done.contains(&n.name)).collect();
+    let mut partial = with_copper(board, &work);
+    // The shared index rips the crowd out instead of being rebuilt.
+    shared.hold(index.as_mut().expect("index"), &work)?;
+    let mut share = true;
+    if let Some(seeder) = seeder {
+        let failed_signal: IndexSet<String> = remaining
+            .iter()
+            .filter(|net| !plane_nets.contains(&net.name) && !crowd.contains(&net.name))
+            .map(|net| net.name.clone())
+            .collect();
+        if failed_signal.is_empty() {
+            return Ok(None);
+        }
+        let seeded = seeder(&partial, &failed_signal)?;
+        for track in added_items(&seeded.tracks, &partial.tracks) {
+            work.entry(track.net.clone()).or_default().0.push(track);
+        }
+        for via in added_items(&seeded.vias, &partial.vias) {
+            work.entry(via.net.clone()).or_default().1.push(via);
+        }
+        // Seeded escapes join the shared index only if the seeder just added
+        // copper; any other change gets a fresh index of its board.
+        share = same_but_copper(&seeded, &partial)
+            && added_items(&partial.tracks, &seeded.tracks).is_empty()
+            && added_items(&partial.vias, &seeded.vias).is_empty();
+        if share {
+            shared.hold(index.as_mut().expect("index"), &work)?;
+        }
+        partial = seeded;
+    }
+    let fixed = explicit_copper_connectivity(&partial, Candidate::default())?;
+    let remaining: Vec<&PhysicalNet> =
+        remaining.into_iter().filter(|net| !fixed.net_connected(net) || plane_nets.contains(&net.name)).collect();
+    let penalised = |repair: &mut Router<'_, '_>| {
+        repair.history_seed(router);
+        if options.rejection_marker_cost != 0.0 {
+            let mut names: Vec<&String> = remaining_names.iter().collect();
+            names.sort();
+            for name in names {
+                let points: Vec<Point> = router.rejections.get(name).into_iter().flatten().map(|r| r.0).collect();
+                if !points.is_empty() {
+                    repair.penalise_points(&points, options.rejection_marker_cost);
+                }
+            }
+        }
+    };
+    let (more_routes, more, more_rejected, more_complete, rejections, used) = if share {
+        let taken = index.take().expect("index");
+        let mut repair = Router::new(&partial, options, &remaining, IndexSet::new(), required_accesses, taken)?;
+        penalised(&mut repair);
+        let (more_routes, more_conflicts, used) = repair.negotiate(None, events)?;
+        let (more, more_rejected, more_complete) = repair.commit(&more_routes, &more_conflicts)?;
+        *index = repair.clearance.take();
+        shared.added(&more);
+        (more_routes, more, more_rejected, more_complete, repair.rejections.clone(), used)
+    } else {
+        let fresh = RoutingClearanceIndex::new(&partial)?;
+        let mut repair = Router::new(&partial, options, &remaining, IndexSet::new(), required_accesses, fresh)?;
+        penalised(&mut repair);
+        let (more_routes, more_conflicts, used) = repair.negotiate(None, events)?;
+        let (more, more_rejected, more_complete) = repair.commit(&more_routes, &more_conflicts)?;
+        (more_routes, more, more_rejected, more_complete, repair.rejections.clone(), used)
+    };
+    for (name, (tracks, vias)) in &more {
+        let entry = work.entry(name.clone()).or_default();
+        entry.0.extend(tracks.iter().cloned());
+        entry.1.extend(vias.iter().cloned());
+    }
+    done.extend(more_complete.iter().cloned());
+    for net in &remaining {
+        if !more_routes.contains_key(&net.name) && fixed.net_connected(net) && !plane_nets.contains(&net.name) {
+            done.insert(net.name.clone());
+        }
+    }
+    let still: IndexMap<String, Vec<Point>> =
+        more_rejected.into_iter().filter(|(name, _)| !done.contains(name)).collect();
+    Ok(Some(RepairAttempt { work, done, still, routes: more_routes, rejections, used }))
+}
+
+/// `save_state`'s write: the parent directories (`mkdir`), then the text
+/// (`write_text`); a failure is the uncaught `OSError`.
+fn save_inputs(path: &str, text: &str) -> Result<()> {
+    use copper_lang::paths::{python_os_call_error, python_os_error};
+    let crash = |error: &std::io::Error, message: String| {
+        let class = match error.kind() {
+            std::io::ErrorKind::AlreadyExists => "FileExistsError",
+            std::io::ErrorKind::NotFound => "FileNotFoundError",
+            std::io::ErrorKind::PermissionDenied => "PermissionError",
+            std::io::ErrorKind::IsADirectory => "IsADirectoryError",
+            std::io::ErrorKind::NotADirectory => "NotADirectoryError",
+            _ => "OSError",
+        };
+        crate::unified_error::Error::Crash(class.to_owned(), message)
+    };
+    let target = std::path::Path::new(path);
+    if let Some(parent) = target.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        let shown = crate::pypath::display(&parent.to_string_lossy());
+        std::fs::create_dir_all(parent).map_err(|e| crash(&e, python_os_call_error(&e, Some(&shown))))?;
+    }
+    let shown = crate::pypath::display(path);
+    std::fs::write(target, text).map_err(|e| crash(&e, python_os_error(&e, Some(&shown))))
+}
+
+/// `route_unified`: every ordinary net in one negotiated-congestion loop.
 #[allow(clippy::too_many_arguments)]
 pub fn route_unified(
     board: &PhysicalBoard,
@@ -333,6 +514,7 @@ pub fn route_unified(
     fanout_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
     only_nets: Option<&IndexSet<String>>,
     required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
+    mut escape_seeder: Option<&mut EscapeSeeder<'_>>,
     mut on_progress: Option<&mut dyn Progress>,
 ) -> Result<DetailedRoutingResult> {
     if let Some(fanout) = fanout_accesses
@@ -340,12 +522,23 @@ pub fn route_unified(
     {
         return fail("unified router does not consume verified fanout accesses; pass required_accesses");
     }
+    if let Some(path) = &options.save_inputs_path
+        && !path.is_empty()
+    {
+        // A replayable input state for iterating on the router alone
+        // (see replay_unified); a working artifact, not evidence.
+        let text = crate::state_codec::inputs_state_text(
+            board,
+            global_route,
+            options,
+            only_nets,
+            fanout_accesses.is_some() || required_accesses.is_some(),
+        )?;
+        save_inputs(path, &text)?;
+    }
     if options.time_budget_s.is_some_and(|budget| budget != 0.0) {
         // A wall-clock deadline makes the result depend on timing.
         return not_implemented("unified router time_budget_s (a wall-clock deadline)");
-    }
-    if options.save_inputs_path.is_some() {
-        return not_implemented("unified router save_inputs_path");
     }
     if !board.hard_macros.is_empty() {
         let materialized: IndexSet<&String> = board.materialized_macros.iter().collect();
@@ -496,80 +689,52 @@ pub fn route_unified(
             break;
         }
         let baseline = open_count(board, &nets, &accepted, &plane_nets, &complete)?;
-        // repair_attempt(seed=False)
-        let mut work: Accepted = accepted.clone();
-        let mut done = complete.clone();
-        let remaining: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| !done.contains(&n.name)).collect();
-        let mut crowd = neighbour_nets(board, &remaining, &work, options.repair_neighbour_reach_nm);
-        let remaining_names: IndexSet<String> = remaining.iter().map(|n| n.name.clone()).collect();
-        for name in &remaining_names {
-            for (_, _, blockers, _, _) in router.rejections.get(name).into_iter().flatten() {
-                for blocker in blockers {
-                    if work.contains_key(blocker) && !plane_nets.contains(blocker) {
-                        crowd.insert(blocker.clone());
-                    }
-                }
+        let mut index = router.clearance.take();
+        let mut best: Option<((i64, i64), RepairAttempt, bool)> = None;
+        let seeds: &[bool] = if escape_seeder.is_some() { &[false, true] } else { &[false] };
+        for &seed in seeds {
+            let attempt = repair_attempt(
+                board,
+                options,
+                &nets,
+                &plane_nets,
+                &accepted,
+                &complete,
+                &router,
+                &mut index,
+                &mut shared,
+                if seed { escape_seeder.as_deref_mut() } else { None },
+                required_accesses,
+                &mut events,
+            )?;
+            forward(&mut on_progress, &mut events);
+            let Some(attempt) = attempt else { continue };
+            iterations += attempt.used;
+            let score = open_count(board, &nets, &attempt.work, &plane_nets, &attempt.done)?;
+            if score < baseline && best.as_ref().is_none_or(|(least, _, _)| score < *least) {
+                best = Some((score, attempt, seed));
+            }
+            if best.as_ref().is_some_and(|(least, _, _)| least.0 == 0) {
+                break;
             }
         }
-        for name in &crowd {
-            work.shift_remove(name);
-            done.shift_remove(name);
-        }
-        let remaining: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| !done.contains(&n.name)).collect();
-        let partial = with_copper(board, &work);
-        let mut index = router.clearance.take().expect("index");
-        shared.hold(&mut index, &work)?;
-        let fixed = explicit_copper_connectivity(&partial, Candidate::default())?;
-        let remaining: Vec<&PhysicalNet> =
-            remaining.into_iter().filter(|net| !fixed.net_connected(net) || plane_nets.contains(&net.name)).collect();
-        let mut repair = Router::new(&partial, options, &remaining, IndexSet::new(), required_accesses, index)?;
-        repair.history_seed(&router);
-        if options.rejection_marker_cost != 0.0 {
-            let mut names: Vec<&String> = remaining_names.iter().collect();
-            names.sort();
-            for name in names {
-                let points: Vec<Point> = router.rejections.get(name).into_iter().flatten().map(|r| r.0).collect();
-                if !points.is_empty() {
-                    repair.penalise_points(&points, options.rejection_marker_cost);
-                }
-            }
-        }
-        let (more_routes, more_conflicts, used) = repair.negotiate(None, &mut events)?;
-        forward(&mut on_progress, &mut events);
-        let (more, more_rejected, more_complete) = repair.commit(&more_routes, &more_conflicts)?;
-        shared.added(&more);
-        for (name, (tracks, vias)) in &more {
-            let entry = work.entry(name.clone()).or_default();
-            entry.0.extend(tracks.iter().cloned());
-            entry.1.extend(vias.iter().cloned());
-        }
-        done.extend(more_complete.iter().cloned());
-        for net in &remaining {
-            if !more_routes.contains_key(&net.name) && fixed.net_connected(net) && !plane_nets.contains(&net.name) {
-                done.insert(net.name.clone());
-            }
-        }
-        let still: IndexMap<String, Vec<Point>> =
-            more_rejected.into_iter().filter(|(name, _)| !done.contains(name)).collect();
-        let repair_rejections = repair.rejections.clone();
-        let mut index = repair.clearance.take().expect("index");
-        drop(repair);
-        iterations += used;
-        let score = open_count(board, &nets, &work, &plane_nets, &done)?;
-        let improved = score < baseline;
-        if improved {
-            accepted = work;
-            complete = done;
-            rejected = still;
-            for (name, records) in repair_rejections {
+        let improved = best.is_some();
+        let mut seeded = false;
+        if let Some((_, attempt, seed)) = best {
+            accepted = attempt.work;
+            complete = attempt.done;
+            rejected = attempt.still;
+            seeded = seed;
+            for (name, records) in attempt.rejections {
                 router.rejections.insert(name, records);
             }
-            for (name, route) in more_routes {
+            for (name, route) in attempt.routes {
                 router.routes.insert(name, route);
             }
         }
-        shared.hold(&mut index, &accepted)?;
-        router.clearance = Some(index);
+        // Back to the adopted copper (attempts left their own in the index).
+        shared.hold(index.as_mut().expect("index"), &accepted)?;
+        router.clearance = index;
         emit(
             &mut on_progress,
             "unified_commit",
@@ -577,7 +742,7 @@ pub fn route_unified(
             vec![
                 ("round", int(round_index + 1)),
                 ("adopted", Value::Bool(improved)),
-                ("seeded", Value::Bool(false)),
+                ("seeded", Value::Bool(improved && seeded)),
                 ("seconds", Value::Float(0.0)),
             ],
         );

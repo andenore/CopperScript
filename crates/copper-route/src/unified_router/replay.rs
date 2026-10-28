@@ -108,6 +108,11 @@ pub fn replay_unified(
     let map = |items: &Option<Vec<(copper_pcb::board::PadReference, crate::pin_escape::RoutingAccess)>>| {
         items.as_ref().map(|items| items.iter().cloned().collect::<indexmap::IndexMap<_, _>>())
     };
+    if saved.options.save_inputs_path.as_deref().is_some_and(|path| !path.is_empty())
+        && (saved.fanout_created_vias.is_some() || saved.fanout_created_tracks.is_some())
+    {
+        return not_implemented("unified router save_inputs_path with fanout-created copper");
+    }
     let fanout = map(&saved.fanout_accesses);
     let required = map(&saved.required_accesses);
     super::route::route_unified(
@@ -117,6 +122,7 @@ pub fn replay_unified(
         fanout.as_ref(),
         saved.only_nets.as_ref(),
         required.as_ref(),
+        None,
         on_progress,
     )
 }

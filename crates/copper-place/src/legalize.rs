@@ -1483,6 +1483,7 @@ pub fn legalize(
         }
         let mut references: Vec<String> = group.iter().cloned().collect();
         references.sort_by_key(|r| order[r.as_str()]);
+        scene.progress(&format!("support_pack:{}", references.join(",")));
         if let Some(packed) = pack_local_components(scene, &references, &placed, targets, options, false, false, &[])? {
             placed = packed;
             placed_order.extend(references);
@@ -1503,6 +1504,7 @@ pub fn legalize(
                 }
                 let mut members: Vec<String> = pack.into_iter().collect();
                 members.sort_by_key(|r| order[r.as_str()]);
+                scene.progress(&format!("support_pack:{}", members.join(",")));
                 if let Some(packed) =
                     pack_local_components(scene, &members, &placed, targets, options, false, false, &[])?
                 {
@@ -1517,6 +1519,7 @@ pub fn legalize(
         if placed.contains_key(reference) {
             continue;
         }
+        scene.progress(&format!("legalize:{reference}"));
         let choice = best_legal_choice(
             scene,
             reference,

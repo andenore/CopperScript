@@ -25,12 +25,13 @@ use copper_place::PlannerOptions;
 use copper_route::bench::unified_overrides;
 use copper_route::escape_plan::EscapePlanOptions;
 use copper_route::fanout::FanoutOptions;
-use copper_route::flow::{RoutingPipelineOptions, STOP_STAGES, UnifiedPipelineOptions, run_routing_pipeline};
+use copper_route::flow::{RoutingPipelineOptions, STOP_STAGES, run_routing_pipeline};
 use copper_route::iteration_checkpoints::{StageState, StageTracker, write_error_record};
 use copper_route::plane::PlaneStitchOptions;
 use copper_route::progress::{ConsoleProgress, Progress, emit, int, text as text_value};
 use copper_route::routeflow::PlacementRoutingFeedbackOptions;
 use copper_route::routing::GlobalRouterOptions;
+use copper_route::unified_router::UnifiedRouterOptions;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::option_parser::{self, Parsed, Spec, flag, short_value, value};
@@ -162,6 +163,10 @@ enum Stop {
     /// A `ValueError` (`ROUTING ERROR`, exit 2); `error_type` is the Python
     /// class when this rewrite knows it.
     Value { error_type: Option<&'static str>, message: String },
+    /// Python's uncaught `KeyError` of an unknown part (a recorded
+    /// difference): its error record holds the key; this rewrite also prints
+    /// `ROUTING ERROR` and exits 2.
+    UnknownPart { message: String, key: String },
     /// A path this rewrite does not reproduce yet.
     Pending(String),
 }
@@ -380,7 +385,7 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
             Ok(true) => lengths.push((name, text)),
             Ok(false) => return usage(format!("argument {name}: expected a finite length in mm, got '{text}'")),
             Err(Stop::Pending(what)) => return Err(Checked::Pending(what)),
-            Err(Stop::Value { message, .. }) => return usage(message),
+            Err(Stop::Value { message, .. } | Stop::UnknownPart { message, .. }) => return usage(message),
         }
     }
     let optional_length = |name: &str| -> Result<Option<String>, Checked> {
@@ -390,7 +395,7 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
                 Ok(true) => Ok(Some(text.to_owned())),
                 Ok(false) => Err(Checked::Usage(format!("argument {name}: expected a positive length, got '{text}'"))),
                 Err(Stop::Pending(what)) => Err(Checked::Pending(what)),
-                Err(Stop::Value { message, .. }) => Err(Checked::Usage(message)),
+                Err(Stop::Value { message, .. } | Stop::UnknownPart { message, .. }) => Err(Checked::Usage(message)),
             },
         }
     };
@@ -553,7 +558,7 @@ fn unified_flag_notes(arguments: &Arguments) -> (Vec<String>, Vec<String>) {
 
 /// `_unified_options`, as far as this rewrite builds `UnifiedRouterOptions`.
 // PENDING: owned by rust-m4-unified (UnifiedRouterOptions).
-fn unified_options(arguments: &Arguments) -> Result<UnifiedPipelineOptions, Stop> {
+fn unified_options(arguments: &Arguments) -> Result<UnifiedRouterOptions, Stop> {
     let pitch_nm = match &arguments.unified_pitch_mm {
         // `Decimal(text)` is falsy for zero, which keeps the default pitch.
         Some(text) => {
@@ -566,29 +571,29 @@ fn unified_options(arguments: &Arguments) -> Result<UnifiedPipelineOptions, Stop
         }
         None => None,
     };
-    let overrides = unified_overrides(&arguments.texts("--unified-set")).map_err(value_error)?;
-    if !overrides.is_empty() {
-        return Err(Stop::Pending("--unified-set (UnifiedRouterOptions, rust-m4-unified)".to_owned()));
-    }
-    let limit = arguments.unified_pair_states;
-    if limit.is_some_and(|limit| limit <= 0) {
-        return Err(fail("critical pair state limit must be a positive integer or None".to_owned()));
-    }
-    if pitch_nm.is_some_and(|pitch| pitch <= 0)
-        || arguments.int("--unified-iterations") <= 0
-        || arguments.int("--unified-search-states") <= 0
-    {
-        return Err(fail("unified router pitch, iterations and search states must be positive".to_owned()));
-    }
-    if pitch_nm.is_some_and(|pitch| pitch > 1_000_000) {
-        return Err(fail("congestion_tile_nm must be a positive integer of at least one pitch".to_owned()));
-    }
-    let _ = arguments.unified_time_budget_s;
     let direct = arguments.flag("--unified-direct");
-    Ok(UnifiedPipelineOptions {
-        critical_pair_state_limit: limit,
+    let power_islands = arguments.text("--power-islands").unwrap_or("off");
+    let base = UnifiedRouterOptions {
+        pitch_nm,
+        retain_escape_copper: arguments.flag("--unified-retain-escape-copper"),
+        maximum_iterations: arguments.int("--unified-iterations"),
+        maximum_expansions: arguments.int("--unified-search-states"),
+        time_budget_s: arguments.unified_time_budget_s,
+        critical_pair_state_limit: arguments.unified_pair_states,
+        fine_regions: arguments.text("--fine-regions").unwrap_or("arrays").to_owned(),
+        power_islands: (power_islands != "off").then(|| power_islands.to_owned()),
+        pre_route_decouplers: !arguments.flag("--unified-no-decouplers") && !direct,
         direct,
+        route_smoothing: !arguments.flag("--no-route-smoothing"),
         save_inputs_path: arguments.path("--unified-save-inputs"),
+        ..UnifiedRouterOptions::default()
+    };
+    // --unified-set reaches every option; it wins over the dedicated flags above.
+    let overrides: Vec<(String, Value)> =
+        unified_overrides(&arguments.texts("--unified-set")).map_err(value_error)?.into_iter().collect();
+    base.with_overrides(&overrides).map_err(|error| match error {
+        copper_route::unified_error::Error::Value(message) => fail(message),
+        other => Stop::Pending(other.crash_line()),
     })
 }
 
@@ -653,12 +658,35 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         return 1;
     }
     let mut stage_state: Option<StageState> = None;
-    let outcome = route(&arguments, &design, &board_path, out, &mut stage_state);
+    let outcome = route(&arguments, &design, &board_path, &diagnostics, out, &mut stage_state);
     match outcome {
-        Ok(()) => not_implemented(err, "the routed report and outputs"),
+        Ok(Finished::Done { lines, exit }) => {
+            for line in lines {
+                let _ = text::print(out, &line);
+            }
+            exit
+        }
+        Ok(Finished::OutputError { lines, message }) => {
+            for line in lines {
+                let _ = text::print(out, &line);
+            }
+            let _ = text::print(out, &format!("OUTPUT ERROR: {message}"));
+            2
+        }
+        Ok(Finished::PlaneError { .. }) if debug => not_implemented(err, "--debug tracebacks"),
+        Ok(Finished::PlaneError { message }) => {
+            let _ = text::print(out, &format!("PLANE VERIFICATION ERROR: {message}"));
+            2
+        }
         Err(Stop::Pending(what)) => not_implemented(err, &what),
         Err(Stop::Value { .. }) if debug => not_implemented(err, "--debug tracebacks"),
-        Err(Stop::Value { error_type, message }) => {
+        Err(Stop::UnknownPart { .. }) if debug => not_implemented(err, "--debug tracebacks"),
+        Err(stop @ (Stop::Value { .. } | Stop::UnknownPart { .. })) => {
+            let (error_type, message, recorded) = match stop {
+                Stop::Value { error_type, message } => (error_type, message.clone(), message),
+                Stop::UnknownPart { message, key } => (Some("KeyError"), message, key),
+                Stop::Pending(_) => unreachable!("matched above"),
+            };
             let _ = text::print(out, &format!("ROUTING ERROR: {message}"));
             let Some(report) = arguments.path("--report") else { return 2 };
             let Some(error_type) = error_type else {
@@ -674,7 +702,7 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
                 &report,
                 &design.electrical.name,
                 error_type,
-                &message,
+                &recorded,
                 stage_state.as_ref(),
                 summary,
             ) {
@@ -697,9 +725,10 @@ fn route(
     arguments: &Arguments,
     design: &copper_lang::compiler::Design,
     board_path: &str,
+    diagnostics: &[copper_lang::erc::Diagnostic],
     out: &mut dyn Write,
     stage_state: &mut Option<StageState>,
-) -> Result<(), Stop> {
+) -> Result<Finished, Stop> {
     let (locked, offline) = (arguments.flag("--locked"), arguments.flag("--offline"));
     let mechanical = design.mechanical.is_some();
     let options = PhysicalOptions::new(
@@ -708,14 +737,26 @@ fn route(
         arguments.layers,
         &arguments.fab_profile,
     )?;
+    let unknown_part = |error: Error| match &error {
+        Error::Value(message) if message.starts_with("component ") && message.contains(" uses unknown part ") => {
+            let key = message.rsplit(" uses unknown part ").next().unwrap_or_default().to_owned();
+            Stop::UnknownPart { message: message.clone(), key }
+        }
+        _ => Stop::from(error),
+    };
+    // Proxy physicalization raises only `ValueError` (and the unknown part's KeyError).
+    let proxy_error = |error: Error| match unknown_part(error) {
+        Stop::Value { message, .. } => Stop::Value { error_type: Some("ValueError"), message },
+        other => other,
+    };
     let mut board = if arguments.flag("--allow-proxy-footprints") {
-        physicalize(design, Footprints::Proxy, &options, locked, offline)?
+        physicalize(design, Footprints::Proxy, &options, locked, offline).map_err(proxy_error)?
     } else {
         let base = paths::resolve(Path::new(board_path)).parent().map(Path::to_path_buf).unwrap_or_default();
         let roots: Vec<PathBuf> =
             arguments.texts("--footprint-root").iter().map(|root| PathBuf::from(pypath::display(root))).collect();
         let mut resolver = FootprintResolver::new(&base, &roots, false, locked, offline);
-        physicalize(design, Footprints::Resolved(&mut resolver), &options, locked, offline)?
+        physicalize(design, Footprints::Resolved(&mut resolver), &options, locked, offline).map_err(unknown_part)?
     };
     if let Some(scene) = arguments.path("--placement-templates") {
         board = templates::apply_placement_templates(board, Path::new(&scene), locked, offline)?;
@@ -723,6 +764,7 @@ fn route(
     for scene in arguments.texts("--hard-macro") {
         board = hard_macros::apply_hard_macro_scene(board, Path::new(&pypath::display(scene)), locked, offline)?;
     }
+    let editor_source_board = board.clone();
     let direct_unified = arguments.flag("--unified-direct");
     let stitch_enabled = arguments.flag("--stitch-zone-pads") || !board.zones.is_empty();
     let early_plane_pads = arguments.texts("--early-plane-pad");
@@ -846,7 +888,7 @@ fn route(
     };
     let mut console = arguments.flag("--progress").then(|| ConsoleProgress::new(&mut *out));
     let mut tracker = console.as_mut().map(|console| StageTracker::new(Some(console as &mut dyn Progress)));
-    let result = (|| -> Result<(), Stop> {
+    let result = (|| -> Result<Finished, Stop> {
         let mut progress: Option<&mut dyn Progress> = tracker.as_mut().map(|tracker| tracker as &mut dyn Progress);
         let (ignored, mapped) = unified_flag_notes(arguments);
         let strings = |items: &[String]| Value::Array(items.iter().map(|item| text_value(item)).collect());
@@ -876,8 +918,10 @@ fn route(
         if arguments.text("--reuse-placement").is_some() {
             return Err(Stop::Pending("--reuse-placement (placement checkpoints)".to_owned()));
         }
+        if arguments.text("--checkpoint-dir").is_some() {
+            return Err(Stop::Pending("--checkpoint-dir (placement checkpoints)".to_owned()));
+        }
         let unified = unified_options(arguments)?;
-        let _ = (direct_unified, arguments.filled_copper_trials, arguments.filled_copper_search_states);
         let escape_plan = arguments.boolean("--escape-plan", false);
         let bus_layers = arguments.boolean("--bus-layers", false);
         let array_flow = arguments.boolean("--array-flow", false);
@@ -894,7 +938,7 @@ fn route(
             global_options: Some(router_options),
             feedback_options: Some(feedback_options),
             fanout_options,
-            plane_stitch_options: early_options,
+            plane_stitch_options: early_options.clone(),
             detailed_feedback_trials: arguments.int("--detailed-feedback-trials"),
             critical_feedback_trials: arguments.int("--critical-feedback-trials"),
             placement_feedback_trials: arguments.int("--congestion-feedback-trials"),
@@ -904,11 +948,29 @@ fn route(
             escape_plan_options,
             ..RoutingPipelineOptions::default()
         };
-        run_routing_pipeline(board, pipeline, progress).map_err(|error| match error {
+        let reborrow: Option<&mut dyn Progress> = match &mut progress {
+            Some(callback) => Some(&mut **callback),
+            None => None,
+        };
+        let result = run_routing_pipeline(board, pipeline, reborrow).map_err(|error| match error {
             Error::Value(message) => Stop::Value { error_type: Some("ValueError"), message },
             Error::NotImplemented(what) => Stop::Pending(what),
         })?;
-        Ok(())
+        let context = TailContext {
+            arguments,
+            design,
+            board_path,
+            diagnostics,
+            physical_board: &editor_source_board,
+            plane_options: &plane_options,
+            early_options: early_options.as_ref(),
+            stitch_enabled,
+            direct_unified,
+        };
+        finish(&context, result, &mut progress).map_err(|error| match error {
+            Error::Value(message) => Stop::Pending(format!("an uncaught error in the report tail: {message}")),
+            Error::NotImplemented(what) => Stop::Pending(what),
+        })
     })();
     *stage_state = tracker.map(|tracker| tracker.state);
     result
@@ -927,4 +989,708 @@ fn zone_and_ground_pads(board: &PhysicalBoard) -> (Vec<PadReference>, Vec<PadRef
         }
     }
     (zone_pads, ground_pads)
+}
+
+/// How the report tail ends: the lines printed after the progress stream.
+enum Finished {
+    Done {
+        lines: Vec<String>,
+        exit: u8,
+    },
+    OutputError {
+        lines: Vec<String>,
+        message: String,
+    },
+    /// `PLANE VERIFICATION ERROR` (a native refill/DRC exception).
+    PlaneError {
+        message: String,
+    },
+}
+
+/// What the report tail reads besides the pipeline result.
+struct TailContext<'a> {
+    arguments: &'a Arguments,
+    design: &'a copper_lang::compiler::Design,
+    board_path: &'a str,
+    diagnostics: &'a [copper_lang::erc::Diagnostic],
+    physical_board: &'a PhysicalBoard,
+    plane_options: &'a PlaneStitchOptions,
+    early_options: Option<&'a PlaneStitchOptions>,
+    stitch_enabled: bool,
+    direct_unified: bool,
+}
+
+fn pads_value(pads: &[PadReference]) -> Value {
+    Value::Array(pads.iter().map(|pad| Value::from(format!("{}.{}", pad.component, pad.pad))).collect())
+}
+
+fn parse_document(text: &str) -> Value {
+    copper_json::parse(text).expect("a JSON document")
+}
+
+/// `uuid4().hex[:count]`: fresh random hex digits.
+fn random_hex(count: usize) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    hasher.update(now.as_nanos().to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    let local = 0u8;
+    hasher.update((&local as *const u8 as usize).to_le_bytes());
+    hasher.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>()[..count].to_owned()
+}
+
+fn object_of(entries: Vec<(&str, Value)>) -> Value {
+    Value::Object(entries.into_iter().map(|(key, value)| (key.to_owned(), value)).collect())
+}
+
+/// `str(path.with_name(path.stem + suffix))`.
+fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = match name.rfind('.') {
+        Some(index) if index > 0 && index < name.len() - 1 => &name[..index],
+        _ => &name[..],
+    };
+    path.with_file_name(format!("{stem}{suffix}"))
+}
+
+/// `Path.with_suffix(suffix)`.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let stem = match name.rfind('.') {
+        Some(index) if index > 0 && index < name.len() - 1 => &name[..index],
+        _ => &name[..],
+    };
+    path.with_file_name(format!("{stem}{suffix}"))
+}
+
+/// The work-limit record of the report.
+fn work_limits(arguments: &Arguments, direct: bool) -> Value {
+    let filled_trials = if direct { 0 } else { arguments.filled_copper_trials };
+    let (ignored, mapped) = unified_flag_notes(arguments);
+    let strings = |items: Vec<String>| Value::Array(items.into_iter().map(Value::Str).collect());
+    let budget = arguments
+        .int("--congestion-feedback-trials")
+        .max(arguments.int("--detailed-feedback-trials") + arguments.int("--critical-feedback-trials"));
+    object_of(vec![
+        ("unified_direct", Value::Bool(direct)),
+        ("unified_retain_escape_copper", Value::Bool(arguments.flag("--unified-retain-escape-copper"))),
+        ("unified_iterations", Value::from(arguments.int("--unified-iterations"))),
+        ("unified_time_budget_s", arguments.unified_time_budget_s.map_or(Value::Null, Value::Float)),
+        ("unified_search_states", Value::from(arguments.int("--unified-search-states"))),
+        ("fine_regions", Value::from(arguments.text("--fine-regions").unwrap_or("arrays"))),
+        ("pin_access_step_mm", Value::from(arguments.length("--pin-access-step-mm"))),
+        (
+            "critical_pin_access_step_mm",
+            arguments.critical_pin_access_step_mm.as_deref().map_or(Value::Null, Value::from),
+        ),
+        ("placement_feedback_trials", Value::from(arguments.int("--placement-feedback-trials"))),
+        ("package_initial_pair_states", Value::from(arguments.int("--package-initial-pair-states"))),
+        ("zone_dependency_expansions", Value::from(arguments.int("--zone-dependency-expansions"))),
+        ("maximum_ripup_blockers", Value::from(arguments.int("--maximum-ripup-blockers"))),
+        ("filled_copper_trials", Value::from(filled_trials)),
+        ("filled_copper_search_states", Value::from(arguments.filled_copper_search_states)),
+        ("decoupling_placement_trials", Value::from(arguments.planner.decoupling_trials)),
+        ("placement_seeds", arguments.planner.seeds.map_or(Value::Null, Value::from)),
+        ("placement_refinement_passes", Value::from(arguments.planner.refinement_passes)),
+        ("escape_spacing_passes", Value::from(arguments.planner.spacing_passes)),
+        ("congestion_feedback_trials", Value::from(budget)),
+        ("router", Value::from("unified")),
+        ("ignored_flags", strings(ignored)),
+        ("mapped_flags", strings(mapped)),
+    ])
+}
+
+/// The output tail of the Python handler after `run_routing_pipeline`.
+fn finish(
+    context: &TailContext<'_>,
+    result: copper_route::flow::RoutingPipelineResult,
+    progress: &mut Option<&mut dyn Progress>,
+) -> copper_pcb::Result<Finished> {
+    use copper_route::flow::PhysicalFlowStatus;
+    let arguments = context.arguments;
+    let stopped = result.stopped_after.is_some();
+    let native_cli = if stopped { None } else { arguments.path("--verify-plane-fill") };
+    if !stopped {
+        emit(progress, "final_contacts_native_drc", "started", Vec::new());
+    }
+    let mut stitch = if !stopped && context.stitch_enabled && !context.direct_unified {
+        Some(copper_route::plane::stitch_zone_pads(result.board(), Some(context.plane_options))?)
+    } else {
+        result.plane_stitch.clone()
+    };
+    let mut plane_repair: Option<Value> = None;
+    if let Some(current) = stitch.take() {
+        if context.stitch_enabled && !context.direct_unified && !current.board.zones.is_empty() && !stopped {
+            // Routing after stitching can wall a pour-contact pad off; re-stitch those explicitly.
+            let before = current.added_track_count + current.added_via_count;
+            let (repaired, still_cut_off) =
+                copper_route::plane::repair_cut_off_plane_pads(current, context.plane_options, 2)?;
+            plane_repair = Some(object_of(vec![
+                ("added_copper", Value::from(repaired.added_track_count + repaired.added_via_count - before)),
+                ("still_cut_off", pads_value(&still_cut_off)),
+            ]));
+            stitch = Some(repaired);
+        } else {
+            stitch = Some(current);
+        }
+    }
+    let output_board = match &stitch {
+        Some(stitch) if context.stitch_enabled && !stopped => stitch.board.clone(),
+        _ => result.board().clone(),
+    };
+    let duplicate_stitch = if stopped {
+        copper_route::pad_stitch::DuplicatePadStitchResult {
+            board: output_board.clone(),
+            stitched: Vec::new(),
+            pending: Vec::new(),
+            added_track_count: 0,
+            already_connected: Vec::new(),
+        }
+    } else {
+        copper_route::pad_stitch::stitch_duplicate_pads(&output_board)?
+    };
+    let output_board = duplicate_stitch.board.clone();
+    let mut fixed = copper_route::route_cleanup::counter(&context.physical_board.tracks);
+    let placements: indexmap::IndexMap<String, copper_pcb::board::Placement> =
+        output_board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+    for hard in &output_board.hard_macros {
+        if output_board.materialized_macros.contains(&hard.cluster) {
+            let geometry = copper_pcb::hard_macros::resolved_macro_geometry(&output_board, hard, &placements)?;
+            for track in &geometry.tracks {
+                *fixed.entry(track.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+    let (output_board, trimmed_overhangs) = if stopped {
+        (output_board, false)
+    } else {
+        copper_route::route_cleanup::trim_dangling_overhangs(&output_board, &fixed)?
+    };
+    let output_drc = if !stopped
+        && ((context.stitch_enabled && stitch.is_some())
+            || duplicate_stitch.added_track_count != 0
+            || trimmed_overhangs)
+    {
+        copper_route::drc_report::run_physical_drc(&output_board, copper_drc::Policy::default())?
+    } else {
+        result.drc.clone()
+    };
+    let decision = copper_route::drc_report::decision_value(output_drc.decision());
+    if !stopped {
+        emit(progress, "final_contacts_native_drc", "finished", vec![("decision", text_value(decision))]);
+    }
+    let mut output_board = output_board;
+    let mut output_drc = output_drc;
+    let mut filled_feedback = None;
+    let mut native_cleanup: Option<Value> = None;
+    let mut plane_verification: Option<copper_route::plane_verify::PlaneVerification> = None;
+    if let Some(native_cli) = &native_cli {
+        use copper_route::plane_verify::NativeError;
+        emit(progress, "independent_kicad", "started", Vec::new());
+        let report_location = PathBuf::from(
+            arguments
+                .path("--report")
+                .unwrap_or_else(|| format!("{}.route-report.json", context.design.electrical.name)),
+        );
+        let evidence_directory = match arguments.path("--native-evidence-directory") {
+            Some(directory) => PathBuf::from(directory),
+            None => sibling(&report_location, &format!(".native-{}", random_hex(12))),
+        };
+        let options = copper_route::filled_feedback::FilledCopperFeedbackOptions {
+            maximum_trials: arguments.filled_copper_trials,
+            maximum_search_states: arguments.filled_copper_search_states,
+            maximum_blockers: arguments.int("--maximum-ripup-blockers"),
+            maximum_dependency_expansions: arguments.int("--zone-dependency-expansions"),
+        };
+        let outcome = options.validate().map_err(NativeError::Pcb).and_then(|()| {
+            copper_route::filled_feedback::improve_filled_copper(
+                &result,
+                &output_board,
+                Path::new(native_cli),
+                &options,
+                Some(&evidence_directory),
+            )
+        });
+        let feedback = match outcome {
+            Ok(feedback) => feedback,
+            Err(NativeError::Pcb(copper_pcb::Error::NotImplemented(what))) => {
+                return Err(copper_pcb::Error::NotImplemented(what));
+            }
+            Err(error) => return Ok(Finished::PlaneError { message: error.to_string() }),
+        };
+        output_board = feedback.board.clone();
+        plane_verification = feedback.verification.clone();
+        output_drc = copper_route::drc_report::run_physical_drc(&output_board, copper_drc::Policy::default())?;
+        if let Some(verification) = &plane_verification {
+            // `remove_native_dangling_tracks`: native_stub_candidate declines
+            // evidence without exactly identified dangling ends.
+            let findings = &verification.native_findings;
+            let eligible = verification.matches(&output_board)?
+                && verification.unconnected_count == 0
+                && verification.island_count == 0
+                && !findings.is_empty()
+                && findings.len() <= 64
+                && findings.len() as i64 == verification.other_violation_count
+                && findings.iter().all(|f| {
+                    f.category == "violation"
+                        && (f.kind == "track_dangling" || f.kind == "via_dangling")
+                        && f.items.len() == 1
+                });
+            if eligible {
+                return copper_pcb::not_implemented("native dangling-copper cleanup (native_stub_cleanup)");
+            }
+            let mut protected = fixed.clone();
+            let prefix = result.plane_stitch.as_ref().map_or(&result.critical.board, |stitch| &stitch.board);
+            for track in &prefix.tracks {
+                let count = protected.entry(track.clone()).or_insert(0);
+                let in_prefix = prefix.tracks.iter().filter(|t| *t == track).count() as i64;
+                *count = (*count).max(in_prefix);
+            }
+            let mut protected_vias: indexmap::IndexMap<&copper_pcb::board::Via, i64> = indexmap::IndexMap::new();
+            for via in context.physical_board.vias.iter() {
+                *protected_vias.entry(via).or_insert(0) += 1;
+            }
+            let mut prefix_vias: indexmap::IndexMap<&copper_pcb::board::Via, i64> = indexmap::IndexMap::new();
+            for via in prefix.vias.iter() {
+                *prefix_vias.entry(via).or_insert(0) += 1;
+            }
+            for (via, count) in prefix_vias {
+                let entry = protected_vias.entry(via).or_insert(0);
+                *entry = (*entry).max(count);
+            }
+            native_cleanup = Some(object_of(vec![
+                ("status", Value::from("unchanged")),
+                ("before_digest", Value::from(verification.board_digest.as_str())),
+                ("after_digest", Value::from(verification.board_digest.as_str())),
+                (
+                    "before_artifact_directory",
+                    verification.artifact_directory.as_deref().map_or(Value::Null, Value::from),
+                ),
+                (
+                    "after_artifact_directory",
+                    verification.artifact_directory.as_deref().map_or(Value::Null, Value::from),
+                ),
+                ("removed_track_occurrences", Value::from(0i64)),
+                ("added_track_occurrences", Value::from(0i64)),
+                ("removed_via_occurrences", Value::from(0i64)),
+                (
+                    "diagnostics",
+                    Value::Array(vec![object_of(vec![("reason", Value::from("native_evidence_not_eligible"))])]),
+                ),
+                ("protected_tracks", Value::from(protected.values().sum::<i64>())),
+                ("protected_vias", Value::from(protected_vias.values().sum::<i64>())),
+            ]));
+            emit(
+                progress,
+                "independent_kicad",
+                "finished",
+                vec![
+                    ("passed", Value::Bool(verification.passed)),
+                    ("unconnected", Value::from(verification.unconnected_count)),
+                    ("other_violations", Value::from(verification.other_violation_count)),
+                ],
+            );
+        }
+        filled_feedback = Some(feedback);
+    }
+    let (duplicate_pending, duplicate_verified) = copper_route::route_closure::reconcile_zone_lands(
+        &output_board,
+        &duplicate_stitch.pending,
+        plane_verification.as_ref(),
+    )?;
+    let (plane_pending, plane_verified) = copper_route::route_closure::reconcile_zone_lands(
+        &output_board,
+        stitch.as_ref().map_or(&[][..], |stitch| &stitch.pending_pads),
+        plane_verification.as_ref(),
+    )?;
+    let complete_with_fill = copper_route::route_closure::routing_complete_with_fill(
+        &result,
+        &output_board,
+        &output_drc,
+        plane_verification.as_ref(),
+    )?;
+    let verified = plane_verification.as_ref().is_some_and(|v| v.passed);
+    let closure_status = if !stopped
+        && complete_with_fill
+        && (arguments.text("--verify-plane-fill").is_none() || verified)
+        && duplicate_pending.is_empty()
+        && plane_pending.is_empty()
+    {
+        PhysicalFlowStatus::Pass
+    } else {
+        PhysicalFlowStatus::Fail
+    };
+    let board_name = &context.design.electrical.name;
+    let report_path =
+        PathBuf::from(arguments.path("--report").unwrap_or_else(|| format!("{board_name}.route-report.json")));
+    let placement_board = &result.placement_and_global.board;
+    let mut report = Object::new();
+    let mut put = |key: &str, value: Value| {
+        report.insert(key.to_owned(), value);
+    };
+    put("schema", Value::from("copperscript-route-board/v0.1"));
+    put("status", Value::from(closure_status.value()));
+    put("erc_pass", Value::Bool(!copper_lang::erc::has_errors(context.diagnostics)));
+    put("routing_profile", Value::from(arguments.text("--routing-profile").unwrap_or("custom_defaults")));
+    put("work_limits", work_limits(arguments, context.direct_unified));
+    put(
+        "erc_diagnostics",
+        Value::Array(context.diagnostics.iter().map(|item| Value::from(item.to_string())).collect()),
+    );
+    if let Some(stage) = &result.stopped_after {
+        put("stopped_after", Value::from(stage.as_str()));
+        put("native_verification", Value::from("skipped_for_stopped_run"));
+        put("final_copper_processing", Value::from("skipped_for_stopped_run"));
+    }
+    put("fabrication_ready", Value::Bool(false));
+    put("routing_complete", Value::Bool(closure_status == PhysicalFlowStatus::Pass));
+    put("placement_candidate", Value::from(result.placement_and_global.placement_candidate.as_str()));
+    put("global", parse_document(&result.placement_and_global.global_route.to_json()));
+    put("critical", parse_document(&result.critical.to_json()?));
+    put("detailed", parse_document(&result.detailed.to_json()));
+    put("drc", parse_document(&output_drc.to_json()));
+    let mut summary = copper_route::route_summary::connection_summary(&output_board, Some(&output_drc.report))
+        .map_err(|error| copper_pcb::Error::NotImplemented(error.crash_line()))?;
+    if let Some(native) = &plane_verification {
+        summary.push((
+            "native".to_owned(),
+            object_of(vec![
+                ("passed", Value::Bool(native.passed)),
+                ("unconnected", Value::from(native.unconnected_count)),
+                ("islands", Value::from(native.island_count)),
+                ("violations", Value::from(native.other_violation_count)),
+            ]),
+        ));
+    }
+    put("summary", Value::Object(summary.into_iter().collect()));
+    let findings = copper_place::layout::placement_intent_findings(placement_board)?
+        .into_iter()
+        .map(|f| {
+            let mut entries = vec![
+                ("code", Value::from(f.code)),
+                ("status", Value::from(f.status.value())),
+                ("message", Value::from(f.message.as_str())),
+            ];
+            if let Some(subject) = &f.subject {
+                entries.push(("subject", Value::from(subject.as_str())));
+            }
+            object_of(entries)
+        })
+        .collect();
+    put("placement_findings", Value::Array(findings));
+    put(
+        "escape",
+        copper_route::escape_plan::escape_diagnostics(placement_board, &EscapePlanOptions::default())?.report(),
+    );
+    let bus_layers = arguments.boolean("--bus-layers", false);
+    if arguments.boolean("--escape-plan", false) || bus_layers {
+        let options = EscapePlanOptions { two_end_order: true, bus_layers, ..EscapePlanOptions::default() };
+        put("escape_plan", copper_route::escape_plan::plan_two_end_escapes(placement_board, &options, None)?.report());
+    }
+    if arguments.boolean("--array-flow", false) {
+        let options = EscapePlanOptions { array_flow: true, ..EscapePlanOptions::default() };
+        let items = copper_route::escape_plan::plan_array_escapes(placement_board, &options)?;
+        put("array_escape", Value::Array(items.iter().map(|item| item.report()).collect()));
+    }
+    // `_fine_region_report`: the plan of a fresh `_unified_options(args)`.
+    let fresh =
+        unified_options(arguments).map_err(|_| copper_pcb::Error::NotImplemented("_fine_region_report".to_owned()))?;
+    let plan = copper_route::unified_router::fine_region_plan(&output_board, &fresh)
+        .map_err(|error| copper_pcb::Error::NotImplemented(error.crash_line()))?;
+    let fine = match plan {
+        None => object_of(vec![("mode", Value::from("off"))]),
+        Some(plan) => {
+            let mut document = Object::new();
+            document.insert("mode".to_owned(), Value::from(fresh.fine_regions.as_str()));
+            for (key, value) in plan.report() {
+                document.insert(key, value);
+            }
+            Value::Object(document)
+        }
+    };
+    report.insert("fine_regions".to_owned(), fine);
+    if let Some(feedback) = &result.placement_feedback {
+        // Congestion-driven placement feedback (trials, moves, hot tiles).
+        report.insert("placement_feedback".to_owned(), feedback.report());
+    }
+    let zone_nets = copper_pcb::zones::distribution_zone_nets(&output_board);
+    let ordinary: Vec<_> = result.detailed.nets.iter().filter(|item| !zone_nets.contains(&item.net)).collect();
+    let mut unrouted: Vec<String> = ordinary.iter().filter(|i| !i.connected).map(|i| i.net.clone()).collect();
+    unrouted.sort();
+    let mut deferred: Vec<String> = result
+        .detailed
+        .nets
+        .iter()
+        .filter(|i| !i.connected && zone_nets.contains(&i.net))
+        .map(|i| i.net.clone())
+        .collect();
+    deferred.sort();
+    let routed_count = ordinary.iter().filter(|i| i.connected).count() as i64;
+    let strings = |items: &[String]| Value::Array(items.iter().map(|item| Value::from(item.as_str())).collect());
+    let native_fill_verified = match &plane_verification {
+        Some(native) => native.passed && native.matches(&output_board)?,
+        None => false,
+    };
+    report.insert(
+        "connectivity".to_owned(),
+        object_of(vec![
+            ("routed_ordinary_net_count", Value::from(routed_count)),
+            ("unrouted_ordinary_nets", strings(&unrouted)),
+            ("deferred_zone_nets", strings(&deferred)),
+            ("native_fill_verified", Value::Bool(native_fill_verified)),
+        ]),
+    );
+    let mut lengths: indexmap::IndexMap<&str, i64> =
+        [("straight_nm", 0), ("diagonal_45_nm", 0), ("other_angle_nm", 0)].into_iter().collect();
+    let zone_layers: Vec<copper_physical::CopperLayer> =
+        output_board.zones.iter().flat_map(|zone| zone.layers.iter().copied()).collect();
+    let mut layer_lengths: indexmap::IndexMap<String, i64> = output_board
+        .stackup
+        .copper_layers
+        .iter()
+        .filter(|layer| !zone_layers.contains(layer))
+        .map(|layer| (layer.value().to_owned(), 0))
+        .collect();
+    for track in &output_board.tracks {
+        if zone_nets.contains(&track.net) {
+            continue;
+        }
+        let dx = (track.end.x_nm - track.start.x_nm).abs();
+        let dy = (track.end.y_nm - track.start.y_nm).abs();
+        let kind = if dx == 0 || dy == 0 {
+            "straight_nm"
+        } else if dx == dy {
+            "diagonal_45_nm"
+        } else {
+            "other_angle_nm"
+        };
+        let length =
+            copper_route::routing_metrics::isqrt(i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy));
+        *lengths.get_mut(kind).expect("kind") += length;
+        *layer_lengths.entry(track.layer.value().to_owned()).or_insert(0) += length;
+    }
+    let mut zone_list: Vec<String> = zone_nets.iter().cloned().collect();
+    zone_list.sort();
+    report.insert(
+        "route_geometry".to_owned(),
+        object_of(vec![
+            (
+                "signal_track_length_nm",
+                Value::Object(lengths.into_iter().map(|(k, v)| (k.to_owned(), Value::from(v))).collect()),
+            ),
+            (
+                "signal_layer_length_nm",
+                Value::Object(layer_lengths.into_iter().map(|(k, v)| (k, Value::from(v))).collect()),
+            ),
+            (
+                "zone_net_track_count",
+                Value::from(output_board.tracks.iter().filter(|t| zone_nets.contains(&t.net)).count() as i64),
+            ),
+            ("zone_nets_deferred", strings(&zone_list)),
+        ]),
+    );
+    let lane_review = copper_route::critical_review::critical_lane_review(
+        &output_board,
+        &result.critical.nets,
+        &result.critical.match_tuning,
+    )?;
+    let lane_line = matches!(lane_review.get("nets"), Some(Value::Array(nets)) if !nets.is_empty())
+        .then(|| copper_route::critical_review::lane_review_line(&lane_review));
+    report.insert("critical_lane_review".to_owned(), Value::Object(lane_review));
+    let filled = output_board.vias.iter().filter(|via| via.finish == "filled-capped").count() as i64;
+    if filled != 0 {
+        report.insert(
+            "fabrication_requirements".to_owned(),
+            Value::Array(vec![object_of(vec![
+                ("process", Value::from("plated-over-filled-via-in-pad")),
+                ("net", Value::from("GND")),
+                ("count", Value::from(filled)),
+                ("diameter_nm", Value::from(300_000i64)),
+                ("drill_nm", Value::from(200_000i64)),
+                (
+                    "ordering_note",
+                    Value::from(
+                        "Explicitly specify filled and capped via-in-pad; KiCad PCB and Gerbers do not encode this process.",
+                    ),
+                ),
+            ])]),
+        );
+    }
+    let via_arrays = copper_route::pad_via_arrays::via_in_pad_array_report(&output_board)?;
+    if !via_arrays.is_empty() {
+        report.insert("via_in_pad_arrays".to_owned(), Value::Array(via_arrays));
+    }
+    let mut duplicate = Vec::new();
+    if stopped {
+        duplicate.push(("status", Value::from("not_run")));
+    }
+    duplicate.extend([
+        ("stitched_pads", pads_value(&duplicate_stitch.stitched)),
+        ("pending_pads", pads_value(&duplicate_pending)),
+        ("surface_pending_pads", pads_value(&duplicate_stitch.pending)),
+        ("zone_verified_pads", pads_value(&duplicate_verified)),
+        ("already_connected_pads", pads_value(&duplicate_stitch.already_connected)),
+        ("added_track_count", Value::from(duplicate_stitch.added_track_count)),
+        (
+            "pipeline_added_track_count",
+            Value::from(result.duplicate_pad_stitch.as_ref().map_or(0, |item| item.added_track_count)),
+        ),
+    ]);
+    if let Some(stitch) = &stitch {
+        let options = context.plane_options;
+        let optional = |value: Option<i64>| value.map_or(Value::Null, Value::from);
+        let preferred: Vec<PadReference> = options.preferred_ground_pads.iter().flatten().cloned().collect();
+        let mut entries = vec![
+            ("stitched_pads", pads_value(&stitch.stitched_pads)),
+            ("pending_pads", pads_value(&plane_pending)),
+            ("surface_pending_pads", pads_value(&stitch.pending_pads)),
+            ("explicit_feeder_pads", pads_value(&stitch.explicit_feeder_pads)),
+            ("zone_verified_pads", pads_value(&plane_verified)),
+            ("added_track_count", Value::from(stitch.added_track_count)),
+            ("added_via_count", Value::from(stitch.added_via_count)),
+            ("step_nm", Value::from(options.step_nm)),
+            ("maze_step_nm", Value::from(options.maze_step_nm)),
+            ("maze_state_budget", Value::from(options.maze_state_budget)),
+            ("maximum_radius_nm", Value::from(options.maximum_radius_nm)),
+            ("maximum_contact_radius_nm", Value::from(options.maximum_contact_radius_nm)),
+            ("maximum_detour_nm", Value::from(options.maximum_detour_nm)),
+            ("escape_width_nm", optional(options.escape_width_nm)),
+            ("ground_via_in_pad", Value::Bool(options.ground_via_in_pad)),
+            ("include_surface_zones", Value::Bool(options.include_surface_zones)),
+            ("preferred_ground_pads", pads_value(&preferred)),
+            (
+                "filled_capped_via_count",
+                Value::from(stitch.board.vias.iter().filter(|via| via.finish == "filled-capped").count() as i64),
+            ),
+            ("zone_fill_verified", Value::Bool(plane_verification.as_ref().is_some_and(|v| v.passed))),
+        ];
+        if let Some(native) = &plane_verification {
+            entries
+                .push(("zone_connectivity_verified", Value::Bool(native.zone_connectivity_verified(&output_board)?)));
+        }
+        if let Some(repair) = &plane_repair {
+            entries.push(("cut_off_repair", repair.clone()));
+        }
+        report.insert("plane_stitch".to_owned(), object_of(entries));
+    }
+    if let Some(early) = &result.plane_stitch {
+        let selected = match context.early_options.and_then(|options| options.only_pads.as_ref()) {
+            Some(pads) if !pads.is_empty() => pads_value(&pads.iter().cloned().collect::<Vec<_>>()),
+            _ => Value::from("all"),
+        };
+        report.insert(
+            "early_plane_stitch".to_owned(),
+            object_of(vec![
+                ("selected_pads", selected),
+                ("stitched_pads", pads_value(&early.stitched_pads)),
+                ("pending_pads", pads_value(&early.pending_pads)),
+                ("added_via_count", Value::from(early.added_via_count)),
+            ]),
+        );
+    }
+    report.insert("duplicate_pad_stitch".to_owned(), object_of(duplicate));
+    if let Some(native) = &plane_verification {
+        report.insert("plane_verification".to_owned(), parse_document(&native.to_json()));
+    }
+    if let Some(cleanup) = native_cleanup {
+        report.insert("native_cleanup".to_owned(), cleanup);
+    }
+    if let Some(feedback) = &filled_feedback {
+        report.insert("filled_copper_feedback".to_owned(), parse_document(&feedback.to_json()));
+    }
+    let native = match &plane_verification {
+        Some(native) => Some((native.matches(&output_board)?, native.passed, native.report_digest.clone())),
+        None => None,
+    };
+    let evidence = copper_place::requirements::RouteEvidence {
+        drc_board_digest: Some(output_drc.token.board_digest.clone()),
+        native,
+        drc: Some(output_drc.report.clone()),
+        via_arrays_present: Some(copper_route::pad_via_arrays::via_in_pad_arrays_present),
+    };
+    let requirements =
+        copper_place::requirements::verify_stage_requirements(context.design, &output_board, Some(&evidence))?;
+    let requirements_complete = requirements.get("complete").cloned().unwrap_or(Value::Bool(false));
+    report.insert("requirements".to_owned(), requirements);
+    report.insert("requirements_complete".to_owned(), requirements_complete.clone());
+    report.insert(
+        "routing_quality".to_owned(),
+        copper_route::routing_metrics::routing_quality(&output_board, plane_verification.as_ref())?,
+    );
+    let lines = Vec::new();
+    emit(progress, "export", "started", Vec::new());
+    let exported = (|| -> Result<(PathBuf, Vec<String>), String> {
+        if let Some(parent) = report_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            copper_pcb::project::create_directories(parent)?;
+        }
+        let content = copper_json::Dumps::new().indent(2).sort_keys(true).dumps(&Value::Object(report.clone())) + "\n";
+        copper_json::text::write_text(&report_path, &content)
+            .map_err(|e| paths::python_os_error(&e, Some(&paths::display(&report_path))))?;
+        let stale = sibling(&report_path, ".error.json");
+        match std::fs::remove_file(&stale) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(paths::python_os_error(&e, Some(&paths::display(&stale)))),
+        }
+        let summary_path = sibling(&report_path, ".summary.json");
+        let summary = copper_place::summary::write_summary(&report_path, &summary_path).map_err(|e| e.to_string())?;
+        if let Some(output) = arguments.path("--output") {
+            let output = PathBuf::from(output);
+            let manifest = copper_pcb::kicad_pcb::generate(&output_board).map_err(|e| e.to_string())?;
+            copper_pcb::project::write_kicad_project(&manifest, &output)?;
+            let revision = {
+                use sha2::{Digest, Sha256};
+                let bytes = std::fs::read(context.board_path).map_err(|e| e.to_string())?;
+                Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>()
+            };
+            copper_editor::overlay::write_intent(
+                Path::new(context.board_path),
+                context.physical_board,
+                &output_board,
+                &with_suffix(&output, ".editor-intent.json"),
+                Some(&context.design.electrical),
+                Some(&revision),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Ok((summary_path, summary))
+    })();
+    let (summary_path, summary) = match exported {
+        Ok(done) => done,
+        Err(message) => return Ok(Finished::OutputError { lines, message }),
+    };
+    emit(
+        progress,
+        "export",
+        "finished",
+        vec![("report", text_value(&paths::display(&report_path))), ("status", text_value(closure_status.value()))],
+    );
+    let mut lines = lines;
+    if let Some(stage) = &result.stopped_after {
+        lines.push(format!("STOPPED after {stage} (--stop-after): partial run, open nets below are expected"));
+    }
+    lines.push(format!(
+        "BOARD ROUTE: {} - ordinary routed={}, unrouted={}; deferred zone nets={}, native fill verified={}; \
+         explicit-copper DRC={}; native filled-board DRC={}",
+        closure_status.value(),
+        routed_count,
+        unrouted.len(),
+        deferred.len(),
+        if native_fill_verified { "True" } else { "False" },
+        decision,
+        if verified { "pass" } else { "not passed" }
+    ));
+    lines.extend(lane_line);
+    lines.push(format!("Report -> {}", paths::display(&report_path)));
+    lines.extend(summary);
+    lines.push(format!("Summary -> {}", paths::display(&summary_path)));
+    if let Some(output) = arguments.path("--output") {
+        lines.push(format!("KiCad PCB draft -> {output}"));
+    }
+    let passed = closure_status == PhysicalFlowStatus::Pass
+        && !copper_lang::erc::has_errors(context.diagnostics)
+        && (!arguments.flag("--require-verified-intent") || requirements_complete == Value::Bool(true))
+        && plane_verification.as_ref().is_none_or(|v| v.passed);
+    Ok(Finished::Done { lines, exit: if passed { 0 } else { 1 } })
 }

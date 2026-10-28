@@ -3,7 +3,7 @@
 //! (`placement._placement_polygon`, `transformed_pad_position`,
 //! `_relative_penalty`, `relative_placement_violations` and friends).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use indexmap::{IndexMap, IndexSet};
@@ -42,7 +42,25 @@ pub struct Scene<'a> {
     /// Every relative rule of the board, in order.
     pub relative: Vec<&'a RelativePlacementRule>,
     courtyards: RefCell<IndexMap<(usize, BoardSide), Vec<(Decimal, Rc<Vec<Point>>)>>>,
+    /// The planner's `progress(stage, seed, seed_count)` observer, and the
+    /// seed its phase-level stages report.
+    progress: Option<PlacementProgress<'a>>,
+    seed: Cell<(i64, i64)>,
 }
+
+/// `generate_placement_candidates(progress=)`: observes `(stage, seed, seed_count)`.
+pub trait StageSink {
+    fn stage(&self, stage: &str, seed: i64, seed_count: i64);
+}
+
+impl<F: FnMut(&str, i64, i64)> StageSink for RefCell<F> {
+    fn stage(&self, stage: &str, seed: i64, seed_count: i64) {
+        (self.borrow_mut())(stage, seed, seed_count);
+    }
+}
+
+/// A borrowed stage observer (`RefCell::new(|stage, seed, seeds| ...)`).
+pub type PlacementProgress<'a> = &'a dyn StageSink;
 
 impl<'a> Scene<'a> {
     pub fn new(board: &'a PhysicalBoard, policy: Policy) -> Self {
@@ -53,7 +71,35 @@ impl<'a> Scene<'a> {
             plane_nets: copper_pcb::zones::distribution_zone_nets(board),
             relative: board.relative_rules.iter().collect(),
             courtyards: RefCell::new(IndexMap::new()),
+            progress: None,
+            seed: Cell::new((0, 0)),
         }
+    }
+
+    /// Observe the planner's stages with `progress`.
+    pub fn with_progress(mut self, progress: Option<PlacementProgress<'a>>) -> Self {
+        self.progress = progress;
+        self
+    }
+
+    /// Whether a progress observer is installed.
+    pub fn observed(&self) -> bool {
+        self.progress.is_some()
+    }
+
+    /// `progress(stage, seed, seeds)` with an explicit seed, which later
+    /// stage-only reports reuse.
+    pub fn progress_at(&self, stage: &str, seed: i64, seeds: i64) {
+        self.seed.set((seed, seeds));
+        if let Some(progress) = self.progress {
+            progress.stage(stage, seed, seeds);
+        }
+    }
+
+    /// `progress(stage)` inside a seed's phase (`lambda stage: progress(stage, seed, seeds)`).
+    pub fn progress(&self, stage: &str) {
+        let (seed, seeds) = self.seed.get();
+        self.progress_at(stage, seed, seeds);
     }
 
     /// `_rules(board).get(reference)`.

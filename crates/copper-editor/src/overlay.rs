@@ -861,3 +861,69 @@ impl RoutedOverlay {
         Value::Object(scene)
     }
 }
+
+/// `_track`: one routed track of the intent.
+fn track_record(t: &TrackSegment) -> Value {
+    object(vec![
+        ("net", Value::from(t.net.as_str())),
+        ("start", point_value(t.start)),
+        ("end", point_value(t.end)),
+        ("width_nm", Value::from(t.width_nm)),
+        ("layer", Value::from(t.layer.value())),
+    ])
+}
+
+/// `_via`: one routed via of the intent.
+fn via_record(v: &Via) -> Value {
+    object(vec![
+        ("net", Value::from(v.net.as_str())),
+        ("position", point_value(v.position)),
+        ("size_nm", Value::from(v.size_nm)),
+        ("drill_nm", Value::from(v.drill_nm)),
+        ("from_layer", Value::from(v.from_layer.value())),
+        ("to_layer", Value::from(v.to_layer.value())),
+    ])
+}
+
+/// `write_intent(source, unrouted, routed, path, electrical=, source_revision=)`:
+/// called by `route-board` with source rules and the final router poses.
+pub fn write_intent(
+    source: &Path,
+    unrouted: &PhysicalBoard,
+    routed: &PhysicalBoard,
+    path: &Path,
+    electrical: Option<&Board>,
+    source_revision: Option<&str>,
+) -> Result<()> {
+    let mut posed = unrouted.clone();
+    posed.placements = routed.placements.clone();
+    let mut native_references = Object::new();
+    let mut distinct = std::collections::BTreeSet::new();
+    for p in &posed.placements {
+        let reference = copper_pcb::kicad_pcb::kicad_reference(&p.reference);
+        distinct.insert(reference.clone());
+        native_references.insert(p.reference.clone(), Value::from(reference));
+    }
+    if distinct.len() != native_references.len() {
+        return value("source references collide in the native PCB export");
+    }
+    let bytes =
+        std::fs::read(source).map_err(|e| Error::Os(paths::python_os_error(&e, Some(&paths::display(source)))))?;
+    let current_revision = sha256_hex(&bytes);
+    if source_revision.is_some_and(|revision| revision != current_revision) {
+        return value("source changed during routing; editor intent cannot be published");
+    }
+    let data = object(vec![
+        ("schema", Value::from(INTENT_SCHEMA)),
+        ("source_revision", Value::from(current_revision.as_str())),
+        ("electrical_digest", electrical.map_or(Value::Null, |board| Value::from(electrical_digest(board)))),
+        ("native_references", Value::Object(native_references)),
+        ("physical_digest", Value::from(projection_digest(&posed))),
+        ("poses", Value::Array(pose_records(&posed))),
+        ("tracks", Value::Array(routed.tracks.iter().map(track_record).collect())),
+        ("vias", Value::Array(routed.vias.iter().map(via_record).collect())),
+    ]);
+    let text = Dumps::new().indent(2).sort_keys(true).dumps(&data) + "\n";
+    copper_json::text::write_text(path, &text)
+        .map_err(|e| Error::Os(paths::python_os_error(&e, Some(&paths::display(path)))))
+}
