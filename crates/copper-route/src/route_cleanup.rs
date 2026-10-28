@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 
 use indexmap::{IndexMap, IndexSet};
 
-use copper_drc::connectivity::{Candidate, CopperContact, copper_contacts_overlap, explicit_copper_connectivity, via_copper_contact};
+use copper_drc::connectivity::{
+    Candidate, CopperContact, copper_contacts_overlap, explicit_copper_connectivity, via_copper_contact,
+};
 use copper_pcb::board::{PhysicalBoard, PhysicalNet, RouteKind, TrackSegment, Via};
 use copper_pcb::transform::{placed_pad_shape, transformed_local_point};
 use copper_physical::footprint::PadKind;
@@ -65,7 +67,8 @@ fn net_pad_shapes(board: &PhysicalBoard, net: &str) -> Vec<(Vec<CopperLayer>, Ro
             }
         }
         for pad in &footprint.pads {
-            if !assigned.contains(pad.number.as_str()) || matches!(pad.kind, PadKind::Aperture | PadKind::NonPlatedThroughHole)
+            if !assigned.contains(pad.number.as_str())
+                || matches!(pad.kind, PadKind::Aperture | PadKind::NonPlatedThroughHole)
             {
                 continue;
             }
@@ -143,7 +146,12 @@ impl Settler<'_> {
             .collect();
         let graph = explicit_copper_connectivity(
             self.board,
-            Candidate { only_nets: Some(&only), tracks: Some(&shrunk_tracks), vias: Some(&shrunk_vias), ..Candidate::default() },
+            Candidate {
+                only_nets: Some(&only),
+                tracks: Some(&shrunk_tracks),
+                vias: Some(&shrunk_vias),
+                ..Candidate::default()
+            },
         )?;
         if !graph.net_connected(self.net) {
             return Ok(None);
@@ -195,7 +203,9 @@ impl Settler<'_> {
 /// copper) and critical, zone and incomplete nets never change.
 pub fn trim_dangling_overhangs(board: &PhysicalBoard, protected: &TrackCounter) -> Result<PhysicalBoard> {
     let mut skip: IndexSet<&str> = board.zones.iter().map(|zone| zone.net.as_str()).collect();
-    skip.extend(board.net_routing_rules.iter().filter(|rule| rule.kind != RouteKind::General).map(|rule| rule.net.as_str()));
+    skip.extend(
+        board.net_routing_rules.iter().filter(|rule| rule.kind != RouteKind::General).map(|rule| rule.net.as_str()),
+    );
     let nets: IndexMap<&str, &PhysicalNet> = board.nets.iter().map(|net| (net.name.as_str(), net)).collect();
     let mut by_net: BTreeMap<&str, Vec<TrackSegment>> = BTreeMap::new();
     for track in &board.tracks {
@@ -213,13 +223,8 @@ pub fn trim_dangling_overhangs(board: &PhysicalBoard, protected: &TrackCounter) 
         if skip.contains(name) || owned.is_empty() {
             continue;
         }
-        let settle = Settler {
-            board,
-            name,
-            net,
-            pads: net_pad_shapes(board, name),
-            order: board.stackup.copper_layers.clone(),
-        };
+        let settle =
+            Settler { board, name, net, pads: net_pad_shapes(board, name), order: board.stackup.copper_layers.clone() };
         let vias: Vec<Via> = board.vias.iter().filter(|via| via.net == *name).cloned().collect();
         let Some(score) = settle.score(tracks, &vias)? else { continue };
         if score.1 == 0 {

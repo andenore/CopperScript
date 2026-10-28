@@ -85,6 +85,11 @@ fn empty() -> Value {
     Value::Object(Object::new())
 }
 
+/// `native.get(key) if native else None`.
+fn native_field(native: Option<&Value>, key: &str) -> Value {
+    if truthy(native) { native.and_then(|n| n.get(key)).cloned().unwrap_or(Value::Null) } else { Value::Null }
+}
+
 /// `summarize_report`: a bounded projection of a routing or layout report.
 pub fn summarize_report(report: &Value, report_path: &str, report_digest: &str) -> Result<Value> {
     const LIMIT: usize = 8;
@@ -110,15 +115,108 @@ pub fn summarize_report(report: &Value, report_path: &str, report_digest: &str) 
             ));
         }
     }
-    if report.get("plane_verification").is_some_and(|v| *v != Value::Null)
-        || !list(report.get("drc").and_then(|d| d.get("findings"))).is_empty()
-        || report.get("detailed").is_some()
-        || report.get("critical").is_some()
-        || report.get("fanout").is_some()
-    {
-        return copper_pcb::not_implemented("summaries of routing reports");
-    }
+    let native = report.get("plane_verification").filter(|value| **value != Value::Null);
     let token_digest = report.get("drc").and_then(|d| d.get("token")).and_then(|t| t.get("board_digest"));
+    let deferred: Vec<&Value> =
+        list(report.get("route_geometry").and_then(|g| g.get("zone_nets_deferred"))).iter().collect();
+    let in_deferred = |nets: Option<&Value>| {
+        let nets = list(nets);
+        !nets.is_empty() && nets.iter().all(|net| deferred.contains(&net))
+    };
+    let findings = list(report.get("drc").and_then(|d| d.get("findings")));
+    let native_bound =
+        truthy(native) && truthy(token_digest) && native.and_then(|n| n.get("board_digest")) == token_digest;
+    let native_closed = native_bound
+        && native.and_then(|n| n.get("passed")) == Some(&Value::Bool(true))
+        && ["unconnected_count", "other_violation_count", "island_count"]
+            .iter()
+            .all(|key| native.and_then(|n| n.get(key)) == Some(&int(0)))
+        && !truthy(native.and_then(|n| n.get("findings")));
+    let mut reconciled: i64 = 0;
+    let severity = |f: &Value| f.get("severity").and_then(Value::as_str).map(str::to_owned);
+    let code_of = |f: &Value| f.get("code").and_then(Value::as_str).map(str::to_owned);
+    let only_deferred = findings.iter().all(|f| {
+        severity(f).as_deref() != Some("error")
+            || code_of(f).as_deref() == Some("DRC-ROUTE-INCOMPLETE")
+            || (code_of(f).as_deref() == Some("DRC-OPEN-NET") && in_deferred(f.get("nets")))
+    });
+    if let Some(native) = native
+        && !truthy(native.get("passed"))
+    {
+        // Native findings repeat one description per item; count them instead.
+        let mut repeated: Vec<(String, usize)> = Vec::new();
+        for item in list(native.get("findings")) {
+            let item = py_str(item);
+            match repeated.iter_mut().find(|(text, _)| *text == item) {
+                Some(entry) => entry.1 += 1,
+                None => repeated.push((item, 1)),
+            }
+        }
+        let detail: Vec<String> = repeated
+            .iter()
+            .map(|(text, count)| if *count > 1 { format!("{count} x {text}") } else { text.clone() })
+            .collect();
+        let detail = detail.join("; ");
+        let detail = if detail.is_empty() { "Native verification has not passed.".to_owned() } else { detail };
+        issues.push(issue(
+            "native",
+            "NATIVE-VERIFY".to_owned(),
+            text("filled-board"),
+            &text(&detail),
+            "Run `copper issues RUN --stage native` for grouped, located findings and \
+             `copper view RUN --issue ID --filled` to see one.",
+            &[],
+            &[],
+        ));
+    }
+    for finding in findings {
+        if severity(finding).as_deref() != Some("error") {
+            continue;
+        }
+        if native_closed
+            && report.get("routing_complete") == Some(&Value::Bool(true))
+            && only_deferred
+            && (code_of(finding).as_deref() == Some("DRC-ROUTE-INCOMPLETE")
+                || (code_of(finding).as_deref() == Some("DRC-OPEN-NET") && in_deferred(finding.get("nets"))))
+        {
+            reconciled += 1;
+            continue;
+        }
+        let nets: Vec<String> = list(finding.get("nets")).iter().map(py_str).collect();
+        let next = match nets.first() {
+            Some(net) => {
+                format!("Locate it with `copper issues RUN --net {net}`; see it with `copper view RUN --net {net}`.")
+            }
+            None => "List located physical issues with `copper issues RUN --stage physical`.".to_owned(),
+        };
+        let measurement = object(vec![
+            ("actual_nm", finding.get("measured_nm").cloned().unwrap_or(Value::Null)),
+            ("limit_nm", finding.get("required_nm").cloned().unwrap_or(Value::Null)),
+        ]);
+        issues.push(issue(
+            "physical",
+            code_of(finding).unwrap_or_else(|| "DRC-UNKNOWN".to_owned()),
+            text(&nets.join(",")),
+            finding.get("message").unwrap_or(&text("")),
+            &next,
+            &[],
+            &[measurement],
+        ));
+    }
+    for row in list(report.get("detailed").and_then(|d| d.get("nets"))) {
+        let net = row.get("net").cloned().unwrap_or(Value::Null);
+        if !truthy(row.get("connected")) && !deferred.contains(&&net) {
+            issues.push(issue(
+                "routing",
+                "ORDINARY-OPEN".to_owned(),
+                net,
+                &text("Ordinary net is incomplete."),
+                "Inspect the failed route's blockers and bounded search diagnostics.",
+                &[],
+                &[],
+            ));
+        }
+    }
     for gate in list(report.get("gates")) {
         let status = gate.get("status").and_then(Value::as_str).unwrap_or_default();
         if matches!(status, "fail" | "failed" | "blocked" | "not_run") {
@@ -132,6 +230,29 @@ pub fn summarize_report(report: &Value, report_path: &str, report_digest: &str) 
                 &[],
             ));
         }
+    }
+    for group in list(report.get("critical").and_then(|c| c.get("nets"))) {
+        let diagnostics: Vec<String> = list(group.get("diagnostics")).iter().map(py_str).collect();
+        if !truthy(group.get("connected")) || !diagnostics.is_empty() {
+            let nets: Vec<String> = list(group.get("nets")).iter().map(py_str).collect();
+            let detail = if diagnostics.is_empty() {
+                "Critical group is incomplete.".to_owned()
+            } else {
+                diagnostics.join("; ")
+            };
+            issues.push(issue(
+                "critical",
+                "CRITICAL-ROUTE".to_owned(),
+                text(&nets.join(",")),
+                &text(&detail),
+                "Inspect the group's physical profile and retained critical-route diagnostics.",
+                &[],
+                &[],
+            ));
+        }
+    }
+    if truthy(report.get("fanout").and_then(|f| f.get("late_bypass_completion"))) {
+        return copper_pcb::not_implemented("summaries of late bypass completion");
     }
     let priority = |stage: &str| match stage {
         "native" => 0,
@@ -211,10 +332,21 @@ pub fn summarize_report(report: &Value, report_path: &str, report_digest: &str) 
         (
             "native",
             object(vec![
-                ("status", text("not_run")),
-                ("unconnected", Value::Null),
-                ("violations", Value::Null),
-                ("report_digest", Value::Null),
+                (
+                    "status",
+                    text(if native_closed {
+                        "pass"
+                    } else if truthy(native) && !truthy(native.and_then(|n| n.get("passed"))) {
+                        "fail"
+                    } else if truthy(native) {
+                        "unbound"
+                    } else {
+                        "not_run"
+                    }),
+                ),
+                ("unconnected", native_field(native, "unconnected_count")),
+                ("violations", native_field(native, "other_violation_count")),
+                ("report_digest", native_field(native, "report_digest")),
             ]),
         ),
         (
@@ -235,7 +367,7 @@ pub fn summarize_report(report: &Value, report_path: &str, report_digest: &str) 
         ),
         ("issue_count", int(issues.len() as i64)),
         ("issue_counts_by_stage", Value::Object(counts.into_iter().map(|(k, v)| (k.to_owned(), int(v))).collect())),
-        ("native_reconciled_explicit_findings", int(0)),
+        ("native_reconciled_explicit_findings", int(reconciled)),
         ("issues", Value::Array(issue_values)),
         ("omitted_issue_count", int(issues.len().saturating_sub(LIMIT) as i64)),
         ("fabrication_ready", Value::Bool(false)),

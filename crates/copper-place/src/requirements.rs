@@ -267,8 +267,22 @@ fn placement(scene: &Scene, constraint: &Constraint, lowered: &Lowered) -> Verif
     Ok((status.to_owned(), detail, measurements))
 }
 
-/// `_evaluate` at the placement stage.
-fn evaluate(scene: &Scene, flat: &FlatElectricalView, constraint: &Constraint) -> Verified {
+/// The routing-stage evidence `verify_requirements(..., drc=, native=, stage="route")` reads.
+#[derive(Clone, Debug, Default)]
+pub struct RouteEvidence {
+    /// `drc.token.board_digest`, when a DRC report is given.
+    pub drc_board_digest: Option<String>,
+    /// The native filled-board verification: (`matches(physical)`, `passed`, `report_digest`).
+    pub native: Option<(bool, bool, String)>,
+}
+
+/// `_evaluate` (`route` is the routing-stage evidence, None at the placement stage).
+fn evaluate(
+    scene: &Scene,
+    flat: &FlatElectricalView,
+    constraint: &Constraint,
+    route: Option<&RouteEvidence>,
+) -> Verified {
     match constraint.mode {
         ConstraintMode::Assume => return outcome("assumed", "source assumption; not verified evidence"),
         ConstraintMode::External => {
@@ -292,7 +306,34 @@ fn evaluate(scene: &Scene, flat: &FlatElectricalView, constraint: &Constraint) -
         }
         return placement(scene, constraint, &lowered);
     }
-    outcome("blocked", "requires final routing-stage evidence; placement alone is insufficient")
+    if route.is_none() {
+        return outcome("blocked", "requires final routing-stage evidence; placement alone is insufficient");
+    }
+    if constraint.kind == ConstraintKind::CopperZone {
+        let Some(expected) = lowered.zones.first() else {
+            return Err(Unresolved::NotImplemented("an unlowered copper zone (Python crashes)".to_owned()));
+        };
+        if !scene.board.zones.contains(expected) {
+            return outcome("fail", "declared zone geometry/settings absent or changed");
+        }
+        return match route.and_then(|route| route.native.as_ref()) {
+            Some((true, true, _)) => {
+                outcome("pass", "preserved zone declaration and current native filled-board checks; no impedance proof")
+            }
+            Some((true, false, _)) => outcome("fail", "native filled-board connectivity/DRC did not pass"),
+            _ => outcome("blocked", "current artifact-bound native refill evidence is missing"),
+        };
+    }
+    match constraint.kind {
+        ConstraintKind::Routing
+        | ConstraintKind::LengthMatch
+        | ConstraintKind::ViaInPad
+        | ConstraintKind::HoleClearance => Err(Unresolved::NotImplemented(format!(
+            "routing-stage verification of {} declarations",
+            constraint.kind.value()
+        ))),
+        _ => outcome("blocked", "no supported verifier for this declaration"),
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -451,6 +492,17 @@ pub fn verify_requirements(design: &Design, physical: &PhysicalBoard, stage: &st
     if stage != "placement" {
         return copper_pcb::not_implemented("routing-stage requirement verification");
     }
+    verify_stage_requirements(design, physical, None)
+}
+
+/// `verify_requirements(source, physical, drc=, native=, stage="route")` when
+/// `route` is given, else the placement stage.
+pub fn verify_stage_requirements(
+    design: &Design,
+    physical: &PhysicalBoard,
+    route: Option<&RouteEvidence>,
+) -> Result<Value> {
+    let stage = if route.is_some() { "route" } else { "placement" };
     let flat = copper_lang::elaborate::elaborate(&design.electrical).map_err(Error::Value)?;
     let digest = copper_drc::digest::physical_board_digest(physical);
     let scene = Scene::new(physical, crate::PlannerOptions::default().policy());
@@ -479,10 +531,13 @@ pub fn verify_requirements(design: &Design, physical: &PhysicalBoard, stage: &st
         if constraint.constraint_id.as_ref().is_none_or(|id| id.is_empty()) {
             constraint.constraint_id = Some(physical_id);
         }
+        let stale_drc = route.and_then(|route| route.drc_board_digest.as_deref()).is_some_and(|board| board != digest);
         let verified = if counts[identifier.as_str()] > 1 {
             outcome("blocked", "duplicate declaration ID")
+        } else if stale_drc {
+            outcome("blocked", "DRC evidence belongs to different physical geometry")
         } else {
-            evaluate(&scene, &flat, &constraint)
+            evaluate(&scene, &flat, &constraint, route)
         };
         let (status, detail, measurements) = match verified {
             Ok(result) => result,
@@ -513,6 +568,9 @@ pub fn verify_requirements(design: &Design, physical: &PhysicalBoard, stage: &st
             ("declared_verifier", original.verifier.as_deref().map_or(Value::Null, text)),
         ]));
     }
+    if route.is_some() && !flat.physical_macros.is_empty() {
+        return copper_pcb::not_implemented("routing-stage verification of source macros");
+    }
     rows.extend(verify_source_macros(&flat, physical)?);
     let status_of = |row: &Value| row.get("status").and_then(Value::as_str).unwrap_or_default().to_owned();
     let hard: Vec<&Value> = rows.iter().filter(|r| r.get("required") == Some(&Value::Bool(true))).collect();
@@ -541,7 +599,13 @@ pub fn verify_requirements(design: &Design, physical: &PhysicalBoard, stage: &st
         ("complete", Value::Bool(overall == "pass")),
         ("board_digest", text(&digest)),
         ("source_digest", text(&sha256_hex(source.as_bytes()))),
-        ("native_report_digest", Value::Null),
+        (
+            "native_report_digest",
+            match route.and_then(|route| route.native.as_ref()) {
+                Some((true, _, digest)) => text(digest),
+                _ => Value::Null,
+            },
+        ),
         ("counts", Value::Object(tally.into_iter().map(|(k, v)| (k, int(v))).collect())),
         ("requirements", Value::Array(rows)),
         (
