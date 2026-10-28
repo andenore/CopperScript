@@ -903,7 +903,7 @@ impl<'b> RoutingClearanceIndex<'b> {
         for (position, record) in kept.iter().enumerate().skip(first) {
             if record.default_occurrence {
                 let occurrence = format!("addition:{position}:{}", record.kind);
-                self.relabel(&record.clone(), &occurrence);
+                self.relabel(record, &occurrence);
             }
         }
         self.additions = kept.iter().map(|record| record.entry.clone()).collect();
