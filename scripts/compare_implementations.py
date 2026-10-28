@@ -582,7 +582,8 @@ def compare_case(case: Case, rust_command: list[str], python_command: list[str],
     if case.mutation is not None:
         source, seed = case.mutation
         original = (ROOT / source).read_text(encoding="utf-8")
-        mutated = ROOT / Path(source).parent / Path(case.stdin_input or case.args[1]).name
+        target = case.stdin_input or next(arg for arg in case.args if Path(arg).name.startswith(".compare-mutation-"))
+        mutated = ROOT / target
         mutated.write_bytes(mutate_source(original, seed).encode("utf-8"))
     try:
         return _compare_runs(case, record, rust_command, python_command, work, slug, out, environment,
