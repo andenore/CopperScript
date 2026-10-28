@@ -11,7 +11,7 @@ use copper_units::Decimal;
 
 use crate::board::Placement;
 
-pub(crate) fn decimal_f64(value: &Decimal) -> f64 {
+pub fn decimal_f64(value: &Decimal) -> f64 {
     value.to_sci_string().parse().expect("finite decimal")
 }
 
@@ -29,7 +29,8 @@ pub fn transformed_local_point(placement: &Placement, point: Point) -> Point {
     Point::new(placement.position.x_nm + offset.x_nm, placement.position.y_nm + offset.y_nm)
 }
 
-fn rotate_offset(center: Point, x: i64, y: i64, degrees: f64) -> Point {
+/// `drc._rotate_offset`: `center` plus `(x, y)` rotated by `degrees`.
+pub fn rotate_offset(center: Point, x: i64, y: i64, degrees: f64) -> Point {
     let angle = degrees.to_radians();
     let (x, y) = (x as f64, y as f64);
     Point::new(

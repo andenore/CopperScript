@@ -267,6 +267,141 @@ fn placement(scene: &Scene, constraint: &Constraint, lowered: &Lowered) -> Verif
     Ok((status.to_owned(), detail, measurements))
 }
 
+const ROUTE_PARAMETERS: [&str; 13] = [
+    "kind",
+    "priority",
+    "width",
+    "clearance",
+    "allowed_layers",
+    "max_vias",
+    "max_length",
+    "partner",
+    "max_skew",
+    "breakout_length",
+    "breakout_width",
+    "breakout_gap",
+    "breakout_clearance",
+];
+
+/// `_routing`: a routing declaration against the final copper.
+fn routing(
+    constraint: &Constraint,
+    lowered: &Lowered,
+    board: &PhysicalBoard,
+    drc: Option<&copper_drc::Report>,
+) -> Verified {
+    const BUDGET_CODES: [&str; 3] = ["DRC-MAX-LENGTH", "DRC-DIFF-SKEW", "DRC-LENGTH-MATCH"];
+    let Some(expected) = lowered.routing.first() else {
+        return Err(Unresolved::NotImplemented("an unlowered routing rule (Python crashes)".to_owned()));
+    };
+    let Some(current) = board.net_routing_rules.iter().find(|r| r.net == expected.net) else {
+        return outcome("blocked", "routing intent is absent from the final physical board");
+    };
+    let mut view = board.clone();
+    view.net_routing_rules = board.net_routing_rules.iter().filter(|r| r.net != expected.net).cloned().collect();
+    view.net_routing_rules.push(expected.clone());
+    let findings = copper_drc::routing_rule_findings(&view).map_err(|error| match error {
+        Error::Value(message) => Unresolved::Value(message),
+        Error::NotImplemented(what) => Unresolved::NotImplemented(what),
+    })?;
+    let mut related: IndexSet<String> = IndexSet::from([expected.net.clone()]);
+    if let Some(partner) = &expected.differential_partner {
+        related.insert(partner.clone());
+    }
+    let touches = |nets: &[String]| nets.iter().any(|net| related.contains(net));
+    let errors: Vec<&copper_drc::Finding> = findings
+        .iter()
+        .filter(|f| {
+            (f.severity == copper_drc::Severity::Error || BUDGET_CODES.contains(&f.code.as_str())) && touches(&f.nets)
+        })
+        .collect();
+    let optional = |value: Option<i64>| value.map_or(Value::Null, |v| Value::from(v));
+    let measurements: Vec<Value> = errors
+        .iter()
+        .map(|f| {
+            object(vec![
+                ("property", text(&f.code)),
+                ("actual_nm", optional(f.measured_nm)),
+                ("limit_nm", optional(f.required_nm)),
+            ])
+        })
+        .collect();
+    let done = |status: &str, detail: &str, measurements: &[Value]| -> Verified {
+        Ok((status.to_owned(), detail.to_owned(), measurements.to_vec()))
+    };
+    if !errors.is_empty() {
+        let detail: Vec<&str> = errors.iter().map(|f| f.message.as_str()).collect();
+        return done("fail", &detail.join("; "), &measurements);
+    }
+    let nets: Vec<_> = board.nets.iter().filter(|n| related.contains(&n.name)).collect();
+    let graph = copper_drc::connectivity::explicit_copper_connectivity(
+        board,
+        copper_drc::connectivity::Candidate { only_nets: Some(&related), ..Default::default() },
+    )
+    .map_err(|error| Unresolved::Value(error.to_string()))?;
+    if nets.len() != related.len() || !nets.iter().all(|n| graph.net_connected(n)) {
+        return done(
+            "blocked",
+            "routing limits cannot pass while an affected net lacks explicit connectivity",
+            &measurements,
+        );
+    }
+    let has = |name: &str| constraint.parameters.contains_key(name);
+    if has("clearance") || has("breakout_clearance") {
+        let required = expected.clearance_nm.filter(|v| *v != 0).unwrap_or(board.rules.minimum_clearance_nm);
+        let actual = current.clearance_nm.filter(|v| *v != 0).unwrap_or(board.rules.minimum_clearance_nm);
+        if actual < required
+            || (has("breakout_clearance") && current.breakout_clearance_nm != expected.breakout_clearance_nm)
+        {
+            return done(
+                "blocked",
+                "final clearance rule differs; a scoped exact-clearance verification is required",
+                &measurements,
+            );
+        }
+        let executed = drc.is_some_and(|drc| {
+            drc.coverage
+                .iter()
+                .any(|c| c.check == "shorts_and_clearance" && c.status == copper_drc::CoverageStatus::Executed)
+        });
+        if !executed {
+            return done("blocked", "no current exact-clearance DRC coverage", &measurements);
+        }
+        let errors: Vec<&str> = drc
+            .expect("covered")
+            .findings
+            .iter()
+            .filter(|f| {
+                f.severity == copper_drc::Severity::Error
+                    && touches(&f.nets)
+                    && ["DRC-CLEARANCE", "DRC-SHORT", "DRC-ZONE-CLEARANCE"].contains(&f.code.as_str())
+            })
+            .map(|f| f.message.as_str())
+            .collect();
+        if !errors.is_empty() {
+            return done("fail", &errors.join("; "), &measurements);
+        }
+    }
+    let mut unknown: Vec<&str> =
+        constraint.parameters.keys().map(String::as_str).filter(|key| !ROUTE_PARAMETERS.contains(key)).collect();
+    unknown.sort_unstable();
+    if !unknown.is_empty() {
+        let detail = format!("no complete final-geometry/electrical verifier for parameters: {}", unknown.join(", "));
+        return done("blocked", &detail, &measurements);
+    }
+    if has("breakout_gap") {
+        return done("blocked", "pair-gap enforcement needs a complete final pair-geometry verifier", &measurements);
+    }
+    if has("max_skew") && expected.differential_partner.is_none() {
+        return done("blocked", "pair-skew limit has no declared differential partner", &measurements);
+    }
+    done(
+        "pass",
+        "original declaration's implemented geometric limits checked; no electrical performance claim",
+        &measurements,
+    )
+}
+
 /// The routing-stage evidence `verify_requirements(..., drc=, native=, stage="route")` reads.
 #[derive(Clone, Debug, Default)]
 pub struct RouteEvidence {
@@ -274,6 +409,10 @@ pub struct RouteEvidence {
     pub drc_board_digest: Option<String>,
     /// The native filled-board verification: (`matches(physical)`, `passed`, `report_digest`).
     pub native: Option<(bool, bool, String)>,
+    /// The final explicit-copper DRC report.
+    pub drc: Option<copper_drc::Report>,
+    /// `pad_via_arrays.via_in_pad_arrays_present` (routing owns the array geometry).
+    pub via_arrays_present: Option<fn(&PhysicalBoard) -> Result<bool>>,
 }
 
 /// `_evaluate` (`route` is the routing-stage evidence, None at the placement stage).
@@ -324,11 +463,35 @@ fn evaluate(
             _ => outcome("blocked", "current artifact-bound native refill evidence is missing"),
         };
     }
+    if constraint.kind == ConstraintKind::ViaInPad {
+        let Some(expected) = lowered.via_in_pad.first() else {
+            return Err(Unresolved::NotImplemented("an unlowered via-in-pad rule (Python crashes)".to_owned()));
+        };
+        if !scene.board.via_in_pad_rules.contains(expected) {
+            return outcome("fail", "via-in-pad permission/array differs from source");
+        }
+        if expected.rows.is_some() {
+            let Some(present) = route.and_then(|route| route.via_arrays_present) else {
+                return Err(Unresolved::NotImplemented("via-in-pad array presence".to_owned()));
+            };
+            let mut scoped = scene.board.clone();
+            scoped.via_in_pad_rules = vec![expected.clone()];
+            let found = present(&scoped).map_err(|error| match error {
+                Error::Value(message) => Unresolved::Value(message),
+                Error::NotImplemented(what) => Unresolved::NotImplemented(what),
+            })?;
+            if !found {
+                return outcome("fail", "required via-array geometry or multiplicity is absent");
+            }
+            return outcome("blocked", "required array is present; fabrication process confirmation remains external");
+        }
+        return outcome("pass", "geometric permission preserved; no claim that an ordered via process is qualified");
+    }
+    if constraint.kind == ConstraintKind::Routing {
+        return routing(constraint, &lowered, scene.board, route.and_then(|route| route.drc.as_ref()));
+    }
     match constraint.kind {
-        ConstraintKind::Routing
-        | ConstraintKind::LengthMatch
-        | ConstraintKind::ViaInPad
-        | ConstraintKind::HoleClearance => Err(Unresolved::NotImplemented(format!(
+        ConstraintKind::LengthMatch | ConstraintKind::HoleClearance => Err(Unresolved::NotImplemented(format!(
             "routing-stage verification of {} declarations",
             constraint.kind.value()
         ))),
@@ -358,8 +521,13 @@ fn same_value(a: Option<&Value>, b: Option<&Value>) -> bool {
     }
 }
 
-/// `verify_source_macros` at the placement stage.
-fn verify_source_macros(flat: &FlatElectricalView, physical: &PhysicalBoard) -> Result<Vec<Value>> {
+/// `verify_source_macros(flat, physical, stage=, stale_drc=)`.
+fn verify_source_macros(
+    flat: &FlatElectricalView,
+    physical: &PhysicalBoard,
+    placement_stage: bool,
+    stale_drc: bool,
+) -> Result<Vec<Value>> {
     if flat.physical_macros.is_empty() {
         return Ok(Vec::new());
     }
@@ -388,7 +556,9 @@ fn verify_source_macros(flat: &FlatElectricalView, physical: &PhysicalBoard) -> 
     for binding in &bindings {
         let (mut status, mut detail) = ("blocked".to_owned(), "physical macro copper is not materialized".to_owned());
         let snapshot = prepared.get(binding.name.as_str());
-        if let Some(error) = &preparation_error {
+        if stale_drc {
+            detail = "DRC evidence belongs to different physical geometry".to_owned();
+        } else if let Some(error) = &preparation_error {
             detail = error.clone();
         } else if !macros.contains_key(binding.name.as_str()) || !clusters.contains_key(binding.name.as_str()) {
             (status, detail) = ("fail".to_owned(), "source-selected physical macro is missing".to_owned());
@@ -462,7 +632,10 @@ fn verify_source_macros(flat: &FlatElectricalView, physical: &PhysicalBoard) -> 
                         "source-selected asset, exact bindings and immutable owner copper verified; electrical/RF/power and native-fill qualification remain separate".to_owned(),
                     );
                 }
-                Ok(None) => detail = "binding is present; owner copper acceptance requires materialization".to_owned(),
+                Ok(None) if placement_stage => {
+                    detail = "binding is present; owner copper acceptance requires materialization".to_owned()
+                }
+                Ok(None) => {}
                 Err(message) => (status, detail) = ("fail".to_owned(), message),
             }
         }
@@ -568,10 +741,8 @@ pub fn verify_stage_requirements(
             ("declared_verifier", original.verifier.as_deref().map_or(Value::Null, text)),
         ]));
     }
-    if route.is_some() && !flat.physical_macros.is_empty() {
-        return copper_pcb::not_implemented("routing-stage verification of source macros");
-    }
-    rows.extend(verify_source_macros(&flat, physical)?);
+    let stale_drc = route.and_then(|route| route.drc_board_digest.as_deref()).is_some_and(|board| board != digest);
+    rows.extend(verify_source_macros(&flat, physical, route.is_none(), stale_drc)?);
     let status_of = |row: &Value| row.get("status").and_then(Value::as_str).unwrap_or_default().to_owned();
     let hard: Vec<&Value> = rows.iter().filter(|r| r.get("required") == Some(&Value::Bool(true))).collect();
     let overall = if hard.iter().any(|r| status_of(r) == "fail") {

@@ -1296,8 +1296,9 @@ fn finish(
             ])]),
         );
     }
-    if output_board.via_in_pad_rules.iter().any(|rule| rule.rows.is_some()) {
-        return copper_pcb::not_implemented("the via-in-pad array report (pad_via_arrays.via_in_pad_array_report)");
+    let via_arrays = copper_route::pad_via_arrays::via_in_pad_array_report(&output_board)?;
+    if !via_arrays.is_empty() {
+        report.insert("via_in_pad_arrays".to_owned(), Value::Array(via_arrays));
     }
     let mut duplicate = Vec::new();
     if stopped {
@@ -1319,6 +1320,8 @@ fn finish(
     let evidence = copper_place::requirements::RouteEvidence {
         drc_board_digest: Some(output_drc.token.board_digest.clone()),
         native: None,
+        drc: Some(output_drc.report.clone()),
+        via_arrays_present: Some(copper_route::pad_via_arrays::via_in_pad_arrays_present),
     };
     let requirements =
         copper_place::requirements::verify_stage_requirements(context.design, &output_board, Some(&evidence))?;
