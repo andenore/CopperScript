@@ -529,3 +529,29 @@ do not shrink as much.
 - Windows: Python digests the report it wrote with CRLF, so the summary's
   `report_sha256` differs from the Rust binary's LF report there; it needs
   recording once a Windows run has the digests.
+
+**M3 stream: the physical editor (branch `rust-m4-editor`).**
+
+- `copper-editor` ports `pcbir.editor` for an opened board session:
+  dependency preparation (a preparation mode on the `copper-lang`
+  `PackageResolver` that records new pins in memory and writes
+  `copper.lock` once), layer selection, physicalization with templates,
+  hard macros and fixed cluster poses, the source workspace inputs, and
+  the derived scene: components, pads, bodies, silkscreen and board
+  artwork, outline paths, mechanical features, the pad-island ratsnest
+  (the exact spatial Boruvka MST), net costs, relative-placement
+  violations (`copper-drc` `relative_placement_violations` now returns the
+  full records), physical feature geometry, source features, the feature
+  catalog, dimension source names, macro instance contracts (Python's
+  `asdict` reprs) and the routed overlay. Python's macro-copper cache key
+  rebuilds the board with only the macro members, which `PhysicalBoard`
+  validation rejects whenever another part shares a net; the scene then
+  carries that message as `macro_copper_not_materialized`, and the rewrite
+  reproduces it.
+- `copper edit-mechanical` / `copper edit` with `--scene-output`: four M3
+  suites (`edit-mechanical`, `-proxy`, `-macros`, `-options`), 277 cases:
+  272 byte-identical, 5 pending.
+- Not implemented (exit 3): the loopback HTTP editor (every run without
+  `--scene-output`), definition sessions (macro and board_profile
+  documents), via-in-pad via arrays in macro previews, and the macro
+  preview of a board whose nets all stay inside its macros.

@@ -17,6 +17,7 @@ copper-place.workspace = true
 copper-units.workspace = true
 indexmap.workspace = true
 num-bigint.workspace = true
+num-rational.workspace = true
 num-traits.workspace = true
 sha2.workspace = true
 

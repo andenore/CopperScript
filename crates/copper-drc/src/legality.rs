@@ -1170,7 +1170,7 @@ pub fn legal(
     Checker::new(board, Policy::default()).legal(candidate, placed, cluster_keepouts)
 }
 
-fn target_point(board: &PhysicalBoard, placements: &Poses, target: &PlacementTarget) -> Result<Option<Point>> {
+pub fn target_point(board: &PhysicalBoard, placements: &Poses, target: &PlacementTarget) -> Result<Option<Point>> {
     let Some(placement) = placements.get(&target.reference) else { return Ok(None) };
     let Some(pad) = &target.pad else { return Ok(Some(placement.position)) };
     let Some(land) = board.footprints[&placement.footprint].pads.iter().find(|p| p.number == *pad) else {
@@ -1183,7 +1183,7 @@ fn target_point(board: &PhysicalBoard, placements: &Poses, target: &PlacementTar
     Ok(Some(transformed_local_point(placement, land.position)))
 }
 
-fn rounded_distance(a: Point, b: Point) -> i64 {
+pub fn rounded_distance(a: Point, b: Point) -> i64 {
     round_int(hypot((a.x_nm - b.x_nm) as f64, (a.y_nm - b.y_nm) as f64))
 }
 
@@ -1227,15 +1227,33 @@ pub fn relative_penalty(board: &PhysicalBoard, placements: &Poses) -> Result<i64
     Ok(total)
 }
 
-fn mm_text(value_nm: i64) -> String {
+pub fn mm_text(value_nm: i64) -> String {
     let millimetres = Decimal::from_i64(value_nm).div(&Decimal::from_i64(1_000_000)).expect("finite length");
     copper_units::Quantity::of(copper_units::Dimension::Length, &millimetres, "mm").expect("a length in mm").to_string()
 }
 
-/// The `message` of each `relative_placement_violations` record.
-pub fn relative_violation_messages(board: &PhysicalBoard, placements: &Poses) -> Result<Vec<String>> {
-    let mut messages = Vec::new();
-    for rule in &board.relative_rules {
+/// One `relative_placement_violations` record.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelativeViolation {
+    pub rule_index: usize,
+    pub kind: RelativePlacementKind,
+    pub targets: Vec<PlacementTarget>,
+    pub references: Vec<String>,
+    /// Distance rules: the pair index, actual distance and limit.
+    pub pair_index: Option<usize>,
+    /// The actual distance, or the actual span of an alignment.
+    pub actual_nm: i64,
+    /// The distance limit, or the alignment tolerance.
+    pub limit_nm: i64,
+    pub axis: Option<AlignmentAxis>,
+    pub excess_nm: i64,
+    pub message: String,
+}
+
+/// `relative_placement_violations`: every violated relative rule, in rule order.
+pub fn relative_placement_violations(board: &PhysicalBoard, placements: &Poses) -> Result<Vec<RelativeViolation>> {
+    let mut violations = Vec::new();
+    for (rule_index, rule) in board.relative_rules.iter().enumerate() {
         let Some(points) = rule_points(board, placements, rule)? else { continue };
         match rule.kind {
             RelativePlacementKind::MaxDistance | RelativePlacementKind::MinDistance => {
@@ -1248,34 +1266,63 @@ pub fn relative_violation_messages(board: &PhysicalBoard, placements: &Poses) ->
                         continue;
                     }
                     let (left, right) = (&rule.targets[index], &rule.targets[index + 1]);
-                    messages.push(format!(
-                        "{} to {}: {} distance {}, actual {}",
-                        left.reference,
-                        right.reference,
-                        if maximum { "maximum" } else { "minimum" },
-                        mm_text(limit),
-                        mm_text(actual)
-                    ));
+                    violations.push(RelativeViolation {
+                        rule_index,
+                        kind: rule.kind,
+                        targets: rule.targets.clone(),
+                        references: vec![left.reference.clone(), right.reference.clone()],
+                        pair_index: Some(index),
+                        actual_nm: actual,
+                        limit_nm: limit,
+                        axis: None,
+                        excess_nm: amount,
+                        message: format!(
+                            "{} to {}: {} distance {}, actual {}",
+                            left.reference,
+                            right.reference,
+                            if maximum { "maximum" } else { "minimum" },
+                            mm_text(limit),
+                            mm_text(actual)
+                        ),
+                    });
                 }
             }
             RelativePlacementKind::Align => {
                 let values: Vec<i64> =
                     points.iter().map(|p| if rule.axis == Some(AlignmentAxis::X) { p.x_nm } else { p.y_nm }).collect();
                 let actual = values.iter().max().expect("targets") - values.iter().min().expect("targets");
-                if (actual - rule.tolerance_nm).max(0) != 0 {
-                    let references: Vec<&str> = rule.targets.iter().map(|t| t.reference.as_str()).collect();
-                    messages.push(format!(
+                let amount = (actual - rule.tolerance_nm).max(0);
+                if amount != 0 {
+                    let references: Vec<String> = rule.targets.iter().map(|t| t.reference.clone()).collect();
+                    let message = format!(
                         "{}: {} alignment tolerance {}, actual span {}",
                         references.join(", "),
                         rule.axis.map_or("axis", AlignmentAxis::value),
                         mm_text(rule.tolerance_nm),
                         mm_text(actual)
-                    ));
+                    );
+                    violations.push(RelativeViolation {
+                        rule_index,
+                        kind: rule.kind,
+                        targets: rule.targets.clone(),
+                        references,
+                        pair_index: None,
+                        actual_nm: actual,
+                        limit_nm: rule.tolerance_nm,
+                        axis: rule.axis,
+                        excess_nm: amount,
+                        message,
+                    });
                 }
             }
         }
     }
-    Ok(messages)
+    Ok(violations)
+}
+
+/// The `message` of each `relative_placement_violations` record.
+pub fn relative_violation_messages(board: &PhysicalBoard, placements: &Poses) -> Result<Vec<String>> {
+    Ok(relative_placement_violations(board, placements)?.into_iter().map(|v| v.message).collect())
 }
 
 /// `placement_solution_is_hard_legal` at the default options.

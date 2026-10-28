@@ -19435,6 +19435,413 @@
      ]
     }
    ]
+  },
+  {
+   "name": "edit-mechanical",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "edit-mechanical",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--scene-output",
+    "{out}/scene.json"
+   ],
+   "mutations": 3
+  },
+  {
+   "name": "edit-mechanical-proxy",
+   "milestone": "M3",
+   "inputs": [
+    "examples/*/board.copper",
+    "examples/simulation/*.copper",
+    "tests/fixtures/**/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "edit",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--allow-proxy-footprints",
+    "--scene-output",
+    "{out}/scene.json"
+   ],
+   "mutations": 2
+  },
+  {
+   "name": "edit-mechanical-options",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "edit-mechanical-options/four-layer",
+     "args": [
+      "edit",
+      "examples/mechanical_editor_demo/board.copper",
+      "--offline",
+      "--layers",
+      "4",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/six-layer-profile",
+     "args": [
+      "edit",
+      "examples/round_led_ring/board.copper",
+      "--offline",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/four-layer-profile-two",
+     "args": [
+      "edit",
+      "examples/round_led_ring/board.copper",
+      "--offline",
+      "--fab-profile",
+      "jlcpcb-four-layer",
+      "--layers",
+      "2",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/cm4-explicit-two",
+     "args": [
+      "edit",
+      "examples/cm4_baseboard/board.copper",
+      "--offline",
+      "--layers",
+      "2",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/nrf52-six",
+     "args": [
+      "edit",
+      "examples/nrf52_coin_cell/board.copper",
+      "--offline",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/footprint-root",
+     "args": [
+      "edit",
+      "examples/valid_board/board.copper",
+      "--offline",
+      "--footprint-root",
+      "tests/fixtures/footprints",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/nested-output",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/a/b/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/existing-output",
+     "stage": {
+      "scene.json": "examples/mechanical_outline/board.copper"
+     },
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/overwrite-source",
+     "stage": {
+      "board.copper": "examples/mechanical_outline/board.copper"
+     },
+     "args": [
+      "edit",
+      "{out}/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/board.copper"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/output-is-directory",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/missing-board",
+     "args": [
+      "edit",
+      "{out}/missing.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/kicad-mod",
+     "args": [
+      "edit",
+      "examples/macro_definition/test.kicad_mod",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/not-utf8",
+     "stage": {
+      "board.copper": "site/assets/copper-logo.png"
+     },
+     "args": [
+      "edit",
+      "{out}/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/part-document",
+     "args": [
+      "edit",
+      "examples/macro_definition/parts/land.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/project-without-manifest",
+     "args": [
+      "edit",
+      "examples/macro_definition/layouts/link.copper",
+      "--offline",
+      "--project",
+      "{out}",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/board-with-project",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--offline",
+      "--project",
+      "{out}",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/invalid-layers",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--layers",
+      "3",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/invalid-profile",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--fab-profile",
+      "x",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/invalid-port",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--port",
+      "x",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/no-board",
+     "args": [
+      "edit-mechanical"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/help",
+     "args": [
+      "edit-mechanical",
+      "--help"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/artwork-fixture",
+     "args": [
+      "edit",
+      "tests/fixtures/editor-artwork/board.copper",
+      "--offline",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/missing-overlay",
+     "args": [
+      "edit",
+      "examples/mechanical_editor_demo/board.copper",
+      "--offline",
+      "--overlay",
+      "{out}/missing.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/missing-templates",
+     "args": [
+      "edit",
+      "examples/mechanical_editor_demo/board.copper",
+      "--offline",
+      "--placement-templates",
+      "{out}/missing.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/templates",
+     "args": [
+      "edit",
+      "examples/full_vertical/board.copper",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--placement-templates",
+      "examples/full_vertical/placement_templates.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/templates-resolved",
+     "args": [
+      "edit",
+      "examples/full_vertical/board.copper",
+      "--offline",
+      "--placement-templates",
+      "examples/full_vertical/placement_templates.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/templates-not-json",
+     "args": [
+      "edit",
+      "examples/valid_board/board.copper",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-templates",
+      "examples/valid_board/board.copper",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/hard-macro-missing",
+     "args": [
+      "edit",
+      "examples/valid_board/board.copper",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--hard-macro",
+      "examples/missing-scene.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/hard-macro-wrong-schema",
+     "args": [
+      "edit",
+      "examples/valid_board/board.copper",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--hard-macro",
+      "scripts/compare_corpus.json",
+      "--scene-output",
+      "{out}/scene.json"
+     ]
+    },
+    {
+     "id": "edit-mechanical-options/serve",
+     "args": [
+      "edit",
+      "examples/mechanical_outline/board.copper",
+      "--offline",
+      "--no-browser"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "edit-mechanical-macros",
+   "milestone": "M3",
+   "inputs": [
+    "tests/rust-port/export-kicad-pcb/*.copper",
+    "tests/rust-port/export-kicad-pcb/macros/*.copper"
+   ],
+   "declares": "board",
+   "args": [
+    "edit-mechanical",
+    "{input}",
+    "--locked",
+    "--offline",
+    "--scene-output",
+    "{out}/scene.json"
+   ],
+   "mutations": 2
   }
  ]
 }

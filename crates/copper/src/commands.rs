@@ -3,9 +3,9 @@
 use std::io::Write;
 
 use crate::{
-    agent_guide, assembly, audit_footprints, check, check_footprint, compile, compile_macro, editor_overlay, explain,
-    export_kicad, export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout, power_check, query,
-    si_check, state, summarize, view,
+    agent_guide, assembly, audit_footprints, check, check_footprint, compile, compile_macro, edit_mechanical,
+    editor_overlay, explain, export_kicad, export_kicad_pcb, export_manufacturing, issues, library, lock, lsp,
+    plan_layout, power_check, query, si_check, state, summarize, view,
 };
 
 /// Exit status of a command the Rust rewrite does not implement yet.
@@ -33,8 +33,8 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("summarize", Plan::Done),
     ("benchmark-routing", Plan::Milestone("M4")),
     ("editor-overlay", Plan::Done),
-    ("edit-mechanical", Plan::Milestone("M3")),
-    ("edit", Plan::Milestone("M3")),
+    ("edit-mechanical", Plan::Done),
+    ("edit", Plan::Done),
     ("export-manufacturing", Plan::Done),
     ("audit-cam", Plan::Python),
     ("assess-engineering", Plan::Python),
@@ -111,6 +111,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "export-manufacturing" => export_manufacturing::run(rest, out, err),
         "plan-layout" => plan_layout::run(rest, out, err),
         "editor-overlay" => editor_overlay::run(rest, out, err),
+        "edit-mechanical" | "edit" => edit_mechanical::run(rest, out, err),
         _ => match plan(command) {
             Some(Plan::Milestone(milestone)) => {
                 let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");

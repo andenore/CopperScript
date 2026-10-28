@@ -87,6 +87,11 @@ impl BreakoutRegions {
         BreakoutRegions { minimum_clearance_nm: board.rules.minimum_clearance_nm, rules, declared, ordinary, lands }
     }
 
+    /// `land`: the terminal land with this pad identity.
+    pub fn land_by_identity(&self, identity: &str) -> Option<&BreakoutLand> {
+        self.lands.values().flatten().find(|land| land.identity == identity)
+    }
+
     /// `__bool__`.
     pub fn any(&self) -> bool {
         !self.declared.is_empty()

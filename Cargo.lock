@@ -90,6 +90,7 @@ dependencies = [
  "copper-units",
  "indexmap",
  "num-bigint",
+ "num-rational",
  "num-traits",
  "sha2",
 ]
