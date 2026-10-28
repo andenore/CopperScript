@@ -163,6 +163,10 @@ enum Stop {
     /// A `ValueError` (`ROUTING ERROR`, exit 2); `error_type` is the Python
     /// class when this rewrite knows it.
     Value { error_type: Option<&'static str>, message: String },
+    /// Python's uncaught `KeyError` of an unknown part (a recorded
+    /// difference): its error record holds the key; this rewrite also prints
+    /// `ROUTING ERROR` and exits 2.
+    UnknownPart { message: String, key: String },
     /// A path this rewrite does not reproduce yet.
     Pending(String),
 }
@@ -381,7 +385,7 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
             Ok(true) => lengths.push((name, text)),
             Ok(false) => return usage(format!("argument {name}: expected a finite length in mm, got '{text}'")),
             Err(Stop::Pending(what)) => return Err(Checked::Pending(what)),
-            Err(Stop::Value { message, .. }) => return usage(message),
+            Err(Stop::Value { message, .. } | Stop::UnknownPart { message, .. }) => return usage(message),
         }
     }
     let optional_length = |name: &str| -> Result<Option<String>, Checked> {
@@ -391,7 +395,7 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
                 Ok(true) => Ok(Some(text.to_owned())),
                 Ok(false) => Err(Checked::Usage(format!("argument {name}: expected a positive length, got '{text}'"))),
                 Err(Stop::Pending(what)) => Err(Checked::Pending(what)),
-                Err(Stop::Value { message, .. }) => Err(Checked::Usage(message)),
+                Err(Stop::Value { message, .. } | Stop::UnknownPart { message, .. }) => Err(Checked::Usage(message)),
             },
         }
     };
@@ -676,7 +680,13 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         }
         Err(Stop::Pending(what)) => not_implemented(err, &what),
         Err(Stop::Value { .. }) if debug => not_implemented(err, "--debug tracebacks"),
-        Err(Stop::Value { error_type, message }) => {
+        Err(Stop::UnknownPart { .. }) if debug => not_implemented(err, "--debug tracebacks"),
+        Err(stop @ (Stop::Value { .. } | Stop::UnknownPart { .. })) => {
+            let (error_type, message, recorded) = match stop {
+                Stop::Value { error_type, message } => (error_type, message.clone(), message),
+                Stop::UnknownPart { message, key } => (Some("KeyError"), message, key),
+                Stop::Pending(_) => unreachable!("matched above"),
+            };
             let _ = text::print(out, &format!("ROUTING ERROR: {message}"));
             let Some(report) = arguments.path("--report") else { return 2 };
             let Some(error_type) = error_type else {
@@ -692,7 +702,7 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
                 &report,
                 &design.electrical.name,
                 error_type,
-                &message,
+                &recorded,
                 stage_state.as_ref(),
                 summary,
             ) {
@@ -727,14 +737,21 @@ fn route(
         arguments.layers,
         &arguments.fab_profile,
     )?;
+    let unknown_part = |error: Error| match &error {
+        Error::Value(message) if message.starts_with("component ") && message.contains(" uses unknown part ") => {
+            let key = message.rsplit(" uses unknown part ").next().unwrap_or_default().to_owned();
+            Stop::UnknownPart { message: message.clone(), key }
+        }
+        _ => Stop::from(error),
+    };
     let mut board = if arguments.flag("--allow-proxy-footprints") {
-        physicalize(design, Footprints::Proxy, &options, locked, offline)?
+        physicalize(design, Footprints::Proxy, &options, locked, offline).map_err(unknown_part)?
     } else {
         let base = paths::resolve(Path::new(board_path)).parent().map(Path::to_path_buf).unwrap_or_default();
         let roots: Vec<PathBuf> =
             arguments.texts("--footprint-root").iter().map(|root| PathBuf::from(pypath::display(root))).collect();
         let mut resolver = FootprintResolver::new(&base, &roots, false, locked, offline);
-        physicalize(design, Footprints::Resolved(&mut resolver), &options, locked, offline)?
+        physicalize(design, Footprints::Resolved(&mut resolver), &options, locked, offline).map_err(unknown_part)?
     };
     if let Some(scene) = arguments.path("--placement-templates") {
         board = templates::apply_placement_templates(board, Path::new(&scene), locked, offline)?;

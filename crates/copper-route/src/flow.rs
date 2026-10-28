@@ -20,6 +20,7 @@ use copper_physical::pyfloat::{hypot, round_int};
 use copper_place::PlannerOptions;
 
 use crate::bga_fanout::plan_bga_fanouts;
+use crate::congestion_feedback::{FeedbackOutcome, FeedbackState};
 use crate::critical::{
     CriticalNetResult, CriticalRoutingResult, CriticalRoutingStatus, fingerprint as critical_fingerprint,
 };
@@ -758,59 +759,83 @@ pub fn run_routing_pipeline(
         }
     }
     let plane_stitch_options = if unified_options.direct { None } else { options.plane_stitch_options.clone() };
-    let critical = if unified_options.direct {
+    let pair_state_limit = unified_options
+        .critical_pair_state_limit
+        .filter(|limit| *limit != 0)
+        .or(Some(options.critical_pair_state_limit).filter(|limit| *limit != 0));
+    let tail = TailInputs {
+        unified_options: &unified_options,
+        unified_fanout: unified_fanout.as_ref(),
+        pair_state_limit,
+        critical_plane_options: options.plane_stitch_options.as_ref(),
+        plane_stitch_options: plane_stitch_options.as_ref(),
+        drc_policy: options.drc_policy,
+    };
+    if unified_options.direct {
         emit(
             &mut on_progress,
             "unified_direct",
             "started",
             vec![("reason", text("all mutable nets negotiate together; only source-fixed copper is retained"))],
         );
-        (direct_critical(&placement)?, None)
-    } else {
-        let pair_state_limit = unified_options
-            .critical_pair_state_limit
-            .filter(|limit| *limit != 0)
-            .or(Some(options.critical_pair_state_limit).filter(|limit| *limit != 0));
-        route_critical_stage(
-            &placement,
-            &unified_options,
-            unified_fanout.as_ref(),
-            pair_state_limit,
-            options.plane_stitch_options.as_ref(),
-            &mut on_progress,
-        )?
-    };
-    let (critical, reserved) = critical;
-    let (critical, plane_stitch) = complete_critical_stage(
-        critical,
-        &unified_options,
-        plane_stitch_options.as_ref(),
-        &mut on_progress,
-        array_plans.as_ref(),
-    )?;
-    let pre_detailed = plane_stitch.as_ref().map_or(&critical.board, |stitch| &stitch.board).clone();
-    let deferred = copper_pcb::zones::deferred_zone_nets(&pre_detailed)?;
-    let (mut critical, mut plane_stitch) = (critical, plane_stitch);
-    let pre_detailed = release_escape_masks(
-        reserved.as_ref(),
-        &mut critical,
-        &mut plane_stitch,
-        pre_detailed,
-        &unified_options,
-        &mut on_progress,
-    )?;
-    let (detailed, drc, duplicate_stitch) = route_ordinary_stage(
-        &unified_options,
-        unified_fanout.as_ref(),
-        &pre_detailed,
-        &placement.global_route,
-        options.drc_policy,
-        &mut on_progress,
-    )?;
+    }
+    let routed = route_tail(&placement, array_plans.as_ref(), &tail, &mut on_progress)?;
     let feedback_budget =
         options.placement_feedback_trials.max(options.detailed_feedback_trials + options.critical_feedback_trials);
+    let mut placement = placement;
+    let (mut critical, mut detailed, mut drc) = (routed.critical, routed.detailed, routed.drc);
+    let (mut plane_stitch, mut duplicate_stitch) = (routed.plane_stitch, routed.duplicate);
     let placement_feedback = if feedback_budget != 0 {
-        Some(placement_feedback_entry(&critical, &detailed, &drc, &deferred, feedback_budget, &mut on_progress)?)
+        let state = FeedbackState {
+            board: placement.board.clone(),
+            global_route: placement.global_route.clone(),
+            critical,
+            detailed,
+            drc,
+            deferred_nets: routed.deferred,
+            payload: (plane_stitch, duplicate_stitch),
+        };
+        let mut rerun = |trial_board: &PhysicalBoard,
+                         trial_global: &GlobalRoutingResult,
+                         progress: &mut Option<ProgressCallback<'_>>|
+         -> Result<FeedbackState<TailPayload>> {
+            if unified_options.save_inputs_path.is_some() {
+                return copper_pcb::not_implemented("congestion trials beside --unified-save-inputs");
+            }
+            let mut trial = placement.clone();
+            trial.board = trial_board.clone();
+            trial.global_route = trial_global.clone();
+            let (trial_plans, _) = plan_array_frames(trial_board, escape_plan_options, progress)?;
+            let routed = route_tail(&trial, trial_plans.as_ref(), &tail, progress)?;
+            Ok(FeedbackState {
+                board: trial_board.clone(),
+                global_route: trial_global.clone(),
+                critical: routed.critical,
+                detailed: routed.detailed,
+                drc: routed.drc,
+                deferred_nets: routed.deferred,
+                payload: (routed.plane_stitch, routed.duplicate),
+            })
+        };
+        let score = |state: &FeedbackState<TailPayload>| feedback_score(&state.critical, &state.detailed, &state.drc);
+        let (best, outcome) = crate::congestion_feedback::run_placement_feedback(
+            state,
+            feedback_budget,
+            options.detailed_feedback_movement_nm,
+            &placement_options,
+            &global_options,
+            &mut rerun,
+            &score,
+            &mut on_progress,
+        )?;
+        if outcome.accepted_moves != 0 {
+            placement.board = best.board;
+            placement.global_route = best.global_route;
+            placement.placement_candidate = format!("{}-congestion", placement.placement_candidate);
+        }
+        (critical, detailed, drc) = (best.critical, best.detailed, best.drc);
+        (plane_stitch, duplicate_stitch) = best.payload;
+        Some(outcome)
     } else {
         None
     };
@@ -837,6 +862,73 @@ pub fn run_routing_pipeline(
     })
 }
 
+/// What every pass of the pipeline tail shares (`_route_critical_stage`
+/// onwards), on the main placement and on each congestion trial.
+struct TailInputs<'a> {
+    unified_options: &'a UnifiedRouterOptions,
+    unified_fanout: Option<&'a FanoutOptions>,
+    pair_state_limit: Option<i64>,
+    /// The critical stage's plane options (the caller's, also when direct).
+    critical_plane_options: Option<&'a PlaneStitchOptions>,
+    plane_stitch_options: Option<&'a PlaneStitchOptions>,
+    drc_policy: Policy,
+}
+
+/// The plane stitch and duplicate-pad stitch of one tail pass.
+type TailPayload = (Option<PlaneStitchResult>, DuplicatePadStitchResult);
+
+struct TailResult {
+    critical: CriticalRoutingResult,
+    plane_stitch: Option<PlaneStitchResult>,
+    deferred: IndexSet<String>,
+    detailed: DetailedRoutingResult,
+    drc: DrcReport,
+    duplicate: DuplicatePadStitchResult,
+}
+
+/// Reservations, critical routing, held copper, islands, dogbones, plane
+/// stitch, ordinary routing and closure on `placement`.
+fn route_tail(
+    placement: &PlacementRoutingResult,
+    array_plans: Option<&IndexMap<String, ArrayEscape>>,
+    tail: &TailInputs<'_>,
+    on_progress: &mut Option<ProgressCallback<'_>>,
+) -> Result<TailResult> {
+    let (critical, reserved) = if tail.unified_options.direct {
+        (direct_critical(placement)?, None)
+    } else {
+        route_critical_stage(
+            placement,
+            tail.unified_options,
+            tail.unified_fanout,
+            tail.pair_state_limit,
+            tail.critical_plane_options,
+            on_progress,
+        )?
+    };
+    let (mut critical, mut plane_stitch) =
+        complete_critical_stage(critical, tail.unified_options, tail.plane_stitch_options, on_progress, array_plans)?;
+    let pre_detailed = plane_stitch.as_ref().map_or(&critical.board, |stitch| &stitch.board).clone();
+    let deferred = copper_pcb::zones::deferred_zone_nets(&pre_detailed)?;
+    let pre_detailed = release_escape_masks(
+        reserved.as_ref(),
+        &mut critical,
+        &mut plane_stitch,
+        pre_detailed,
+        tail.unified_options,
+        on_progress,
+    )?;
+    let (detailed, drc, duplicate) = route_ordinary_stage(
+        tail.unified_options,
+        tail.unified_fanout,
+        &pre_detailed,
+        &placement.global_route,
+        tail.drc_policy,
+        on_progress,
+    )?;
+    Ok(TailResult { critical, plane_stitch, deferred, detailed, drc, duplicate })
+}
+
 /// Meaning of each acceptance score component (`_feedback_score`); lower is better.
 pub const SCORE_ORDER: [&str; 7] = [
     "hard_drc_errors",
@@ -847,41 +939,6 @@ pub const SCORE_ORDER: [&str; 7] = [
     "total_length_nm",
     "vias",
 ];
-
-/// `congestion_feedback.FeedbackOutcome` of a loop that ran no trial.
-#[derive(Clone, Debug)]
-pub struct FeedbackOutcome {
-    pub stop_reason: String,
-    pub score: Vec<i64>,
-    pub failed_nets: Vec<String>,
-}
-
-impl FeedbackOutcome {
-    /// `report()`.
-    pub fn report(&self) -> Value {
-        let ints = |items: &[i64]| Value::Array(items.iter().map(|v| Value::from(*v)).collect());
-        let texts = |items: &[String]| Value::Array(items.iter().map(|v| Value::from(v.as_str())).collect());
-        Value::Object(
-            [
-                ("accepted_moves", Value::from(0i64)),
-                ("reruns", Value::from(0i64)),
-                ("rounds", Value::from(0i64)),
-                ("stop_reason", Value::from(self.stop_reason.as_str())),
-                ("score_order", Value::Array(SCORE_ORDER.iter().map(|s| Value::from(*s)).collect())),
-                ("initial_score", ints(&self.score)),
-                ("final_score", ints(&self.score)),
-                ("initial_failed_nets", texts(&self.failed_nets)),
-                ("final_failed_nets", texts(&self.failed_nets)),
-                ("map_source", Value::Null),
-                ("trials", Value::Array(Vec::new())),
-                ("hot_tiles", Value::Array(Vec::new())),
-            ]
-            .into_iter()
-            .map(|(k, v)| (k.to_owned(), v))
-            .collect(),
-        )
-    }
-}
 
 /// `_feedback_score`: the acceptance tuple of the placement feedback loop.
 fn feedback_score(
@@ -917,63 +974,6 @@ fn feedback_score(
         m.total_length_nm,
         m.via_count,
     ])
-}
-
-/// `run_placement_feedback` up to its first round: with no failed nets the
-/// loop stops at once; moving parts is not rewritten yet.
-fn placement_feedback_entry(
-    critical: &CriticalRoutingResult,
-    detailed: &DetailedRoutingResult,
-    drc: &DrcReport,
-    deferred: &IndexSet<String>,
-    trials: i64,
-    on_progress: &mut Option<ProgressCallback<'_>>,
-) -> Result<FeedbackOutcome> {
-    let score = feedback_score(critical, detailed, drc)?;
-    let mut failed: IndexSet<String> = detailed
-        .nets
-        .iter()
-        .filter(|item| !item.connected && !deferred.contains(&item.net))
-        .map(|item| item.net.clone())
-        .collect();
-    for item in &critical.nets {
-        if !item.connected || !item.diagnostics.is_empty() {
-            failed.extend(item.nets.iter().filter(|net| !net.starts_with('<')).cloned());
-        }
-    }
-    for finding in drc.findings() {
-        if finding.code == "DRC-OPEN-NET" {
-            failed.extend(finding.nets.iter().filter(|net| !deferred.contains(*net)).cloned());
-        }
-    }
-    let mut failed: Vec<String> = failed.into_iter().collect();
-    failed.sort();
-    let ints = |items: &[i64]| Value::Array(items.iter().map(|v| Value::from(*v)).collect());
-    let texts = |items: &[String]| Value::Array(items.iter().map(|v| text(v)).collect());
-    emit(
-        on_progress,
-        "placement_feedback",
-        "started",
-        vec![("trials", int(trials)), ("failed_nets", texts(&failed)), ("score", ints(&score))],
-    );
-    if !failed.is_empty() {
-        return copper_pcb::not_implemented(
-            "congestion-driven placement moves (congestion_feedback.run_placement_feedback)",
-        );
-    }
-    emit(
-        on_progress,
-        "placement_feedback",
-        "finished",
-        vec![
-            ("stop_reason", text("no_failed_nets")),
-            ("trials", int(0)),
-            ("accepted_moves", int(0)),
-            ("score", ints(&score)),
-            ("failed_nets", texts(&failed)),
-        ],
-    );
-    Ok(FeedbackOutcome { stop_reason: "no_failed_nets".to_owned(), score, failed_nets: failed })
 }
 
 // ---------------------------------------------------------------------------
