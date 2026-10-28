@@ -12,6 +12,7 @@ pub mod artwork;
 pub mod configuration;
 pub mod definitions;
 pub mod dependencies;
+pub mod difflib;
 pub mod features;
 pub mod islands;
 pub mod jobs;

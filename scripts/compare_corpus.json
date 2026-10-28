@@ -21782,6 +21782,27 @@
    ]
   },
   {
+   "name": "edit-mechanical-source",
+   "milestone": "M3",
+   "timeout_s": 240,
+   "stage": {
+    "board.copper": "examples/mechanical_editor_demo/board.copper"
+   },
+   "cases": [
+    {
+     "id": "edit-mechanical-source/transactions",
+     "http": "tests/rust-port/editor/source.jsonl",
+     "args": [
+      "edit-mechanical",
+      "--offline",
+      "--no-browser",
+      "--allow-proxy-footprints",
+      "{out}/board.copper"
+     ]
+    }
+   ]
+  },
+  {
    "name": "replay-unified",
    "milestone": "M4",
    "inputs": [

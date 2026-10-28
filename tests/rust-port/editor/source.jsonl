@@ -1,0 +1,67 @@
+# Source transactions: reviewed lock, mechanical and feature edits, save, undo and redo.
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "C1", "x_nm": 12500000, "y_nm": 9000000, "rotation": 90, "side": "front", "locks": ["position", "rotation"]}}
+{"post": "/api/operation", "json": {"action": "move", "revision": "{revision}", "reference": "R1", "x_nm": 20000000, "y_nm": 15000000, "rotation": 0, "side": "front"}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "nope"}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"get": "/api/scene"}
+{"post": "/api/operation", "json": {"action": "undo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "redo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "redo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "C1", "x_nm": null, "y_nm": null, "rotation": 45.5, "side": "back", "locks": ["rotation", "side"]}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "C1", "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "front", "locks": []}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "C1", "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "front", "locks": ["position", "position"]}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "C1", "x_nm": 1.5, "y_nm": 0, "rotation": 0, "side": "front", "locks": ["position"]}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "C1", "x_nm": 0, "y_nm": 0, "rotation": 9000, "side": "front", "locks": ["rotation"]}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "C1", "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "top", "locks": ["side"]}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "NOPE", "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "front", "locks": ["side"]}}
+{"post": "/api/operation", "json": {"action": "prepare_lock", "revision": "{revision}", "reference": "C1", "x_nm": 0, "y_nm": 0, "rotation": 0, "side": "front", "locks": []}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "hole", "name": "H2", "shape": "", "parameters": {"position": "(36mm,26mm)", "diameter": "2.2mm"}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "hole", "name": "H2", "shape": "", "parameters": {"position": "(35mm,25mm)"}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "hole", "name": "H1", "shape": "", "parameters": {}, "remove": true}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "outline", "name": "", "shape": "rectangle", "parameters": {}, "remove": true}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "spaceship", "name": "", "shape": "", "parameters": {}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "hole", "name": "H9", "shape": "", "parameters": {"position": "(1mm,1mm); } hole X { position = (2mm,2mm)"}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical", "revision": "{revision}", "kind": "hole", "name": "H3", "shape": "", "parameters": {"position": "(20mm,15mm)", "diameter": "2mm"}, "remove": false}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical_batch", "revision": "{revision}", "features": [{"kind": "hole", "name": "H4", "shape": "", "parameters": {"position": "(36mm,4mm)", "diameter": "2mm"}, "remove": false}, {"kind": "hole", "name": "H5", "shape": "", "parameters": {"position": "(4mm,26mm)", "diameter": "2mm"}, "remove": false}]}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical_batch", "revision": "{revision}", "features": []}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical_batch", "revision": "{revision}", "features": [{"kind": "hole", "name": "H4", "shape": "", "parameters": {}, "remove": false}, {"kind": "hole", "name": "H4", "shape": "", "parameters": {}, "remove": false}]}}
+{"post": "/api/operation", "json": {"action": "prepare_mechanical_batch", "revision": "{revision}", "features": [{"kind": "hole", "name": "H4", "shape": "", "parameters": {"position": 3}, "remove": false}]}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "constraint", "kind": "max_distance", "name": "", "targets": ["R1", "C1"], "parameters": {"distance": "12 mm"}}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "constraint", "kind": "allowed_orientations", "name": "constraint:9", "targets": ["R1"], "parameters": {"values": "\"0,90,180,270\""}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "artwork", "kind": "text", "name": "LABEL", "parameters": {"text": "\"Demo\"", "position": "(20 mm, 3 mm)", "size": "1 mm"}}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "artwork", "kind": "text", "name": "LABEL", "parameters": {"text": "\"Renamed\""}}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "artwork", "kind": "branding", "name": "", "parameters": {"enabled": "true"}}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "stackup", "kind": "stackup", "name": "stackup", "parameters": {"declaration": "stackup { copper F.Cu { thickness = 35 um; } dielectric core { thickness = 1.53 mm; er = 4.2; } copper B.Cu { thickness = 35 um; } }"}}}
+{"post": "/api/operation", "json": {"action": "discard_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "constraint", "kind": "fixed_placement", "name": "", "parameters": {}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "constraint", "kind": "max_distance", "name": "constraint:99", "targets": ["R1", "C1"], "parameters": {}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "constraint", "kind": "max_distance", "name": "", "targets": ["R1", "C1"], "parameters": {"distance": "1 mm; } constraint min_distance(R1, R2) { distance = 1 mm"}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "constraint", "kind": "max_distance", "name": "", "parameters": {"distance": 5}}}
+{"post": "/api/operation", "json": {"action": "review_feature", "revision": "{revision}", "category": "artwork", "kind": "text", "name": "LABEL", "parameters": {}, "remove": "yes"}}
+{"post": "/api/operation", "json": {"action": "review_features", "revision": "{revision}", "features": [{"category": "artwork", "kind": "line", "name": "L1", "parameters": {"start": "(5 mm, 5 mm)", "end": "(10 mm, 5 mm)"}}, {"category": "artwork", "kind": "circle", "name": "C9", "parameters": {"center": "(10 mm, 20 mm)", "radius": "1 mm"}}]}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "review_features", "revision": "{revision}", "features": []}}
+{"post": "/api/operation", "json": {"action": "review_features", "revision": "{revision}", "features": [{"category": "artwork", "kind": "line", "name": "L1", "parameters": {}, "extra": 1}]}}
+{"post": "/api/operation", "json": {"action": "review_features", "revision": "{revision}", "features": [{"category": "artwork", "kind": "line", "name": "L1", "parameters": {}, "remove": true}, {"category": "artwork", "kind": "line", "name": "L1", "parameters": {}, "remove": true}]}}
+{"post": "/api/operation", "json": {"action": "review_features", "revision": "{revision}", "features": [{"category": 1, "kind": "line", "name": "L1", "parameters": {}}]}}
+{"post": "/api/operation", "json": {"action": "undo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "undo_source", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "move", "revision": "{revision}", "reference": "R1", "x_nm": 22000000, "y_nm": 14000000, "rotation": 0, "side": "front"}}
+{"post": "/api/operation", "json": {"action": "apply", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "prepare_placement", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "save_source", "revision": "{revision}", "review_id": "{review_id}"}}
+{"post": "/api/operation", "json": {"action": "prepare_placement", "revision": "{revision}"}}
+{"post": "/api/operation", "json": {"action": "move", "revision": "{revision}", "reference": "R2", "x_nm": 25000000, "y_nm": 12000000, "rotation": 0, "side": "front"}}
+{"post": "/api/operation", "json": {"action": "reload_source", "revision": 0}}
+{"post": "/api/operation", "json": {"action": "reload_source", "revision": "{revision}"}}
+{"get": "/api/scene"}

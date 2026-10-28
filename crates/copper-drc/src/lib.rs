@@ -208,6 +208,22 @@ fn coverage(check: &str, status: CoverageStatus, required: bool, detail: &str) -
     Coverage { check: check.to_owned(), status, required, detail: detail.to_owned() }
 }
 
+/// `placement_copper_findings`: the geometric copper/drill checks for
+/// editing an unrouted placement (no connectivity or route gates).
+pub fn placement_copper_findings(board: &PhysicalBoard) -> Result<Vec<Finding>> {
+    let mut findings: Vec<Finding> = Vec::new();
+    check_board_edge(board, &mut findings)?;
+    check_copper_spacing(board, &mut findings, &mut Vec::new())?;
+    check_fixed_polygons(board, &mut findings)?;
+    check_copper_artwork(board, &mut findings)?;
+    check_non_plated_hole_clearance(board, &mut findings)?;
+    check_via_hole_clearance(board, &mut findings)?;
+    check_drill_spacing(board, &mut findings)?;
+    check_copper_keepouts(board, &mut findings)?;
+    check_zone_routing_reservations(board, &mut findings)?;
+    Ok(findings)
+}
+
 /// `run_physical_drc`: check the exact physical IR.
 pub fn run_physical_drc(board: &PhysicalBoard, policy: Policy) -> Result<Report> {
     use CoverageStatus::*;

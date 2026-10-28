@@ -152,6 +152,6 @@ pub fn document_session(
             .map(PathBuf::from),
     );
     inputs.extend(source_macro_input_paths(&board)?);
-    let workspace = Workspace::new(&source, &design, inputs)?;
+    let workspace = Workspace::new(&source, &design, inputs, settings.clone())?;
     EditorSession::new(board, &source, Some(workspace), overlay)
 }
