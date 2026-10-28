@@ -1,9 +1,7 @@
 //! The router's search: net routes over the shared lattice (`_route_net`,
 //! `_search`, `_astar_native`) and their claims (`_finish_route`).
 
-use std::collections::{HashMap, HashSet};
-
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 
 use copper_physical::pyfloat::hypot;
 
@@ -19,8 +17,8 @@ fn radius_key(radius: f64) -> u64 {
 }
 
 thread_local! {
-    static OFFSETS: std::cell::RefCell<HashMap<(char, i64, i64, u64), std::rc::Rc<Vec<(i64, i64)>>>> =
-        std::cell::RefCell::new(HashMap::new());
+    static OFFSETS: std::cell::RefCell<IndexMap<(char, i64, i64, u64), std::rc::Rc<Vec<(i64, i64)>>>> =
+        std::cell::RefCell::new(IndexMap::new());
 }
 
 /// `_segment_offsets_cached`.
@@ -52,7 +50,7 @@ pub struct Targets<'a> {
     pub extra: Option<&'a IndexMap<i64, f64>>,
 }
 
-impl Router<'_, '_, '_> {
+impl Router<'_, '_> {
     /// `_lead_penalty`: congestion price of an off-grid lead-in.
     pub fn lead_penalty(&mut self, lead: &Lead, present: f64) -> f64 {
         if lead.is_empty() || self.ignore_soft_costs {
@@ -72,7 +70,8 @@ impl Router<'_, '_, '_> {
             self.lead_nodes.insert(lead.clone(), nodes);
         }
         let nodes = &self.lead_nodes[lead];
-        let exact = copper_physical::pyfloat::sum(lead.iter().map(|t| self.lead_history.get(t).copied().unwrap_or(0.0)));
+        let exact =
+            copper_physical::pyfloat::sum(lead.iter().map(|t| self.lead_history.get(t).copied().unwrap_or(0.0)));
         if nodes.is_empty() {
             return exact;
         }
@@ -114,7 +113,9 @@ impl Router<'_, '_, '_> {
         }
         if !route.connected && self.deadline_expired {
             route.reason = "time budget exhausted".to_owned();
-        } else if !route.connected && self.specs[index].layers.len() > 1 && !self.board.stackup.via_technologies.is_empty()
+        } else if !route.connected
+            && self.specs[index].layers.len() > 1
+            && !self.board.stackup.via_technologies.is_empty()
         {
             return not_implemented("unified router via technologies");
         }
@@ -148,10 +149,8 @@ impl Router<'_, '_, '_> {
             }
             self.specs[index].via_factor = factor;
             if route.via_xy.len() as i64 > budget {
-                route = NetRoute::empty(
-                    false,
-                    &format!("needs {} new vias, max_vias leaves {budget}", route.via_xy.len()),
-                );
+                route =
+                    NetRoute::empty(false, &format!("needs {} new vias, max_vias leaves {budget}", route.via_xy.len()));
             }
         }
         Ok(route)
@@ -173,13 +172,13 @@ impl Router<'_, '_, '_> {
             return Ok(route);
         }
         let mut tree: IndexMap<i64, f64> = IndexMap::new();
-        let mut leads: HashMap<i64, Lead> = HashMap::new();
+        let mut leads: IndexMap<i64, Lead> = IndexMap::new();
         for (node, lead, cost) in &components[0] {
             let penalty = self.lead_penalty(lead, present);
             tree.insert(*node, cost + penalty);
             leads.insert(*node, lead.clone());
         }
-        let mut used_leads: HashSet<Lead> = HashSet::new();
+        let mut used_leads: IndexSet<Lead> = IndexSet::new();
         let mut remaining: Vec<usize> = (1..components.len()).collect();
         let base = self.lattice.point(*tree.keys().next().expect("first component"));
         remaining.sort_by_key(|&ci| {
@@ -280,9 +279,7 @@ impl Router<'_, '_, '_> {
             }
             let layer = g.layers.iter().position(|l| *l == bias.layer).expect("layer") as i64;
             let area = &bias.area;
-            for node in
-                g.nodes_in(layer, area.min_x as f64, area.min_y as f64, area.max_x as f64, area.max_y as f64)
-            {
+            for node in g.nodes_in(layer, area.min_x as f64, area.min_y as f64, area.max_x as f64, area.max_y as f64) {
                 *extra.entry(node).or_insert(0.0) += bias.rate as f64 / 10.0;
             }
         }
@@ -309,8 +306,7 @@ impl Router<'_, '_, '_> {
         let tbox = g.box_of(targets.nodes.iter().copied()).expect("targets");
         let (sx0, sy0, sx1, sy1) = g.box_of(sources.iter().map(|s| s.0)).expect("sources");
         let margin = self.margin(&self.specs[index]);
-        let mut bbox =
-            g.grow_box((tbox.0.min(sx0), tbox.1.min(sy0), tbox.2.max(sx1), tbox.3.max(sy1)), margin);
+        let mut bbox = g.grow_box((tbox.0.min(sx0), tbox.1.min(sy0), tbox.2.max(sx1), tbox.3.max(sy1)), margin);
         let whole = g.full_box();
         for attempt in 0..3 {
             let result = self.astar(index, sources, &targets, present, bbox, tbox)?;
@@ -406,18 +402,16 @@ impl Router<'_, '_, '_> {
         if !self.board.stackup.via_technologies.is_empty() {
             return not_implemented("unified router via technologies");
         }
-        let layers: Vec<i32> = spec
-            .layers
-            .iter()
-            .map(|&l| l as i32 | if spec.target_only.contains(&l) { 0x100 } else { 0 })
-            .collect();
+        let layers: Vec<i32> =
+            spec.layers.iter().map(|&l| l as i32 | if spec.target_only.contains(&l) { 0x100 } else { 0 }).collect();
         let move_base = self.move_base();
         let turn = if self.options.bend_cost != 0.0 { Some(self.turn_table()) } else { None };
-        let mut marks: Vec<(Vec<i64>, u8)> = Vec::new();
-        marks.push((spec.neck.iter().copied().collect(), FLAG_NECK));
-        marks.push((spec.neck_mid.iter().copied().collect(), FLAG_NECK_MID));
-        marks.push((spec.region.iter().copied().collect(), FLAG_REGION));
-        marks.push((targets.nodes.to_vec(), FLAG_TARGET));
+        let marks: Vec<(Vec<i64>, u8)> = vec![
+            (spec.neck.iter().copied().collect(), FLAG_NECK),
+            (spec.neck_mid.iter().copied().collect(), FLAG_NECK_MID),
+            (spec.region.iter().copied().collect(), FLAG_REGION),
+            (targets.nodes.to_vec(), FLAG_TARGET),
+        ];
         for (nodes, bit) in &marks {
             for &node in nodes {
                 self.flags[node as usize] |= bit;
@@ -484,17 +478,16 @@ impl Router<'_, '_, '_> {
         let spec = &self.specs[index];
         let g = &self.lattice;
         let pitch = g.pitch as f64;
-        let mut nodes: HashSet<i64> = HashSet::new();
-        let mut claims: HashSet<i64> = HashSet::new();
-        let mut via_claims: HashSet<i64> = HashSet::new();
+        let mut nodes: IndexSet<i64> = IndexSet::new();
+        let mut claims: IndexSet<i64> = IndexSet::new();
+        let mut via_claims: IndexSet<i64> = IndexSet::new();
         let mut body: IndexMap<i64, i64> = IndexMap::new();
         let default_width = self.default_width as f64;
         let via_body = (spec.via_size as f64 - default_width) / 2.0 / pitch;
         let neighbour = self.default_width.max(spec.width) as f64;
         let track_radius = (spec.width as f64 / 2.0 + spec.clearance as f64 + neighbour / 2.0) / pitch;
         let hole = self.board.rules.minimum_hole_clearance_nm as f64;
-        let via_reach =
-            (spec.via_size as f64 / 2.0 + spec.clearance as f64).max(spec.via_drill as f64 / 2.0 + hole);
+        let via_reach = (spec.via_size as f64 / 2.0 + spec.clearance as f64).max(spec.via_drill as f64 / 2.0 + hole);
         let via_radius = (via_reach + default_width / 2.0) / pitch;
         let via_via_radius = (via_reach + spec.via_size as f64 / 2.0) / pitch;
         let prospective_reach = (self.candidate_via_size as f64 / 2.0
@@ -543,7 +536,7 @@ impl Router<'_, '_, '_> {
                 }
             }
         }
-        let via_xy: HashSet<i64> = changes.keys().copied().collect();
+        let via_xy: IndexSet<i64> = changes.keys().copied().collect();
         // Without via technologies every site is a through via.
         let nl = g.nl;
         for &xy in changes.keys() {

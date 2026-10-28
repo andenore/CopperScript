@@ -19337,6 +19337,47 @@
     "replay-unified",
     "{input}"
    ]
+  },
+  {
+   "name": "replay-unified-output",
+   "milestone": "M4",
+   "compare": [
+    "exit",
+    "stderr",
+    "files"
+   ],
+   "cases": [
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "-o",
+      "{out}/routed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/placement.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "-o",
+      "{out}/routed.kicad_pcb"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/routing.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "-o",
+      "{out}/routed.kicad_pcb"
+     ]
+    }
+   ]
   }
  ]
 }

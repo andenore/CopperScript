@@ -1511,7 +1511,7 @@ impl<'b> RoutingClearanceIndex<'b> {
         self.board.rules.minimum_clearance_nm.max(own).max(theirs)
     }
 
-    fn overlapping_objects(&self, shape: &RoundedConvexShape, layers: &[CopperLayer]) -> Vec<&CopperObject> {
+    pub fn overlapping_objects(&self, shape: &RoundedConvexShape, layers: &[CopperLayer]) -> Vec<&CopperObject> {
         self.nearby_copper(shape, layers, self.max_clearance_nm)
     }
 

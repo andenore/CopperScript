@@ -8,12 +8,13 @@
 
 pub mod astar;
 pub mod geometry;
+pub mod negotiate;
 mod options;
 pub mod rasters;
-pub mod router;
-pub mod negotiate;
-pub mod search;
 mod replay;
+pub mod route;
+pub mod router;
+pub mod search;
 
 pub use options::*;
 pub use replay::*;

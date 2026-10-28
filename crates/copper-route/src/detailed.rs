@@ -122,13 +122,17 @@ pub fn land_pieces(
         .pads
         .iter()
         .enumerate()
-        .filter(|(_, land)| land.number == number && !matches!(land.kind, PadKind::Aperture | PadKind::NonPlatedThroughHole))
+        .filter(|(_, land)| {
+            land.number == number && !matches!(land.kind, PadKind::Aperture | PadKind::NonPlatedThroughHole)
+        })
         .collect();
     if lands.len() < 2 {
         return Ok(Vec::new());
     }
-    let positions: Vec<copper_physical::Point> =
-        lands.iter().map(|(_, land)| copper_pcb::transform::transformed_local_point(placement, land.position)).collect();
+    let positions: Vec<copper_physical::Point> = lands
+        .iter()
+        .map(|(_, land)| copper_pcb::transform::transformed_local_point(placement, land.position))
+        .collect();
     let shapes: Vec<_> = lands
         .iter()
         .zip(&positions)

@@ -1,8 +1,6 @@
 //! PathFinder negotiation (`negotiate`, `_conflicts`, `_penalise`) and the
 //! exact materialisation of routes (`copper`, `commit`).
 
-use std::collections::HashSet;
-
 use indexmap::{IndexMap, IndexSet};
 
 use copper_json::Value;
@@ -35,7 +33,7 @@ enum Proposal {
     Via(Via),
 }
 
-impl Router<'_, '_, '_> {
+impl Router<'_, '_> {
     /// `_conflicts`: negotiate actual emitted copper.
     pub fn conflicts(&mut self, routes: &IndexMap<String, NetRoute>) -> Result<IndexSet<String>> {
         self.exact_track_conflicts.clear();
@@ -54,12 +52,12 @@ impl Router<'_, '_, '_> {
             let spec_index = self.specs.iter().position(|s| &s.name == name).expect("spec");
             let raws: IndexSet<&TrackSegment> = route.leads.iter().flatten().collect();
             for raw in raws {
-                for fragment in self.clearance.breakout.neck_down(std::slice::from_ref(raw)) {
+                for fragment in self.clearance.as_ref().expect("index").breakout.neck_down(std::slice::from_ref(raw)) {
                     raw_leads.entry((name.clone(), fragment)).or_default().insert(raw.clone());
                 }
             }
-            let mut tracks: HashSet<TrackSegment> = HashSet::new();
-            let mut vias: HashSet<Via> = HashSet::new();
+            let mut tracks: IndexSet<TrackSegment> = IndexSet::new();
+            let mut vias: IndexSet<Via> = IndexSet::new();
             for (path, leads) in route.paths.iter().zip(&route.leads) {
                 let (t, v) = self.copper(spec_index, path, leads, None)?;
                 tracks.extend(t);
@@ -147,7 +145,7 @@ impl Router<'_, '_, '_> {
     /// `negotiate`: the PathFinder loop; routes persist on the router.
     pub fn negotiate(
         &mut self,
-        only: Option<&HashSet<String>>,
+        only: Option<&IndexSet<String>>,
         events: &mut Vec<Event>,
     ) -> Result<(IndexMap<String, NetRoute>, IndexSet<String>, i64)> {
         let options = self.options.clone();
@@ -197,18 +195,13 @@ impl Router<'_, '_, '_> {
             let routes = self.routes.clone();
             let conflicts = self.conflicts(&routes)?;
             for name in &pending {
-                let age = if conflicts.contains(name) { self.conflict_age.get(name).copied().unwrap_or(0) + 1 } else { 0 };
+                let age =
+                    if conflicts.contains(name) { self.conflict_age.get(name).copied().unwrap_or(0) + 1 } else { 0 };
                 self.conflict_age.insert(name.clone(), age);
             }
-            failed = names
-                .iter()
-                .filter(|name| self.routes.get(*name).is_none_or(|r| !r.connected))
-                .cloned()
-                .collect();
-            let score = (
-                failed.len() + conflicts.len(),
-                copper_physical::pyfloat::sum(self.routes.values().map(|r| r.length)),
-            );
+            failed = names.iter().filter(|name| self.routes.get(*name).is_none_or(|r| !r.connected)).cloned().collect();
+            let score =
+                (failed.len() + conflicts.len(), copper_physical::pyfloat::sum(self.routes.values().map(|r| r.length)));
             if best_snapshot.as_ref().is_none_or(|best| score < best.0) {
                 best_snapshot = Some((score, self.routes.clone(), conflicts.clone()));
                 best_iteration = iteration;
@@ -363,7 +356,7 @@ impl Router<'_, '_, '_> {
                 tracks.push(track(run_start, prev, run_width, g.layer_of(prev)));
             }
         }
-        let tracks = self.clearance.breakout.neck_down(&tracks);
+        let tracks = self.clearance.as_ref().expect("index").breakout.neck_down(&tracks);
         let mut unique: Vec<Via> = Vec::new();
         for via in vias {
             if !unique.contains(&via) {
@@ -387,12 +380,16 @@ impl Router<'_, '_, '_> {
             .filter(|(_, route)| route.connected && route.paths.is_empty())
             .map(|(name, _)| name.clone())
             .collect();
-        let by_name: IndexMap<&str, usize> =
-            self.specs.iter().enumerate().map(|(i, s)| (s.name.as_str(), i)).collect();
+        let by_name: IndexMap<&str, usize> = self.specs.iter().enumerate().map(|(i, s)| (s.name.as_str(), i)).collect();
         let mut order: Vec<&String> = routes.iter().filter(|(_, r)| !r.paths.is_empty()).map(|(n, _)| n).collect();
         order.sort_by(|a, b| {
             let key = |name: &String| {
-                (conflicts.contains(name), !routes[name].connected, self.specs[by_name[name.as_str()]].span, name.clone())
+                (
+                    conflicts.contains(name),
+                    !routes[name].connected,
+                    self.specs[by_name[name.as_str()]].span,
+                    name.clone(),
+                )
             };
             key(a).cmp(&key(b))
         });
@@ -406,18 +403,24 @@ impl Router<'_, '_, '_> {
                 let (tracks, vias) = self.copper(index, path, leads, None)?;
                 let mut bad: Vec<Point> = Vec::new();
                 for track in &tracks {
-                    if !(self.clearance.can_track(name, track.start, track.end, track.width_nm, track.layer)?
-                        && track_inside_board(self.board, track.start, track.end, track.width_nm)?)
+                    if !(self.clearance.as_ref().expect("index").can_track(
+                        name,
+                        track.start,
+                        track.end,
+                        track.width_nm,
+                        track.layer,
+                    )? && track_inside_board(self.board, track.start, track.end, track.width_nm)?)
                     {
                         let at = Point::new(
                             (track.start.x_nm + track.end.x_nm).div_euclid(2),
                             (track.start.y_nm + track.end.y_nm).div_euclid(2),
                         );
                         bad.push(at);
-                        let (blockers, fixed) = self.clearance.blocking_track_nets(track)?;
+                        let (blockers, fixed) = self.clearance.as_ref().expect("index").blocking_track_nets(track)?;
                         let mut blockers: Vec<String> = blockers.into_iter().collect();
                         blockers.sort();
-                        let reason = first_reason(&self.clearance.track_blocker_records(track)?);
+                        let reason =
+                            first_reason(&self.clearance.as_ref().expect("index").track_blocker_records(track)?);
                         self.rejections.entry(name.clone()).or_default().push((
                             at,
                             track.layer.value().to_owned(),
@@ -431,7 +434,7 @@ impl Router<'_, '_, '_> {
                     if net_vias.contains(via) {
                         continue;
                     }
-                    if !self.clearance.can_via(
+                    if !self.clearance.as_ref().expect("index").can_via(
                         name,
                         via.position,
                         via.size_nm,
@@ -442,10 +445,10 @@ impl Router<'_, '_, '_> {
                         None,
                     )? {
                         bad.push(via.position);
-                        let (blockers, fixed) = self.clearance.blocking_via_nets(via)?;
+                        let (blockers, fixed) = self.clearance.as_ref().expect("index").blocking_via_nets(via)?;
                         let mut blockers: Vec<String> = blockers.into_iter().collect();
                         blockers.sort();
-                        let reason = first_reason(&self.clearance.via_blocker_records(via)?);
+                        let reason = first_reason(&self.clearance.as_ref().expect("index").via_blocker_records(via)?);
                         self.rejections.entry(name.clone()).or_default().push((
                             via.position,
                             "via".to_owned(),
@@ -457,7 +460,7 @@ impl Router<'_, '_, '_> {
                 }
                 if bad.is_empty() {
                     let fresh: Vec<Via> = vias.iter().filter(|v| !net_vias.contains(v)).cloned().collect();
-                    if self.clearance.candidate_via_conflict(&fresh, false)?.is_some() {
+                    if self.clearance.as_ref().expect("index").candidate_via_conflict(&fresh, false)?.is_some() {
                         bad.push(vias[0].position);
                     }
                 }
@@ -467,12 +470,12 @@ impl Router<'_, '_, '_> {
                     continue;
                 }
                 for track in tracks {
-                    self.clearance.add_track(track.clone(), false, None)?;
+                    self.clearance.as_mut().expect("index").add_track(track.clone(), false, None)?;
                     net_tracks.push(track);
                 }
                 for via in vias {
                     if !net_vias.contains(&via) {
-                        self.clearance.add_via(via.clone(), false, None)?;
+                        self.clearance.as_mut().expect("index").add_via(via.clone(), false, None)?;
                         net_vias.push(via);
                     }
                 }
@@ -488,7 +491,7 @@ impl Router<'_, '_, '_> {
     }
 
     /// `history_seed`: carry congestion history over from an earlier router.
-    pub fn history_seed(&mut self, other: &Router<'_, '_, '_>) {
+    pub fn history_seed(&mut self, other: &Router<'_, '_>) {
         if other.lattice.signature() == self.lattice.signature() {
             self.occupancy.copy_history(&other.occupancy);
             self.present = other.present;

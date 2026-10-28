@@ -1,7 +1,7 @@
 //! `_Router`: the net model, the shared negotiation state and the setup of
 //! the unified router (obstacles, rasters, net specs and attach candidates).
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -47,17 +47,17 @@ pub struct NetSpec {
     pub via_factor: f64,
     pub neck_width: i64,
     pub neck_clearance: i64,
-    pub plane: HashSet<i64>,
-    pub region: HashSet<i64>,
-    pub neck: HashSet<i64>,
-    pub neck_mid: HashSet<i64>,
+    pub plane: IndexSet<i64>,
+    pub region: IndexSet<i64>,
+    pub neck: IndexSet<i64>,
+    pub neck_mid: IndexSet<i64>,
     pub target_only: Vec<usize>,
     pub optional: usize,
     pub via_budget: Option<i64>,
     pub max_length: Option<i64>,
     pub islands: usize,
-    pub joined: IndexMap<usize, HashSet<i64>>,
-    pub explicit: IndexMap<usize, HashSet<usize>>,
+    pub joined: IndexMap<usize, IndexSet<i64>>,
+    pub explicit: IndexMap<usize, IndexSet<usize>>,
     pub anchors: Vec<Vec<Point>>,
 }
 
@@ -66,16 +66,16 @@ pub struct NetSpec {
 pub struct NetRoute {
     pub paths: Vec<Vec<i64>>,
     pub leads: Vec<Lead>,
-    pub nodes: HashSet<i64>,
-    pub via_xy: HashSet<i64>,
-    pub claims: HashSet<i64>,
-    pub via_claims: HashSet<i64>,
+    pub nodes: IndexSet<i64>,
+    pub via_xy: IndexSet<i64>,
+    pub claims: IndexSet<i64>,
+    pub via_claims: IndexSet<i64>,
     pub connected: bool,
     pub length: f64,
     pub reason: String,
     /// Nodes covered by this route's own copper beyond a default-width
     /// track, mapped to the path node or via site owning them.
-    pub body: HashMap<i64, i64>,
+    pub body: IndexMap<i64, i64>,
 }
 
 impl NetRoute {
@@ -83,14 +83,14 @@ impl NetRoute {
         NetRoute {
             paths: Vec::new(),
             leads: Vec::new(),
-            nodes: HashSet::new(),
-            via_xy: HashSet::new(),
-            claims: HashSet::new(),
-            via_claims: HashSet::new(),
+            nodes: IndexSet::new(),
+            via_xy: IndexSet::new(),
+            claims: IndexSet::new(),
+            via_claims: IndexSet::new(),
             connected,
             length: 0.0,
             reason: reason.to_owned(),
-            body: HashMap::new(),
+            body: IndexMap::new(),
         }
     }
 }
@@ -106,7 +106,12 @@ pub struct Occupancy {
 
 impl Occupancy {
     pub fn new(size: usize, plane: usize) -> Occupancy {
-        Occupancy { occ: vec![0; size], via_occ: vec![0; plane], history: vec![0.0; size], via_history: vec![0.0; plane] }
+        Occupancy {
+            occ: vec![0; size],
+            via_occ: vec![0; plane],
+            history: vec![0.0; size],
+            via_history: vec![0.0; plane],
+        }
     }
 
     pub fn copy_history(&mut self, other: &Occupancy) {
@@ -138,7 +143,12 @@ fn copper_layer_index(layers: &[CopperLayer], layer: CopperLayer) -> Result<usiz
 /// (stable on ties: the cover's x-major order).
 pub fn nearest_first(lattice: &UniformLattice, position: Point, reach: f64) -> Vec<(f64, i64, i64, i64)> {
     let mut near: Vec<(f64, i64, i64, i64)> = lattice
-        .cover(position.x_nm as f64 - reach, position.y_nm as f64 - reach, position.x_nm as f64 + reach, position.y_nm as f64 + reach)
+        .cover(
+            position.x_nm as f64 - reach,
+            position.y_nm as f64 - reach,
+            position.x_nm as f64 + reach,
+            position.y_nm as f64 + reach,
+        )
         .into_iter()
         .map(|(column, x, y)| (hypot((x - position.x_nm) as f64, (y - position.y_nm) as f64), column, x, y))
         .collect();
@@ -188,16 +198,16 @@ pub fn choose_pitch(board: &PhysicalBoard, default_nm: i64) -> Result<i64> {
 }
 
 /// `_Router`.
-pub struct Router<'p, 'b, 'i> {
+pub struct Router<'p, 'b> {
     pub board: &'p PhysicalBoard,
     pub options: UnifiedRouterOptions,
-    pub explicit_pads: HashSet<PadReference>,
+    pub explicit_pads: IndexSet<PadReference>,
     pub lattice: UniformLattice,
     pub pitch: i64,
     pub via_cost: f64,
     pub rules: IndexMap<String, NetRoutingRule>,
     pub zone_nets: IndexSet<String>,
-    pub clearance: &'i mut RoutingClearanceIndex<'b>,
+    pub clearance: Option<RoutingClearanceIndex<'b>>,
     pub net_ids: IndexMap<String, i32>,
     pub rasters: Rasters,
     pub occupancy: Occupancy,
@@ -212,8 +222,8 @@ pub struct Router<'p, 'b, 'i> {
     pub candidate_clearance: i64,
     pub exit_corridors: IndexMap<String, IndexSet<i64>>,
     pub routes: IndexMap<String, NetRoute>,
-    pub lead_nodes: HashMap<Lead, Vec<i64>>,
-    pub lead_history: HashMap<TrackSegment, f64>,
+    pub lead_nodes: IndexMap<Lead, Vec<i64>>,
+    pub lead_history: IndexMap<TrackSegment, f64>,
     pub present: f64,
     pub conflict_age: IndexMap<String, i64>,
     pub deadline_expired: bool,
@@ -223,7 +233,7 @@ pub struct Router<'p, 'b, 'i> {
     pub turn_cache: Option<Vec<f64>>,
     pub local_spent: i64,
     pub segment_cache: Option<SegmentCache>,
-    pub escape_bias_cache: HashMap<String, Option<(Vec<i64>, Vec<f64>)>>,
+    pub escape_bias_cache: IndexMap<String, Option<(Vec<i64>, Vec<f64>)>>,
     pub scratch: super::astar::Scratch,
     pub flags: Vec<u8>,
     pub extra: Vec<f64>,
@@ -235,15 +245,15 @@ pub struct Router<'p, 'b, 'i> {
     pub fine_plan: Option<crate::fine_regions::FineRegionPlan>,
 }
 
-impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
+impl<'p, 'b> Router<'p, 'b> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         board: &'p PhysicalBoard,
         options: &UnifiedRouterOptions,
         nets: &[&PhysicalNet],
-        explicit_pads: HashSet<PadReference>,
+        explicit_pads: IndexSet<PadReference>,
         required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
-        clearance: &'i mut RoutingClearanceIndex<'b>,
+        clearance: RoutingClearanceIndex<'b>,
     ) -> Result<Self> {
         if options.guide_cost != 0.0 {
             return not_implemented("unified router guide_cost (global-route corridors)");
@@ -312,7 +322,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
             via_cost,
             rules,
             zone_nets,
-            clearance,
+            clearance: Some(clearance),
             net_ids,
             rasters: Rasters::new(board, &[], 0, false, Vec::new(), Vec::new(), vec![0], Vec::new()),
             occupancy: Occupancy::new(size, plane),
@@ -327,8 +337,8 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
             candidate_clearance: 0,
             exit_corridors: IndexMap::new(),
             routes: IndexMap::new(),
-            lead_nodes: HashMap::new(),
-            lead_history: HashMap::new(),
+            lead_nodes: IndexMap::new(),
+            lead_history: IndexMap::new(),
             present: options.present_factor,
             conflict_age: IndexMap::new(),
             deadline_expired: false,
@@ -338,7 +348,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
             turn_cache: None,
             local_spent: 0,
             segment_cache: Some(SegmentCache::new()),
-            escape_bias_cache: HashMap::new(),
+            escape_bias_cache: IndexMap::new(),
             scratch: super::astar::Scratch::new(size),
             flags: vec![0; size],
             extra: vec![0.0; size],
@@ -352,8 +362,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
         let (obstacles, holes) = router.obstacles()?;
         let margin = options.raster_margin_nm.unwrap_or(pitch.div_euclid(8));
         let exact = if options.ball_field_exact { router.ball_field_boxes()? } else { Vec::new() };
-        router.rasters =
-            Rasters::new(board, &router.lattice.blocks, nl, false, obstacles, holes, vec![margin], exact);
+        router.rasters = Rasters::new(board, &router.lattice.blocks, nl, false, obstacles, holes, vec![margin], exact);
         if options.ball_field_via_sites {
             return not_implemented("unified router ball_field_via_sites");
         }
@@ -369,7 +378,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
                 net_by_pad.insert(pad, &net.name);
             }
         }
-        let selected: HashSet<&str> = nets.iter().map(|net| net.name.as_str()).collect();
+        let selected: IndexSet<&str> = nets.iter().map(|net| net.name.as_str()).collect();
         for (pad, access) in required_accesses.into_iter().flatten() {
             let Some(name) = net_by_pad.get(pad) else {
                 return fail(format!("required routing access has no net: {pad}"));
@@ -377,7 +386,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
             if !selected.contains(name) {
                 continue;
             }
-            if verified_routing_access(board, pad, name, access, router.clearance)?.is_none() {
+            if verified_routing_access(board, pad, name, access, router.clearance.as_ref().expect("index"))?.is_none() {
                 return fail(format!("required routing access is stale or invalid: {pad}"));
             }
             router.required_accesses.insert(pad.clone(), access.clone());
@@ -391,12 +400,18 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
         router.specs = specs;
         router.segment_cache = None;
         let rules = &board.rules;
-        router.candidate_via_size =
-            std::iter::once(rules.default_via_size_nm).chain(router.specs.iter().map(|s| s.via_size)).max().expect("one");
-        router.candidate_via_drill =
-            std::iter::once(rules.default_via_drill_nm).chain(router.specs.iter().map(|s| s.via_drill)).max().expect("one");
-        router.candidate_clearance =
-            std::iter::once(rules.minimum_clearance_nm).chain(router.specs.iter().map(|s| s.clearance)).max().expect("one");
+        router.candidate_via_size = std::iter::once(rules.default_via_size_nm)
+            .chain(router.specs.iter().map(|s| s.via_size))
+            .max()
+            .expect("one");
+        router.candidate_via_drill = std::iter::once(rules.default_via_drill_nm)
+            .chain(router.specs.iter().map(|s| s.via_drill))
+            .max()
+            .expect("one");
+        router.candidate_clearance = std::iter::once(rules.minimum_clearance_nm)
+            .chain(router.specs.iter().map(|s| s.clearance))
+            .max()
+            .expect("one");
         router.exit_corridors = router.seed_exit_corridors()?;
         Ok(router)
     }
@@ -474,10 +489,11 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
             list.iter().filter_map(|l| layers.iter().position(|x| x == l)).collect()
         };
         let mut obstacles = Vec::new();
-        let objects: Vec<_> = self.clearance.objects().into_iter().cloned().collect();
+        let objects: Vec<_> = self.clearance.as_ref().expect("index").objects().into_iter().cloned().collect();
         for item in &objects {
             let netless = item.net.starts_with('<');
-            let rule_floor = if netless { 0 } else { self.rules.get(&item.net).map_or(0, |r| r.clearance_nm.unwrap_or(0)) };
+            let rule_floor =
+                if netless { 0 } else { self.rules.get(&item.net).map_or(0, |r| r.clearance_nm.unwrap_or(0)) };
             let floor = item.clearance_nm.max(rule_floor);
             let owner = if netless { FOREIGN } else { self.net_id(&item.net) };
             obstacles.push(Obstacle {
@@ -492,7 +508,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
                 polygon: false,
             });
         }
-        for keepout in self.clearance.keepouts() {
+        for keepout in self.clearance.as_ref().expect("index").keepouts() {
             obstacles.push(Obstacle {
                 owner: FOREIGN,
                 layers: index_of(&keepout.layers),
@@ -505,7 +521,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
                 polygon: false,
             });
         }
-        for (region_layers, shape) in self.clearance.macro_regions() {
+        for (region_layers, shape) in self.clearance.as_ref().expect("index").macro_regions() {
             obstacles.push(Obstacle {
                 owner: FOREIGN,
                 layers: index_of(region_layers),
@@ -518,7 +534,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
                 polygon: false,
             });
         }
-        let reservations = &self.clearance.zone_reservations;
+        let reservations = &self.clearance.as_ref().expect("index").zone_reservations;
         let zones: Vec<(String, Vec<usize>, Vec<Point>, i64, i64)> = reservations
             .zones
             .iter()
@@ -544,7 +560,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
                 polygon: true,
             });
         }
-        let hole_list: Vec<_> = self.clearance.holes().into_iter().cloned().collect();
+        let hole_list: Vec<_> = self.clearance.as_ref().expect("index").holes().into_iter().cloned().collect();
         let mut holes = Vec::new();
         for hole in &hole_list {
             let owner = if hole.net.starts_with('<') { FOREIGN } else { self.net_id(&hole.net) };
@@ -586,7 +602,8 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
     fn spec(&mut self, net: &PhysicalNet) -> Result<Option<NetSpec>> {
         let board = self.board;
         let rule = self.rules.get(&net.name).cloned();
-        let width = rule.as_ref().and_then(|r| r.width_nm).filter(|w| *w != 0).unwrap_or(board.rules.default_track_width_nm);
+        let width =
+            rule.as_ref().and_then(|r| r.width_nm).filter(|w| *w != 0).unwrap_or(board.rules.default_track_width_nm);
         let clearance = board.rules.minimum_clearance_nm.max(rule.as_ref().and_then(|r| r.clearance_nm).unwrap_or(0));
         let mut allowed: IndexSet<CopperLayer> = routing_layers(board, &net.name, rule.as_ref()).into_iter().collect();
         if rule.as_ref().is_some_and(|r| r.max_vias == Some(0)) {
@@ -622,10 +639,10 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
             via_factor: 1.0,
             neck_width: 0,
             neck_clearance: 0,
-            plane: HashSet::new(),
-            region: HashSet::new(),
-            neck: HashSet::new(),
-            neck_mid: HashSet::new(),
+            plane: IndexSet::new(),
+            region: IndexSet::new(),
+            neck: IndexSet::new(),
+            neck_mid: IndexSet::new(),
             target_only,
             optional: 0,
             via_budget: None,
@@ -652,9 +669,10 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
         if let Some((length, neck)) = breakout {
             let rule = rule.as_ref().expect("rule");
             spec.neck_width = neck.max(board.rules.minimum_track_width_nm);
-            spec.neck_clearance = board.rules.minimum_clearance_nm.max(
-                rule.breakout_clearance_nm.filter(|v| *v != 0).or(rule.clearance_nm).unwrap_or(0),
-            );
+            spec.neck_clearance = board
+                .rules
+                .minimum_clearance_nm
+                .max(rule.breakout_clearance_nm.filter(|v| *v != 0).or(rule.clearance_nm).unwrap_or(0));
             self.neck_nodes(net, &mut spec, length)?;
         } else if self.options.implicit_neck_nm != 0
             && rule.as_ref().is_none_or(|r| r.width_nm.is_none())
@@ -744,8 +762,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
     fn components(&mut self, net: &PhysicalNet, spec: &mut NetSpec) -> Result<Vec<Vec<Attach>>> {
         let board = self.board;
         let only: IndexSet<String> = IndexSet::from([net.name.clone()]);
-        let graph =
-            explicit_copper_connectivity(board, Candidate { only_nets: Some(&only), ..Candidate::default() })?;
+        let graph = explicit_copper_connectivity(board, Candidate { only_nets: Some(&only), ..Candidate::default() })?;
         let pads = macro_routing_pads(board, net)?;
         let mut groups: IndexMap<String, Vec<PadReference>> = IndexMap::new();
         for pad in &pads {
@@ -756,8 +773,8 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
             groups.entry(root).or_default().push(pad.clone());
         }
         let ports = macro_routing_ports(board, &net.name)?;
-        let mut macro_tracks: HashSet<TrackSegment> = HashSet::new();
-        let mut macro_vias: HashSet<Via> = HashSet::new();
+        let mut macro_tracks: IndexSet<TrackSegment> = IndexSet::new();
+        let mut macro_vias: IndexSet<Via> = IndexSet::new();
         let poses_by_ref = placement_map(board);
         for hard in &board.hard_macros {
             if board.materialized_macros.contains(&hard.cluster) {
@@ -775,8 +792,10 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
             let mut anchors: Vec<Anchor> = Vec::new();
             for pad in &members {
                 if let Some(port) = ports.get(pad) {
-                    let indexes =
-                        macro_port_layers(board, port)?.iter().map(|l| copper_layer_index(&layers, *l)).collect::<Result<_>>()?;
+                    let indexes = macro_port_layers(board, port)?
+                        .iter()
+                        .map(|l| copper_layer_index(&layers, *l))
+                        .collect::<Result<_>>()?;
                     anchors.push((port.position, indexes, None));
                     continue;
                 }
@@ -787,9 +806,9 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
                 }
                 anchors.extend(pad_anchors);
             }
-            let mut joined: HashSet<i64> = HashSet::new();
+            let mut joined: IndexSet<i64> = IndexSet::new();
             let mut host_anchors: Vec<Anchor> = Vec::new();
-            let mut host_joined: HashSet<i64> = HashSet::new();
+            let mut host_joined: IndexSet<i64> = IndexSet::new();
             let mut host_tracks: Vec<(TrackSegment, usize)> = Vec::new();
             for (index, via) in board.vias.iter().enumerate() {
                 if via.net != net.name || graph.roots.get(&format!("via:{index}")) != Some(&root) {
@@ -836,7 +855,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
                         Ok((port.position, indexes, None))
                     })
                     .collect::<Result<_>>()?;
-                let mut public: HashSet<i64> = HashSet::new();
+                let mut public: IndexSet<i64> = IndexSet::new();
                 for (position, indexes, _) in &anchors {
                     for &l in indexes {
                         if let Some(node) = self.lattice.snap(l as i64, *position) {
@@ -880,7 +899,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
     }
 
     /// `_separate_land_pieces`: land positions of each piece not joined to the first land.
-    fn separate_land_pieces(&self, pad: &PadReference) -> Result<Vec<HashSet<Point>>> {
+    fn separate_land_pieces(&self, pad: &PadReference) -> Result<Vec<IndexSet<Point>>> {
         let board = self.board;
         let pose = board.placements.iter().find(|p| p.reference == pad.component).expect("placed component");
         let footprint = &board.footprints[&pose.footprint];
@@ -952,14 +971,22 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
                     let mut path = None;
                     if !spec.neck.contains(&node) {
                         path = checked_access_path(
-                            self.board, self.clearance, &spec.name, *position, target, spec.width, copper, false, true,
+                            self.board,
+                            self.clearance.as_ref().expect("index"),
+                            &spec.name,
+                            *position,
+                            target,
+                            spec.width,
+                            copper,
+                            false,
+                            true,
                             None,
                         )?;
                     }
                     if path.is_none() && spec.neck_width != 0 {
                         path = checked_access_path(
                             self.board,
-                            self.clearance,
+                            self.clearance.as_ref().expect("index"),
                             &spec.name,
                             *position,
                             target,
@@ -1033,7 +1060,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
         let clearance = if spec.neck_clearance != 0 { spec.neck_clearance } else { spec.clearance };
         let owner = self.rasters.track(width, clearance).0;
         let mut stack: Vec<i64> = nodes.to_vec();
-        let mut visited: HashSet<i64> = nodes.iter().copied().collect();
+        let mut visited: IndexSet<i64> = nodes.iter().copied().collect();
         while !stack.is_empty() && visited.len() < limit {
             let node = stack.pop().expect("non-empty");
             if open[node as usize] {
@@ -1102,7 +1129,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
             };
             let path = local_access_path(
                 self.board,
-                self.clearance,
+                self.clearance.as_ref().expect("index"),
                 &spec.name,
                 position,
                 Point::new(x, y),
@@ -1145,10 +1172,16 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
         for &extension in &self.options.attach_extension_steps_nm.clone() {
             let corner = Point::new(position.x_nm + outward.0 * extension, position.y_nm + outward.1 * extension);
             for &width in &widths {
-                if !self.clearance.can_track(&spec.name, position, corner, width, copper)? {
+                if !self.clearance.as_ref().expect("index").can_track(&spec.name, position, corner, width, copper)? {
                     continue;
                 }
-                let stem = TrackSegment { net: spec.name.clone(), start: position, end: corner, width_nm: width, layer: copper };
+                let stem = TrackSegment {
+                    net: spec.name.clone(),
+                    start: position,
+                    end: corner,
+                    width_nm: width,
+                    layer: copper,
+                };
                 let mut found = 0;
                 for (distance, column, x, y) in nearest_first(&self.lattice, corner, reach as f64) {
                     if found >= 3 {
@@ -1161,7 +1194,7 @@ impl<'p, 'b, 'i> Router<'p, 'b, 'i> {
                     }
                     let path = checked_access_path(
                         self.board,
-                        self.clearance,
+                        self.clearance.as_ref().expect("index"),
                         &spec.name,
                         corner,
                         Point::new(x, y),

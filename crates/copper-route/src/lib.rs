@@ -41,6 +41,8 @@ pub mod pin_access;
 pub mod pin_escape;
 pub mod plane_estimate;
 pub mod progress;
+pub mod route_smoothing;
+pub mod route_summary;
 pub mod routeflow;
 pub mod routing;
 pub mod routing_clearance;

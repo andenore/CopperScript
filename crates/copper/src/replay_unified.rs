@@ -13,10 +13,16 @@ use std::path::Path;
 
 use indexmap::IndexSet;
 
-use copper_json::{Value, python_str_repr, text};
+use std::time::Instant;
+
+use copper_json::{Dumps, Object, Value, python_str_repr, text};
 use copper_lang::paths::python_os_error;
+use copper_route::progress::Progress;
+use copper_route::route_summary::connection_summary;
+use copper_route::state_codec::encode_result;
 use copper_route::unified_error::Error;
 use copper_route::unified_router::{FIELDS, ReplayRequest, replay_unified};
+use copper_state::StateDocument;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::option_parser::{self, flag, short_value, value};
@@ -163,10 +169,117 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         exact_escape: parsed.value("--exact-escape").map(str::to_owned),
         overrides,
     };
-    match replay_unified(&document, &shown, &request, None) {
-        Ok(_) => not_implemented(err, "the replay summary"),
-        Err(Error::Value(message)) => replay_error(out, &message),
-        Err(error @ Error::Crash(..)) => crash(err, &error.crash_line()),
-        Err(Error::NotImplemented(what)) => not_implemented(err, &what),
+    let started = Instant::now();
+    let mut console = ConsoleProgress { started, out: &mut *out };
+    let progress: Option<&mut dyn Progress> = if parsed.flag("--progress") { Some(&mut console) } else { None };
+    let result = match replay_unified(&document, &shown, &request, progress) {
+        Ok(result) => result,
+        Err(Error::Value(message)) => return replay_error(out, &message),
+        Err(error @ Error::Crash(..)) => return crash(err, &error.crash_line()),
+        Err(Error::NotImplemented(what)) => return not_implemented(err, &what),
+    };
+    if let Some(path) = parsed.value("--save-result") {
+        let path = pypath::display(path);
+        let document = StateDocument::new(
+            "pcbir.detailed:DetailedRoutingResult",
+            Object::from([(
+                "note".to_owned(),
+                Value::from("Scoped unified replay result; not source/native admission or board qualification"),
+            )]),
+            encode_result(&result),
+        );
+        if let Err(message) = write_new(Path::new(&path), &document.to_text()) {
+            return replay_error(out, &message);
+        }
     }
+    let seconds = copper_physical::pyfloat::round_digits(started.elapsed().as_secs_f64(), 1);
+    let summary = match copper_drc::run_physical_drc(&result.board, copper_drc::Policy::default())
+        .map_err(copper_route::unified_error::Error::from)
+        .and_then(|drc| connection_summary(&result.board, Some(&drc)))
+    {
+        Ok(summary) => summary,
+        Err(Error::NotImplemented(what)) => return not_implemented(err, &what),
+        Err(error) => return crash(err, &error.crash_line()),
+    };
+    let mut nets: Vec<_> = result.nets.iter().collect();
+    nets.sort_by(|a, b| a.net.cmp(&b.net));
+    let mut selected: Vec<Value> = result.nets.iter().map(|n| Value::from(n.net.as_str())).collect();
+    selected.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+    let unrouted: Object = nets
+        .iter()
+        .filter(|n| !n.connected)
+        .map(|n| (n.net.clone(), Value::Array(n.diagnostics.iter().map(|d| Value::from(d.as_str())).collect())))
+        .collect();
+    let mut entries: Object = Object::from([
+        ("state".to_owned(), Value::from(shown.as_str())),
+        ("overrides".to_owned(), Value::Object(request.overrides.iter().cloned().collect())),
+        (
+            "fanout".to_owned(),
+            match &request.bga_fanout {
+                None => Value::Null,
+                Some(options) => Value::Object(options.iter().cloned().collect()),
+            },
+        ),
+        ("seconds".to_owned(), Value::Float(seconds)),
+        ("selected_nets".to_owned(), Value::Array(selected)),
+        ("unrouted".to_owned(), Value::Object(unrouted)),
+    ]);
+    for (key, value) in summary {
+        entries.insert(key, value);
+    }
+    let text = Dumps::new().indent(1).sort_keys(true).dumps(&Value::Object(entries));
+    if let Some(report) = parsed.value("--report") {
+        let report = pypath::display(report);
+        if let Err(message) = write_report(Path::new(&report), &(text.clone() + "\n")) {
+            return crash(err, &message);
+        }
+    }
+    if let Some(output) = parsed.value("--output") {
+        let output = pypath::display(output);
+        let manifest = match copper_drc::macros::materialize_hard_macros(result.board.clone())
+            .and_then(|board| copper_pcb::kicad_pcb::generate(&board))
+        {
+            Ok(manifest) => manifest,
+            Err(copper_pcb::Error::NotImplemented(what)) => return not_implemented(err, &what),
+            Err(copper_pcb::Error::Value(message)) => return crash(err, &format!("ValueError: {message}")),
+        };
+        if let Err(message) = copper_pcb::project::write_kicad_project(&manifest, Path::new(&output)) {
+            return crash(err, &message);
+        }
+    }
+    let _ = text::print(out, &text);
+    0
+}
+
+/// `console_progress()`: one `PROGRESS` JSON line per event.
+struct ConsoleProgress<'a> {
+    started: Instant,
+    out: &'a mut dyn Write,
+}
+
+impl Progress for ConsoleProgress<'_> {
+    fn observe(&mut self, phase: &str, event: &str, details: Vec<(&'static str, Value)>) {
+        let elapsed = copper_physical::pyfloat::round_digits(self.started.elapsed().as_secs_f64(), 3);
+        let document = Value::Object(Object::from([
+            ("phase".to_owned(), Value::from(phase)),
+            ("event".to_owned(), Value::from(event)),
+            ("elapsed_seconds".to_owned(), Value::Float(elapsed)),
+            ("details".to_owned(), Value::Object(details.into_iter().map(|(k, v)| (k.to_owned(), v)).collect())),
+        ]));
+        let _ = text::print(self.out, &format!("PROGRESS {}", Dumps::new().sort_keys(true).dumps(&document)));
+        let _ = self.out.flush();
+    }
+}
+
+/// `Path.write_text` of a new state file (parents created).
+fn write_new(path: &Path, content: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| copper_lang::paths::python_os_call_error(&e, Some(&parent.display().to_string())))?;
+    }
+    copper_json::text::write_text(path, content).map_err(|e| python_os_error(&e, Some(&path.display().to_string())))
+}
+
+fn write_report(path: &Path, content: &str) -> Result<(), String> {
+    write_new(path, content)
 }

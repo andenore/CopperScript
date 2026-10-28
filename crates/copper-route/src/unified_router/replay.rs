@@ -73,9 +73,9 @@ pub fn replay_unified(
     text: &str,
     path: &str,
     request: &ReplayRequest,
-    _on_progress: Option<ProgressCallback<'_>>,
+    on_progress: Option<ProgressCallback<'_>>,
 ) -> Result<DetailedRoutingResult> {
-    let _saved = prepare_replay(text, path, request)?;
+    let saved = prepare_replay(text, path, request)?;
     if let Some(islands) = &request.power_islands
         && islands != "auto"
         && CopperLayer::parse(islands).is_none()
@@ -91,5 +91,18 @@ pub fn replay_unified(
     if request.exact_escape.is_some() {
         return not_implemented("replay-unified --exact-escape (pcbir.exact_escape)");
     }
-    not_implemented("replay-unified routing (pcbir.unified_router.route_unified)")
+    let map = |items: &Option<Vec<(copper_pcb::board::PadReference, crate::pin_escape::RoutingAccess)>>| {
+        items.as_ref().map(|items| items.iter().cloned().collect::<indexmap::IndexMap<_, _>>())
+    };
+    let fanout = map(&saved.fanout_accesses);
+    let required = map(&saved.required_accesses);
+    super::route::route_unified(
+        &saved.board,
+        &saved.global_route,
+        &saved.options,
+        fanout.as_ref(),
+        saved.only_nets.as_ref(),
+        required.as_ref(),
+        on_progress,
+    )
 }
