@@ -617,14 +617,23 @@ impl<'p, 'b> Router<'p, 'b> {
         }
         let mut target_only = Vec::new();
         if self.zone_nets.contains(&net.name) {
-            return not_implemented("unified router zone (plane) nets");
+            let zone_layers: IndexSet<CopperLayer> =
+                board.zones.iter().filter(|z| z.net == net.name).flat_map(|z| z.layers.iter().copied()).collect();
+            target_only = self
+                .lattice
+                .layers
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| zone_layers.contains(*l) && !allowed.contains(*l))
+                .map(|(i, _)| i)
+                .collect();
+            allowed.extend(zone_layers);
         }
         let layers: Vec<usize> =
             self.lattice.layers.iter().enumerate().filter(|(_, l)| allowed.contains(*l)).map(|(i, _)| i).collect();
         if layers.is_empty() {
             return Ok(None);
         }
-        target_only.clear();
         let nid = self.net_id(&net.name);
         let mut spec = NetSpec {
             name: net.name.clone(),
@@ -684,6 +693,19 @@ impl<'p, 'b> Router<'p, 'b> {
             self.neck_nodes(net, &mut spec, length)?;
         }
         spec.components = self.components(net, &mut spec)?;
+        if self.zone_nets.contains(&net.name) {
+            let (mut planes, islands, optional) = self.zone_regions(&net.name, &spec);
+            if self.options.reuse_plane_vias {
+                let taps = self.plane_via_taps(&net.name, &spec, &planes)?;
+                planes.extend(taps);
+            }
+            spec.plane = planes;
+            spec.islands = islands.len() + optional.len();
+            spec.optional = optional.len();
+            for island in islands.into_iter().chain(optional) {
+                spec.components.push(island.into_iter().map(|node| (node, Vec::new(), 0.0)).collect());
+            }
+        }
         let points: Vec<Point> =
             spec.components.iter().flat_map(|c| c.iter().map(|(node, _, _)| self.lattice.point(*node))).collect();
         spec.span = if points.is_empty() {
@@ -773,6 +795,17 @@ impl<'p, 'b> Router<'p, 'b> {
             groups.entry(root).or_default().push(pad.clone());
         }
         let ports = macro_routing_ports(board, &net.name)?;
+        // `macro_owned_pads` for zone nets.
+        let owned: IndexSet<&PadReference> = if self.zone_nets.contains(&net.name) {
+            board
+                .hard_macros
+                .iter()
+                .filter(|m| board.materialized_macros.contains(&m.cluster))
+                .flat_map(|m| m.pad_bindings.iter().map(|(pad, _)| pad))
+                .collect()
+        } else {
+            IndexSet::new()
+        };
         let mut macro_tracks: IndexSet<TrackSegment> = IndexSet::new();
         let mut macro_vias: IndexSet<Via> = IndexSet::new();
         let poses_by_ref = placement_map(board);
@@ -789,6 +822,12 @@ impl<'p, 'b> Router<'p, 'b> {
         ordered.sort_by_key(|(_, members)| members[0].to_string());
         let layers = self.lattice.layers.clone();
         for (root, members) in ordered {
+            if !owned.is_empty()
+                && members.iter().all(|pad| owned.contains(pad))
+                && !members.iter().any(|pad| ports.contains_key(pad))
+            {
+                continue;
+            }
             let mut anchors: Vec<Anchor> = Vec::new();
             for pad in &members {
                 if let Some(port) = ports.get(pad) {
@@ -887,7 +926,8 @@ impl<'p, 'b> Router<'p, 'b> {
             components.push(component);
             spec.anchors.push(anchors.iter().map(|a| a.0).collect());
             if !self.explicit_pads.is_empty() && members.iter().any(|pad| self.explicit_pads.contains(pad)) {
-                return not_implemented("unified router explicit plane pads (pour re-check)");
+                let exclusion = self.explicit_exclusion(&members)?;
+                spec.explicit.insert(components.len() - 1, exclusion);
             }
         }
         for anchors in separate {
@@ -943,6 +983,151 @@ impl<'p, 'b> Router<'p, 'b> {
             }
         }
         taps
+    }
+
+    /// `_explicit_exclusion`: the surface layers of these pads.
+    fn explicit_exclusion(&self, pads: &[PadReference]) -> Result<IndexSet<usize>> {
+        let poses = placement_map(self.board);
+        let mut result = IndexSet::new();
+        for pad in pads {
+            if let Some(pose) = poses.get(&pad.component) {
+                let side = if pose.side.value() == "front" { CopperLayer::Front } else { CopperLayer::Back };
+                result.insert(copper_layer_index(&self.lattice.layers, side)?);
+            }
+        }
+        Ok(result)
+    }
+
+    /// `_zone_regions`: plane target nodes of a zone net, its separate pours and fragments.
+    fn zone_regions(&mut self, name: &str, spec: &NetSpec) -> (IndexSet<i64>, Vec<Vec<i64>>, Vec<Vec<i64>>) {
+        let (fill_width, fill_clearance) = if self.options.plane_fill_width {
+            (self.board.rules.minimum_track_width_nm, self.board.rules.minimum_clearance_nm)
+        } else {
+            (spec.width, spec.clearance)
+        };
+        let owner = self.rasters.track(fill_width, fill_clearance).0.to_vec();
+        let g = &self.lattice;
+        let (nl, ny, nx) = (g.nl as usize, g.ny as usize, g.nx as usize);
+        let plane = nx * ny;
+        let view = &self.rasters.views[0];
+        let mut per_layer: IndexMap<usize, Vec<bool>> = IndexMap::new();
+        for zone in self.board.zones.iter().filter(|z| z.net == name) {
+            let inside: Vec<bool> = (0..plane)
+                .map(|at| {
+                    let (x, y) = (view.px[at], view.py[at]);
+                    super::geometry::polygon_inside(&zone.outer, x, y)
+                        && zone.holes.iter().all(|hole| !super::geometry::polygon_inside(hole, x, y))
+                })
+                .collect();
+            for layer in &zone.layers {
+                let index = g.layers.iter().position(|l| l == layer).expect("zone layer");
+                let mask: Vec<bool> = (0..plane)
+                    .map(|at| {
+                        let o = owner[index * plane + at];
+                        inside[at] && (o == FREE || o == spec.nid)
+                    })
+                    .collect();
+                match per_layer.get_mut(&index) {
+                    Some(existing) => {
+                        for (e, m) in existing.iter_mut().zip(mask) {
+                            *e |= m;
+                        }
+                    }
+                    None => {
+                        per_layer.insert(index, mask);
+                    }
+                }
+            }
+        }
+        let _ = nl;
+        let minimum = 4.max(self.options.plane_piece_area_nm2.div_euclid(g.pitch * g.pitch));
+        let mut pieces: IndexMap<usize, Vec<Vec<i64>>> = IndexMap::new();
+        for (&index, mask) in &per_layer {
+            let (labels, count) = label(mask, ny, nx);
+            if count == 0 {
+                continue;
+            }
+            let mut sizes = vec![0i64; count + 1];
+            for &l in &labels {
+                sizes[l as usize] += 1;
+            }
+            // np.argsort(-sizes[1:]): ties keep label order.
+            let mut order: Vec<usize> = (1..=count).collect();
+            order.sort_by_key(|&l| -sizes[l]);
+            let mut found = Vec::new();
+            for (k, &l) in order.iter().enumerate() {
+                if sizes[l] < minimum && k != 0 {
+                    break;
+                }
+                found.push(
+                    labels
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, v)| **v as usize == l)
+                        .map(|(at, _)| g.layer_node(at as i64, index as i64))
+                        .collect::<Vec<i64>>(),
+                );
+            }
+            pieces.insert(index, found);
+        }
+        if pieces.is_empty() {
+            return (IndexSet::new(), Vec::new(), Vec::new());
+        }
+        let largest = pieces.values().map(|p| p[0].len()).max().expect("pieces") as f64;
+        let mut planes = IndexSet::new();
+        let (mut islands, mut optional) = (Vec::new(), Vec::new());
+        for found in pieces.values() {
+            let first = &found[0];
+            if first.len() as f64 >= largest * self.options.plane_piece_fraction {
+                planes.extend(first.iter().copied());
+            } else {
+                islands.push(first.clone());
+            }
+            optional.extend(found[1..].iter().cloned());
+        }
+        (planes, islands, optional)
+    }
+
+    /// `_plane_via_taps`: nodes at existing plane vias that already land in the plane.
+    fn plane_via_taps(&self, name: &str, spec: &NetSpec, planes: &IndexSet<i64>) -> Result<IndexSet<i64>> {
+        let g = &self.lattice;
+        let layers_all = &g.layers;
+        let mut taps = IndexSet::new();
+        for via in &self.board.vias {
+            if via.net != name {
+                continue;
+            }
+            let Some(site) = g.snap(0, via.position) else { continue };
+            let column = g.column(site);
+            let (a, b) =
+                (copper_layer_index(layers_all, via.from_layer)?, copper_layer_index(layers_all, via.to_layer)?);
+            let span: Vec<usize> = (a..=b).collect();
+            let step = g.step_nm(site) as f64;
+            let reach = 1
+                .max(copper_physical::pyfloat::round_int((via.size_nm as f64 / 2.0 + spec.clearance as f64) / step))
+                + 1;
+            let around = [(reach, 0), (-reach, 0), (0, reach), (0, -reach)];
+            let touch = 1.max((via.size_nm as f64 / 2.0 / step).ceil() as i64);
+            let square: Vec<(i64, i64)> =
+                (-touch..=touch).flat_map(|dx| (-touch..=touch).map(move |dy| (dx, dy))).collect();
+            let surrounded = |index: usize| {
+                let node = g.layer_node(column, index as i64);
+                if self.options.plane_fill_width {
+                    return g.offset_nodes(node, &square).iter().filter(|n| planes.contains(*n)).count() >= 2;
+                }
+                let ring = g.offset_nodes(node, &around);
+                ring.len() == around.len() && ring.iter().all(|n| planes.contains(n))
+            };
+            if !span.iter().any(|&index| surrounded(index)) {
+                continue;
+            }
+            for &index in &span {
+                if spec.layers.contains(&index) {
+                    taps.insert(g.layer_node(column, index as i64));
+                }
+            }
+        }
+        Ok(taps)
     }
 
     /// `_attach`: grid nodes reachable from anchors with exact, checked lead-ins.

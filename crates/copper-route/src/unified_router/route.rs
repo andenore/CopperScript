@@ -5,7 +5,7 @@
 use indexmap::{IndexMap, IndexSet};
 
 use copper_drc::connectivity::{Candidate, explicit_copper_connectivity};
-use copper_json::Value;
+use copper_json::{Object, Value};
 use copper_pcb::board::{PadReference, PhysicalBoard, PhysicalNet, RouteKind, TrackSegment, Via};
 use copper_pcb::keepouts::placement_map;
 use copper_pcb::transform::transformed_local_point;
@@ -326,6 +326,10 @@ pub fn route_unified(
     {
         return fail("unified router does not consume verified fanout accesses; pass required_accesses");
     }
+    if options.time_budget_s.is_some_and(|budget| budget != 0.0) {
+        // A wall-clock deadline makes the result depend on timing.
+        return not_implemented("unified router time_budget_s (a wall-clock deadline)");
+    }
     if options.save_inputs_path.is_some() {
         return not_implemented("unified router save_inputs_path");
     }
@@ -373,9 +377,6 @@ pub fn route_unified(
         return not_implemented("unified router bus phase (buses_first with match groups)");
     }
     bus_names.clear();
-    if !plane_nets.is_empty() && nets.iter().any(|n| plane_nets.contains(&n.name)) {
-        return not_implemented("unified router plane nets and the pour re-check");
-    }
     let mut events: Vec<Event> = Vec::new();
     emit(&mut on_progress, "unified_setup", "started", vec![("nets", int(nets.len() as i64))]);
     if !options.share_commit_index {
@@ -507,6 +508,27 @@ pub fn route_unified(
         if !improved {
             break;
         }
+    }
+    if options.pour_recheck && !plane_nets.is_empty() {
+        let mut index = router.clearance.take().expect("index");
+        let (adopted, adopted_complete, report) = recheck_pours(
+            board,
+            &nets,
+            &plane_nets,
+            &accepted,
+            complete.clone(),
+            options,
+            required_accesses,
+            &mut shared,
+            &mut index,
+            &mut events,
+        )?;
+        router.clearance = Some(index);
+        forward(&mut on_progress, &mut events);
+        accepted = adopted;
+        complete = adopted_complete;
+        iterations += report.0;
+        emit(&mut on_progress, "unified_pour_recheck", "finished", report.1);
     }
     let spec_names: IndexSet<String> = router.specs.iter().map(|s| s.name.clone()).collect();
     if options.route_smoothing && !accepted.is_empty() {
@@ -674,4 +696,189 @@ fn smoothed(board: &PhysicalBoard, accepted: &Accepted) -> Result<Accepted> {
         by_net.get_mut(&track.net).expect("accepted net").push(track);
     }
     Ok(accepted.iter().map(|(name, (_, vias))| (name.clone(), (by_net[name].clone(), vias.clone()))).collect())
+}
+
+/// `_merge`.
+fn merge(accepted: &Accepted, more: &Accepted) -> Accepted {
+    let mut merged = accepted.clone();
+    for (name, (tracks, vias)) in more {
+        let entry = merged.entry(name.clone()).or_default();
+        entry.0.extend(tracks.iter().cloned());
+        entry.1.extend(vias.iter().cloned());
+    }
+    merged
+}
+
+fn pour_estimate(board: &PhysicalBoard, accepted: &Accepted) -> Result<crate::plane_estimate::PlaneEstimate> {
+    crate::plane_estimate::estimate_plane_connectivity(&with_copper(board, accepted))
+}
+
+fn strings(values: &[String]) -> Value {
+    Value::Array(values.iter().map(|v| Value::from(v.as_str())).collect())
+}
+
+/// `_recheck_pours`: reconnect plane pads committed signal copper walled off
+/// from their pour. Returns (accepted, complete, (iterations, report)).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn recheck_pours<'b>(
+    board: &'b PhysicalBoard,
+    nets: &[&'b PhysicalNet],
+    plane_nets: &IndexSet<String>,
+    accepted: &Accepted,
+    mut complete: IndexSet<String>,
+    options: &UnifiedRouterOptions,
+    required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
+    shared: &mut Shared,
+    index: &mut RoutingClearanceIndex<'b>,
+    events: &mut Vec<Event>,
+) -> Result<(Accepted, IndexSet<String>, (i64, Vec<(&'static str, Value)>))> {
+    let before = pour_estimate(board, accepted)?;
+    let routed_planes: IndexSet<&str> =
+        nets.iter().filter(|n| plane_nets.contains(&n.name)).map(|n| n.name.as_str()).collect();
+    let cut: IndexMap<&String, &Vec<String>> =
+        before.open_pads.iter().filter(|(name, _)| routed_planes.contains(name.as_str())).collect();
+    let mut cut_pads: Vec<String> = cut.values().flat_map(|p| p.iter().cloned()).collect();
+    cut_pads.sort();
+    cut_pads.truncate(12);
+    let mut iterations = 0;
+    let mut steps: Vec<String> = Vec::new();
+    let cut_off = cut.values().map(|p| p.len() as i64).sum::<i64>();
+    if cut.is_empty() {
+        return Ok((
+            accepted.clone(),
+            complete,
+            (0, vec![("cut_off", int(cut_off)), ("pads", strings(&cut_pads)), ("steps", strings(&steps))]),
+        ));
+    }
+    let signal_before = open_count(board, nets, accepted, plane_nets, &complete)?.0;
+    let plane_list: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| cut.contains_key(&n.name)).collect();
+    let mut current = (accepted.clone(), before);
+    let mut adopted = false;
+    // Step 1: plane nets only, everything else fixed.
+    shared.hold(index, &current.0)?;
+    let partial = with_copper(board, &current.0);
+    let taken = std::mem::replace(index, RoutingClearanceIndex::new(board)?);
+    let mut step = Router::new(&partial, options, &plane_list, IndexSet::new(), required_accesses, taken)?;
+    let (routes, conflicts, used) = step.negotiate(None, events)?;
+    iterations += used;
+    let (more, _, _) = step.commit(&routes, &conflicts)?;
+    *index = step.clearance.take().expect("index");
+    drop(step);
+    shared.added(&more);
+    let candidate = merge(&current.0, &more);
+    let estimate = pour_estimate(board, &candidate)?;
+    let signal = open_count(board, nets, &candidate, plane_nets, &complete)?.0;
+    let ok = estimate.opens < current.1.opens && signal <= signal_before;
+    steps.push(format!(
+        "plane reroute: pour opens {}->{}, signal opens {signal_before}->{signal}{}",
+        current.1.opens,
+        estimate.opens,
+        if ok { "" } else { " (not kept)" }
+    ));
+    if ok {
+        current = (candidate, estimate);
+        adopted = true;
+    }
+    let still: IndexMap<String, Vec<String>> = current
+        .1
+        .open_pads
+        .iter()
+        .filter(|(name, _)| routed_planes.contains(name.as_str()))
+        .map(|(n, p)| (n.clone(), p.clone()))
+        .collect();
+    let mut explicit_report: Option<Value> = None;
+    if !still.is_empty() {
+        let pad_of = |text: &String| {
+            let (component, pad) = text.rsplit_once('.').expect("REF.PAD");
+            PadReference::new(component, pad)
+        };
+        let pads: IndexSet<PadReference> = still.values().flatten().map(pad_of).collect();
+        let mut names: Vec<&String> = still.keys().collect();
+        names.sort();
+        let focus: Vec<PhysicalNet> = names
+            .iter()
+            .map(|name| PhysicalNet { name: (*name).clone(), pads: still[*name].iter().map(pad_of).collect() })
+            .collect();
+        let focus_refs: Vec<&PhysicalNet> = focus.iter().collect();
+        let crowd: IndexSet<String> = neighbour_nets(board, &focus_refs, &current.0, options.repair_neighbour_reach_nm)
+            .into_iter()
+            .filter(|name| !plane_nets.contains(name))
+            .collect();
+        let ripped: Accepted =
+            current.0.iter().filter(|(name, _)| !crowd.contains(*name)).map(|(n, c)| (n.clone(), c.clone())).collect();
+        let still_nets: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| still.contains_key(&n.name)).collect();
+        shared.hold(index, &ripped)?;
+        let partial = with_copper(board, &ripped);
+        let taken = std::mem::replace(index, RoutingClearanceIndex::new(board)?);
+        let mut first = Router::new(&partial, options, &still_nets, pads, required_accesses, taken)?;
+        let (routes, conflicts, used) = first.negotiate(None, events)?;
+        iterations += used;
+        let (plane_more, plane_rejected, _) = first.commit(&routes, &conflicts)?;
+        let mut explicit = Object::new();
+        for name in still.keys() {
+            let copper = plane_more.get(name).map_or((0, 0), |(t, v)| (t.len(), v.len()));
+            let reason = routes.get(name).map_or("not routed".to_owned(), |r| r.reason.clone());
+            let rejected = if plane_rejected.contains_key(name) { rejection_text(&first, name) } else { String::new() };
+            explicit.insert(
+                name.clone(),
+                Value::Object(Object::from([
+                    ("copper".to_owned(), Value::Array(vec![int(copper.0 as i64), int(copper.1 as i64)])),
+                    ("reason".to_owned(), Value::from(reason.as_str())),
+                    ("rejected".to_owned(), Value::from(rejected.as_str())),
+                ])),
+            );
+        }
+        explicit_report = Some(Value::Object(explicit));
+        *index = first.clearance.take().expect("index");
+        drop(first);
+        shared.added(&plane_more);
+        let candidate = merge(&ripped, &plane_more);
+        let crowd_nets: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| crowd.contains(&n.name)).collect();
+        shared.hold(index, &candidate)?;
+        let partial = with_copper(board, &candidate);
+        let taken = std::mem::replace(index, RoutingClearanceIndex::new(board)?);
+        let mut second = Router::new(&partial, options, &crowd_nets, IndexSet::new(), required_accesses, taken)?;
+        let (routes, conflicts, used) = second.negotiate(None, events)?;
+        iterations += used;
+        let (signal_more, _, signal_complete) = second.commit(&routes, &conflicts)?;
+        *index = second.clearance.take().expect("index");
+        drop(second);
+        shared.added(&signal_more);
+        let candidate = merge(&candidate, &signal_more);
+        let estimate = pour_estimate(board, &candidate)?;
+        let mut candidate_complete: IndexSet<String> =
+            complete.iter().filter(|n| !crowd.contains(*n)).cloned().collect();
+        candidate_complete.extend(signal_complete);
+        let signal = open_count(board, nets, &candidate, plane_nets, &candidate_complete)?.0;
+        let ok = estimate.opens < current.1.opens && signal <= signal_before;
+        steps.push(format!(
+            "explicit copper, {} net(s) ripped up: pour opens {}->{}, signal opens {signal_before}->{signal}{}",
+            crowd.len(),
+            current.1.opens,
+            estimate.opens,
+            if ok { "" } else { " (not kept)" }
+        ));
+        if ok {
+            current = (candidate, estimate);
+            complete = candidate_complete;
+            adopted = true;
+        }
+    }
+    shared.hold(index, &current.0)?;
+    let mut still_cut: Vec<String> = current
+        .1
+        .open_pads
+        .iter()
+        .filter(|(name, _)| routed_planes.contains(name.as_str()))
+        .flat_map(|(_, pads)| pads.iter().cloned())
+        .collect();
+    still_cut.sort();
+    still_cut.truncate(12);
+    let mut report = vec![("cut_off", int(cut_off)), ("pads", strings(&cut_pads)), ("steps", strings(&steps))];
+    if let Some(explicit) = explicit_report {
+        report.push(("explicit_route", explicit));
+    }
+    report.push(("adopted", Value::Bool(adopted)));
+    report.push(("still_cut_off", strings(&still_cut)));
+    Ok((current.0, complete, (iterations, report)))
 }

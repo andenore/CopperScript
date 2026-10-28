@@ -158,7 +158,7 @@ impl Router<'_, '_> {
 
     fn route_net_once(&mut self, index: usize, present: f64) -> Result<NetRoute> {
         if !self.specs[index].plane.is_empty() {
-            return not_implemented("unified router plane-net routes");
+            return self.route_plane_net(index, present);
         }
         let components: Vec<Vec<Attach>> = self.specs[index].components.clone();
         let mut route = NetRoute::empty(false, "");
@@ -233,6 +233,99 @@ impl Router<'_, '_> {
             remaining.retain(|&r| r != ci);
         }
         route.connected = true;
+        self.finish_route(&mut route, index);
+        Ok(route)
+    }
+
+    /// `_route_plane_net`: join every pad group (and small pour) of a zone net to its plane.
+    fn route_plane_net(&mut self, index: usize, present: f64) -> Result<NetRoute> {
+        let spec = self.specs[index].clone();
+        let mut route = NetRoute::empty(false, "");
+        let mut targets: IndexSet<i64> = spec.plane.clone();
+        let mut missing = 0;
+        let whole = self.lattice.full_box();
+        let margin = self.margin(&spec);
+        let count = spec.components.len();
+        let first_island = count - spec.islands;
+        let first_optional = count - spec.optional;
+        let order: Vec<usize> = (first_island..count).chain(0..first_island).collect();
+        for position in order {
+            let component = &spec.components[position];
+            let optional = position >= first_optional;
+            if component.is_empty() {
+                missing += (!optional) as usize;
+                continue;
+            }
+            let excluded = spec.explicit.get(&position);
+            if excluded.is_none()
+                && (component.iter().any(|(node, lead, _)| targets.contains(node) && lead.is_empty())
+                    || spec.joined.get(&position).is_some_and(|joined| joined.iter().any(|n| targets.contains(n))))
+            {
+                if position >= first_island {
+                    targets.extend(component.iter().map(|(node, _, _)| *node));
+                }
+                continue;
+            }
+            let mut sources: IndexMap<i64, f64> = IndexMap::new();
+            let mut leads: IndexMap<i64, Lead> = IndexMap::new();
+            for (node, lead, cost) in component {
+                let penalty = self.lead_penalty(lead, present);
+                sources.insert(*node, cost + penalty);
+                leads.insert(*node, lead.clone());
+            }
+            let source_list: Vec<(i64, f64)> = sources.iter().map(|(n, c)| (*n, *c)).collect();
+            if let Some(excluded) = excluded {
+                let allowed: Vec<i64> = targets
+                    .iter()
+                    .copied()
+                    .filter(|n| !excluded.contains(&(self.lattice.layer_of(*n) as usize)))
+                    .collect();
+                let found = if allowed.is_empty() {
+                    None
+                } else {
+                    self.astar(index, &source_list, &Targets { nodes: &allowed, extra: None }, present, whole, whole)?
+                };
+                let Some((path, _)) = found else {
+                    missing += (!optional) as usize;
+                    continue;
+                };
+                route.leads.push(leads.get(&path[0]).cloned().unwrap_or_default());
+                targets.extend(path.iter().copied());
+                route.paths.push(path);
+                continue;
+            }
+            let bbox = self.lattice.grow_box(self.lattice.box_of(sources.keys().copied()).expect("sources"), margin);
+            let target_list: Vec<i64> = targets.iter().copied().collect();
+            let mut found = if target_list.is_empty() {
+                None
+            } else {
+                self.astar(index, &source_list, &Targets { nodes: &target_list, extra: None }, present, bbox, whole)?
+            };
+            if found.is_none() && !target_list.is_empty() {
+                found = self.astar(
+                    index,
+                    &source_list,
+                    &Targets { nodes: &target_list, extra: None },
+                    present,
+                    whole,
+                    whole,
+                )?;
+            }
+            let Some((path, _)) = found else {
+                missing += (!optional) as usize;
+                continue;
+            };
+            route.leads.push(leads.get(&path[0]).cloned().unwrap_or_default());
+            targets.extend(path.iter().copied());
+            route.paths.push(path);
+            if position >= first_island {
+                targets.extend(sources.keys().copied());
+            }
+        }
+        route.connected = missing == 0;
+        if missing != 0 {
+            route.reason = format!("{missing} of {} pad groups cannot reach the plane", count - spec.optional);
+        }
         self.finish_route(&mut route, index);
         Ok(route)
     }

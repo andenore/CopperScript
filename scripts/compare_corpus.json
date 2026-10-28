@@ -19127,6 +19127,234 @@
       "--report",
       "{out}/report.json"
      ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/zones.state.json",
+      "--set",
+      "pour_recheck=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/zones.state.json",
+      "--set",
+      "commit_rounds=1",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/zones.state.json",
+      "--set",
+      "maximum_iterations=2",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/six_layer.state.json",
+      "--set",
+      "fine_regions=off",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/six_layer.state.json",
+      "--set",
+      "route_smoothing=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "maximum_iterations=1",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/placement.state.json",
+      "--set",
+      "maximum_iterations=1",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/routing.state.json",
+      "--set",
+      "bend_cost=0",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "export_congestion=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/zones.state.json",
+      "--set",
+      "plane_fill_width=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/zones.state.json",
+      "--set",
+      "reuse_plane_vias=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "implicit_neck_nm=0",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "local_escape_radius_nm=0",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/placement.state.json",
+      "--set",
+      "pitch_nm=500000",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/routing.state.json",
+      "--set",
+      "via_cost_mm=0.2",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "outer_layer_cost=0.5",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/zones.state.json",
+      "--set",
+      "rejection_marker_cost=3",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/nrf52.state.json",
+      "--set",
+      "commit_rounds=2",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/nrf52.state.json",
+      "--only",
+      "GND",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
     }
    ]
   },

@@ -10,7 +10,7 @@ use copper_json::{Object, Value};
 use copper_pcb::board::PhysicalBoard;
 use copper_physical::pyfloat::{round_digits, round_int};
 
-use crate::unified_error::{Result, not_implemented};
+use crate::unified_error::Result;
 
 const ROUTING_BUDGET_WARNING_CODES: [&str; 3] = ["DRC-MAX-LENGTH", "DRC-DIFF-SKEW", "DRC-LENGTH-MATCH"];
 
@@ -67,9 +67,6 @@ pub fn connection_summary(board: &PhysicalBoard, drc: Option<&Report>) -> Result
             open_nets.push(Value::from(net.name.as_str()));
         }
     }
-    if !board.zones.is_empty() {
-        return not_implemented("route summary plane estimate (pcbir.plane_estimate)");
-    }
     let length: i64 = board
         .tracks
         .iter()
@@ -95,10 +92,35 @@ pub fn connection_summary(board: &PhysicalBoard, drc: Option<&Report>) -> Result
                 ("completion", Value::Float(completion)),
             ]),
         ),
-        (
-            "plane".to_owned(),
-            object(vec![("nets", int(p_nets)), ("connections", int(p_connections)), ("explicit_opens", int(p_opens))]),
-        ),
+        ("plane".to_owned(), {
+            let mut plane =
+                vec![("nets", int(p_nets)), ("connections", int(p_connections)), ("explicit_opens", int(p_opens))];
+            if !board.zones.is_empty() {
+                let estimate = crate::plane_estimate::estimate_plane_connectivity(board)?;
+                let mut open_nets: Vec<&String> =
+                    estimate.net_groups.iter().filter(|(_, groups)| **groups > 1).map(|(net, _)| net).collect();
+                open_nets.sort();
+                let mut open_pads: Vec<(&String, &Vec<String>)> = estimate.open_pads.iter().collect();
+                open_pads.sort_by(|a, b| a.0.cmp(b.0));
+                plane.push(("estimated_opens", int(estimate.opens)));
+                plane.push((
+                    "estimated_open_nets",
+                    Value::Array(open_nets.into_iter().map(|n| Value::from(n.as_str())).collect()),
+                ));
+                plane.push((
+                    "estimated_open_pads",
+                    Value::Object(
+                        open_pads
+                            .into_iter()
+                            .map(|(net, pads)| {
+                                (net.clone(), Value::Array(pads.iter().map(|p| Value::from(p.as_str())).collect()))
+                            })
+                            .collect(),
+                    ),
+                ));
+            }
+            object(plane)
+        }),
         (
             "copper".to_owned(),
             object(vec![

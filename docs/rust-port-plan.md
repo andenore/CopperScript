@@ -532,20 +532,31 @@ do not shrink as much.
 
 **M4 stream: unified router and `replay-unified` (branch `rust-m4-unified`).**
 
-- `copper-route` (on `rust-m4-global`'s foundation) gained
-  `unified_router` options (`UnifiedRouterOptions`, `__post_init__`, the
-  `--set`/`--unified-set` overrides), `fine_regions` (the fine-patch
-  planner), `package_patterns` (ball-array detection), `detailed` result
-  types, `congestion_feedback` `CongestionMap` and a typed decoder of the
-  `--unified-save-inputs` state with Python's `StateError`, `ValueError`
-  and uncaught-exception texts (`unified_error`).
-- `copper replay-unified` parses every option, decodes the state, applies
-  overrides and the `--only`/`--component` selection with Python's errors;
-  routing, `--power-islands`, `--refanout` and `--exact-escape` report not
-  implemented (exit 3).
+- `copper-route` (on `rust-m4-global`'s foundation) gained the unified
+  router: options (`__post_init__`, `--set`/`--unified-set` overrides),
+  `fine_regions`, the uniform lattice (`routing_lattice`, PENDING
+  `rust-m4-global`), legality rasters, the native A* kernel (`astar.c`) with
+  its heap tie-breaking, net specs and attach candidates (checked,
+  extended and local lead-ins, necks), PathFinder negotiation with exact
+  proposal conflicts, exact commit, rip-in repair rounds over the shared
+  index, plane nets with the pour re-check, `route_smoothing`,
+  `plane_estimate` (raster pour estimate), `route_summary`, budgets and the
+  congestion export; plus a typed codec for `--unified-save-inputs` states
+  and `--save-result` results with Python's `StateError`, `ValueError` and
+  uncaught-exception texts.
+- `copper replay-unified` is rewritten: every option, error path, summary,
+  `--report`, `--save-result`, `-o` and `--progress`.
 - Inputs: `tests/rust-port/unified/` (seven `route-board
   --unified-save-inputs` states, malformed and valid variants;
   `generate.py`, README). Corpus: `replay-unified` (states and mutations),
-  `-options`, `-errors`, `-malformed`; replays compare the result state,
-  the report's `unrouted`, exit status and stderr, never the `seconds` or
-  `PROGRESS` timing. No case sets a time budget (the default is none).
+  `-options`, `-errors`, `-malformed`, `-output`: 97 byte-identical, 1
+  pending. Replays compare the result state, the report's `unrouted`, the
+  KiCad output, exit status and stderr, never the `seconds` or `PROGRESS`
+  timing. No case sets a time budget (the default is none); a
+  `time_budget_s` deadline reports not implemented.
+- Not implemented (exit 3): nested lattices (fine-region patches on ball
+  arrays), the bus phase (`buses_first` with match groups) and bus skew
+  tuning (`critical_tuning`), via technologies, required return vias,
+  guide costs, exit reservations, ball-field via sites, `--power-islands`,
+  `--refanout`, `--exact-escape`, via-in-pad arrays and a dynamically typed
+  state value (a text pitch).

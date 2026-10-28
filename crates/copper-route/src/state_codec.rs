@@ -1951,8 +1951,35 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
             }
         }
     }
-    if !board.via_in_pad_rules.is_empty() {
-        return not_implemented("via-in-pad rules");
+    let mut permitted: IndexSet<&PadReference> = IndexSet::new();
+    for rule in &board.via_in_pad_rules {
+        if !permitted.insert(&rule.pad) {
+            return fail("multiple via-in-pad permissions for one pad");
+        }
+        if assigned.get(&rule.pad).copied() != Some("GND") {
+            return fail("via-in-pad permission requires a connected GND pad");
+        }
+        let placement = board.placements.iter().find(|p| p.reference == rule.pad.component).expect("placed pad");
+        let lands: Vec<_> =
+            board.footprints[&placement.footprint].pads.iter().filter(|p| p.number == rule.pad.pad).collect();
+        if lands.iter().any(|p| p.kind != PadKind::Smd) {
+            return fail("via-in-pad permission requires SMD lands");
+        }
+        if board.metadata.get("fabrication_profile").map(String::as_str) != Some("jlcpcb-six-layer")
+            || board.stackup.copper_layers.len() != 6
+        {
+            return fail("filled-capped via-in-pad requires the JLCPCB six-layer profile");
+        }
+        if !board
+            .zones
+            .iter()
+            .any(|z| z.net == "GND" && z.layers.iter().any(|l| !matches!(l, CopperLayer::Front | CopperLayer::Back)))
+        {
+            return fail("via-in-pad permission requires a declared inner GND zone");
+        }
+        if rule.rows.is_some() {
+            return not_implemented("via-in-pad arrays");
+        }
     }
     for track in &board.tracks {
         if !net_names.contains(&track.net.as_str()) {
