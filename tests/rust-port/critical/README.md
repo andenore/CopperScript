@@ -29,7 +29,7 @@ the checkpoint is complete.
 | `si-single-ended` | `tests/rust-port/si-check/single_ended.copper` | as `si-dphy` |
 | `si-two-layer` | `tests/rust-port/si-check/two_layer.copper` | `--locked --offline --allow-proxy-footprints --no-check --layers 2` |
 | `nrf-antenna-macro` | `examples/nrf_antenna_macro/board.copper` | `--locked --offline --no-check --layers 6 --fab-profile jlcpcb-six-layer` |
-| `full-vertical` | `examples/full_vertical/board.copper` | as `si-dphy` |
+| `full-vertical` | `examples/full_vertical/board.copper` | `--locked --no-check --layers 6 --fab-profile jlcpcb-six-layer` (resolves footprints online; proxies do not fit its macros) |
 
 The trivial no-critical-net checkpoint of `examples/valid_board` (and its
 placement checkpoint, which `replay-critical` also accepts) is the M5 report

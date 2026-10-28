@@ -529,7 +529,7 @@ fn footprint(value: &StateValue) -> Result<PhysicalFootprint> {
         exclude_from_bom: flag("exclude_from_bom")?,
         exclude_from_pos_files: flag("exclude_from_pos_files")?,
         internal_pad_groups: sequence(fields.get("internal_pad_groups"), |item| {
-            let fields = Fields::of(item, "pcbir.physical:InternalPadGroup")?;
+            let fields = Fields::of(item, "pcbir.pad_connections:InternalPadGroup")?;
             fields.allow(&["numbers"])?;
             InternalPadGroup::new(texts(Some(fields.required("numbers")?))?).map_err(Error::Value)
         })?,

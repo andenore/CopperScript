@@ -88,3 +88,117 @@ pub fn track_inside_board(board: &PhysicalBoard, start: Point, end: Point, width
         distance * num_rational::BigRational::from_integer(4.into()) >= limit
     }))
 }
+
+/// `surface_path` without detours: short 45-degree-first pad escapes with
+/// exact-clearance fallbacks, reusing an endpoint-connected committed
+/// same-layer chain. `None` when no candidate clears.
+#[allow(clippy::too_many_arguments)]
+pub fn surface_path(
+    board: &PhysicalBoard,
+    clearance: &crate::routing_clearance::RoutingClearanceIndex<'_>,
+    net: &str,
+    start: Point,
+    end: Point,
+    width_nm: i64,
+    layer: copper_physical::CopperLayer,
+    committed: &[copper_pcb::board::TrackSegment],
+) -> Result<Option<Vec<copper_pcb::board::TrackSegment>>> {
+    use std::collections::VecDeque;
+    if start == end {
+        return Ok(Some(Vec::new()));
+    }
+    let mut adjacency: indexmap::IndexMap<Point, Vec<(Point, &copper_pcb::board::TrackSegment)>> =
+        indexmap::IndexMap::new();
+    for track in committed {
+        if track.net == net
+            && track.layer == layer
+            && track.width_nm >= clearance.breakout.required_width_nm(track, width_nm)
+        {
+            adjacency.entry(track.start).or_default().push((track.end, track));
+            adjacency.entry(track.end).or_default().push((track.start, track));
+        }
+    }
+    let mut reached: indexmap::IndexSet<Point> = indexmap::IndexSet::from([start]);
+    let mut queue = VecDeque::from([start]);
+    while let Some(current) = queue.pop_front() {
+        if reached.contains(&end) {
+            break;
+        }
+        for (neighbor, track) in adjacency.get(&current).cloned().unwrap_or_default() {
+            if reached.contains(&neighbor) {
+                continue;
+            }
+            if !track_inside_board(board, track.start, track.end, track.width_nm)?
+                || !clearance.can_track(net, track.start, track.end, track.width_nm, layer)?
+            {
+                continue;
+            }
+            reached.insert(neighbor);
+            queue.push_back(neighbor);
+        }
+    }
+    if reached.contains(&end) {
+        return Ok(Some(Vec::new()));
+    }
+    let (dx, dy) = (end.x_nm - start.x_nm, end.y_nm - start.y_nm);
+    let diagonal = dx.abs().min(dy.abs());
+    let mut paths: Vec<Vec<Point>> = Vec::new();
+    if dx == 0 || dy == 0 || dx.abs() == dy.abs() {
+        paths.push(vec![start, end]);
+    } else if dx.abs() > dy.abs() {
+        let step = if dx > 0 { diagonal } else { -diagonal };
+        paths.push(vec![start, Point::new(end.x_nm - step, start.y_nm), end]);
+        paths.push(vec![start, Point::new(start.x_nm + step, end.y_nm), end]);
+    } else {
+        let step = if dy > 0 { diagonal } else { -diagonal };
+        paths.push(vec![start, Point::new(start.x_nm, end.y_nm - step), end]);
+        paths.push(vec![start, Point::new(end.x_nm, start.y_nm + step), end]);
+    }
+    if dx != 0 && dy != 0 {
+        paths.push(vec![start, Point::new(start.x_nm, end.y_nm), end]);
+        paths.push(vec![start, Point::new(end.x_nm, start.y_nm), end]);
+    }
+    let mut paths = clearance.terminal_preferences.ordered(net, layer, paths);
+    if !paths.contains(&vec![start, end]) {
+        paths.push(vec![start, end]);
+    }
+    'paths: for points in paths {
+        let mut additions = Vec::new();
+        for pair in points.windows(2) {
+            let (first, second) = (pair[0], pair[1]);
+            if first == second {
+                continue;
+            }
+            let pieces = clearance.route_pieces(net, first, second, width_nm, layer)?;
+            for piece in &pieces {
+                if !track_inside_board(board, piece.start, piece.end, piece.width_nm)?
+                    || !clearance.can_track(net, piece.start, piece.end, piece.width_nm, layer)?
+                {
+                    continue 'paths;
+                }
+            }
+            for piece in pieces {
+                let mut reused = false;
+                for old in committed {
+                    if old.net == net
+                        && old.layer == layer
+                        && ((old.start == piece.start && old.end == piece.end)
+                            || (old.start == piece.end && old.end == piece.start))
+                        && old.width_nm >= piece.width_nm
+                        && track_inside_board(board, old.start, old.end, old.width_nm)?
+                        && clearance.can_track(net, old.start, old.end, old.width_nm, layer)?
+                    {
+                        reused = true;
+                        break;
+                    }
+                }
+                if !reused {
+                    additions.push(piece);
+                }
+            }
+        }
+        return crate::route_style::chamfer_ordinary_corners(board, &additions, &[], clearance, Some(committed))
+            .map(Some);
+    }
+    Ok(None)
+}

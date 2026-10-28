@@ -737,7 +737,7 @@ pub fn route_critical_nets(
         // PENDING: plan_bundles order, crossings, nested exits and repairs.
         return copper_pcb::not_implemented("critical pair bundles");
     }
-    for (rule, group) in &jobs {
+    for (job_index, (rule, group)) in jobs.iter().enumerate() {
         if let Some(graph) = &owner_graph
             && stage_board.tracks.iter().any(|track| track.net == rule.net)
             && group.iter().all(|name| net_by_name.get(name.as_str()).is_some_and(|net| graph.net_connected(net)))
@@ -784,8 +784,17 @@ pub fn route_critical_nets(
             }
             let partner_rule = rules[partner_name.as_str()];
             let mut blockers: IndexSet<String> = IndexSet::new();
-            let (result, pair_tracks, pair_vias) =
-                route_pair_group(&stage_board, rule, partner_rule, &routes, &rules, &tracks, &vias, &mut blockers)?;
+            let (result, pair_tracks, pair_vias) = route_pair_group(
+                &stage_board,
+                rule,
+                partner_rule,
+                &routes,
+                &rules,
+                &tracks,
+                &vias,
+                options.pair_state_limit,
+                &mut blockers,
+            )?;
             if !result.connected {
                 // Pairs leaving the same package were not planned as a bundle: the
                 // committed pairs sharing a terminal package are rip-up suspects.
@@ -817,8 +826,50 @@ pub fn route_critical_nets(
             committed.push((group.clone(), pair_tracks, pair_vias));
             continue;
         }
-        // PENDING: _route_single / _route_single_exact (unified router cohort).
-        return copper_pcb::not_implemented("critical single-ended routing");
+        // Contiguous single-ended critical and clock jobs share one unified
+        // negotiation (`_route_critical_cohort`).
+        if matches!(rule.kind, RouteKind::Critical | RouteKind::Clock) {
+            let cohort = jobs[job_index..]
+                .iter()
+                .take_while(|(peer, peer_group)| {
+                    matches!(peer.kind, RouteKind::Critical | RouteKind::Clock) && peer_group.len() == 1
+                })
+                .count();
+            if cohort > 1 {
+                // PENDING: owned by rust-m4-unified (unified_router cohort).
+                return copper_pcb::not_implemented("critical single-ended cohort (unified router)");
+            }
+        }
+        let guide = routes.get(&rule.net);
+        let (result, net_tracks, net_vias) = route_single(&stage_board, rule, guide)?;
+        let (result, net_tracks, net_vias) =
+            reject_reserved_plane_tracks(&stage_board, result, net_tracks, net_vias, &rules);
+        let (result, net_tracks, net_vias) =
+            validate_candidate(&stage_board, result, net_tracks, net_vias, &tracks, &vias, None)?;
+        let (result, net_tracks, net_vias) =
+            improve_single_surface(&stage_board, rule, guide, result, net_tracks, net_vias, &tracks, &vias)?;
+        let guided = guide.is_some_and(|route| route.connected);
+        let point_to_point = matches!(rule.kind, RouteKind::RfFeed | RouteKind::Clock);
+        let rf_tree = rule.kind == RouteKind::RfFeed && rule.topology == "tree" && rule.max_vias == Some(0);
+        if (!result.connected || !result.warnings.is_empty())
+            && guided
+            && (!point_to_point || guide.is_some_and(|route| route.accesses.len() == 2) || rf_tree)
+        {
+            // PENDING: owned by rust-m4-unified (_route_single_exact).
+            return copper_pcb::not_implemented("critical exact single-ended search (unified router)");
+        }
+        if result.connected
+            && result.strategy == "global_guide"
+            && net_by_name.get(rule.net.as_str()).is_some_and(|net| net.pads.len() >= 3)
+            && !point_to_point
+        {
+            // PENDING: owned by rust-m4-unified (_route_single_exact).
+            return copper_pcb::not_implemented("critical exact single-ended tree (unified router)");
+        }
+        results.push(result);
+        tracks.extend(net_tracks.iter().cloned());
+        vias.extend(net_vias.iter().cloned());
+        committed.push((group.clone(), net_tracks, net_vias));
     }
     let match_tuning = tune_match_groups(&stage_board, &rules, &base_tracks, &base_vias, &committed)?;
     let conflict_diagnostics = intersection_diagnostics(&tracks, &coupled_pairs);
@@ -1489,6 +1540,7 @@ fn route_pair_group(
     rules: &IndexMap<&str, &NetRoutingRule>,
     tracks: &[TrackSegment],
     vias: &[Via],
+    pair_state_limit: Option<i64>,
     blockers: &mut IndexSet<String>,
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
     let (first, second) = if rule.net <= partner_rule.net { (rule, partner_rule) } else { (partner_rule, rule) };
@@ -1520,12 +1572,58 @@ fn route_pair_group(
         (Some(a), Some(b)) => crate::pair_terminals::terminal_partners(a, b).is_some(),
         _ => false,
     };
+    let owned = crate::pair_terminals::macro_owned_pads(board);
+    let protected_ends = board
+        .nets
+        .iter()
+        .filter(|net| net.name == first.net || net.name == second.net)
+        .any(|net| net.pads.iter().any(|pad| owned.contains(pad)));
+    let mut result = result;
     if !within_budget(&result) && supported {
-        // PENDING: paired_candidates / paired_via_candidates (pair_search, pair_vias, pair_refine).
-        return copper_pcb::not_implemented("critical joint pair search");
+        if protected_ends && !guided {
+            // PENDING: pair_terminals.macro_terminal_guides_proved.
+            return copper_pcb::not_implemented("critical pair search from proved macro ports");
+        }
+        let search_board = board_with(board, tracks, vias);
+        let (first_guide, second_guide) = (&routes[&first.net], &routes[&second.net]);
+        let prefer_vias = pair_prefers_via_escape(&search_board, first_guide, second_guide)?;
+        let order = if prefer_vias { "via_first_internal_lands" } else { "surface_first" };
+        let searchers: [fn(
+            &PhysicalBoard,
+            &NetRoutingRule,
+            &NetRoutingRule,
+            &GlobalNetRoute,
+            &GlobalNetRoute,
+        ) -> Result<()>; 2] = if prefer_vias {
+            [crate::pair_vias::paired_via_candidates, crate::pair_search::paired_candidates]
+        } else {
+            [crate::pair_search::paired_candidates, crate::pair_vias::paired_via_candidates]
+        };
+        // `search_tiers`: both families over three pitches within the bound.
+        // Every search below yields nothing without expanding a state, so the
+        // bound, the resumed frontiers and the escalation never come into play.
+        for searcher in searchers {
+            for _pitch_nm in [1_000_000, 500_000, 250_000] {
+                searcher(&search_board, first, second, first_guide, second_guide)?;
+            }
+        }
+        // The coarse candidate is the only fallback, and an unchanged result
+        // never yields to itself (`_within_or_shorter`).
+        result.search_states = 0;
+        result.candidate_attempts = 0;
+        result.pair_searches = 0;
+        result.pair_resumed_states = 0;
+        result.pair_resumed_portals = 0;
+        result.pair_search_order = Some(order.to_owned());
+        result.pair_state_limit = pair_state_limit;
+        result.pair_budget_exhausted = false;
+        result.rejections = Vec::new();
+        result.rejection_examples = Vec::new();
+        if !result.connected {
+            result.diagnostics.push("joint pair search: 0 searches, 0 states, 0 candidates; none accepted".to_owned());
+        }
     }
     // `reported`: preparation evidence only when it prepared something.
-    let mut result = result;
     if preparation.status != "source_terminals" {
         result.local_preparation = Some(preparation);
     }
@@ -1695,4 +1793,182 @@ fn tune_match_groups(
         });
     }
     Ok(outcomes)
+}
+
+/// `_pair_prefers_via_escape`: matched via portals first for an internally
+/// located SMD terminal pair (every same-number land at one endpoint of both
+/// members inside the package's pad-centre bounds by a via and two clearances).
+fn pair_prefers_via_escape(board: &PhysicalBoard, first: &GlobalNetRoute, second: &GlobalNetRoute) -> Result<bool> {
+    use copper_physical::footprint::PadKind;
+    let margin = board.rules.default_via_size_nm + 2 * board.rules.minimum_clearance_nm;
+    for access in &first.accesses {
+        let Some(other) = second.accesses.iter().rev().find(|item| item.pad.component == access.pad.component) else {
+            continue;
+        };
+        let Some(placement) = board.placements.iter().find(|item| item.reference == access.pad.component) else {
+            continue;
+        };
+        let pads: Vec<_> = board.footprints[&placement.footprint]
+            .pads
+            .iter()
+            .filter(|pad| !matches!(pad.kind, PadKind::Aperture | PadKind::NonPlatedThroughHole))
+            .collect();
+        if pads.is_empty() {
+            continue;
+        }
+        let min_x = pads.iter().map(|p| p.position.x_nm).min().expect("pads");
+        let max_x = pads.iter().map(|p| p.position.x_nm).max().expect("pads");
+        let min_y = pads.iter().map(|p| p.position.y_nm).min().expect("pads");
+        let max_y = pads.iter().map(|p| p.position.y_nm).max().expect("pads");
+        let internal = [access, other].iter().all(|terminal| {
+            let lands: Vec<_> = pads.iter().filter(|p| p.number == terminal.pad.pad).collect();
+            !lands.is_empty()
+                && lands.iter().all(|p| {
+                    p.kind == PadKind::Smd
+                        && min_x + margin < p.position.x_nm
+                        && p.position.x_nm < max_x - margin
+                        && min_y + margin < p.position.y_nm
+                        && p.position.y_nm < max_y - margin
+                })
+        });
+        if internal {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+// ---------------------------------------------------------------------------
+// Single-ended nets
+
+/// `_pin_stubs`: each access's checked lead-in, or a stub to its access point.
+fn pin_stubs(net: &str, guide: &GlobalNetRoute, width: i64) -> Vec<TrackSegment> {
+    let mut result = Vec::new();
+    for access in &guide.accesses {
+        if !access.tracks.is_empty() {
+            result.extend(access.tracks.iter().cloned());
+        } else if access.pad_position != access.access_position {
+            result.push(TrackSegment {
+                net: net.to_owned(),
+                start: access.pad_position,
+                end: access.access_position,
+                width_nm: width,
+                layer: access.layer,
+            });
+        }
+    }
+    result
+}
+
+/// `_route_single`: the global guide's segments, pin stubs and vias.
+fn route_single(
+    board: &PhysicalBoard,
+    rule: &NetRoutingRule,
+    guide: Option<&GlobalNetRoute>,
+) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
+    let nets = vec![rule.net.clone()];
+    let Some(guide) = guide.filter(|guide| guide.connected) else {
+        let message = "missing connected global guide".to_owned();
+        return Ok((CriticalNetResult::new(nets, false, 0, 0, Vec::new(), 0, vec![message]), Vec::new(), Vec::new()));
+    };
+    let rf_tree = rule.kind == RouteKind::RfFeed && rule.topology == "tree" && rule.max_vias == Some(0);
+    if matches!(rule.kind, RouteKind::Clock | RouteKind::RfFeed) && guide.accesses.len() != 2 && !rf_tree {
+        let message = format!("{} v0.1 requires point-to-point topology", rule.kind.value());
+        return Ok((CriticalNetResult::new(nets, false, 0, 0, Vec::new(), 0, vec![message]), Vec::new(), Vec::new()));
+    }
+    if !guide.vias.is_empty() {
+        // PENDING: _guide_via needs routing_vias.physical_via_span (rust-m4-global).
+        return copper_pcb::not_implemented("critical single-ended guide vias");
+    }
+    let width = rule.width_nm.filter(|w| *w != 0).unwrap_or(board.rules.default_track_width_nm);
+    let mut tracks: Vec<TrackSegment> = guide
+        .segments
+        .iter()
+        .map(|item| TrackSegment {
+            net: rule.net.clone(),
+            start: item.start,
+            end: item.end,
+            width_nm: width,
+            layer: item.layer,
+        })
+        .collect();
+    tracks.extend(pin_stubs(&rule.net, guide, width));
+    let tracks = copper_drc::breakout::BreakoutRegions::new(board).split_tracks(&tracks, None);
+    let mut vias: Vec<Via> = Vec::new();
+    for via in guide.accesses.iter().filter_map(|access| access.via.as_ref()) {
+        if !vias.contains(via) {
+            vias.push(via.clone());
+        }
+    }
+    let via_refs: Vec<&Via> = vias.iter().collect();
+    let track_refs: Vec<&TrackSegment> = tracks.iter().collect();
+    let diagnostics = budget_diagnostics(rule, &via_refs);
+    let mut result = CriticalNetResult::new(
+        nets,
+        diagnostics.is_empty(),
+        tracks.len() as i64,
+        vias.len() as i64,
+        vec![track_length(&track_refs)],
+        0,
+        diagnostics,
+    );
+    result.assumptions = external_assumptions(rule);
+    result.evidence_digests = external_evidence(rule);
+    result.warnings = budget_warnings(rule, &track_refs);
+    Ok((result, tracks, vias))
+}
+
+/// `_improve_single_surface`: a shorter fully checked via-free surface tree
+/// replaces the guide's copper (or an open result).
+#[allow(clippy::too_many_arguments)]
+fn improve_single_surface(
+    board: &PhysicalBoard,
+    rule: &NetRoutingRule,
+    guide: Option<&GlobalNetRoute>,
+    incumbent: CriticalNetResult,
+    incumbent_tracks: Vec<TrackSegment>,
+    incumbent_vias: Vec<Via>,
+    committed_tracks: &[TrackSegment],
+    committed_vias: &[Via],
+) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
+    let bounded_rf = rule.kind == RouteKind::RfFeed && rule.max_vias == Some(0);
+    let Some(guide) = guide.filter(|guide| guide.connected) else {
+        return Ok((incumbent, incumbent_tracks, incumbent_vias));
+    };
+    if (!guide.vias.is_empty() || guide.accesses.iter().any(|access| access.via.is_some())) && !bounded_rf {
+        return Ok((incumbent, incumbent_tracks, incumbent_vias));
+    }
+    let guide_length = incumbent.lengths_nm.first().copied();
+    let search_board = board_with(board, committed_tracks, committed_vias);
+    let (mut best, mut best_tracks, mut best_vias) = (incumbent, incumbent_tracks, incumbent_vias);
+    let mut attempts = 0;
+    for tracks in crate::local_critical::local_surface_candidates(&search_board, rule, bounded_rf)? {
+        attempts += 1;
+        let refs: Vec<&TrackSegment> = tracks.iter().collect();
+        let length = track_length(&refs);
+        if best.connected && best_vias.is_empty() && length >= best.lengths_nm[0] {
+            continue;
+        }
+        let mut candidate = CriticalNetResult::new(
+            vec![rule.net.clone()],
+            true,
+            tracks.len() as i64,
+            0,
+            vec![length],
+            0,
+            budget_diagnostics(rule, &[]),
+        );
+        candidate.warnings = budget_warnings(rule, &refs);
+        candidate.assumptions = external_assumptions(rule);
+        candidate.evidence_digests = external_evidence(rule);
+        candidate.strategy = "local_surface_tree".to_owned();
+        let (candidate, tracks, vias) =
+            validate_candidate(board, candidate, tracks, Vec::new(), committed_tracks, committed_vias, None)?;
+        if candidate.connected && (!best.connected || length < best.lengths_nm[0]) {
+            (best, best_tracks, best_vias) = (candidate, tracks, vias);
+        }
+    }
+    best.local_candidate_attempts = attempts;
+    best.guide_length_nm = guide_length;
+    Ok((best, best_tracks, best_vias))
 }

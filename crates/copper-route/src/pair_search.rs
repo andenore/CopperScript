@@ -161,3 +161,52 @@ pub fn attempt_document(item: &PairSearchAttempt) -> Value {
         ("minimum_goal_distance_nm", item.minimum_goal_distance_nm.map_or(Value::Null, Value::from)),
     ])
 }
+
+/// `_pair_profile` reached the search: `true` when the pair has a common
+/// same-layer profile (width, gap, two terminals each, partners, a layer).
+fn pair_profile_supported(
+    board: &copper_pcb::board::PhysicalBoard,
+    first_rule: &copper_pcb::board::NetRoutingRule,
+    second_rule: &copper_pcb::board::NetRoutingRule,
+    first_guide: &crate::routing::GlobalNetRoute,
+    second_guide: &crate::routing::GlobalNetRoute,
+) -> crate::Result<bool> {
+    let default = board.rules.default_track_width_nm;
+    let width = first_rule.width_nm.filter(|w| *w != 0).unwrap_or(default);
+    if second_rule.width_nm.filter(|w| *w != 0).unwrap_or(default) != width {
+        return Ok(false);
+    }
+    let Some(gap) = first_rule.pair_gap_nm else { return Ok(false) };
+    if second_rule.pair_gap_nm != Some(gap) || first_guide.accesses.len() != 2 || second_guide.accesses.len() != 2 {
+        return Ok(false);
+    }
+    if crate::pair_terminals::terminal_partners(first_guide, second_guide).is_none() {
+        return Ok(false);
+    }
+    let second_layers = crate::routing_layers::routing_layers(board, &second_rule.net, Some(second_rule));
+    let mut layers: Vec<CopperLayer> = crate::routing_layers::routing_layers(board, &first_rule.net, Some(first_rule))
+        .into_iter()
+        .filter(|layer| second_layers.contains(layer))
+        .collect();
+    for access in first_guide.accesses.iter().chain(&second_guide.accesses) {
+        let contact = crate::pair_terminals::terminal_copper_layers(board, &access.pad)?;
+        layers.retain(|layer| contact.contains(layer));
+    }
+    Ok(!layers.is_empty())
+}
+
+/// `paired_candidates` as far as it is ported: a pair without a common
+/// same-layer profile yields nothing; a search reports not implemented.
+pub fn paired_candidates(
+    board: &copper_pcb::board::PhysicalBoard,
+    first_rule: &copper_pcb::board::NetRoutingRule,
+    second_rule: &copper_pcb::board::NetRoutingRule,
+    first_guide: &crate::routing::GlobalNetRoute,
+    second_guide: &crate::routing::GlobalNetRoute,
+) -> crate::Result<()> {
+    if pair_profile_supported(board, first_rule, second_rule, first_guide, second_guide)? {
+        // PENDING: ports, departure preferences and the joint spine search.
+        return copper_pcb::not_implemented("critical joint pair search (pair_search.paired_candidates)");
+    }
+    Ok(())
+}
