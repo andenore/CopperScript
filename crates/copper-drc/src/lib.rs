@@ -1356,7 +1356,7 @@ fn check_copper_keepouts(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> 
 }
 
 /// `non_plated_holes`: placed drill envelopes, including unnumbered mechanical holes.
-fn non_plated_holes(board: &PhysicalBoard) -> Vec<(String, RoundedConvexShape)> {
+pub fn non_plated_holes(board: &PhysicalBoard) -> Vec<(String, RoundedConvexShape)> {
     let mut holes: Vec<(String, RoundedConvexShape)> =
         board.mechanical_holes.iter().map(|h| (format!("mechanical-hole:{}", h.id), hole_shape(h))).collect();
     holes.extend(board.mechanical_slots.iter().map(|s| (format!("mechanical-slot:{}", s.id), slot_shape(s))));

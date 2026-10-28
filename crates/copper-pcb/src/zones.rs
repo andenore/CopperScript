@@ -252,3 +252,101 @@ pub fn routing_layers(board: &PhysicalBoard, net: &str, rule: Option<&NetRouting
     let planes = dedicated_plane_layers(board);
     selected.iter().filter(|layer| planes.get(*layer).is_none_or(|owner| owner == net)).copied().collect()
 }
+
+/// `deferred_zone_nets`: nets whose every terminal lies in one declared (non-macro) zone.
+///
+/// Routing intent, never filled connectivity: regional islands must not
+/// suppress external feeders or bridges between separate islands.
+pub fn deferred_zone_nets(board: &PhysicalBoard) -> Result<indexmap::IndexSet<String>> {
+    let local: Vec<&str> = board.hard_macros.iter().flat_map(|m| m.zones.iter().map(|z| z.id.as_str())).collect();
+    let poses = crate::keepouts::placement_map(board);
+    let mut members: IndexMap<&str, Vec<Point>> = IndexMap::new();
+    for net in &board.nets {
+        let mut points = Vec::new();
+        for pad in &net.pads {
+            let pose = poses
+                .get(&pad.component)
+                .ok_or_else(|| Error::Value(copper_json::python_str_repr(&pad.component)))?;
+            points.push(crate::transform::transformed_pad_position(board, pose, &pad.pad)?);
+        }
+        members.insert(&net.name, points);
+    }
+    let mut result = indexmap::IndexSet::new();
+    for zone in &board.zones {
+        if local.contains(&zone.id.as_str()) {
+            continue;
+        }
+        let Some(points) = members.get(zone.net.as_str()).filter(|points| !points.is_empty()) else { continue };
+        if points.iter().all(|p| {
+            point_in_polygon(*p, &zone.outer) && !zone.holes.iter().any(|hole| point_in_polygon(*p, hole))
+        }) {
+            result.insert(zone.net.clone());
+        }
+    }
+    Ok(result)
+}
+
+/// `ZoneRoutingReservations`: net-aware track reservations shared by access,
+/// routing and final DRC. Routing intent, never filled copper or via/pad
+/// obstructions.
+pub struct ZoneRoutingReservations {
+    pub zones: Vec<(CopperZone, copper_physical::RoundedConvexShape)>,
+    pub clearances: IndexMap<String, i64>,
+    pub minimum_clearance_nm: i64,
+}
+
+impl ZoneRoutingReservations {
+    pub fn new(board: &PhysicalBoard) -> Self {
+        let zones = board
+            .zones
+            .iter()
+            .filter(|zone| zone.reserve_routing)
+            .map(|zone| {
+                (zone.clone(), copper_physical::RoundedConvexShape::new(zone.outer.clone(), 0).expect("zone outline"))
+            })
+            .collect();
+        let clearances = board.net_routing_rules.iter().map(|r| (r.net.clone(), r.clearance_nm.unwrap_or(0))).collect();
+        ZoneRoutingReservations { zones, clearances, minimum_clearance_nm: board.rules.minimum_clearance_nm }
+    }
+
+    /// `blocking_zones`: the reserved zones of other nets that `shape` on `layer` consumes.
+    pub fn blocking_zones(
+        &self,
+        net: &str,
+        shape: &copper_physical::RoundedConvexShape,
+        layer: CopperLayer,
+    ) -> Vec<&CopperZone> {
+        use copper_physical::geometry::shapes_clear;
+        let mut result = Vec::new();
+        for (zone, outer) in &self.zones {
+            if zone.net == net || !zone.layers.contains(&layer) {
+                continue;
+            }
+            let margin = self
+                .minimum_clearance_nm
+                .max(zone.clearance_nm.unwrap_or(0))
+                .max(self.clearances.get(net).copied().unwrap_or(0))
+                .max(self.clearances.get(&zone.net).copied().unwrap_or(0));
+            if shapes_clear(shape, outer, margin) {
+                continue;
+            }
+            // A swept shape wholly inside a polygon hole does not consume the
+            // reserved copper. Keep the radius and clearance from its boundary.
+            let in_hole = zone.holes.iter().any(|hole| {
+                ring_edges(&shape.spine).iter().all(|(a, b)| segment_in_polygon(*a, *b, hole))
+                    && ring_edges(hole).iter().all(|(a, b)| {
+                        shapes_clear(shape, &copper_physical::RoundedConvexShape::new(vec![*a, *b], 0).expect("edge"), margin)
+                    })
+            });
+            if in_hole {
+                continue;
+            }
+            result.push(zone);
+        }
+        result
+    }
+
+    pub fn can_area(&self, net: &str, shape: &copper_physical::RoundedConvexShape, layer: CopperLayer) -> bool {
+        self.blocking_zones(net, shape, layer).is_empty()
+    }
+}
