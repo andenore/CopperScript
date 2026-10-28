@@ -13,7 +13,12 @@ output, or a difference recorded in docs/rust-port-differences.md.
 Each case runs both implementations in turn with the same working directory
 and the same output directory, so paths in their output agree. The harness
 compares the exit status, stdout, stderr and every output file byte for byte
-(a suite may narrow this), and records both run times. The Rust binary writes
+(a suite may narrow this), and records both run times. Outputs that differ
+only in floating-point rounding are ``close``, which passes: the exit statuses
+match, every channel agrees outside its numbers, and each number agrees within
+a relative ``FLOAT_TOLERANCE`` (JSON documents are compared as values).
+``--exact`` turns this off. The rewrite does not reproduce Python's float
+rounding bit for bit (docs/rust-port-plan.md, D6). The Rust binary writes
 LF line endings on every platform; on Windows the Python outputs' CRLF is read
 as LF before comparing (and the Rust outputs' too, for formats such as CSV
 that use CRLF on every platform). ``{root}`` in case arguments is the
@@ -71,6 +76,7 @@ import fnmatch
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -325,6 +331,88 @@ def _json_parts(name: str, data: bytes | None, spec) -> dict[str, object]:
     return {f"json:{name}#{'.'.join(keys)}":
             _sha256(json.dumps(_json_at(data, keys) if data is not None else None, sort_keys=True).encode())
             for keys in paths}
+
+
+FLOAT_TOLERANCE = 1e-9
+# A free-standing number as Python, numpy or KiCad print it. Digits inside a
+# word or hash (U1, sha256:...) stay text, and text must match exactly.
+_NUMBER = re.compile(rb"(?<![\w.])[-+]?(?:\d+\.\d*|\.\d+|\d+)(?:[eE][-+]?\d+)?(?![\w.])")
+EXACT = False
+
+
+def _floats_close(a: float, b: float) -> bool:
+    if a == b or (math.isnan(a) and math.isnan(b)):
+        return True
+    return abs(a - b) <= FLOAT_TOLERANCE * max(abs(a), abs(b), 1.0)
+
+
+def _values_close(a, b) -> bool:
+    """JSON values equal up to float rounding; integers must be equal."""
+    if isinstance(a, bool) or isinstance(b, bool) or (isinstance(a, int) and isinstance(b, int)):
+        return a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return _floats_close(float(a), float(b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return list(a) == list(b) and all(_values_close(a[key], b[key]) for key in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_values_close(x, y) for x, y in zip(a, b))
+    return a == b
+
+
+def _text_close(a: bytes, b: bytes) -> bool:
+    """Two outputs equal up to float rounding: as JSON values, else number by number."""
+    if a == b:
+        return True
+    try:
+        return _values_close(json.loads(a.decode("utf-8")), json.loads(b.decode("utf-8")))
+    except (UnicodeDecodeError, ValueError):
+        pass
+    if _NUMBER.sub(b"#", a) != _NUMBER.sub(b"#", b):
+        return False
+    for x, y in zip(_NUMBER.findall(a), _NUMBER.findall(b)):
+        if x != y and (not re.search(rb"[.eE]", x + y) or not _floats_close(float(x), float(y))):
+            return False
+    return True
+
+
+def _close(python: "Run", rust: "Run", case: "Case", names: list[str]) -> bool:
+    """Whether every differing channel of a case differs only in float rounding."""
+    for name in names:
+        if name == "exit":
+            return False
+        if name in ("stdout", "stderr"):
+            left, right = getattr(python, name), getattr(rust, name)
+        elif name.startswith("files:"):
+            file_name = name.split(":", 1)[1]
+            left, right = python.files.get(file_name), rust.files.get(file_name)
+        elif name.startswith("json:"):
+            file_name = name[5:].split("#", 1)[0]
+            spec = case.json_keys[file_name]
+            left, right = (_json_selected(run.files.get(file_name), spec) for run in (python, rust))
+            if not _values_close(left, right):
+                return False
+            continue
+        else:
+            return False
+        if left is None or right is None or not _text_close(left, right):
+            return False
+    return True
+
+
+def _json_selected(data: bytes | None, spec):
+    """The values a ``json`` entry compares, before digesting."""
+    if data is None:
+        return None
+    if isinstance(spec, dict):
+        try:
+            value = json.loads(data.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            return None
+        for keys in spec["without"]:
+            value = _json_without(value, keys)
+        return value
+    paths = spec if spec and isinstance(spec[0], list) else [spec]
+    return [_json_at(data, keys) for keys in paths]
 
 
 @dataclass
@@ -789,7 +877,8 @@ def compare_case(case: Case, rust_command: list[str], python_command: list[str],
     if case.mutation is not None:
         source, seed = case.mutation
         original = (ROOT / source).read_text(encoding="utf-8")
-        mutated = ROOT / Path(source).parent / Path(case.stdin_input or case.args[1]).name
+        target = case.stdin_input or next(arg for arg in case.args if Path(arg).name.startswith(".compare-mutation-"))
+        mutated = ROOT / target
         mutated.write_bytes(mutate_source(original, seed).encode("utf-8"))
     try:
         return _compare_runs(case, record, rust_command, python_command, work, slug, out, environment,
@@ -829,6 +918,8 @@ def _compare_runs(case, record, rust_command, python_command, work, slug, out, e
         return {**record, "status": "equal"}, []
     names, excerpt = _differences(python, rust, case)
     record["differences"] = names
+    if not EXACT and _close(python, rust, case, names):
+        return {**record, "status": "close"}, []
     for entry in differences:
         if entry["case"] == case.id and entry["python"] == digests["python"] and entry["rust"] == digests["rust"]:
             return {**record, "status": "accepted", "accepted_by": entry["id"]}, []
@@ -856,13 +947,13 @@ def markdown(report: dict) -> str:
     lines = [f"# Rust/Python comparison ({report['platform']}, commit {report.get('commit') or 'unknown'})", "",
              f"Gate: suites up to {report['gate_milestone']}. "
              f"Result: {'pass' if report['passed'] else 'FAIL'}.", "",
-             "| Suite | Milestone | Gated | Equal | Accepted | Different | Pending | Skipped | Error | Python s | Rust s |",
-             "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
+             "| Suite | Milestone | Gated | Equal | Close | Accepted | Different | Pending | Skipped | Error | Python s | Rust s |",
+             "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for suite in report["suites"]:
         counts = suite["counts"]
         lines.append(f"| {suite['name']} | {suite['milestone']} | {'yes' if suite['gated'] else 'no'} | "
                      + " | ".join(str(counts.get(key, 0)) for key in
-                                  ("equal", "accepted", "different", "pending", "skipped", "error"))
+                                  ("equal", "close", "accepted", "different", "pending", "skipped", "error"))
                      + f" | {suite['python_seconds']:.2f} | {suite['rust_seconds']:.2f} |")
     ladder = [case for case in report["cases"] if case["suite"] == "ladder"]
     if ladder:
@@ -907,9 +998,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-oracle-cache", action="store_true", help="always run the Python oracle")
     parser.add_argument("--print-oracle-digest", action="store_true",
                         help="print the oracle cache digest (for a CI cache key) and stop")
+    parser.add_argument("--exact", action="store_true",
+                        help="compare byte for byte: no float-rounding tolerance (status close)")
     parser.add_argument("--jobs", type=int, default=1,
                         help="cases to run at once (default 1; timings are only comparable with 1)")
     args = parser.parse_args(argv)
+    global EXACT
+    EXACT = args.exact
 
     if args.print_oracle_digest:
         print(oracle_digest(args.python))

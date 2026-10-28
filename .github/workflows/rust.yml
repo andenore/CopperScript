@@ -78,23 +78,26 @@ jobs:
         run: cargo fmt --all --check
       - name: Lint
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Install the Python oracle
+        # Python proves macro edge openings with shapely (the qualification extra).
+        run: python -m pip install -e ".[test]" "shapely==2.1.2"
+      - name: Populate the package cache
+        # Locked online checks fetch every board's pinned packages into its
+        # .copper-cache without changing copper.lock, and a locked online
+        # footprint audit fetches the KiCad footprint libraries they resolve
+        # from; tests and the comparison then run offline, as locally. Boards
+        # that fail ERC or the audit still fetch.
+        run: |
+          for board in examples/*/board.copper examples/simulation/*.copper; do
+            python -m copperscript check "$board" --locked > /dev/null || true
+            python -m copperscript audit-footprints "$board" --locked > /dev/null || true
+          done
       - name: Test
         run: cargo test --workspace --locked
       - name: Build the binary
         run: cargo build --release --locked -p copper
-      - name: Install the Python oracle
-        # Python proves macro edge openings with shapely (the qualification extra).
-        run: python -m pip install -e ".[test]" "shapely==2.1.2"
       - name: Check the oracle fixtures are current
         run: python scripts/generate_rust_fixtures.py --check
-      - name: Populate the package cache
-        # Locked online checks fetch every board's pinned packages into its
-        # .copper-cache without changing copper.lock; the comparison then runs
-        # offline, as locally. Boards that fail ERC still fetch.
-        run: |
-          for board in examples/*/board.copper examples/simulation/*.copper; do
-            python -m copperscript check "$board" --locked > /dev/null || true
-          done
       - name: Key the oracle cache
         # Python results stay valid while the non-Rust tree and the
         # interpreter's packages are unchanged; Rust-only pushes reuse them.

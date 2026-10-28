@@ -19,9 +19,6 @@ pub const NOT_IMPLEMENTED_MARKER: &str = "not implemented in the Rust rewrite";
 pub enum Plan {
     /// Implemented in this binary.
     Done,
-    /// Planned for the named milestone of docs/rust-port-plan.md.
-    #[allow(dead_code)] // Every command has landed; kept for the plan's later additions.
-    Milestone(&'static str),
     /// An independent check that stays on the Python CLI in the first iteration.
     Python,
 }
@@ -72,6 +69,10 @@ pub fn plan(command: &str) -> Option<Plan> {
 const USAGE: &str = "usage: copper COMMAND [ARGS]";
 
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
+    // Placement's decoupling-access pass runs the decoupler router (copper-route).
+    copper_place::planner::register_decoupling_pass(|board, placements, options| {
+        copper_route::decoupling::improve_decoupling_placement(board, placements, options, None)
+    });
     let Some(command) = args.first() else {
         let _ = writeln!(err, "{USAGE}\ncopper: error: the following arguments are required: command");
         return 2;
@@ -83,7 +84,6 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
             for (name, plan) in COMMANDS {
                 let status = match plan {
                     Plan::Done => "rewritten".to_owned(),
-                    Plan::Milestone(milestone) => format!("planned for {milestone}"),
                     Plan::Python => "stays on the Python CLI".to_owned(),
                 };
                 let _ = writeln!(out, "  {name:<22} {status}");
@@ -121,10 +121,6 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "editor-overlay" => editor_overlay::run(rest, out, err),
         "edit-mechanical" | "edit" => edit_mechanical::run(rest, out, err),
         _ => match plan(command) {
-            Some(Plan::Milestone(milestone)) => {
-                let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: {command} (planned for {milestone})");
-                NOT_IMPLEMENTED_EXIT
-            }
             Some(Plan::Python) => {
                 let _ = writeln!(
                     err,
@@ -159,10 +155,10 @@ mod tests {
     }
 
     #[test]
-    fn unported_commands_report_their_milestone() {
-        let (code, _, err) = call(&["audit-cam"]);
-        assert_eq!(code, NOT_IMPLEMENTED_EXIT);
-        assert!(err.contains("python -m copperscript audit-cam"), "{err}");
+    fn python_only_commands_point_at_the_python_cli() {
+        let (code, out, err) = call(&["audit-cam"]);
+        assert_eq!((code, out.as_str()), (NOT_IMPLEMENTED_EXIT, ""));
+        assert!(err.contains(NOT_IMPLEMENTED_MARKER) && err.contains("python -m copperscript audit-cam"), "{err}");
     }
 
     #[test]

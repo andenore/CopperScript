@@ -166,7 +166,18 @@ completion time) may differ within the recorded entries.
   Windows; the harness reads the Python outputs' CRLF as LF on Windows before
   comparing, so this is a policy, not a per-case recorded difference.
 - Float code (`hypot`, `atan2`, cost weights) keeps the same operations in
-  the same order unless a recorded difference says otherwise.
+  the same order where that is natural, but floating-point rounding is not
+  reproduced bit for bit (decision D6): no Python or numpy numeric algorithm
+  is ported only to match its last bit. The harness reports outputs that
+  differ only in float rounding as `close` (a pass): exit statuses equal,
+  text equal outside its numbers, integers equal, floats within a relative
+  1e-9, JSON compared as values; `--exact` shows the byte comparison. The
+  exact helpers already written (`pyfloat`) stay in use.
+- Where a rounding difference changes a decision (a routing tie, a legality
+  threshold), outputs diverge beyond `close`. For routing commands the
+  acceptance is then quality, not identity: the Rust result must route as
+  completely, pass DRC, and be no worse on the benchmark ladder's metrics
+  (completion, length, vias); such cases are recorded with those metrics.
 - Iteration order is deterministic everywhere: `BTreeMap`/`IndexMap`, no
   `HashMap` iteration feeding output, stable sorts with the same keys. The
   binary must reproduce its own output bit for bit across runs and platforms.
@@ -272,6 +283,11 @@ do not shrink as much.
   commands on a reduced, frozen package (section 5).
 - **D5 Identity bar: reviewed differences allowed.** Byte identity is the
   default; every deviation is recorded in the differences log (section 4).
+- **D6 Floats: rounding is not reproduced (recorded 2026-10-28).** Backwards
+  compatibility will break anyway, so bit-exact float parity is not worth
+  porting numeric algorithms for. Differences only in float rounding pass as
+  `close`; routing that diverges because of them is judged on quality
+  (section 4, numerics).
 
 ## 9. Next steps
 
@@ -702,3 +718,37 @@ do not shrink as much.
   macro previews, and the macro preview of a board whose nets all stay
   inside its macros. The HTTP server exits 3 with the marker on stderr
   when a request reaches one of them.
+
+
+**M4 stream: the decoupler router (branch `rust-m4-decoupling`).**
+
+- `copper-route` ports `pcbir.decoupling` (`route_decouplers`,
+  `improve_decoupling_placement`, `DecouplingRouteResult`),
+  `pcbir.decoupling_paths` (the witness dataclasses, `_land`,
+  `_return_targets`, `_budget_reason`, `_normal_via`, `_track_ok`,
+  `_find_path`, `verify_crosslayer_decoupling`,
+  `validate_crosslayer_witness`, `refresh_crosslayer_witnesses`, and
+  `propose_crosslayer_decoupling` up to its launch search),
+  `pcbir.bypass_links` (`verified_bypass_links`) and
+  `pcbir.route_quality` (`escape_paths_cross`). Signatures follow Python's
+  keywords in order; `propose_crosslayer_decoupling`'s numeric bounds are
+  one `ProposalBounds` value with Python's defaults; progress is an
+  optional `FnMut(&str)` stage observer.
+- `copper-place` cannot depend on `copper-route` (the reverse dependency
+  exists), so the planner exposes `register_decoupling_pass`; `copper`
+  registers `copper_route::decoupling::improve_decoupling_placement` at the
+  start of `commands::run`. Without a registration (a library user of
+  `copper-place` alone) a movable decoupler still exits 3.
+- `DecouplingLink` derives `Eq`/`Hash` (sets and witness maps). Python's
+  object-identity checks on witness edges (`edge is item`) compare values.
+  DRC finding fingerprints are compared as their exact field tuples.
+- Suites: the 8 pending `plan-layout-fixtures` and 8 pending
+  `route-global-fixtures` six-layer cases are byte-identical; every
+  plan-layout* and route-global* suite has 0 pending and 0 different.
+- Not implemented (exit 3): new opposite-surface launches
+  (`decoupling_paths._connections` and the proposal loop need fanout's
+  `_package_candidates`, `_legal_choices`, `_two_leg_candidates`,
+  `_interstitial_sites`, plus `access_sites` and `track_containment`), the
+  `surface_path_between` detour fallback of `route_decouplers`, and
+  via-in-pad arrays (`_source_array_owner`, the materialized-macro
+  context's array vias).

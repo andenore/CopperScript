@@ -766,7 +766,7 @@ pub struct PowerFeedBoundary {
 }
 
 /// `DecouplingLink`: a semantic bypass association.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DecouplingLink {
     pub capacitor: PadReference,
     pub target: PadReference,
