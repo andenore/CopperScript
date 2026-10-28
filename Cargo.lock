@@ -42,6 +42,7 @@ dependencies = [
  "copper-physical",
  "copper-place",
  "copper-report",
+ "copper-route",
  "copper-state",
  "copper-units",
  "sha2",
@@ -167,6 +168,21 @@ dependencies = [
  "indexmap",
  "num-bigint",
  "num-traits",
+ "sha2",
+]
+
+[[package]]
+name = "copper-route"
+version = "0.1.0"
+dependencies = [
+ "copper-drc",
+ "copper-json",
+ "copper-lang",
+ "copper-pcb",
+ "copper-physical",
+ "copper-state",
+ "copper-units",
+ "indexmap",
  "sha2",
 ]
 

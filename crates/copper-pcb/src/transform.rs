@@ -69,3 +69,21 @@ pub fn placed_pad_shape(position: Point, pad: &FootprintPad, placement: &Placeme
         }
     }
 }
+
+/// `placement.transformed_pad_position`: a placed pad's centre, or the
+/// `PlacementAlgorithmError` message for an unknown pad number.
+pub fn transformed_pad_position(
+    board: &crate::board::PhysicalBoard,
+    placement: &Placement,
+    pad_number: &str,
+) -> Result<Point, String> {
+    let footprint = &board.footprints[&placement.footprint];
+    let pad = footprint.pads.iter().find(|item| item.number == pad_number).ok_or_else(|| {
+        format!(
+            "component {} has no pad {}",
+            copper_json::python_str_repr(&placement.reference),
+            copper_json::python_str_repr(pad_number)
+        )
+    })?;
+    Ok(transformed_local_point(placement, pad.position))
+}
