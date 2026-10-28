@@ -879,6 +879,7 @@ pub fn route_critical_nets(
                 &tracks,
                 &vias,
                 options.pair_state_limit,
+                escalation,
                 &mut blockers,
             )?;
             if !result.connected {
@@ -1645,6 +1646,59 @@ fn route_pair(
             prefer_access_tracks,
         )?);
     }
+    let strategy = if is_aligned { "aligned_pair" } else { "global_guide" };
+    finish_pair(board, first, second, first_tracks, second_tracks, gap, strategy, tuning_board)
+}
+
+/// `_route_pair(..., exact_tracks=...)` for a joint search candidate without
+/// layer transitions: the candidate's lanes, measured and gated like the
+/// coarse candidate (connected guides are not required).
+fn route_pair_exact(
+    board: &PhysicalBoard,
+    first_rule: &NetRoutingRule,
+    second_rule: &NetRoutingRule,
+    routes: &IndexMap<String, GlobalNetRoute>,
+    exact: &(Vec<TrackSegment>, Vec<TrackSegment>),
+    tuning_board: &PhysicalBoard,
+) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
+    let (first, second) =
+        if first_rule.net <= second_rule.net { (first_rule, second_rule) } else { (second_rule, first_rule) };
+    let nets = vec![first.net.clone(), second.net.clone()];
+    let failed = |message: &str| {
+        let result = CriticalNetResult::new(nets.clone(), false, 0, 0, Vec::new(), 0, vec![message.to_owned()]);
+        Ok((result, Vec::new(), Vec::new()))
+    };
+    let (Some(guide), Some(partner_guide)) = (routes.get(&first.net), routes.get(&second.net)) else {
+        return failed("both pair members require connected global guides");
+    };
+    if guide.accesses.len() != 2 || partner_guide.accesses.len() != 2 {
+        return failed("coupled pair routing v0.1 requires two terminals per member");
+    }
+    let first_width = first.width_nm.filter(|width| *width != 0).unwrap_or(board.rules.default_track_width_nm);
+    let second_width = second.width_nm.filter(|width| *width != 0).unwrap_or(board.rules.default_track_width_nm);
+    let gap = first.pair_gap_nm.filter(|gap| *gap != 0).or(second.pair_gap_nm);
+    let Some(gap) = gap.filter(|gap| first_width == second_width && second.pair_gap_nm == Some(*gap)) else {
+        return failed("pair members require identical width and gap profiles");
+    };
+    finish_pair(board, first, second, exact.0.clone(), exact.1.clone(), gap, "joint_pair_search", tuning_board)
+}
+
+/// The common tail of `_route_pair`: breakout cuts, intra-pair skew,
+/// lengths, coupling, budgets and the result.
+#[allow(clippy::too_many_arguments)]
+fn finish_pair(
+    board: &PhysicalBoard,
+    first: &NetRoutingRule,
+    second: &NetRoutingRule,
+    mut first_tracks: Vec<TrackSegment>,
+    mut second_tracks: Vec<TrackSegment>,
+    gap: i64,
+    strategy: &str,
+    tuning_board: &PhysicalBoard,
+) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
+    let nets = vec![first.net.clone(), second.net.clone()];
+    let first_width = first.width_nm.filter(|width| *width != 0).unwrap_or(board.rules.default_track_width_nm);
+    let second_width = second.width_nm.filter(|width| *width != 0).unwrap_or(board.rules.default_track_width_nm);
     let breakout = copper_drc::breakout::BreakoutRegions::new(board);
     if breakout.any() {
         first_tracks = breakout.split_tracks(&first_tracks, Some(first_width));
@@ -1707,7 +1761,7 @@ fn route_pair(
     result.coupled_length_nm = coupled;
     result.uncoupled_lengths_nm = uncoupled;
     result.evidence_digests = evidence;
-    result.strategy = if is_aligned { "aligned_pair" } else { "global_guide" }.to_owned();
+    result.strategy = strategy.to_owned();
     result.warnings = warnings;
     Ok((result, tracks, Vec::new()))
 }
@@ -1725,6 +1779,7 @@ fn route_pair_group(
     tracks: &[TrackSegment],
     vias: &[Via],
     pair_state_limit: Option<i64>,
+    pair_state_escalation: i64,
     blockers: &mut IndexSet<String>,
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
     let (first, second) = if rule.net <= partner_rule.net { (rule, partner_rule) } else { (partner_rule, rule) };
@@ -1743,6 +1798,17 @@ fn route_pair_group(
     }
     let guided =
         [&rule.net, &partner_rule.net].iter().all(|name| routes.get(*name).is_some_and(|route| route.connected));
+    // A candidate over its length/skew budget is kept only as a fallback.
+    let mut fallback = (result.connected && !result.warnings.is_empty())
+        .then(|| (result.clone(), pair_tracks.clone(), pair_vias.clone()));
+    let keep = |fallback: &mut Option<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)>,
+                attempt: &CriticalNetResult,
+                attempt_tracks: &[TrackSegment],
+                attempt_vias: &[Via]| {
+        if attempt.connected && fallback.as_ref().is_none_or(|(kept, _, _)| within_or_shorter(attempt, kept)) {
+            *fallback = Some((attempt.clone(), attempt_tracks.to_vec(), attempt_vias.to_vec()));
+        }
+    };
     if !within_budget(&result)
         && guided
         && prepared.first_branches.is_empty()
@@ -1763,10 +1829,7 @@ fn route_pair_group(
             }
             return Ok((attempt, proposed_tracks, proposed_vias));
         }
-        if attempt.connected && (!result.connected || !result.warnings.is_empty()) {
-            // PENDING: `keep` of a connected over-budget proposal as the fallback.
-            return copper_pcb::not_implemented("critical over-budget pair proposal fallback");
-        }
+        keep(&mut fallback, &attempt, &proposed_tracks, &proposed_vias);
     }
     let supported = match (routes.get(&first.net), routes.get(&second.net)) {
         (Some(a), Some(b)) => crate::pair_terminals::terminal_partners(a, b).is_some(),
@@ -1778,49 +1841,184 @@ fn route_pair_group(
         .iter()
         .filter(|net| net.name == first.net || net.name == second.net)
         .any(|net| net.pads.iter().any(|pad| owned.contains(pad)));
-    let mut result = result;
+    let (mut result, mut pair_tracks, mut pair_vias) = (result, pair_tracks, pair_vias);
     if !within_budget(&result) && supported {
         if protected_ends && !guided {
             // PENDING: pair_terminals.macro_terminal_guides_proved.
             return copper_pcb::not_implemented("critical pair search from proved macro ports");
         }
         let search_board = board_with(board, tracks, vias);
-        let (first_guide, second_guide) = (&routes[&first.net], &routes[&second.net]);
-        let prefer_vias = pair_prefers_via_escape(&search_board, first_guide, second_guide)?;
+        let (first_guide, second_guide) = (routes[&first.net].clone(), routes[&second.net].clone());
+        let prefer_vias = pair_prefers_via_escape(&search_board, &first_guide, &second_guide)?;
         let order = if prefer_vias { "via_first_internal_lands" } else { "surface_first" };
-        let searchers: [fn(
-            &PhysicalBoard,
-            &NetRoutingRule,
-            &NetRoutingRule,
-            &GlobalNetRoute,
-            &GlobalNetRoute,
-        ) -> Result<()>; 2] = if prefer_vias {
-            [crate::pair_vias::paired_via_candidates, crate::pair_search::paired_candidates]
-        } else {
-            [crate::pair_search::paired_candidates, crate::pair_vias::paired_via_candidates]
-        };
-        // `search_tiers`: both families over three pitches within the bound.
-        // Every search below yields nothing without expanding a state, so the
-        // bound, the resumed frontiers and the escalation never come into play.
-        for searcher in searchers {
-            for _pitch_nm in [1_000_000, 500_000, 250_000] {
-                searcher(&search_board, first, second, first_guide, second_guide)?;
+        let families = if prefer_vias { [true, false] } else { [false, true] };
+        let mut stats = crate::pair_search::PairSearchStats::default();
+        let mut rejected: Vec<(String, String)> = Vec::new();
+        let mut best = (result, pair_tracks, pair_vias);
+        // `checked_candidate`: every candidate passes the coarse candidate's gates.
+        let check = |candidate: crate::pair_search::PairSearchCandidate,
+                     best: &mut (CriticalNetResult, Vec<TrackSegment>, Vec<Via>),
+                     fallback: &mut Option<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)>,
+                     rejected: &mut Vec<(String, String)>,
+                     blockers: &mut IndexSet<String>|
+         -> Result<bool> {
+            if !candidate.via_pairs.is_empty() || !candidate.return_vias.is_empty() {
+                // PENDING: exact paired transitions (pair_vias.transition_spacing, return_paths).
+                return copper_pcb::not_implemented("critical paired via candidates");
             }
+            let mut candidate_blockers: IndexSet<String> = IndexSet::new();
+            let exact = (candidate.first.clone(), candidate.second.clone());
+            let (attempt, proposed_tracks, proposed_vias) =
+                route_pair_exact(board, first, second, &routes, &exact, &search_board)?;
+            let (attempt, proposed_tracks, proposed_vias) =
+                reject_reserved_plane_tracks(board, attempt, proposed_tracks, proposed_vias, rules);
+            let (attempt, proposed_tracks, proposed_vias) = validate_candidate(
+                board,
+                attempt,
+                proposed_tracks,
+                proposed_vias,
+                tracks,
+                vias,
+                Some(&mut candidate_blockers),
+            )?;
+            if !attempt.connected
+                && attempt.tuned_length_nm > 0
+                && SPACING_GATES.contains(&rejection_gate(&attempt.diagnostics).0.as_str())
+            {
+                // PENDING: pair_terminals._matched_local_candidates.
+                return copper_pcb::not_implemented("critical clearance-aware pair tuning retry");
+            }
+            if attempt.connected {
+                // PENDING: _improve_pair_spine (pair_refine.paired_shortcuts).
+                return copper_pcb::not_implemented("critical pair spine refinement");
+            }
+            if within_budget(&attempt) {
+                *best = (attempt, proposed_tracks, proposed_vias);
+                return Ok(true);
+            }
+            if attempt.connected {
+                keep(fallback, &attempt, &proposed_tracks, &proposed_vias);
+                rejected.push(rejection_gate(&attempt.warnings));
+                return Ok(false);
+            }
+            if SPACING_GATES.contains(&rejection_gate(&attempt.diagnostics).0.as_str()) {
+                blockers.extend(candidate_blockers.iter().cloned());
+            }
+            rejected.push(rejection_gate(&attempt.diagnostics));
+            Ok(false)
+        };
+        let mut limit = pair_state_limit;
+        let tiers = |limit: Option<i64>,
+                     stats: &mut crate::pair_search::PairSearchStats,
+                     best: &mut (CriticalNetResult, Vec<TrackSegment>, Vec<Via>),
+                     fallback: &mut Option<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)>,
+                     rejected: &mut Vec<(String, String)>,
+                     blockers: &mut IndexSet<String>|
+         -> Result<()> {
+            for via_family in families {
+                for pitch_nm in [1_000_000, 500_000, 250_000] {
+                    let mut bounds = crate::pair_search::SearchBounds {
+                        maximum_searches: 8,
+                        maximum_states: 30_000,
+                        pitch_nm,
+                        maximum_total_states: None,
+                    };
+                    if let Some(limit) = limit {
+                        let remaining = limit - stats.expanded_states;
+                        if remaining <= 0 {
+                            break;
+                        }
+                        let slice = remaining.min(1.max(limit.div_euclid(6)));
+                        bounds.maximum_total_states = Some(stats.expanded_states + slice);
+                        bounds.maximum_states = 1.max((slice + 1).div_euclid(2));
+                        bounds.maximum_searches = 2;
+                    }
+                    let mut accept = |candidate, _: &mut crate::pair_search::PairSearchStats| {
+                        check(candidate, best, fallback, rejected, blockers)
+                    };
+                    if via_family {
+                        crate::pair_vias::paired_via_candidates(
+                            &search_board,
+                            first,
+                            second,
+                            &first_guide,
+                            &second_guide,
+                            bounds,
+                            stats,
+                            &mut accept,
+                        )?;
+                    } else {
+                        crate::pair_search::paired_candidates(
+                            &search_board,
+                            first,
+                            second,
+                            &first_guide,
+                            &second_guide,
+                            bounds,
+                            stats,
+                            &mut accept,
+                        )?;
+                    }
+                    if within_budget(&best.0) {
+                        break;
+                    }
+                }
+                if within_budget(&best.0) {
+                    break;
+                }
+            }
+            if !within_budget(&best.0)
+                && let Some(limit) = limit
+                && stats.expanded_states < limit
+            {
+                let mut accept = |candidate, _: &mut crate::pair_search::PairSearchStats| {
+                    check(candidate, best, fallback, rejected, blockers)
+                };
+                crate::pair_search::resume_pair_candidates(stats, limit, &mut accept)?;
+            }
+            Ok(())
+        };
+        tiers(limit, &mut stats, &mut best, &mut fallback, &mut rejected, blockers)?;
+        if !within_budget(&best.0)
+            && limit.is_some_and(|value| stats.expanded_states >= value)
+            && pair_state_escalation > 1
+        {
+            limit = limit.map(|value| value * pair_state_escalation);
+            tiers(limit, &mut stats, &mut best, &mut fallback, &mut rejected, blockers)?;
         }
-        // The coarse candidate is the only fallback, and an unchanged result
-        // never yields to itself (`_within_or_shorter`).
-        result.search_states = 0;
-        result.candidate_attempts = 0;
-        result.pair_searches = 0;
-        result.pair_resumed_states = 0;
-        result.pair_resumed_portals = 0;
+        if !within_budget(&best.0)
+            && let Some(kept) = &fallback
+            && within_or_shorter(&kept.0, &best.0)
+        {
+            best = kept.clone();
+        }
+        (result, pair_tracks, pair_vias) = best;
+        let (rejections, examples) = rejection_summary(&rejected);
+        result.search_states = stats.expanded_states;
+        result.candidate_attempts = stats.candidates;
+        result.pair_searches = stats.searches;
+        result.pair_resumed_states = stats.resumed_states;
+        result.pair_resumed_portals = stats.resumed_portals;
+        result.pair_ports = stats.port_inventory.clone();
+        result.pair_transitions = stats.transition_inventory.clone();
+        result.pair_attempts = crate::pair_search::pair_search_attempts(&stats);
         result.pair_search_order = Some(order.to_owned());
-        result.pair_state_limit = pair_state_limit;
-        result.pair_budget_exhausted = false;
-        result.rejections = Vec::new();
-        result.rejection_examples = Vec::new();
+        result.pair_state_limit = limit;
+        result.pair_budget_exhausted = limit.is_some_and(|value| stats.expanded_states >= value) && !result.connected;
+        result.rejections = rejections.clone();
+        result.rejection_examples = examples;
         if !result.connected {
-            result.diagnostics.push("joint pair search: 0 searches, 0 states, 0 candidates; none accepted".to_owned());
+            let reasons: Vec<String> = rejections.iter().map(|(gate, count)| format!("{gate}={count}")).collect();
+            let mut message = format!(
+                "joint pair search: {} searches, {} states, {} candidates; none accepted",
+                stats.searches, stats.expanded_states, stats.candidates
+            );
+            if !reasons.is_empty() {
+                message.push_str(&format!(" (first-failing gates: {})", reasons.join(", ")));
+            }
+            result.diagnostics.push(message);
+            result.diagnostics.extend(stats.terminal_port_rejections.iter().take(2).cloned());
+            result.diagnostics.extend(stats.launch_rejections.iter().take(3).cloned());
         }
     }
     // `reported`: preparation evidence only when it prepared something.
@@ -2302,4 +2500,48 @@ fn pair_pin_stubs(
         }
     }
     Ok(result)
+}
+
+/// `_within_or_shorter`: whether `candidate` should replace `incumbent`.
+fn within_or_shorter(candidate: &CriticalNetResult, incumbent: &CriticalNetResult) -> bool {
+    if !candidate.connected {
+        return false;
+    }
+    if !incumbent.connected {
+        return true;
+    }
+    if incumbent.warnings.is_empty() {
+        return false;
+    }
+    let rank = |item: &CriticalNetResult| {
+        (!item.warnings.is_empty(), item.warnings.len(), item.skew_nm, item.lengths_nm.iter().sum::<i64>())
+    };
+    rank(candidate) < rank(incumbent)
+}
+
+/// `_rejection_summary`: counted first-failing gates (most frequent first)
+/// and three examples, distinct gates first.
+fn rejection_summary(rejected: &[(String, String)]) -> (Vec<(String, i64)>, Vec<String>) {
+    let mut counts: IndexMap<String, i64> = IndexMap::new();
+    for (gate, _) in rejected {
+        *counts.entry(gate.clone()).or_default() += 1;
+    }
+    let mut summary: Vec<(String, i64)> = counts.into_iter().collect();
+    summary.sort_by(|a, b| (-a.1, &a.0).cmp(&(-b.1, &b.0)));
+    let mut examples: Vec<String> = Vec::new();
+    for (gate, _) in &summary {
+        let message = &rejected.iter().find(|(item, _)| item == gate).expect("a counted gate").1;
+        if examples.len() < 3 && !examples.contains(message) {
+            examples.push(message.clone());
+        }
+    }
+    for (_, message) in rejected {
+        if examples.len() >= 3 {
+            break;
+        }
+        if !examples.contains(message) {
+            examples.push(message.clone());
+        }
+    }
+    (summary, examples)
 }

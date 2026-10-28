@@ -13,7 +13,9 @@ use copper_drc::Policy;
 use copper_drc::connectivity::{Candidate, explicit_copper_connectivity};
 use copper_json::Value;
 use copper_pcb::board::{PhysicalBoard, RouteKind};
+use copper_pcb::board::{TrackSegment, Via};
 use copper_physical::CopperLayer;
+use copper_physical::Point;
 use copper_physical::pyfloat::{hypot, round_int};
 use copper_place::PlannerOptions;
 
@@ -296,6 +298,14 @@ fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::Copper
     Ok(halos)
 }
 
+/// The installed progress observer, reborrowed for one call.
+fn reborrow<'a>(on_progress: &'a mut Option<ProgressCallback<'_>>) -> Option<ProgressCallback<'a>> {
+    match on_progress {
+        Some(callback) => Some(&mut **callback),
+        None => None,
+    }
+}
+
 /// `critical_return_plane_options`: declared return contacts before a
 /// critical search needs them, or None.
 pub fn critical_return_plane_options(
@@ -339,7 +349,7 @@ fn route_critical_stage(
     pair_state_limit: Option<i64>,
     plane_stitch_options: Option<&PlaneStitchOptions>,
     on_progress: &mut Option<ProgressCallback<'_>>,
-) -> Result<CriticalRoutingResult> {
+) -> Result<(CriticalRoutingResult, Option<Reserved>)> {
     let board = &placement.board;
     let planar = crate::critical::promote_planar_nets(board).1;
     if !planar.is_empty() {
@@ -353,25 +363,74 @@ fn route_critical_stage(
         );
     }
     let halos = macro_port_halos(board)?;
-    if unified_fanout.is_some() && unified_options.escapes_first {
-        return copper_pcb::not_implemented("ordinary escape reservations (flow._plan_ordinary_escapes)");
-    }
+    let mut reserved = match unified_fanout {
+        Some(fanout) if unified_options.escapes_first => {
+            plan_ordinary_escapes(board, fanout, on_progress, &halos, &planar)?
+        }
+        _ => None,
+    };
     if !board.decoupling_links.is_empty() && unified_options.pre_route_decouplers {
         return copper_pcb::not_implemented("bypass reservations (flow._plan_decouplers)");
     }
-    emit(on_progress, "bypass_reservation", "bound", vec![("mode", text("keepouts")), ("reason", Value::Null)]);
-    let return_options = critical_return_plane_options(board, plane_stitch_options, &halos);
+    let critical_inputs = |keepouts: &[copper_physical::CopperKeepout],
+                           on_progress: &mut Option<ProgressCallback<'_>>| {
+        let mut source = board.clone();
+        source.copper_keepouts.extend(keepouts.iter().cloned());
+        emit(on_progress, "bypass_reservation", "bound", vec![("mode", text("keepouts")), ("reason", Value::Null)]);
+        source
+    };
+    let source = critical_inputs(reserved.as_ref().map_or(&[][..], |r| &r.2[..]), on_progress);
+    let return_options = critical_return_plane_options(&source, plane_stitch_options, &halos);
     let options = crate::critical::CriticalOptions {
         pair_state_limit,
         plane_stitch_options: return_options.as_ref(),
         unified_options: Some(unified_options),
         ..Default::default()
     };
-    let progress: Option<ProgressCallback<'_>> = match on_progress {
-        Some(callback) => Some(&mut **callback),
-        None => None,
-    };
-    crate::critical::route_critical_nets(board.clone(), &placement.global_route, &options, progress)
+    let mut critical =
+        crate::critical::route_critical_nets(source, &placement.global_route, &options, reborrow(on_progress))?;
+    if let Some(planned) = reserved.as_mut() {
+        let failed: IndexSet<String> =
+            critical.nets.iter().filter(|item| !item.connected).flat_map(|item| item.nets.iter().cloned()).collect();
+        if !failed.is_empty() {
+            // Critical nets come first: free the reservations around the pads
+            // of any critical net they blocked and route again; keep whichever
+            // attempt connects more critical nets.
+            let kept = release_reservations(board, &planned.2, &failed, crate::nm_from_mm(2));
+            if kept.len() < planned.2.len() {
+                if unified_options.retain_escape_copper {
+                    return copper_pcb::not_implemented(
+                        "retained ordinary escape copper (flow.bind_ordinary_escape_copper)",
+                    );
+                }
+                let mut nets: Vec<&String> = failed.iter().collect();
+                nets.sort();
+                emit(
+                    on_progress,
+                    "ordinary_escapes",
+                    "released",
+                    vec![
+                        ("nets", Value::Array(nets.iter().map(|n| text(n)).collect())),
+                        ("keepouts", int((planned.2.len() - kept.len()) as i64)),
+                    ],
+                );
+                let retry_source = critical_inputs(&kept, on_progress);
+                let retry = crate::critical::route_critical_nets(
+                    retry_source,
+                    &placement.global_route,
+                    &options,
+                    reborrow(on_progress),
+                )?;
+                let failures =
+                    |result: &CriticalRoutingResult| result.nets.iter().filter(|item| !item.connected).count();
+                if failures(&retry) < failures(&critical) {
+                    critical = retry;
+                    planned.2 = kept;
+                }
+            }
+        }
+    }
+    Ok((critical, reserved))
 }
 
 /// `_complete_critical_stage` for a run without reservations or held copper.
@@ -436,13 +495,15 @@ fn route_ordinary_stage(
     on_progress: &mut Option<ProgressCallback<'_>>,
 ) -> Result<(DetailedRoutingResult, DrcReport, DuplicatePadStitchResult)> {
     emit(on_progress, "ordinary_area", "started", Vec::new());
-    if fanout_options.is_some() && !unified_options.direct {
-        return copper_pcb::not_implemented("the unified router's escape seeder (fanout.route_fanout)");
-    }
-    let progress: Option<&mut dyn crate::progress::Progress> = match on_progress {
-        Some(callback) => Some(&mut **callback),
-        None => None,
+    // `_route_unified_compat`: failed signal nets get pad escapes
+    // (`route_fanout`) in the seeded repair attempts.
+    let mut seeder = |partial: &PhysicalBoard, nets: &IndexSet<String>| {
+        crate::fanout::route_fanout(partial, fanout_options, Some(nets))
+            .map(|fanout| fanout.board)
+            .map_err(crate::unified_error::Error::from)
     };
+    let escape_seeder: Option<&mut crate::unified_router::route::EscapeSeeder<'_>> =
+        if fanout_options.is_some() && !unified_options.direct { Some(&mut seeder) } else { None };
     let detailed = crate::unified_router::route::route_unified(
         pre_detailed,
         global_route,
@@ -450,8 +511,8 @@ fn route_ordinary_stage(
         None,
         None,
         None,
-        None,
-        progress,
+        escape_seeder,
+        reborrow(on_progress),
     )
     .map_err(|error| match error {
         crate::unified_error::Error::Value(message) => Error::Value(message),
@@ -698,7 +759,7 @@ pub fn run_routing_pipeline(
             "started",
             vec![("reason", text("all mutable nets negotiate together; only source-fixed copper is retained"))],
         );
-        direct_critical(&placement)?
+        (direct_critical(&placement)?, None)
     } else {
         let pair_state_limit = unified_options
             .critical_pair_state_limit
@@ -713,6 +774,7 @@ pub fn run_routing_pipeline(
             &mut on_progress,
         )?
     };
+    let (critical, reserved) = critical;
     let (critical, plane_stitch) = complete_critical_stage(
         critical,
         &unified_options,
@@ -721,6 +783,16 @@ pub fn run_routing_pipeline(
         array_plans.as_ref(),
     )?;
     let pre_detailed = plane_stitch.as_ref().map_or(&critical.board, |stitch| &stitch.board).clone();
+    let deferred = copper_pcb::zones::deferred_zone_nets(&pre_detailed)?;
+    let (mut critical, mut plane_stitch) = (critical, plane_stitch);
+    let pre_detailed = release_escape_masks(
+        reserved.as_ref(),
+        &mut critical,
+        &mut plane_stitch,
+        pre_detailed,
+        &unified_options,
+        &mut on_progress,
+    )?;
     let (detailed, drc, duplicate_stitch) = route_ordinary_stage(
         &unified_options,
         unified_fanout.as_ref(),
@@ -732,7 +804,6 @@ pub fn run_routing_pipeline(
     let feedback_budget =
         options.placement_feedback_trials.max(options.detailed_feedback_trials + options.critical_feedback_trials);
     let placement_feedback = if feedback_budget != 0 {
-        let deferred = copper_pcb::zones::deferred_zone_nets(&pre_detailed)?;
         Some(placement_feedback_entry(&critical, &detailed, &drc, &deferred, feedback_budget, &mut on_progress)?)
     } else {
         None
@@ -897,4 +968,381 @@ fn placement_feedback_entry(
         ],
     );
     Ok(FeedbackOutcome { stop_reason: "no_failed_nets".to_owned(), score, failed_nets: failed })
+}
+
+// ---------------------------------------------------------------------------
+// Ordinary escape reservations
+
+/// Planned escape copper and the keepouts that reserve it.
+type Reserved = (Vec<TrackSegment>, Vec<Via>, Vec<copper_physical::CopperKeepout>);
+
+/// `Counter(after) - Counter(before)`, `.elements()` order.
+fn added_elements<T: Clone + Eq + std::hash::Hash>(after: &[T], before: &[T]) -> Vec<T> {
+    let mut counts: IndexMap<&T, i64> = IndexMap::new();
+    for item in after {
+        *counts.entry(item).or_insert(0) += 1;
+    }
+    for item in before {
+        if let Some(count) = counts.get_mut(item) {
+            *count -= 1;
+        }
+    }
+    let mut result = Vec::new();
+    for (item, count) in counts {
+        for _ in 0..count.max(0) {
+            result.push(item.clone());
+        }
+    }
+    result
+}
+
+/// `drc._point_segment_distance` (float).
+fn point_segment_distance(point: Point, start: Point, end: Point) -> f64 {
+    let (dx, dy) = (end.x_nm - start.x_nm, end.y_nm - start.y_nm);
+    if dx == 0 && dy == 0 {
+        return hypot((point.x_nm - start.x_nm) as f64, (point.y_nm - start.y_nm) as f64);
+    }
+    let numerator =
+        i128::from(point.x_nm - start.x_nm) * i128::from(dx) + i128::from(point.y_nm - start.y_nm) * i128::from(dy);
+    let denominator = i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy);
+    let fraction = crate::routing_lattice::true_div(numerator, denominator).clamp(0.0, 1.0);
+    hypot(
+        point.x_nm as f64 - (start.x_nm as f64 + fraction * dx as f64),
+        point.y_nm as f64 - (start.y_nm as f64 + fraction * dy as f64),
+    )
+}
+
+/// `drc._segment_distance` (float).
+fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
+    let orientation = |p: Point, q: Point, r: Point| -> i32 {
+        let value = i128::from(q.y_nm - p.y_nm) * i128::from(r.x_nm - q.x_nm)
+            - i128::from(q.x_nm - p.x_nm) * i128::from(r.y_nm - q.y_nm);
+        value.signum() as i32
+    };
+    let on_segment = |p: Point, q: Point, r: Point| {
+        p.x_nm.min(r.x_nm) <= q.x_nm
+            && q.x_nm <= p.x_nm.max(r.x_nm)
+            && p.y_nm.min(r.y_nm) <= q.y_nm
+            && q.y_nm <= p.y_nm.max(r.y_nm)
+    };
+    let (o1, o2, o3, o4) = (orientation(a, b, c), orientation(a, b, d), orientation(c, d, a), orientation(c, d, b));
+    let intersect = (o1 != o2 && o3 != o4)
+        || (o1 == 0 && on_segment(a, c, b))
+        || (o2 == 0 && on_segment(a, d, b))
+        || (o3 == 0 && on_segment(c, a, d))
+        || (o4 == 0 && on_segment(c, b, d));
+    if intersect {
+        return 0.0;
+    }
+    [(a, c, d), (b, c, d), (c, a, b), (d, a, b)]
+        .iter()
+        .map(|(p, s, e)| point_segment_distance(*p, *s, *e))
+        .fold(f64::INFINITY, |acc, v| if v < acc { v } else { acc })
+}
+
+/// `_copper_keepouts`: keepouts covering planned copper plus clearance.
+fn copper_keepouts(
+    board: &PhysicalBoard,
+    tracks: &[TrackSegment],
+    vias: &[Via],
+    prefix: &str,
+    fixed: Option<&PhysicalBoard>,
+) -> Vec<copper_physical::CopperKeepout> {
+    let gap = board.rules.minimum_clearance_nm;
+    let layers = &board.stackup.copper_layers;
+    let position = |layer: CopperLayer| layers.iter().position(|l| *l == layer).expect("layer");
+    let span = |via: &Via| layers[position(via.from_layer)..=position(via.to_layer)].to_vec();
+    let mut solid: Vec<(Point, Point, f64, Vec<CopperLayer>)> = Vec::new();
+    if let Some(fixed) = fixed {
+        for t in &fixed.tracks {
+            solid.push((t.start, t.end, t.width_nm as f64 / 2.0, vec![t.layer]));
+        }
+        for v in &fixed.vias {
+            solid.push((v.position, v.position, v.size_nm as f64 / 2.0, span(v)));
+        }
+    }
+    let touches = |a: Point, b: Point, radius: i64, layers: &[CopperLayer]| {
+        solid.iter().any(|(c, d, half, other)| {
+            layers.iter().any(|l| other.contains(l)) && segment_distance(a, b, *c, *d) < radius as f64 * 1.42 + half
+        })
+    };
+    let capsule = |a: Point, b: Point, radius: i64| -> Vec<Point> {
+        let (dx, dy) = (b.x_nm - a.x_nm, b.y_nm - a.y_nm);
+        let length = hypot(dx as f64, dy as f64);
+        let (ux, uy) = if length != 0.0 { (dx as f64 / length, dy as f64 / length) } else { (1.0, 0.0) };
+        let (nx, ny) = (-uy, ux);
+        let mut corners = Vec::new();
+        for ((px, py), sx) in [((a.x_nm, a.y_nm), -1i64), ((b.x_nm, b.y_nm), 1)] {
+            let normals: [i64; 2] = if sx < 0 { [-1, 1] } else { [1, -1] };
+            for sn in normals {
+                let x = px as f64 + (sx * radius) as f64 * ux + (sn * radius) as f64 * nx;
+                let y = py as f64 + (sx * radius) as f64 * uy + (sn * radius) as f64 * ny;
+                corners.push(Point::new(round_int(x), round_int(y)));
+            }
+        }
+        corners
+    };
+    let keepout = |id: String, layers: Vec<CopperLayer>, vertices: Vec<Point>| copper_physical::CopperKeepout {
+        id,
+        layers,
+        vertices,
+        block_tracks: true,
+        block_vias: true,
+        block_pads: false,
+        block_zones: false,
+        block_footprints: false,
+    };
+    let mut keepouts = Vec::new();
+    for (index, track) in tracks.iter().enumerate() {
+        let radius = track.width_nm.div_euclid(2) + gap;
+        if touches(track.start, track.end, radius, &[track.layer]) {
+            continue;
+        }
+        keepouts.push(keepout(
+            format!("{prefix}-track-{index}"),
+            vec![track.layer],
+            capsule(track.start, track.end, radius),
+        ));
+    }
+    for (index, via) in vias.iter().enumerate() {
+        let radius = via.size_nm.div_euclid(2) + gap;
+        let layers = span(via);
+        if touches(via.position, via.position, radius, &layers) {
+            continue;
+        }
+        keepouts.push(keepout(format!("{prefix}-via-{index}"), layers, capsule(via.position, via.position, radius)));
+    }
+    keepouts
+}
+
+/// `_route_ordinary_escapes`: escapes of `nets` on the macro frame.
+fn route_ordinary_escapes(
+    board: &PhysicalBoard,
+    fanout_options: &FanoutOptions,
+    nets: &IndexSet<String>,
+    keepouts: &[copper_physical::CopperKeepout],
+) -> Result<(Vec<TrackSegment>, Vec<Via>, Vec<copper_physical::CopperKeepout>, Vec<copper_pcb::board::PadReference>)> {
+    let mut frame = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
+    frame.copper_keepouts.extend(keepouts.iter().cloned());
+    let escapes = crate::fanout::route_fanout(&frame, Some(fanout_options), Some(nets))?;
+    let tracks = added_elements(&escapes.board.tracks, &frame.tracks);
+    let vias = added_elements(&escapes.board.vias, &frame.vias);
+    let reserved = copper_keepouts(board, &tracks, &vias, "escape-reserve", Some(&frame));
+    Ok((tracks, vias, reserved, escapes.pending_pads))
+}
+
+/// `_plan_ordinary_escapes`: escapes for crowded ordinary pins, and the
+/// keepouts that reserve them, or None.
+fn plan_ordinary_escapes(
+    board: &PhysicalBoard,
+    fanout_options: &FanoutOptions,
+    on_progress: &mut Option<ProgressCallback<'_>>,
+    keepouts: &[copper_physical::CopperKeepout],
+    exclude: &[String],
+) -> Result<Option<Reserved>> {
+    let rules: IndexMap<&str, _> = board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
+    let mut supply: IndexSet<&str> = board.zones.iter().map(|z| z.net.as_str()).collect();
+    for link in &board.decoupling_links {
+        supply.insert(&link.net);
+        supply.insert(&link.return_net);
+    }
+    let ordinary: IndexSet<String> = board
+        .nets
+        .iter()
+        .filter(|net| {
+            net.pads.len() >= 2
+                && !supply.contains(net.name.as_str())
+                && rules.get(net.name.as_str()).is_none_or(|rule| rule.kind == RouteKind::General)
+                && !exclude.contains(&net.name)
+        })
+        .map(|net| net.name.clone())
+        .collect();
+    if ordinary.is_empty() {
+        return Ok(None);
+    }
+    emit(on_progress, "ordinary_escapes", "started", vec![("nets", int(ordinary.len() as i64))]);
+    match route_ordinary_escapes(board, fanout_options, &ordinary, keepouts) {
+        Err(Error::Value(message)) => {
+            emit(on_progress, "ordinary_escapes", "finished", vec![("skipped", text(&message))]);
+            Ok(None)
+        }
+        Err(error) => Err(error),
+        Ok((tracks, vias, reserved, pending)) => {
+            let mut nets: Vec<String> =
+                tracks.iter().map(|t| t.net.clone()).chain(vias.iter().map(|v| v.net.clone())).collect();
+            nets.sort();
+            nets.dedup();
+            emit(
+                on_progress,
+                "ordinary_escapes",
+                "finished",
+                vec![
+                    ("vias", int(vias.len() as i64)),
+                    ("tracks", int(tracks.len() as i64)),
+                    ("pending", int(pending.len() as i64)),
+                    ("nets", Value::Array(nets.iter().map(|n| text(n)).collect())),
+                ],
+            );
+            Ok(Some((tracks, vias, reserved)))
+        }
+    }
+}
+
+/// `_release_reservations`: escape reservations outside the pad boxes of
+/// `nets` (+margin).
+fn release_reservations(
+    board: &PhysicalBoard,
+    keepouts: &[copper_physical::CopperKeepout],
+    nets: &IndexSet<String>,
+    margin_nm: i64,
+) -> Vec<copper_physical::CopperKeepout> {
+    let poses: IndexMap<&str, _> = board.placements.iter().map(|p| (p.reference.as_str(), p)).collect();
+    let mut boxes = Vec::new();
+    for net in board.nets.iter().filter(|n| nets.contains(&n.name)) {
+        let points: Vec<Point> = net
+            .pads
+            .iter()
+            .map(|pad| {
+                let pose = poses[pad.component.as_str()];
+                let land = board.footprints[&pose.footprint].pads.iter().find(|l| l.number == pad.pad).expect("land");
+                copper_pcb::transform::transformed_local_point(pose, land.position)
+            })
+            .collect();
+        if !points.is_empty() {
+            boxes.push((
+                points.iter().map(|p| p.x_nm).min().expect("points") - margin_nm,
+                points.iter().map(|p| p.y_nm).min().expect("points") - margin_nm,
+                points.iter().map(|p| p.x_nm).max().expect("points") + margin_nm,
+                points.iter().map(|p| p.y_nm).max().expect("points") + margin_nm,
+            ));
+        }
+    }
+    let inside = |keepout: &copper_physical::CopperKeepout| {
+        let count = keepout.vertices.len() as i128;
+        let cx = crate::routing_lattice::true_div(keepout.vertices.iter().map(|v| i128::from(v.x_nm)).sum(), count);
+        let cy = crate::routing_lattice::true_div(keepout.vertices.iter().map(|v| i128::from(v.y_nm)).sum(), count);
+        boxes
+            .iter()
+            .any(|(x0, y0, x1, y1)| *x0 as f64 <= cx && cx <= *x1 as f64 && *y0 as f64 <= cy && cy <= *y1 as f64)
+    };
+    keepouts.iter().filter(|k| !inside(k)).cloned().collect()
+}
+
+/// `track_containment.track_is_contained`.
+fn track_is_contained(candidate: &TrackSegment, existing: &[TrackSegment]) -> bool {
+    existing.iter().any(|held| {
+        held.net == candidate.net
+            && held.layer == candidate.layer
+            && held.width_nm == candidate.width_nm
+            && copper_physical::geometry::point_on_segment(candidate.start, held.start, held.end)
+            && copper_physical::geometry::point_on_segment(candidate.end, held.start, held.end)
+    })
+}
+
+/// `_join_reserved_copper`: drop a stage's reservation keepouts and add the
+/// copper they held, each piece checked exactly.
+fn join_reserved_copper(
+    board: &PhysicalBoard,
+    tracks: &[TrackSegment],
+    vias: &[Via],
+    keepouts: &[copper_physical::CopperKeepout],
+) -> Result<PhysicalBoard> {
+    let temporary: IndexSet<&str> = keepouts.iter().map(|k| k.id.as_str()).collect();
+    let mut base = board.clone();
+    base.copper_keepouts.retain(|k| !temporary.contains(k.id.as_str()));
+    let (kept_tracks, kept_vias) = {
+        let mut index = crate::routing_clearance::RoutingClearanceIndex::new(&base)?;
+        let (mut kept_tracks, mut kept_vias) = (Vec::new(), Vec::new());
+        let mut present: IndexSet<(String, Point, CopperLayer, CopperLayer)> =
+            base.vias.iter().map(|v| (v.net.clone(), v.position, v.from_layer, v.to_layer)).collect();
+        for via in vias {
+            let key = (via.net.clone(), via.position, via.from_layer, via.to_layer);
+            if present.contains(&key) {
+                continue;
+            }
+            if index.can_via(
+                &via.net,
+                via.position,
+                via.size_nm,
+                via.from_layer,
+                via.to_layer,
+                Some(via.drill_nm),
+                false,
+                None,
+            )? {
+                index.add_via(via.clone(), false, None)?;
+                kept_vias.push(via.clone());
+                present.insert(key);
+            }
+        }
+        for track in tracks {
+            if track_is_contained(track, &base.tracks) {
+                continue;
+            }
+            if index.can_track(&track.net, track.start, track.end, track.width_nm, track.layer)? {
+                index.add_track(track.clone(), false, None)?;
+                kept_tracks.push(track.clone());
+            }
+        }
+        (kept_tracks, kept_vias)
+    };
+    base.tracks.extend(kept_tracks);
+    base.vias.extend(kept_vias);
+    Ok(base)
+}
+
+/// `_release_escape_masks`: drop the temporary escape keepouts before
+/// ordinary routing; with `planned_escapes_as_copper` the promised exits join
+/// the ordinary stage's board as copper.
+fn release_escape_masks(
+    reserved: Option<&Reserved>,
+    critical: &mut CriticalRoutingResult,
+    plane_stitch: &mut Option<PlaneStitchResult>,
+    pre_detailed: PhysicalBoard,
+    unified_options: &UnifiedRouterOptions,
+    on_progress: &mut Option<ProgressCallback<'_>>,
+) -> Result<PhysicalBoard> {
+    let Some((tracks, vias, keepouts)) = reserved else { return Ok(pre_detailed) };
+    let temporary: IndexSet<&str> = keepouts.iter().map(|k| k.id.as_str()).collect();
+    critical.board.copper_keepouts.retain(|k| !temporary.contains(k.id.as_str()));
+    if let Some(stitch) = plane_stitch.as_mut() {
+        stitch.board.copper_keepouts.retain(|k| !temporary.contains(k.id.as_str()));
+    }
+    let mut pre_detailed = pre_detailed;
+    pre_detailed.copper_keepouts.retain(|k| !temporary.contains(k.id.as_str()));
+    if unified_options.planned_escapes_as_copper && (!tracks.is_empty() || !vias.is_empty()) {
+        let joined = join_reserved_copper(&pre_detailed, tracks, vias, &[])?;
+        let kept_tracks = &joined.tracks[pre_detailed.tracks.len()..];
+        let kept_vias = &joined.vias[pre_detailed.vias.len()..];
+        let present: IndexSet<(&str, Point, CopperLayer, CopperLayer)> =
+            pre_detailed.vias.iter().map(|v| (v.net.as_str(), v.position, v.from_layer, v.to_layer)).collect();
+        let reused_vias: Vec<&Via> =
+            vias.iter().filter(|v| present.contains(&(v.net.as_str(), v.position, v.from_layer, v.to_layer))).collect();
+        let reused_tracks: Vec<&TrackSegment> =
+            tracks.iter().filter(|t| track_is_contained(t, &pre_detailed.tracks)).collect();
+        let dropped_vias: Vec<&Via> =
+            vias.iter().filter(|v| !kept_vias.contains(v) && !reused_vias.contains(v)).collect();
+        let dropped_tracks: Vec<&TrackSegment> =
+            tracks.iter().filter(|t| !kept_tracks.contains(t) && !reused_tracks.contains(t)).collect();
+        let mut dropped_nets: Vec<String> =
+            dropped_tracks.iter().map(|t| t.net.clone()).chain(dropped_vias.iter().map(|v| v.net.clone())).collect();
+        dropped_nets.sort();
+        dropped_nets.dedup();
+        emit(
+            on_progress,
+            "ordinary_escapes",
+            "joined",
+            vec![
+                ("tracks", int(kept_tracks.len() as i64)),
+                ("vias", int(kept_vias.len() as i64)),
+                ("reused_tracks", int(reused_tracks.len() as i64)),
+                ("reused_vias", int(reused_vias.len() as i64)),
+                ("dropped_tracks", int(dropped_tracks.len() as i64)),
+                ("dropped_vias", int(dropped_vias.len() as i64)),
+                ("dropped_nets", Value::Array(dropped_nets.iter().map(|n| text(n)).collect())),
+            ],
+        );
+        pre_detailed = joined;
+    }
+    Ok(pre_detailed)
 }

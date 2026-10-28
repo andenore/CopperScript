@@ -505,7 +505,7 @@ fn save_inputs(path: &str, text: &str) -> Result<()> {
     std::fs::write(target, text).map_err(|e| crash(&e, python_os_error(&e, Some(&shown))))
 }
 
-/// `route_unified` without a bus phase, plane nets or an escape seeder.
+/// `route_unified`: every ordinary net in one negotiated-congestion loop.
 #[allow(clippy::too_many_arguments)]
 pub fn route_unified(
     board: &PhysicalBoard,
