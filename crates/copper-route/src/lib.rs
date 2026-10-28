@@ -40,6 +40,7 @@ pub mod package_patterns;
 pub mod pin_access;
 pub mod pin_escape;
 pub mod plane_estimate;
+pub mod power_islands;
 pub mod progress;
 pub mod route_smoothing;
 pub mod route_summary;

@@ -73,17 +73,31 @@ pub fn replay_unified(
     text: &str,
     path: &str,
     request: &ReplayRequest,
-    on_progress: Option<ProgressCallback<'_>>,
+    mut on_progress: Option<ProgressCallback<'_>>,
 ) -> Result<DetailedRoutingResult> {
-    let saved = prepare_replay(text, path, request)?;
+    let mut saved = prepare_replay(text, path, request)?;
     if let Some(islands) = &request.power_islands
         && islands != "auto"
         && CopperLayer::parse(islands).is_none()
     {
         return fail(format!("{} is not a valid CopperLayer", copper_json::python_str_repr(islands)));
     }
-    if request.power_islands.is_some() {
-        return not_implemented("replay-unified --power-islands (pcbir.power_islands)");
+    if let Some(islands) = &request.power_islands {
+        let layer = if islands == "auto" {
+            crate::power_islands::auto_power_layer(&saved.board)
+        } else {
+            CopperLayer::parse(islands)
+        };
+        if let Some(layer) = layer {
+            if saved.options.power_islands_ball_grid_only {
+                return not_implemented("replay-unified --power-islands with power_islands_ball_grid_only");
+            }
+            let partition = crate::power_islands::plan_power_islands(&saved.board, layer)?;
+            saved.board.zones.extend(partition.zones.iter().cloned());
+            if let Some(callback) = on_progress.as_mut() {
+                callback.observe("power_islands", "finished", partition.report());
+            }
+        }
     }
     if request.bga_fanout.is_some() {
         return not_implemented("replay-unified --refanout (pcbir.bga_fanout)");

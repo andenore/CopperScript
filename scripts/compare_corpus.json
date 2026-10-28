@@ -19355,6 +19355,126 @@
       "--report",
       "{out}/report.json"
      ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/zones.state.json",
+      "--power-islands",
+      "auto",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/zones.state.json",
+      "--power-islands",
+      "In1.Cu",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/zones.state.json",
+      "--power-islands",
+      "In2.Cu",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/six_layer.state.json",
+      "--power-islands",
+      "auto",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/six_layer.state.json",
+      "--power-islands",
+      "In1.Cu",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/six_layer.state.json",
+      "--power-islands",
+      "In2.Cu",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/nrf52.state.json",
+      "--power-islands",
+      "auto",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/nrf52.state.json",
+      "--power-islands",
+      "In1.Cu",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/nrf52.state.json",
+      "--power-islands",
+      "In2.Cu",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--power-islands",
+      "auto",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
     }
    ]
   },
