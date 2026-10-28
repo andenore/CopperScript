@@ -10,7 +10,24 @@ pub mod astar;
 pub mod geometry;
 mod options;
 pub mod rasters;
+pub mod router;
+pub mod negotiate;
+pub mod search;
 mod replay;
 
 pub use options::*;
 pub use replay::*;
+
+/// `fine_region_plan`: the fine-patch plan the lattice is built from; `None` for "off".
+pub fn fine_region_plan(
+    board: &copper_pcb::board::PhysicalBoard,
+    options: &UnifiedRouterOptions,
+) -> crate::unified_error::Result<Option<crate::fine_regions::FineRegionPlan>> {
+    if options.fine_regions == "off" {
+        return Ok(None);
+    }
+    let mut planner = options.fine_region_options.clone().unwrap_or_default();
+    planner.dense_packages = options.fine_regions == "dense";
+    let pitch = options.pitch_nm.filter(|p| *p != 0).unwrap_or(DEFAULT_PITCH_NM);
+    crate::fine_regions::plan_fine_regions(board, pitch, Some(&planner)).map(Some)
+}

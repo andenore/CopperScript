@@ -39,6 +39,7 @@ pub mod layer_assignment;
 pub mod package_patterns;
 pub mod pin_access;
 pub mod pin_escape;
+pub mod plane_estimate;
 pub mod progress;
 pub mod routeflow;
 pub mod routing;

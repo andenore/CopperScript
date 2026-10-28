@@ -867,6 +867,16 @@ impl<'b> RoutingClearanceIndex<'b> {
     }
 
     /// Live indexed copper in insertion order.
+    /// Resolved copper keepouts (`_keepouts`; read by the unified router's rasters).
+    pub fn keepouts(&self) -> &[KeepoutObject] {
+        &self.keepouts
+    }
+
+    /// Hard-macro copper regions (`_macro_regions`).
+    pub fn macro_regions(&self) -> &[(Vec<CopperLayer>, RoundedConvexShape)] {
+        &self.macro_regions
+    }
+
     pub fn objects(&self) -> Vec<&CopperObject> {
         self.slots.iter().flatten().collect()
     }

@@ -108,3 +108,52 @@ pub fn fingerprint(global_fingerprint: &str, board: &PhysicalBoard, metrics: &De
     let digest = Sha256::digest(text.as_bytes());
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
+
+/// `land_pieces`: the lands of one pad number grouped into pieces of
+/// touching copper, the first land's piece first; each piece lists its lands
+/// (by footprint index) with their board positions.
+pub fn land_pieces(
+    placement: &copper_pcb::board::Placement,
+    footprint: &copper_physical::footprint::PhysicalFootprint,
+    number: &str,
+) -> crate::unified_error::Result<Vec<Vec<(usize, copper_physical::Point)>>> {
+    use copper_physical::footprint::PadKind;
+    let lands: Vec<(usize, &copper_physical::footprint::FootprintPad)> = footprint
+        .pads
+        .iter()
+        .enumerate()
+        .filter(|(_, land)| land.number == number && !matches!(land.kind, PadKind::Aperture | PadKind::NonPlatedThroughHole))
+        .collect();
+    if lands.len() < 2 {
+        return Ok(Vec::new());
+    }
+    let positions: Vec<copper_physical::Point> =
+        lands.iter().map(|(_, land)| copper_pcb::transform::transformed_local_point(placement, land.position)).collect();
+    let shapes: Vec<_> = lands
+        .iter()
+        .zip(&positions)
+        .map(|((_, land), position)| copper_pcb::transform::placed_pad_shape(*position, land, placement))
+        .collect();
+    let mut parent: Vec<usize> = (0..lands.len()).collect();
+    fn find(parent: &mut [usize], mut index: usize) -> usize {
+        while parent[index] != index {
+            parent[index] = parent[parent[index]];
+            index = parent[index];
+        }
+        index
+    }
+    for first in 0..lands.len() {
+        for second in first + 1..lands.len() {
+            if !copper_physical::geometry::shapes_clear(&shapes[first], &shapes[second], 1) {
+                let (a, b) = (find(&mut parent, second), find(&mut parent, first));
+                parent[a] = b;
+            }
+        }
+    }
+    let mut pieces: indexmap::IndexMap<usize, Vec<(usize, copper_physical::Point)>> = indexmap::IndexMap::new();
+    for index in 0..lands.len() {
+        let root = find(&mut parent, index);
+        pieces.entry(root).or_default().push((lands[index].0, positions[index]));
+    }
+    Ok(pieces.into_values().collect())
+}
