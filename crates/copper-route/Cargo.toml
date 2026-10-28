@@ -1,6 +1,6 @@
 [package]
 name = "copper-route"
-description = "Routing: exact clearance index, global router, layer assignment, escape planning, pin access, planes, the routing pipeline and the benchmark ladder (M4)"
+description = "Routing (M4): exact clearance index, global router, layer assignment, critical and pair routing, pin access, planes, the routing pipeline and the benchmark ladder"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

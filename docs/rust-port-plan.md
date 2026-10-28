@@ -615,3 +615,39 @@ do not shrink as much.
   guide costs, exit reservations, ball-field via sites, ball-grid supply
   islands (`power_islands_ball_grid_only`), `--refanout`, `--exact-escape`, via-in-pad arrays and a dynamically typed
   state value (a text pitch).
+
+**M4 stream: critical and pair routing, `replay-critical` (branch `rust-m4-critical`).**
+
+- `copper replay-critical` is wired (`crates/copper/src/replay_critical.rs`):
+  arguments, `load_state` (schema, digest, decode, Python's messages),
+  critical inputs dicts and placement checkpoints, the report (critical
+  document, DRC report, route summary), `-o` and stdout. `copper-route`
+  `critical` ports the stage's guards, `promote_planar_nets`, the job order,
+  `--only` selection, hard-macro and asymmetric-rule results, the batch
+  intersection check, lane delays (Python `Decimal.sqrt` in `copper-units`),
+  fingerprints and documents; `route_summary`, `routing_state` (global route
+  decoding, PENDING rust-m4-unified) and the report types of `pair_search`,
+  `pair_terminals` and `critical_bundles`. `copper-drc` gained breakout
+  relaxation records, now part of the DRC report document.
+- Checkpoints of every board with critical rules and derived error inputs
+  are under `tests/rust-port/critical/` (`generate.py`, README). The harness
+  `json` option takes several key paths and a `without` form, so reports
+  carrying wall time compare everything but `seconds` and
+  `local_preparation.elapsed_seconds`.
+- Routed paths ported: pair terminal preparation (source terminals), the
+  coarse aligned-pair and offset-guide candidates with pin stubs and
+  checked access lead-ins, budgets, coupled length, atomic DRC validation,
+  the joint search tiers when no searcher expands a state; single-ended
+  guides, pin stubs and local surface trees (`local_critical`,
+  `surface_path`, `route_style`); length-match outcomes within limits;
+  the route summary's plane estimate (`plane_estimate`, PENDING
+  rust-m4-unified).
+- Corpus (6 `replay-critical*` suites, 90 cases): 77 byte-identical, 13
+  not implemented, none different. Not implemented (exit 3): the joint
+  pair search proper (`pair_search` ports and spine search, `pair_vias`
+  transitions, `pair_refine`, resumed frontiers), guide vias
+  (`physical_via_span` is a rust-m4-global stub), intra-pair skew tuning,
+  local contact branches, the unified router (single-ended cohorts, exact
+  searches; rust-m4-unified), bundles and repairs, package-access
+  reservations, plane contacts and length-match tuning over the limit.
+

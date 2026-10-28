@@ -339,6 +339,49 @@ impl Decimal {
         Decimal::triple(negative, coefficient, exponent).fix()
     }
 
+    /// Python's `a.sqrt()` (`_pydecimal.Decimal.sqrt`): correctly rounded to
+    /// the context precision, with the ideal exponent when exact. Negative
+    /// operands are an invalid operation.
+    pub fn sqrt(&self) -> Result<Self, DecimalError> {
+        if self.coefficient.is_zero() {
+            return Ok(Decimal::triple(self.negative, BigUint::zero(), self.exponent >> 1));
+        }
+        if self.negative {
+            return Err(DecimalError::Special("sqrt of a negative number".to_owned()));
+        }
+        let precision = PRECISION as i64 + 1;
+        let digits = digit_count(&self.coefficient) as i64;
+        let mut exponent = self.exponent >> 1;
+        let (mut coefficient, length) = if self.exponent & 1 == 1 {
+            (&self.coefficient * 10u8, (digits >> 1) + 1)
+        } else {
+            (self.coefficient.clone(), (digits + 1) >> 1)
+        };
+        let shift = precision - length;
+        let mut exact = if shift >= 0 {
+            coefficient *= pow10(2 * shift as u64);
+            true
+        } else {
+            let (quotient, remainder) = coefficient.div_rem(&pow10(2 * (-shift) as u64));
+            coefficient = quotient;
+            remainder.is_zero()
+        };
+        exponent -= shift;
+        let mut root = num_integer::Roots::sqrt(&coefficient);
+        exact = exact && &root * &root == coefficient;
+        if exact {
+            if shift >= 0 {
+                root /= pow10(shift as u64);
+            } else {
+                root *= pow10((-shift) as u64);
+            }
+            exponent += shift;
+        } else if (&root % 5u8).is_zero() {
+            root += 1u8;
+        }
+        Decimal::triple(false, root, exponent).fix()
+    }
+
     /// Python's `a % b`: the remainder of truncating division, with the
     /// dividend's sign (`_pydecimal.Decimal._divide`).
     pub fn rem(&self, other: &Decimal) -> Result<Self, DecimalError> {
@@ -543,6 +586,22 @@ mod tests {
 
     fn d(text: &str) -> Decimal {
         Decimal::parse(text).unwrap()
+    }
+
+    #[test]
+    fn square_roots_match_python() {
+        for (operand, root) in [
+            ("2", "1.414213562373095048801688724"),
+            ("4", "2"),
+            ("0.25", "0.5"),
+            ("3.123456", "1.767330189862664005072288960"),
+            ("1E+3", "31.62277660168379331998893544"),
+            ("1.0000", "1.00"),
+            ("12.5", "3.535533905932737622004221811"),
+            ("4.000000", "2.000"),
+        ] {
+            assert_eq!(d(operand).sqrt().unwrap().to_sci_string(), root, "sqrt({operand})");
+        }
     }
 
     #[test]

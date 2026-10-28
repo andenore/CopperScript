@@ -295,7 +295,9 @@ impl Router<'_, '_> {
                 route.paths.push(path);
                 continue;
             }
-            let bbox = self.lattice.grow_box(self.lattice.box_of(&sources.keys().copied().collect::<Vec<_>>()).expect("sources"), margin);
+            let bbox = self
+                .lattice
+                .grow_box(self.lattice.box_of(&sources.keys().copied().collect::<Vec<_>>()).expect("sources"), margin);
             let target_list: Vec<i64> = targets.iter().copied().collect();
             let mut found = if target_list.is_empty() {
                 None
@@ -397,7 +399,7 @@ impl Router<'_, '_> {
         present: f64,
     ) -> Result<Option<(Vec<i64>, i64)>> {
         let g = &self.lattice;
-        let tbox = g.box_of(&targets.nodes).expect("targets");
+        let tbox = g.box_of(targets.nodes).expect("targets");
         let (sx0, sy0, sx1, sy1) = g.box_of(&sources.iter().map(|s| s.0).collect::<Vec<_>>()).expect("sources");
         let margin = self.margin(&self.specs[index]);
         let mut bbox = g.grow_box((tbox.0.min(sx0), tbox.1.min(sy0), tbox.2.max(sx1), tbox.3.max(sy1)), margin);

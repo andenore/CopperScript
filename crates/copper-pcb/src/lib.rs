@@ -31,6 +31,7 @@ pub mod kicad_pcb;
 pub mod physicalize;
 pub mod power;
 pub mod project;
+pub mod state_codec;
 pub mod templates;
 pub mod transform;
 pub mod zones;

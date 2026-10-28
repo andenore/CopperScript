@@ -611,16 +611,17 @@ fn routed_track_length_nm(board: &PhysicalBoard, net: &str) -> i64 {
         .sum()
 }
 
-struct MatchGroup {
-    id: String,
-    max_skew_nm: i64,
-    members: Vec<(String, i64, bool)>,
-    skew_nm: Option<i64>,
-    status: &'static str,
+/// `MatchGroupCheck`: one group's member `(net, length, connected)`, skew and status.
+pub struct MatchGroup {
+    pub id: String,
+    pub max_skew_nm: i64,
+    pub members: Vec<(String, i64, bool)>,
+    pub skew_nm: Option<i64>,
+    pub status: &'static str,
 }
 
 /// `verify_match_groups`: member lengths and skew once every member is connected.
-fn verify_match_groups(board: &PhysicalBoard) -> Result<Vec<MatchGroup>> {
+pub fn verify_match_groups(board: &PhysicalBoard) -> Result<Vec<MatchGroup>> {
     if board.match_groups.is_empty() {
         return Ok(Vec::new());
     }

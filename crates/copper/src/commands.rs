@@ -5,7 +5,7 @@ use std::io::Write;
 use crate::{
     agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compile, compile_macro,
     explain, export_kicad, export_kicad_pcb, export_manufacturing, issues, library, lock, lsp, plan_layout,
-    power_check, query, replay_unified, route_board, route_global, si_check, state, summarize, view,
+    power_check, query, replay_critical, replay_unified, route_board, route_global, si_check, state, summarize, view,
 };
 
 /// Exit status of a command the Rust rewrite does not implement yet.
@@ -47,7 +47,7 @@ pub const COMMANDS: &[(&str, Plan)] = &[
     ("view", Plan::Done),
     ("state", Plan::Done),
     ("replay-unified", Plan::Done),
-    ("replay-critical", Plan::Milestone("M4")),
+    ("replay-critical", Plan::Done),
     ("query", Plan::Done),
     ("si-check", Plan::Done),
     ("lock", Plan::Done),
@@ -109,6 +109,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "assembly" => assembly::run(rest, out, err),
         "si-check" => si_check::run(rest, out, err),
         "route-board" => route_board::run(rest, out, err),
+        "replay-critical" => replay_critical::run(rest, out, err),
         "export-manufacturing" => export_manufacturing::run(rest, out, err),
         "plan-layout" => plan_layout::run(rest, out, err),
         "bench" => copper_route::ladder::run(rest, out, err),
@@ -155,9 +156,9 @@ mod tests {
 
     #[test]
     fn unported_commands_report_their_milestone() {
-        let (code, out, err) = call(&["route-global", "board.copper"]);
+        let (code, out, err) = call(&["editor-overlay", "board.copper"]);
         assert_eq!((code, out.as_str()), (NOT_IMPLEMENTED_EXIT, ""));
-        assert!(err.contains(NOT_IMPLEMENTED_MARKER) && err.contains("M4"), "{err}");
+        assert!(err.contains(NOT_IMPLEMENTED_MARKER) && err.contains("M6"), "{err}");
         let (code, _, err) = call(&["audit-cam"]);
         assert_eq!(code, NOT_IMPLEMENTED_EXIT);
         assert!(err.contains("python -m copperscript audit-cam"), "{err}");

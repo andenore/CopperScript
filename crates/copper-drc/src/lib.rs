@@ -34,6 +34,7 @@ use copper_physical::mechanical::{hole_shape, shape_in_outline, slot_shape};
 use copper_physical::pyfloat::{hypot, round_int};
 use copper_physical::{BoardSide, CopperLayer, Point};
 
+pub use crate::breakout::BreakoutRelaxation;
 use crate::breakout::BreakoutSpacing;
 use crate::connectivity::{Candidate, explicit_copper_connectivity};
 
@@ -187,13 +188,17 @@ impl Default for Policy {
     }
 }
 
-/// `PhysicalDrcReport` without the signoff token and relaxation records.
+/// `PhysicalDrcReport` without the signoff token and the component
+/// hole-clearance relaxation records.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Report {
     pub decision: Decision,
     pub complete: bool,
     pub findings: Vec<Finding>,
     pub coverage: Vec<Coverage>,
+    /// Checks that passed only under breakout values, sorted by check,
+    /// objects, nets and layers.
+    pub breakout_relaxations: Vec<BreakoutRelaxation>,
 }
 
 /// `EXTERNAL_PLACEMENT_KEY`.
@@ -237,7 +242,8 @@ pub fn run_physical_drc(board: &PhysicalBoard, policy: Policy) -> Result<Report>
     }
     let gap_rules = board.placement_rules.iter().any(|r| r.additional_courtyard_gap_nm.is_some());
     covered.push(coverage("courtyard_gap", if gap_rules { Executed } else { NotApplicable }, true, ""));
-    check_track_rules(board, &mut findings)?;
+    let mut relaxations: Vec<BreakoutRelaxation> = Vec::new();
+    check_track_rules(board, &mut findings, &mut relaxations)?;
     covered.push(coverage("track_width_and_budgets", Executed, true, ""));
     check_differential_rules(board, &mut findings);
     covered.push(coverage("differential_geometry", Executed, true, ""));
@@ -259,7 +265,7 @@ pub fn run_physical_drc(board: &PhysicalBoard, policy: Policy) -> Result<Report>
     covered.push(coverage("via_geometry_and_budgets", Executed, true, ""));
     check_board_edge(board, &mut findings)?;
     covered.push(coverage("copper_to_board_edge", Executed, true, ""));
-    check_copper_spacing(board, &mut findings)?;
+    check_copper_spacing(board, &mut findings, &mut relaxations)?;
     check_fixed_polygons(board, &mut findings)?;
     check_copper_artwork(board, &mut findings)?;
     covered.push(coverage("shorts_and_clearance", Executed, true, ""));
@@ -371,7 +377,9 @@ pub fn run_physical_drc(board: &PhysicalBoard, policy: Policy) -> Result<Report>
         .iter()
         .any(|f| f.severity == Severity::Error || (policy.fail_on_warnings && f.severity == Severity::Warning));
     let decision = if blocking || !complete { Decision::Fail } else { Decision::Pass };
-    Ok(Report { decision, complete, findings, coverage: covered })
+    relaxations
+        .sort_by(|a, b| (&a.check, &a.objects, &a.nets, &a.layers).cmp(&(&b.check, &b.objects, &b.nets, &b.layers)));
+    Ok(Report { decision, complete, findings, coverage: covered, breakout_relaxations: relaxations })
 }
 
 /// `_as_input_copper`: a pad-only spacing finding on an imported placement is input copper.
@@ -495,7 +503,11 @@ fn check_connectivity(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Res
 }
 
 /// `_check_track_rules`.
-fn check_track_rules(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Result<()> {
+fn check_track_rules(
+    board: &PhysicalBoard,
+    findings: &mut Vec<Finding>,
+    relaxations: &mut Vec<BreakoutRelaxation>,
+) -> Result<()> {
     let rules: IndexMap<&str, &NetRoutingRule> = board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
     let spacing = rules.values().any(|r| r.breakout_width_nm.is_some()).then(|| BreakoutSpacing::new(board));
     let contracts = copper_pcb::hard_macros::materialized_track_width_contracts(board)?;
@@ -503,6 +515,7 @@ fn check_track_rules(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Resu
         let rule = rules.get(track.net.as_str());
         let required = board.rules.minimum_track_width_nm.max(rule.and_then(|r| r.width_nm).unwrap_or(0));
         let mut relaxed = required;
+        let mut land: Option<String> = None;
         if let Some((hard, contract)) = contracts.get(&index) {
             relaxed = board.rules.minimum_track_width_nm.max(contract.minimum_width_nm);
             findings.push(
@@ -525,9 +538,11 @@ fn check_track_rules(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Resu
             );
         } else if let (Some(spacing), Some(rule)) = (&spacing, rule)
             && let Some(width) = rule.breakout_width_nm
-            && spacing.land(&track.net, &[track.start, track.end]).is_some()
         {
-            relaxed = required.min(board.rules.minimum_track_width_nm.max(width));
+            land = spacing.land(&track.net, &[track.start, track.end]);
+            if land.is_some() {
+                relaxed = required.min(board.rules.minimum_track_width_nm.max(width));
+            }
         }
         if track.width_nm < relaxed {
             findings.push(
@@ -544,7 +559,23 @@ fn check_track_rules(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Resu
                 .required(relaxed)
                 .measured(track.width_nm),
             );
+        } else if track.width_nm < required
+            && let Some(spacing) = &spacing
+            && !contracts.contains_key(&index)
+        {
+            spacing.record(
+                "track_width",
+                vec![format!("track:{index}")],
+                &[(track.net.as_str(), land.as_deref())],
+                vec![track.layer.value().to_owned()],
+                required,
+                relaxed,
+                Some(track.width_nm),
+            );
         }
+    }
+    if let Some(spacing) = spacing {
+        relaxations.extend(spacing.relaxations.into_inner());
     }
     let mut sorted: Vec<(&&str, &&NetRoutingRule)> = rules.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
@@ -930,7 +961,11 @@ fn spacing_finding(
 }
 
 /// `_check_copper_spacing`: shorts and clearance between foreign copper.
-fn check_copper_spacing(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Result<()> {
+fn check_copper_spacing(
+    board: &PhysicalBoard,
+    findings: &mut Vec<Finding>,
+    relaxations: &mut Vec<BreakoutRelaxation>,
+) -> Result<()> {
     let spacing = BreakoutSpacing::new(board);
     let track_lands: Vec<Option<String>> =
         board.tracks.iter().map(|t| spacing.land(&t.net, &[t.start, t.end])).collect();
@@ -940,7 +975,7 @@ fn check_copper_spacing(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> R
             if left.net == right.net || left.layer != right.layer {
                 continue;
             }
-            let (clearance, _) = spacing.between(
+            let (clearance, normal) = spacing.between(
                 &left.net,
                 track_lands[left_index].as_deref(),
                 &right.net,
@@ -957,6 +992,28 @@ fn check_copper_spacing(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> R
                     vec![left.layer.value().to_owned()],
                     (required_twice + 1) / 2,
                 ));
+            } else if clearance < normal
+                && !segment_distance_at_least(
+                    left.start,
+                    left.end,
+                    right.start,
+                    right.end,
+                    left.width_nm + right.width_nm + 2 * normal,
+                    2,
+                )
+            {
+                spacing.note(
+                    &segment_distance_squared(left.start, left.end, right.start, right.end),
+                    left.width_nm + right.width_nm,
+                    normal,
+                    clearance,
+                    [format!("track:{left_index}"), format!("track:{right_index}")],
+                    [
+                        (left.net.as_str(), track_lands[left_index].as_deref()),
+                        (right.net.as_str(), track_lands[right_index].as_deref()),
+                    ],
+                    vec![left.layer.value().to_owned()],
+                );
             }
         }
     }
@@ -965,13 +1022,36 @@ fn check_copper_spacing(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> R
             if track.net == via.net || !via_covers_layer(board, via, track.layer)? {
                 continue;
             }
-            let (clearance, _) = spacing.between(
+            let (clearance, normal) = spacing.between(
                 &track.net,
                 track_lands[track_index].as_deref(),
                 &via.net,
                 via_lands[via_index].as_deref(),
             );
             let required_twice = track.width_nm + via.size_nm + 2 * clearance;
+            if clearance < normal
+                && point_segment_distance_at_least(via.position, track.start, track.end, required_twice, 2)
+                && !point_segment_distance_at_least(
+                    via.position,
+                    track.start,
+                    track.end,
+                    track.width_nm + via.size_nm + 2 * normal,
+                    2,
+                )
+            {
+                spacing.note(
+                    &point_segment_distance_squared(via.position, track.start, track.end),
+                    track.width_nm + via.size_nm,
+                    normal,
+                    clearance,
+                    [format!("track:{track_index}"), format!("via:{via_index}")],
+                    [
+                        (track.net.as_str(), track_lands[track_index].as_deref()),
+                        (via.net.as_str(), via_lands[via_index].as_deref()),
+                    ],
+                    vec![track.layer.value().to_owned()],
+                );
+            }
             if !point_segment_distance_at_least(via.position, track.start, track.end, required_twice, 2) {
                 let distance = point_segment_distance_squared(via.position, track.start, track.end);
                 findings.push(spacing_finding(
@@ -998,13 +1078,27 @@ fn check_copper_spacing(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> R
                 i128::from(left.position.y_nm - right.position.y_nm),
             );
             let distance_squared = dx * dx + dy * dy;
-            let (clearance, _) = spacing.between(
+            let (clearance, normal) = spacing.between(
                 &left.net,
                 via_lands[left_index].as_deref(),
                 &right.net,
                 via_lands[right_index].as_deref(),
             );
             let required_twice = i128::from(left.size_nm + right.size_nm + 2 * clearance);
+            if 4 * distance_squared >= required_twice * required_twice && clearance < normal {
+                spacing.note(
+                    &rational(distance_squared),
+                    left.size_nm + right.size_nm,
+                    normal,
+                    clearance,
+                    [format!("via:{left_index}"), format!("via:{right_index}")],
+                    [
+                        (left.net.as_str(), via_lands[left_index].as_deref()),
+                        (right.net.as_str(), via_lands[right_index].as_deref()),
+                    ],
+                    Vec::new(),
+                );
+            }
             if 4 * distance_squared < required_twice * required_twice {
                 let distance = rational(distance_squared);
                 findings.push(
@@ -1041,10 +1135,25 @@ fn check_copper_spacing(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> R
             if track.net == pad.net || !pad.layers.contains(&track.layer) {
                 continue;
             }
-            let (relaxed, _) =
+            let (relaxed, normal) =
                 spacing.between(&track.net, track_lands[track_index].as_deref(), &pad.net, land.as_deref());
             let clearance = pad.clearance_nm.max(relaxed);
+            let normal = pad.clearance_nm.max(normal);
             let required = copper.radius_nm + pad.shape.radius_nm + clearance;
+            if clearance < normal
+                && shapes_clear(&copper, &pad.shape, clearance)
+                && !shapes_clear(&copper, &pad.shape, normal)
+            {
+                spacing.note(
+                    &shape_distance_squared(&copper, &pad.shape),
+                    2 * (copper.radius_nm + pad.shape.radius_nm),
+                    normal,
+                    clearance,
+                    [format!("track:{track_index}"), pad.identity.clone()],
+                    [(track.net.as_str(), track_lands[track_index].as_deref()), (pad.net.as_str(), land.as_deref())],
+                    vec![track.layer.value().to_owned()],
+                );
+            }
             if !shapes_clear(&copper, &pad.shape, clearance) {
                 let distance = shape_distance_squared(&copper, &pad.shape);
                 findings.push(spacing_finding(
@@ -1091,9 +1200,25 @@ fn check_copper_spacing(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> R
                 }
                 continue;
             }
-            let (relaxed, _) = spacing.between(&via.net, via_lands[via_index].as_deref(), &pad.net, land.as_deref());
+            let (relaxed, normal) =
+                spacing.between(&via.net, via_lands[via_index].as_deref(), &pad.net, land.as_deref());
             let clearance = pad.clearance_nm.max(relaxed);
+            let normal = pad.clearance_nm.max(normal);
             let required = copper.radius_nm + pad.shape.radius_nm + clearance;
+            if clearance < normal
+                && shapes_clear(&copper, &pad.shape, clearance)
+                && !shapes_clear(&copper, &pad.shape, normal)
+            {
+                spacing.note(
+                    &shape_distance_squared(&copper, &pad.shape),
+                    2 * (copper.radius_nm + pad.shape.radius_nm),
+                    normal,
+                    clearance,
+                    [format!("via:{via_index}"), pad.identity.clone()],
+                    [(via.net.as_str(), via_lands[via_index].as_deref()), (pad.net.as_str(), land.as_deref())],
+                    Vec::new(),
+                );
+            }
             if !shapes_clear(&copper, &pad.shape, clearance) {
                 let distance = shape_distance_squared(&copper, &pad.shape);
                 findings.push(spacing_finding(
@@ -1131,14 +1256,35 @@ fn check_copper_spacing(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> R
             if left.net == right.net || shared.is_empty() {
                 continue;
             }
-            let (relaxed, _) = spacing.between(
+            let (relaxed, normal) = spacing.between(
                 &left.net,
                 pad_lands[left_position].as_deref(),
                 &right.net,
                 pad_lands[right_position].as_deref(),
             );
             let clearance = left.clearance_nm.max(right.clearance_nm).max(relaxed);
+            let normal = left.clearance_nm.max(right.clearance_nm).max(normal);
             let required = left.shape.radius_nm + right.shape.radius_nm + clearance;
+            if clearance < normal
+                && shapes_clear(&left.shape, &right.shape, clearance)
+                && !shapes_clear(&left.shape, &right.shape, normal)
+            {
+                let mut layers: Vec<String> = shared.iter().map(|l| l.value().to_owned()).collect();
+                layers.sort();
+                layers.dedup();
+                spacing.note(
+                    &shape_distance_squared(&left.shape, &right.shape),
+                    2 * (left.shape.radius_nm + right.shape.radius_nm),
+                    normal,
+                    clearance,
+                    [left.identity.clone(), right.identity.clone()],
+                    [
+                        (left.net.as_str(), pad_lands[left_position].as_deref()),
+                        (right.net.as_str(), pad_lands[right_position].as_deref()),
+                    ],
+                    layers,
+                );
+            }
             if !shapes_clear(&left.shape, &right.shape, clearance) {
                 let distance = shape_distance_squared(&left.shape, &right.shape);
                 let layers: Vec<&str> = shared.iter().map(|l| l.value()).collect();
@@ -1158,6 +1304,7 @@ fn check_copper_spacing(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> R
             }
         }
     }
+    relaxations.extend(spacing.relaxations.into_inner());
     Ok(())
 }
 

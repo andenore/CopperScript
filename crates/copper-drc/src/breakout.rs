@@ -173,20 +173,109 @@ pub fn plain_clearance(board: &PhysicalBoard, first: Option<&NetRoutingRule>, se
         .max(second.and_then(|r| r.clearance_nm).unwrap_or(0))
 }
 
-/// `_BreakoutSpacing`: region-aware copper spacing for physical DRC.
-///
-/// Relaxation records (the report's `breakout_relaxations`) are not kept;
-/// they never change a finding.
+/// `DrcBreakoutRelaxation`: a width, clearance or pair-gap check passed only
+/// under breakout values. `required_nm` is the normal value the copper does
+/// not meet and `relaxed_nm` the breakout value it does meet; `regions`
+/// names, for each net whose breakout value applied, the terminal land whose
+/// region holds its copper and the net's breakout length.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BreakoutRelaxation {
+    /// "track_width", "clearance" or "pair_gap".
+    pub check: String,
+    pub objects: Vec<String>,
+    pub nets: Vec<String>,
+    pub layers: Vec<String>,
+    pub required_nm: i64,
+    pub relaxed_nm: i64,
+    pub measured_nm: Option<i64>,
+    pub regions: Vec<(String, String, i64)>,
+}
+
+/// `_BreakoutSpacing`: region-aware copper spacing for physical DRC, with
+/// the relaxation records of the checks that passed only under breakout
+/// values (they never change a finding).
 pub struct BreakoutSpacing<'a> {
     board: &'a PhysicalBoard,
     pub rules: IndexMap<String, NetRoutingRule>,
     pub regions: BreakoutRegions,
+    pub relaxations: std::cell::RefCell<Vec<BreakoutRelaxation>>,
 }
 
 impl<'a> BreakoutSpacing<'a> {
     pub fn new(board: &'a PhysicalBoard) -> Self {
         let regions = BreakoutRegions::new(board);
-        BreakoutSpacing { board, rules: regions.rules.clone(), regions }
+        BreakoutSpacing { board, rules: regions.rules.clone(), regions, relaxations: Default::default() }
+    }
+
+    /// `check`: the breakout value a spacing between the nets relaxes.
+    pub fn check(&self, first: &str, second: &str) -> &'static str {
+        if self.regions.any() && self.regions.pair(first, second) { "pair_gap" } else { "clearance" }
+    }
+
+    /// `note`: record a relaxation when copper meets `relaxed` but not
+    /// `required`. `distance_squared` is between the spines and
+    /// `radii_twice` the sum of both copper widths; `copper` pairs each net
+    /// with its region.
+    #[allow(clippy::too_many_arguments)]
+    pub fn note(
+        &self,
+        distance_squared: &num_rational::BigRational,
+        radii_twice: i64,
+        required: i64,
+        relaxed: i64,
+        objects: [String; 2],
+        copper: [(&str, Option<&str>); 2],
+        layers: Vec<String>,
+    ) {
+        use num_bigint::BigInt;
+        let needed = BigInt::from(radii_twice + 2 * required);
+        let four = num_rational::BigRational::from_integer(BigInt::from(4));
+        let scaled = &four * distance_squared;
+        if scaled >= num_rational::BigRational::from_integer(&needed * &needed) {
+            return;
+        }
+        let floor = crate::fraction_sqrt_floor(&scaled);
+        let measured = (floor - radii_twice).div_euclid(2);
+        let check = self.check(copper[0].0, copper[1].0);
+        self.record(check, objects.to_vec(), &copper, layers, required, relaxed, Some(measured));
+    }
+
+    /// `record`: one relaxation with the regions that justified it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record(
+        &self,
+        check: &str,
+        objects: Vec<String>,
+        copper: &[(&str, Option<&str>)],
+        layers: Vec<String>,
+        required: i64,
+        relaxed: i64,
+        measured: Option<i64>,
+    ) {
+        let mut regions: Vec<(String, String, i64)> = copper
+            .iter()
+            .filter_map(|(net, land)| {
+                let land = (*land)?;
+                self.regions
+                    .relaxes(net, Some(land), check)
+                    .then(|| ((*net).to_owned(), land.to_owned(), self.rules[*net].breakout_length_nm.unwrap_or(0)))
+            })
+            .collect();
+        regions.sort();
+        regions.dedup();
+        let mut nets: Vec<String> = copper.iter().map(|(net, _)| (*net).to_owned()).collect();
+        nets.sort();
+        nets.dedup();
+        self.relaxations.borrow_mut().push(BreakoutRelaxation {
+            check: check.to_owned(),
+            objects,
+            nets,
+            layers,
+            required_nm: required,
+            relaxed_nm: relaxed,
+            measured_nm: measured,
+            regions,
+        });
     }
 
     /// `land`: the terminal land whose breakout region holds this copper of `net`.
