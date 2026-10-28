@@ -84,3 +84,13 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
+
+/// `[x_nm, y_nm]`.
+pub(crate) fn point_value(point: copper_physical::Point) -> copper_json::Value {
+    copper_json::Value::Array(vec![copper_json::Value::from(point.x_nm), copper_json::Value::from(point.y_nm)])
+}
+
+/// A JSON object in this key order.
+pub(crate) fn object(entries: Vec<(&str, copper_json::Value)>) -> copper_json::Value {
+    copper_json::Value::Object(entries.into_iter().map(|(key, value)| (key.to_owned(), value)).collect())
+}
