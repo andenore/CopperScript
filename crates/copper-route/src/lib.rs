@@ -34,9 +34,12 @@ macro_rules! text_enum {
 }
 
 pub mod bench;
+pub mod bypass_links;
 pub mod congestion_feedback;
 pub mod critical;
 pub mod critical_bundles;
+pub mod decoupling;
+pub mod decoupling_paths;
 pub mod detailed;
 pub mod drc_report;
 pub mod escape_assignment;
@@ -63,6 +66,7 @@ pub mod plane_verify;
 pub mod power_islands;
 pub mod progress;
 pub mod pypath;
+pub mod route_quality;
 pub mod route_smoothing;
 pub mod route_style;
 pub mod route_summary;

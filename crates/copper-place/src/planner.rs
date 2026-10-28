@@ -3,6 +3,8 @@
 //! clusters, legalization, relative repair, refinement, escape spacing and
 //! decoupling access; then the Pareto frontier of legal candidates.
 
+use std::sync::OnceLock;
+
 use indexmap::IndexSet;
 
 use copper_pcb::board::{PhysicalBoard, Placement};
@@ -57,8 +59,21 @@ fn repr(text: &str) -> String {
     copper_json::python_str_repr(text)
 }
 
+/// The decoupling-access pass (`decoupling.improve_decoupling_placement`):
+/// `(bypass_board, refined, phase options) -> (poses, moves)`. It runs the
+/// decoupler router, which lives in `copper-route` (a dependent of this crate),
+/// so the binary registers it.
+pub type DecouplingPass = fn(&PhysicalBoard, &Poses, &PlannerOptions) -> Result<(Poses, i64)>;
+
+static DECOUPLING_PASS: OnceLock<DecouplingPass> = OnceLock::new();
+
+/// Install the decoupling-access pass; the first registration wins.
+pub fn register_decoupling_pass(pass: DecouplingPass) {
+    let _ = DECOUPLING_PASS.set(pass);
+}
+
 /// `improve_decoupling_placement`: the source checks and early exits; a movable
-/// decoupler needs the disposable decoupler routing pass, which is not rewritten.
+/// decoupler runs the registered pass on the board at the refined poses.
 fn improve_decoupling_placement(scene: &Scene, refined: &Poses, options: &PlannerOptions) -> Result<(Poses, i64)> {
     let board = scene.board;
     if board.decoupling_links.is_empty() {
@@ -77,7 +92,14 @@ fn improve_decoupling_placement(scene: &Scene, refined: &Poses, options: &Planne
     {
         return Ok((refined.clone(), 0));
     }
-    copper_pcb::not_implemented("decoupling-access placement (movable decouplers need the decoupler router)")
+    let Some(pass) = DECOUPLING_PASS.get() else {
+        return copper_pcb::not_implemented(
+            "decoupling-access placement (movable decouplers need the decoupler router)",
+        );
+    };
+    let mut bypass_board = board.clone();
+    bypass_board.placements = board.placements.iter().map(|p| refined[&p.reference].clone()).collect();
+    pass(&bypass_board, refined, options)
 }
 
 /// `generate_placement_candidates`: a deterministic Pareto frontier of legal candidates.
