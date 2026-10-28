@@ -549,7 +549,24 @@ def _facing_turns(first, second):
     return turns(first, second)+turns(second, first)
 
 
-def _transition_pairs(groups, departure_rank=None):
+def _cramped(first, second, pitch_nm):
+    """Facing ports nearer along their headings than their side step needs.
+
+    A 45-degree side step across the headings takes as much travel along
+    them, plus a search step out of one port and into the other. Nearer
+    than that, the pair has to turn back on itself, so its route is a loop.
+    Long collars that reach toward each other look close, yet are exactly
+    this.
+    """
+    if (first.heading - second.heading) % 8 != 4:
+        return False
+    dx, dy = _HEADS[first.heading]
+    vx, vy = second.center.x_nm-first.center.x_nm, second.center.y_nm-first.center.y_nm
+    # Both projections are scaled by the heading's length; so is the margin.
+    return vx*dx+vy*dy < abs(vx*dy-vy*dx)+2*pitch_nm*hypot(dx, dy)
+
+
+def _transition_pairs(groups, departure_rank=None, pitch_nm=0):
     families = {(False, False): [], (True, True): [], (False, True): [], (True, False): []}
     for a, b in product(*groups):
         if a.port.sign == -b.port.sign:
@@ -559,6 +576,7 @@ def _transition_pairs(groups, departure_rank=None):
         return (a.rank+b.rank,
                 (departure_rank(a)+departure_rank(b)) if departure_rank is not None else 0,
                 _facing_turns(a.port, b.port),
+                _cramped(a.port, b.port, pitch_nm),
                 a.port.preference+b.port.preference,
                 hypot(a.port.center.x_nm-b.port.center.x_nm, a.port.center.y_nm-b.port.center.y_nm),
                 a.port.center.x_nm, a.port.center.y_nm, b.port.center.x_nm, b.port.center.y_nm)
@@ -648,7 +666,7 @@ def paired_via_candidates(board: PhysicalBoard, first: NetRoutingRule, second: N
                 departure_ranks[key] = int(not _can_depart(held, RoutingClearanceIndex(held),
                     first.net, second.net, item.port, width, offset, clearance, layer, pitch_nm))
             return departure_ranks[key]
-        total_pairs, combinations = _transition_pairs(groups, departure_rank)
+        total_pairs, combinations = _transition_pairs(groups, departure_rank, pitch_nm)
         if not total_pairs:
             domains_text = "; ".join(
                 f"{access.pad.component} {surface.value} to {layer.value}: "

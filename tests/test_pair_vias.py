@@ -223,3 +223,21 @@ def test_easy_via_pair_is_still_exactly_accepted_with_initial_cap(monkeypatch):
                 if f.severity.value == 'error' and f.code != 'DRC-ROUTE-INCOMPLETE']
 
 
+
+
+def test_facing_ports_without_room_for_their_side_step_rank_after_open_ones():
+    from types import SimpleNamespace
+    from pcbir.pair_vias import _cramped
+
+    def port(x, y, heading):
+        return SimpleNamespace(center=Point.mm(x, y), heading=heading)
+
+    pitch = nm_from_mm(.5)
+    # Up from (19, 50) and down from (20.5, 48.44): 1.56 mm along their
+    # headings for a 1.5 mm side step, which with a search step out of and
+    # into each port needs 2.5 mm. The pair would loop back on itself.
+    assert _cramped(port(19, 50, 6), port(20.5, 48.44, 2), pitch)
+    # Shorter collars leave 3.56 mm.
+    assert not _cramped(port(19, 51.5, 6), port(20.5, 47.94, 2), pitch)
+    # Ports that do not face each other are left to the facing-turn rank.
+    assert not _cramped(port(19, 50, 6), port(20.5, 48.44, 0), pitch)

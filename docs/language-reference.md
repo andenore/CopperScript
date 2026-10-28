@@ -1284,11 +1284,14 @@ pairs that cannot change layer as possible, then as many pairs as possible
 one planned paired layer swap: a layer both members allow (and every member of
 their `layer_group`), other than the terminal surface and reachable by a via;
 layers next to a declared `copper_zone` come first; never the layer of another
-moving pair it crosses. Moving pairs are routed first in the bundle, using
-only the paired-via search on that layer: matched vias at both ends, return
-vias within `maximum_return_via_distance` or a declared shared reference, no
-transition via inside a breakout region, transitions inside the pair's
-reserved corridor first. They skip the coarse candidate and the surface
+moving pair it crosses. Moving pairs are routed first in the bundle, then
+the pairs they cross, then the rest; among the surface pairs, those nearest a
+moving pair along the terminal rows come first, so the pairs beside the
+transition vias can step aside before the outer pairs take the room. Moving
+pairs use only the paired-via search on that layer: matched vias at both ends,
+return vias within `maximum_return_via_distance` or a declared shared
+reference, transitions inside the pair's reserved corridor first and
+transition vias inside a breakout region last. They skip the coarse candidate and the surface
 search, so each member gets exactly two vias; every candidate passes the same
 profile, plane and native DRC gates, and bundle repair keeps the plan. A
 member whose `max_vias` is below 2, or a pair with no crossing layer left, is
@@ -1320,8 +1323,8 @@ without copper and the exact paired searches decide. When `max_skew` and
 `tuning_amplitude_limit` are both set, skew beyond the limit is compensated on
 the shorter member: bumps no taller than the amplitude limit, 3 × width wide
 and 3 × width from each other and from the segment ends, on the axis-aligned
-segments nearest the terminal or bend where the length difference arises,
-bulging away from the partner, with 45° corners (below; the chamfer leg is at
+segments nearest the terminal or bend where the length difference arises
+(segments inside a breakout region last), bulging away from the partner, with 45° corners (below; the chamfer leg is at
 most the member's narrowest width). At most eight bumps are used; when they do
 not fit, the geometry is unchanged and the skew gate reports it. On a board
 with breakout regions the compensation aims 32 nm inside `max_skew`, because a
@@ -1354,14 +1357,18 @@ least length that brings its shortest member within `max_skew` (32 nm inside
 it on a board with breakout regions). Bumps are no taller than the unit's
 `tuning_amplitude_limit` (the smaller of a pair); a unit without one is not
 tuned. They sit on straight axis-aligned runs (for a
-pair, where both members are parallel at the pair spacing), at least
+pair, where both members are parallel at the pair spacing; where they run
+parallel up to three times wider, as beside the pair's vias, both members
+bulge apart over the same interval as single nets), at least
 3 × width from either end of the run and 3 × width apart, and are 3 × width
 wide (the outer member of a pair 3 × width + 2 × spacing), on either side of
 the run. Placement rule: the room of each slot is the tallest bump, up to the
 amplitude limit, whose swept area (the convex outline of the chamfered bump)
 clears all other copper, lands, holes, keep-outs and the board edge by the
-applicable clearance; slots with the most room are used first, then those
-farthest from the unit's terminals, then by position. The fewest bumps that
+applicable clearance; slots outside breakout regions come first (inside one
+the clearance is relaxed for the dense lands, and a bump there takes the room
+the neighbouring lands' lanes need to escape), then slots with the most room,
+then those farthest from the unit's terminals, then by position. The fewest bumps that
 provide the length are used, at most 16 per unit (`MATCH_TUNING_BUMP_LIMIT` in
 `pcbir.critical_tuning`), with levelled heights. Each tuned unit passes the same profile gates (length and via
 budgets, pair skew and `maximum_uncoupled_length`) and atomic native-DRC
@@ -1406,7 +1413,9 @@ consecutive tops with room on their sides; windows with the most capacity
 come first, and the last one is trimmed to the fewest tops that add the
 length. Lines without a serpentine keep one-sided bumps, and a unit whose
 serpentines cannot provide the length falls back to bumps alone (also when the
-length is too small for tops of that height). At most 32 legs are used per
+length is too small for tops of that height). Serpentines and then bumps are
+tried outside breakout regions first, and only then anywhere, so a serpentine
+beside the lands never wins over bumps in the open run. At most 32 legs are used per
 unit (`MATCH_TUNING_LEG_LIMIT`, a bump counting two); heights are levelled
 across tops and bumps, and c is lowered until it suits every leg and makes the
 added length exact. Adjacent legs couple, so a serpentine's delay is slightly

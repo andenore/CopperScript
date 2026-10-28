@@ -222,6 +222,37 @@ def _paths(start: Point, end: Point) -> tuple[tuple[Point, ...], ...]:
             (start, Point(end.x_nm - sx * distance, end.y_nm - sy * distance), end))
 
 
+# Shortest straight leg of a mid-way collar jog (``_collar_paths``).
+_COLLAR_LEG_NM = 50_000
+
+
+def _collar_paths(start: Point, end: Point) -> tuple[tuple[Point, ...], ...]:
+    """``_paths`` plus a collar that leaves its land straight and turns mid-way.
+
+    A pair widening from its land pitch to a wider port (a via pair) can only
+    jog at the land with ``_paths``: the other variant ends on its diagonal,
+    which a port refuses. Between flanking lands that early jog is illegal.
+    The extra variant runs straight along the long axis for half of the
+    excess, takes the 45-degree jog, then finishes straight into the port.
+    It needs at least ``_COLLAR_LEG_NM`` of each straight leg: a near-diagonal
+    offset would otherwise enter the port on its diagonal behind a stub.
+    """
+    paths = _paths(start, end)
+    dx, dy = end.x_nm - start.x_nm, end.y_nm - start.y_nm
+    jog, run = sorted((abs(dx), abs(dy)))
+    if not jog or run - jog < 2 * _COLLAR_LEG_NM:
+        return paths
+    sx, sy = (1 if dx > 0 else -1), (1 if dy > 0 else -1)
+    lead = (run - jog) // 2
+    if abs(dy) > abs(dx):
+        first = Point(start.x_nm, start.y_nm + sy * lead)
+        second = Point(first.x_nm + sx * jog, first.y_nm + sy * jog)
+    else:
+        first = Point(start.x_nm + sx * lead, start.y_nm)
+        second = Point(first.x_nm + sx * jog, first.y_nm + sy * jog)
+    return (*paths, (start, first, second, end))
+
+
 def _tracks(net: str, points: tuple[Point, ...], width: int, layer: CopperLayer,
             breakout: BreakoutRegions | None = None) -> tuple[TrackSegment, ...]:
     tracks = tuple(TrackSegment(net, a, b, width, layer)
@@ -457,7 +488,7 @@ def _ports(board: PhysicalBoard, index: RoutingClearanceIndex, first_name: str,
             center = Point(middle.x_nm + dx * step, middle.y_nm + dy * step)
             targets = (_shift(center, normal, sign), _shift(center, normal, -sign))
             admitted = False
-            for a, b in product(_paths(first, targets[0]), _paths(second, targets[1])):
+            for a, b in product(_collar_paths(first, targets[0]), _collar_paths(second, targets[1])):
                 # Fanout must reach the pair port in its stated orientation.
                 if (_heading(a[-2], a[-1]) != heading
                         or _heading(b[-2], b[-1]) != heading):

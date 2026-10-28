@@ -368,6 +368,32 @@ def test_tuning_compensates_next_to_the_bend_where_the_mismatch_arises() -> None
     assert _bumps(reversed_inner, 0) == bumps
 
 
+def test_tuning_bumps_leave_breakout_regions_to_the_escaping_lanes() -> None:
+    # The same bend, with the run cut at x = 14 mm where a breakout region
+    # (R1) begins. Bumps there would take the relaxed-clearance room that
+    # neighbouring lands need to escape, so they go just outside it.
+    width, layer = nm_from_mm("0.25"), CopperLayer.FRONT
+    inner = [TrackSegment("A", Point.mm(0, 0), Point.mm(14, 0), width, layer),
+             TrackSegment("A", Point.mm(14, 0), Point.mm(20, 0), width, layer),
+             TrackSegment("A", Point.mm(20, 0), Point.mm(20, 4), width, layer)]
+    outer = [TrackSegment("B", Point.mm(0, "-0.45"), Point.mm("20.45", "-0.45"), width, layer),
+             TrackSegment("B", Point.mm("20.45", "-0.45"), Point.mm("20.45", 4), width, layer)]
+
+    class Region:
+        def __bool__(self) -> bool:
+            return True
+
+        def inside_any(self, point: Point) -> bool:
+            return point.x_nm > nm_from_mm(14)
+
+    added = _tune_pair(inner, outer, nm_from_mm("0.1"), nm_from_mm("0.3"), breakout=Region())
+    assert added >= nm_from_mm("0.8")
+    bumps = _bumps(inner, 0)
+    assert len(bumps) == 2
+    # Next to the region boundary, 3 x width from it, none inside.
+    assert bumps[-1][1] == nm_from_mm(14) - 3 * width
+
+
 @pytest.mark.parametrize("obstacle", ("pad", "keepout", "edge", "pair_clearance"))
 def test_pair_rejects_unsafe_exact_geometry_atomically(obstacle) -> None:
     board = _pair_board()

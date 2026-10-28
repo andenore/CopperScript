@@ -272,3 +272,23 @@ def test_pair_members_must_agree_on_the_tuning_style() -> None:
         NetRoutingRule("A", RouteKind.CLOCK, tuning_spacing_nm=nm_from_mm("0.5"))
     with pytest.raises(ValueError):
         NetRoutingRule("A", RouteKind.CLOCK, tuning_style="zigzag")
+
+
+def test_bumps_in_the_open_run_win_over_a_serpentine_beside_the_lands() -> None:
+    # One net along x. Below it, x 25 to 45 mm is blocked, so a serpentine
+    # (tops on both sides) only fits at x < 25 mm. Every slot starting before
+    # x = 26 mm counts as inside a breakout region beside the lands here.
+    # One-sided bumps further along add the length outside it and win; with
+    # every slot outside, the serpentine still comes first.
+    board = replace(EMPTY, copper_keepouts=(_keepout("below", 25, 8, 46, "9.8"),))
+    tracks = (TrackSegment("A", Point.mm(5, 10), Point.mm(45, 10), WIDTH, LAYER),)
+    added = nm_from_mm("1.2")
+    serpentine = _tuner(tracks, board, nets=("A",), spacing=0).plan(added)
+    assert serpentine.legs and serpentine.tracks is not None
+    tuner = _tuner(tracks, board, nets=("A",), spacing=0)
+    tuner.inside = lambda slot: slot.start < nm_from_mm(26)
+    plan = tuner.plan(added)
+    assert plan.tracks is not None and not plan.legs
+    moved = [t for t in plan.tracks if t.start.y_nm != nm_from_mm(10) or t.end.y_nm != nm_from_mm(10)]
+    assert moved and all(min(t.start.x_nm, t.end.x_nm) > nm_from_mm("25.5") for t in moved)
+    assert _track_length(plan.tracks) == nm_from_mm(40) + added

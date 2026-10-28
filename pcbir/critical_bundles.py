@@ -248,11 +248,11 @@ def plan_bundles(
     member net has exactly two pads, one on each of the same two placed
     components. Groups that share components, kind and priority form a bundle
     when there are at least two of them. With ``plan_crossings``, a bundle
-    whose pairs must cross gets its planned crossings, and its moving pairs
-    come first in its order (plan R5). With ``plan_nested_exits``, a bundle
-    that leaves a package across a corner gets the nested exits of its
-    side-edge surface pairs, and each nest takes its slots in the order
-    innermost first (plan R7).
+    whose pairs must cross gets its planned crossings and is routed from its
+    moving pairs outward (``_crossing_order``, plan R5). With
+    ``plan_nested_exits``, a bundle that leaves a package across a corner
+    gets the nested exits of its side-edge surface pairs, and each nest takes
+    its slots in the order innermost first (plan R7).
     """
     nets = {item.name: item for item in board.nets}
     placements = {item.reference: item for item in board.placements}
@@ -277,11 +277,7 @@ def plan_bundles(
         crossings = (_plan_crossings(board, entries, (first, second), order, rules)
                      if plan_crossings else ())
         if crossings:
-            # Moving pairs first, so the surface pairs route around their
-            # transition sites; each part keeps the physical order.
-            moving = {item.group for item in crossings}
-            order = (*(group for group in order if group in moving),
-                     *(group for group in order if group not in moving))
+            order = _crossing_order(entries, (first, second), order, crossings)
         nested = (_plan_nested_exits(board, [entry for entry in entries
                                              if entry[0] not in {item.group for item in crossings}],
                                      (first, second), rules)
@@ -346,18 +342,15 @@ def _group_lands(
             for reference, points in positions.items()}
 
 
-def _physical_order(
+def _row_ranks(
     entries: list[tuple[tuple[str, ...], dict[str, Point]]], components: tuple[str, str],
-) -> tuple[tuple[str, ...], ...]:
-    """Outermost groups first, by their rank along each component's terminal row.
+) -> list[dict[tuple[str, ...], int]]:
+    """Each group's rank along each component's terminal row.
 
     Each component's row axis is x or y, whichever spreads the bundle's land
-    centres more (x on a tie). A group's depth is its distance in ranks from
-    the nearer end of the row, summed over both components, so a bundle whose
-    order is consistent at both ends is routed from both edges inward. Ties go
-    to the lower rank at the first component, then to the net names.
+    centres more (x on a tie). Ties go to the other coordinate, then to the
+    net names.
     """
-    count = len(entries)
     ranks: list[dict[tuple[str, ...], int]] = []
     for reference in components:
         points = [lands[reference] for _, lands in entries]
@@ -369,12 +362,56 @@ def _physical_order(
             entry[1][reference].y_nm if horizontal else entry[1][reference].x_nm,
             entry[0]))
         ranks.append({group: rank for rank, (group, _) in enumerate(ordered)})
+    return ranks
+
+
+def _physical_order(
+    entries: list[tuple[tuple[str, ...], dict[str, Point]]], components: tuple[str, str],
+) -> tuple[tuple[str, ...], ...]:
+    """Outermost groups first, by their rank along each component's terminal row.
+
+    A group's depth is its distance in ranks (``_row_ranks``) from the nearer
+    end of the row, summed over both components, so a bundle whose order is
+    consistent at both ends is routed from both edges inward. Ties go to the
+    lower rank at the first component, then to the net names.
+    """
+    count = len(entries)
+    ranks = _row_ranks(entries, components)
 
     def depth(group: tuple[str, ...]) -> int:
         return sum(min(rank[group], count - 1 - rank[group]) for rank in ranks)
 
     return tuple(sorted((group for group, _ in entries),
                         key=lambda group: (depth(group), ranks[0][group], group)))
+
+
+def _crossing_order(
+    entries: list[tuple[tuple[str, ...], dict[str, Point]]], components: tuple[str, str],
+    order: tuple[tuple[str, ...], ...], crossings: tuple[PlannedCrossing, ...],
+) -> tuple[tuple[str, ...], ...]:
+    """The route order of a bundle with planned crossings (plan R5).
+
+    The moving pairs come first, so the surface pairs route around their
+    transition sites, then the pairs they cross, then the rest. Within the
+    surface pairs, the pairs nearest a moving pair come first: distance is
+    the smallest difference in row rank (``_row_ranks``) to a moving pair,
+    summed over both components. The transitions are the obstruction, so
+    each later pair only bends around pairs nearer to it and the outermost
+    pairs keep the free room on their open side. Without that, outer pairs
+    routed first and straight wall in the pairs beside the transitions, which
+    must step aside for the transition vias. Ties keep ``order``.
+    """
+    moving = [group for group in order if group in {item.group for item in crossings}]
+    crossed = {other for item in crossings for other in item.crosses} - set(moving)
+    ranks = _row_ranks(entries, components)
+    position = {group: index for index, group in enumerate(order)}
+
+    def distance(group: tuple[str, ...]) -> int:
+        return min(sum(abs(rank[group] - rank[other]) for rank in ranks) for other in moving)
+
+    surface = sorted((group for group in order if group not in moving),
+                     key=lambda group: (group not in crossed, distance(group), position[group]))
+    return (*moving, *surface)
 
 
 def crossing_outcome(
