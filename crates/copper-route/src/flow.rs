@@ -300,7 +300,7 @@ fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::Copper
 }
 
 /// The installed progress observer, reborrowed for one call.
-fn reborrow<'a>(on_progress: &'a mut Option<ProgressCallback<'_>>) -> Option<ProgressCallback<'a>> {
+pub(crate) fn reborrow<'a>(on_progress: &'a mut Option<ProgressCallback<'_>>) -> Option<ProgressCallback<'a>> {
     match on_progress {
         Some(callback) => Some(&mut **callback),
         None => None,

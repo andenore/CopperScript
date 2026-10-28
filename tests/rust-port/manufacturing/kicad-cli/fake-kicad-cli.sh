@@ -32,6 +32,50 @@ case "$1 $2 $3" in
         printf '{"violations": [{"type": "clearance"}], "unconnected_items": []}\n' > "$output"
     elif [ "$MODE" = drc-not-json ]; then
         printf 'DRC report\n' > "$output"
+    elif [ "$MODE" = zone-open ] || [ "$MODE" = zone-open-always ] || [ "$MODE" = dangling ] \
+            || [ "$MODE" = zone-open-dangling ]; then
+        # Native findings on a deterministic schedule (by verification
+        # directory). An open is an unconnected pair on the first zone's net:
+        # its first two pads on different footprints. A dangling end is the
+        # last segment of another net. zone-open: open in verification-001
+        # only, as if the first bridge closed it; zone-open-always: always;
+        # dangling: dangling end in verification-001; zone-open-dangling: the
+        # open in verification-001, the dangling end in verification-002.
+        open=
+        dangling=
+        case "$MODE $output" in
+        "zone-open "*/verification-001/*|"zone-open-dangling "*/verification-001/*|"zone-open-always "*) open=yes ;;
+        "dangling "*/verification-001/*|"zone-open-dangling "*/verification-002/*) dangling=yes ;;
+        esac
+        items=
+        [ -n "$open" ] && items=$(awk '
+            FNR == NR { if (!net && /^    \(net_name "/) { net = $2; sub(/\)$/, "", net) }; next }
+            /^  \(footprint / { footprint++ }
+            /^    \(pad / { inpad = 1; padnet = "" }
+            inpad && /^      \(net / { padnet = $3; sub(/\)$/, "", padnet) }
+            inpad && /^      \(uuid / {
+                inpad = 0
+                if (net && padnet == net && footprint != used && count < 2) {
+                    uuid = $2; sub(/\)$/, "", uuid)
+                    printf "%s{\"uuid\": %s, \"description\": \"Pad\"}", (count ? ", " : ""), uuid
+                    used = footprint; count++
+                }
+            }
+        ' "$board" "$board")
+        segment=
+        [ -n "$dangling" ] && segment=$(awk '
+            /^  \(zone/ { inzone = 1 }
+            inzone && !zone && /^    \(net [0-9]+\)$/ { zone = $2 }
+            /^  \(segment/ { insegment = 1; segmentnet = "" }
+            insegment && /^    \(net / { segmentnet = $2 }
+            insegment && /^    \(uuid / { insegment = 0; if (segmentnet != zone) { last = $2; sub(/\)$/, "", last) } }
+            END { print last }
+        ' "$board")
+        unconnected=
+        [ -n "$items" ] && unconnected="{\"type\": \"unconnected_items\", \"description\": \"Missing connection between items\", \"severity\": \"error\", \"items\": [$items]}"
+        violations=
+        [ -n "$segment" ] && violations="{\"type\": \"track_dangling\", \"description\": \"Track has unconnected end\", \"severity\": \"warning\", \"items\": [{\"uuid\": $segment, \"description\": \"Track\"}]}"
+        printf '{"violations": [%s], "unconnected_items": [%s]}\n' "$violations" "$unconnected" > "$output"
     elif [ "$MODE" = drc-missing-key ]; then
         printf '{"violations": []}\n' > "$output"
     else

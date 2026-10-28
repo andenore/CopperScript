@@ -1,9 +1,9 @@
 //! Native filled-plane verification records (`pcbir.plane_verify`).
 //!
 //! The data types of a `kicad-cli` verification, as the routing report and the
-//! filled-copper feedback read them. Running `kicad-cli` itself
-//! (`verify_filled_planes`, `remove_native_dangling_tracks`) is ported with the
-//! filled-copper feedback.
+//! filled-copper feedback read them, running `kicad-cli` itself
+//! (`verify_filled_planes`) and the native dangling-copper cleanups
+//! (`remove_native_dangling_tracks`, `remove_native_dangling_copper`).
 
 use copper_json::{Dumps, Object, Value};
 use copper_pcb::board::PhysicalBoard;
@@ -241,7 +241,7 @@ pub fn kicad_export_digest(manifest: &copper_pcb::kicad_pcb::Manifest) -> String
 
 use std::path::{Path, PathBuf};
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 
 /// An exception `verify_filled_planes` raises, as Python's `str(exc)`:
 /// `RuntimeError`, `OSError` (a missing tool is `FileNotFoundError`), or a
@@ -696,4 +696,193 @@ impl Drop for TemporaryDirectory {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
+}
+
+/// `Counter(a) | Counter(b)`: the larger count of each object.
+fn counter_union<T: Clone + Eq + std::hash::Hash>(
+    first: &mut crate::dependency_reroute::Multiset<T>,
+    second: &crate::dependency_reroute::Multiset<T>,
+) {
+    for (item, count) in second {
+        let entry = first.entry(item.clone()).or_insert(0);
+        *entry = (*entry).max(*count);
+    }
+}
+
+/// The nets of exactly mapped native opens, or None (`opens` and
+/// `filled_feedback._open_nets`).
+pub fn mapped_open_nets(evidence: &PlaneVerification) -> Option<IndexSet<String>> {
+    let entries: Vec<_> = evidence.native_findings.iter().filter(|f| f.category == "unconnected").collect();
+    if entries.len() as i64 != evidence.unconnected_count
+        || entries.iter().any(|finding| {
+            finding.kind != "unconnected_items"
+                || finding.items.is_empty()
+                || finding.items.iter().any(|item| item.net.is_none() || item.kind == "unknown")
+        })
+    {
+        return None;
+    }
+    Some(entries.iter().flat_map(|f| f.items.iter().filter_map(|item| item.net.clone())).collect())
+}
+
+/// `remove_native_dangling_copper`: clean exact disposable ordinary native
+/// ends inside a repair transaction, each removal proven by a fresh refill
+/// (`verifier`).
+pub fn remove_native_dangling_copper(
+    board: &PhysicalBoard,
+    evidence: &PlaneVerification,
+    protected_tracks: &crate::dependency_reroute::Multiset<copper_pcb::board::TrackSegment>,
+    protected_vias: &crate::dependency_reroute::Multiset<copper_pcb::board::Via>,
+    eligible_nets: &std::collections::BTreeSet<String>,
+    verifier: &mut dyn FnMut(&PhysicalBoard) -> Result<PlaneVerification, NativeError>,
+) -> Result<(PhysicalBoard, PlaneVerification), NativeError> {
+    use crate::dependency_reroute::{multiset, subtract};
+    let unchanged = || Ok((board.clone(), evidence.clone()));
+    if !evidence.matches(board).map_err(NativeError::Pcb)? || evidence.island_count != 0 {
+        return unchanged();
+    }
+    let findings: Vec<&NativeFinding> = evidence.native_findings.iter().filter(|f| f.category == "violation").collect();
+    if findings.is_empty()
+        || findings.len() > 64
+        || findings.len() as i64 != evidence.other_violation_count
+        || findings.iter().any(|f| f.kind != "track_dangling" && f.kind != "via_dangling")
+    {
+        return unchanged();
+    }
+    let mut blocked = copper_pcb::zones::distribution_zone_nets(board);
+    blocked.extend(
+        board
+            .net_routing_rules
+            .iter()
+            .filter(|rule| rule.kind != copper_pcb::board::RouteKind::General)
+            .map(|rule| rule.net.clone()),
+    );
+    let mut tracks = protected_tracks.clone();
+    let mut vias = protected_vias.clone();
+    let pad_vias = crate::pad_via_arrays::via_in_pad_array_vias(board).map_err(NativeError::Pcb)?;
+    counter_union(&mut vias, &multiset(&pad_vias));
+    let placements: indexmap::IndexMap<String, copper_pcb::board::Placement> =
+        board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+    let (mut macro_tracks, mut macro_vias) =
+        (crate::dependency_reroute::Multiset::new(), crate::dependency_reroute::Multiset::new());
+    for hard in &board.hard_macros {
+        if board.materialized_macros.contains(&hard.cluster) {
+            let geometry =
+                copper_pcb::hard_macros::resolved_macro_geometry(board, hard, &placements).map_err(NativeError::Pcb)?;
+            for track in &geometry.tracks {
+                *macro_tracks.entry(track.clone()).or_insert(0) += 1;
+            }
+            for via in &geometry.vias {
+                *macro_vias.entry(via.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+    counter_union(&mut tracks, &macro_tracks);
+    counter_union(&mut vias, &macro_vias);
+    let objects = native_object_map(board).map_err(NativeError::Pcb)?;
+    let (mut segments, mut via_indices) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+    let mut affected: IndexSet<String> = IndexSet::new();
+    for finding in &findings {
+        let kind = if finding.kind == "track_dangling" { "segment" } else { "via" };
+        if finding.items.len() != 1 {
+            return unchanged();
+        }
+        let item = &finding.items[0];
+        let Some(index) = item.index else { return unchanged() };
+        if objects.get(&item.uuid) != Some(item)
+            || item.kind != kind
+            || item.net.as_ref().is_none_or(|net| !eligible_nets.contains(net) || blocked.contains(net))
+        {
+            return unchanged();
+        }
+        if kind == "segment" {
+            segments.insert(index)
+        } else {
+            via_indices.insert(index)
+        };
+        affected.insert(item.net.clone().expect("net"));
+    }
+    let removed_tracks = multiset(segments.iter().map(|&i| &board.tracks[i as usize]));
+    let removed_vias = multiset(via_indices.iter().map(|&i| &board.vias[i as usize]));
+    if !subtract(&removed_tracks, &subtract(&multiset(&board.tracks), &tracks)).is_empty()
+        || !subtract(&removed_vias, &subtract(&multiset(&board.vias), &vias)).is_empty()
+    {
+        return unchanged();
+    }
+    let mut candidate = board.clone();
+    candidate.tracks = board
+        .tracks
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !segments.contains(&(*i as i64)))
+        .map(|(_, t)| t.clone())
+        .collect();
+    candidate.vias = board
+        .vias
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !via_indices.contains(&(*i as i64)))
+        .map(|(_, v)| v.clone())
+        .collect();
+    for current in [board, &candidate] {
+        let graph = copper_drc::connectivity::explicit_copper_connectivity(
+            current,
+            copper_drc::connectivity::Candidate { only_nets: Some(&affected), ..Default::default() },
+        )
+        .map_err(|error| NativeError::Pcb(copper_pcb::Error::Value(error.to_string())))?;
+        if !board.nets.iter().filter(|net| affected.contains(&net.name)).all(|net| graph.net_connected(net)) {
+            return unchanged();
+        }
+    }
+    let Some(old_opens) = mapped_open_nets(evidence) else { return unchanged() };
+    let checked = verifier(&candidate)?;
+    let new_opens = mapped_open_nets(&checked);
+    if checked.matches(&candidate).map_err(NativeError::Pcb)?
+        && checked.island_count == 0
+        && checked.other_violation_count == 0
+        && new_opens.is_some_and(|new| new.is_subset(&old_opens))
+        && checked.unconnected_count <= evidence.unconnected_count
+    {
+        return Ok((candidate, checked));
+    }
+    unchanged()
+}
+
+/// `remove_native_dangling_tracks`: trim native ordinary dead ends; via
+/// removal needs explicit ownership guards. All rounds stay inside one
+/// transaction: only a fully clean fresh refill commits. The flag is whether
+/// the cleaned board was accepted.
+pub fn remove_native_dangling_tracks(
+    board: &PhysicalBoard,
+    evidence: &PlaneVerification,
+    protected: &crate::dependency_reroute::Multiset<copper_pcb::board::TrackSegment>,
+    protected_vias: Option<&crate::dependency_reroute::Multiset<copper_pcb::board::Via>>,
+    kicad_cli: &Path,
+    artifact_directory: Option<&Path>,
+    diagnostics: &mut Vec<Value>,
+) -> Result<(PhysicalBoard, PlaneVerification, bool), NativeError> {
+    let (mut current, mut checked) = (board.clone(), evidence.clone());
+    for index in 0..4 {
+        let Some(candidate) = crate::native_stub_cleanup::native_stub_candidate(
+            &current,
+            &checked,
+            protected,
+            protected_vias,
+            diagnostics,
+        )
+        .map_err(NativeError::Pcb)?
+        else {
+            break;
+        };
+        let stage = artifact_directory.map(|d| d.join(format!("round-{:03}", index + 1)));
+        checked = verify_filled_planes(&candidate, kicad_cli, 10, stage.as_deref())?;
+        if !checked.matches(&candidate).map_err(NativeError::Pcb)? {
+            break;
+        }
+        if checked.passed {
+            return Ok((candidate, checked, true));
+        }
+        current = candidate;
+    }
+    Ok((board.clone(), evidence.clone(), false))
 }

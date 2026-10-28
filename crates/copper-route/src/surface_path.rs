@@ -490,6 +490,49 @@ pub fn surface_path_between_counted(
     maximum_detour_nm: i64,
     state_budget: i64,
 ) -> Result<(Option<Vec<copper_pcb::board::TrackSegment>>, i64)> {
+    let search = surface_path_between_observed(
+        board,
+        clearance,
+        net,
+        start,
+        end,
+        width_nm,
+        layer,
+        step_nm,
+        maximum_detour_nm,
+        state_budget,
+        false,
+    )?;
+    Ok((search.path, search.expanded_states))
+}
+
+/// One `surface_path_between` search as its finished progress event reports it.
+#[derive(Clone, Debug)]
+pub struct SurfaceBridgeSearch {
+    pub path: Option<Vec<copper_pcb::board::TrackSegment>>,
+    pub expanded_states: i64,
+    /// `found`, `state_budget_exhausted` or `search_exhausted`.
+    pub outcome: &'static str,
+    /// The first 32 sampled rejection blockers by identity (with an observer).
+    pub blocker_records: Vec<crate::routing_clearance::RoutingBlocker>,
+}
+
+/// `surface_path_between` with an observer installed when `observed`: up to
+/// 16 rejected moves name their exact blockers.
+#[allow(clippy::too_many_arguments)]
+pub fn surface_path_between_observed(
+    board: &PhysicalBoard,
+    clearance: &crate::routing_clearance::RoutingClearanceIndex<'_>,
+    net: &str,
+    start: Point,
+    end: Point,
+    width_nm: i64,
+    layer: copper_physical::CopperLayer,
+    step_nm: i64,
+    maximum_detour_nm: i64,
+    state_budget: i64,
+    observed: bool,
+) -> Result<SurfaceBridgeSearch> {
     use std::cmp::Reverse;
     use std::collections::BinaryHeap;
     if step_nm <= 0 || maximum_detour_nm < 0 || state_budget <= 0 {
@@ -512,6 +555,8 @@ pub fn surface_path_between_counted(
     best.insert(initial, 0);
     parent.insert(initial, None);
     let mut expanded = 0;
+    let mut failure_blockers = std::collections::BTreeSet::new();
+    let mut rejection_samples = 0;
     while expanded < state_budget {
         let Some(Reverse((_, cost, x, y, heading))) = queue.pop() else { break };
         let state = (x, y, heading);
@@ -561,7 +606,12 @@ pub fn surface_path_between_counted(
                 }
                 if legal {
                     pieces.extend(tail);
-                    return Ok((Some(pieces), expanded));
+                    return Ok(SurfaceBridgeSearch {
+                        path: Some(pieces),
+                        expanded_states: expanded,
+                        outcome: "found",
+                        blocker_records: Vec::new(),
+                    });
                 }
             }
         }
@@ -579,6 +629,12 @@ pub fn surface_path_between_counted(
             if !track_inside_board(board, point, neighbor, width_nm)?
                 || !clearance.can_route(net, point, neighbor, width_nm, layer)?
             {
+                if observed && rejection_samples < 16 {
+                    rejection_samples += 1;
+                    for piece in clearance.route_pieces(net, point, neighbor, width_nm, layer)? {
+                        failure_blockers.extend(clearance.track_blocker_records(&piece)?);
+                    }
+                }
                 continue;
             }
             let difference = if heading >= 0 { (next_heading - heading).abs() } else { 0 };
@@ -593,5 +649,13 @@ pub fn surface_path_between_counted(
             queue.push(Reverse((candidate + heuristic(neighbor), candidate, nx, ny, next_heading)));
         }
     }
-    Ok((None, expanded))
+    let mut blocker_records: Vec<_> = failure_blockers.into_iter().collect();
+    blocker_records.sort_by(|a, b| a.identity.cmp(&b.identity).then_with(|| a.cmp(b)));
+    blocker_records.truncate(32);
+    Ok(SurfaceBridgeSearch {
+        path: None,
+        expanded_states: expanded,
+        outcome: if queue.is_empty() { "search_exhausted" } else { "state_budget_exhausted" },
+        blocker_records,
+    })
 }

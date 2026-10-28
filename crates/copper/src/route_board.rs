@@ -1104,7 +1104,7 @@ fn work_limits(arguments: &Arguments, direct: bool) -> Value {
 /// The output tail of the Python handler after `run_routing_pipeline`.
 fn finish(
     context: &TailContext<'_>,
-    result: copper_route::flow::RoutingPipelineResult,
+    mut result: copper_route::flow::RoutingPipelineResult,
     progress: &mut Option<&mut dyn Progress>,
 ) -> copper_pcb::Result<Finished> {
     use copper_route::flow::PhysicalFlowStatus;
@@ -1210,6 +1210,7 @@ fn finish(
                 Path::new(native_cli),
                 &options,
                 Some(&evidence_directory),
+                progress.as_mut().map(|p| &mut **p as &mut dyn Progress),
             )
         });
         let feedback = match outcome {
@@ -1219,27 +1220,11 @@ fn finish(
             }
             Err(error) => return Ok(Finished::PlaneError { message: error.to_string() }),
         };
+        result = feedback.pipeline.clone();
         output_board = feedback.board.clone();
         plane_verification = feedback.verification.clone();
         output_drc = copper_route::drc_report::run_physical_drc(&output_board, copper_drc::Policy::default())?;
-        if let Some(verification) = &plane_verification {
-            // `remove_native_dangling_tracks`: native_stub_candidate declines
-            // evidence without exactly identified dangling ends.
-            let findings = &verification.native_findings;
-            let eligible = verification.matches(&output_board)?
-                && verification.unconnected_count == 0
-                && verification.island_count == 0
-                && !findings.is_empty()
-                && findings.len() <= 64
-                && findings.len() as i64 == verification.other_violation_count
-                && findings.iter().all(|f| {
-                    f.category == "violation"
-                        && (f.kind == "track_dangling" || f.kind == "via_dangling")
-                        && f.items.len() == 1
-                });
-            if eligible {
-                return copper_pcb::not_implemented("native dangling-copper cleanup (native_stub_cleanup)");
-            }
+        if let Some(verification) = plane_verification.clone() {
             let mut protected = fixed.clone();
             let prefix = result.plane_stitch.as_ref().map_or(&result.critical.board, |stitch| &stitch.board);
             for track in &prefix.tracks {
@@ -1247,50 +1232,76 @@ fn finish(
                 let in_prefix = prefix.tracks.iter().filter(|t| *t == track).count() as i64;
                 *count = (*count).max(in_prefix);
             }
-            let mut protected_vias: indexmap::IndexMap<&copper_pcb::board::Via, i64> = indexmap::IndexMap::new();
-            for via in context.physical_board.vias.iter() {
-                *protected_vias.entry(via).or_insert(0) += 1;
-            }
-            let mut prefix_vias: indexmap::IndexMap<&copper_pcb::board::Via, i64> = indexmap::IndexMap::new();
-            for via in prefix.vias.iter() {
-                *prefix_vias.entry(via).or_insert(0) += 1;
-            }
-            for (via, count) in prefix_vias {
+            let mut protected_vias = copper_route::dependency_reroute::multiset(&context.physical_board.vias);
+            for (via, count) in copper_route::dependency_reroute::multiset(&prefix.vias) {
                 let entry = protected_vias.entry(via).or_insert(0);
                 *entry = (*entry).max(count);
             }
+            let mut diagnostics = Vec::new();
+            let cleanup = copper_route::plane_verify::remove_native_dangling_tracks(
+                &output_board,
+                &verification,
+                &protected,
+                Some(&protected_vias),
+                Path::new(native_cli),
+                Some(&evidence_directory.join("native-cleanup")),
+                &mut diagnostics,
+            );
+            let (cleaned, after, accepted) = match cleanup {
+                Ok(found) => found,
+                Err(NativeError::Pcb(copper_pcb::Error::NotImplemented(what))) => {
+                    return Err(copper_pcb::Error::NotImplemented(what));
+                }
+                Err(error) => return Ok(Finished::PlaneError { message: error.to_string() }),
+            };
+            let removed = |from: &[copper_pcb::board::TrackSegment], to: &[copper_pcb::board::TrackSegment]| {
+                copper_route::dependency_reroute::subtract(
+                    &copper_route::dependency_reroute::multiset(from),
+                    &copper_route::dependency_reroute::multiset(to),
+                )
+                .values()
+                .sum::<i64>()
+            };
+            let removed_vias = copper_route::dependency_reroute::subtract(
+                &copper_route::dependency_reroute::multiset(&output_board.vias),
+                &copper_route::dependency_reroute::multiset(&cleaned.vias),
+            )
+            .values()
+            .sum::<i64>();
             native_cleanup = Some(object_of(vec![
-                ("status", Value::from("unchanged")),
+                ("status", Value::from(if accepted { "accepted" } else { "unchanged" })),
                 ("before_digest", Value::from(verification.board_digest.as_str())),
-                ("after_digest", Value::from(verification.board_digest.as_str())),
+                ("after_digest", Value::from(after.board_digest.as_str())),
                 (
                     "before_artifact_directory",
                     verification.artifact_directory.as_deref().map_or(Value::Null, Value::from),
                 ),
-                (
-                    "after_artifact_directory",
-                    verification.artifact_directory.as_deref().map_or(Value::Null, Value::from),
-                ),
-                ("removed_track_occurrences", Value::from(0i64)),
-                ("added_track_occurrences", Value::from(0i64)),
-                ("removed_via_occurrences", Value::from(0i64)),
-                (
-                    "diagnostics",
-                    Value::Array(vec![object_of(vec![("reason", Value::from("native_evidence_not_eligible"))])]),
-                ),
+                ("after_artifact_directory", after.artifact_directory.as_deref().map_or(Value::Null, Value::from)),
+                ("removed_track_occurrences", Value::from(removed(&output_board.tracks, &cleaned.tracks))),
+                ("added_track_occurrences", Value::from(removed(&cleaned.tracks, &output_board.tracks))),
+                ("removed_via_occurrences", Value::from(removed_vias)),
+                ("diagnostics", Value::Array(diagnostics)),
                 ("protected_tracks", Value::from(protected.values().sum::<i64>())),
                 ("protected_vias", Value::from(protected_vias.values().sum::<i64>())),
             ]));
+            if !after.matches(&cleaned)? {
+                return Ok(Finished::PlaneError { message: "native cleanup verification is stale".to_owned() });
+            }
+            if accepted {
+                output_board = cleaned;
+                output_drc = copper_route::drc_report::run_physical_drc(&output_board, copper_drc::Policy::default())?;
+            }
             emit(
                 progress,
                 "independent_kicad",
                 "finished",
                 vec![
-                    ("passed", Value::Bool(verification.passed)),
-                    ("unconnected", Value::from(verification.unconnected_count)),
-                    ("other_violations", Value::from(verification.other_violation_count)),
+                    ("passed", Value::Bool(after.passed)),
+                    ("unconnected", Value::from(after.unconnected_count)),
+                    ("other_violations", Value::from(after.other_violation_count)),
                 ],
             );
+            plane_verification = Some(after);
         }
         filled_feedback = Some(feedback);
     }
