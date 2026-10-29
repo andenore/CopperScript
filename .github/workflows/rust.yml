@@ -23,6 +23,9 @@ on:
       - 'pcbir/**'
       - 'copperscript/**'
       - 'examples/**'
+      - 'tests/**'
+      - 'scripts/ci_install_kicad10.sh'
+      - '.github/board-toolchain.json'
       - 'pyproject.toml'
   pull_request:
     paths:
@@ -41,6 +44,9 @@ on:
       - 'pcbir/**'
       - 'copperscript/**'
       - 'examples/**'
+      - 'tests/**'
+      - 'scripts/ci_install_kicad10.sh'
+      - '.github/board-toolchain.json'
       - 'pyproject.toml'
   workflow_dispatch:
 
