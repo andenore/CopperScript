@@ -107,6 +107,35 @@
    ]
   },
   {
+   "name": "fx10-bridge",
+   "project": "../examples/fx10_bridge",
+   "tags": [
+    "medium",
+    "examples",
+    "bga"
+   ],
+   "timeout_s": 1800,
+   "args": [
+    "--locked",
+    "--offline",
+    "--layers",
+    "6",
+    "--fab-profile",
+    "jlcpcb-six-layer",
+    "--candidates",
+    "1",
+    "--feedback-iterations",
+    "1",
+    "--router-iterations",
+    "5",
+    "--progress",
+    "--fanout",
+    "--via-lattice",
+    "--plane-contact-radius-mm",
+    "5"
+   ]
+  },
+  {
    "name": "led-ring",
    "project": "${COPPER_BOARDS}/CopperLedRing",
    "tags": [
