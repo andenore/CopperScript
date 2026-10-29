@@ -951,3 +951,33 @@ Ladder after the port (Python vs Rust seconds): round-led-ring equal
 (43.8 vs 8.4), nrf52 equal (14.4 vs 3.2), full-vertical equal (175.7 vs
 26.3), cm4 equal (10.1 vs 2.8); with the zone-open stand-in, led-ring equal
 (18.2 vs 2.6) and asset-tracker equal (1704 vs 208).
+
+### Nested fine-region lattice and ball-grid features (`rust-fine-lattice`, 2026-10-29)
+
+Ported the unified router's nested-lattice path: the router holds either
+lattice (`unified_router/lattice.rs`) and builds the `NestedLattice` of a
+fine-region plan with patches (per-block raster margins, shadowed nodes),
+with `_zone_regions_nested`, `_open_space_nested` (`_label_nested` across
+portals, areas in base cells), `_finish_route_nested`, the weighted lead
+penalty, the C kernel's nested specialisation (block tables, portal twins
+at cost 0, base-pitch heuristic, `[block][layer][move]` costs),
+`penalise_points`, the congestion map's column weights and the
+`unified_setup` patch report. Also ported: `ball_field_via_sites`
+(`_ball_field_via_mask`), `exit_reservation_cost` (`_seed_exit_corridors`),
+`power_islands.plan_ball_grid_islands` and `ball_grid_rails` (flow and
+`replay-unified --power-islands` with `power_islands_ball_grid_only`);
+route-board's `_fine_region_report` guard is gone. No new exits 3 remain
+for these paths.
+
+New corpus inputs: hand-built states `bga_nested` (5x5 ball array, nested
+by default) and `bga_power` (6x6 grid with decoupled ball rails on a B.Cu
+plane), built by `generate.py`'s `SYNTHETIC`. New replay-unified-options
+cases (fine_regions=dense on nrf52, round_led_ring, bga_nested;
+fine_regions=off; via sites with and without a band; exit reservations;
+ball-grid islands alone and combined) and route-board-options nrf52 with
+fine_regions=dense: all equal. Default gate 3174 equal / 33 accepted;
+route-board* and replay-unified* 332 equal / 1 accepted / 1 pending
+(the existing `option-text-pitch` malformed state).
+
+CopperProbe's ladder entry was not run: the session could not attach the
+private repository, so the BUFFER critical-routing nested case is unchecked.

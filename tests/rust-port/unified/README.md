@@ -27,6 +27,15 @@ Each board runs, from a scratch directory, with `PYTHONUTF8=1 PYTHONHASHSEED=0`:
 | `nrf52` | `examples/nrf52_coin_cell/board.copper` | `--locked --offline --layers 6 --fab-profile jlcpcb-six-layer --width-mm 50 --height-mm 40` |
 | `via_array` | `tests/rust-port/export-kicad-pcb/via_array.copper` | `--locked --offline --layers 6 --fab-profile jlcpcb-six-layer` (a committed 2x2 via-in-pad array; `malformed/via-array-*` and `variants/via-array-*` change its rule and array vias) |
 
+Two states hold hand-built boards (`generate.py`'s `SYNTHETIC`, built with
+the test suite's ball-grid helpers; the state holds the board, its global
+route at 2 mm tiles and the default options, written without routing):
+
+| Name | Board |
+|---|---|
+| `bga_nested` | `test_unified_nested_routing._bga_board()`: a 5x5 0.75 mm ball array fanned out to a ring of pads on 4 layers; the default `fine_regions="arrays"` routes it on a nested lattice |
+| `bga_power` | `test_escape_plan.ball_grid(6, "0.45", plane={1})` plus capacitors decoupling rails `N8` and `N29` against the B.Cu `GND` plane: the ball-grid power islands (`--power-islands B.Cu` with `power_islands_ball_grid_only`), `ball_field_via_sites` and `exit_reservation_cost` |
+
 `routing`, `six_layer`, `zones`, `round_led_ring` and `nrf52` leave nets
 unrouted (route-board exits 1); their states are complete inputs either way.
 The nRF52 board with proxy footprints fails before routing (macro footprint

@@ -284,15 +284,34 @@ fn congestion_map(router: &mut Router<'_, '_>, failed: &[String], tile_nm: i64) 
         }
     }
     let g = &router.lattice;
-    let tx: Vec<i64> = (0..g.nx).map(|i| (i * g.pitch).div_euclid(tile_nm)).collect();
-    let ty: Vec<i64> = (0..g.ny).map(|i| (i * g.pitch).div_euclid(tile_nm)).collect();
-    let (tiles_x, tiles_y) = (*tx.last().expect("nx") as usize + 1, *ty.last().expect("ny") as usize + 1);
-    let mut tile_ids = Vec::with_capacity(plane);
-    for &y in &ty {
-        for &x in &tx {
-            tile_ids.push(y as usize * tiles_x + x as usize);
+    let mut weight: Option<Vec<f64>> = None;
+    let (tiles_x, tiles_y, tile_ids) = match g.as_nested() {
+        Some(nested) => {
+            let tx: Vec<i64> = nested.column_x.iter().map(|x| (x - nested.x0).div_euclid(tile_nm)).collect();
+            let ty: Vec<i64> = nested.column_y.iter().map(|y| (y - nested.y0).div_euclid(tile_nm)).collect();
+            let tiles_x = *tx.iter().max().expect("columns") as usize + 1;
+            let tiles_y = *ty.iter().max().expect("columns") as usize + 1;
+            let ids = tx.iter().zip(&ty).map(|(&x, &y)| y as usize * tiles_x + x as usize).collect();
+            let column_weight = nested.column_weight();
+            for (demand, w) in node_demand.iter_mut().zip(&column_weight) {
+                *demand *= w;
+            }
+            weight = Some(column_weight);
+            (tiles_x, tiles_y, ids)
         }
-    }
+        None => {
+            let tx: Vec<i64> = (0..g.nx).map(|i| (i * g.pitch).div_euclid(tile_nm)).collect();
+            let ty: Vec<i64> = (0..g.ny).map(|i| (i * g.pitch).div_euclid(tile_nm)).collect();
+            let (tiles_x, tiles_y) = (*tx.last().expect("nx") as usize + 1, *ty.last().expect("ny") as usize + 1);
+            let mut ids = Vec::with_capacity(plane);
+            for &y in &ty {
+                for &x in &tx {
+                    ids.push(y as usize * tiles_x + x as usize);
+                }
+            }
+            (tiles_x, tiles_y, ids)
+        }
+    };
     let count = tiles_x * tiles_y;
     let mut demand = vec![0.0f64; count];
     for (id, value) in tile_ids.iter().zip(&node_demand) {
@@ -309,7 +328,11 @@ fn congestion_map(router: &mut Router<'_, '_>, failed: &[String], tile_nm: i64) 
     let mut capacity = vec![0.0f64; count];
     for (column, id) in tile_ids.iter().enumerate() {
         let free = layers.iter().filter(|&&layer| owner[layer * plane + column] == FREE).count();
-        capacity[*id] += free as f64 / lane;
+        let lanes = free as f64 / lane;
+        capacity[*id] += match &weight {
+            Some(weight) => lanes * weight[column],
+            None => lanes,
+        };
     }
     let rows = |values: Vec<f64>| values.chunks(tiles_x).map(<[f64]>::to_vec).collect::<Vec<_>>();
     let g = &router.lattice;
@@ -662,17 +685,33 @@ pub fn route_unified(
     if options.export_congestion && options.congestion_tile_nm < router.pitch {
         return fail("congestion_tile_nm must be at least the router pitch");
     }
+    // The base block's shape; on a nested lattice also the patches and node counts.
     let lattice = &router.lattice;
-    emit(
-        &mut on_progress,
-        "unified_setup",
-        "finished",
-        vec![
-            ("nets", int(router.specs.len() as i64)),
-            ("grid", Value::Array(vec![int(lattice.nx), int(lattice.ny), int(lattice.nl)])),
-            ("seconds", Value::Float(0.0)),
-        ],
-    );
+    let mut setup = vec![
+        ("nets", int(router.specs.len() as i64)),
+        ("grid", Value::Array(vec![int(lattice.nx), int(lattice.ny), int(lattice.nl)])),
+    ];
+    if let Some(nested) = lattice.as_nested() {
+        let patches = nested.blocks[1..]
+            .iter()
+            .map(|block| {
+                Value::Object(Object::from([
+                    ("x0".to_owned(), Value::Float(block.x0 as f64 / 1e6)),
+                    ("y0".to_owned(), Value::Float(block.y0 as f64 / 1e6)),
+                    ("x1".to_owned(), Value::Float(block.x1 as f64 / 1e6)),
+                    ("y1".to_owned(), Value::Float(block.y1 as f64 / 1e6)),
+                    ("factor".to_owned(), int(block.factor)),
+                    ("nodes".to_owned(), int(block.plane * nested.nl)),
+                ]))
+            })
+            .collect();
+        setup.push(("patches", Value::Array(patches)));
+        setup.push(("nodes", int(nested.size)));
+        let finest = router.fine_plan.as_ref().expect("fine plan").uniform_nodes_at_finest;
+        setup.push(("uniform_nodes_at_finest", int(finest)));
+    }
+    setup.push(("seconds", Value::Float(0.0)));
+    emit(&mut on_progress, "unified_setup", "finished", setup);
     let (routes, conflicts, mut iterations) = router.negotiate(deadline, None, &mut events)?;
     forward(&mut on_progress, &mut events);
     let (mut accepted, mut rejected, mut complete) = router.commit(&routes, &conflicts)?;

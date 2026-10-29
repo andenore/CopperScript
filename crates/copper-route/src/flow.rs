@@ -633,11 +633,12 @@ fn complete_critical_stage(
         };
         if let Some(layer) = layer {
             emit(on_progress, "power_islands", "started", vec![("layer", text(layer.value()))]);
-            if unified_options.power_islands_ball_grid_only {
-                return copper_pcb::not_implemented("power_islands.plan_ball_grid_islands");
+            let partition = if unified_options.power_islands_ball_grid_only {
+                crate::power_islands::plan_ball_grid_islands(&critical.board, layer)
+            } else {
+                crate::power_islands::plan_power_islands(&critical.board, layer)
             }
-            let partition = crate::power_islands::plan_power_islands(&critical.board, layer)
-                .map_err(|error| Error::NotImplemented(error.crash_line()))?;
+            .map_err(|error| Error::NotImplemented(error.crash_line()))?;
             critical.board.zones.extend(partition.zones.iter().cloned());
             emit(on_progress, "power_islands", "finished", partition.report());
         }

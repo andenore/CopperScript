@@ -92,7 +92,58 @@ fn octile(x: i64, y: i64, (tx0, ty0, tx1, ty1): (i64, i64, i64, i64)) -> f64 {
     if hx > hy { hx as f64 + 0.41421356 * hy as f64 } else { hy as f64 + 0.41421356 * hx as f64 }
 }
 
-/// Everything one search reads (the kernel's arguments on a uniform lattice).
+/// Nested lattice: `key_f`, the heap key of cost `c` at a column's point
+/// `(u, v)` in base pitches, `(c + max) + 0.41421356 * min`.
+fn key_f(c: f64, u: f64, v: f64, (tx0, ty0, tx1, ty1): (f64, f64, f64, f64)) -> f64 {
+    let hx = if u < tx0 {
+        tx0 - u
+    } else if u > tx1 {
+        u - tx1
+    } else {
+        0.0
+    };
+    let hy = if v < ty0 {
+        ty0 - v
+    } else if v > ty1 {
+        v - ty1
+    } else {
+        0.0
+    };
+    if hx > hy { (c + hx) + 0.41421356 * hy } else { (c + hy) + 0.41421356 * hx }
+}
+
+/// Nested lattice: `h_f`, the bare octile distance `max + 0.41421356 * min`.
+fn h_f(u: f64, v: f64, (tx0, ty0, tx1, ty1): (f64, f64, f64, f64)) -> f64 {
+    let hx = if u < tx0 {
+        tx0 - u
+    } else if u > tx1 {
+        u - tx1
+    } else {
+        0.0
+    };
+    let hy = if v < ty0 {
+        ty0 - v
+    } else if v > ty1 {
+        v - ty1
+    } else {
+        0.0
+    };
+    if hx > hy { hx + 0.41421356 * hy } else { hy + 0.41421356 * hx }
+}
+
+/// A nested lattice's block tables (`NestedLattice::kernel_tables`).
+pub struct NestedTables<'a> {
+    /// Per block: first column, nx and ny.
+    pub blocks: &'a [i32],
+    pub block_of: &'a [u8],
+    pub ux: &'a [f64],
+    pub uy: &'a [f64],
+    pub twins: &'a [i32],
+    /// Per block the 8 move lengths in base pitches.
+    pub steps: &'a [f64],
+}
+
+/// Everything one search reads (the kernel's arguments).
 pub struct SearchInput<'a> {
     pub nx: i64,
     pub ny: i64,
@@ -122,6 +173,9 @@ pub struct SearchInput<'a> {
     /// `None` altogether: through vias only.
     pub via_transitions: Option<&'a [Option<&'a [i32]>]>,
     pub max_expansions: i64,
+    /// A nested lattice's tables (`move_base` is then `[block][layer][move]`);
+    /// `None` on a uniform lattice.
+    pub nested: Option<NestedTables<'a>>,
 }
 
 /// Reusable search state (`best`, `parent`).
@@ -151,6 +205,9 @@ pub fn search(input: &SearchInput<'_>, scratch: &mut Scratch) -> Option<Vec<i64>
 }
 
 fn run(input: &SearchInput<'_>, scratch: &mut Scratch) -> Option<Vec<i64>> {
+    if let Some(tables) = &input.nested {
+        return run_nested(input, tables, scratch);
+    }
     let nx = input.nx;
     let plane = nx * input.ny;
     let (bx0, by0, bx1, by1) = input.bbox;
@@ -277,6 +334,210 @@ fn run(input: &SearchInput<'_>, scratch: &mut Scratch) -> Option<Vec<i64>> {
             }
             if let Some(transitions) = input.via_transitions {
                 match transitions[layer as usize * input.nl + layer2 as usize] {
+                    Some(mask) if mask[rest as usize] == -1 || mask[rest as usize] == input.nid => {}
+                    _ => continue,
+                }
+            }
+            let n2 = (layer2 * plane + rest) as usize;
+            if entry & 0x100 != 0 && input.flags[n2] & FLAG_TARGET == 0 {
+                continue;
+            }
+            let o = input.owner[n2];
+            if o != -1 && o != input.nid {
+                continue;
+            }
+            let c = cost + vpen * (1.0 + input.hist[n2]) * (1.0 + input.present * input.occ[n2] as f64);
+            if c < best[n2] {
+                if best[n2] >= INF {
+                    touched.push(n2);
+                }
+                best[n2] = c;
+                parent[n2] = node as i32;
+                heap_push(heap, Entry { key: c + h, g: c, node: n2 as i32 });
+            }
+        }
+    }
+    if found < 0 {
+        return None;
+    }
+    let mut path = Vec::new();
+    let mut node = found;
+    while node != -1 {
+        path.push(node);
+        node = parent[node as usize] as i64;
+    }
+    path.reverse();
+    Some(path)
+}
+
+/// The kernel's nested specialisation (`_astar_nested`'s semantics): moves
+/// stay in a node's block, a portal twin is reached at cost 0 on the same
+/// layer, and the heuristic is in base pitches.
+fn run_nested(input: &SearchInput<'_>, tables: &NestedTables<'_>, scratch: &mut Scratch) -> Option<Vec<i64>> {
+    let nl = input.nl;
+    let blocks = tables.blocks;
+    let last = blocks.len() - 3;
+    let plane = (blocks[last] + blocks[last + 1] * blocks[last + 2]) as i64;
+    let (bx0, by0, bx1, by1) = input.bbox;
+    let (fbx0, fby0, fbx1, fby1) = (bx0 as f64, by0 as f64, bx1 as f64, by1 as f64);
+    let t = input.tbox;
+    let ftbox = (t.0 as f64, t.1 as f64, t.2 as f64, t.3 as f64);
+    let (ux, uy) = (tables.ux, tables.uy);
+    let Scratch { best, parent, heap, touched } = scratch;
+    let mut allowed = [0u8; 64];
+    for &layer in input.layers {
+        allowed[(layer & 0xff) as usize] = if layer & 0x100 != 0 { 2 } else { 1 };
+    }
+    for &(node, source_cost) in input.sources {
+        let (layer, rest) = (node / plane, (node % plane) as usize);
+        let index = node as usize;
+        if allowed[layer as usize] == 0 || source_cost >= best[index] {
+            continue;
+        }
+        if best[index] >= INF {
+            touched.push(index);
+        }
+        best[index] = source_cost;
+        parent[index] = -1;
+        let key = key_f(source_cost, ux[rest], uy[rest], ftbox);
+        heap_push(heap, Entry { key, g: source_cost, node: node as i32 });
+    }
+    let mut expansions = 0i64;
+    let mut found: i64 = -1;
+    while !heap.is_empty() {
+        let entry = heap_pop(heap);
+        let node = entry.node as i64;
+        let cost = entry.g;
+        if node < 0 {
+            found = -node - 1;
+            break;
+        }
+        let index = node as usize;
+        if cost > best[index] {
+            continue;
+        }
+        if input.flags[index] & FLAG_TARGET != 0 {
+            let Some(extra) = input.target_extra else {
+                found = node;
+                break;
+            };
+            let total = cost + extra[index];
+            heap_push(heap, Entry { key: total, g: total, node: (-node - 1) as i32 });
+        }
+        expansions += 1;
+        if expansions > input.max_expansions {
+            break;
+        }
+        let (layer, rest) = (node / plane, node % plane);
+        let b = tables.block_of[rest as usize] as usize;
+        let local = rest - blocks[3 * b] as i64;
+        let (nxb, nyb) = (blocks[3 * b + 1] as i64, blocks[3 * b + 2] as i64);
+        let (y, x) = (local / nxb, local % nxb);
+        let target_only = allowed[layer as usize] == 2;
+        let here_in_region = input.flags[index] & FLAG_REGION != 0;
+        let here_neck_only = here_in_region && input.flags[index] & FLAG_NECK != 0;
+        let at = (b * nl + layer as usize) * 8;
+        let base = &input.move_base[at..at + 8];
+        let step = &tables.steps[8 * b..8 * b + 8];
+        // Turn cost from the heading of this node's best parent, which must
+        // lie in the node's block.
+        let mut turn_row: Option<&[f64]> = None;
+        if let Some(turn) = input.turn {
+            let p = parent[index] as i64;
+            if p >= 0 && p / plane == layer && tables.block_of[(p - layer * plane) as usize] as usize == b {
+                let d = node - p;
+                for m in 0..8 {
+                    if d == DY[m] * nxb + DX[m] {
+                        turn_row = Some(&turn[8 * m..8 * m + 8]);
+                        break;
+                    }
+                }
+            }
+        }
+        for m in 0..8 {
+            let (x2, y2) = (x + DX[m], y + DY[m]);
+            let dn = DY[m] * nxb + DX[m];
+            if x2 < 0 || x2 >= nxb || y2 < 0 || y2 >= nyb {
+                continue;
+            }
+            let rest2 = (rest + dn) as usize;
+            let (u, v) = (ux[rest2], uy[rest2]);
+            if u < fbx0 || u > fbx1 || v < fby0 || v > fby1 {
+                continue;
+            }
+            let n2 = (node + dn) as usize;
+            if target_only && input.flags[n2] & FLAG_TARGET == 0 {
+                continue;
+            }
+            if here_neck_only && input.flags[n2] & FLAG_REGION == 0 {
+                continue;
+            }
+            let o = input.owner[n2];
+            if o != -1 && o != input.nid && !(here_in_region && input.flags[n2] & FLAG_NECK != 0) {
+                continue;
+            }
+            if DX[m] != 0 && DY[m] != 0 {
+                let cell = (node + (if DY[m] > 0 { 0 } else { -1 }) * nxb + if DX[m] > 0 { 0 } else { -1 }) as usize;
+                let o = input.mid_owner[cell];
+                if o != -1
+                    && o != input.nid
+                    && !(here_in_region && input.flags[n2] & FLAG_REGION != 0 && input.flags[cell] & FLAG_NECK_MID != 0)
+                {
+                    continue;
+                }
+            }
+            let mut c = cost + base[m] * (1.0 + input.hist[n2]) * (1.0 + input.present * input.occ[n2] as f64);
+            if let Some(row) = turn_row {
+                c += row[m];
+            }
+            if let Some(guide) = input.guide {
+                c += step[m] * guide[n2];
+            }
+            if c < best[n2] {
+                if best[n2] >= INF {
+                    touched.push(n2);
+                }
+                best[n2] = c;
+                parent[n2] = node as i32;
+                let key = key_f(c, u, v, ftbox);
+                heap_push(heap, Entry { key, g: c, node: n2 as i32 });
+            }
+        }
+        let h = h_f(ux[rest as usize], uy[rest as usize], ftbox);
+        // Portal: the coincident node of the other block, at no cost (no
+        // heading, turn or guide term); the target-only, neck and owner
+        // rules still apply to the twin.
+        let twin = tables.twins[rest as usize];
+        if twin >= 0 {
+            let n2 = (node - rest + twin as i64) as usize;
+            let o = input.owner[n2];
+            if !(target_only && input.flags[n2] & FLAG_TARGET == 0)
+                && !(here_neck_only && input.flags[n2] & FLAG_REGION == 0)
+                && (o == -1 || o == input.nid || (here_in_region && input.flags[n2] & FLAG_NECK != 0))
+                && cost < best[n2]
+            {
+                if best[n2] >= INF {
+                    touched.push(n2);
+                }
+                best[n2] = cost;
+                parent[n2] = node as i32;
+                heap_push(heap, Entry { key: cost + h, g: cost, node: n2 as i32 });
+            }
+        }
+        let vo = input.via_owner[rest as usize];
+        if input.via_transitions.is_none() && vo != -1 && vo != input.nid {
+            continue;
+        }
+        let vpen = input.via_cost
+            * (1.0 + input.via_hist[rest as usize])
+            * (1.0 + input.present * input.via_occ[rest as usize] as f64);
+        for &entry in input.layers {
+            let layer2 = (entry & 0xff) as i64;
+            if layer2 == layer {
+                continue;
+            }
+            if let Some(transitions) = input.via_transitions {
+                match transitions[layer as usize * nl + layer2 as usize] {
                     Some(mask) if mask[rest as usize] == -1 || mask[rest as usize] == input.nid => {}
                     _ => continue,
                 }
