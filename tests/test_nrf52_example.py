@@ -115,3 +115,18 @@ def test_example_cli_retains_incomplete_signoff_and_performance_profile(tmp_path
     assert json.loads((tmp_path / "erc.json").read_text(encoding="utf-8"))["findings"] == []
     assert (tmp_path / "profile.pstats").is_file()
     assert "make_example" in (tmp_path / "profile.txt").read_text(encoding="utf-8")
+
+
+def test_example_route_uses_selected_rust_binary_and_preserves_failure(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from examples.nrf52_coin_cell import nrf52_example as example
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        assert kwargs == {"check": False}
+        return SimpleNamespace(returncode=3)
+    monkeypatch.setattr(example.subprocess, "run", run)
+    compiler = str(tmp_path / "Rust compiler.exe")
+    assert example.main(["--route", "--copper", compiler, "--output-dir", str(tmp_path), "--offline"]) == 3
+    assert calls[0][:2] == [compiler, "route-board"] and "--offline" in calls[0]
+    assert not (tmp_path / "profile.pstats").exists()
