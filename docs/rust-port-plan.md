@@ -692,7 +692,6 @@ do not shrink as much.
   (`plane.stitch_zone_pads`, rust-m4-flow) and length-match tuning over the
   limit.
 
-
 **M3 stream: the physical editor (branch `rust-m4-editor`).**
 
 - `copper-editor` ports `pcbir.editor` for an opened board session:
@@ -738,7 +737,6 @@ do not shrink as much.
   macro previews, and the macro preview of a board whose nets all stay
   inside its macros. The HTTP server exits 3 with the marker on stderr
   when a request reaches one of them.
-
 
 **M4 stream: the decoupler router (branch `rust-m4-decoupling`).**
 
@@ -1052,3 +1050,16 @@ replay-unified* and route-board* suites. nrf52 with a 2x2 array: route-board
 equal (11.0 vs 1.3 s); full-vertical with an array in the modem's exposed
 pad: plan-layout equal (both reject the site, 90 vs 16 s). CopperBench was
 not run (the repository could not be attached in this session).
+
+### Main sync: via paths in length-match lengths (`rust-main-sync2`, 2026-10-29)
+
+Ported b16122a: a `length_match` member's length is its routed track length
+plus, for each of its vias, the depth between the outermost copper layers its
+tracks end on there (`copper_layer_depths_nm`, `via_length_nm`,
+`routed_match_length_nm` in `copper_drc::signal_integrity`). Verification
+(`verify_match_groups`, so DRC, `si-check` and the critical review), the
+final group tuning and tuning while routing (`_via_lengths` in
+`critical_match.rs`) use it. The synthetic `crossing-tuned` replay follows
+the updated test (a 1.2 mm amplitude limit); `crossing-tuning-short` keeps
+the old 0.8 mm limit, which now fails for insufficient room. A track on a
+layer outside the stack-up, where Python raises `KeyError`, exits 3.

@@ -44,6 +44,27 @@ fn net_length(copper: &[&TrackSegment], net: &str) -> i64 {
     track_length(&items)
 }
 
+/// `_via_lengths`: each net's via path length in `tracks`/`vias`. Tuning
+/// never moves vias, so a `length_match` member's length is its track length
+/// plus this constant.
+fn via_lengths<'v>(
+    board: &PhysicalBoard,
+    tracks: &[&TrackSegment],
+    vias: impl IntoIterator<Item = &'v Via>,
+    nets: &[String],
+) -> Result<IndexMap<String, i64>> {
+    let vias: Vec<&Via> = vias.into_iter().collect();
+    nets.iter()
+        .map(|net| {
+            Ok((net.clone(), copper_drc::signal_integrity::via_path_length_nm(&board.stackup, tracks, &vias, net)?))
+        })
+        .collect()
+}
+
+fn committed_vias<'c>(base_vias: &'c [Via], committed: &'c Committed) -> impl Iterator<Item = &'c Via> {
+    base_vias.iter().chain(committed.iter().flat_map(|(_, _, items)| items.iter()))
+}
+
 fn copper_of<'c>(base_tracks: &'c [TrackSegment], committed: &'c Committed) -> Vec<&'c TrackSegment> {
     base_tracks.iter().chain(committed.iter().flat_map(|(_, items, _)| items.iter())).collect()
 }
@@ -219,8 +240,10 @@ pub(crate) fn tune_match_groups(
         let mut after = lengths.clone();
         if let Some(candidate) = &trial {
             let copper = copper_of(base_tracks, candidate);
+            let current_tracks: Vec<&TrackSegment> = current.tracks.iter().collect();
+            let via_paths = via_lengths(board, &current_tracks, &current.vias, &group.nets)?;
             for net in &group.nets {
-                after.insert(net.clone(), net_length(&copper, net));
+                after.insert(net.clone(), net_length(&copper, net) + via_paths[net.as_str()]);
             }
             let skew_after = spread(&after);
             if skew_after > group.max_skew_nm {
@@ -334,14 +357,16 @@ pub(crate) fn tune_bundle_pairs(
 ) -> Result<bool> {
     let members: IndexSet<String> = group.nets.iter().cloned().collect();
     let mut lengths: IndexMap<String, i64> = IndexMap::new();
-    {
+    let via_paths = {
         let copper = copper_of(base_tracks, committed);
+        let via_paths = via_lengths(board, &copper, committed_vias(base_vias, committed), &group.nets)?;
         for net in &group.nets {
             if copper.iter().any(|t| t.net == *net) {
-                lengths.insert(net.clone(), net_length(&copper, net));
+                lengths.insert(net.clone(), net_length(&copper, net) + via_paths[net.as_str()]);
             }
         }
-    }
+        via_paths
+    };
     let Some(longest) = lengths.values().max().copied() else {
         return Err(Error::Value("max() iterable argument is empty".to_owned()));
     };
@@ -393,7 +418,7 @@ pub(crate) fn tune_bundle_pairs(
             committed[*index].1 = proposed[index].clone();
             let candidate = candidates[&unit].clone();
             for (net, length) in candidate.nets.iter().zip(&candidate.lengths_nm) {
-                lengths.insert(net.clone(), *length);
+                lengths.insert(net.clone(), length + via_paths.get(net).copied().unwrap_or(0));
             }
             results[result_index[&unit]] = candidate;
         }
@@ -438,7 +463,7 @@ pub(crate) fn tune_bundle_pairs(
         tuning.as_routed.entry(unit.clone()).or_insert((committed[index].1.clone(), result));
         committed[index].1 = proposed;
         for (net, length) in candidate.nets.iter().zip(&candidate.lengths_nm) {
-            lengths.insert(net.clone(), *length);
+            lengths.insert(net.clone(), length + via_paths.get(net).copied().unwrap_or(0));
         }
         results[result_index[&unit]] = candidate;
         tuning.early.push(step(unit, "routing", &plan, added, ""));
@@ -506,6 +531,7 @@ fn tune_match_group(
     let mut attempts: IndexMap<String, TuningGroupOutcome> = IndexMap::new();
     let breakout = BreakoutRegions::new(board);
     let mut lengths = lengths.clone();
+    let via_paths = via_lengths(board, &copper_of(base_tracks, committed), committed_vias(base_vias, committed), nets)?;
     for (name, group_units) in tuning_groups(rules, nets) {
         let positions: Vec<usize> =
             units.iter().copied().filter(|index| group_units.contains(&trial[*index].0)).collect();
@@ -546,7 +572,7 @@ fn tune_match_group(
             trial[*index].1 = proposed[index].clone();
             let candidate = candidates[&unit].clone();
             for (net, length) in candidate.nets.iter().zip(&candidate.lengths_nm) {
-                lengths.insert(net.clone(), *length);
+                lengths.insert(net.clone(), length + via_paths.get(net).copied().unwrap_or(0));
             }
             tuned.insert(unit, candidate);
         }

@@ -373,6 +373,47 @@ def routed_track_length_nm(board: PhysicalBoard, net: str) -> int:
                for track in board.tracks if track.net == net)
 
 
+def copper_layer_depths_nm(stackup) -> dict:
+    """Depth of each copper layer's centre below the top surface.
+
+    From the declared physical layers when they name every copper layer,
+    else with the copper layers spread evenly over the board thickness.
+    """
+    depths, depth = {}, 0
+    for layer in stackup.physical_layers:
+        if layer.copper_layer is not None:
+            depths[layer.copper_layer] = depth + layer.thickness_nm // 2
+        depth += layer.thickness_nm
+    if set(depths) >= set(stackup.copper_layers):
+        return depths
+    count = len(stackup.copper_layers)
+    return {layer: stackup.thickness_nm * index // max(1, count - 1)
+            for index, layer in enumerate(stackup.copper_layers)}
+
+
+def via_length_nm(board: PhysicalBoard, net: str) -> int:
+    """Signal path the vias of ``net`` add: for each via, the depth between the
+    outermost copper layers whose tracks end on it (none for a via its tracks
+    meet on one layer only)."""
+    depths = copper_layer_depths_nm(board.stackup)
+    tracks = [track for track in board.tracks if track.net == net]
+    total = 0
+    for via in board.vias:
+        if via.net != net:
+            continue
+        reach = via.size_nm // 2
+        layers = {track.layer for track in tracks for end in (track.start, track.end)
+                  if hypot(end.x_nm - via.position.x_nm, end.y_nm - via.position.y_nm) <= reach}
+        if len(layers) > 1:
+            total += max(depths[layer] for layer in layers) - min(depths[layer] for layer in layers)
+    return total
+
+
+def routed_match_length_nm(board: PhysicalBoard, net: str) -> int:
+    """A ``length_match`` member's length: its routed tracks plus its via paths."""
+    return routed_track_length_nm(board, net) + via_length_nm(board, net)
+
+
 @dataclass(frozen=True, slots=True)
 class MatchMemberLength:
     net: str
@@ -408,7 +449,7 @@ class MatchGroupResult:
 
 
 def verify_match_groups(board: PhysicalBoard) -> tuple[MatchGroupResult, ...]:
-    """Member lengths and group skew from routed tracks.
+    """Member lengths (tracks and via paths) and group skew from routed copper.
 
     A group is ``pass`` or ``fail`` only once every member net is connected;
     before that it is ``incomplete`` with ``skew_nm`` None.
@@ -423,7 +464,7 @@ def verify_match_groups(board: PhysicalBoard) -> tuple[MatchGroupResult, ...]:
     physical = {net.name: net for net in board.nets}
     results = []
     for group in board.match_groups:
-        lengths = tuple(MatchMemberLength(net, routed_track_length_nm(board, net),
+        lengths = tuple(MatchMemberLength(net, routed_match_length_nm(board, net),
                                           graph.net_connected(physical[net]))
                         for net in group.nets)
         if all(member.routed for member in lengths):
