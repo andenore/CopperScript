@@ -12,7 +12,7 @@ use std::f64::consts::PI;
 use copper_json::{Dumps, Object, Value};
 use copper_lang::mechanical::stackup::StackupLayer;
 use copper_pcb::Result;
-use copper_pcb::board::{NetRoutingRule, PhysicalBoard, RouteKind, Stackup};
+use copper_pcb::board::{NetRoutingRule, PhysicalBoard, RouteKind, Stackup, TrackSegment, Via};
 use copper_physical::CopperLayer;
 use copper_physical::pyfloat::{hypot, round_int};
 use copper_units::Decimal;
@@ -611,6 +611,73 @@ fn routed_track_length_nm(board: &PhysicalBoard, net: &str) -> i64 {
         .sum()
 }
 
+/// `copper_layer_depths_nm`: each copper layer's centre below the top
+/// surface, from the declared physical layers when they name every copper
+/// layer, else with the copper layers spread evenly over the board thickness.
+pub fn copper_layer_depths_nm(stackup: &Stackup) -> IndexMap<CopperLayer, i64> {
+    let (mut depths, mut depth) = (IndexMap::new(), 0);
+    for layer in &stackup.physical_layers {
+        if let Some(copper) = &layer.copper_layer {
+            depths.insert(*copper, depth + layer.thickness_nm.div_euclid(2));
+        }
+        depth += layer.thickness_nm;
+    }
+    if stackup.copper_layers.iter().all(|layer| depths.contains_key(layer)) {
+        return depths;
+    }
+    let spans = (stackup.copper_layers.len() as i64 - 1).max(1);
+    stackup
+        .copper_layers
+        .iter()
+        .enumerate()
+        .map(|(index, layer)| (*layer, (stackup.thickness_nm * index as i64).div_euclid(spans)))
+        .collect()
+}
+
+/// `via_length_nm`: for each via of `net`, the depth between the outermost
+/// copper layers whose tracks end on it (none when they meet on one layer).
+pub fn via_length_nm(board: &PhysicalBoard, net: &str) -> Result<i64> {
+    let tracks: Vec<&TrackSegment> = board.tracks.iter().collect();
+    let vias: Vec<&Via> = board.vias.iter().collect();
+    via_path_length_nm(&board.stackup, &tracks, &vias, net)
+}
+
+/// `via_length_nm` over the copper `tracks`/`vias` of a board with `stackup`.
+pub fn via_path_length_nm(stackup: &Stackup, tracks: &[&TrackSegment], vias: &[&Via], net: &str) -> Result<i64> {
+    let depths = copper_layer_depths_nm(stackup);
+    let tracks: Vec<&&TrackSegment> = tracks.iter().filter(|track| track.net == net).collect();
+    let mut total = 0;
+    for via in vias.iter().filter(|via| via.net == net) {
+        let reach = via.size_nm.div_euclid(2) as f64;
+        let mut layers = IndexSet::new();
+        for track in &tracks {
+            for end in [&track.start, &track.end] {
+                if hypot((end.x_nm - via.position.x_nm) as f64, (end.y_nm - via.position.y_nm) as f64) <= reach {
+                    layers.insert(track.layer);
+                }
+            }
+        }
+        if layers.len() > 1 {
+            let mut reached = Vec::new();
+            for layer in &layers {
+                let Some(depth) = depths.get(layer) else {
+                    // Python raises KeyError (a crash) for a track off the stack-up.
+                    let message = format!("via path through {} outside the stack-up", layer.value());
+                    return Err(copper_pcb::Error::NotImplemented(message));
+                };
+                reached.push(*depth);
+            }
+            total += reached.iter().max().unwrap() - reached.iter().min().unwrap();
+        }
+    }
+    Ok(total)
+}
+
+/// `routed_match_length_nm`: a `length_match` member's routed tracks plus its via paths.
+pub fn routed_match_length_nm(board: &PhysicalBoard, net: &str) -> Result<i64> {
+    Ok(routed_track_length_nm(board, net) + via_length_nm(board, net)?)
+}
+
 /// `MatchGroupCheck`: one group's member `(net, length, connected)`, skew and status.
 pub struct MatchGroup {
     pub id: String,
@@ -620,7 +687,7 @@ pub struct MatchGroup {
     pub status: &'static str,
 }
 
-/// `verify_match_groups`: member lengths and skew once every member is connected.
+/// `verify_match_groups`: member lengths (tracks and via paths) and skew once every member is connected.
 pub fn verify_match_groups(board: &PhysicalBoard) -> Result<Vec<MatchGroup>> {
     if board.match_groups.is_empty() {
         return Ok(Vec::new());
@@ -635,7 +702,7 @@ pub fn verify_match_groups(board: &PhysicalBoard) -> Result<Vec<MatchGroup>> {
             let Some(physical) = board.nets.iter().find(|item| item.name == *net) else {
                 return Err(format!("match group {} names unknown net {net}", group.id).into());
             };
-            lengths.push((net.clone(), routed_track_length_nm(board, net), graph.net_connected(physical)));
+            lengths.push((net.clone(), routed_match_length_nm(board, net)?, graph.net_connected(physical)));
         }
         let (skew, status) = if lengths.iter().all(|(_, _, routed)| *routed) {
             let longest = lengths.iter().map(|(_, length, _)| *length).max().unwrap_or(0);
@@ -848,5 +915,41 @@ mod tests {
         assert_eq!(round_digits(-2.5e-10, 9), -0.0);
         assert_eq!(copper_json::python_float_repr(round_digits(89.99999999999, 9)), "90.0");
         assert_eq!(ohms(49.3456789012345).to_sci_string(), "49.345678901");
+    }
+
+    #[test]
+    fn via_paths_count_the_depth_between_the_layers_their_tracks_use() {
+        use copper_physical::geometry::Point;
+        // test_match_lengths_count_each_via_between_the_layers_its_tracks_use:
+        // the lane changes to B.Cu and back through two vias, each adding the
+        // 1.6 mm board thickness; a via its tracks meet on one layer adds nothing.
+        let stackup = Stackup::new(vec![CopperLayer::Front, CopperLayer::Back]);
+        let depths = copper_layer_depths_nm(&stackup);
+        assert_eq!(depths.into_iter().collect::<Vec<_>>(), [(CopperLayer::Front, 0), (CopperLayer::Back, 1_600_000)]);
+        let mm = |x: i64| Point { x_nm: x * 1_000_000, y_nm: 6_000_000 };
+        let track = |a, b, layer| TrackSegment {
+            net: "LANE_A_P".to_owned(),
+            start: mm(a),
+            end: mm(b),
+            width_nm: 200_000,
+            layer,
+        };
+        let (front, back) = (CopperLayer::Front, CopperLayer::Back);
+        let tracks = [track(5, 10, front), track(10, 20, back), track(20, 25, front), track(25, 33, front)];
+        let vias: Vec<Via> = [10, 20, 25]
+            .into_iter()
+            .map(|x| Via {
+                net: "LANE_A_P".to_owned(),
+                position: mm(x),
+                size_nm: 600_000,
+                drill_nm: 300_000,
+                from_layer: CopperLayer::Front,
+                to_layer: CopperLayer::Back,
+                technology: None,
+                finish: String::new(),
+            })
+            .collect();
+        let (tracks, vias): (Vec<&TrackSegment>, Vec<&Via>) = (tracks.iter().collect(), vias.iter().collect());
+        assert_eq!(via_path_length_nm(&stackup, &tracks, &vias, "LANE_A_P").unwrap(), 3_200_000);
     }
 }

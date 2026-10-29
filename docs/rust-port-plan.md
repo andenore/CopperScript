@@ -1017,3 +1017,16 @@ Remaining guards on these paths: critical pairs from proved macro ports
 contacts and local contact preparation in `pair_terminals`, and the unified
 router without `share_commit_index`. The ladder was not re-run in this
 stream.
+
+### Main sync: via paths in length-match lengths (`rust-main-sync2`, 2026-10-29)
+
+Ported b16122a: a `length_match` member's length is its routed track length
+plus, for each of its vias, the depth between the outermost copper layers its
+tracks end on there (`copper_layer_depths_nm`, `via_length_nm`,
+`routed_match_length_nm` in `copper_drc::signal_integrity`). Verification
+(`verify_match_groups`, so DRC, `si-check` and the critical review), the
+final group tuning and tuning while routing (`_via_lengths` in
+`critical_match.rs`) use it. The synthetic `crossing-tuned` replay follows
+the updated test (a 1.2 mm amplitude limit); `crossing-tuning-short` keeps
+the old 0.8 mm limit, which now fails for insufficient room. A track on a
+layer outside the stack-up, where Python raises `KeyError`, exits 3.

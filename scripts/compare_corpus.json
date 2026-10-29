@@ -24859,6 +24859,17 @@
      ]
     },
     {
+     "id": "replay-critical-synthetic/crossing-tuning-short",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/crossing-tuning-short.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
      "id": "replay-critical-synthetic/nested-routed",
      "args": [
       "replay-critical",

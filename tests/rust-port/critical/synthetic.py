@@ -62,11 +62,13 @@ def _crossing_failed():
     return replace(board, copper_keepouts=(*board.copper_keepouts, wall))
 
 
-def _crossing_tuned():
+def _crossing_tuned(amplitude: str = "1.2"):
+    # The crossing pair's via paths to In2.Cu count toward its length, so the
+    # straight pair needs taller bumps than 0.8 mm ("crossing-tuning-short").
     board = crossings._shared_reference(crossings._swapped())
     nets = tuple(net.name for net in board.nets if net.name != "GND")
     return replace(board, match_groups=(NetMatchGroup("lanes", nets, nm_from_mm("0.1")),),
-                   net_routing_rules=tuple(replace(rule, tuning_amplitude_limit_nm=nm_from_mm("0.8"))
+                   net_routing_rules=tuple(replace(rule, tuning_amplitude_limit_nm=nm_from_mm(amplitude))
                                            for rule in board.net_routing_rules))
 
 
@@ -135,6 +137,7 @@ CASES = {
     "crossing-breakout-inside": (lambda: _breakout(crossings._swapped(), breakout_length_nm=nm_from_mm("15"),
                                                    breakout_clearance_nm=nm_from_mm("0.1")), None, ()),
     "crossing-tuned": (_crossing_tuned, None, ()),
+    "crossing-tuning-short": (lambda: _crossing_tuned("0.8"), None, ()),
     # Nested corner exits (plan R7).
     "nested-routed": (nested._corner_board, None, ()),
     "nested-breakout": (lambda: nested._corner_board(nested.TIGHT, clearance="0.3", breakout=True), None,
