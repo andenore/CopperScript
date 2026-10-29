@@ -278,19 +278,20 @@ board Fx10Bridge {
 
     // 46 x 32 mm placement: USB-C on the west edge, the bridge centred, the bus
     // header east, crystal north and power entry south. Ball A1 is the bridge's north-west corner.
-    constraint fixed_placement(U_USB) { x = 22mm; y = 16mm; rotation = 0; side = front; }
+    constraint fixed_placement(U_USB) { x = 23mm; y = 16mm; rotation = 0; side = front; }
     constraint fixed_placement(J_USB) { x = 8mm; y = 16mm; rotation = 270; side = front; }
     constraint fixed_placement(J_BUS) { x = 39mm; y = 16mm; rotation = 0; side = front; }
-    constraint fixed_placement(J_PWR) { x = 24mm; y = 28mm; rotation = 90; side = front; }
-    constraint fixed_placement(X1) { x = 19.2mm; y = 7.4mm; rotation = 0; side = front; }
-    // AC-coupling capacitors in the channel between receptacle and array.
-    constraint fixed_placement(C_TX1P) { x = 14.93mm; y = 11.2mm; rotation = 90; side = front; }
-    constraint fixed_placement(C_TX1N) { x = 14.93mm; y = 13.1mm; rotation = 90; side = front; }
-    constraint fixed_placement(C_TX2P) { x = 14.93mm; y = 18.4mm; rotation = 90; side = front; }
-    constraint fixed_placement(C_TX2N) { x = 14.93mm; y = 20.3mm; rotation = 90; side = front; }
+    constraint fixed_placement(J_PWR) { x = 25mm; y = 28mm; rotation = 90; side = front; }
+    constraint fixed_placement(X1) { x = 20.2mm; y = 7.4mm; rotation = 0; side = front; }
+    // AC-coupling capacitors side by side in the channel between receptacle
+    // and array, in line with their pair.
+    constraint fixed_placement(C_TX1P) { x = 14.72mm; y = 13.2mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_TX1N) { x = 15.92mm; y = 13.2mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_TX2P) { x = 14.72mm; y = 18.6mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_TX2N) { x = 15.92mm; y = 18.6mm; rotation = 90; side = front; }
     // Back-side bypass in the array's central cross, beside their supply balls.
-    constraint fixed_placement(C_CORE_B1) { x = 22mm; y = 13.2mm; rotation = 0; side = back; }
-    constraint fixed_placement(C_CORE_B2) { x = 22mm; y = 18.8mm; rotation = 0; side = back; }
-    constraint fixed_placement(C_IO_B1) { x = 24.8mm; y = 16mm; rotation = 90; side = back; }
-    constraint fixed_placement(C_U18_B1) { x = 19.2mm; y = 16mm; rotation = 90; side = back; }
+    constraint fixed_placement(C_CORE_B1) { x = 23mm; y = 13.2mm; rotation = 0; side = back; }
+    constraint fixed_placement(C_CORE_B2) { x = 23mm; y = 18.8mm; rotation = 0; side = back; }
+    constraint fixed_placement(C_IO_B1) { x = 25.8mm; y = 16mm; rotation = 90; side = back; }
+    constraint fixed_placement(C_U18_B1) { x = 20.2mm; y = 16mm; rotation = 90; side = back; }
 }
