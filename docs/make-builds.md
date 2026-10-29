@@ -7,8 +7,13 @@ full-vertical Python routing wrappers. CI uses these same Make configurations;
 it explicitly sets `PLACEMENT_TEMPLATES=` for its full-vertical run to preserve
 its source-only placement policy, and owns timeout/artifact handling separately.
 
-Requires GNU Make, an installed CopperScript environment (`uv sync --extra test`
-from this checkout), and KiCad 10 plus its footprints for physical targets.
+Requires GNU Make, the Rust `copper` executable installed with
+`cargo install --path crates/copper --locked`, a Python helper/test environment
+(`uv sync --extra test`), and KiCad 10 plus its footprints for physical targets.
+Compiler commands use `CARGO_HOME/bin/copper` (normally `~/.cargo/bin/copper`),
+so a virtual environment's Python `copper` entry point cannot shadow Rust.
+Override `COPPER` with another executable path when needed. Python remains for
+orchestration, input/macro provenance and project-specific analysis helpers.
 On Windows GNU Make is an additional tool, not bundled with CopperScript;
 `mingw32-make` can be used wherever commands below say `make`.
 
@@ -33,7 +38,7 @@ Targets:
 | `compile` | Hierarchical electrical/mechanical JSON IR |
 | `layout` | Placement draft and report, not a routed board |
 | `edit` | Mechanical/floorplan editor |
-| `route` | Profiled package escape/routing, saved copper fill and native DRC |
+| `route` | Rust package escape/routing, saved copper fill and native DRC |
 | `compile-examples` (root only) | Compile the registered examples and compatibility fixtures |
 | `check-examples` (root only) | Run `check`, `compile`, and a dry-run of `route` for every registered complete example |
 
@@ -65,7 +70,7 @@ profiling summaries, hashes and `run.json`. No recursive clean target deletes
 past evidence. Set `RUN_DIR` to a **new/empty path below project `build/`** if a
 fixed CI destination is needed.
 
-The generic `pcbir.build` runner resolves this board's imports through its
+The generic `pcbir.build --copper PATH --profile none` runner resolves this board's imports through its
 nearest manifest, fetches only pinned URL dependencies, then routes offline.
 It never assumes CopperLib or a sibling checkout. It preserves routing errors,
 saves filled copper in the deliverable and accepts success only with ERC pass,
@@ -91,7 +96,7 @@ make EXAMPLE=cm4 route KICAD_CLI="C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"
 make EXAMPLE=cm4 layout KICAD_FOOTPRINTS="C:/Program Files/KiCad/10.0/share/kicad/footprints"
 make EXAMPLE=cm4 route RESOLVE_ARGS="--locked --offline"
 make EXAMPLE=cm4 route BUILD_ARGS=--dry-run
-make EXAMPLE=cm4 route PROFILE=none
+make EXAMPLE=cm4 route COPPER=/path/to/rust/copper
 make EXAMPLE=full-vertical route EXTRA_ROUTE_ARGS="--zone-dependency-expansions 0"
 ```
 
@@ -124,7 +129,9 @@ include make/board.mk
 
 The independent project owns its manifest/lock and `build/` gitignore entry;
 it needs no example-specific Python script. Its `PYTHON` setting must select
-the environment with CopperScript installed. In this checkout the CM4 local
+the environment with the CopperScript helper package installed; `COPPER` selects
+the Rust executable. Rust's unsupported features fail explicitly without switching
+to Python, and `cProfile` is unavailable for a native executable. In this checkout the CM4 local
 Makefile also includes the shared recipes: `make -C examples/cm4_baseboard route`.
 
 Successful routing is **not manufacturing signoff**. Power/current review,

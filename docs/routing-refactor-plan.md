@@ -399,6 +399,13 @@ with migration instructions; current consumer wrappers migrate with the CLI.
 This reduces the option count by twelve; folding the remaining live controls
 into profiles is still open. See the [migration table](cli-workflow.md).
 
+Example build entry points now select the installed Cargo Rust executable. The
+Python orchestration runner accepts an explicit compiler path, records its hash,
+and preserves unsupported/nonzero exits and native completion gates. Python
+remains for helper APIs, provenance and tests; it is not a compiler fallback.
+The installed binary is byte-identical to the binary used for the ladder above;
+a native Rust-backed build-runner fixture also passes refill and DRC.
+
 - Delete the retire list and its tests, and `--legacy-pipeline`.
 - Cut `route-board` options to a short profile set: `quick`, `balanced`,
   `thorough`, plus time budget, layers and fab profile.

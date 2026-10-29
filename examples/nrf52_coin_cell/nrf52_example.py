@@ -10,6 +10,9 @@ import io
 import json
 from pathlib import Path
 import pstats
+import subprocess
+
+from pcbir.build import default_rust_compiler
 
 from pcbir import resolved_physicalize, FootprintResolver, PrototypePhysicalOptions
 from pcbir.backends.kicad_pcb import KiCadPcbBackend
@@ -56,12 +59,12 @@ def main(argv=None):
     parser.add_argument("--footprint-root", action="append", type=Path, default=[], help="optional local footprint override")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "build/nrf52-coin-cell")
     parser.add_argument("--route", action="store_true", help="run the complete standard routing pipeline")
+    parser.add_argument("--copper", type=Path, default=default_rust_compiler(), help="Rust copper executable")
     parser.add_argument("--offline", action="store_true", help="use only an already verified package cache")
     parser.add_argument("--kicad-cli", type=Path, help="independent plane refill/DRC executable")
     args = parser.parse_args(argv)
     profiler = cProfile.Profile()
     if args.route:
-        from pcbir.cli import main as cli_main
         args.output_dir.mkdir(parents=True,exist_ok=True)
         command = ["route-board",str(SOURCE),"--locked","--width-mm","50","--height-mm","40",
             "--layers","6","--fab-profile","jlcpcb-six-layer",
@@ -75,13 +78,7 @@ def main(argv=None):
             command.extend(("--verify-plane-fill",str(args.kicad_cli)))
         if args.offline:
             command.append("--offline")
-        try:
-            return profiler.runcall(cli_main,command)
-        finally:
-            profiler.dump_stats(args.output_dir / "profile.pstats")
-            stats = io.StringIO()
-            pstats.Stats(profiler,stream=stats).sort_stats("cumulative").print_stats(40)
-            (args.output_dir / "profile.txt").write_text(stats.getvalue(),encoding="utf-8")
+        return subprocess.run([str(args.copper), *command], check=False).returncode
     board = profiler.runcall(make_example, args.footprint_root, offline=args.offline)
     # Preserve the default completeness gate in the delivered report. Only
     # macro materialization's bounded acceptance ignores unrelated airwires.

@@ -23,6 +23,12 @@ from .profiling import phase_summary, profiled_command, profile_summary
 from .syntax import CopperScriptError
 
 
+def default_rust_compiler() -> Path:
+    """Use Cargo's native executable rather than a virtualenv's Python shim."""
+    cargo = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+    return Path(os.environ.get("COPPER", cargo / "bin" / ("copper.exe" if os.name == "nt" else "copper")))
+
+
 def default_kicad_cli() -> Path:
     configured = os.environ.get("KICAD_CLI") or shutil.which("kicad-cli")
     return Path(configured or Path(os.environ.get("ProgramFiles", "C:/Program Files"))
@@ -37,18 +43,19 @@ def default_footprints(cli: Path) -> Path:
 
 
 def routing_command(source: Path, output: Path, cli: Path, footprints: Path,
-                    options: list[str], *, locked: bool = True) -> list[str]:
+                    options: list[str], *, locked: bool = True, copper: Path | None = None) -> list[str]:
     reserved = {"-o", "--output", "--report", "--verify-plane-fill", "--locked", "--offline"}
     if any(arg.split("=", 1)[0] in reserved or arg.startswith("-o") and not arg.startswith("--")
            for arg in options):
         raise ValueError("output, report, verification and resolution flags are controlled by the build runner")
-    command = [sys.executable, "-u", "-m", "copperscript", "route-board", str(source),
+    arguments = ["route-board", str(source),
         *(["--locked"] if locked else []), "--offline", "--footprint-root", str(footprints), *options,
         "--verify-plane-fill", str(cli), "--report", str(output / "route-report.json"),
         "-o", str(output / "board.kicad_pcb")]
     from .cli import _parser
-    _parser().parse_args(command[4:])
-    return command
+    _parser().parse_args(arguments)
+    compiler = [str(copper)] if copper is not None else [sys.executable, "-u", "-m", "copperscript"]
+    return [*compiler, *arguments]
 
 
 def completed(output: Path) -> bool:
@@ -162,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, help="new/empty directory below project build/")
     parser.add_argument("--output-root", type=Path, help="timestamped runs below this project build/ directory")
     parser.add_argument("--profile", choices=("cprofile", "none"), default="cprofile")
+    parser.add_argument("--copper", type=Path, help="compiler executable; Rust builds use --profile none")
     parser.add_argument("--dry-run", action="store_true", help="validate cached inputs; write nothing")
     raw = list(sys.argv[1:] if argv is None else argv)
     separator = raw.index("--") if "--" in raw else len(raw)
@@ -174,6 +182,12 @@ def main(argv: list[str] | None = None) -> int:
     base = (args.output_root or project / "build" / source.stem).resolve()
     output = (args.output_dir or base / started.strftime("%Y%m%dT%H%M%S%fZ")).resolve()
     try:
+        compiler = Path(shutil.which(str(args.copper)) or args.copper).resolve() if args.copper else None
+        if compiler is not None:
+            if not compiler.is_file():
+                raise ValueError(f"compiler executable missing: {compiler}; install the Rust copper CLI")
+            if args.profile != "none":
+                raise ValueError("cProfile requires the Python compiler; use --profile none with --copper")
         build = project / "build"
         if output == build or not output.is_relative_to(build):
             raise ValueError("output must stay below project build/")
@@ -183,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(f"output is not empty: {output}")
         if not cli.is_file() or not footprints.is_dir():
             raise ValueError("KiCad CLI or footprint directory missing; supply explicit paths")
-        route = routing_command(source, output, cli, footprints, options, locked=args.locked)
+        route = routing_command(source, output, cli, footprints, options, locked=args.locked, copper=compiler)
         # Resolve this board's actual imports through its nearest manifest. No
         # hardcoded library, sibling checkout, relocking or executed vendor code.
         design = compile_design_file(source, locked=args.locked, offline=args.offline or args.dry_run)
@@ -191,6 +205,9 @@ def main(argv: list[str] | None = None) -> int:
         macros = prepare_macro_bindings(design, locked=args.locked, offline=args.offline or args.dry_run) if design is not None else ()
         inputs = provenance(project, source, options, macro_paths=tuple(
             Path(p) for m in macros for p in m.provenance.get('inputs', {str(m.path): m.digest})))
+        if compiler is not None:
+            inputs["compiler"] = {"executable": str(compiler),
+                                  "sha256": hashlib.sha256(compiler.read_bytes()).hexdigest()}
     except (OSError, ValueError, CopperScriptError) as exc:
         print(f"SETUP ERROR: {exc}", file=sys.stderr)
         return 2
@@ -234,7 +251,7 @@ def main(argv: list[str] | None = None) -> int:
         code = 2
     finally:
         manifest["profiling"] = save_performance(output, args.profile, code) if owned else {"status": "not_started"}
-        manifest.update(status={0: "passed", 1: "unmet_gates", 130: "interrupted"}.get(code, "error"),
+        manifest.update(status={0: "passed", 1: "unmet_gates", 3: "unsupported", 130: "interrupted"}.get(code, "error"),
                         exit_code=code, elapsed_seconds=round(time.perf_counter() - tick, 3),
                         finished_utc=datetime.now(timezone.utc).isoformat())
         if owned:

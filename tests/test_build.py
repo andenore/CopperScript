@@ -161,6 +161,36 @@ def test_profile_is_saved_on_unmet_gates(setup, monkeypatch):
     assert json.loads((output / "phase-timings.json").read_text())["intervals"][0]["duration_seconds"] == 2
 
 
+def test_external_compiler_is_recorded_and_unsupported_never_falls_back(setup, monkeypatch):
+    project, arguments = setup
+    compiler = project / "Rust compiler with spaces.exe"
+    compiler.write_bytes(b"test compiler")
+    calls = []
+    def unsupported(command, cwd, log):
+        calls.append(command)
+        log.write_text("not implemented in the Rust rewrite")
+        return 3
+    monkeypatch.setattr(build, "run_logged", unsupported)
+    assert build.main([*arguments, "--copper", str(compiler), "--profile", "none"]) == 3
+    assert len(calls) == 1 and calls[0][:2] == [str(compiler), "route-board"]
+    assert "copperscript" not in calls[0] and "pcbir.profiling" not in calls[0]
+    manifest = json.loads((project / "build/run/run.json").read_text())
+    assert manifest["status"] == "unsupported" and manifest["exit_code"] == 3
+    assert manifest["provenance"]["compiler"]["executable"] == str(compiler)
+    assert len(manifest["provenance"]["compiler"]["sha256"]) == 64
+
+
+def test_external_compiler_cannot_be_python_profiled_or_missing(setup, capsys):
+    project, arguments = setup
+    compiler = project / "rust.exe"
+    assert build.main([*arguments, "--copper", str(compiler), "--profile", "none"]) == 2
+    assert "compiler executable missing" in capsys.readouterr().err
+    compiler.touch()
+    assert build.main([*arguments, "--copper", str(compiler)]) == 2
+    assert "use --profile none" in capsys.readouterr().err
+    assert not (project / "build").exists()
+
+
 def test_corrupt_profile_preserves_router_failure(tmp_path):
     (tmp_path / "routing.prof").write_bytes(b"corrupt")
     assert build.save_performance(tmp_path, "cprofile", 1)["status"] == "error"
@@ -215,7 +245,7 @@ def test_shared_make_routes_use_generic_runner_and_exact_settings(make, example,
     assert result.returncode == 0, result.stderr
     command = shlex.split(result.stdout)
     assert "pcbir.build" in command and "scripts/route" not in result.stdout
-    assert "--profile" in command and "cprofile" in command
+    assert "--profile" in command and "none" in command and "--copper" in command
     options = command[command.index("--") + 1:]
     args = _parser().parse_args(["route-board", "example.copper", *options])
     assert args.layers == layers and not args.ground_via_in_pad and not args.allow_proxy_footprints
@@ -278,7 +308,8 @@ def test_aggregate_compiles_positive_examples_without_routing(make):
     assert registered.returncode == 0, registered.stderr
     examples = registered.stdout.split()
     assert examples and len(examples) == len(set(examples))
-    assert result.stdout.count("-m copperscript compile ") == len(examples)
+    assert sum(" compile " in line and " -o " in line for line in result.stdout.splitlines()) == len(examples)
+    assert "-m copperscript compile" not in result.stdout
     assert all(f"EXAMPLE={example} compile" in result.stdout for example in examples)
     assert "EXAMPLE=invalid_board" not in result.stdout
     assert "EXAMPLE=nrf_antenna_macro" not in result.stdout
