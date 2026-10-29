@@ -138,6 +138,6 @@ impl From<Object> for Value {
 
 mod unicode;
 pub use unicode::{
-    python_casefold, python_isalnum, python_isalpha, python_isdigit, python_isprintable, python_isspace,
-    python_str_repr,
+    python_casefold, python_decimal, python_isalnum, python_isalpha, python_isdigit, python_isprintable,
+    python_isspace, python_str_repr,
 };

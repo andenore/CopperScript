@@ -39,6 +39,26 @@ pub fn python_isdigit(character: char) -> bool {
     get_general_category(character) == GeneralCategory::DecimalNumber
 }
 
+/// The value of a decimal digit (general category Nd), as `int()` and
+/// `float()` read it. Unicode encodes every Nd digit in a contiguous run from
+/// 0 to 9, so the value is the offset within the digit's run.
+pub fn python_decimal(character: char) -> Option<u32> {
+    if character.is_ascii_digit() {
+        return character.to_digit(10);
+    }
+    if !python_isdigit(character) {
+        return None;
+    }
+    let mut start = character as u32;
+    while let Some(previous) = start.checked_sub(1).and_then(char::from_u32) {
+        if get_general_category(previous) != GeneralCategory::DecimalNumber {
+            break;
+        }
+        start -= 1;
+    }
+    Some((character as u32 - start) % 10)
+}
+
 /// `str.isalnum()`: letters and numbers (L* and N* categories).
 pub fn python_isalnum(character: char) -> bool {
     if character.is_ascii() {
@@ -426,6 +446,17 @@ const CASEFOLD_EXCEPTIONS: &[(char, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decimal_digits_read_like_int() {
+        assert_eq!(python_decimal('7'), Some(7));
+        assert_eq!(python_decimal('\u{661}'), Some(1)); // ARABIC-INDIC DIGIT ONE
+        assert_eq!(python_decimal('\u{6f9}'), Some(9)); // EXTENDED ARABIC-INDIC DIGIT NINE
+        assert_eq!(python_decimal('\u{ff15}'), Some(5)); // FULLWIDTH DIGIT FIVE
+        assert_eq!(python_decimal('\u{1d7d8}'), Some(0)); // MATHEMATICAL DOUBLE-STRUCK DIGIT ZERO, after a bold run
+        assert_eq!(python_decimal('\u{b2}'), None); // SUPERSCRIPT TWO: isdigit in Python, not decimal
+        assert_eq!(python_decimal('x'), None);
+    }
 
     #[test]
     fn repr_matches_python() {

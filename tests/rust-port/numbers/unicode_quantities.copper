@@ -1,0 +1,10 @@
+// Rust-port corpus input: quantities and dimensions written with Unicode decimal digits; not a circuit.
+board UnicodeDigits {
+    use library "tiny";
+    component R1: RESISTOR { value = ١٠kohm; footprint = "0402"; }
+    component R2: RESISTOR { value = ٤.٧kohm; footprint = "0402"; }
+    component C1: CAPACITOR { value = １００nF; footprint = "0402"; }
+    net N { R1.1; R2.1; C1.1; }
+    net GND { R1.2; R2.2; C1.2; }
+    mechanical { outline rectangle { width = ٤٠mm; height = ٢٠.٥mm; } }
+}

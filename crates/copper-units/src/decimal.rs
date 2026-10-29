@@ -109,10 +109,18 @@ impl Decimal {
         Decimal::triple(value < 0, BigUint::from(value.unsigned_abs()), 0)
     }
 
-    /// Python's `Decimal(text)`: exact, without context rounding.
+    /// Python's `Decimal(text)`: exact, without context rounding. Like
+    /// Python it accepts any Unicode decimal digit (`٤٠` is 40).
     pub fn parse(text: &str) -> Result<Self, DecimalError> {
-        let trimmed = text.trim();
         let syntax = || DecimalError::Syntax(text.to_owned());
+        let ascii: String = text
+            .chars()
+            .map(|c| match copper_json::python_decimal(c) {
+                Some(digit) if !c.is_ascii() => char::from_digit(digit, 10).expect("a decimal digit"),
+                _ => c,
+            })
+            .collect();
+        let trimmed = ascii.trim();
         let (negative, body) = match trimmed.as_bytes().first() {
             Some(b'-') => (true, &trimmed[1..]),
             Some(b'+') => (false, &trimmed[1..]),
@@ -586,6 +594,14 @@ mod tests {
 
     fn d(text: &str) -> Decimal {
         Decimal::parse(text).unwrap()
+    }
+
+    #[test]
+    fn unicode_digits_parse_like_python() {
+        assert_eq!(d("\u{664}\u{660}"), d("40")); // ARABIC-INDIC 40
+        assert_eq!(d("-\u{661}.\u{665}"), d("-1.5"));
+        assert_eq!(d("\u{ff12}e\u{ff13}"), d("2e3")); // FULLWIDTH 2e3
+        assert!(Decimal::parse("\u{b2}").is_err()); // SUPERSCRIPT TWO is not a decimal digit
     }
 
     #[test]

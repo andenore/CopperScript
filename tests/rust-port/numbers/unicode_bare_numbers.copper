@@ -1,0 +1,7 @@
+// Rust-port corpus input: bare numbers written with Unicode decimal digits (once a Rust panic); not a circuit.
+board UnicodeBareNumbers {
+    use library "tiny";
+    component R1: RESISTOR { value = ١.٥; footprint = "0402"; }
+    component R2: RESISTOR { value = -٣; footprint = "0402"; }
+    net N { R1.1; R2.1; }
+}

@@ -6,7 +6,7 @@
 
 use std::str::FromStr;
 
-use copper_json::python_str_repr;
+use copper_json::{python_decimal, python_str_repr};
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 
@@ -760,32 +760,48 @@ impl Parser {
         Ok(attributes)
     }
 
-    /// Python's `float(text) if "." in text else int(text)`.
-    fn number(text: &str) -> Scalar {
-        if text.contains('.') {
-            Scalar::Float(text.parse().expect("a lexed number is a valid float"))
+    /// Python's `float(text) if "." in text else int(text)`. Both accept any
+    /// Unicode decimal digit (`١.٥` is 1.5), so digits are read by value
+    /// first; `None` where Python's conversion would raise.
+    fn number(text: &str) -> Option<Scalar> {
+        let ascii: String = text
+            .chars()
+            .map(|c| match c {
+                '+' | '-' | '.' => Some(c),
+                _ => python_decimal(c).and_then(|digit| char::from_digit(digit, 10)),
+            })
+            .collect::<Option<_>>()?;
+        if ascii.contains('.') {
+            ascii.parse().ok().map(Scalar::Float)
         } else {
-            Scalar::Int(BigInt::from_str(text.trim_start_matches('+')).expect("a lexed number is a valid integer"))
+            BigInt::from_str(ascii.trim_start_matches('+')).ok().map(Scalar::Int)
         }
+    }
+
+    /// [`Self::number`] at the number token `token`, a parse error where it has no value.
+    fn number_at(&self, text: &str, token: &Token) -> Result<Scalar> {
+        Self::number(text)
+            .ok_or_else(|| self.error_at("PAR010", format!("expected number, found {}", repr(&token.text)), token))
     }
 
     fn scalar(&mut self) -> Result<Scalar> {
         if self.at_symbol("-") || self.at_symbol("+") {
             let sign = self.advance().text;
-            let number = format!("{sign}{}", self.expect(TokenKind::Number, "number after sign")?.text);
+            let token = self.expect(TokenKind::Number, "number after sign")?;
+            let number = format!("{sign}{}", token.text);
             if self.current().kind == TokenKind::Identifier {
                 return Ok(Scalar::Quantity { value: number, unit: self.advance().text });
             }
-            return Ok(Self::number(&number));
+            return self.number_at(&number, &token);
         }
         match self.current().kind {
             TokenKind::String => Ok(Scalar::Str(self.advance().text)),
             TokenKind::Number => {
-                let number = self.advance().text;
+                let token = self.advance();
                 if self.current().kind == TokenKind::Identifier {
-                    return Ok(Scalar::Quantity { value: number, unit: self.advance().text });
+                    return Ok(Scalar::Quantity { value: token.text, unit: self.advance().text });
                 }
-                Ok(Self::number(&number))
+                self.number_at(&token.text, &token)
             }
             TokenKind::Identifier => {
                 let mut value = self.advance().text;
