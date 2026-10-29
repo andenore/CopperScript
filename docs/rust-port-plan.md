@@ -1112,8 +1112,12 @@ technologies`), 21 replay-unified option cases (`share_commit_index=false`,
 `bga_open.copper` (suite `route-board-bga`: fanout sidecar, via lattice
 with and without array flow), `hole_clearance*.copper` and the si-check
 length-match boards (suite `route-board-requirements`), and summarize
-inputs `reports/runs/valid-clearance/late-*.json`. No difference was
-recorded.
+inputs `reports/runs/valid-clearance/late-*.json`. D-0111 and D-0112
+record the si-check unknown-part mutation of `route-board/bga.copper`
+(Python `KeyError`). Variants of `hole_clearance.copper` whose placement
+fails were left out: on a `PlacementAlgorithmError` the Rust route-board
+error record still says `ValueError` and writes no diagnostic board (the
+gap the via-in-pad stream noted).
 
 Environment notes for this container: the Python oracle needs the project
 installed (`pip install --no-deps -e .`, for the `tiny` library entry

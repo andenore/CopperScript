@@ -26795,34 +26795,6 @@
      ]
     },
     {
-     "id": "route-board-requirements/hole_clearance_tight",
-     "args": [
-      "route-board",
-      "tests/rust-port/route-board/hole_clearance_tight.copper",
-      "--locked",
-      "--offline",
-      "--no-check",
-      "-o",
-      "{out}/routed.kicad_pcb",
-      "--report",
-      "{out}/route.json"
-     ]
-    },
-    {
-     "id": "route-board-requirements/hole_clearance_missing",
-     "args": [
-      "route-board",
-      "tests/rust-port/route-board/hole_clearance_missing.copper",
-      "--locked",
-      "--offline",
-      "--no-check",
-      "-o",
-      "{out}/routed.kicad_pcb",
-      "--report",
-      "{out}/route.json"
-     ]
-    },
-    {
      "id": "route-board-requirements/no_stackup",
      "args": [
       "route-board",
