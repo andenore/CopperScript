@@ -16455,6 +16455,7 @@
     "--report",
     "{out}/route.json"
    ],
+   "timeout_s": 1800,
    "compare": [
     "exit",
     "files"

@@ -1064,3 +1064,47 @@ final group tuning and tuning while routing (`_via_lengths` in
 the updated test (a 1.2 mm amplitude limit); `crossing-tuning-short` keeps
 the old 0.8 mm limit, which now fails for insufficient room. A track on a
 layer outside the stack-up, where Python raises `KeyError`, exits 3.
+
+### Public BGA example: FX10-like bridge (`rust-bga-example`, 2026-10-29)
+
+`examples/fx10_bridge` is the first public board with a full, tight ball
+grid: an FX10-like USB 3.2 bridge (`examples/packages/usb_bridge`, 121
+balls, 11 x 11, 10 x 10 mm, 0.8 mm pitch; an illustrative ball map, not
+Infineon's) between a 24-pin USB-C receptacle and a 2 x 13 capture-bus
+header, six layers (`jlcpcb-six-layer`, 0.45/0.2 mm vias), two SuperSpeed
+lanes, USB 2.0, a 16-bit + clock bus under `length_match`, and bypass
+capacitors on the back under the array. It is in `bench/ladder.json`
+(`fx10-bridge`, tags `medium`, `examples`, `bga`; `--fanout --via-lattice`)
+and in the corpus `boards`, so every `"boards": "*"` suite and every
+`examples/*/board.copper` glob covers it.
+
+Python, ladder arguments, one run alone: 558 s; 156 vias; signal completion
+0.953 (85 connections, 4 open: USB_DP and USB_DM, whose two receptacle rows
+hit "local contact crossover topology unsupported"); GND (In1.Cu) and VCORE
+(In3.Cu) report open by exact copper because their plane fill needs native
+refill, which the container does not run. Without `--via-lattice` the
+lattice-free fanout leaves V1V8 and VUSB18 open too and took 1028 s (three runs sharing four cores, where the lattice run took 554 s);
+`--fanout-maze` routes identical copper to the default; `--bus-layers` and
+`--escape-plan` change copper but not the open nets.
+
+Comparison of every fx10 case (`--case "*fx10*" --milestone M6`): 173
+equal, including all gated M1/M2 cases (check, compile, query, audit,
+lock, export-kicad, export-kicad-pcb*) and plan-layout, route-global,
+si-check, assembly, edit-mechanical and lsp. Pending (Rust exits 3), for
+the `rust-router-guards` stream:
+
+| Case | Python s | "not implemented" message |
+|---|---:|---|
+| `ladder/fx10-bridge` | 558 | route-board (the via lattice (via_lattice.plan_via_lattices)) |
+| `route-board/fx10-bridge` | ROUTE_BOARD_PY | route-board (critical pair terminals with local branch ties) |
+| `route-board-fanout-boards/fx10-bridge` | 228 | route-board (critical pair terminals with local branch ties) |
+| `route-board-nofanout-boards/fx10-bridge` | 105 | route-board (critical pair terminals with local branch ties) |
+| `route-board-save-inputs-boards/fx10-bridge` | 102 | route-board (critical pair terminals with local branch ties) |
+| `route-board-direct-boards/fx10-bridge` | 64 | route-board (routing-stage verification of length_match declarations) |
+| `route-board-stopped/fx10-bridge` | 39 | route-board (routing-stage verification of length_match declarations) |
+
+The "local branch ties" are the USB 2.0 pair: each of USB_DP/USB_DM lands
+on both receptacle rows (A6/B6, A7/B7). The `route-board` suite's timeout is
+now 1800 s, since Python's default route of this board exceeds 600 s.
+Because the CI `ladder` job is gated at M4, `fx10-bridge` fails it until the
+via lattice is ported.
