@@ -1144,6 +1144,16 @@ Guards that remain, and why:
   critical-replay board decoder): no saved critical input carries one.
 - Zone priorities beyond 64 bits, and the Python-crash guards.
 
+Handoff: the FX10-like BGA example (merged into rust-m2 as ddf8aac, after
+this branch's last merge of rust-m2) hits three guards that this branch
+ports: the via lattice (ladder/fx10-bridge), "critical pair terminals with
+local branch ties" (route-board, -fanout-boards, -nofanout-boards,
+-save-inputs-boards) and "routing-stage verification of length_match
+declarations" (route-board-direct-boards, route-board-stopped). They were
+not run on that board here: the next session should merge rust-m2, run
+those suites and the fx10-bridge ladder entry, and lift its M5 gate in
+`board_milestones` if they are equal.
+
 ### Shapely geometry (`rust-shapely`, 2026-10-29)
 
 Implemented the geometry Python gets from shapely that still exited 3, under
