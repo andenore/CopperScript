@@ -496,3 +496,24 @@ def test_pair_members_beside_vias_wider_than_the_lane_spacing_still_take_bumps(p
     assert max(max(t.start.y_nm, t.end.y_nm) for t in result if t.net == "A") > nm_from_mm(10)
     assert min(min(t.start.y_nm, t.end.y_nm) for t in result if t.net == "A") == nm_from_mm(10)
     assert min(min(t.start.y_nm, t.end.y_nm) for t in result if t.net == "B") < nm_from_mm("8.8")
+
+
+def test_match_lengths_count_each_via_between_the_layers_its_tracks_use():
+    from pcbir.physical import Stackup, Via
+    from pcbir.signal_integrity import copper_layer_depths_nm, routed_match_length_nm, via_length_nm
+
+    # LANE_A changes from F.Cu to B.Cu and back through two vias; on a
+    # 1.6 mm two-layer board each adds 1.6 mm to its match length. A via its
+    # tracks meet on one layer only adds nothing.
+    board = _lanes_board(TWO_LANES)
+    board = replace(board, stackup=Stackup(copper_layers=(CopperLayer.FRONT, CopperLayer.BACK)))
+    assert copper_layer_depths_nm(board.stackup) == {CopperLayer.FRONT: 0, CopperLayer.BACK: nm_from_mm("1.6")}
+    front, back = CopperLayer.FRONT, CopperLayer.BACK
+    tracks = (TrackSegment("LANE_A_P", Point.mm(5, 6), Point.mm(10, 6), WIDTH, front),
+              TrackSegment("LANE_A_P", Point.mm(10, 6), Point.mm(20, 6), WIDTH, back),
+              TrackSegment("LANE_A_P", Point.mm(20, 6), Point.mm(25, 6), WIDTH, front),
+              TrackSegment("LANE_A_P", Point.mm(25, 6), Point.mm(33, 6), WIDTH, front))
+    vias = tuple(Via("LANE_A_P", Point.mm(x, 6), nm_from_mm("0.6"), nm_from_mm("0.3")) for x in (10, 20, 25))
+    routed = replace(board, tracks=tracks, vias=vias)
+    assert via_length_nm(routed, "LANE_A_P") == 2 * nm_from_mm("1.6")
+    assert routed_match_length_nm(routed, "LANE_A_P") == nm_from_mm(28) + 2 * nm_from_mm("1.6")
