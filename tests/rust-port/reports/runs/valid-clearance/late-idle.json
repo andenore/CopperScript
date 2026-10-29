@@ -1,0 +1,1221 @@
+{
+  "connectivity": {
+    "deferred_zone_nets": [],
+    "native_fill_verified": false,
+    "routed_ordinary_net_count": 4,
+    "unrouted_ordinary_nets": []
+  },
+  "critical": {
+    "bundles": [],
+    "global_routing_fingerprint": "901dc251abd84636e056da58a8c0d5fbe8176b4999c7841d6cc93d06f6aa2521",
+    "lanes": [],
+    "match_tuning": [],
+    "nets": [],
+    "plane_reservation_track_count": 0,
+    "plane_reservation_via_count": 0,
+    "reserved_track_count": 0,
+    "reserved_via_count": 0,
+    "routing_fingerprint": "7079ce8132f0e4e313c785f2126c24d068758e78795cfd25f4bf2ed965201abd",
+    "schema": "copperscript-critical-route/v0.1",
+    "status": "success"
+  },
+  "critical_lane_review": {
+    "coupling_factor": 2,
+    "ignored_zone_nets": [],
+    "match_groups": [],
+    "nets": [],
+    "pairs": [],
+    "search_radius_nm": 1000000,
+    "sharp_bend_degrees": 45
+  },
+  "detailed": {
+    "global_routing_fingerprint": "901dc251abd84636e056da58a8c0d5fbe8176b4999c7841d6cc93d06f6aa2521",
+    "locked_track_count": 9,
+    "locked_via_count": 9,
+    "metrics": {
+      "conflict_resource_count": 0,
+      "passes": 3,
+      "routed_net_count": 4,
+      "total_conflict_overflow": 0,
+      "total_length_nm": 55269929,
+      "track_count": 56,
+      "unrouted_net_count": 0,
+      "via_count": 2
+    },
+    "nets": [
+      {
+        "connected": true,
+        "diagnostics": [],
+        "guide_deviation_count": 0,
+        "length_nm": 13048559,
+        "net": "GND",
+        "orthogonal_mode_used": false,
+        "resumed_branch_count": 0,
+        "retry_heuristic_weight_percent": null,
+        "search_budget_exhausted": false,
+        "search_policy": null,
+        "search_stats": null,
+        "track_count": 15,
+        "via_count": 0,
+        "warnings": []
+      },
+      {
+        "connected": true,
+        "diagnostics": [],
+        "guide_deviation_count": 0,
+        "length_nm": 12784494,
+        "net": "I2C_SCL",
+        "orthogonal_mode_used": false,
+        "resumed_branch_count": 0,
+        "retry_heuristic_weight_percent": null,
+        "search_budget_exhausted": false,
+        "search_policy": null,
+        "search_stats": null,
+        "track_count": 10,
+        "via_count": 1,
+        "warnings": []
+      },
+      {
+        "connected": true,
+        "diagnostics": [],
+        "guide_deviation_count": 0,
+        "length_nm": 10765803,
+        "net": "I2C_SDA",
+        "orthogonal_mode_used": false,
+        "resumed_branch_count": 0,
+        "retry_heuristic_weight_percent": null,
+        "search_budget_exhausted": false,
+        "search_policy": null,
+        "search_stats": null,
+        "track_count": 10,
+        "via_count": 0,
+        "warnings": []
+      },
+      {
+        "connected": true,
+        "diagnostics": [],
+        "guide_deviation_count": 0,
+        "length_nm": 18671073,
+        "net": "V3V3",
+        "orthogonal_mode_used": false,
+        "resumed_branch_count": 0,
+        "retry_heuristic_weight_percent": null,
+        "search_budget_exhausted": false,
+        "search_policy": null,
+        "search_stats": null,
+        "track_count": 21,
+        "via_count": 1,
+        "warnings": []
+      }
+    ],
+    "repair_trial_report_limit": 256,
+    "repair_trials": [],
+    "routing_fingerprint": "bd9e0ed01fc1d621bf42dc8bd6a6a602ccf148603fb53217e5a4eda6667ed90d",
+    "schema": "copperscript-detailed-route/v0.1",
+    "search_work": null,
+    "status": "success"
+  },
+  "drc": {
+    "completeness": "complete",
+    "coverage": [
+      {
+        "check": "route_completeness",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "connectivity",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "placement_legality",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "courtyard_gap",
+        "detail": "",
+        "required": true,
+        "status": "not_applicable"
+      },
+      {
+        "check": "track_width_and_budgets",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "differential_geometry",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "length_match",
+        "detail": "",
+        "required": true,
+        "status": "not_applicable"
+      },
+      {
+        "check": "single_ended_return_vias",
+        "detail": "exact existing-barrel span and center distance; no filled-reference or SI proof",
+        "required": true,
+        "status": "not_applicable"
+      },
+      {
+        "check": "via_geometry_and_budgets",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "copper_to_board_edge",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "shorts_and_clearance",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "non_plated_hole_clearance",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "via_hole_to_copper",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "drill_to_drill_spacing",
+        "detail": "",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "copper_keepouts",
+        "detail": "polygonal keepout checks for tracks, vias, and component pads",
+        "required": true,
+        "status": "executed"
+      },
+      {
+        "check": "copper_zones",
+        "detail": "",
+        "required": false,
+        "status": "not_applicable"
+      },
+      {
+        "check": "solder_mask",
+        "detail": "mask sliver and expansion checks require final artwork",
+        "required": false,
+        "status": "unsupported"
+      },
+      {
+        "check": "silkscreen",
+        "detail": "silkscreen-to-mask checks require final artwork",
+        "required": false,
+        "status": "unsupported"
+      },
+      {
+        "check": "creepage",
+        "detail": "creepage requires a declared safety profile",
+        "required": false,
+        "status": "unsupported"
+      },
+      {
+        "check": "signal_integrity",
+        "detail": "impedance and signal integrity require external qualification",
+        "required": false,
+        "status": "unsupported"
+      },
+      {
+        "check": "thermal",
+        "detail": "thermal/current qualification requires external analysis",
+        "required": false,
+        "status": "unsupported"
+      }
+    ],
+    "decision": "fail",
+    "findings": [
+      {
+        "code": "DRC-CLEARANCE",
+        "disposition": "active",
+        "fingerprint": "b3469d7e5c0e87c3f171c32c2225b28f6819c65979ab02791b5dbdad09ccaa58",
+        "layers": [
+          "F.Cu"
+        ],
+        "measured_nm": 550363,
+        "message": "pad:C1.2:1 and pad:U2.45:4 violate copper spacing",
+        "nets": [
+          "GND",
+          "I2C_SCL"
+        ],
+        "objects": [
+          "pad:C1.2:1",
+          "pad:U2.45:4"
+        ],
+        "required_nm": 700000,
+        "severity": "error",
+        "waiver_reason": null
+      },
+      {
+        "code": "DRC-CLEARANCE",
+        "disposition": "active",
+        "fingerprint": "a6d34c4f9577bbc7964224e66204c4f61a670e03432352bd716fb2be1062585d",
+        "layers": [
+          "F.Cu"
+        ],
+        "measured_nm": 501597,
+        "message": "pad:C1.2:1 and pad:U2.46:5 violate copper spacing",
+        "nets": [
+          "GND",
+          "I2C_SDA"
+        ],
+        "objects": [
+          "pad:C1.2:1",
+          "pad:U2.46:5"
+        ],
+        "required_nm": 700000,
+        "severity": "error",
+        "waiver_reason": null
+      }
+    ],
+    "schema": "copperscript-physical-drc/v0.1",
+    "token": {
+      "board_digest": "e82d822316859317b9ffb0d13a971b26147e2361479274ff130ca16619f25e09",
+      "completeness": "complete",
+      "decision": "fail",
+      "report_digest": "34ab70735cd3c2fc9a4087bdb173a238e56ea27952081c97453884f5f2d98feb",
+      "rules_digest": "7ae6e616e9a6f497d08fae739fb1165387618557022e087c4d0f3a0485d2c43f",
+      "schema": "copperscript-signoff/v0.1",
+      "token_digest": "dbed3197ac9455db48250d0084291266421127635169fe130502751252b98de4"
+    }
+  },
+  "duplicate_pad_stitch": {
+    "added_track_count": 0,
+    "already_connected_pads": [],
+    "pending_pads": [],
+    "pipeline_added_track_count": 0,
+    "stitched_pads": [],
+    "surface_pending_pads": [],
+    "zone_verified_pads": []
+  },
+  "erc_diagnostics": [],
+  "erc_pass": true,
+  "escape": {
+    "clusters": [],
+    "crossing_pairs": 0,
+    "overflow_clusters": [],
+    "pairs": [],
+    "schema": "copperscript.escape-diagnostics/v0.1"
+  },
+  "fabrication_ready": false,
+  "fanout": {
+    "late_bypass_completion": {
+      "maximum_passes": 3,
+      "passes": 0,
+      "status": "not_needed"
+    }
+  },
+  "fine_regions": {
+    "base_nodes": 39528,
+    "base_pitch_mm": 0.25,
+    "fine_nodes": 0,
+    "finest_pitch_mm": 0.25,
+    "layers": 2,
+    "mode": "arrays",
+    "patches": [],
+    "skipped": [],
+    "total_nodes": 39528,
+    "uniform_nodes_at_finest": 39528,
+    "uniform_to_nested_ratio": 1.0
+  },
+  "global": {
+    "hotspots": [],
+    "metrics": {
+      "deferred_net_count": 0,
+      "iterations": 2,
+      "maximum_overflow": 0,
+      "maximum_utilization_ppm": 1000000,
+      "overfull_resource_count": 0,
+      "proposed_via_count": 2,
+      "region_only_access_count": 0,
+      "routed_net_count": 4,
+      "total_length_nm": 105365000,
+      "total_overflow": 0,
+      "unrouted_net_count": 0
+    },
+    "placement_fingerprint": "f88c0993c9749ca2b7e9855f25fb17144da35e5163d814fdbf186ca03b3c5e17",
+    "routes": [
+      {
+        "accesses": [
+          {
+            "access_position_nm": [
+              27500000,
+              2500000
+            ],
+            "layer": "F.Cu",
+            "pad": "C1.2",
+            "pad_position_nm": [
+              25500000,
+              4730000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  27500000,
+                  2500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  25500000,
+                  4730000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              22500000,
+              2500000
+            ],
+            "layer": "F.Cu",
+            "pad": "U2.23",
+            "pad_position_nm": [
+              19500000,
+              5270000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  22500000,
+                  2500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  19500000,
+                  5270000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              27500000,
+              7500000
+            ],
+            "layer": "F.Cu",
+            "pad": "U3.2",
+            "pad_position_nm": [
+              25500000,
+              8635000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  27500000,
+                  7500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  25500000,
+                  8635000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              22500000,
+              7500000
+            ],
+            "layer": "B.Cu",
+            "pad": "U1.2",
+            "pad_position_nm": [
+              20365000,
+              9500000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  20365000,
+                  8000000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  20365000,
+                  9500000
+                ],
+                "width_nm": 250000
+              },
+              {
+                "end_nm": [
+                  22500000,
+                  7500000
+                ],
+                "layer": "B.Cu",
+                "start_nm": [
+                  20365000,
+                  8000000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": [
+              20365000,
+              8000000
+            ],
+            "region_only": false
+          }
+        ],
+        "connected": true,
+        "deferred_to_zone": false,
+        "diagnostics": [],
+        "length_nm": 32270000,
+        "net": "GND",
+        "segments": [
+          {
+            "end_nm": [
+              27500000,
+              2500000
+            ],
+            "guide_half_width_nm": 5000000,
+            "layer": "F.Cu",
+            "resource": "edge:0:4:0:0:5:0",
+            "start_nm": [
+              22500000,
+              2500000
+            ]
+          },
+          {
+            "end_nm": [
+              27500000,
+              7500000
+            ],
+            "guide_half_width_nm": 5000000,
+            "layer": "F.Cu",
+            "resource": "edge:0:5:0:0:5:1",
+            "start_nm": [
+              27500000,
+              2500000
+            ]
+          },
+          {
+            "end_nm": [
+              27500000,
+              7500000
+            ],
+            "guide_half_width_nm": 5000000,
+            "layer": "B.Cu",
+            "resource": "edge:1:4:1:1:5:1",
+            "start_nm": [
+              22500000,
+              7500000
+            ]
+          }
+        ],
+        "vias": [
+          {
+            "from_layer": "F.Cu",
+            "position_nm": [
+              27500000,
+              7500000
+            ],
+            "resource": "via:0:1:5:1",
+            "to_layer": "B.Cu"
+          },
+          {
+            "from_layer": "F.Cu",
+            "position_nm": [
+              20365000,
+              8000000
+            ],
+            "resource": "via:0:1:4:1",
+            "to_layer": "B.Cu"
+          }
+        ]
+      },
+      {
+        "accesses": [
+          {
+            "access_position_nm": [
+              22500000,
+              2500000
+            ],
+            "layer": "F.Cu",
+            "pad": "U2.45",
+            "pad_position_nm": [
+              24500000,
+              4000000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  22500000,
+                  2500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  24500000,
+                  4000000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              27500000,
+              7500000
+            ],
+            "layer": "F.Cu",
+            "pad": "R2.2",
+            "pad_position_nm": [
+              28000000,
+              11000000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  27500000,
+                  7500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  28000000,
+                  11000000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              27500000,
+              7500000
+            ],
+            "layer": "F.Cu",
+            "pad": "U3.3",
+            "pad_position_nm": [
+              30500000,
+              7365000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  27500000,
+                  7500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  30500000,
+                  7365000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          }
+        ],
+        "connected": true,
+        "deferred_to_zone": false,
+        "diagnostics": [],
+        "length_nm": 20635000,
+        "net": "I2C_SCL",
+        "segments": [
+          {
+            "end_nm": [
+              27500000,
+              2500000
+            ],
+            "guide_half_width_nm": 5000000,
+            "layer": "F.Cu",
+            "resource": "edge:0:4:0:0:5:0",
+            "start_nm": [
+              22500000,
+              2500000
+            ]
+          },
+          {
+            "end_nm": [
+              27500000,
+              7500000
+            ],
+            "guide_half_width_nm": 5000000,
+            "layer": "F.Cu",
+            "resource": "edge:0:5:0:0:5:1",
+            "start_nm": [
+              27500000,
+              2500000
+            ]
+          }
+        ],
+        "vias": []
+      },
+      {
+        "accesses": [
+          {
+            "access_position_nm": [
+              22500000,
+              7500000
+            ],
+            "layer": "F.Cu",
+            "pad": "U2.46",
+            "pad_position_nm": [
+              24500000,
+              5270000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  22500000,
+                  7500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  24500000,
+                  5270000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              22500000,
+              7500000
+            ],
+            "layer": "F.Cu",
+            "pad": "R1.2",
+            "pad_position_nm": [
+              25000000,
+              10000000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  22500000,
+                  7500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  25000000,
+                  10000000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              27500000,
+              7500000
+            ],
+            "layer": "F.Cu",
+            "pad": "U3.4",
+            "pad_position_nm": [
+              30500000,
+              8635000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  27500000,
+                  7500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  30500000,
+                  8635000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          }
+        ],
+        "connected": true,
+        "deferred_to_zone": false,
+        "diagnostics": [],
+        "length_nm": 18365000,
+        "net": "I2C_SDA",
+        "segments": [
+          {
+            "end_nm": [
+              27500000,
+              7500000
+            ],
+            "guide_half_width_nm": 5000000,
+            "layer": "F.Cu",
+            "resource": "edge:0:4:1:0:5:1",
+            "start_nm": [
+              22500000,
+              7500000
+            ]
+          }
+        ],
+        "vias": []
+      },
+      {
+        "accesses": [
+          {
+            "access_position_nm": [
+              27500000,
+              2500000
+            ],
+            "layer": "F.Cu",
+            "pad": "C1.1",
+            "pad_position_nm": [
+              25500000,
+              2730000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  27500000,
+                  2500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  25500000,
+                  2730000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              27500000,
+              2500000
+            ],
+            "layer": "F.Cu",
+            "pad": "U2.24",
+            "pad_position_nm": [
+              24500000,
+              2730000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  27500000,
+                  2500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  24500000,
+                  2730000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              27500000,
+              7500000
+            ],
+            "layer": "F.Cu",
+            "pad": "R2.1",
+            "pad_position_nm": [
+              26000000,
+              11000000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  27500000,
+                  7500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  26000000,
+                  11000000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              27500000,
+              7500000
+            ],
+            "layer": "F.Cu",
+            "pad": "U3.1",
+            "pad_position_nm": [
+              25500000,
+              7365000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  27500000,
+                  7500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  25500000,
+                  7365000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              27500000,
+              12500000
+            ],
+            "layer": "F.Cu",
+            "pad": "R1.1",
+            "pad_position_nm": [
+              25000000,
+              12000000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  27500000,
+                  12500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  25000000,
+                  12000000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          },
+          {
+            "access_position_nm": [
+              22500000,
+              12500000
+            ],
+            "layer": "F.Cu",
+            "pad": "U1.3",
+            "pad_position_nm": [
+              21000000,
+              14500000
+            ],
+            "physical_tracks": [
+              {
+                "end_nm": [
+                  22500000,
+                  12500000
+                ],
+                "layer": "F.Cu",
+                "start_nm": [
+                  21000000,
+                  14500000
+                ],
+                "width_nm": 250000
+              }
+            ],
+            "physical_via_nm": null,
+            "region_only": false
+          }
+        ],
+        "connected": true,
+        "deferred_to_zone": false,
+        "diagnostics": [],
+        "length_nm": 34095000,
+        "net": "V3V3",
+        "segments": [
+          {
+            "end_nm": [
+              27500000,
+              12500000
+            ],
+            "guide_half_width_nm": 5000000,
+            "layer": "F.Cu",
+            "resource": "edge:0:4:2:0:5:2",
+            "start_nm": [
+              22500000,
+              12500000
+            ]
+          },
+          {
+            "end_nm": [
+              27500000,
+              7500000
+            ],
+            "guide_half_width_nm": 5000000,
+            "layer": "F.Cu",
+            "resource": "edge:0:5:0:0:5:1",
+            "start_nm": [
+              27500000,
+              2500000
+            ]
+          },
+          {
+            "end_nm": [
+              27500000,
+              12500000
+            ],
+            "guide_half_width_nm": 5000000,
+            "layer": "F.Cu",
+            "resource": "edge:0:5:1:0:5:2",
+            "start_nm": [
+              27500000,
+              7500000
+            ]
+          }
+        ],
+        "vias": []
+      }
+    ],
+    "routing_fingerprint": "901dc251abd84636e056da58a8c0d5fbe8176b4999c7841d6cc93d06f6aa2521",
+    "schema": "copperscript-global-route/v0.1",
+    "status": "success"
+  },
+  "placement_candidate": "candidate-01",
+  "placement_feedback": {
+    "accepted_moves": 0,
+    "final_failed_nets": [],
+    "final_score": [
+      2,
+      0,
+      0,
+      0,
+      0,
+      55269929,
+      2
+    ],
+    "hot_tiles": [],
+    "initial_failed_nets": [],
+    "initial_score": [
+      2,
+      0,
+      0,
+      0,
+      0,
+      55269929,
+      2
+    ],
+    "map_source": null,
+    "reruns": 0,
+    "rounds": 0,
+    "score_order": [
+      "hard_drc_errors",
+      "open_signal_nets",
+      "critical_failures",
+      "unrouted_nets",
+      "conflict_overflow",
+      "total_length_nm",
+      "vias"
+    ],
+    "stop_reason": "no_failed_nets",
+    "trials": []
+  },
+  "placement_findings": [],
+  "requirements": {
+    "board_digest": "e82d822316859317b9ffb0d13a971b26147e2361479274ff130ca16619f25e09",
+    "complete": true,
+    "counts": {
+      "pass": 1
+    },
+    "native_report_digest": null,
+    "requirements": [
+      {
+        "declared_consumers": [],
+        "declared_verifier": null,
+        "detail": "checked against actual final placement geometry",
+        "id": "max_distance:0",
+        "kind": "max_distance",
+        "measurements": [
+          {
+            "actual_nm": 1414213,
+            "comparison": "exact squared distance",
+            "limit_nm": 3000000,
+            "passed": true,
+            "property": "max_distance"
+          }
+        ],
+        "mode": "require",
+        "origins": [
+          "/home/user/CopperScript/examples/valid_board/board.copper:106:16"
+        ],
+        "parameters": {
+          "distance": "3 mm"
+        },
+        "required": true,
+        "status": "pass",
+        "targets": [
+          "C1",
+          "U2.VDD"
+        ],
+        "verifier": "copperscript-final-geometry/v0.1"
+      }
+    ],
+    "schema": "copperscript-requirement-verification/v0.1",
+    "scope": "explicit semantic declarations; ERC, mechanical, package, CAM and production gates remain separate",
+    "source_digest": "98b4a7a48575fd198aa5e47266380b97fe1e46cdffc6e540ce848a1ba631ed75",
+    "stage": "route",
+    "status": "pass"
+  },
+  "requirements_complete": true,
+  "route_geometry": {
+    "signal_layer_length_nm": {
+      "B.Cu": 18263831,
+      "F.Cu": 46006090
+    },
+    "signal_track_length_nm": {
+      "diagonal_45_nm": 29344921,
+      "other_angle_nm": 0,
+      "straight_nm": 34925000
+    },
+    "zone_net_track_count": 0,
+    "zone_nets_deferred": []
+  },
+  "routing_complete": false,
+  "routing_profile": "quick",
+  "routing_quality": {
+    "angle_length_nm": {
+      "diagonal_45_nm": 29344921,
+      "other_angle_nm": 0,
+      "straight_nm": 34925000
+    },
+    "board_digest": "e82d822316859317b9ffb0d13a971b26147e2361479274ff130ca16619f25e09",
+    "decoupling": [],
+    "layer_length_nm": {
+      "B.Cu": 18263831,
+      "F.Cu": 46006090
+    },
+    "length_method": "sum of integer-nanometre segment lengths rounded down",
+    "native_fill_current": false,
+    "native_report_digest": null,
+    "nets": {
+      "GND": {
+        "explicit_copper_connected": true,
+        "track_count": 18,
+        "track_length_nm": 16048557,
+        "via_count": 3
+      },
+      "I2C_SCL": {
+        "explicit_copper_connected": true,
+        "track_count": 12,
+        "track_length_nm": 14784493,
+        "via_count": 3
+      },
+      "I2C_SDA": {
+        "explicit_copper_connected": true,
+        "track_count": 12,
+        "track_length_nm": 12765801,
+        "via_count": 2
+      },
+      "V3V3": {
+        "explicit_copper_connected": true,
+        "track_count": 23,
+        "track_length_nm": 20671070,
+        "via_count": 3
+      },
+      "VBUS": {
+        "explicit_copper_connected": true,
+        "track_count": 0,
+        "track_length_nm": 0,
+        "via_count": 0
+      }
+    },
+    "reference_coverage": [],
+    "schema": "copperscript-routing-quality/v0.1",
+    "scope": "explicit track geometry and surface connectivity; no impedance, thermal or production qualification",
+    "track_count": 65,
+    "track_length_nm": 64269921,
+    "via_count": 11
+  },
+  "schema": "copperscript-route-board/v0.1",
+  "status": "fail",
+  "summary": {
+    "copper": {
+      "track_length_mm": 64.27,
+      "tracks": 65,
+      "vias": 11
+    },
+    "drc": {
+      "budget_warnings_by_code": {},
+      "decision": "fail",
+      "errors": 2,
+      "errors_by_code": {
+        "DRC-CLEARANCE": 2
+      }
+    },
+    "plane": {
+      "connections": 0,
+      "explicit_opens": 0,
+      "nets": 0
+    },
+    "schema": "copperscript-route-summary/v1",
+    "signal": {
+      "completion": 1.0,
+      "connections": 12,
+      "nets": 4,
+      "open_nets": [],
+      "opens": 0
+    }
+  },
+  "work_limits": {
+    "congestion_feedback_trials": 4,
+    "critical_pin_access_step_mm": null,
+    "decoupling_placement_trials": 4,
+    "escape_spacing_passes": 2,
+    "filled_copper_search_states": 2000,
+    "filled_copper_trials": 2,
+    "fine_regions": "arrays",
+    "ignored_flags": [],
+    "mapped_flags": [],
+    "maximum_ripup_blockers": 4,
+    "package_initial_pair_states": 6000,
+    "pin_access_step_mm": "0.5",
+    "placement_feedback_trials": 24,
+    "placement_refinement_passes": 2,
+    "placement_seeds": null,
+    "router": "unified",
+    "unified_direct": false,
+    "unified_iterations": 150,
+    "unified_retain_escape_copper": false,
+    "unified_search_states": 400000,
+    "unified_time_budget_s": null,
+    "zone_dependency_expansions": 2
+  }
+}

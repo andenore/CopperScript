@@ -24706,6 +24706,258 @@
       "--report",
       "{out}/report.json"
      ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "share_commit_index=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/zones.state.json",
+      "--set",
+      "share_commit_index=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/round_led_ring.state.json",
+      "--set",
+      "share_commit_index=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/bga_power.state.json",
+      "--set",
+      "share_commit_index=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/routing.state.json",
+      "--set",
+      "share_commit_index=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/nrf52.state.json",
+      "--set",
+      "share_commit_index=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/bus-skew.state.json",
+      "--set",
+      "share_commit_index=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/bus-bundles.state.json",
+      "--set",
+      "bus_bundles=true",
+      "--set",
+      "share_commit_index=false",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/valid_board.state.json",
+      "--set",
+      "guide_cost=0.9",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/zones.state.json",
+      "--set",
+      "guide_cost=0.5",
+      "--set",
+      "guide_margin_nm=500000",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/round_led_ring.state.json",
+      "--set",
+      "guide_cost=1.0",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/bga_nested.state.json",
+      "--set",
+      "guide_cost=0.9",
+      "--set",
+      "bend_cost=0.7",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/routing.state.json",
+      "--set",
+      "guide_cost=2.0",
+      "--set",
+      "guide_margin_nm=0",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/return-vias",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/return-vias.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/return-vias-missing",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/return-vias-missing.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-blind",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-blind.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-through",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-through.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-none",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-none.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-blind-span",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-blind-span.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-blind-blocked",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-blind-blocked.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-catalog",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-catalog.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
     }
    ]
   },
@@ -25563,6 +25815,331 @@
      "args": [
       "replay-critical",
       "tests/rust-port/critical/synthetic/group-tuning.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-crossover",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-crossover.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-crossover-rejected",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-crossover-rejected.state.json",
+      "--pair-states",
+      "1",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-crossover-support",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-crossover-support.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-crossover-support-remote",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-crossover-support-remote.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-support-joint",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-support-joint.state.json",
+      "--pair-states",
+      "6000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-support-joint-tiny",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-support-joint-tiny.state.json",
+      "--pair-states",
+      "1",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-support-remote",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-support-remote.state.json",
+      "--pair-states",
+      "6000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-support-ambiguous",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-support-ambiguous.state.json",
+      "--pair-states",
+      "6000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-support-no-contract",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-support-no-contract.state.json",
+      "--pair-states",
+      "6000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-joint-returns",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-joint-returns.state.json",
+      "--pair-states",
+      "6000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-joint-returns-far",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-joint-returns-far.state.json",
+      "--pair-states",
+      "6000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-fallback",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-fallback.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-fallback-duplicates",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-fallback-duplicates.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-fallback-duplicates-tiny",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-fallback-duplicates-tiny.state.json",
+      "--pair-states",
+      "1",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-support-branches",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-support-branches.state.json",
+      "--pair-states",
+      "20000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-support-branches-tiny",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-support-branches-tiny.state.json",
+      "--pair-states",
+      "1",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-support-branches-remote",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-support-branches-remote.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-hybrid-anchor",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-hybrid-anchor.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-hybrid-anchor-renamed",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-hybrid-anchor-renamed.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-macro-ports",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-macro-ports.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/terminals-macro-ports-coarse",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/terminals-macro-ports-coarse.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/single-guide-via",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/single-guide-via.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/single-guide-via-budget",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/single-guide-via-budget.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/reserved-bypass",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/reserved-bypass.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/reserved-crossface",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/reserved-crossface.state.json",
+      "--pair-states",
+      "6000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/reserved-crossface-forged",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/reserved-crossface-forged.state.json",
+      "--pair-states",
+      "6000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/reserved-short",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/reserved-short.state.json",
+      "--pair-states",
+      "6000",
       "--report",
       "{out}/critical-report.json",
       "-o",
@@ -26575,6 +27152,209 @@
       "50",
       "--height-mm",
       "40",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "route-board-bga",
+   "milestone": "M4",
+   "cases": [
+    {
+     "id": "route-board-bga/bga",
+     "args": [
+      "route-board",
+      "tests/rust-port/route-board/bga.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga-save-inputs",
+     "args": [
+      "route-board",
+      "tests/rust-port/route-board/bga.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "--unified-save-inputs",
+      "{out}/unified.state.json",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga-via-lattice",
+     "args": [
+      "route-board",
+      "tests/rust-port/route-board/bga.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "--via-lattice",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga_open",
+     "args": [
+      "route-board",
+      "tests/rust-port/route-board/bga_open.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga_open-via-lattice",
+     "args": [
+      "route-board",
+      "tests/rust-port/route-board/bga_open.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "--via-lattice",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga_open-via-lattice-array-flow",
+     "args": [
+      "route-board",
+      "tests/rust-port/route-board/bga_open.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "--via-lattice",
+      "--array-flow",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga_open-via-lattice-save-inputs",
+     "args": [
+      "route-board",
+      "tests/rust-port/route-board/bga_open.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "--via-lattice",
+      "--unified-save-inputs",
+      "{out}/unified.state.json",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "route-board-requirements",
+   "milestone": "M4",
+   "cases": [
+    {
+     "id": "route-board-requirements/hole_clearance",
+     "args": [
+      "route-board",
+      "tests/rust-port/route-board/hole_clearance.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-requirements/no_stackup",
+     "args": [
+      "route-board",
+      "tests/rust-port/si-check/no_stackup.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--routing-profile",
+      "quick",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-requirements/layer_groups",
+     "args": [
+      "route-board",
+      "tests/rust-port/si-check/layer_groups.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--routing-profile",
+      "quick",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",

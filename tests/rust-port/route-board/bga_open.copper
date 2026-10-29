@@ -1,0 +1,16 @@
+// Rust-port corpus input: the 7x7 ball grid of bga.copper without its In1.Cu zone at 1.27 mm pitch (via lattice sites); not a circuit.
+board BallGridOpen {
+    import parts "./bga/parts";
+    component U1: parts.Bga49Wide;
+    component R1: parts.Pair;
+    component R2: parts.Pair;
+    component R3: parts.Pair;
+    net A { U1.D4; R1.A; }
+    net B { U1.C3; R1.B; }
+    net C { U1.E5; R2.A; }
+    net D { U1.C5; R2.B; }
+    net E { U1.E3; R3.A; }
+    net F { U1.A1; R3.B; }
+    net GND { U1.D3; U1.D5; U1.G7; }
+    constraint fixed_placement(U1) { x = 15 mm; y = 12 mm; rotation = 0; }
+}

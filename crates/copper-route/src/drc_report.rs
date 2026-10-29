@@ -179,6 +179,11 @@ impl DrcReport {
             let items = self.report.breakout_relaxations.iter().map(relaxation_document).collect();
             document.insert("breakout_relaxations".to_owned(), Value::Array(items));
         }
+        if !self.report.hole_clearance_relaxations.is_empty() {
+            // Likewise present only when a component-scoped hole_clearance relaxed a check.
+            let items = self.report.hole_clearance_relaxations.iter().map(hole_relaxation_document).collect();
+            document.insert("hole_clearance_relaxations".to_owned(), Value::Array(items));
+        }
         if include_token {
             document.insert("token".to_owned(), self.token.document());
         }
@@ -189,6 +194,20 @@ impl DrcReport {
     pub fn to_json(&self) -> String {
         Dumps::new().indent(2).sort_keys(true).dumps(&self.document(true)) + "\n"
     }
+}
+
+/// One `hole_clearance_relaxations` entry of the report document.
+fn hole_relaxation_document(item: &copper_drc::HoleClearanceRelaxation) -> Value {
+    let texts = |items: &[String]| Value::Array(items.iter().map(|item| Value::from(item.as_str())).collect());
+    let mut document = Object::new();
+    document.insert("component".to_owned(), Value::from(item.component.as_str()));
+    document.insert("objects".to_owned(), texts(&item.objects));
+    document.insert("nets".to_owned(), texts(&item.nets));
+    document.insert("required_nm".to_owned(), Value::from(item.required_nm));
+    document.insert("relaxed_nm".to_owned(), Value::from(item.relaxed_nm));
+    document.insert("measured_nm".to_owned(), Value::from(item.measured_nm));
+    document.insert("reason".to_owned(), Value::from(item.reason.as_str()));
+    Value::Object(document)
 }
 
 /// `_rules_digest`.
@@ -204,9 +223,6 @@ fn rules_digest(board_digest: &str, policy: Policy) -> String {
 
 /// `run_physical_drc(board, policy=...)` with the report bound to its token.
 pub fn run_physical_drc(board: &PhysicalBoard, policy: Policy) -> Result<DrcReport> {
-    if !board.component_hole_clearances.is_empty() {
-        return copper_pcb::not_implemented("DRC component hole-clearance relaxation records");
-    }
     let report = copper_drc::run_physical_drc(board, policy)?;
     let board_digest = physical_board_digest(board);
     let token = SignoffToken {

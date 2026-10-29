@@ -227,7 +227,42 @@ def via_arrays(target: Path, valid: Path) -> None:
         _write(valid / f"{name}.state.json", document)
 
 
+def technologies() -> None:
+    """Variants of ``synthetic/technology-blind.state.json`` with a board via
+    against its via technology catalog (F.Cu to In1.Cu ``blind-f1``: 0.1 mm
+    least drill and annular ring, aspect ratio 12 on a 1.6 mm board)."""
+    source = json.loads((HERE / "synthetic" / "technology-blind.state.json").read_text(encoding="utf-8"))
+
+    def layer(value):
+        return {"$enum": "pcbir.physical:CopperLayer", "value": value}
+
+    def via(size, drill, technology="blind-f1", to_layer="In1.Cu"):
+        def change(document):
+            _entry(document, "board")[1]["fields"]["vias"] = {"$tuple": [{"$type": "pcbir.physical:Via", "fields": {
+                "net": "W", "position": {"$type": "pcbir.physical:Point", "fields": {"x_nm": 20000000, "y_nm": 20000000}},
+                "size_nm": size, "drill_nm": drill, "from_layer": layer("F.Cu"), "to_layer": layer(to_layer),
+                "technology": technology, "finish": "standard"}}]}
+        return change
+
+    for folder, name, change in (
+        ("malformed", "technology-aspect-ratio", via(300000, 100000)),
+        ("malformed", "technology-drill", via(450000, 50000)),
+        ("malformed", "technology-ring", via(250000, 200000)),
+        ("malformed", "technology-span", via(450000, 200000, to_layer="B.Cu")),
+        ("malformed", "technology-unknown", via(450000, 200000, technology="laser")),
+        ("malformed", "technology-missing", via(450000, 200000, technology=None)),
+        ("variants", "technology-via", via(450000, 200000)),
+    ):
+        document = copy.deepcopy(source)
+        change(document)
+        _write(HERE / folder / f"{name}.state.json", document)
+    print("technologies: 7 variants")
+
+
 if __name__ == "__main__":
-    names = sys.argv[1:] or [*BOARDS, *SYNTHETIC, "malformed"]
+    names = sys.argv[1:] or [*BOARDS, *SYNTHETIC, "malformed", "technologies"]
     for name in names:
-        malformed() if name == "malformed" else synthetic(name) if name in SYNTHETIC else generate(name)
+        if name == "technologies":
+            technologies()
+        else:
+            malformed() if name == "malformed" else synthetic(name) if name in SYNTHETIC else generate(name)

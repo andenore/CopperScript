@@ -27,7 +27,7 @@ use crate::pin_escape::RoutingAccess;
 use crate::progress::Progress;
 use crate::routing::GlobalRoutingResult;
 use crate::routing_clearance::RoutingClearanceIndex;
-use crate::unified_error::{Result, fail, not_implemented};
+use crate::unified_error::{Result, fail};
 
 fn int(value: i64) -> Value {
     Value::Int(value.into())
@@ -135,14 +135,44 @@ fn neighbour_nets(board: &PhysicalBoard, nets: &[&PhysicalNet], accepted: &Accep
     result
 }
 
+/// Runs `$body` with `$router`, a router over `$partial`: on the shared index
+/// in `$slot` (given back afterwards), or, without `share_commit_index`, on a
+/// fresh index of `$partial`.
+macro_rules! with_router {
+    ($shared:expr, $slot:expr, $partial:expr, $options:expr, $nets:expr, $pads:expr, $required:expr,
+     |$router:ident| $body:block) => {
+        if $shared.enabled {
+            let taken = $slot.take().expect("index");
+            let mut $router = Router::new($partial, $options, $nets, $pads, $required, taken)?;
+            $router.set_guides($shared.guides);
+            let outcome = $body;
+            *$slot = $router.clearance.take();
+            outcome
+        } else {
+            let fresh = RoutingClearanceIndex::new($partial)?;
+            let mut $router = Router::new($partial, $options, $nets, $pads, $required, fresh)?;
+            $router.set_guides($shared.guides);
+            $body
+        }
+    };
+}
+
 /// `_SharedIndex`: one exact index of a base board plus a chosen part of this call's copper.
-struct Shared {
+/// Without `share_commit_index` (`enabled` false) it holds nothing and every
+/// router builds a fresh index of its own board.
+struct Shared<'g> {
+    enabled: bool,
+    /// The global route every router of the call follows (`guides`).
+    guides: Option<&'g GlobalRoutingResult>,
     held: IndexMap<String, (Vec<TrackSegment>, Vec<Via>)>,
     frozen: IndexSet<String>,
 }
 
-impl Shared {
+impl Shared<'_> {
     fn added(&mut self, more: &Accepted) {
+        if !self.enabled {
+            return;
+        }
         for (name, (tracks, vias)) in more {
             let entry = self.held.entry(name.clone()).or_default();
             entry.0.extend(tracks.iter().cloned());
@@ -152,12 +182,18 @@ impl Shared {
 
     /// `freeze`: the copper held now becomes part of the base.
     fn freeze(&mut self) {
+        if !self.enabled {
+            return;
+        }
         let names: Vec<String> = self.held.keys().cloned().collect();
         self.frozen.extend(names);
         self.held.clear();
     }
 
     fn hold(&mut self, index: &mut RoutingClearanceIndex<'_>, target: &Accepted) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
         let mut names: Vec<String> =
             self.held.keys().chain(target.keys()).cloned().collect::<IndexSet<_>>().into_iter().collect();
         names.sort();
@@ -398,7 +434,7 @@ fn repair_attempt(
     complete: &IndexSet<String>,
     router: &Router<'_, '_>,
     index: &mut Option<RoutingClearanceIndex<'_>>,
-    shared: &mut Shared,
+    shared: &mut Shared<'_>,
     seeder: Option<&mut EscapeSeeder<'_>>,
     required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
     deadline: Option<Instant>,
@@ -428,8 +464,10 @@ fn repair_attempt(
     let remaining: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| !done.contains(&n.name)).collect();
     let mut partial = with_copper(board, &work);
     // The shared index rips the crowd out instead of being rebuilt.
-    shared.hold(index.as_mut().expect("index"), &work)?;
-    let mut share = true;
+    let mut share = shared.enabled;
+    if share {
+        shared.hold(index.as_mut().expect("index"), &work)?;
+    }
     if let Some(seeder) = seeder {
         let failed_signal: IndexSet<String> = remaining
             .iter()
@@ -448,7 +486,8 @@ fn repair_attempt(
         }
         // Seeded escapes join the shared index only if the seeder just added
         // copper; any other change gets a fresh index of its board.
-        share = same_but_copper(&seeded, &partial)
+        share = share
+            && same_but_copper(&seeded, &partial)
             && added_items(&partial.tracks, &seeded.tracks).is_empty()
             && added_items(&partial.vias, &seeded.vias).is_empty();
         if share {
@@ -475,6 +514,7 @@ fn repair_attempt(
     let (more_routes, more, more_rejected, more_complete, rejections, used) = if share {
         let taken = index.take().expect("index");
         let mut repair = Router::new(&partial, options, &remaining, IndexSet::new(), required_accesses, taken)?;
+        repair.set_guides(shared.guides);
         penalised(&mut repair);
         let (more_routes, more_conflicts, used) = repair.negotiate(deadline, None, events)?;
         let (more, more_rejected, more_complete) = repair.commit(&more_routes, &more_conflicts)?;
@@ -484,6 +524,7 @@ fn repair_attempt(
     } else {
         let fresh = RoutingClearanceIndex::new(&partial)?;
         let mut repair = Router::new(&partial, options, &remaining, IndexSet::new(), required_accesses, fresh)?;
+        repair.set_guides(shared.guides);
         penalised(&mut repair);
         let (more_routes, more_conflicts, used) = repair.negotiate(deadline, None, events)?;
         let (more, more_rejected, more_complete) = repair.commit(&more_routes, &more_conflicts)?;
@@ -507,7 +548,7 @@ fn repair_attempt(
 
 /// `save_state`'s write: the parent directories (`mkdir`), then the text
 /// (`write_text`); a failure is the uncaught `OSError`.
-fn save_inputs(path: &str, text: &str) -> Result<()> {
+pub fn save_inputs(path: &str, text: &str) -> Result<()> {
     use copper_lang::paths::{python_os_call_error, python_os_error};
     let crash = |error: &std::io::Error, message: String| {
         let class = match error.kind() {
@@ -625,11 +666,13 @@ pub fn route_unified(
             }
         }
     }
-    if !options.share_commit_index {
-        return not_implemented("unified router without share_commit_index");
-    }
     let mut events: Vec<Event> = Vec::new();
-    let mut shared = Shared { held: IndexMap::new(), frozen: IndexSet::new() };
+    let mut shared = Shared {
+        enabled: options.share_commit_index,
+        guides: Some(global_route),
+        held: IndexMap::new(),
+        frozen: IndexSet::new(),
+    };
     let mut bus_accepted: Accepted = IndexMap::new();
     let mut bus_complete: IndexSet<String> = IndexSet::new();
     let mut bus_skew_notes: Vec<String> = Vec::new();
@@ -644,6 +687,7 @@ pub fn route_unified(
         let bus_nets: Vec<&PhysicalNet> =
             nets.iter().copied().filter(|n| bus_names.contains(n.name.as_str())).collect();
         let mut bus_router = Router::new(board, &bus_options, &bus_nets, IndexSet::new(), required_accesses, index)?;
+        bus_router.set_guides(shared.guides);
         let (bus_routes, bus_conflicts, used) = bus_router.negotiate(deadline, None, &mut events)?;
         forward(&mut on_progress, &mut events);
         let (accepted_bus, _, complete_bus) = bus_router.commit(&bus_routes, &bus_conflicts)?;
@@ -696,7 +740,9 @@ pub fn route_unified(
         }
     }
     emit(&mut on_progress, "unified_setup", "started", vec![("nets", int(nets.len() as i64))]);
+    let index = if shared.enabled { index } else { RoutingClearanceIndex::new(board)? };
     let mut router = Router::new(board, options, &nets, IndexSet::new(), required_accesses, index)?;
+    router.set_guides(shared.guides);
     if options.export_congestion && options.congestion_tile_nm < router.pitch {
         return fail("congestion_tile_nm must be at least the router pitch");
     }
@@ -806,7 +852,9 @@ pub fn route_unified(
             }
         }
         // Back to the adopted copper (attempts left their own in the index).
-        shared.hold(index.as_mut().expect("index"), &accepted)?;
+        if shared.enabled {
+            shared.hold(index.as_mut().expect("index"), &accepted)?;
+        }
         router.clearance = index;
         emit(
             &mut on_progress,
@@ -1064,7 +1112,7 @@ fn recheck_pours<'b>(
     mut complete: IndexSet<String>,
     options: &UnifiedRouterOptions,
     required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
-    shared: &mut Shared,
+    shared: &mut Shared<'_>,
     slot: &mut Option<RoutingClearanceIndex<'b>>,
     deadline: Option<Instant>,
     events: &mut Vec<Event>,
@@ -1092,15 +1140,17 @@ fn recheck_pours<'b>(
     let mut current = (accepted.clone(), before);
     let mut adopted = false;
     // Step 1: plane nets only, everything else fixed.
-    shared.hold(slot.as_mut().expect("index"), &current.0)?;
+    if shared.enabled {
+        shared.hold(slot.as_mut().expect("index"), &current.0)?;
+    }
     let partial = with_copper(board, &current.0);
-    let taken = slot.take().expect("index");
-    let mut step = Router::new(&partial, options, &plane_list, IndexSet::new(), required_accesses, taken)?;
-    let (routes, conflicts, used) = step.negotiate(deadline, None, events)?;
+    let (more, used) =
+        with_router!(shared, slot, &partial, options, &plane_list, IndexSet::new(), required_accesses, |step| {
+            let (routes, conflicts, used) = step.negotiate(deadline, None, events)?;
+            let (more, _, _) = step.commit(&routes, &conflicts)?;
+            (more, used)
+        });
     iterations += used;
-    let (more, _, _) = step.commit(&routes, &conflicts)?;
-    *slot = step.clearance.take();
-    drop(step);
     shared.added(&more);
     let candidate = merge(&current.0, &more);
     let estimate = pour_estimate(board, &candidate)?;
@@ -1144,42 +1194,47 @@ fn recheck_pours<'b>(
         let ripped: Accepted =
             current.0.iter().filter(|(name, _)| !crowd.contains(*name)).map(|(n, c)| (n.clone(), c.clone())).collect();
         let still_nets: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| still.contains_key(&n.name)).collect();
-        shared.hold(slot.as_mut().expect("index"), &ripped)?;
-        let partial = with_copper(board, &ripped);
-        let taken = slot.take().expect("index");
-        let mut first = Router::new(&partial, options, &still_nets, pads, required_accesses, taken)?;
-        let (routes, conflicts, used) = first.negotiate(deadline, None, events)?;
-        iterations += used;
-        let (plane_more, plane_rejected, _) = first.commit(&routes, &conflicts)?;
-        let mut explicit = Object::new();
-        for name in still.keys() {
-            let copper = plane_more.get(name).map_or((0, 0), |(t, v)| (t.len(), v.len()));
-            let reason = routes.get(name).map_or("not routed".to_owned(), |r| r.reason.clone());
-            let rejected = if plane_rejected.contains_key(name) { rejection_text(&first, name) } else { String::new() };
-            explicit.insert(
-                name.clone(),
-                Value::Object(Object::from([
-                    ("copper".to_owned(), Value::Array(vec![int(copper.0 as i64), int(copper.1 as i64)])),
-                    ("reason".to_owned(), Value::from(reason.as_str())),
-                    ("rejected".to_owned(), Value::from(rejected.as_str())),
-                ])),
-            );
+        if shared.enabled {
+            shared.hold(slot.as_mut().expect("index"), &ripped)?;
         }
+        let partial = with_copper(board, &ripped);
+        let (plane_more, used, explicit) =
+            with_router!(shared, slot, &partial, options, &still_nets, pads, required_accesses, |first| {
+                let (routes, conflicts, used) = first.negotiate(deadline, None, events)?;
+                let (plane_more, plane_rejected, _) = first.commit(&routes, &conflicts)?;
+                let mut explicit = Object::new();
+                for name in still.keys() {
+                    let copper = plane_more.get(name).map_or((0, 0), |(t, v)| (t.len(), v.len()));
+                    let reason = routes.get(name).map_or("not routed".to_owned(), |r| r.reason.clone());
+                    let rejected =
+                        if plane_rejected.contains_key(name) { rejection_text(&first, name) } else { String::new() };
+                    explicit.insert(
+                        name.clone(),
+                        Value::Object(Object::from([
+                            ("copper".to_owned(), Value::Array(vec![int(copper.0 as i64), int(copper.1 as i64)])),
+                            ("reason".to_owned(), Value::from(reason.as_str())),
+                            ("rejected".to_owned(), Value::from(rejected.as_str())),
+                        ])),
+                    );
+                }
+                (plane_more, used, explicit)
+            });
+        iterations += used;
         explicit_report = Some(Value::Object(explicit));
-        *slot = first.clearance.take();
-        drop(first);
         shared.added(&plane_more);
         let candidate = merge(&ripped, &plane_more);
         let crowd_nets: Vec<&PhysicalNet> = nets.iter().copied().filter(|n| crowd.contains(&n.name)).collect();
-        shared.hold(slot.as_mut().expect("index"), &candidate)?;
+        if shared.enabled {
+            shared.hold(slot.as_mut().expect("index"), &candidate)?;
+        }
         let partial = with_copper(board, &candidate);
-        let taken = slot.take().expect("index");
-        let mut second = Router::new(&partial, options, &crowd_nets, IndexSet::new(), required_accesses, taken)?;
-        let (routes, conflicts, used) = second.negotiate(deadline, None, events)?;
+        let (signal_more, signal_complete, used) =
+            with_router!(shared, slot, &partial, options, &crowd_nets, IndexSet::new(), required_accesses, |second| {
+                let (routes, conflicts, used) = second.negotiate(deadline, None, events)?;
+                let (signal_more, _, signal_complete) = second.commit(&routes, &conflicts)?;
+                (signal_more, signal_complete, used)
+            });
         iterations += used;
-        let (signal_more, _, signal_complete) = second.commit(&routes, &conflicts)?;
-        *slot = second.clearance.take();
-        drop(second);
         shared.added(&signal_more);
         let candidate = merge(&candidate, &signal_more);
         let estimate = pour_estimate(board, &candidate)?;
@@ -1201,7 +1256,9 @@ fn recheck_pours<'b>(
             adopted = true;
         }
     }
-    shared.hold(slot.as_mut().expect("index"), &current.0)?;
+    if shared.enabled {
+        shared.hold(slot.as_mut().expect("index"), &current.0)?;
+    }
     let mut still_cut: Vec<String> = current
         .1
         .open_pads

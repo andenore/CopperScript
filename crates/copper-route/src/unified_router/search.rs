@@ -8,10 +8,14 @@ use copper_physical::pyfloat::hypot;
 
 use super::astar::{FLAG_NECK, FLAG_NECK_MID, FLAG_REGION, FLAG_TARGET, NestedTables, Scratch, SearchInput, search};
 use super::geometry::{disc_offsets, segment_offsets};
+use super::rasters::FOREIGN;
+
+/// A via's `(from, to, technology)`.
+pub type ViaSpan = (CopperLayer, CopperLayer, Option<String>);
 use super::router::{Attach, Lead, NetRoute, NetSpec, Router};
 use crate::routing_lattice::{IndexBox, MOVES, NestedLattice};
 use crate::unified_error::{Result, not_implemented};
-use copper_physical::Point;
+use copper_physical::{CopperLayer, Point};
 
 /// Python's `round(radius, 6)` as a cache key.
 fn radius_key(radius: f64) -> u64 {
@@ -134,8 +138,9 @@ impl Router<'_, '_> {
         } else if !route.connected
             && self.specs[index].layers.len() > 1
             && !self.board.stackup.via_technologies.is_empty()
+            && self.via_transitions(index)?.is_empty()
         {
-            return not_implemented("unified router via technologies");
+            route.reason.push_str("; no_via_technology for allowed layer transitions");
         }
         Ok(route)
     }
@@ -421,6 +426,15 @@ impl Router<'_, '_> {
         let margin = self.margin(&self.specs[index]);
         let mut bbox = g.grow_box((tbox.0.min(sx0), tbox.1.min(sy0), tbox.2.max(sx1), tbox.3.max(sy1)), margin);
         let whole = g.full_box();
+        if !self.guides.is_empty() {
+            let name = self.specs[index].name.clone();
+            if let Some(corridor) = self.guide_corridor(&name)? {
+                // A guided net's window covers its corridor, so the soft guide
+                // cost can be followed where the guide detours.
+                let (cx0, cy0, cx1, cy1) = corridor.bounds;
+                bbox = (bbox.0.min(cx0), bbox.1.min(cy0), bbox.2.max(cx1), bbox.3.max(cy1));
+            }
+        }
         for attempt in 0..3 {
             let result = self.astar(index, sources, &targets, present, bbox, tbox)?;
             if result.is_some() {
@@ -501,17 +515,160 @@ impl Router<'_, '_> {
         table
     }
 
-    /// `_via_owners`: the via raster (return-via masks are not rewritten).
-    fn via_owner(&mut self, index: usize) -> Result<Vec<i32>> {
+    /// `_via_owners`: the via raster; a single-ended net that requires return
+    /// vias may propose a via only within reach of an existing return barrel
+    /// (a proposal: exact checks repeat at commit and in DRC).
+    fn via_owner(&mut self, index: usize, span: Option<(usize, usize)>) -> Result<Vec<i32>> {
         let spec = &self.specs[index];
-        if let Some(rule) = self.rules.get(&spec.name)
-            && rule.require_return_vias
-            && rule.differential_partner.is_none()
-        {
-            return not_implemented("unified router required return vias");
-        }
         let (size, drill, clearance) = (spec.via_size, spec.via_drill, spec.clearance);
-        Ok(self.rasters.via(size, drill, clearance, None).to_vec())
+        let rule = match self.rules.get(&spec.name) {
+            Some(rule) if rule.require_return_vias && rule.differential_partner.is_none() => rule.clone(),
+            _ => return Ok(self.rasters.via(size, drill, clearance, span).to_vec()),
+        };
+        if let Some(cached) = self.return_via_owners.get(&(spec.name.clone(), span)) {
+            return Ok(cached.clone());
+        }
+        let name = spec.name.clone();
+        let layers = &self.lattice.layers;
+        let (low, high) = span.unwrap_or((0, layers.len() - 1));
+        let (low, high) = (layers[low], layers[high]);
+        let mut masks: Vec<Vec<bool>> = self.rasters.views.iter().map(|view| vec![false; view.px.len()]).collect();
+        for via in &self.board.vias {
+            if rule.return_via_net.as_deref() != Some(via.net.as_str())
+                || via.net == name
+                || !crate::return_paths::return_span_covers(self.board, via, low, high)
+            {
+                continue;
+            }
+            let Some(limit) = rule.maximum_return_via_distance_nm else {
+                return not_implemented("required return vias without a maximum distance (Python crashes)");
+            };
+            let (x, y) = (via.position.x_nm, via.position.y_nm);
+            for (view, mask) in self.rasters.views.iter().zip(&mut masks) {
+                let block = &view.block;
+                let (x0, y0, x1, y1) =
+                    block.window((x - limit) as f64, (y - limit) as f64, (x + limit) as f64, (y + limit) as f64);
+                if x0 > x1 || y0 > y1 {
+                    continue;
+                }
+                for iy in y0..=y1 {
+                    for ix in x0..=x1 {
+                        let at = (iy * block.nx + ix) as usize;
+                        if (view.px[at] - x as f64).hypot(view.py[at] - y as f64) <= limit as f64 {
+                            mask[at] = true;
+                        }
+                    }
+                }
+            }
+        }
+        let mut owners = self.rasters.via(size, drill, clearance, span).to_vec();
+        for (owner, inside) in owners.iter_mut().zip(masks.iter().flatten()) {
+            if !inside {
+                *owner = FOREIGN;
+            }
+        }
+        self.return_via_owners.insert((name, span), owners.clone());
+        Ok(owners)
+    }
+
+    /// `_transition_span`: the physical via span of a change between two
+    /// lattice layers (`None`: no declared technology serves it).
+    pub fn transition_span(&mut self, low: usize, high: usize) -> Option<(CopperLayer, CopperLayer, Option<String>)> {
+        if let Some(span) = self.via_span_cache.get(&(low, high)) {
+            return span.clone();
+        }
+        let layers = &self.lattice.layers;
+        let span = crate::routing_vias::physical_via_span(self.board, layers[low], layers[high]);
+        self.via_span_cache.insert((low, high), span.clone());
+        span
+    }
+
+    /// The lattice layers a via of `span` occupies (all without a span).
+    fn span_layers(&self, span: Option<&ViaSpan>) -> std::ops::Range<i64> {
+        let g = &self.lattice;
+        match span {
+            None => 0..g.nl,
+            Some((first, second, _)) => {
+                let position = |layer: &CopperLayer| g.layers.iter().position(|item| item == layer).expect("a layer");
+                let (a, b) = (position(first) as i64, position(second) as i64);
+                a.min(b)..a.max(b) + 1
+            }
+        }
+    }
+
+    /// `_site_spans`: the via of each layer-change site, `xy -> (from, to,
+    /// technology)` or `None` (no declared technology serves it; commit
+    /// rejects the path). `changes` maps a site to the lowest and highest
+    /// lattice layer a route changes between there. Without a catalog every
+    /// site is the through via; with one, an existing via of the net at the
+    /// site spanning those layers is reused as it is.
+    pub fn site_spans(&self, name: &str, changes: &IndexMap<i64, (i64, i64)>) -> IndexMap<i64, Option<ViaSpan>> {
+        let g = &self.lattice;
+        let outer = (g.layers[0], *g.layers.last().expect("layers"), None);
+        if self.board.stackup.via_technologies.is_empty() {
+            return changes.keys().map(|xy| (*xy, Some(outer.clone()))).collect();
+        }
+        let order = |layer: CopperLayer| g.layers.iter().position(|item| *item == layer).map(|i| i as i64);
+        let mut result = IndexMap::new();
+        for (&xy, &(low, high)) in changes {
+            let point = g.column_point(xy);
+            let existing = self.board.vias.iter().find(|via| {
+                via.net == name
+                    && via.position == point
+                    && matches!((order(via.from_layer), order(via.to_layer)), (Some(a), Some(b))
+                        if a.min(b) <= low && high <= a.max(b))
+            });
+            let span = match existing {
+                Some(via) => Some((via.from_layer, via.to_layer, via.technology.clone())),
+                None => {
+                    crate::routing_vias::physical_via_span(self.board, g.layers[low as usize], g.layers[high as usize])
+                }
+            };
+            result.insert(xy, span);
+        }
+        result
+    }
+
+    /// `_via_sites`: `site_spans` for every layer-change site of one route's paths.
+    pub fn via_sites(&self, name: &str, paths: &[Vec<i64>]) -> IndexMap<i64, Option<ViaSpan>> {
+        let g = &self.lattice;
+        let mut changes: IndexMap<i64, (i64, i64)> = IndexMap::new();
+        for path in paths {
+            for pair in path.windows(2) {
+                let (la, lb) = (g.layer_of(pair[0]), g.layer_of(pair[1]));
+                if la != lb {
+                    let xy = g.column(pair[0]);
+                    let (low, high) = changes.get(&xy).copied().unwrap_or((la, la));
+                    changes.insert(xy, (low.min(la).min(lb), high.max(la).max(lb)));
+                }
+            }
+        }
+        self.site_spans(name, &changes)
+    }
+
+    /// `_via_transitions`: with a via catalog, the via raster of each served
+    /// pair of the net's layers (`(low, high)` lattice indices) for the span
+    /// its technology drills. Empty without a catalog.
+    pub fn via_transitions(&mut self, index: usize) -> Result<Vec<((usize, usize), Vec<i32>)>> {
+        if self.board.stackup.via_technologies.is_empty() {
+            return Ok(Vec::new());
+        }
+        let layers = self.specs[index].layers.clone();
+        let mut owners = Vec::new();
+        for &low in &layers {
+            for &high in &layers {
+                if low >= high {
+                    continue;
+                }
+                let Some((first, second, _)) = self.transition_span(low, high) else { continue };
+                let order = &self.lattice.layers;
+                let position =
+                    |layer: CopperLayer| order.iter().position(|item| *item == layer).expect("a lattice layer");
+                let (a, b) = (position(first), position(second));
+                owners.push(((low, high), self.via_owner(index, Some((a.min(b), a.max(b))))?));
+            }
+        }
+        Ok(owners)
     }
 
     /// `_astar` through the native kernel's semantics.
@@ -531,14 +688,32 @@ impl Router<'_, '_> {
         let (width, clearance) = (spec.width, spec.clearance);
         let owner = self.rasters.track(width, clearance).0.to_vec();
         let mid_owner = self.rasters.track(width, clearance).1.to_vec();
-        let via_owner = self.via_owner(index)?;
-        if !self.board.stackup.via_technologies.is_empty() {
-            return not_implemented("unified router via technologies");
-        }
+        let via_owner = self.via_owner(index, None)?;
+        let transitions =
+            if self.board.stackup.via_technologies.is_empty() { None } else { Some(self.via_transitions(index)?) };
+        let nl = self.lattice.nl as usize;
+        let transition_table: Option<Vec<Option<&[i32]>>> = transitions.as_ref().map(|owners| {
+            let mut table: Vec<Option<&[i32]>> = vec![None; nl * nl];
+            for ((low, high), mask) in owners {
+                table[low * nl + high] = Some(mask.as_slice());
+                table[high * nl + low] = Some(mask.as_slice());
+            }
+            table
+        });
         let layers: Vec<i32> =
             spec.layers.iter().map(|&l| l as i32 | if spec.target_only.contains(&l) { 0x100 } else { 0 }).collect();
         let move_base = self.move_base();
         let turn = if self.options.bend_cost != 0.0 { Some(self.turn_table()) } else { None };
+        // Per node, guide_cost outside the searched net's corridor (`_n_guide`).
+        let corridor = if self.guides.is_empty() { None } else { self.guide_corridor(&spec.name)? };
+        if let Some(corridor) = &corridor {
+            let size = self.lattice.size as usize;
+            let cost = self.options.guide_cost;
+            let guide = self.guide_nodes.get_or_insert_with(|| vec![cost; size]);
+            for &node in &corridor.nodes {
+                guide[node as usize] = 0.0;
+            }
+        }
         let marks: Vec<(Vec<i64>, u8)> = vec![
             (spec.neck.iter().copied().collect(), FLAG_NECK),
             (spec.neck_mid.iter().copied().collect(), FLAG_NECK_MID),
@@ -591,8 +766,8 @@ impl Router<'_, '_> {
             sources,
             target_extra: targets.extra.map(|_| &self.extra[..]),
             turn: turn.as_deref(),
-            guide: None,
-            via_transitions: None,
+            guide: corridor.as_ref().and(self.guide_nodes.as_deref()),
+            via_transitions: transition_table.as_deref(),
             max_expansions: self.options.maximum_expansions,
             nested: None,
         };
@@ -614,6 +789,11 @@ impl Router<'_, '_> {
         if let Some(extra) = targets.extra {
             for &node in extra.keys() {
                 self.extra[node as usize] = 0.0;
+            }
+        }
+        if let (Some(corridor), Some(guide)) = (&corridor, self.guide_nodes.as_mut()) {
+            for &node in &corridor.nodes {
+                guide[node as usize] = self.options.guide_cost;
             }
         }
         Ok(path.map(|path| {
@@ -690,18 +870,20 @@ impl Router<'_, '_> {
             }
         }
         let via_xy: IndexSet<i64> = changes.keys().copied().collect();
-        // Without via technologies every site is a through via.
-        let nl = g.nl;
+        // A via's copper claims only the layers it spans (all of them for a
+        // through via, or where no technology serves the site).
+        let spans = self.site_spans(&spec.name, &changes);
         for &xy in changes.keys() {
+            let via_layers = self.span_layers(spans[&xy].as_ref());
             if via_body >= 0.5 {
                 for column in g.offset_columns(xy, &disc_offsets_cached(via_body)) {
-                    for layer in 0..nl {
+                    for layer in via_layers.clone() {
                         body.insert(g.layer_node(column, layer), xy);
                     }
                 }
             }
             for column in g.offset_columns(xy, &disc_offsets_cached(via_radius)) {
-                for layer in 0..nl {
+                for layer in via_layers.clone() {
                     claims.insert(g.layer_node(column, layer));
                 }
             }
@@ -835,18 +1017,18 @@ impl Router<'_, '_> {
             }
         }
         let via_xy: IndexSet<i64> = changes.keys().copied().collect();
-        // Without via technologies every site is a through via.
-        let nl = g.nl;
+        let spans = self.site_spans(&spec.name, &changes);
         for &xy in changes.keys() {
+            let via_layers = self.span_layers(spans[&xy].as_ref());
             if via_body >= 0.5 {
                 for column in g.columns_with_twins(&nested_disc_columns(g, pitch, xy, via_body)) {
-                    for layer in 0..nl {
+                    for layer in via_layers.clone() {
                         body.insert(layer * plane + column, xy);
                     }
                 }
             }
             for column in nested_disc_columns(g, pitch, xy, via_radius) {
-                for layer in 0..nl {
+                for layer in via_layers.clone() {
                     claims.insert(layer * plane + column);
                 }
             }

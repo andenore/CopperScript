@@ -649,6 +649,23 @@ fn stackup_layer(item: &copper_lang::mechanical::stackup::StackupLayer) -> Strin
     )
 }
 
+/// `repr(ViaTechnology)`.
+fn via_technology(item: &ViaTechnology) -> String {
+    let kind = item.kind.value();
+    dc(
+        "ViaTechnology",
+        &[
+            ("id", s(&item.id)),
+            ("kind", enum_repr("ViaKind", &kind.to_uppercase(), kind)),
+            ("from_layer", layer(item.from_layer)),
+            ("to_layer", layer(item.to_layer)),
+            ("minimum_drill_nm", int(item.minimum_drill_nm)),
+            ("minimum_annular_ring_nm", int(item.minimum_annular_ring_nm)),
+            ("maximum_aspect_ratio", decimal(&item.maximum_aspect_ratio)),
+        ],
+    )
+}
+
 /// The `physical_board_digest` document.
 pub fn board_document(board: &PhysicalBoard) -> Json {
     let mut document: Vec<(&str, Json)> = vec![("name", j_str(&board.name))];
@@ -844,7 +861,10 @@ pub fn board_document(board: &PhysicalBoard) -> Json {
                     "physical_layers",
                     j_list(stackup.physical_layers.iter().map(|l| Json::Str(stackup_layer(l))).collect()),
                 ),
-                ("via_technologies", j_list(Vec::new())),
+                (
+                    "via_technologies",
+                    j_list(stackup.via_technologies.iter().map(|t| Json::Str(via_technology(t))).collect()),
+                ),
             ]
             .into_iter()
             .map(|(k, v)| (k.to_owned(), v))

@@ -1380,17 +1380,17 @@ type FlowEdge = [i64; 5];
 /// Integer min-cost max-flow by successive shortest paths (Dijkstra with
 /// potentials). Deterministic: edges are kept in insertion order and ties go
 /// to the lower node.
-struct MinCostFlow {
+pub(crate) struct MinCostFlow {
     graph: Vec<Vec<FlowEdge>>,
 }
 
 impl MinCostFlow {
-    fn new(nodes: usize) -> Self {
+    pub(crate) fn new(nodes: usize) -> Self {
         MinCostFlow { graph: vec![Vec::new(); nodes] }
     }
 
     /// Add an edge; returns its index in `start`'s list.
-    fn add(&mut self, start: usize, end: usize, capacity: i64, cost: i64) -> usize {
+    pub(crate) fn add(&mut self, start: usize, end: usize, capacity: i64, cost: i64) -> usize {
         let reverse = self.graph[end].len() as i64;
         self.graph[start].push([end as i64, capacity, cost, reverse, capacity]);
         let forward = self.graph[start].len() as i64 - 1;
@@ -1398,7 +1398,7 @@ impl MinCostFlow {
         self.graph[start].len() - 1
     }
 
-    fn edge_flow(&self, start: usize, index: usize) -> i64 {
+    pub(crate) fn edge_flow(&self, start: usize, index: usize) -> i64 {
         let edge = self.graph[start][index];
         edge[4] - edge[1]
     }
@@ -1407,7 +1407,7 @@ impl MinCostFlow {
         self.graph[start].iter().any(|edge| edge[0] == end as i64 && edge[4] != 0 && edge[1] == 0)
     }
 
-    fn run(&mut self, source: usize, sink: usize) -> (i64, i64) {
+    pub(crate) fn run(&mut self, source: usize, sink: usize) -> (i64, i64) {
         let size = self.graph.len();
         let mut potential = vec![0i64; size];
         let (mut total_flow, mut total_cost) = (0, 0);

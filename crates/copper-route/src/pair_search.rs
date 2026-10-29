@@ -1521,6 +1521,7 @@ pub fn paired_candidates(
     first_guide: &GlobalNetRoute,
     second_guide: &GlobalNetRoute,
     bounds: SearchBounds,
+    completion: crate::pair_terminals::Completion<'_>,
     stats: &mut PairSearchStats,
     accept: &mut dyn FnMut(PairSearchCandidate, &mut PairSearchStats) -> Result<bool>,
 ) -> Result<bool> {
@@ -1559,7 +1560,19 @@ pub fn paired_candidates(
             lengths: &PORT_LENGTHS_NM,
             allow_local_fallback: true,
         };
-        groups.push(request.ports()?);
+        let mut ports = request.ports()?;
+        if let Some(completion) = completion {
+            let mut completed = Vec::new();
+            for port in ports {
+                if let Some(port) =
+                    crate::pair_terminals::complete_support_port(board, &access.pad.component, port, completion)?
+                {
+                    completed.push(port);
+                }
+            }
+            ports = completed;
+        }
+        groups.push(ports);
     }
     for (access, group) in accesses.iter().zip(&groups) {
         if group.is_empty() {

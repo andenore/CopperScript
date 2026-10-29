@@ -34,7 +34,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 from pcbir import (  # noqa: E402
-    CopperKeepout, CopperLayer, GlobalRouterOptions, NetMatchGroup, Point, PolygonRing, PolygonWithHoles,
+    CopperKeepout, CopperLayer, FootprintPad, GlobalRouterOptions, GlobalViaProposal, NetMatchGroup, NetRoutingRule,
+    PadReference, PhysicalFootprint, Placement, Point, PolygonRing, PolygonWithHoles, RouteKind, Size, Stackup,
     nm_from_mm, route_global,
 )
 from pcbir.workbench import save_state  # noqa: E402
@@ -43,6 +44,9 @@ import test_bundle_tuning as bundle_tuning  # noqa: E402
 import test_critical_bundles as bundles  # noqa: E402
 import test_group_tuning as group_tuning  # noqa: E402
 import test_length_match_tuning as match  # noqa: E402
+import test_local_pair_branches as local_branches  # noqa: E402
+import test_pair_hybrid_contact_anchor as hybrid_anchor  # noqa: E402
+import test_pair_terminal_fallback as terminal_fallback  # noqa: E402
 import test_loose_pair_repair as loose  # noqa: E402
 import test_nested_exits as nested  # noqa: E402
 import test_planned_crossings as crossings  # noqa: E402
@@ -123,7 +127,86 @@ def _serpentine():
                                                   match._keepout("below", 6, 11, 28, "13.2")))
 
 
-# name: (board builder, route_global options or None, replay arguments after the output paths)
+def _rules(board, **fields):
+    return replace(board, net_routing_rules=tuple(replace(rule, **fields) for rule in board.net_routing_rules))
+
+
+def _crossover_support(x):
+    # test_crossover_with_support_keeps_every_contact_and_rejects_remote_branch.
+    board = local_branches.fixture()
+    support = PhysicalFootprint("support", (FootprintPad("1", Point.mm(0, "-.25"), Size.mm(".4", ".3")),
+                                            FootprintPad("2", Point.mm(0, ".25"), Size.mm(".4", ".3"))), Size.mm(1, 1))
+    board = replace(board, footprints={**board.footprints, "support": support},
+                    placements=(*board.placements, Placement("ESD", "support", Point.mm(x, 12))),
+                    nets=tuple(replace(n, pads=(*n.pads, PadReference("ESD", str(i))))
+                               for i, n in enumerate(board.nets, 1)))
+    return _rules(board, breakout_length_nm=4500000)
+
+
+def _support(mode):
+    # test_support_contacts_require_one_source_declared_local_endpoint.
+    board = local_branches.support_fixture()
+    if mode == "remote":
+        return replace(board, placements=tuple(replace(p, position=Point.mm(20, 4)) if p.reference == "SUP_P" else p
+                                               for p in board.placements))
+    if mode == "ambiguous":
+        return _rules(board, breakout_length_nm=40000000)
+    return _rules(board, breakout_length_nm=None, breakout_width_nm=None)
+
+
+def _joint_returns(distance):
+    # test_joint_supports_cross_layers_with_real_returns_or_roll_back.
+    import test_pair_vias as pair_vias
+    board = pair_vias.board_fixture(True)
+    support = PhysicalFootprint("support", (FootprintPad("1", Point(0, 0), Size.mm(".4", ".4")),), Size.mm(1, 1))
+    board = replace(board, footprints={**board.footprints, "support": support},
+                    placements=(*board.placements, Placement("SUP_A", "support", Point.mm("6.4", 10)),
+                                Placement("SUP_B", "support", Point.mm("6.4", 14))),
+                    nets=tuple(replace(n, pads=(*n.pads, PadReference("SUP_" + n.name, "1")))
+                               if n.name in {"A", "B"} else n for n in board.nets))
+    return _rules(board, breakout_length_nm=4000000, breakout_width_nm=250000,
+                  maximum_return_via_distance_nm=distance)
+
+
+def _bound_pair():
+    # test_partial_pair_macro_ports.bound_pair, with the asset in a temporary directory.
+    import tempfile
+    import test_partial_pair_macro_ports as macro_ports
+    with tempfile.TemporaryDirectory() as directory:
+        return macro_ports.bound_pair(Path(directory))
+
+
+def _single_via_board():
+    import test_critical_routing as critical_routing
+    return replace(critical_routing._pair_board(),
+                   stackup=Stackup((CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2,
+                                    CopperLayer.BACK)),
+                   net_routing_rules=(NetRoutingRule("USB_DP", RouteKind.CRITICAL),))
+
+
+def _guide_via(board):
+    # A guide via on USB_DP from F.Cu to In1.Cu, as the test adds it.
+    route = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2.5")))
+    return replace(route, routes=tuple(
+        replace(r, vias=(GlobalViaProposal(r.net, Point.mm(20, 12), CopperLayer.FRONT, CopperLayer.INTERNAL_1,
+                                           "test-via"),)) if r.net == "USB_DP" else r
+        for r in route.routes))
+
+
+def _cleared(board):
+    # Guides as the tests clear them: no access, no coarse copper.
+    route = route_global(board)
+    return replace(route, routes=tuple(replace(r, connected=False, accesses=(), segments=(), vias=())
+                                       for r in route.routes))
+
+
+def _unconnected(board):
+    # Failed coarse access that keeps its pin accesses.
+    route = route_global(board)
+    return replace(route, routes=tuple(replace(r, connected=False, segments=(), vias=()) for r in route.routes))
+
+
+# name: (board builder, route_global options or a guide builder or None, replay arguments after the output paths)
 CASES = {
     # Critical pair bundles (plan R5, R6): planned crossings.
     "crossing-routed": (crossings._swapped, None, ()),
@@ -157,15 +240,132 @@ CASES = {
     "match-serpentine": (_serpentine, None, ()),
     "bundle-tuning": (lambda: bundle_tuning._bundle(bundle_tuning.HEMMED), None, ("--pair-states", "4000")),
     "group-tuning": (group_tuning._group_board, None, ()),
+    # Pair terminal preparation (pair_terminals): local crossovers, support
+    # contacts, joint supports and proved macro ports.
+    "terminals-crossover": (local_branches.fixture, None, ()),
+    "terminals-crossover-rejected": (lambda: _rules(local_branches.fixture(), max_vias=0), None,
+                                     ("--pair-states", "1")),
+    "terminals-crossover-support": (lambda: _crossover_support(23), None, ()),
+    "terminals-crossover-support-remote": (lambda: _crossover_support(18), None, ()),
+    "terminals-support-joint": (local_branches.support_fixture, _unconnected, ("--pair-states", "6000")),
+    "terminals-support-joint-tiny": (local_branches.support_fixture, None, ("--pair-states", "1")),
+    "terminals-support-remote": (lambda: _support("remote"), _unconnected, ("--pair-states", "6000")),
+    "terminals-support-ambiguous": (lambda: _support("ambiguous"), _unconnected, ("--pair-states", "6000")),
+    "terminals-support-no-contract": (lambda: _support("no-contract"), _unconnected, ("--pair-states", "6000")),
+    "terminals-joint-returns": (lambda: _joint_returns(1500000), None, ("--pair-states", "6000")),
+    "terminals-joint-returns-far": (lambda: _joint_returns(100000), None, ("--pair-states", "6000")),
+    "terminals-fallback": (lambda: terminal_fallback.fixture(False), _cleared, ()),
+    "terminals-fallback-duplicates": (lambda: terminal_fallback.fixture(True), _cleared, ()),
+    "terminals-fallback-duplicates-tiny": (lambda: terminal_fallback.fixture(True), _cleared,
+                                           ("--pair-states", "1")),
+    "terminals-support-branches": (terminal_fallback.support_branch_fixture, _cleared, ("--pair-states", "20000")),
+    "terminals-support-branches-tiny": (terminal_fallback.support_branch_fixture, _cleared, ("--pair-states", "1")),
+    "terminals-support-branches-remote": (lambda: terminal_fallback.support_branch_fixture(4), _cleared, ()),
+    "terminals-hybrid-anchor": (hybrid_anchor.hybrid, _cleared, ()),
+    "terminals-hybrid-anchor-renamed": (lambda: hybrid_anchor.hybrid(True), _cleared, ()),
+    "terminals-macro-ports": (lambda: _bound_pair(), _cleared, ()),
+    "terminals-macro-ports-coarse": (lambda: _bound_pair(), None, ()),
+    # Single-ended guide vias (test_critical_transition_without_special_technology_is_through_via).
+    "single-guide-via": (_single_via_board, _guide_via, ()),
+    "single-guide-via-budget": (lambda: _rules(_single_via_board(), max_vias=0), _guide_via, ()),
 }
 
 
 def write(name: str) -> Path:
     build, options, _ = CASES[name]
     board = build()
-    route = route_global(board) if options is None else route_global(board, options)
+    if callable(options):
+        route = options(board)
+    else:
+        route = route_global(board) if options is None else route_global(board, options)
     path = OUT / f"{name}.state.json"
     save_state(path, {"board": board, "global_route": route, "reserved_accesses": None,
+                      "plane_stitch_options": None})
+    print(f"{path.relative_to(ROOT)} ({path.stat().st_size} bytes)")
+    return path
+
+
+# --- Package-access reservations ----------------------------------------------
+
+
+def _bypass_held():
+    # test_bypass_checkpoint_replays_only_after_unique_edge_restore_and_fresh_admission.
+    from pcbir.decoupling import route_decouplers
+    from pcbir.flow import _bypass_copper_reservations
+    import test_decoupling_crosslayer_paths as crosslayer
+    source, _ = crosslayer.fixture()
+    planned = route_decouplers(source)
+    held, reason = _bypass_copper_reservations(source, planned.created_tracks, planned.created_vias,
+                                               planned.admitted_path_witnesses)
+    assert held is not None, reason
+    return source, route_global(source), held
+
+
+def _crossface(mode=None):
+    # test_formal_critical_pair_and_retained_clock_admit_only_complete_crossface_prefix.
+    import test_crosslayer_reservation_admission as admission
+    from pcbir.physical import CopperZone, PhysicalNet, TrackSegment
+    import test_critical_routing as critical_routing
+    pair = critical_routing._pair_board()
+    feed, link = admission.fixture()
+    terminal = PhysicalFootprint("single_clock", (FootprintPad("1", Point(0, 0), Size.mm(".4", ".4")),),
+                                 Size.mm(1, 1))
+    board = replace(pair, rules=feed.rules, stackup=feed.stackup,
+        footprints={**pair.footprints, **feed.footprints, terminal.name: terminal},
+        placements=(*pair.placements, *(replace(p, position=Point(p.position.x_nm, p.position.y_nm + 10_000_000))
+                                        for p in feed.placements),
+                    Placement("CLK_A", terminal.name, Point.mm(5, 5)),
+                    Placement("CLK_B", terminal.name, Point.mm(20, 5))),
+        nets=(*pair.nets, *feed.nets, PhysicalNet("CLOCK_OWNER", (PadReference("CLK_A", "1"),
+                                                                 PadReference("CLK_B", "1")))),
+        decoupling_links=feed.decoupling_links,
+        zones=(CopperZone("ordinary_return_plane", link.return_net, (CopperLayer.INTERNAL_1,),
+                          PolygonWithHoles(PolygonRing(pair.outline.vertices))),),
+        net_routing_rules=(*pair.net_routing_rules, *feed.net_routing_rules,
+                           NetRoutingRule("CLOCK_OWNER", RouteKind.CLOCK, width_nm=150000,
+                                          allowed_layers=(CopperLayer.FRONT,), max_vias=0,
+                                          max_length_nm=30_000_000)))
+    # The bypass-only reservation route-board's critical stage receives (the
+    # test's route_fanout result also holds pin accesses, which replay refuses).
+    from pcbir.decoupling import route_decouplers
+    from pcbir.flow import _bypass_copper_reservations
+    planned = route_decouplers(board)
+    ordinary, reason = _bypass_copper_reservations(board, planned.created_tracks, planned.created_vias,
+                                                   planned.admitted_path_witnesses)
+    assert ordinary is not None, reason
+    guides = route_global(board, GlobalRouterOptions(tile_size_nm=2_500_000, maximum_iterations=1))
+    if mode == "forged":
+        extra = replace(ordinary.decoupling_vias[-1], position=Point.mm(30, 20))
+        ordinary = replace(ordinary, board=replace(ordinary.board, vias=(*ordinary.board.vias, extra)),
+                           created_vias=(*ordinary.created_vias, extra),
+                           decoupling_vias=(*ordinary.decoupling_vias, extra),
+                           added_via_count=ordinary.added_via_count + 1)
+    elif mode == "short":
+        # An ordinary (undeclared) reservation track across both pair lands.
+        pads = [p for n in board.nets if n.name in {"USB_DP", "USB_DM"} for p in n.pads if p.component == "J1"]
+        from pcbir.placement import transformed_pad_position
+        poses = {p.reference: p for p in board.placements}
+        a, b = (transformed_pad_position(board, poses[p.component], p.pad) for p in pads[:2])
+        extra = TrackSegment(link.net, a, b, 150000, CopperLayer.FRONT)
+        ordinary = replace(ordinary, board=replace(ordinary.board, tracks=(*ordinary.board.tracks, extra)),
+                           created_tracks=(*ordinary.created_tracks, extra),
+                           added_track_count=ordinary.added_track_count + 1)
+    return board, guides, ordinary
+
+
+# name: (builder of (board, global route, reserved accesses), replay arguments after the output paths)
+RESERVED = {
+    "reserved-bypass": (_bypass_held, ()),
+    "reserved-crossface": (_crossface, ("--pair-states", "6000")),
+    "reserved-crossface-forged": (lambda: _crossface("forged"), ("--pair-states", "6000")),
+    "reserved-short": (lambda: _crossface("short"), ("--pair-states", "6000")),
+}
+
+
+def write_reserved(name: str) -> Path:
+    board, route, reserved = RESERVED[name][0]()
+    path = OUT / f"{name}.state.json"
+    save_state(path, {"board": board, "global_route": route, "reserved_accesses": reserved,
                       "plane_stitch_options": None})
     print(f"{path.relative_to(ROOT)} ({path.stat().st_size} bytes)")
     return path
@@ -190,7 +390,41 @@ def _bus_bundle_board():
     return replace(board, match_groups=(NetMatchGroup("bus", ("A", "B"), nm_from_mm(5)),))
 
 
-# name: (board builder, saved UnifiedRouterOptions fields)
+def _return_crossing(returns=True):
+    # test_single_ended_return_vias.crossing: a single-ended net that needs
+    # existing return vias to cross a wall (route_unified only_nets={"S"}).
+    import test_single_ended_return_vias as return_vias
+    return return_vias.crossing(returns=returns)
+
+
+def _technology_board(technologies, layers=None, *, closed=False, blocked=None):
+    # test_unified_commit_index._four_layer and test_unified_span_guides: A must
+    # change layers across a F.Cu wall, within ``layers``, with a via catalog.
+    import test_unified_commit_index as commit_index
+    import test_unified_span_guides as span_guides
+    catalog = tuple({"through": commit_index.THROUGH, "blind": commit_index.BLIND,
+                     "back-blind": span_guides.BACK_BLIND}[name] for name in technologies)
+    board = commit_index._four_layer(catalog, layers=layers)
+    if closed:
+        # test_a_layer_change_no_technology_serves_is_rejected_with_its_reason.
+        wall = PolygonWithHoles(PolygonRing(tuple(Point.mm(x, y) for x, y in
+                                                  (("12.8", 0), ("13.2", 0), ("13.2", 26), ("12.8", 26)))))
+        board = replace(board, tracks=(), copper_keepouts=(CopperKeepout(
+            "wall", (CopperLayer.FRONT,), wall, block_tracks=True, block_vias=False, block_pads=False,
+            block_zones=False),))
+    if blocked is not None:
+        # test_blind_vias_check_only_their_copper_span.
+        wall = span_guides._keepout("wall", (CopperLayer.FRONT,), ("12.8", 0, "13.2", 26), tracks=True, vias=False)
+        blocker = span_guides._keepout("via-blocker", (blocked,), (0, 0, 26, 26))
+        board = replace(board, tracks=(), copper_keepouts=(wall, blocker))
+    return board
+
+
+def _technology_guides(board):
+    return route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+
+
+# name: (board builder, saved UnifiedRouterOptions fields[, (guide builder, only_nets)])
 UNIFIED = {
     # test_tuned_bus_copper_survives_route_smoothing; replay with --set route_smoothing=true.
     "bus-skew": (_bus_skew_board, {"buses_first": True}),
@@ -198,24 +432,50 @@ UNIFIED = {
     "bus-skew-untunable": (lambda: _bus_skew_board(None), {"buses_first": True}),
     # test_bus_bundles_route_the_nets_between_the_bus_parts_with_the_bus; replay with --set bus_bundles=true.
     "bus-bundles": (_bus_bundle_board, {"maximum_iterations": 5}),
+    # test_negotiation_uses_existing_nearby_returns_without_adding_or_dropping_them.
+    "return-vias": (_return_crossing, {"pitch_nm": nm_from_mm("0.25"), "maximum_iterations": 4, "commit_rounds": 2},
+                    (lambda board: route_global(replace(board, tracks=(), vias=())), frozenset({"S"}))),
+    # test_missing_returns_do_not_silently_allow_signal_transitions.
+    "return-vias-missing": (lambda: _return_crossing(False),
+                            {"pitch_nm": nm_from_mm("0.25"), "maximum_iterations": 3, "commit_rounds": 1},
+                            (lambda board: route_global(replace(board, tracks=(), vias=())), frozenset({"S"}))),
+    # Via technologies (test_unified_commit_index, test_unified_span_guides).
+    "technology-blind": (lambda: _technology_board(("through", "blind"), (CopperLayer.FRONT, CopperLayer.INTERNAL_1)),
+                         {}, (_technology_guides, None)),
+    "technology-through": (lambda: _technology_board(("through", "blind"), (CopperLayer.FRONT, CopperLayer.BACK)),
+                           {}, (_technology_guides, None)),
+    "technology-none": (lambda: _technology_board(("blind",), (CopperLayer.FRONT, CopperLayer.BACK), closed=True),
+                        {}, (_technology_guides, None)),
+    "technology-blind-span": (lambda: _technology_board(("through", "blind"),
+                                                        (CopperLayer.FRONT, CopperLayer.INTERNAL_1),
+                                                        blocked=CopperLayer.BACK),
+                              {"maximum_iterations": 3, "commit_rounds": 1}, (_technology_guides, None)),
+    "technology-blind-blocked": (lambda: _technology_board(("through", "blind"),
+                                                           (CopperLayer.FRONT, CopperLayer.INTERNAL_1),
+                                                           blocked=CopperLayer.INTERNAL_1),
+                                 {"maximum_iterations": 3, "commit_rounds": 1}, (_technology_guides, None)),
+    "technology-catalog": (lambda: _technology_board(("through", "blind", "back-blind")), {},
+                           (_technology_guides, None)),
 }
 
 
 def write_unified(name: str) -> Path:
     from pcbir.unified_router import UnifiedRouterOptions, route_unified
-    build, fields = UNIFIED[name]
+    build, fields, *custom = UNIFIED[name]
     board = build()
-    route = route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    guides, only_nets = custom[0] if custom else (
+        lambda board: route_global(board, GlobalRouterOptions(tile_size_nm=nm_from_mm("2"))), None)
+    route = guides(board)
     path = UNIFIED_OUT / f"{name}.state.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    route_unified(board, route, UnifiedRouterOptions(save_inputs_path=str(path), **fields))
+    route_unified(board, route, UnifiedRouterOptions(save_inputs_path=str(path), **fields), only_nets=only_nets)
     print(f"{path.relative_to(ROOT)} ({path.stat().st_size} bytes)")
     return path
 
 
 def main(names: list[str]) -> int:
     unified = names[:1] == ["--unified"]
-    cases = UNIFIED if unified else CASES
+    cases = UNIFIED if unified else {**CASES, **RESERVED}
     names = names[1:] if unified else names
     unknown = set(names) - set(cases)
     if unknown:
@@ -223,7 +483,7 @@ def main(names: list[str]) -> int:
         return 2
     for name in cases:
         if not names or name in names:
-            (write_unified if unified else write)(name)
+            (write_unified if unified else write_reserved if name in RESERVED else write)(name)
     return 0
 
 

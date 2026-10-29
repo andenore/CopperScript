@@ -1,0 +1,17 @@
+// Rust-port corpus input: a 7x7 ball grid whose inner balls the unified router's ball-grid fanout drops to vias; not a circuit.
+board BallGrid {
+    import parts "./bga/parts";
+    component U1: parts.Bga49;
+    component R1: parts.Pair;
+    component R2: parts.Pair;
+    component R3: parts.Pair;
+    net A { U1.D4; R1.A; }
+    net B { U1.C3; R1.B; }
+    net C { U1.E5; R2.A; }
+    net D { U1.C5; R2.B; }
+    net E { U1.E3; R3.A; }
+    net F { U1.A1; R3.B; }
+    net GND { U1.D3; U1.D5; U1.G7; }
+    constraint fixed_placement(U1) { x = 15 mm; y = 12 mm; rotation = 0; }
+    constraint copper_zone(GND) { layers = "In1.Cu"; pad_connection = solid; }
+}

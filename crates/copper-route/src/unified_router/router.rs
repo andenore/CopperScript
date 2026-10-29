@@ -28,7 +28,7 @@ use crate::plane_estimate::label;
 use crate::routing_clearance::RoutingClearanceIndex;
 use crate::routing_lattice::{NestedLattice, UniformLattice};
 use crate::routing_layers::signal_layer_preferences;
-use crate::unified_error::{Error, Result, fail, not_implemented};
+use crate::unified_error::{Error, Result, fail};
 
 pub type Lead = Vec<TrackSegment>;
 /// An attach candidate: `(node, lead-in copper, cost in pitches)`.
@@ -293,6 +293,16 @@ pub struct Router<'p, 'b> {
     pub open_cache: IndexMap<(i64, i64), Vec<bool>>,
     pub move_cache: Option<Vec<f64>>,
     pub turn_cache: Option<Vec<f64>>,
+    /// The connected global routes per net, when `guide_cost` is set (`guides`).
+    pub guides: IndexMap<String, Vec<crate::routing::GlobalNetRoute>>,
+    /// `_guide_cache`: each net's corridor, or `None`.
+    pub guide_cache: IndexMap<String, Option<std::rc::Rc<Corridor>>>,
+    /// `_n_guide`: per node, `guide_cost` outside the searched net's corridor.
+    pub guide_nodes: Option<Vec<f64>>,
+    /// Per net and via span, the via raster narrowed to its required return barrels.
+    pub return_via_owners: IndexMap<(String, Option<(usize, usize)>), Vec<i32>>,
+    /// `_via_span_cache`: the physical span of each lattice layer change.
+    pub via_span_cache: IndexMap<(usize, usize), Option<(CopperLayer, CopperLayer, Option<String>)>>,
     pub local_spent: i64,
     pub segment_cache: Option<SegmentCache>,
     pub escape_bias_cache: IndexMap<String, Option<(Vec<i64>, Vec<f64>)>>,
@@ -309,10 +319,115 @@ pub struct Router<'p, 'b> {
     pub kernel_tables: Option<crate::routing_lattice::KernelTables>,
 }
 
+/// A net's global-route corridor: its nodes, sorted, and their box.
+pub struct Corridor {
+    pub nodes: Vec<i64>,
+    pub bounds: crate::routing_lattice::IndexBox,
+}
+
 impl<'p, 'b> Router<'p, 'b> {
     /// `_expired`: the soft deadline has passed.
     pub fn expired(&self) -> bool {
         self.deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline)
+    }
+
+    /// The `guides` of `_Router(..., guides=...)`: each connected global
+    /// route with copper or accesses, kept only for a nonzero `guide_cost`.
+    pub fn set_guides(&mut self, guides: Option<&crate::routing::GlobalRoutingResult>) {
+        let Some(guides) = guides.filter(|_| self.options.guide_cost != 0.0) else { return };
+        for route in &guides.routes {
+            if route.connected && (!route.segments.is_empty() || !route.accesses.is_empty()) {
+                self.guides.entry(route.net.clone()).or_default().push(route.clone());
+            }
+        }
+    }
+
+    /// `_guide_corridor`: the net's global-route corridor as grid nodes, or
+    /// `None`. Guide segments on their own layer within their half width plus
+    /// `guide_margin_nm`, and pin accesses within the margin square.
+    pub fn guide_corridor(&mut self, name: &str) -> Result<Option<std::rc::Rc<Corridor>>> {
+        if let Some(cached) = self.guide_cache.get(name) {
+            return Ok(cached.clone());
+        }
+        let mut result = None;
+        if let Some(routes) = self.guides.get(name).filter(|routes| !routes.is_empty()) {
+            let g = &self.lattice;
+            let margin = self.options.guide_margin_nm;
+            let index_of = |layer: CopperLayer| g.layers.iter().position(|l| *l == layer).map(|i| i as i64);
+            let mut parts: Vec<i64> = Vec::new();
+            for route in routes {
+                for segment in &route.segments {
+                    let Some(layer) = index_of(segment.layer) else { continue };
+                    let r = segment.guide_half_width_nm + margin;
+                    let (a, b) = (segment.start, segment.end);
+                    for block in g.blocks() {
+                        let window = block.window(
+                            (a.x_nm.min(b.x_nm) - r) as f64,
+                            (a.y_nm.min(b.y_nm) - r) as f64,
+                            (a.x_nm.max(b.x_nm) + r) as f64,
+                            (a.y_nm.max(b.y_nm) + r) as f64,
+                        );
+                        let (ix0, iy0, ix1, iy1) = window;
+                        if ix0 > ix1 || iy0 > iy1 {
+                            continue;
+                        }
+                        let mut inside = Vec::new();
+                        for iy in iy0..=iy1 {
+                            for ix in ix0..=ix1 {
+                                let d = super::geometry::segment_distance(
+                                    block.xs[ix as usize],
+                                    block.ys[iy as usize],
+                                    a.x_nm as f64,
+                                    a.y_nm as f64,
+                                    b.x_nm as f64,
+                                    b.y_nm as f64,
+                                );
+                                inside.push(d <= r as f64);
+                            }
+                        }
+                        let mask = crate::routing_lattice::Mask { width: (ix1 - ix0 + 1) as usize, values: &inside };
+                        parts
+                            .extend(block.window_columns(window, Some(&mask)).into_iter().map(|c| c + layer * g.plane));
+                    }
+                }
+                for access in &route.accesses {
+                    let Some(layer) = index_of(access.layer) else { continue };
+                    let c = access.access_position;
+                    for block in g.blocks() {
+                        let window = block.window(
+                            (c.x_nm - margin) as f64,
+                            (c.y_nm - margin) as f64,
+                            (c.x_nm + margin) as f64,
+                            (c.y_nm + margin) as f64,
+                        );
+                        let (ix0, iy0, ix1, iy1) = window;
+                        if ix0 > ix1 || iy0 > iy1 {
+                            continue;
+                        }
+                        let mut inside = Vec::new();
+                        for iy in iy0..=iy1 {
+                            for ix in ix0..=ix1 {
+                                inside.push(
+                                    (block.xs[ix as usize] - c.x_nm as f64).abs() <= margin as f64
+                                        && (block.ys[iy as usize] - c.y_nm as f64).abs() <= margin as f64,
+                                );
+                            }
+                        }
+                        let mask = crate::routing_lattice::Mask { width: (ix1 - ix0 + 1) as usize, values: &inside };
+                        parts
+                            .extend(block.window_columns(window, Some(&mask)).into_iter().map(|c| c + layer * g.plane));
+                    }
+                }
+            }
+            parts.sort_unstable();
+            parts.dedup();
+            if !parts.is_empty() {
+                let bounds = g.box_of(&parts).expect("corridor nodes");
+                result = Some(std::rc::Rc::new(Corridor { nodes: parts, bounds }));
+            }
+        }
+        self.guide_cache.insert(name.to_owned(), result.clone());
+        Ok(result)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -324,9 +439,6 @@ impl<'p, 'b> Router<'p, 'b> {
         required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
         clearance: RoutingClearanceIndex<'b>,
     ) -> Result<Self> {
-        if options.guide_cost != 0.0 {
-            return not_implemented("unified router guide_cost (global-route corridors)");
-        }
         let fine_plan = super::fine_region_plan(board, options)?;
         let pitch = match &fine_plan {
             None => match options.pitch_nm {
@@ -423,6 +535,11 @@ impl<'p, 'b> Router<'p, 'b> {
             open_cache: IndexMap::new(),
             move_cache: None,
             turn_cache: None,
+            guides: IndexMap::new(),
+            guide_cache: IndexMap::new(),
+            guide_nodes: None,
+            return_via_owners: IndexMap::new(),
+            via_span_cache: IndexMap::new(),
             local_spent: 0,
             segment_cache: Some(SegmentCache::new()),
             escape_bias_cache: IndexMap::new(),

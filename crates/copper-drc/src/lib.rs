@@ -199,6 +199,23 @@ pub struct Report {
     /// Checks that passed only under breakout values, sorted by check,
     /// objects, nets and layers.
     pub breakout_relaxations: Vec<BreakoutRelaxation>,
+    /// Pad-to-own-hole checks that passed only under a component-scoped
+    /// `hole_clearance`, sorted by component and objects.
+    pub hole_clearance_relaxations: Vec<HoleClearanceRelaxation>,
+}
+
+/// `DrcHoleClearanceRelaxation`: `objects` are the component's pad and its
+/// own non-plated hole; `required_nm` the board hole clearance the pad does
+/// not meet, `relaxed_nm` the scoped one it does meet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HoleClearanceRelaxation {
+    pub component: String,
+    pub objects: Vec<String>,
+    pub nets: Vec<String>,
+    pub required_nm: i64,
+    pub relaxed_nm: i64,
+    pub measured_nm: i64,
+    pub reason: String,
 }
 
 /// `EXTERNAL_PLACEMENT_KEY`.
@@ -216,7 +233,7 @@ pub fn placement_copper_findings(board: &PhysicalBoard) -> Result<Vec<Finding>> 
     check_copper_spacing(board, &mut findings, &mut Vec::new())?;
     check_fixed_polygons(board, &mut findings)?;
     check_copper_artwork(board, &mut findings)?;
-    check_non_plated_hole_clearance(board, &mut findings)?;
+    check_non_plated_hole_clearance(board, &mut findings, &mut Vec::new())?;
     check_via_hole_clearance(board, &mut findings)?;
     check_drill_spacing(board, &mut findings)?;
     check_copper_keepouts(board, &mut findings)?;
@@ -326,7 +343,8 @@ pub fn run_physical_drc(board: &PhysicalBoard, policy: Policy) -> Result<Report>
             "breakout width, pair gap and clearance apply only to copper within breakout_length of a terminal land; checks they relaxed are listed in breakout_relaxations",
         ));
     }
-    check_non_plated_hole_clearance(board, &mut findings)?;
+    let mut hole_relaxations: Vec<HoleClearanceRelaxation> = Vec::new();
+    check_non_plated_hole_clearance(board, &mut findings, &mut hole_relaxations)?;
     covered.push(coverage("non_plated_hole_clearance", Executed, true, ""));
     if !board.component_hole_clearances.is_empty() {
         covered.push(coverage(
@@ -395,7 +413,15 @@ pub fn run_physical_drc(board: &PhysicalBoard, policy: Policy) -> Result<Report>
     let decision = if blocking || !complete { Decision::Fail } else { Decision::Pass };
     relaxations
         .sort_by(|a, b| (&a.check, &a.objects, &a.nets, &a.layers).cmp(&(&b.check, &b.objects, &b.nets, &b.layers)));
-    Ok(Report { decision, complete, findings, coverage: covered, breakout_relaxations: relaxations })
+    hole_relaxations.sort_by(|a, b| (&a.component, &a.objects).cmp(&(&b.component, &b.objects)));
+    Ok(Report {
+        decision,
+        complete,
+        findings,
+        coverage: covered,
+        breakout_relaxations: relaxations,
+        hole_clearance_relaxations: hole_relaxations,
+    })
 }
 
 /// `_as_input_copper`: a pad-only spacing finding on an imported placement is input copper.
@@ -1541,7 +1567,11 @@ pub fn non_plated_holes(board: &PhysicalBoard) -> Vec<(String, RoundedConvexShap
 }
 
 /// `_check_non_plated_hole_clearance`: copper to NPTH; a scoped rule covers its own pads and holes.
-fn check_non_plated_hole_clearance(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Result<()> {
+fn check_non_plated_hole_clearance(
+    board: &PhysicalBoard,
+    findings: &mut Vec<Finding>,
+    relaxations: &mut Vec<HoleClearanceRelaxation>,
+) -> Result<()> {
     let clearance = board.rules.minimum_hole_clearance_nm;
     let mut scoped: IndexMap<String, &ComponentHoleClearance> = IndexMap::new();
     for placement in &board.placements {
@@ -1581,6 +1611,16 @@ fn check_non_plated_hole_clearance(board: &PhysicalBoard, findings: &mut Vec<Fin
                         .required(rule.clearance_nm)
                         .measured(measured),
                     );
+                } else {
+                    relaxations.push(HoleClearanceRelaxation {
+                        component: rule.reference.clone(),
+                        objects: vec![pad.identity.clone(), identity.clone()],
+                        nets: vec![pad.net.clone()],
+                        required_nm: clearance,
+                        relaxed_nm: rule.clearance_nm,
+                        measured_nm: measured,
+                        reason: rule.reason.clone(),
+                    });
                 }
             } else if !shapes_clear(&pad.shape, &hole, clearance) {
                 findings.push(

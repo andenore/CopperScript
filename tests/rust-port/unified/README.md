@@ -45,7 +45,10 @@ identity mismatch), so it resolves its footprints from the lock.
 rule (schema, digest, JSON syntax, an unknown or invalid option or board
 field, a missing key); their content digests are recomputed unless the digest
 is the point. `variants/` holds valid variants (`fine_regions="auto"`, a saved
-two-net selection) that Python routes.
+two-net selection) that Python routes. `generate.py technologies` adds
+`malformed/technology-*` and `variants/technology-via`: a board via of
+`synthetic/technology-blind` checked against its via technology catalog
+(aspect ratio, drill, annular ring, span, unknown or missing technology).
 
 No state sets a time budget: the replay suites compare the routed result
 state, the report's `unrouted` map, the exit status and stderr, never the

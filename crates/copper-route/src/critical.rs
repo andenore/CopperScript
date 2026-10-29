@@ -713,12 +713,13 @@ impl Default for CriticalOptions<'_> {
 
 /// The `reserved_accesses` preflight of `route_critical_nets`: current
 /// guides, the exact source prefix, fresh bypass admission, and no
-/// critical or zone copper beyond the admitted feeds.
+/// critical or zone copper beyond the admitted feeds. The hard DRC findings
+/// the reservations introduce (`code: message`) fail it physically.
 fn admit_reserved_accesses(
     board: &PhysicalBoard,
     global_route: &GlobalRoutingResult,
     reserved: &crate::bypass_reservations::BypassReservation,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     if global_route.placement_fingerprint != placement_fingerprint(board) {
         return Err(Error::Value("package-access critical guides are stale".to_owned()));
     }
@@ -767,7 +768,8 @@ fn admit_reserved_accesses(
             }
         }
     }
-    let hard = |checked: &PhysicalBoard| -> Result<Vec<String>> {
+    // Each hard finding with its identity (Python's `fingerprint` fields).
+    let hard = |checked: &PhysicalBoard| -> Result<Vec<(String, String)>> {
         let report = crate::drc_report::run_physical_drc(checked, copper_drc::Policy::default())?;
         Ok(report
             .report
@@ -779,18 +781,21 @@ fn admit_reserved_accesses(
                     && f.code != "DRC-ROUTE-INCOMPLETE"
             })
             .map(|f| {
-                format!("{:?}", (&f.code, &f.message, &f.objects, &f.nets, &f.layers, f.required_nm, f.measured_nm))
+                let identity = format!(
+                    "{:?}",
+                    (&f.code, &f.message, &f.objects, &f.nets, &f.layers, f.required_nm, f.measured_nm)
+                );
+                (identity, format!("{}: {}", f.code, f.message))
             })
             .collect())
     };
     let fatal = hard(&reserved.board)?;
-    if !fatal.is_empty() {
-        let baseline: IndexSet<String> = hard(board)?.into_iter().collect();
-        if fatal.iter().any(|f| !baseline.contains(f)) {
-            return copper_pcb::not_implemented("a failed package-reservation preflight (route_critical_nets)");
-        }
+    if fatal.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(())
+    // Only findings the reservations introduce count against them.
+    let baseline: IndexSet<String> = hard(board)?.into_iter().map(|(identity, _)| identity).collect();
+    Ok(fatal.into_iter().filter(|(identity, _)| !baseline.contains(identity)).map(|(_, message)| message).collect())
 }
 
 /// `on_progress(event, nets, result)` of `route_critical_nets`, forwarded as
@@ -856,7 +861,44 @@ pub fn route_critical_nets(
     let mut tracks: Vec<TrackSegment> = board.tracks.clone();
     let mut vias: Vec<Via> = board.vias.clone();
     if let Some(reserved) = options.reserved_accesses {
-        admit_reserved_accesses(&board, global_route, reserved)?;
+        let fatal = admit_reserved_accesses(&board, global_route, reserved)?;
+        if !fatal.is_empty() {
+            // A structurally valid but physically failed preflight is a
+            // partial design result: keep the evidence, never route over it.
+            let nets = vec![CriticalNetResult::new(
+                vec!["<package-reservations>".to_owned()],
+                false,
+                0,
+                0,
+                Vec::new(),
+                0,
+                fatal,
+            )];
+            let mut failed = reserved.board.clone();
+            failed.metadata = board.metadata.clone();
+            for (key, value) in
+                [("critical_routing", "failed"), ("detailed_routing", "partial"), ("fabrication_ready", "false")]
+            {
+                failed.metadata.insert(key.to_owned(), value.to_owned());
+            }
+            let routing_fingerprint =
+                fingerprint(&global_route.routing_fingerprint, &reserved.board.tracks, &reserved.board.vias, &nets);
+            return Ok(CriticalRoutingResult {
+                status: CriticalRoutingStatus::Failed,
+                locked_tracks: reserved.board.tracks.clone(),
+                locked_vias: reserved.board.vias.clone(),
+                reserved_track_count: reserved.board.tracks.len() as i64,
+                reserved_via_count: reserved.board.vias.len() as i64,
+                board: failed,
+                nets,
+                global_routing_fingerprint: global_route.routing_fingerprint.clone(),
+                routing_fingerprint,
+                bundles: Vec::new(),
+                match_tuning: Vec::new(),
+                plane_reservation_track_count: 0,
+                plane_reservation_via_count: 0,
+            });
+        }
         tracks.extend(reserved.created_tracks.iter().cloned());
         vias.extend(reserved.created_vias.iter().cloned());
     }
@@ -1391,6 +1433,8 @@ enum Saved {
     Board(Box<PhysicalBoard>),
     GlobalRoute(Box<GlobalRoutingResult>),
     PlaneOptions(Box<PlaneStitchOptions>),
+    /// Package-access reservations, or why their restoration fails.
+    Reserved(Box<std::result::Result<crate::bypass_reservations::BypassReservation, String>>),
     /// `None`, or another value the replay never uses as a board or route.
     Other,
     /// A value whose decoding needs a module that has not landed.
@@ -1405,7 +1449,9 @@ fn decode_value(value: &StateValue) -> Result<Saved> {
             "pcbir.routing:GlobalRoutingResult" => {
                 Ok(Saved::GlobalRoute(Box::new(crate::routing_state::global_routing_result(value)?)))
             }
-            "pcbir.fanout:FanoutResult" => Ok(Saved::Pending("critical replay with package-access reservations")),
+            "pcbir.fanout:FanoutResult" => {
+                Ok(Saved::Reserved(Box::new(crate::bypass_reservations::saved_reservation(value)?)))
+            }
             "pcbir.plane:PlaneStitchOptions" => Ok(Saved::PlaneOptions(Box::new(plane_stitch_options(value)?))),
             _ => copper_pcb::not_implemented(&format!("a saved {name} value")),
         },
@@ -1593,12 +1639,17 @@ pub fn replay_critical(
             (None, _) | (Some((_, StateValue::Null)), _) => {}
             (_, Some(Saved::Pending(what))) => pending = pending.or(Some(*what)),
             (_, Some(Saved::PlaneOptions(_))) if key == "plane_stitch_options" => {}
+            (_, Some(Saved::Reserved(_))) if key == "reserved_accesses" => {}
             _ => pending = pending.or(Some("critical replay inputs of an unexpected kind")),
         }
     }
     if let Some(what) = pending {
         return copper_pcb::not_implemented(what);
     }
+    let reserved = match decoded.remove("reserved_accesses") {
+        Some(Saved::Reserved(reserved)) => Some((*reserved).map_err(Error::Value)?),
+        _ => None,
+    };
     let plane_options = match decoded.remove("plane_stitch_options") {
         Some(Saved::PlaneOptions(options)) => Some(*options),
         _ => None,
@@ -1610,6 +1661,7 @@ pub fn replay_critical(
             only_nets,
             pair_state_limit: Some(pair_state_limit),
             plane_stitch_options: plane_options.as_ref(),
+            reserved_accesses: reserved.as_ref(),
             ..Default::default()
         },
         None,
@@ -2138,7 +2190,7 @@ fn route_pair(
 /// `_route_pair(..., exact_tracks=...)` for a joint search candidate without
 /// layer transitions: the candidate's lanes, measured and gated like the
 /// coarse candidate (connected guides are not required).
-fn route_pair_exact(
+pub(crate) fn route_pair_exact(
     board: &PhysicalBoard,
     first_rule: &NetRoutingRule,
     second_rule: &NetRoutingRule,
@@ -2461,13 +2513,60 @@ pub(crate) fn route_pair_group(
     let (first, second) = if rule.net <= partner_rule.net { (rule, partner_rule) } else { (partner_rule, rule) };
     let mut preparation = PairTerminalPreparation::not_started();
     let held = board_with(board, tracks, vias);
-    crate::pair_terminals::plan_pair_supports(&held, first, second, routes)?;
-    let prepared = crate::pair_terminals::prepare_pair_terminals(&held, first, second, routes, &mut preparation)?;
+    let source_routes = routes;
+    // A planned support defers its contacts to a completion of every
+    // proposed escape and return; otherwise the terminals are prepared now.
+    let (prepared, completion) = match crate::pair_terminals::plan_pair_supports(&held, first, second, routes)? {
+        Some(plan) => {
+            let mut supported = routes.clone();
+            for guide in &plan.guides {
+                supported.insert(guide.net.clone(), guide.clone());
+            }
+            preparation.status = "pending_support_contacts".to_owned();
+            preparation.pending_contacts = plan.contacts.iter().map(|(_, contact)| contact.pad.clone()).collect();
+            let completion = crate::pair_terminals::PairSupportCompletion::new(
+                plan,
+                first,
+                second,
+                std::mem::take(&mut preparation),
+                &held,
+            );
+            let prepared = crate::pair_terminals::Prepared {
+                routes: supported,
+                first_branches: Vec::new(),
+                second_branches: Vec::new(),
+                via_pairs: Vec::new(),
+                return_vias: Vec::new(),
+            };
+            (prepared, Some(std::cell::RefCell::new(completion)))
+        }
+        None => (crate::pair_terminals::prepare_pair_terminals(&held, first, second, routes, &mut preparation)?, None),
+    };
     let routes = prepared.routes;
     let (first_branches, second_branches) = (prepared.first_branches, prepared.second_branches);
     let (branch_via_pairs, branch_return_vias) = (prepared.via_pairs, prepared.return_vias);
-    // `reported`: preparation evidence only when it prepared something.
-    let reported = |mut outcome: Routed, preparation: PairTerminalPreparation| -> Result<Routed> {
+    let completion = completion.as_ref();
+    // `reported`: a blocked or unsupported preparation explains a failed
+    // pair; a completed support plan is joint; preparation evidence only
+    // when it prepared something.
+    let reported = |mut outcome: Routed, preparation: PairTerminalPreparation, blockers: &mut IndexSet<String>| {
+        let mut preparation = match completion {
+            Some(completion) => completion.borrow().report.clone(),
+            None => preparation,
+        };
+        if !outcome.0.connected && ["blocked", "unsupported"].contains(&preparation.status.as_str()) {
+            blockers.extend(preparation.blocking_nets.iter().cloned());
+            for message in &mut outcome.0.diagnostics {
+                if message == "coupled pair routing v0.1 requires two terminals per member" {
+                    *message =
+                        format!("local pair-terminal preparation {}: {}", preparation.status, preparation.reason);
+                }
+            }
+        }
+        if completion.is_some() && outcome.0.connected {
+            preparation.status = "joint_support_contacts".to_owned();
+            preparation.pending_contacts.clear();
+        }
         if preparation.status != "source_terminals" {
             outcome.0.local_preparation = Some(preparation);
         }
@@ -2485,7 +2584,7 @@ pub(crate) fn route_pair_group(
         if let Some(turns) = turns {
             turns.insert(nested.group.clone(), turn);
         }
-        return reported((attempt, pair_tracks, pair_vias), preparation);
+        return reported((attempt, pair_tracks, pair_vias), preparation, blockers);
     }
     let (result, pair_tracks, pair_vias) = match crossing {
         None => {
@@ -2514,7 +2613,7 @@ pub(crate) fn route_pair_group(
             result.strategy = "planned_crossing".to_owned();
             result.pair_search_order = Some("planned_crossing".to_owned());
             if crossing.layer.is_none() {
-                return reported((result, Vec::new(), Vec::new()), preparation);
+                return reported((result, Vec::new(), Vec::new()), preparation, blockers);
             }
             (result, Vec::new(), Vec::new())
         }
@@ -2547,7 +2646,7 @@ pub(crate) fn route_pair_group(
         let (attempt, proposed_tracks, proposed_vias) =
             validate_candidate(board, attempt, proposed_tracks, proposed_vias, tracks, vias, None)?;
         if within_budget(&attempt) {
-            return reported((attempt, proposed_tracks, proposed_vias), preparation);
+            return reported((attempt, proposed_tracks, proposed_vias), preparation, blockers);
         }
         keep(&mut fallback, &attempt, &proposed_tracks, &proposed_vias);
     }
@@ -2565,17 +2664,25 @@ pub(crate) fn route_pair_group(
         .iter()
         .filter(|net| net.name == first.net || net.name == second.net)
         .any(|net| net.pads.iter().any(|pad| owned.contains(pad)));
-    if !within_budget(&result) && supported {
-        if protected_ends && !guided {
-            // PENDING: pair_terminals.macro_terminal_guides_proved.
-            return copper_pcb::not_implemented("critical pair search from proved macro ports");
-        }
+    let proved_ports = protected_ends
+        && crate::pair_terminals::macro_terminal_guides_proved(
+            board,
+            [routes.get(&first.net), routes.get(&second.net)],
+        )?;
+    if !within_budget(&result) && supported && (guided || !protected_ends || proved_ports) {
         let mut search_board = board_with(board, tracks, vias);
         search_board.tracks.extend(first_branches.iter().cloned());
         search_board.tracks.extend(second_branches.iter().cloned());
         search_board.vias.extend(branch_via_pairs.iter().flat_map(|(a, b)| [a.clone(), b.clone()]));
         search_board.vias.extend(branch_return_vias.iter().cloned());
         let (first_guide, second_guide) = (routes[&first.net].clone(), routes[&second.net].clone());
+        // Freshly joined surface contacts may offer alternate endpoints,
+        // spent on a finer tier when no primary portal exists.
+        let variants = if preparation.status == "surface_contacts" {
+            crate::pair_terminals::joined_terminal_variants(&search_board, first, second, source_routes, &routes)?
+        } else {
+            vec![routes.clone()]
+        };
         let site_rank = match crossing {
             Some(crossing) => Some(crossing_site_rank(board, &crossing.group)?),
             None => None,
@@ -2584,14 +2691,17 @@ pub(crate) fn route_pair_group(
         let crossing_layers: Vec<CopperLayer> = crossing.and_then(|item| item.layer).into_iter().collect();
         // Each searcher: whether it is the paired-via family, and its restriction.
         let (order, searchers): (&str, Vec<(bool, crate::pair_vias::ViaRestriction<'_>)>) = if crossing.is_some() {
-            let restriction =
-                crate::pair_vias::ViaRestriction { layers: Some(&crossing_layers), site_rank: site_rank_ref };
+            let restriction = crate::pair_vias::ViaRestriction {
+                layers: Some(&crossing_layers),
+                site_rank: site_rank_ref,
+                completion,
+            };
             ("planned_crossing", vec![(true, restriction)])
         } else {
             // Internal lands should not consume all surface maze resolutions
             // before exploring a legal paired layer escape.
             let prefer_vias = pair_prefers_via_escape(&search_board, &first_guide, &second_guide)?;
-            let none = crate::pair_vias::ViaRestriction::default();
+            let none = crate::pair_vias::ViaRestriction { completion, ..Default::default() };
             if prefer_vias {
                 ("via_first_internal_lands", vec![(true, none), (false, none)])
             } else {
@@ -2645,10 +2755,11 @@ pub(crate) fn route_pair_group(
                 // at most two existing clearance-aware tuning proposals on the
                 // complete generated group; every gate is checked again.
                 let held = board_with(board, tracks, vias);
-                for tuned in crate::pair_terminals::matched_local_candidates(&held, first, second, &complete)? {
+                crate::pair_terminals::matched_local_candidates(&held, first, second, &complete, &mut |proposal| {
+                    let crate::pair_terminals::LocalProposal::Tuned(tuned) = proposal else { return Ok(false) };
                     let (revised, revised_tracks, revised_vias) = admit(&tuned, &mut candidate_blockers)?;
                     if !revised.connected {
-                        continue;
+                        return Ok(false);
                     }
                     let length = |items: &[TrackSegment]| track_length(&items.iter().collect::<Vec<_>>());
                     let added = length(&tuned.first) + length(&tuned.second)
@@ -2657,13 +2768,13 @@ pub(crate) fn route_pair_group(
                     attempt = revised;
                     attempt.tuned_length_nm += added;
                     (proposed_tracks, proposed_vias) = (revised_tracks, revised_vias);
-                    break;
-                }
+                    Ok(true)
+                })?;
             }
             if attempt.connected {
                 if planned {
                     attempt.strategy = "planned_crossing".to_owned();
-                } else if candidate.via_pairs.is_empty() && !branched {
+                } else if candidate.via_pairs.is_empty() && !branched && completion.is_none() {
                     (attempt, proposed_tracks, proposed_vias) = improve_pair_spine(
                         board,
                         &search_board,
@@ -2700,7 +2811,9 @@ pub(crate) fn route_pair_group(
                      blockers: &mut IndexSet<String>|
          -> Result<()> {
             for (via_family, restriction) in &searchers {
-                for pitch_nm in [1_000_000, 500_000, 250_000] {
+                let port_pairs_at_entry = stats.port_pairs;
+                let mut active = &variants[0];
+                for (tier, pitch_nm) in [1_000_000, 500_000, 250_000].into_iter().enumerate() {
                     let mut bounds = crate::pair_search::SearchBounds {
                         maximum_searches: 8,
                         maximum_states: 30_000,
@@ -2717,6 +2830,10 @@ pub(crate) fn route_pair_group(
                         bounds.maximum_states = 1.max((slice + 1).div_euclid(2));
                         bounds.maximum_searches = 2;
                     }
+                    if stats.port_pairs == port_pairs_at_entry {
+                        active = &variants[tier.min(variants.len() - 1)];
+                    }
+                    let (first_guide, second_guide) = (&active[&first.net], &active[&second.net]);
                     let mut accept = |candidate, _: &mut crate::pair_search::PairSearchStats| {
                         check(candidate, best, fallback, rejected, blockers)
                     };
@@ -2725,8 +2842,8 @@ pub(crate) fn route_pair_group(
                             &search_board,
                             first,
                             second,
-                            &first_guide,
-                            &second_guide,
+                            first_guide,
+                            second_guide,
                             bounds,
                             *restriction,
                             stats,
@@ -2737,9 +2854,10 @@ pub(crate) fn route_pair_group(
                             &search_board,
                             first,
                             second,
-                            &first_guide,
-                            &second_guide,
+                            first_guide,
+                            second_guide,
                             bounds,
+                            completion,
                             stats,
                             &mut accept,
                         )?;
@@ -2810,7 +2928,7 @@ pub(crate) fn route_pair_group(
             result.diagnostics.extend(stats.launch_rejections.iter().take(3).cloned());
         }
     }
-    reported((result, pair_tracks, pair_vias), preparation)
+    reported((result, pair_tracks, pair_vias), preparation, blockers)
 }
 
 /// Plan R7: a nested exit that does not clear committed copper at its
@@ -3313,10 +3431,6 @@ fn route_single(
         let message = format!("{} v0.1 requires point-to-point topology", rule.kind.value());
         return Ok((CriticalNetResult::new(nets, false, 0, 0, Vec::new(), 0, vec![message]), Vec::new(), Vec::new()));
     }
-    if !guide.vias.is_empty() {
-        // PENDING: _guide_via needs routing_vias.physical_via_span (rust-m4-global).
-        return copper_pcb::not_implemented("critical single-ended guide vias");
-    }
     let width = rule.width_nm.filter(|w| *w != 0).unwrap_or(board.rules.default_track_width_nm);
     let mut tracks: Vec<TrackSegment> = guide
         .segments
@@ -3332,9 +3446,14 @@ fn route_single(
     tracks.extend(pin_stubs(&rule.net, guide, width));
     let tracks = copper_drc::breakout::BreakoutRegions::new(board).split_tracks(&tracks, None);
     let mut vias: Vec<Via> = Vec::new();
-    for via in guide.accesses.iter().filter_map(|access| access.via.as_ref()) {
-        if !vias.contains(via) {
-            vias.push(via.clone());
+    let mut proposed = Vec::new();
+    for item in &guide.vias {
+        proposed.push(guide_via(board, &rule.net, item, item.position)?);
+    }
+    proposed.extend(guide.accesses.iter().filter_map(|access| access.via.clone()));
+    for via in proposed {
+        if !vias.contains(&via) {
+            vias.push(via);
         }
     }
     let via_refs: Vec<&Via> = vias.iter().collect();

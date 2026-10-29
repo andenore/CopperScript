@@ -32,11 +32,12 @@ use crate::surface_path::via_inside_board;
 pub type SiteRank<'a> = &'a dyn Fn(&[Via]) -> Option<i64>;
 
 /// `paired_via_candidates`' `layers` (the middle layers allowed, a planned
-/// crossing) and `site_rank`.
+/// crossing), `site_rank` and `terminal_completion`.
 #[derive(Clone, Copy, Default)]
 pub struct ViaRestriction<'a> {
     pub layers: Option<&'a [CopperLayer]>,
     pub site_rank: Option<SiteRank<'a>>,
+    pub completion: crate::pair_terminals::Completion<'a>,
 }
 
 /// `_Transition`: a collar, its signal vias, return vias and site rank.
@@ -355,9 +356,18 @@ fn return_via(
     surface: CopperLayer,
     layer: CopperLayer,
     trace: &mut TransitionTrace,
+    mut completion: Option<&mut dyn FnMut(&[Via]) -> Result<bool>>,
 ) -> Result<Option<Vec<Via>>> {
+    // `() if completion is None or completion(()) else None`.
+    let none_needed = |completion: &mut Option<&mut dyn FnMut(&[Via]) -> Result<bool>>| -> Result<Option<Vec<Via>>> {
+        let accepted = match completion {
+            Some(complete) => complete(&[])?,
+            None => true,
+        };
+        Ok(accepted.then(Vec::new))
+    };
     if !(first.require_return_vias || second.require_return_vias) {
-        return Ok(Some(Vec::new()));
+        return none_needed(&mut completion);
     }
     let span = crate::routing_vias::physical_via_span(board, surface, layer);
     let contract = span.as_ref().is_some_and(|span| {
@@ -381,7 +391,7 @@ fn return_via(
     }
     let points: Vec<Point> = pair.iter().map(|v| v.position).collect();
     if crate::return_paths::shared_reference_plane(board, first, second, &[surface, layer], &points)?.is_some() {
-        return Ok(Some(Vec::new()));
+        return none_needed(&mut completion);
     }
     let requested: Vec<&NetRoutingRule> = [first, second].into_iter().filter(|r| r.require_return_vias).collect();
     let nets: IndexSet<&Option<String>> = requested.iter().map(|r| &r.return_via_net).collect();
@@ -401,7 +411,15 @@ fn return_via(
         let mut all = pair.to_vec();
         all.push(via.clone());
         if via_inside_board(board, position, via.size_nm)? && index.candidate_vias_clear(&all)? {
-            return Ok(Some(vec![via]));
+            let accepted = match completion.as_mut() {
+                Some(complete) => complete(std::slice::from_ref(&via))?,
+                None => true,
+            };
+            if accepted {
+                return Ok(Some(vec![via]));
+            }
+            trace.record("return_support_completion_rejected", &[position], None, &[], &[], None)?;
+            continue;
         }
         trace.record("return_site_blocked", &[position], Some(index), &[via], &[], None)?;
     }
@@ -645,6 +663,7 @@ fn transitions(
     layer: CopperLayer,
     include_outer: bool,
     site_rank: Option<SiteRank<'_>>,
+    completion: crate::pair_terminals::Completion<'_>,
     trace: &mut TransitionTrace,
     stats: &mut PairSearchStats,
 ) -> Result<Vec<Transition>> {
@@ -666,6 +685,17 @@ fn transitions(
                 rank: 0,
                 outer: family == 1,
             }));
+        }
+        if let Some(completion) = completion {
+            let mut completed = Vec::new();
+            for item in results {
+                if let Some(port) =
+                    crate::pair_terminals::complete_support_port(board, component, item.port, completion)?
+                {
+                    completed.push(Transition { port, ..item });
+                }
+            }
+            results = completed;
         }
         return Ok(select_domains(results));
     }
@@ -723,8 +753,33 @@ fn transitions(
                 *rejections.entry("signal_vias_blocked").or_default() += 1;
                 continue;
             }
-            let Some(returns) = return_via(board, &reserved, collar, &pair, (first, second), surface, layer, trace)?
-            else {
+            let mut branches: crate::pair_terminals::SupportBranches = (Vec::new(), Vec::new());
+            let mut complete_return = |returns: &[Via]| -> Result<bool> {
+                let Some(completion) = completion else { return Ok(true) };
+                let mut held = escaped.clone();
+                held.vias = board.vias.iter().chain(&pair).chain(returns).cloned().collect();
+                let proposed =
+                    completion.borrow_mut().complete(component, &held, &collar.first, &collar.second, "transition")?;
+                match proposed {
+                    None => Ok(false),
+                    Some(proposed) => {
+                        branches = proposed;
+                        Ok(true)
+                    }
+                }
+            };
+            let returns = return_via(
+                board,
+                &reserved,
+                collar,
+                &pair,
+                (first, second),
+                surface,
+                layer,
+                trace,
+                completion.is_some().then_some(&mut complete_return as &mut dyn FnMut(&[Via]) -> Result<bool>),
+            )?;
+            let Some(returns) = returns else {
                 trace.record("return_unavailable", &sites, None, &[], &[], None)?;
                 *rejections.entry("return_via_blocked").or_default() += 1;
                 continue;
@@ -744,6 +799,8 @@ fn transitions(
                 },
             };
             let mut held = escaped.clone();
+            held.tracks.extend(branches.0.iter().cloned());
+            held.tracks.extend(branches.1.iter().cloned());
             held.vias = board.vias.iter().cloned().chain(transition_vias.iter().cloned()).collect();
             let held_index = RoutingClearanceIndex::new(&held)?;
             let inner_ports = port_request(
@@ -765,9 +822,11 @@ fn transitions(
                 *rejections.entry("onward_collars_blocked").or_default() += 1;
             }
             for inner in inner_ports {
-                let mut first_lane = collar.first.clone();
+                let mut first_lane = branches.0.clone();
+                first_lane.extend(collar.first.iter().cloned());
                 first_lane.extend(inner.first.iter().cloned());
-                let mut second_lane = collar.second.clone();
+                let mut second_lane = branches.1.clone();
+                second_lane.extend(collar.second.iter().cloned());
                 second_lane.extend(inner.second.iter().cloned());
                 results.push(Transition {
                     port: Port {
@@ -991,6 +1050,7 @@ pub fn paired_via_candidates(
                 layer,
                 true,
                 restriction.site_rank,
+                restriction.completion,
                 &mut trace,
                 stats,
             )?);

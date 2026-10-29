@@ -111,6 +111,7 @@ pub mod surface_path;
 pub mod terminal_preferences;
 pub mod unified_error;
 pub mod unified_router;
+pub mod via_lattice;
 
 pub use copper_pcb::{Error, Result};
 pub use progress::{Progress, emit};

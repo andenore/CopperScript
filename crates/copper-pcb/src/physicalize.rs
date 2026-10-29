@@ -1629,7 +1629,7 @@ fn lower_decoupling(flat: &FlatElectricalView, nets: &[PhysicalNet]) -> Result<V
 }
 
 /// `_lower_match_groups`: the nets of each `length_match` constraint.
-fn lower_match_groups(flat: &FlatElectricalView) -> Result<Vec<(String, Vec<String>, i64)>> {
+pub fn lower_match_groups(flat: &FlatElectricalView) -> Result<Vec<(String, Vec<String>, i64)>> {
     let nets: IndexSet<&str> = flat.nets.iter().map(|n| n.name.as_str()).collect();
     let mut groups: Vec<(String, Vec<String>, i64)> = Vec::new();
     let mut owner: IndexMap<String, String> = IndexMap::new();
@@ -1734,7 +1734,7 @@ fn check_tuning_groups(flat: &FlatElectricalView, groups: &[(String, Vec<String>
 }
 
 /// `_lower_hole_clearances`: component-scoped NPTH clearances (none for proxies).
-fn lower_hole_clearances(
+pub fn lower_hole_clearances(
     flat: &FlatElectricalView,
     footprints: &IndexMap<String, PhysicalFootprint>,
     placements: &[Placement],
