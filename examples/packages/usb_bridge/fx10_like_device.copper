@@ -22,10 +22,10 @@ device FX10_LIKE_USB_BRIDGE {
     pad VUSB33 { domains = "power"; directions = "input"; voltage_min = 3.0V; voltage_max = 3.6V; }
     pad GND { domains = "ground"; directions = "input"; }
 
-    pad SSTX2_P { domains = "digital"; directions = "output"; traits = "differential_positive"; power_domain = VUSB18; }
-    pad SSTX2_N { domains = "digital"; directions = "output"; traits = "differential_negative"; power_domain = VUSB18; }
-    pad SSRX2_P { domains = "digital"; directions = "input"; traits = "differential_positive"; power_domain = VUSB18; }
-    pad SSRX2_N { domains = "digital"; directions = "input"; traits = "differential_negative"; power_domain = VUSB18; }
+    pad XTAL_IN { domains = "analog"; directions = "input"; }
+    pad XTAL_OUT { domains = "analog"; directions = "output"; }
+    pad RESET_N { domains = "digital"; directions = "input"; traits = "reset"; power_domain = VDDIO; }
+    pad VBUS_DET { domains = "digital"; directions = "input"; power_domain = VUSB33; }
     pad CC1 { domains = "analog,digital"; directions = "bidirectional"; traits = "usb_cc"; power_domain = VUSB33; }
     pad CC2 { domains = "analog,digital"; directions = "bidirectional"; traits = "usb_cc"; power_domain = VUSB33; }
     pad I2C_SCL { domains = "digital"; directions = "bidirectional"; drive_modes = "open_drain"; power_domain = VDDIO; }
@@ -61,12 +61,11 @@ device FX10_LIKE_USB_BRIDGE {
     pad P0D15 { domains = "digital"; directions = "input"; power_domain = VDDIO; }
     pad P0D7 { domains = "digital"; directions = "input"; power_domain = VDDIO; }
     pad USB_RREF { domains = "analog"; directions = "passive"; power_domain = VUSB18; }
-    pad XTAL_IN { domains = "analog"; directions = "input"; }
-    pad XTAL_OUT { domains = "analog"; directions = "output"; }
+    pad SSTX2_P { domains = "digital"; directions = "output"; traits = "differential_positive"; power_domain = VUSB18; }
+    pad SSTX2_N { domains = "digital"; directions = "output"; traits = "differential_negative"; power_domain = VUSB18; }
+    pad SSRX2_P { domains = "digital"; directions = "input"; traits = "differential_positive"; power_domain = VUSB18; }
+    pad SSRX2_N { domains = "digital"; directions = "input"; traits = "differential_negative"; power_domain = VUSB18; }
     pad UART_RX { domains = "digital"; directions = "input"; drive_modes = "push_pull"; traits = "gpio"; power_domain = VDDIO; }
-    pad RESET_N { domains = "digital"; directions = "input"; traits = "reset"; power_domain = VDDIO; }
-    pad VBUS_DET { domains = "digital"; directions = "input"; power_domain = VUSB33; }
-    pad GPIO0 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull"; traits = "gpio"; power_domain = VDDIO; }
     pad GPIO1 { domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull"; traits = "gpio"; power_domain = VDDIO; }
     pad UART_TX { domains = "digital"; directions = "output"; drive_modes = "push_pull"; traits = "gpio"; power_domain = VDDIO; }
     pad P0OE { domains = "digital"; directions = "output"; drive_modes = "push_pull"; power_domain = VDDIO; }

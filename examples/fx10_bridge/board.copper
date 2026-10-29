@@ -93,7 +93,7 @@ board Fx10Bridge {
         U_USB.GND_F7; U_USB.GND_F9; U_USB.GND_G1; U_USB.GND_G3; U_USB.GND_G4; U_USB.GND_G5;
         U_USB.GND_G6; U_USB.GND_G7; U_USB.GND_G8; U_USB.GND_H2; U_USB.GND_H5; U_USB.GND_H7;
         U_USB.GND_H9; U_USB.GND_J3; U_USB.GND_J5; U_USB.GND_J7; U_USB.GND_J9; U_USB.GND_K1;
-        U_USB.GND_K2; U_USB.GND_K6;
+        U_USB.GND_K2; U_USB.GND_K6; U_USB.GND_L4;
     }
 
     // USB-C: VBUS sense divider, sink Rd terminations on CC, both D+/D- rows.
@@ -106,7 +106,9 @@ board Fx10Bridge {
     net USB_RREF { U_USB.USB_RREF; R_RREF.1; }
 
     // SuperSpeed lanes. Transmit pairs pass AC-coupling capacitors, so each
-    // splits into a bridge-side and a connector-side pair.
+    // splits into a bridge-side and a connector-side pair. Lane 1 (west
+    // balls) meets the receptacle's north contacts, lane 2 (south balls) its
+    // south contacts, so the lanes do not cross.
     net SSTX1_P { U_USB.SSTX1_P; C_TX1P.1; }
     net SSTX1_N { U_USB.SSTX1_N; C_TX1N.1; }
     net SSTX1_CP { C_TX1P.2; J_USB.TX1_P; }
@@ -150,7 +152,7 @@ board Fx10Bridge {
     net ADC_OE { U_USB.P0OE; J_BUS.24; }
 
     no_connect U_USB.TCK, U_USB.TMS, U_USB.TDI, U_USB.TDO { reason = "JTAG not brought out on this example"; }
-    no_connect U_USB.GPIO0, U_USB.GPIO1, U_USB.GPIO2, U_USB.GPIO3, U_USB.UART_TX, U_USB.UART_RX {
+    no_connect U_USB.GPIO1, U_USB.GPIO2, U_USB.GPIO3, U_USB.UART_TX, U_USB.UART_RX {
         reason = "spare bridge GPIO and debug UART unused";
     }
 
@@ -275,12 +277,17 @@ board Fx10Bridge {
     }
 
     // 46 x 32 mm placement: USB-C on the west edge, the bridge centred, the bus
-    // header east and power entry south. Ball A1 is the bridge's north-west corner.
+    // header east, crystal north and power entry south. Ball A1 is the bridge's north-west corner.
     constraint fixed_placement(U_USB) { x = 22mm; y = 16mm; rotation = 0; side = front; }
     constraint fixed_placement(J_USB) { x = 8mm; y = 16mm; rotation = 270; side = front; }
     constraint fixed_placement(J_BUS) { x = 39mm; y = 16mm; rotation = 0; side = front; }
     constraint fixed_placement(J_PWR) { x = 24mm; y = 28mm; rotation = 90; side = front; }
-    constraint fixed_placement(X1) { x = 17mm; y = 25mm; rotation = 0; side = front; }
+    constraint fixed_placement(X1) { x = 19.2mm; y = 7.4mm; rotation = 0; side = front; }
+    // AC-coupling capacitors in the channel between receptacle and array.
+    constraint fixed_placement(C_TX1P) { x = 14.93mm; y = 11.2mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_TX1N) { x = 14.93mm; y = 13.1mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_TX2P) { x = 14.93mm; y = 18.4mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_TX2N) { x = 14.93mm; y = 20.3mm; rotation = 90; side = front; }
     // Back-side bypass in the array's central cross, beside their supply balls.
     constraint fixed_placement(C_CORE_B1) { x = 22mm; y = 13.2mm; rotation = 0; side = back; }
     constraint fixed_placement(C_CORE_B2) { x = 22mm; y = 18.8mm; rotation = 0; side = back; }

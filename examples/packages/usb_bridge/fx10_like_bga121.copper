@@ -7,7 +7,7 @@
 
 // Ball map (row A at the top, column 1 at the left, as KiCad's footprint):
 //             1        2        3        4        5        6        7        8        9       10       11
-//   A       GND  SSTX2_P  SSTX2_N      GND  SSRX2_P  SSRX2_N      GND      CC1      CC2  I2C_SCL  I2C_SDA
+//   A       GND  XTAL_IN XTAL_OUT      GND  RESET_N VBUS_DET      GND      CC1      CC2  I2C_SCL  I2C_SDA
 //   B   SSTX1_P      GND      GND   VUSB18      GND   VUSB33      TCK      TMS    GPIO3     P0EN     P0D0
 //   C   SSTX1_N   VUSB33      GND   VUSB18      GND    VCORE      GND    VCORE    VDDIO     P0D8     P0D1
 //   D       GND      GND   VUSB33    VCORE      GND    VCORE      GND    VCORE      GND     P0D9     P0D2
@@ -17,7 +17,7 @@
 //   H    USB_DP      GND   VUSB33    VCORE      GND    VCORE      GND    VCORE      GND    P0D13     P0D5
 //   J    USB_DM   VUSB33      GND    VCORE      GND    VCORE      GND    VDDIO      GND    P0D14     P0D6
 //   K       GND      GND    VDDIO    GPIO2    VCORE      GND    VDDIO      TDI      TDO    P0D15     P0D7
-//   L  USB_RREF  XTAL_IN XTAL_OUT  UART_RX  RESET_N VBUS_DET    GPIO0    GPIO1  UART_TX     P0OE    P0OVR
+//   L  USB_RREF  SSTX2_P  SSTX2_N      GND  SSRX2_P  SSRX2_N  UART_RX    GPIO1  UART_TX     P0OE    P0OVR
 //
 // Rings: 0 = outer edge ... 5 = centre ball F6. Signals sit in rings 0-1,
 // supplies in rings 1-3 and ground in rings 2-5, so every ring-2+ ball
@@ -29,7 +29,7 @@
 // solder_mask_margin 0.035 / solder_paste_margin 0.000001 are dropped:
 // CopperScript rejects footprint-wide mask/paste overrides, so the board
 // fabrication profile's mask rules apply to these 0.4 mm SMD lands.
-// Counts: GND 43, VCORE 13, VDDIO 6, VUSB18 5, VUSB33 5, signals 49.
+// Counts: GND 44, VCORE 13, VDDIO 6, VUSB18 5, VUSB33 5, signals 48.
 part FX10_LIKE_BGA121 {
     category = "controller.usb";
     manufacturer = "Example (FX10-like, unverified)";
@@ -38,11 +38,11 @@ part FX10_LIKE_BGA121 {
     source_document = "Illustrative FX10-like ball map; not an Infineon document";
 
     pin GND_A1 { number = "A1"; bond = GND; }
-    pin SSTX2_P { number = "A2"; bond = SSTX2_P; }
-    pin SSTX2_N { number = "A3"; bond = SSTX2_N; }
+    pin XTAL_IN { number = "A2"; bond = XTAL_IN; }
+    pin XTAL_OUT { number = "A3"; bond = XTAL_OUT; }
     pin GND_A4 { number = "A4"; bond = GND; }
-    pin SSRX2_P { number = "A5"; bond = SSRX2_P; }
-    pin SSRX2_N { number = "A6"; bond = SSRX2_N; }
+    pin RESET_N { number = "A5"; bond = RESET_N; }
+    pin VBUS_DET { number = "A6"; bond = VBUS_DET; }
     pin GND_A7 { number = "A7"; bond = GND; }
     pin CC1 { number = "A8"; bond = CC1; }
     pin CC2 { number = "A9"; bond = CC2; }
@@ -148,12 +148,12 @@ part FX10_LIKE_BGA121 {
     pin P0D15 { number = "K10"; bond = P0D15; }
     pin P0D7 { number = "K11"; bond = P0D7; }
     pin USB_RREF { number = "L1"; bond = USB_RREF; }
-    pin XTAL_IN { number = "L2"; bond = XTAL_IN; }
-    pin XTAL_OUT { number = "L3"; bond = XTAL_OUT; }
-    pin UART_RX { number = "L4"; bond = UART_RX; }
-    pin RESET_N { number = "L5"; bond = RESET_N; }
-    pin VBUS_DET { number = "L6"; bond = VBUS_DET; }
-    pin GPIO0 { number = "L7"; bond = GPIO0; }
+    pin SSTX2_P { number = "L2"; bond = SSTX2_P; }
+    pin SSTX2_N { number = "L3"; bond = SSTX2_N; }
+    pin GND_L4 { number = "L4"; bond = GND; }
+    pin SSRX2_P { number = "L5"; bond = SSRX2_P; }
+    pin SSRX2_N { number = "L6"; bond = SSRX2_N; }
+    pin UART_RX { number = "L7"; bond = UART_RX; }
     pin GPIO1 { number = "L8"; bond = GPIO1; }
     pin UART_TX { number = "L9"; bond = UART_TX; }
     pin P0OE { number = "L10"; bond = P0OE; }

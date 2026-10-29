@@ -60064,7 +60064,7 @@
       "version": "7ebfa6b23cc292a56f751b7b5f4a0e12eeef69dd"
     },
     {
-      "checksum": "sha256:22b9e35d0c914eb8524bb63237ec2bcc5d0d28a7d6f40fcfe39849f8e7bad380",
+      "checksum": "sha256:68e0c0bc9ad25802533f9e344deb6444a48898e214f02947d3e88e4a21cff600",
       "files": [
         {
           "path": "compatibility/ad4134_device.copper",
@@ -60178,13 +60178,13 @@
         },
         {
           "path": "usb_bridge/fx10_like_bga121.copper",
-          "sha256": "1ff030ab0588c7dd377e4bd67c4cccda17b8c11e5cd5f9f7a04a82b1e6a4faf7",
-          "size": 8641
+          "sha256": "935da98bc21718ea96bb632a625fc5c16eba35b2c77ae4f5401f957028db2759",
+          "size": 8640
         },
         {
           "path": "usb_bridge/fx10_like_device.copper",
-          "sha256": "7b42398d4ce7bad350cbb6b0ce969812ec3a84cee44572522a96dce3f9182875",
-          "size": 6943
+          "sha256": "f0f88293af303f9865d175be74182aae2f4a197395bb730e91c75ebee8cc5816",
+          "size": 6808
         },
         {
           "path": "usb_bridge/power_header.copper",
