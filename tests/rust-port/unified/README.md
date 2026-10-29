@@ -25,6 +25,7 @@ Each board runs, from a scratch directory, with `PYTHONUTF8=1 PYTHONHASHSEED=0`:
 | `dphy` | `tests/rust-port/si-check/dphy.copper` | `--locked --offline --allow-proxy-footprints --layers 6 --fab-profile jlcpcb-six-layer` |
 | `round_led_ring` | `examples/round_led_ring/board.copper` | `--locked --layers 2 --fab-profile generic --candidates 1 --feedback-iterations 1 --router-iterations 5 --fanout --plane-contact-radius-mm 5` (the ladder's arguments; resolves footprints online) |
 | `nrf52` | `examples/nrf52_coin_cell/board.copper` | `--locked --offline --layers 6 --fab-profile jlcpcb-six-layer --width-mm 50 --height-mm 40` |
+| `via_array` | `tests/rust-port/export-kicad-pcb/via_array.copper` | `--locked --offline --layers 6 --fab-profile jlcpcb-six-layer` (a committed 2x2 via-in-pad array; `malformed/via-array-*` and `variants/via-array-*` change its rule and array vias) |
 
 `routing`, `six_layer`, `zones`, `round_led_ring` and `nrf52` leave nets
 unrouted (route-board exits 1); their states are complete inputs either way.

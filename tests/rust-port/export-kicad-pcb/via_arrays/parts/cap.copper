@@ -1,0 +1,6 @@
+part Cap {
+    category = "passive.capacitor";
+    footprint = "../pair.kicad_mod";
+    pin A { number = "1"; domains = "analog,power"; directions = "passive"; }
+    pin B { number = "2"; domains = "analog,power"; directions = "passive"; }
+}

@@ -24936,6 +24936,658 @@
      ]
     }
    ]
+  },
+  {
+   "name": "via-in-pad-arrays",
+   "milestone": "M3",
+   "cases": [
+    {
+     "id": "via-in-pad-arrays/via_array/check",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array.copper",
+      "--locked",
+      "--offline"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array/check-json",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array.copper",
+      "--locked",
+      "--offline",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array/export-kicad-pcb",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array/export-kicad-pcb-two-layer",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array/si-check",
+     "args": [
+      "si-check",
+      "tests/rust-port/export-kicad-pcb/via_array.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array/plan-layout",
+     "args": [
+      "plan-layout",
+      "tests/rust-port/export-kicad-pcb/via_array.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/placed.kicad_pcb",
+      "--report",
+      "{out}/placement.json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_pitch/check",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array_pitch.copper",
+      "--locked",
+      "--offline"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_pitch/check-json",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array_pitch.copper",
+      "--locked",
+      "--offline",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_pitch/export-kicad-pcb",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array_pitch.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_pitch/export-kicad-pcb-two-layer",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array_pitch.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_pitch/si-check",
+     "args": [
+      "si-check",
+      "tests/rust-port/export-kicad-pcb/via_array_pitch.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_pitch/plan-layout",
+     "args": [
+      "plan-layout",
+      "tests/rust-port/export-kicad-pcb/via_array_pitch.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/placed.kicad_pcb",
+      "--report",
+      "{out}/placement.json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_misfit/check",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array_misfit.copper",
+      "--locked",
+      "--offline"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_misfit/check-json",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array_misfit.copper",
+      "--locked",
+      "--offline",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_misfit/export-kicad-pcb",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array_misfit.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_misfit/export-kicad-pcb-two-layer",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array_misfit.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_misfit/si-check",
+     "args": [
+      "si-check",
+      "tests/rust-port/export-kicad-pcb/via_array_misfit.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_misfit/plan-layout",
+     "args": [
+      "plan-layout",
+      "tests/rust-port/export-kicad-pcb/via_array_misfit.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/placed.kicad_pcb",
+      "--report",
+      "{out}/placement.json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_back/check",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array_back.copper",
+      "--locked",
+      "--offline"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_back/check-json",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array_back.copper",
+      "--locked",
+      "--offline",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_back/export-kicad-pcb",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array_back.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_back/export-kicad-pcb-two-layer",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array_back.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_back/si-check",
+     "args": [
+      "si-check",
+      "tests/rust-port/export-kicad-pcb/via_array_back.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_back/plan-layout",
+     "args": [
+      "plan-layout",
+      "tests/rust-port/export-kicad-pcb/via_array_back.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/placed.kicad_pcb",
+      "--report",
+      "{out}/placement.json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_rotated/check",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array_rotated.copper",
+      "--locked",
+      "--offline"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_rotated/check-json",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array_rotated.copper",
+      "--locked",
+      "--offline",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_rotated/export-kicad-pcb",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array_rotated.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_rotated/export-kicad-pcb-two-layer",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array_rotated.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_rotated/si-check",
+     "args": [
+      "si-check",
+      "tests/rust-port/export-kicad-pcb/via_array_rotated.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_rotated/plan-layout",
+     "args": [
+      "plan-layout",
+      "tests/rust-port/export-kicad-pcb/via_array_rotated.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/placed.kicad_pcb",
+      "--report",
+      "{out}/placement.json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_decoupling/check",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array_decoupling.copper",
+      "--locked",
+      "--offline"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_decoupling/check-json",
+     "args": [
+      "check",
+      "tests/rust-port/export-kicad-pcb/via_array_decoupling.copper",
+      "--locked",
+      "--offline",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_decoupling/export-kicad-pcb",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array_decoupling.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_decoupling/export-kicad-pcb-two-layer",
+     "args": [
+      "export-kicad-pcb",
+      "tests/rust-port/export-kicad-pcb/via_array_decoupling.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_decoupling/si-check",
+     "args": [
+      "si-check",
+      "tests/rust-port/export-kicad-pcb/via_array_decoupling.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/via_array_decoupling/plan-layout",
+     "args": [
+      "plan-layout",
+      "tests/rust-port/export-kicad-pcb/via_array_decoupling.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/placed.kicad_pcb",
+      "--report",
+      "{out}/placement.json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/nrf52/si-check",
+     "args": [
+      "si-check",
+      "examples/nrf52_coin_cell/via_array.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--width-mm",
+      "50",
+      "--height-mm",
+      "40",
+      "--json"
+     ]
+    },
+    {
+     "id": "via-in-pad-arrays/nrf52/plan-layout",
+     "args": [
+      "plan-layout",
+      "examples/nrf52_coin_cell/via_array.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--width-mm",
+      "50",
+      "--height-mm",
+      "40",
+      "-o",
+      "{out}/placed.kicad_pcb",
+      "--report",
+      "{out}/placement.json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "route-board-via-in-pad",
+   "milestone": "M4",
+   "cases": [
+    {
+     "id": "route-board-via-in-pad/via_array",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/via_array.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-via-in-pad/via_array_pitch",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/via_array_pitch.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-via-in-pad/via_array_misfit",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/via_array_misfit.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-via-in-pad/via_array_back",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/via_array_back.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb"
+     ]
+    },
+    {
+     "id": "route-board-via-in-pad/via_array_rotated",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/via_array_rotated.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-via-in-pad/via_array_decoupling",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/via_array_decoupling.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-via-in-pad/nrf52",
+     "args": [
+      "route-board",
+      "examples/nrf52_coin_cell/via_array.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--width-mm",
+      "50",
+      "--height-mm",
+      "40",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    }
+   ]
   }
  ]
 }
