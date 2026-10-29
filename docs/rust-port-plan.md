@@ -981,3 +981,39 @@ route-board* and replay-unified* 332 equal / 1 accepted / 1 pending
 
 CopperProbe's ladder entry was not run: the session could not attach the
 private repository, so the BUFFER critical-routing nested case is unchecked.
+
+### Critical bundles, repairs and tuning (`rust-critical-tuning`, 2026-10-29)
+
+Ported `critical_bundles` (planning with a8ae460's crossing order, crossing
+and nested-exit outcomes and lines), `critical_tuning` (`UnitTuner`, slots,
+runs with twin bumps, serpentine windows, breakout-last ordering) and
+`critical_group_tuning` (`GroupTuner`), and wired them into
+`route_critical_nets`: bundle job order, planned crossings (paired-via
+search restricted to the planned layer, `_crossing_site_rank` ranking
+breakout transitions last), nested exits (`nested_exit_candidates`),
+`_bundle_repair` with `_bundle_neighbours` and loose repairs, tuning while
+routing (`_tune_bundle_pairs`, `_drop_group_steps`, `_unrouted_lanes`, the
+retry without tuning) and the final pass (`_tune_match_groups`, units and
+tuning groups). Also `_tune_pair` with `tune_virtual_pair_spans`, the
+clearance-aware retry (`_matched_local_candidates`), coarse guide
+transitions (`_coarse_transition_conflict`, `_guide_via`) and the unified
+router's bus bundles and bus skew tuning.
+
+No existing corpus case reached these paths (every replay-critical,
+si-check and route-board case was already equal and stays equal; none of the
+committed checkpoints plans a bundle). New cases from the unit-test boards
+(`tests/rust-port/critical/synthetic.py`): 24 replay-critical inputs
+(crossings routed/failed/impossible/shared-reference/inside breakout,
+nested exits routed/fallback, bundle and loose repairs, length-match
+tuned/failed/within-limit/incomplete/serpentine, R12 and R14 tuning) and 4
+replay-unified inputs (bus skew, bus bundles); all equal. Span tuning,
+`_tune_pair` with breakout regions and the clearance-aware retry, which no
+replay reaches, are checked against Python values by
+`crates/copper-route/tests/pair_tuning.rs`; bundle planning by
+`tests/critical_bundles.rs`. No difference was recorded.
+
+Remaining guards on these paths: critical pairs from proved macro ports
+(`macro_terminal_guides_proved`), single-ended guide vias, pair support
+contacts and local contact preparation in `pair_terminals`, and the unified
+router without `share_commit_index`. The ladder was not re-run in this
+stream.

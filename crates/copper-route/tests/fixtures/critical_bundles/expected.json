@@ -1,0 +1,5302 @@
+{
+ "blocked-middle": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "outcomes": []
+ },
+ "corner-breakout": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "order": [
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "nested_exits": [
+      {
+       "column_nm": 1262500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "inner": null,
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 1262500
+      },
+      {
+       "column_nm": 2462500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "OUTER_N",
+        "OUTER_P"
+       ],
+       "inner": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 2462500
+      }
+     ],
+     "order": [
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 nested exit INNER_N/INNER_P at U1: planned (planned turn 1.262 mm, column 1.262 mm), innermost",
+    "bundle J1-U1 nested exit OUTER_N/OUTER_P at U1: planned (planned turn 2.462 mm, column 2.462 mm), around INNER_N/INNER_P"
+   ]
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "order": [
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "nested_exits": [
+      {
+       "column_nm": 1262500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "inner": null,
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 1262500
+      },
+      {
+       "column_nm": 2462500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "OUTER_N",
+        "OUTER_P"
+       ],
+       "inner": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 2462500
+      }
+     ],
+     "order": [
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 nested exit INNER_N/INNER_P at U1: planned (planned turn 1.262 mm, column 1.262 mm), innermost",
+    "bundle J1-U1 nested exit OUTER_N/OUTER_P at U1: planned (planned turn 2.462 mm, column 2.462 mm), around INNER_N/INNER_P"
+   ]
+  },
+  "outcomes": []
+ },
+ "corner-tight": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "order": [
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "nested_exits": [
+      {
+       "column_nm": 1262500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "inner": null,
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 1262500
+      },
+      {
+       "column_nm": 2062500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "OUTER_N",
+        "OUTER_P"
+       ],
+       "inner": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 2102500
+      }
+     ],
+     "order": [
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 nested exit INNER_N/INNER_P at U1: planned (planned turn 1.262 mm, column 1.262 mm), innermost",
+    "bundle J1-U1 nested exit OUTER_N/OUTER_P at U1: planned (planned turn 2.103 mm, column 2.062 mm), around INNER_N/INNER_P"
+   ]
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "order": [
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "nested_exits": [
+      {
+       "column_nm": 1262500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "inner": null,
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 1262500
+      },
+      {
+       "column_nm": 2062500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "OUTER_N",
+        "OUTER_P"
+       ],
+       "inner": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 2102500
+      }
+     ],
+     "order": [
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 nested exit INNER_N/INNER_P at U1: planned (planned turn 1.262 mm, column 1.262 mm), innermost",
+    "bundle J1-U1 nested exit OUTER_N/OUTER_P at U1: planned (planned turn 2.103 mm, column 2.062 mm), around INNER_N/INNER_P"
+   ]
+  },
+  "outcomes": []
+ },
+ "corner-wrap": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "order": [
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "nested_exits": [
+      {
+       "column_nm": 1262500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "inner": null,
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 1262500
+      },
+      {
+       "column_nm": 2462500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "OUTER_N",
+        "OUTER_P"
+       ],
+       "inner": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 2462500
+      }
+     ],
+     "order": [
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 nested exit INNER_N/INNER_P at U1: planned (planned turn 1.262 mm, column 1.262 mm), innermost",
+    "bundle J1-U1 nested exit OUTER_N/OUTER_P at U1: planned (planned turn 2.462 mm, column 2.462 mm), around INNER_N/INNER_P"
+   ]
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "order": [
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "nested_exits": [
+      {
+       "column_nm": 1262500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "inner": null,
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 1262500
+      },
+      {
+       "column_nm": 2462500,
+       "component": "U1",
+       "direction": [
+        -1,
+        0
+       ],
+       "group": [
+        "OUTER_N",
+        "OUTER_P"
+       ],
+       "inner": [
+        "INNER_N",
+        "INNER_P"
+       ],
+       "routed_chamfer_nm": null,
+       "routed_turn_nm": null,
+       "status": "planned",
+       "travel": [
+        0,
+        1
+       ],
+       "turn_nm": 2462500
+      }
+     ],
+     "order": [
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "INNER_N",
+     "INNER_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ],
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 nested exit INNER_N/INNER_P at U1: planned (planned turn 1.262 mm, column 1.262 mm), innermost",
+    "bundle J1-U1 nested exit OUTER_N/OUTER_P at U1: planned (planned turn 2.462 mm, column 2.462 mm), around INNER_N/INNER_P"
+   ]
+  },
+  "outcomes": []
+ },
+ "crossing-beside": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_D_N",
+         "LANE_D_P"
+        ]
+       ],
+       "group": [
+        "LANE_C_N",
+        "LANE_C_P"
+       ],
+       "layer": "In2.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In1.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_D_N/LANE_D_P: planned, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu)"
+   ]
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_D_N",
+         "LANE_D_P"
+        ]
+       ],
+       "group": [
+        "LANE_C_N",
+        "LANE_C_P"
+       ],
+       "layer": "In2.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In1.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_D_N/LANE_D_P: planned, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu)"
+   ]
+  },
+  "outcomes": [
+   {
+    "bundle": 0,
+    "connected": true,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ]
+     ],
+     "group": [
+      "LANE_C_N",
+      "LANE_C_P"
+     ],
+     "layer": "In2.Cu",
+     "reason": "",
+     "reference_planes": [
+      "In1.Cu"
+     ],
+     "status": "routed",
+     "surface": "F.Cu",
+     "transitions": [
+      {
+       "component": "J1",
+       "reference": "return_vias",
+       "return_vias": [
+        [
+         19600000,
+         11550000
+        ],
+        [
+         21600000,
+         12950000
+        ]
+       ],
+       "shared_reference_layer": null,
+       "vias": {
+        "LANE_C_N": [
+         19600000,
+         12050000
+        ],
+        "LANE_C_P": [
+         19600000,
+         12450000
+        ]
+       }
+      },
+      {
+       "component": "U1",
+       "reference": "not_required",
+       "return_vias": [],
+       "shared_reference_layer": null,
+       "vias": {
+        "LANE_C_N": [
+         10400000,
+         10300000
+        ],
+        "LANE_C_P": [
+         10400000,
+         10700000
+        ]
+       }
+      }
+     ]
+    },
+    "line": "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_D_N/LANE_D_P: routed, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu); J1 vias (19.600, 12.050)/(19.600, 12.450) mm, return vias (19.600, 11.550)/(21.600, 12.950) mm; U1 vias (10.400, 10.300)/(10.400, 10.700) mm, no return vias required",
+    "vias": [
+     [
+      "LANE_C_N",
+      19600000,
+      12050000
+     ],
+     [
+      "LANE_C_N",
+      10400000,
+      10300000
+     ],
+     [
+      "LANE_C_P",
+      19600000,
+      12450000
+     ],
+     [
+      "LANE_C_P",
+      10400000,
+      10700000
+     ],
+     [
+      "GND",
+      21600000,
+      12950000
+     ],
+     [
+      "GND",
+      19600000,
+      11550000
+     ]
+    ]
+   },
+   {
+    "bundle": 0,
+    "connected": false,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ]
+     ],
+     "group": [
+      "LANE_C_N",
+      "LANE_C_P"
+     ],
+     "layer": "In2.Cu",
+     "reason": "no accepted candidate",
+     "reference_planes": [
+      "In1.Cu"
+     ],
+     "status": "failed",
+     "surface": "F.Cu",
+     "transitions": []
+    },
+    "line": "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_D_N/LANE_D_P: failed, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu); no accepted candidate",
+    "vias": [
+     [
+      "LANE_C_N",
+      19600000,
+      12050000
+     ],
+     [
+      "LANE_C_N",
+      10400000,
+      10300000
+     ],
+     [
+      "LANE_C_P",
+      19600000,
+      12450000
+     ],
+     [
+      "LANE_C_P",
+      10400000,
+      10700000
+     ],
+     [
+      "GND",
+      21600000,
+      12950000
+     ],
+     [
+      "GND",
+      19600000,
+      11550000
+     ]
+    ]
+   }
+  ]
+ },
+ "facing-only": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "FACE_C_N",
+       "FACE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_C_N",
+       "FACE_C_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ],
+    [
+     "FACE_C_N",
+     "FACE_C_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "FACE_C_N",
+       "FACE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_C_N",
+       "FACE_C_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ],
+    [
+     "FACE_C_N",
+     "FACE_C_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "FACE_C_N",
+       "FACE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_C_N",
+       "FACE_C_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ],
+    [
+     "FACE_C_N",
+     "FACE_C_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ],
+      [
+       "FACE_C_N",
+       "FACE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "FACE_A_N",
+       "FACE_A_P"
+      ],
+      [
+       "FACE_C_N",
+       "FACE_C_P"
+      ],
+      [
+       "FACE_B_N",
+       "FACE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "FACE_A_N",
+     "FACE_A_P"
+    ],
+    [
+     "FACE_C_N",
+     "FACE_C_P"
+    ],
+    [
+     "FACE_B_N",
+     "FACE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "outcomes": []
+ },
+ "five-lanes": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_E_N",
+       "LANE_E_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_E_N",
+       "LANE_E_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_E_N",
+     "LANE_E_P"
+    ],
+    [
+     "CLOCK_REF"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_E_N",
+       "LANE_E_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_E_N",
+       "LANE_E_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_E_N",
+     "LANE_E_P"
+    ],
+    [
+     "CLOCK_REF"
+    ]
+   ],
+   "lines": []
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_E_N",
+       "LANE_E_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_E_N",
+       "LANE_E_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_E_N",
+     "LANE_E_P"
+    ],
+    [
+     "CLOCK_REF"
+    ]
+   ],
+   "lines": []
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_E_N",
+       "LANE_E_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_E_N",
+       "LANE_E_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_E_N",
+     "LANE_E_P"
+    ],
+    [
+     "CLOCK_REF"
+    ]
+   ],
+   "lines": []
+  },
+  "outcomes": []
+ },
+ "reversed-four": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_A_N",
+         "LANE_A_P"
+        ],
+        [
+         "LANE_B_N",
+         "LANE_B_P"
+        ]
+       ],
+       "group": [
+        "LANE_C_N",
+        "LANE_C_P"
+       ],
+       "layer": "In2.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In1.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      },
+      {
+       "crosses": [
+        [
+         "LANE_C_N",
+         "LANE_C_P"
+        ],
+        [
+         "LANE_B_N",
+         "LANE_B_P"
+        ]
+       ],
+       "group": [
+        "LANE_A_N",
+        "LANE_A_P"
+       ],
+       "layer": null,
+       "reason": "it crosses moving pairs on In2.Cu and no other allowed layer is left",
+       "reference_planes": [],
+       "status": "impossible",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_A_N/LANE_A_P, LANE_B_N/LANE_B_P: planned, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu)",
+    "bundle J1-U1 crossing LANE_A_N/LANE_A_P under LANE_C_N/LANE_C_P, LANE_B_N/LANE_B_P: impossible (it crosses moving pairs on In2.Cu and no other allowed layer is left)"
+   ]
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_A_N",
+         "LANE_A_P"
+        ],
+        [
+         "LANE_B_N",
+         "LANE_B_P"
+        ]
+       ],
+       "group": [
+        "LANE_C_N",
+        "LANE_C_P"
+       ],
+       "layer": "In2.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In1.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      },
+      {
+       "crosses": [
+        [
+         "LANE_C_N",
+         "LANE_C_P"
+        ],
+        [
+         "LANE_B_N",
+         "LANE_B_P"
+        ]
+       ],
+       "group": [
+        "LANE_A_N",
+        "LANE_A_P"
+       ],
+       "layer": null,
+       "reason": "it crosses moving pairs on In2.Cu and no other allowed layer is left",
+       "reference_planes": [],
+       "status": "impossible",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_A_N/LANE_A_P, LANE_B_N/LANE_B_P: planned, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu)",
+    "bundle J1-U1 crossing LANE_A_N/LANE_A_P under LANE_C_N/LANE_C_P, LANE_B_N/LANE_B_P: impossible (it crosses moving pairs on In2.Cu and no other allowed layer is left)"
+   ]
+  },
+  "outcomes": [
+   {
+    "bundle": 0,
+    "connected": true,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "group": [
+      "LANE_C_N",
+      "LANE_C_P"
+     ],
+     "layer": "In2.Cu",
+     "reason": "",
+     "reference_planes": [
+      "In1.Cu"
+     ],
+     "status": "routed",
+     "surface": "F.Cu",
+     "transitions": [
+      {
+       "component": "J1",
+       "reference": "return_vias",
+       "return_vias": [
+        [
+         19600000,
+         7800000
+        ],
+        [
+         21600000,
+         9200000
+        ]
+       ],
+       "shared_reference_layer": null,
+       "vias": {
+        "LANE_C_N": [
+         19600000,
+         8300000
+        ],
+        "LANE_C_P": [
+         19600000,
+         8700000
+        ]
+       }
+      },
+      {
+       "component": "U1",
+       "reference": "not_required",
+       "return_vias": [],
+       "shared_reference_layer": null,
+       "vias": {
+        "LANE_C_N": [
+         10400000,
+         11300000
+        ],
+        "LANE_C_P": [
+         10400000,
+         11700000
+        ]
+       }
+      }
+     ]
+    },
+    "line": "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_A_N/LANE_A_P, LANE_B_N/LANE_B_P: routed, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu); J1 vias (19.600, 8.300)/(19.600, 8.700) mm, return vias (19.600, 7.800)/(21.600, 9.200) mm; U1 vias (10.400, 11.300)/(10.400, 11.700) mm, no return vias required",
+    "vias": [
+     [
+      "LANE_C_N",
+      19600000,
+      8300000
+     ],
+     [
+      "LANE_C_N",
+      10400000,
+      11300000
+     ],
+     [
+      "LANE_C_P",
+      19600000,
+      8700000
+     ],
+     [
+      "LANE_C_P",
+      10400000,
+      11700000
+     ],
+     [
+      "GND",
+      21600000,
+      9200000
+     ],
+     [
+      "GND",
+      19600000,
+      7800000
+     ]
+    ]
+   },
+   {
+    "bundle": 0,
+    "connected": false,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "group": [
+      "LANE_C_N",
+      "LANE_C_P"
+     ],
+     "layer": "In2.Cu",
+     "reason": "no accepted candidate",
+     "reference_planes": [
+      "In1.Cu"
+     ],
+     "status": "failed",
+     "surface": "F.Cu",
+     "transitions": []
+    },
+    "line": "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_A_N/LANE_A_P, LANE_B_N/LANE_B_P: failed, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu); no accepted candidate",
+    "vias": [
+     [
+      "LANE_C_N",
+      19600000,
+      8300000
+     ],
+     [
+      "LANE_C_N",
+      10400000,
+      11300000
+     ],
+     [
+      "LANE_C_P",
+      19600000,
+      8700000
+     ],
+     [
+      "LANE_C_P",
+      10400000,
+      11700000
+     ],
+     [
+      "GND",
+      21600000,
+      9200000
+     ],
+     [
+      "GND",
+      19600000,
+      7800000
+     ]
+    ]
+   },
+   {
+    "bundle": 0,
+    "connected": true,
+    "crossing": 1,
+    "document": {
+     "crosses": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "group": [
+      "LANE_A_N",
+      "LANE_A_P"
+     ],
+     "layer": null,
+     "reason": "it crosses moving pairs on In2.Cu and no other allowed layer is left",
+     "reference_planes": [],
+     "status": "impossible",
+     "surface": "F.Cu",
+     "transitions": []
+    },
+    "line": "bundle J1-U1 crossing LANE_A_N/LANE_A_P under LANE_C_N/LANE_C_P, LANE_B_N/LANE_B_P: impossible (it crosses moving pairs on In2.Cu and no other allowed layer is left)",
+    "vias": []
+   },
+   {
+    "bundle": 0,
+    "connected": false,
+    "crossing": 1,
+    "document": {
+     "crosses": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "group": [
+      "LANE_A_N",
+      "LANE_A_P"
+     ],
+     "layer": null,
+     "reason": "it crosses moving pairs on In2.Cu and no other allowed layer is left",
+     "reference_planes": [],
+     "status": "impossible",
+     "surface": "F.Cu",
+     "transitions": []
+    },
+    "line": "bundle J1-U1 crossing LANE_A_N/LANE_A_P under LANE_C_N/LANE_C_P, LANE_B_N/LANE_B_P: impossible (it crosses moving pairs on In2.Cu and no other allowed layer is left)",
+    "vias": []
+   }
+  ]
+ },
+ "reversed-six": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_A_N",
+         "LANE_A_P"
+        ],
+        [
+         "LANE_B_N",
+         "LANE_B_P"
+        ]
+       ],
+       "group": [
+        "LANE_C_N",
+        "LANE_C_P"
+       ],
+       "layer": "In2.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In1.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      },
+      {
+       "crosses": [
+        [
+         "LANE_C_N",
+         "LANE_C_P"
+        ],
+        [
+         "LANE_B_N",
+         "LANE_B_P"
+        ]
+       ],
+       "group": [
+        "LANE_A_N",
+        "LANE_A_P"
+       ],
+       "layer": "In3.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In4.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_A_N/LANE_A_P, LANE_B_N/LANE_B_P: planned, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu)",
+    "bundle J1-U1 crossing LANE_A_N/LANE_A_P under LANE_C_N/LANE_C_P, LANE_B_N/LANE_B_P: planned, F.Cu -> In3.Cu -> F.Cu (reference planes In4.Cu)"
+   ]
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_A_N",
+         "LANE_A_P"
+        ],
+        [
+         "LANE_B_N",
+         "LANE_B_P"
+        ]
+       ],
+       "group": [
+        "LANE_C_N",
+        "LANE_C_P"
+       ],
+       "layer": "In2.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In1.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      },
+      {
+       "crosses": [
+        [
+         "LANE_C_N",
+         "LANE_C_P"
+        ],
+        [
+         "LANE_B_N",
+         "LANE_B_P"
+        ]
+       ],
+       "group": [
+        "LANE_A_N",
+        "LANE_A_P"
+       ],
+       "layer": "In3.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In4.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_A_N/LANE_A_P, LANE_B_N/LANE_B_P: planned, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu)",
+    "bundle J1-U1 crossing LANE_A_N/LANE_A_P under LANE_C_N/LANE_C_P, LANE_B_N/LANE_B_P: planned, F.Cu -> In3.Cu -> F.Cu (reference planes In4.Cu)"
+   ]
+  },
+  "outcomes": [
+   {
+    "bundle": 0,
+    "connected": true,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "group": [
+      "LANE_C_N",
+      "LANE_C_P"
+     ],
+     "layer": "In2.Cu",
+     "reason": "",
+     "reference_planes": [
+      "In1.Cu"
+     ],
+     "status": "routed",
+     "surface": "F.Cu",
+     "transitions": [
+      {
+       "component": "J1",
+       "reference": "return_vias",
+       "return_vias": [
+        [
+         19600000,
+         7800000
+        ],
+        [
+         21600000,
+         9200000
+        ]
+       ],
+       "shared_reference_layer": null,
+       "vias": {
+        "LANE_C_N": [
+         19600000,
+         8300000
+        ],
+        "LANE_C_P": [
+         19600000,
+         8700000
+        ]
+       }
+      },
+      {
+       "component": "U1",
+       "reference": "not_required",
+       "return_vias": [],
+       "shared_reference_layer": null,
+       "vias": {
+        "LANE_C_N": [
+         10400000,
+         11300000
+        ],
+        "LANE_C_P": [
+         10400000,
+         11700000
+        ]
+       }
+      }
+     ]
+    },
+    "line": "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_A_N/LANE_A_P, LANE_B_N/LANE_B_P: routed, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu); J1 vias (19.600, 8.300)/(19.600, 8.700) mm, return vias (19.600, 7.800)/(21.600, 9.200) mm; U1 vias (10.400, 11.300)/(10.400, 11.700) mm, no return vias required",
+    "vias": [
+     [
+      "LANE_C_N",
+      19600000,
+      8300000
+     ],
+     [
+      "LANE_C_N",
+      10400000,
+      11300000
+     ],
+     [
+      "LANE_C_P",
+      19600000,
+      8700000
+     ],
+     [
+      "LANE_C_P",
+      10400000,
+      11700000
+     ],
+     [
+      "GND",
+      21600000,
+      9200000
+     ],
+     [
+      "GND",
+      19600000,
+      7800000
+     ]
+    ]
+   },
+   {
+    "bundle": 0,
+    "connected": false,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "group": [
+      "LANE_C_N",
+      "LANE_C_P"
+     ],
+     "layer": "In2.Cu",
+     "reason": "no accepted candidate",
+     "reference_planes": [
+      "In1.Cu"
+     ],
+     "status": "failed",
+     "surface": "F.Cu",
+     "transitions": []
+    },
+    "line": "bundle J1-U1 crossing LANE_C_N/LANE_C_P under LANE_A_N/LANE_A_P, LANE_B_N/LANE_B_P: failed, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu); no accepted candidate",
+    "vias": [
+     [
+      "LANE_C_N",
+      19600000,
+      8300000
+     ],
+     [
+      "LANE_C_N",
+      10400000,
+      11300000
+     ],
+     [
+      "LANE_C_P",
+      19600000,
+      8700000
+     ],
+     [
+      "LANE_C_P",
+      10400000,
+      11700000
+     ],
+     [
+      "GND",
+      21600000,
+      9200000
+     ],
+     [
+      "GND",
+      19600000,
+      7800000
+     ]
+    ]
+   },
+   {
+    "bundle": 0,
+    "connected": true,
+    "crossing": 1,
+    "document": {
+     "crosses": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "group": [
+      "LANE_A_N",
+      "LANE_A_P"
+     ],
+     "layer": "In3.Cu",
+     "reason": "",
+     "reference_planes": [
+      "In4.Cu"
+     ],
+     "status": "routed",
+     "surface": "F.Cu",
+     "transitions": [
+      {
+       "component": "J1",
+       "reference": "return_vias",
+       "return_vias": [
+        [
+         19600000,
+         10800000
+        ],
+        [
+         21600000,
+         12200000
+        ]
+       ],
+       "shared_reference_layer": null,
+       "vias": {
+        "LANE_A_N": [
+         19600000,
+         11300000
+        ],
+        "LANE_A_P": [
+         19600000,
+         11700000
+        ]
+       }
+      },
+      {
+       "component": "U1",
+       "reference": "not_required",
+       "return_vias": [],
+       "shared_reference_layer": null,
+       "vias": {
+        "LANE_A_N": [
+         10400000,
+         8300000
+        ],
+        "LANE_A_P": [
+         10400000,
+         8700000
+        ]
+       }
+      }
+     ]
+    },
+    "line": "bundle J1-U1 crossing LANE_A_N/LANE_A_P under LANE_C_N/LANE_C_P, LANE_B_N/LANE_B_P: routed, F.Cu -> In3.Cu -> F.Cu (reference planes In4.Cu); J1 vias (19.600, 11.300)/(19.600, 11.700) mm, return vias (19.600, 10.800)/(21.600, 12.200) mm; U1 vias (10.400, 8.300)/(10.400, 8.700) mm, no return vias required",
+    "vias": [
+     [
+      "LANE_A_N",
+      19600000,
+      11300000
+     ],
+     [
+      "LANE_A_N",
+      10400000,
+      8300000
+     ],
+     [
+      "LANE_A_P",
+      19600000,
+      11700000
+     ],
+     [
+      "LANE_A_P",
+      10400000,
+      8700000
+     ],
+     [
+      "GND",
+      21600000,
+      12200000
+     ],
+     [
+      "GND",
+      19600000,
+      10800000
+     ]
+    ]
+   },
+   {
+    "bundle": 0,
+    "connected": false,
+    "crossing": 1,
+    "document": {
+     "crosses": [
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "group": [
+      "LANE_A_N",
+      "LANE_A_P"
+     ],
+     "layer": "In3.Cu",
+     "reason": "no accepted candidate",
+     "reference_planes": [
+      "In4.Cu"
+     ],
+     "status": "failed",
+     "surface": "F.Cu",
+     "transitions": []
+    },
+    "line": "bundle J1-U1 crossing LANE_A_N/LANE_A_P under LANE_C_N/LANE_C_P, LANE_B_N/LANE_B_P: failed, F.Cu -> In3.Cu -> F.Cu (reference planes In4.Cu); no accepted candidate",
+    "vias": [
+     [
+      "LANE_A_N",
+      19600000,
+      11300000
+     ],
+     [
+      "LANE_A_N",
+      10400000,
+      8300000
+     ],
+     [
+      "LANE_A_P",
+      19600000,
+      11700000
+     ],
+     [
+      "LANE_A_P",
+      10400000,
+      8700000
+     ],
+     [
+      "GND",
+      21600000,
+      12200000
+     ],
+     [
+      "GND",
+      19600000,
+      10800000
+     ]
+    ]
+   }
+  ]
+ },
+ "shared-reference": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_A_N",
+         "LANE_A_P"
+        ]
+       ],
+       "group": [
+        "LANE_B_N",
+        "LANE_B_P"
+       ],
+       "layer": "In2.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In1.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: planned, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu)"
+   ]
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_A_N",
+         "LANE_A_P"
+        ]
+       ],
+       "group": [
+        "LANE_B_N",
+        "LANE_B_P"
+       ],
+       "layer": "In2.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In1.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: planned, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu)"
+   ]
+  },
+  "outcomes": [
+   {
+    "bundle": 0,
+    "connected": true,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "group": [
+      "LANE_B_N",
+      "LANE_B_P"
+     ],
+     "layer": "In2.Cu",
+     "reason": "",
+     "reference_planes": [
+      "In1.Cu"
+     ],
+     "status": "routed",
+     "surface": "F.Cu",
+     "transitions": [
+      {
+       "component": "J1",
+       "reference": "return_vias",
+       "return_vias": [
+        [
+         19600000,
+         8300000
+        ],
+        [
+         21600000,
+         9700000
+        ]
+       ],
+       "shared_reference_layer": null,
+       "vias": {
+        "LANE_B_N": [
+         19600000,
+         8800000
+        ],
+        "LANE_B_P": [
+         19600000,
+         9200000
+        ]
+       }
+      },
+      {
+       "component": "U1",
+       "reference": "shared_reference",
+       "return_vias": [],
+       "shared_reference_layer": "In1.Cu",
+       "vias": {
+        "LANE_B_N": [
+         10400000,
+         10800000
+        ],
+        "LANE_B_P": [
+         10400000,
+         11200000
+        ]
+       }
+      }
+     ]
+    },
+    "line": "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: routed, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu); J1 vias (19.600, 8.800)/(19.600, 9.200) mm, return vias (19.600, 8.300)/(21.600, 9.700) mm; U1 vias (10.400, 10.800)/(10.400, 11.200) mm, shared reference In1.Cu",
+    "vias": [
+     [
+      "LANE_B_N",
+      19600000,
+      8800000
+     ],
+     [
+      "LANE_B_N",
+      10400000,
+      10800000
+     ],
+     [
+      "LANE_B_P",
+      19600000,
+      9200000
+     ],
+     [
+      "LANE_B_P",
+      10400000,
+      11200000
+     ],
+     [
+      "GND",
+      21600000,
+      9700000
+     ],
+     [
+      "GND",
+      19600000,
+      8300000
+     ]
+    ]
+   },
+   {
+    "bundle": 0,
+    "connected": false,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "group": [
+      "LANE_B_N",
+      "LANE_B_P"
+     ],
+     "layer": "In2.Cu",
+     "reason": "no accepted candidate",
+     "reference_planes": [
+      "In1.Cu"
+     ],
+     "status": "failed",
+     "surface": "F.Cu",
+     "transitions": []
+    },
+    "line": "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: failed, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu); no accepted candidate",
+    "vias": [
+     [
+      "LANE_B_N",
+      19600000,
+      8800000
+     ],
+     [
+      "LANE_B_N",
+      10400000,
+      10800000
+     ],
+     [
+      "LANE_B_P",
+      19600000,
+      9200000
+     ],
+     [
+      "LANE_B_P",
+      10400000,
+      11200000
+     ],
+     [
+      "GND",
+      21600000,
+      9700000
+     ],
+     [
+      "GND",
+      19600000,
+      8300000
+     ]
+    ]
+   }
+  ]
+ },
+ "side-only": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "order": [
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "INNER_N",
+     "INNER_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "order": [
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "INNER_N",
+     "INNER_P"
+    ]
+   ],
+   "lines": []
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "order": [
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "INNER_N",
+     "INNER_P"
+    ]
+   ],
+   "lines": []
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "INNER_N",
+       "INNER_P"
+      ],
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ]
+     ],
+     "order": [
+      [
+       "OUTER_N",
+       "OUTER_P"
+      ],
+      [
+       "INNER_N",
+       "INNER_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "OUTER_N",
+     "OUTER_P"
+    ],
+    [
+     "INNER_N",
+     "INNER_P"
+    ]
+   ],
+   "lines": []
+  },
+  "outcomes": []
+ },
+ "split-priority": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_E_N",
+     "LANE_E_P"
+    ],
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_E_N",
+     "LANE_E_P"
+    ],
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_E_N",
+     "LANE_E_P"
+    ],
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_D_N",
+       "LANE_D_P"
+      ],
+      [
+       "LANE_C_N",
+       "LANE_C_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_E_N",
+     "LANE_E_P"
+    ],
+    [
+     "LANE_D_N",
+     "LANE_D_P"
+    ],
+    [
+     "LANE_C_N",
+     "LANE_C_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ],
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ]
+   ],
+   "lines": []
+  },
+  "outcomes": []
+ },
+ "swapped": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_A_N",
+         "LANE_A_P"
+        ]
+       ],
+       "group": [
+        "LANE_B_N",
+        "LANE_B_P"
+       ],
+       "layer": "In2.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In1.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: planned, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu)"
+   ]
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_A_N",
+         "LANE_A_P"
+        ]
+       ],
+       "group": [
+        "LANE_B_N",
+        "LANE_B_P"
+       ],
+       "layer": "In2.Cu",
+       "reason": "",
+       "reference_planes": [
+        "In1.Cu"
+       ],
+       "status": "planned",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: planned, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu)"
+   ]
+  },
+  "outcomes": [
+   {
+    "bundle": 0,
+    "connected": true,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "group": [
+      "LANE_B_N",
+      "LANE_B_P"
+     ],
+     "layer": "In2.Cu",
+     "reason": "",
+     "reference_planes": [
+      "In1.Cu"
+     ],
+     "status": "routed",
+     "surface": "F.Cu",
+     "transitions": [
+      {
+       "component": "J1",
+       "reference": "return_vias",
+       "return_vias": [
+        [
+         19600000,
+         8300000
+        ],
+        [
+         21600000,
+         9700000
+        ]
+       ],
+       "shared_reference_layer": null,
+       "vias": {
+        "LANE_B_N": [
+         19600000,
+         8800000
+        ],
+        "LANE_B_P": [
+         19600000,
+         9200000
+        ]
+       }
+      },
+      {
+       "component": "U1",
+       "reference": "not_required",
+       "return_vias": [],
+       "shared_reference_layer": null,
+       "vias": {
+        "LANE_B_N": [
+         10400000,
+         10800000
+        ],
+        "LANE_B_P": [
+         10400000,
+         11200000
+        ]
+       }
+      }
+     ]
+    },
+    "line": "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: routed, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu); J1 vias (19.600, 8.800)/(19.600, 9.200) mm, return vias (19.600, 8.300)/(21.600, 9.700) mm; U1 vias (10.400, 10.800)/(10.400, 11.200) mm, no return vias required",
+    "vias": [
+     [
+      "LANE_B_N",
+      19600000,
+      8800000
+     ],
+     [
+      "LANE_B_N",
+      10400000,
+      10800000
+     ],
+     [
+      "LANE_B_P",
+      19600000,
+      9200000
+     ],
+     [
+      "LANE_B_P",
+      10400000,
+      11200000
+     ],
+     [
+      "GND",
+      21600000,
+      9700000
+     ],
+     [
+      "GND",
+      19600000,
+      8300000
+     ]
+    ]
+   },
+   {
+    "bundle": 0,
+    "connected": false,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "group": [
+      "LANE_B_N",
+      "LANE_B_P"
+     ],
+     "layer": "In2.Cu",
+     "reason": "no accepted candidate",
+     "reference_planes": [
+      "In1.Cu"
+     ],
+     "status": "failed",
+     "surface": "F.Cu",
+     "transitions": []
+    },
+    "line": "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: failed, F.Cu -> In2.Cu -> F.Cu (reference planes In1.Cu); no accepted candidate",
+    "vias": [
+     [
+      "LANE_B_N",
+      19600000,
+      8800000
+     ],
+     [
+      "LANE_B_N",
+      10400000,
+      10800000
+     ],
+     [
+      "LANE_B_P",
+      19600000,
+      9200000
+     ],
+     [
+      "LANE_B_P",
+      10400000,
+      11200000
+     ],
+     [
+      "GND",
+      21600000,
+      9700000
+     ],
+     [
+      "GND",
+      19600000,
+      8300000
+     ]
+    ]
+   }
+  ]
+ },
+ "swapped-max-vias-1": {
+  "00": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "01": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": []
+  },
+  "10": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_A_N",
+         "LANE_A_P"
+        ]
+       ],
+       "group": [
+        "LANE_B_N",
+        "LANE_B_P"
+       ],
+       "layer": null,
+       "reason": "max_vias 1 on LANE_B_N allows no paired layer swap; it needs 2 vias per member",
+       "reference_planes": [],
+       "status": "impossible",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: impossible (max_vias 1 on LANE_B_N allows no paired layer swap; it needs 2 vias per member)"
+   ]
+  },
+  "11": {
+   "bundles": [
+    {
+     "components": [
+      "J1",
+      "U1"
+     ],
+     "crossings": [
+      {
+       "crosses": [
+        [
+         "LANE_A_N",
+         "LANE_A_P"
+        ]
+       ],
+       "group": [
+        "LANE_B_N",
+        "LANE_B_P"
+       ],
+       "layer": null,
+       "reason": "max_vias 1 on LANE_B_N allows no paired layer swap; it needs 2 vias per member",
+       "reference_planes": [],
+       "status": "impossible",
+       "surface": "F.Cu",
+       "transitions": []
+      }
+     ],
+     "kind": "differential",
+     "name_order": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ],
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ]
+     ],
+     "order": [
+      [
+       "LANE_B_N",
+       "LANE_B_P"
+      ],
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "priority": 100,
+     "repair_limit": 4,
+     "repairs": [],
+     "repairs_accepted": 0,
+     "repairs_attempted": 0
+    }
+   ],
+   "job_order": [
+    [
+     "LANE_B_N",
+     "LANE_B_P"
+    ],
+    [
+     "LANE_A_N",
+     "LANE_A_P"
+    ]
+   ],
+   "lines": [
+    "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: impossible (max_vias 1 on LANE_B_N allows no paired layer swap; it needs 2 vias per member)"
+   ]
+  },
+  "outcomes": [
+   {
+    "bundle": 0,
+    "connected": true,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "group": [
+      "LANE_B_N",
+      "LANE_B_P"
+     ],
+     "layer": null,
+     "reason": "max_vias 1 on LANE_B_N allows no paired layer swap; it needs 2 vias per member",
+     "reference_planes": [],
+     "status": "impossible",
+     "surface": "F.Cu",
+     "transitions": []
+    },
+    "line": "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: impossible (max_vias 1 on LANE_B_N allows no paired layer swap; it needs 2 vias per member)",
+    "vias": []
+   },
+   {
+    "bundle": 0,
+    "connected": false,
+    "crossing": 0,
+    "document": {
+     "crosses": [
+      [
+       "LANE_A_N",
+       "LANE_A_P"
+      ]
+     ],
+     "group": [
+      "LANE_B_N",
+      "LANE_B_P"
+     ],
+     "layer": null,
+     "reason": "max_vias 1 on LANE_B_N allows no paired layer swap; it needs 2 vias per member",
+     "reference_planes": [],
+     "status": "impossible",
+     "surface": "F.Cu",
+     "transitions": []
+    },
+    "line": "bundle J1-U1 crossing LANE_B_N/LANE_B_P under LANE_A_N/LANE_A_P: impossible (max_vias 1 on LANE_B_N allows no paired layer swap; it needs 2 vias per member)",
+    "vias": []
+   }
+  ]
+ }
+}

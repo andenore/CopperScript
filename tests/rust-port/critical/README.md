@@ -72,3 +72,59 @@ The report and stdout carry wall time (`seconds`, and
 compare the exit status, stderr, the KiCad project files and the report
 without those keys (the harness `json` option's `without` form), never
 stdout. The error and usage suites print no wall time and compare stdout too.
+
+## Synthetic inputs
+
+`synthetic/NAME.state.json` are replay inputs of the small boards the
+critical-routing unit tests build: the board, `route_global(board)` computed
+as its test does, and no reserved accesses or plane-stitch options. They reach
+the bundle, repair and tuning paths no checkpoint reaches. Regenerate with
+
+```sh
+python tests/rust-port/critical/synthetic.py [NAME ...]   # re-executes with PYTHONHASHSEED=0 PYTHONUTF8=1
+```
+
+Replay each with the `--pair-states` given (the test's bound; default 6000
+otherwise). The paths were checked against the Python report and with call
+counters; times are one Python replay.
+
+| File | Source test/helper | `--pair-states` | Reaches | Python |
+|---|---|---|---|---|
+| `crossing-routed` | `test_planned_crossings._swapped` | | a routed planned crossing (paired swap F.Cu -> In2.Cu, return vias) | 1.3 s |
+| `crossing-reversal` | `_reversed(six_layers=True)` | | two routed crossings on their own layers; crossing order (moving pairs first) | 1.7 s |
+| `crossing-impossible-layer` | `_reversed(six_layers=False)` | | one routed and one `impossible` crossing (no layer left), then a rejected bundle repair | 1.0 s |
+| `crossing-impossible-vias` | `_swapped(max_vias=1)` | | an `impossible` crossing (via budget): no search, no copper | 0.5 s |
+| `crossing-failed` | `_swapped()` with In2.Cu closed between the rows | | a planned crossing whose pair finds no candidate (`failed`) | 21 s |
+| `crossing-steps-aside` | `_crossing_beside(...)`, LANE_C moving | | crossing order with the crossed pair routed next to wide transition vias | 4.1 s |
+| `crossing-shared-reference` | `_shared_reference(_swapped())` | | crossing transitions on a declared shared reference (no return vias) | 1.1 s |
+| `crossing-breakout-inside` | `_swapped()`, 15 mm breakouts | | crossing transitions inside breakout regions (fallback) | 2.4 s |
+| `crossing-tuned` | `test_a_length_match_group_with_a_crossing_pair_is_tuned` | | a crossing bundle tuned while routing (`_tune_bundle_pairs`) | 1.1 s |
+| `nested-routed` | `test_nested_exits._corner_board()` | | two routed nested exits; `_tune_pair` intra-pair bumps | 0.6 s |
+| `nested-breakout` | `_corner_board(TIGHT, clearance="0.3", breakout=True)` | 4000 | routed nested exits; `_tune_pair` bumps on pairs with breakout regions (99 tuned calls) | 1.5 s |
+| `nested-fallback` | `_corner_board()` with a keep-out across the side columns | | one `fallback` and one routed nested exit, and an accepted bundle repair | 18 s |
+| `bundle-repair` | `test_critical_bundles._repair_board(*REPAIRABLE)` | 4000 | an accepted bundle rip-up repair (`_bundle_repair`) | 14 s |
+| `bundle-repair-squeezed` | `test_a_squeezed_pair_without_spacing_findings_rips_up_its_nearest_neighbour` | 20000 | a repair of the nearest neighbour (no spacing finding names a blocker) | 1.5 s |
+| `loose-repair` | `test_loose_pair_repair._loose_board` | 2000 | a rejected loose (non-bundle) repair recorded on the group result | 3.7 s |
+| `match-tuned` | `test_length_match_tuning._lanes_board()` | | final-pass tuning (`tuned`), pair bumps | 0.6 s |
+| `match-failed` | `_lanes_board(TWO_LANES)` between walls | | final-pass tuning `failed` (insufficient room), copper restored | 0.5 s |
+| `match-within-limit` | `test_groups_within_their_limit_are_untouched` | | one group `within_limit`, one `tuned` | 0.5 s |
+| `match-incomplete` | `_lanes_board(TWO_LANES)` without LANE_B's rules | | an `incomplete` group | 0.5 s |
+| `match-breakout-regions` | `test_tuned_copper_of_breakout_nets_follows_the_breakout_regions` | | tuning next to necked breakout copper | 0.6 s |
+| `match-bumps-outside-breakout` | `test_tuning_bumps_stay_out_of_breakout_regions_where_there_is_room_elsewhere` | | bumps kept out of breakout regions | 0.5 s |
+| `match-serpentine` | `test_serpentine_tuning._serpentine_lanes` between walls | | serpentine-style final tuning (R10) | 0.5 s |
+| `bundle-tuning` | `test_bundle_tuning._bundle(HEMMED)` | 4000 | tuning while routing in a bundle (R12), two `routing` steps | 1.7 s |
+| `group-tuning` | `test_group_tuning._group_board()` | | a tuning group bent together while routing (`_tune_group`, R14) | 0.5 s |
+
+No synthetic input reaches a tuned `tune_virtual_pair_spans`, the
+clearance-aware retry `pair_terminals._matched_local_candidates`, or twin
+bumps beside vias: their tests drive them with hand-made copper or patched
+candidates, which a replay input cannot carry.
+
+`python tests/rust-port/critical/synthetic.py --unified` writes unified-router
+inputs under `tests/rust-port/unified/synthetic/` (`save_inputs_path`):
+
+| File | Source test | Replay with | Reaches |
+|---|---|---|---|
+| `bus-skew` | `test_tuned_bus_copper_survives_route_smoothing` (saved with `buses_first=true`) | nothing, or `--set route_smoothing=true` | `_tune_bus_skew` lengthening A by 6 mm |
+| `bus-skew-untunable` | the same board without `tuning_amplitude_limit` | nothing | the bus skew note on the board |
+| `bus-bundles` | `test_bus_bundles_route_the_nets_between_the_bus_parts_with_the_bus` (saved with `maximum_iterations=5`) | `--set bus_bundles=true` | a bus phase of three nets (C joins the A/B group) |

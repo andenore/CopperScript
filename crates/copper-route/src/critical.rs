@@ -20,11 +20,16 @@ use copper_drc::connectivity::{Candidate, explicit_copper_connectivity};
 use copper_json::{Dumps, Object, Value};
 use copper_lang::mechanical::stackup::StackupLayer;
 use copper_pcb::board::{NetRoutingRule, PhysicalBoard, RouteKind, TrackSegment, Via};
+use copper_physical::board::CopperKeepout;
+use copper_physical::geometry::point_in_polygon;
 use copper_physical::{CopperLayer, Point};
 use copper_state::StateValue;
 use copper_units::Decimal;
 
-use crate::critical_bundles::{BundleRepair, CriticalBundle, bundle_document, repair_document};
+use crate::critical_bundles::{
+    BundleRepair, CriticalBundle, NestedExit, PlannedCrossing, bundle_document, repair_document,
+};
+use crate::critical_tuning::match_tuning_document;
 use crate::pair_search::{
     PairPortInventory, PairSearchAttempt, PairTransitionInventory, attempt_document, port_inventory_document,
     transition_inventory_document,
@@ -390,7 +395,6 @@ pub struct CriticalRoutingResult {
     /// Bundles of pairs between the same two components: order and repairs.
     pub bundles: Vec<CriticalBundle>,
     /// Length-match tuning outcome per `length_match` group, as documents.
-    /// PENDING: owned by rust-m4-unified (critical_tuning.MatchTuningResult).
     pub match_tuning: Vec<Value>,
     pub plane_reservation_track_count: i64,
     pub plane_reservation_via_count: i64,
@@ -461,7 +465,7 @@ pub fn promote_planar_nets(board: &PhysicalBoard) -> (Option<Vec<NetRoutingRule>
     if promoted.is_empty() { (None, promoted) } else { (Some(rules), promoted) }
 }
 
-fn is_pair_kind(kind: RouteKind) -> bool {
+pub(crate) fn is_pair_kind(kind: RouteKind) -> bool {
     matches!(kind, RouteKind::Differential | RouteKind::CanBus)
 }
 
@@ -501,7 +505,7 @@ pub fn critical_jobs(board: &PhysicalBoard) -> Vec<(NetRoutingRule, Vec<String>)
 }
 
 /// `_budget_diagnostics`: hard profile budgets of candidate copper (the via budget).
-fn budget_diagnostics(rule: &NetRoutingRule, vias: &[&Via]) -> Vec<String> {
+pub(crate) fn budget_diagnostics(rule: &NetRoutingRule, vias: &[&Via]) -> Vec<String> {
     match rule.max_vias {
         Some(limit) if vias.len() as i64 > limit => vec![format!("via count {} exceeds {limit}", vias.len())],
         _ => Vec::new(),
@@ -509,7 +513,7 @@ fn budget_diagnostics(rule: &NetRoutingRule, vias: &[&Via]) -> Vec<String> {
 }
 
 /// `_budget_warnings`: length budget misses of connected copper.
-fn budget_warnings(rule: &NetRoutingRule, tracks: &[&TrackSegment]) -> Vec<String> {
+pub(crate) fn budget_warnings(rule: &NetRoutingRule, tracks: &[&TrackSegment]) -> Vec<String> {
     let length = track_length(tracks);
     match rule.max_length_nm {
         Some(limit) if length > limit => vec![format!("route length {length} nm exceeds {limit} nm")],
@@ -910,10 +914,48 @@ pub fn route_critical_nets(
     };
     let net_by_name: IndexMap<&str, &copper_pcb::board::PhysicalNet> =
         stage_board.nets.iter().map(|net| (net.name.as_str(), net)).collect();
-    if crate::critical_bundles::has_bundles(&stage_board, &jobs, &rules)? {
-        // PENDING: plan_bundles order, crossings, nested exits and repairs.
-        return copper_pcb::not_implemented("critical pair bundles");
+    let bundles =
+        crate::critical_bundles::plan_bundles(&stage_board, &jobs, &rules, options.bundle_repair_limit, true, true)?;
+    let jobs = crate::critical_bundles::bundle_job_order(&jobs, &bundles)?;
+    let mut bundle_of: IndexMap<Vec<String>, usize> = IndexMap::new();
+    for (index, bundle) in bundles.iter().enumerate() {
+        for group in &bundle.order {
+            bundle_of.insert(group.clone(), index);
+        }
     }
+    let mut loose_repairs: IndexMap<Vec<String>, Vec<BundleRepair>> = IndexMap::new();
+    let mut crossings: IndexMap<Vec<String>, PlannedCrossing> = IndexMap::new();
+    let mut nested: IndexMap<Vec<String>, NestedExit> = IndexMap::new();
+    for bundle in &bundles {
+        for item in &bundle.crossings {
+            crossings.insert(item.group.clone(), item.clone());
+        }
+        for item in &bundle.nested_exits {
+            nested.insert(item.group.clone(), item.clone());
+        }
+    }
+    // Turn and chamfer of each group's accepted nested exit, for the report.
+    let mut turns: IndexMap<Vec<String>, (i64, i64)> = IndexMap::new();
+    let mut repairs: Vec<Vec<BundleRepair>> = vec![Vec::new(); bundles.len()];
+    let mut result_index: IndexMap<Vec<String>, usize> = IndexMap::new();
+    // Bundle pairs of a length_match group are tuned as they are accepted (plan R12).
+    let mut match_of: IndexMap<&str, &copper_pcb::board::NetMatchGroup> = IndexMap::new();
+    for item in &stage_board.match_groups {
+        for net in &item.nets {
+            match_of.insert(net.as_str(), item);
+        }
+    }
+    let mut tuning = crate::critical_match::RoutingTuning::default();
+    let current = |committed: &crate::critical_match::Committed| -> (Vec<TrackSegment>, Vec<Via>) {
+        (
+            base_tracks
+                .iter()
+                .cloned()
+                .chain(committed.iter().flat_map(|(_, items, _)| items.iter().cloned()))
+                .collect(),
+            base_vias.iter().cloned().chain(committed.iter().flat_map(|(_, _, items)| items.iter().cloned())).collect(),
+        )
+    };
     let default_unified = crate::unified_router::UnifiedRouterOptions::default();
     let unified = options.unified_options.unwrap_or(&default_unified);
     let mut cohort_candidates: IndexMap<String, Proposal> = IndexMap::new();
@@ -944,11 +986,13 @@ pub fn route_critical_nets(
             result.evidence_digests = external_evidence(rule);
             result.strategy = "immutable_hard_macro".to_owned();
             result.warnings = budget_warnings(rule, &owned_tracks);
-            critical_progress(&mut on_progress, "finished", group, Some(&result));
+            result_index.insert(group.clone(), results.len());
             results.push(result);
+            critical_progress(&mut on_progress, "finished", group, results.last());
             continue;
         }
-        if is_pair_kind(rule.kind) {
+        let mut rerouted: Option<(Vec<String>, CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> = None;
+        let (result, net_tracks, net_vias) = if is_pair_kind(rule.kind) {
             let partner_name = rule.differential_partner.clone().expect("pair rules name a partner");
             if !symmetric_pair(rule) {
                 let mut nets = vec![rule.net.clone(), partner_name];
@@ -962,13 +1006,14 @@ pub fn route_critical_nets(
                     0,
                     vec!["differential/CAN routing rules must be symmetric".to_owned()],
                 );
-                critical_progress(&mut on_progress, "finished", group, Some(&result));
+                result_index.insert(group.clone(), results.len());
                 results.push(result);
+                critical_progress(&mut on_progress, "finished", group, results.last());
                 continue;
             }
             let partner_rule = rules[partner_name.as_str()];
             let mut blockers: IndexSet<String> = IndexSet::new();
-            let (result, pair_tracks, pair_vias) = route_pair_group(
+            let (mut result, mut pair_tracks, mut pair_vias) = route_pair_group(
                 &stage_board,
                 rule,
                 partner_rule,
@@ -979,24 +1024,159 @@ pub fn route_critical_nets(
                 options.pair_state_limit,
                 escalation,
                 &mut blockers,
+                crossings.get(group),
+                nested.get(group),
+                Some(&mut turns),
             )?;
-            if !result.connected {
-                // Pairs leaving the same package were not planned as a bundle: the
-                // committed pairs sharing a terminal package are rip-up suspects.
+            // Connected only over its length/skew budget counts as blocked
+            // here, but the over-budget route stays the fallback.
+            let over_budget = result.connected && !result.warnings.is_empty();
+            let bundle_index = bundle_of.get(group).copied();
+            let bundle_groups: IndexSet<Vec<String>> =
+                bundle_index.map(|index| bundles[index].order.iter().cloned().collect()).unwrap_or_default();
+            if (!result.connected || over_budget) && bundle_index.is_some() {
+                let tuned_here: Vec<usize> = (0..committed.len())
+                    .filter(|position| {
+                        let entry = &committed[*position].0;
+                        bundle_groups.contains(entry) && tuning.as_routed.contains_key(entry)
+                    })
+                    .collect();
+                if !tuned_here.is_empty() {
+                    let saved = (
+                        committed.clone(),
+                        results.clone(),
+                        tuning.clone(),
+                        tracks.clone(),
+                        vias.clone(),
+                        (result.clone(), pair_tracks.clone(), pair_vias.clone()),
+                    );
+                    // Tuning while routing may block this pair (plan R12):
+                    // route it again with that tuning removed, before any rip-up.
+                    for position in tuned_here {
+                        let entry = committed[position].0.clone();
+                        let (entry_tracks, entry_result) =
+                            tuning.as_routed.shift_remove(&entry).expect("a tuned entry");
+                        committed[position].1 = entry_tracks;
+                        results[result_index[&entry]] = entry_result;
+                        // A tuning group's step and target name all its units (plan R14).
+                        tuning.early.retain(|step| !step.nets.iter().any(|net| entry.contains(net)));
+                        tuning.failed_targets.retain(|key, _| !key.iter().any(|net| entry.contains(net)));
+                        for net in &entry {
+                            tuning.routed.shift_remove(net);
+                        }
+                    }
+                    (tracks, vias) = current(&committed);
+                    blockers = IndexSet::new();
+                    let retry = route_pair_group(
+                        &stage_board,
+                        rule,
+                        partner_rule,
+                        &routes,
+                        &rules,
+                        &tracks,
+                        &vias,
+                        options.pair_state_limit,
+                        escalation,
+                        &mut blockers,
+                        crossings.get(group),
+                        None,
+                        None,
+                    )?;
+                    if over_budget && !within_or_shorter(&retry.0, &result) {
+                        // Removing the tuning did not help: keep it and the
+                        // over-budget route.
+                        let outcome;
+                        (committed, results, tuning, tracks, vias, outcome) = saved;
+                        (result, pair_tracks, pair_vias) = outcome;
+                    } else {
+                        (result, pair_tracks, pair_vias) = retry;
+                    }
+                }
+            }
+            let loose = !result.connected && bundle_index.is_none();
+            let mut suspects: Vec<Vec<String>> = Vec::new();
+            if loose {
+                // Pairs leaving the same package were not planned as a bundle,
+                // yet an earlier one can wall a later one's exit in. The
+                // committed pairs that share a terminal package are suspects
+                // for the same rip-up-and-reroute repair, under the same limit.
                 let shared: IndexSet<&str> = group
                     .iter()
                     .flat_map(|name| net_by_name[name.as_str()].pads.iter().map(|pad| pad.component.as_str()))
                     .collect();
-                let suspects = committed.iter().any(|(entry, entry_tracks, entry_vias)| {
-                    entry.len() == 2
-                        && (!entry_tracks.is_empty() || !entry_vias.is_empty())
-                        && entry.iter().any(|name| {
-                            net_by_name[name.as_str()].pads.iter().any(|pad| shared.contains(pad.component.as_str()))
-                        })
-                });
-                if suspects && options.bundle_repair_limit > 0 {
-                    // PENDING: _bundle_repair (rip-up and reroute).
-                    return copper_pcb::not_implemented("critical pair rip-up repair");
+                suspects = committed
+                    .iter()
+                    .filter(|(entry, entry_tracks, entry_vias)| {
+                        entry.len() == 2
+                            && (!entry_tracks.is_empty() || !entry_vias.is_empty())
+                            && entry.iter().any(|name| {
+                                net_by_name[name.as_str()]
+                                    .pads
+                                    .iter()
+                                    .any(|pad| shared.contains(pad.component.as_str()))
+                            })
+                    })
+                    .map(|(entry, _, _)| entry.clone())
+                    .collect();
+                suspects.sort_by_key(|entry| (!entry.iter().any(|net| blockers.contains(net)), entry.clone()));
+                loose_repairs.entry(group.clone()).or_default();
+            } else if !result.connected {
+                let routed_bundle: Vec<Vec<String>> = committed
+                    .iter()
+                    .filter(|(entry, entry_tracks, entry_vias)| {
+                        bundle_groups.contains(entry) && (!entry_tracks.is_empty() || !entry_vias.is_empty())
+                    })
+                    .map(|(entry, _, _)| entry.clone())
+                    .collect();
+                suspects = routed_bundle
+                    .iter()
+                    .filter(|entry| entry.iter().any(|net| blockers.contains(net)))
+                    .cloned()
+                    .collect();
+                if suspects.is_empty() && blockers.is_empty() {
+                    suspects = bundle_neighbours(&stage_board, group, &routed_bundle)?;
+                }
+            }
+            if !result.connected {
+                for blocker in &suspects {
+                    let ledger = match bundle_index {
+                        Some(index) if !loose => &mut repairs[index],
+                        _ => loose_repairs.get_mut(group).expect("a loose ledger"),
+                    };
+                    if ledger.len() as i64 >= options.bundle_repair_limit {
+                        break;
+                    }
+                    let (record, repaired) = bundle_repair(
+                        &stage_board,
+                        &routes,
+                        &rules,
+                        options.pair_state_limit,
+                        (&base_tracks, &base_vias),
+                        &committed,
+                        (rule, partner_rule),
+                        group,
+                        blocker,
+                        (&crossings, &nested, &mut turns),
+                        escalation,
+                    )?;
+                    let ledger = match bundle_index {
+                        Some(index) if !loose => &mut repairs[index],
+                        _ => loose_repairs.get_mut(group).expect("a loose ledger"),
+                    };
+                    ledger.push(record);
+                    if let Some((failed, (blocker_result, blocker_tracks, blocker_vias))) = repaired {
+                        (result, pair_tracks, pair_vias) = failed;
+                        committed.retain(|entry| entry.0 != *blocker);
+                        results[result_index[blocker]] = blocker_result.clone();
+                        (tracks, vias) = current(&committed);
+                        rerouted = Some((blocker.clone(), blocker_result, blocker_tracks, blocker_vias));
+                        break;
+                    }
+                }
+                if loose && let Some(ledger) = loose_repairs.get(group).filter(|ledger| !ledger.is_empty()) {
+                    // Attempts outside a bundle have no bundle record: the
+                    // group's result carries them.
+                    result.repairs = ledger.clone();
                 }
             }
             let key = if rule.net < partner_name {
@@ -1005,89 +1185,108 @@ pub fn route_critical_nets(
                 (partner_name, rule.net.clone())
             };
             coupled_pairs.insert(key);
-            critical_progress(&mut on_progress, "finished", group, Some(&result));
-            results.push(result);
-            tracks.extend(pair_tracks.iter().cloned());
-            vias.extend(pair_vias.iter().cloned());
-            committed.push((group.clone(), pair_tracks, pair_vias));
-            continue;
-        }
-        // Contiguous single-ended critical and clock jobs share one unified
-        // negotiation (`_route_critical_cohort`).
-        if matches!(rule.kind, RouteKind::Critical | RouteKind::Clock) && !cohort_candidates.contains_key(&rule.net) {
-            let cohort: Vec<&NetRoutingRule> = jobs[job_index..]
-                .iter()
-                .take_while(|(peer, peer_group)| {
-                    matches!(peer.kind, RouteKind::Critical | RouteKind::Clock) && peer_group.len() == 1
-                })
-                .map(|(peer, _)| peer)
-                .collect();
-            if cohort.len() > 1 {
-                let proposals = route_critical_cohort(&stage_board, &cohort, global_route, &tracks, &vias, unified)?;
-                cohort_candidates.extend(proposals);
+            (result, pair_tracks, pair_vias)
+        } else {
+            // Contiguous single-ended critical and clock jobs share one unified
+            // negotiation (`_route_critical_cohort`).
+            if matches!(rule.kind, RouteKind::Critical | RouteKind::Clock) && !cohort_candidates.contains_key(&rule.net)
+            {
+                let cohort: Vec<&NetRoutingRule> = jobs[job_index..]
+                    .iter()
+                    .take_while(|(peer, peer_group)| {
+                        matches!(peer.kind, RouteKind::Critical | RouteKind::Clock) && peer_group.len() == 1
+                    })
+                    .map(|(peer, _)| peer)
+                    .collect();
+                if cohort.len() > 1 {
+                    let proposals =
+                        route_critical_cohort(&stage_board, &cohort, global_route, &tracks, &vias, unified)?;
+                    cohort_candidates.extend(proposals);
+                }
             }
-        }
-        if let Some((proposed, net_tracks, net_vias)) = cohort_candidates.shift_remove(&rule.net) {
-            let (result, net_tracks, net_vias) =
-                validate_candidate(&stage_board, proposed, net_tracks, net_vias, &tracks, &vias, None)?;
-            critical_progress(&mut on_progress, "finished", group, Some(&result));
-            results.push(result);
-            tracks.extend(net_tracks.iter().cloned());
-            vias.extend(net_vias.iter().cloned());
-            committed.push((group.clone(), net_tracks, net_vias));
-            continue;
-        }
-        let guide = routes.get(&rule.net);
-        let (result, net_tracks, net_vias) = route_single(&stage_board, rule, guide)?;
-        let (result, net_tracks, net_vias) =
-            reject_reserved_plane_tracks(&stage_board, result, net_tracks, net_vias, &rules);
-        let (result, net_tracks, net_vias) =
-            validate_candidate(&stage_board, result, net_tracks, net_vias, &tracks, &vias, None)?;
-        let (result, net_tracks, net_vias) =
-            improve_single_surface(&stage_board, rule, guide, result, net_tracks, net_vias, &tracks, &vias)?;
-        let guided = guide.is_some_and(|route| route.connected);
-        let point_to_point = matches!(rule.kind, RouteKind::RfFeed | RouteKind::Clock);
-        let rf_tree = rule.kind == RouteKind::RfFeed && rule.topology == "tree" && rule.max_vias == Some(0);
-        let (mut result, mut net_tracks, mut net_vias) = (result, net_tracks, net_vias);
-        if (!result.connected || !result.warnings.is_empty())
-            && guided
-            && (!point_to_point || guide.is_some_and(|route| route.accesses.len() == 2) || rf_tree)
-        {
-            let (repaired, repaired_tracks, repaired_vias) =
-                route_single_exact(&stage_board, rule, global_route, &tracks, &vias, unified)?;
-            if !result.connected || within_or_shorter(&repaired, &result) {
-                let (attempts, guide_length) = (result.local_candidate_attempts, result.guide_length_nm);
-                (result, net_tracks, net_vias) = (repaired, repaired_tracks, repaired_vias);
-                result.local_candidate_attempts = attempts;
-                result.guide_length_nm = guide_length;
+            if let Some((proposed, net_tracks, net_vias)) = cohort_candidates.shift_remove(&rule.net) {
+                validate_candidate(&stage_board, proposed, net_tracks, net_vias, &tracks, &vias, None)?
+            } else {
+                route_single_job(
+                    &stage_board,
+                    rule,
+                    &routes,
+                    global_route,
+                    &rules,
+                    &net_by_name,
+                    &tracks,
+                    &vias,
+                    unified,
+                )?
             }
-        } else if result.connected
-            && result.strategy == "global_guide"
-            && net_by_name.get(rule.net.as_str()).is_some_and(|net| net.pads.len() >= 3)
-            && !point_to_point
-        {
-            // A coarse-guide tree joining three or more terminals can be far
-            // from the shortest; keep the exact tree when shorter, no more vias.
-            let (exact, exact_tracks, exact_vias) =
-                route_single_exact(&stage_board, rule, global_route, &tracks, &vias, unified)?;
-            if exact.connected && exact_vias.len() <= net_vias.len() && exact.lengths_nm[0] < result.lengths_nm[0] {
-                let (attempts, guide_length) = (result.local_candidate_attempts, result.guide_length_nm);
-                (result, net_tracks, net_vias) = (exact, exact_tracks, exact_vias);
-                result.local_candidate_attempts = attempts;
-                result.guide_length_nm = guide_length;
-            }
-        }
-        critical_progress(&mut on_progress, "finished", group, Some(&result));
+        };
+        result_index.insert(group.clone(), results.len());
+        let connected = result.connected;
         results.push(result);
         tracks.extend(net_tracks.iter().cloned());
         vias.extend(net_vias.iter().cloned());
         committed.push((group.clone(), net_tracks, net_vias));
+        critical_progress(&mut on_progress, "finished", group, results.last());
+        if let Some((blocker, blocker_result, blocker_tracks, blocker_vias)) = &rerouted {
+            committed.push((blocker.clone(), blocker_tracks.clone(), blocker_vias.clone()));
+            tracks.extend(blocker_tracks.iter().cloned());
+            vias.extend(blocker_vias.iter().cloned());
+            critical_progress(&mut on_progress, "started", blocker, None);
+            critical_progress(&mut on_progress, "finished", blocker, Some(blocker_result));
+        }
+        let match_group = group.iter().find_map(|net| match_of.get(net.as_str()).copied());
+        if let Some(match_group) = match_group
+            && let Some(&bundle_index) = bundle_of.get(group)
+            && connected
+        {
+            let mut entries = vec![group.clone()];
+            if let Some((blocker, ..)) = &rerouted {
+                entries.push(blocker.clone());
+            }
+            let regrouped = crate::critical_match::drop_group_steps(
+                &entries,
+                &mut committed,
+                &mut results,
+                &result_index,
+                &mut tuning,
+            );
+            for entry in &entries {
+                // Re-routed copper: its earlier tuning is gone.
+                tuning.early.retain(|step| step.nets != *entry);
+                tuning.failed_targets.shift_remove(entry);
+                tuning.as_routed.shift_remove(entry);
+                for net in entry {
+                    tuning.routed.shift_remove(net);
+                }
+            }
+            // Tuning bumps stay out of the lanes of bundle pairs still to route.
+            let routed_groups: Vec<Vec<String>> = committed.iter().map(|(entry, _, _)| entry.clone()).collect();
+            let lanes = unrouted_lanes(&stage_board, &bundles[bundle_index], &routed_groups, &rules)?;
+            let mut tune_board = stage_board.clone();
+            tune_board.copper_keepouts.extend(lanes);
+            let bundle_groups: IndexSet<Vec<String>> = bundles[bundle_index].order.iter().cloned().collect();
+            if crate::critical_match::tune_bundle_pairs(
+                &tune_board,
+                &rules,
+                &base_tracks,
+                &base_vias,
+                &mut committed,
+                &mut results,
+                &result_index,
+                &bundle_groups,
+                match_group,
+                &mut tuning,
+            )? || regrouped
+            {
+                (tracks, vias) = current(&committed);
+            }
+        }
     }
     // A bounded cohort can reject one owner while committing its peers. Give
     // that empty owner one exact retry after all accepted jobs are present.
     for entry in committed.iter_mut() {
         let (group, owned_tracks, owned_vias) = &*entry;
-        let Some(index) = results.iter().rposition(|r| r.nets == *group) else { continue };
+        let index = result_index[group];
         let incumbent = &results[index];
         if group.len() != 1
             || incumbent.connected
@@ -1114,7 +1313,27 @@ pub fn route_critical_nets(
         }
         critical_progress(&mut on_progress, "retry_finished", &group, Some(&candidate));
     }
-    let match_tuning = tune_match_groups(&stage_board, &rules, &base_tracks, &base_vias, &committed)?;
+    let match_tuning = crate::critical_match::tune_match_groups(
+        &stage_board,
+        &rules,
+        &base_tracks,
+        &base_vias,
+        &mut committed,
+        &mut results,
+        &result_index,
+        &tuning,
+    )?;
+    if match_tuning.iter().any(|item| item.status == "tuned") {
+        (tracks, vias) = current(&committed);
+    }
+    let mut bundle_outcomes = Vec::new();
+    for (bundle, records) in bundles.iter().zip(repairs) {
+        let mut outcome = bundle.clone();
+        outcome.repairs = records;
+        outcome.crossings = crossing_outcomes(&stage_board, bundle, &rules, &results, &result_index, &committed)?;
+        outcome.nested_exits = nested_outcomes(bundle, &results, &result_index, &turns);
+        bundle_outcomes.push(outcome);
+    }
     let conflict_diagnostics = intersection_diagnostics(&tracks, &coupled_pairs);
     if !conflict_diagnostics.is_empty() {
         results.push(CriticalNetResult::new(
@@ -1160,7 +1379,7 @@ pub fn route_critical_nets(
         routing_fingerprint,
         reserved_track_count: options.reserved_accesses.map_or(0, |r| r.created_tracks.len() as i64),
         reserved_via_count: options.reserved_accesses.map_or(0, |r| r.created_vias.len() as i64),
-        bundles: Vec::new(),
+        bundles: bundle_outcomes,
         match_tuning: match_tuning.iter().map(match_tuning_document).collect(),
         plane_reservation_track_count: plane_reservations.as_ref().map_or(0, |stitched| stitched.added_track_count),
         plane_reservation_via_count: plane_reservations.as_ref().map_or(0, |stitched| stitched.added_via_count),
@@ -1433,7 +1652,7 @@ fn diagnostic_gate(message: &str) -> String {
 }
 
 /// `_rejection_gate`: the first-failing gate and its message.
-fn rejection_gate(diagnostics: &[String]) -> (String, String) {
+pub(crate) fn rejection_gate(diagnostics: &[String]) -> (String, String) {
     for message in diagnostics {
         let gate = diagnostic_gate(message);
         if gate != "connectivity" {
@@ -1456,7 +1675,7 @@ fn dedupe(items: impl IntoIterator<Item = String>) -> Vec<String> {
     unique.into_iter().collect()
 }
 
-fn board_with(board: &PhysicalBoard, tracks: &[TrackSegment], vias: &[Via]) -> PhysicalBoard {
+pub(crate) fn board_with(board: &PhysicalBoard, tracks: &[TrackSegment], vias: &[Via]) -> PhysicalBoard {
     let mut copy = board.clone();
     copy.tracks = tracks.to_vec();
     copy.vias = vias.to_vec();
@@ -1466,7 +1685,7 @@ fn board_with(board: &PhysicalBoard, tracks: &[TrackSegment], vias: &[Via]) -> P
 /// `_validate_candidate`: accept a critical group atomically with the
 /// authoritative physical DRC of the candidate and all accepted copper.
 /// Findings the board already has without the candidate do not reject it.
-fn validate_candidate(
+pub(crate) fn validate_candidate(
     board: &PhysicalBoard,
     result: CriticalNetResult,
     tracks: Vec<TrackSegment>,
@@ -1581,6 +1800,90 @@ fn reject_reserved_plane_tracks(
 
 type Lane = Vec<(CopperLayer, Point, Point)>;
 
+/// `_coarse_transition_conflict`: why the coarse candidate may not place
+/// its guide transitions: a profile with no via budget or one common signal
+/// layer gets none; otherwise each signal and return via must clear every
+/// land, drilled holes, via keep-outs and the board edge.
+fn coarse_transition_conflict(
+    board: &PhysicalBoard,
+    first: &NetRoutingRule,
+    second: &NetRoutingRule,
+    guide: &GlobalNetRoute,
+    offset: i64,
+) -> Result<Option<String>> {
+    let second_layers = crate::routing_layers::routing_layers(board, &second.net, Some(second));
+    let common = crate::routing_layers::routing_layers(board, &first.net, Some(first))
+        .into_iter()
+        .filter(|layer| second_layers.contains(layer))
+        .collect::<IndexSet<CopperLayer>>();
+    if first.max_vias == Some(0) || second.max_vias == Some(0) || common.len() < 2 {
+        return Ok(Some(format!(
+            "coarse pair guide proposes {} layer transition(s) but the pair profile allows none",
+            guide.vias.len()
+        )));
+    }
+    let index = crate::routing_clearance::RoutingClearanceIndex::new(board)?;
+    for item in &guide.vias {
+        let mut sites = vec![
+            (first.net.as_str(), Point::new(item.position.x_nm + offset, item.position.y_nm)),
+            (second.net.as_str(), Point::new(item.position.x_nm - offset, item.position.y_nm)),
+        ];
+        if first.require_return_vias || second.require_return_vias {
+            let net = first.return_via_net.as_ref().or(second.return_via_net.as_ref()).expect("a return net");
+            sites.push((net.as_str(), item.position));
+        }
+        for (net, position) in sites {
+            let via = guide_via(board, net, item, position)?;
+            if !(crate::surface_path::via_inside_board(board, position, via.size_nm)?
+                && index.can_via(
+                    net,
+                    position,
+                    via.size_nm,
+                    via.from_layer,
+                    via.to_layer,
+                    Some(via.drill_nm),
+                    false,
+                    None,
+                )?)
+            {
+                return Ok(Some(format!(
+                    "coarse guide transition for {net} at ({}, {}) nm violates pad clearance or a via keep-out",
+                    position.x_nm, position.y_nm
+                )));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// `_guide_via`: the physical via of a global transition proposal.
+fn guide_via(
+    board: &PhysicalBoard,
+    net: &str,
+    proposal: &crate::routing::GlobalViaProposal,
+    position: Point,
+) -> Result<Via> {
+    let Some((from_layer, to_layer, technology)) =
+        crate::routing_vias::physical_via_span(board, proposal.from_layer, proposal.to_layer)
+    else {
+        return Err(Error::Value(format!(
+            "no legal physical via for {} to {} on {net}",
+            proposal.from_layer.value(),
+            proposal.to_layer.value()
+        )));
+    };
+    Ok(Via {
+        net: net.to_owned(),
+        position,
+        size_nm: board.rules.default_via_size_nm,
+        drill_nm: board.rules.default_via_drill_nm,
+        from_layer,
+        to_layer,
+        technology,
+        finish: "standard".to_owned(),
+    })
+}
+
 /// `_aligned_pair_paths`: a straight coupled channel with symmetric 45-degree
 /// pin tapers, for unambiguous same-layer aligned terminals.
 fn aligned_pair_paths(first: &GlobalNetRoute, second: &GlobalNetRoute, offset: i64) -> Option<(Lane, Lane)> {
@@ -1650,7 +1953,7 @@ fn int_exceeds(value: i128, bound: f64) -> bool {
 }
 
 /// `_coupled_length`: unioned parallel overlaps of the two members.
-fn coupled_length(first: &[TrackSegment], second: &[TrackSegment], center_spacing_nm: i64) -> i64 {
+pub(crate) fn coupled_length(first: &[TrackSegment], second: &[TrackSegment], center_spacing_nm: i64) -> i64 {
     use copper_physical::pyfloat::{hypot, round_int};
     let measure = |tracks: &[TrackSegment], partners: &[TrackSegment]| -> i64 {
         let mut total = 0;
@@ -1758,9 +2061,12 @@ fn route_pair(
     if aligned.is_none() && (guide.segments.is_empty() || partner_guide.segments.is_empty()) {
         return failed("coarse pair guide has no segments to offset");
     }
-    if !guide.vias.is_empty() {
-        // PENDING: _coarse_transition_conflict and _guide_via (routing_vias.physical_via_span).
-        return copper_pcb::not_implemented("critical coarse pair guide transitions");
+    if !guide.vias.is_empty()
+        && let Some(blocked) = coarse_transition_conflict(board, first, second, guide, offset)?
+    {
+        // Global transitions are proposals. Never emit one the profile or
+        // static obstacles rule out; the exact paired searches still run.
+        return failed(&blocked);
     }
     let is_aligned = aligned.is_some();
     let (positive, negative, junctions) = match aligned {
@@ -1815,7 +2121,18 @@ fn route_pair(
         )?);
     }
     let strategy = if is_aligned { "aligned_pair" } else { "global_guide" };
-    finish_pair(board, first, second, (first_tracks, second_tracks), gap, strategy, tuning_board, (&[], &[]))
+    finish_pair(
+        board,
+        first,
+        second,
+        (first_tracks, second_tracks),
+        gap,
+        strategy,
+        tuning_board,
+        (&[], &[]),
+        (guide, partner_guide),
+        Some(offset),
+    )
 }
 
 /// `_route_pair(..., exact_tracks=...)` for a joint search candidate without
@@ -1850,7 +2167,18 @@ fn route_pair_exact(
         return failed("pair members require identical width and gap profiles");
     };
     let strategy = if transitions.0.is_empty() { "joint_pair_search" } else { "joint_pair_via_search" };
-    finish_pair(board, first, second, exact.clone(), gap, strategy, tuning_board, transitions)
+    finish_pair(
+        board,
+        first,
+        second,
+        exact.clone(),
+        gap,
+        strategy,
+        tuning_board,
+        transitions,
+        (guide, partner_guide),
+        None,
+    )
 }
 
 /// The common tail of `_route_pair`: breakout cuts, intra-pair skew,
@@ -1865,6 +2193,8 @@ fn finish_pair(
     strategy: &str,
     tuning_board: &PhysicalBoard,
     (via_pairs, return_vias): (&[(Via, Via)], &[Via]),
+    guides: (&GlobalNetRoute, &GlobalNetRoute),
+    coarse: Option<i64>,
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
     let nets = vec![first.net.clone(), second.net.clone()];
     let first_width = first.width_nm.filter(|width| *width != 0).unwrap_or(board.rules.default_track_width_nm);
@@ -1875,16 +2205,54 @@ fn finish_pair(
         second_tracks = breakout.split_tracks(&second_tracks, Some(second_width));
     }
     let max_skew = min_declared(first.max_skew_nm, second.max_skew_nm);
+    let mut tuned_length = 0;
     if let Some(max_skew) = max_skew {
         let amplitude = min_declared(first.tuning_amplitude_limit_nm, second.tuning_amplitude_limit_nm).unwrap_or(0);
-        let refs = |tracks: &[TrackSegment]| -> i64 { track_length(&tracks.iter().collect::<Vec<_>>()) };
-        let skew = (refs(&first_tracks) - refs(&second_tracks)).abs();
-        // `_tune_pair`, then `tune_virtual_pair_spans`: nothing to do within the limit.
-        if skew > max_skew && amplitude > 0 {
-            let _ = tuning_board;
-            // PENDING: _tune_pair serpentine bumps and pair_tuning_spans.
-            return copper_pcb::not_implemented("critical intra-pair skew tuning");
+        let margin = if breakout.any() { crate::pair_tuning::BREAKOUT_TUNING_MARGIN_NM } else { 0 };
+        tuned_length = crate::pair_tuning::tune_pair(
+            &mut first_tracks,
+            &mut second_tracks,
+            max_skew,
+            amplitude,
+            margin,
+            breakout.any().then_some(&breakout),
+        )
+        .added_nm;
+        if tuned_length == 0 && coarse.is_none_or(|_| guides.0.vias.is_empty()) {
+            // Guide/via/access anchors and lead-in junctions cannot become
+            // artificial straight-run joins.
+            let mut nodes: Vec<crate::pair_tuning_spans::Node> = Vec::new();
+            for route in [guides.0, guides.1] {
+                for access in &route.accesses {
+                    let points = [access.pad_position, access.access_position]
+                        .into_iter()
+                        .chain(access.tracks.iter().flat_map(|track| [track.start, track.end]));
+                    nodes.extend(points.map(|point| (route.net.clone(), access.layer, point)));
+                }
+            }
+            let proposed: Vec<Via> =
+                via_pairs.iter().flat_map(|(a, b)| [a.clone(), b.clone()]).chain(return_vias.iter().cloned()).collect();
+            let tuner = |a: &mut Vec<TrackSegment>, b: &mut Vec<TrackSegment>, skew: i64, limit: i64, margin: i64| {
+                crate::pair_tuning::tune_pair(a, b, skew, limit, margin, None)
+            };
+            tuned_length = crate::pair_tuning_spans::tune_virtual_pair_spans(
+                &mut first_tracks,
+                &mut second_tracks,
+                max_skew,
+                amplitude,
+                margin,
+                board,
+                tuning_board,
+                &nodes,
+                &proposed,
+                &tuner,
+            )?;
         }
+    }
+    if tuned_length != 0 && breakout.any() {
+        // Cut the new serpentine bumps too.
+        first_tracks = breakout.split_tracks(&first_tracks, Some(first_width));
+        second_tracks = breakout.split_tracks(&second_tracks, Some(second_width));
     }
     let first_refs: Vec<&TrackSegment> = first_tracks.iter().collect();
     let second_refs: Vec<&TrackSegment> = second_tracks.iter().collect();
@@ -1894,7 +2262,29 @@ fn finish_pair(
     let center_spacing = first_width + gap;
     let coupled = coupled_length(&first_tracks, &second_tracks, center_spacing);
     let uncoupled = vec![(first_length - coupled).max(0), (second_length - coupled).max(0)];
-    let pair_vias: Vec<Via> = via_pairs.iter().flat_map(|(a, b)| [a.clone(), b.clone()]).collect();
+    let mut pair_vias: Vec<Via> = via_pairs.iter().flat_map(|(a, b)| [a.clone(), b.clone()]).collect();
+    let mut return_vias: Vec<Via> = return_vias.to_vec();
+    if let Some(offset) = coarse {
+        for item in &guides.0.vias {
+            for (net, sign) in [(&first.net, 1), (&second.net, -1)] {
+                let position = Point::new(item.position.x_nm + sign * offset, item.position.y_nm);
+                pair_vias.push(guide_via(board, net, item, position)?);
+            }
+            if (first.require_return_vias || second.require_return_vias)
+                && crate::return_paths::shared_reference_plane(
+                    board,
+                    first,
+                    second,
+                    &[item.from_layer, item.to_layer],
+                    &[item.position],
+                )?
+                .is_none()
+            {
+                let net = first.return_via_net.as_ref().or(second.return_via_net.as_ref()).expect("a return net");
+                return_vias.push(guide_via(board, net, item, item.position)?);
+            }
+        }
+    }
     let first_pair_vias: Vec<&Via> = pair_vias.iter().filter(|v| v.net == first.net).collect();
     let second_pair_vias: Vec<&Via> = pair_vias.iter().filter(|v| v.net == second.net).collect();
     let mut paired_transitions = paired_via_transitions(&first_pair_vias, &second_pair_vias, center_spacing);
@@ -1989,6 +2379,15 @@ fn finish_pair(
     if first_pair_vias.len() != second_pair_vias.len() || paired_transitions != first_pair_vias.len() as i64 {
         diagnostics.push("differential via transitions are not geometrically paired".to_owned());
     }
+    let return_limit = min_declared(first.maximum_return_via_distance_nm, second.maximum_return_via_distance_nm);
+    let offset = (first_width + gap).div_euclid(2);
+    if via_pairs.is_empty()
+        && !return_vias.is_empty()
+        && let Some(limit) = return_limit
+        && offset > limit
+    {
+        diagnostics.push(format!("return via distance {offset} nm exceeds {limit} nm"));
+    }
     let mut assumptions = external_assumptions(first);
     assumptions.extend(external_assumptions(second));
     assumptions.push("coupled pin fanout remains subject to authoritative physical DRC".to_owned());
@@ -2024,19 +2423,27 @@ fn finish_pair(
     result.uncoupled_lengths_nm = uncoupled;
     result.paired_via_transitions = paired_transitions;
     result.return_via_count = return_vias.len() as i64;
+    result.tuned_length_nm = tuned_length;
     result.evidence_digests = evidence;
     result.strategy = strategy.to_owned();
     result.shared_reference_transition_count = shared_references.len() as i64;
     result.warnings = warnings;
-    let vias: Vec<Via> = pair_vias.iter().chain(return_vias).cloned().collect();
+    let vias: Vec<Via> = pair_vias.iter().chain(&return_vias).cloned().collect();
     Ok((result, tracks, vias))
 }
 
-/// `_route_pair_group` up to the coarse candidate: terminal preparation,
-/// the aligned candidate and its gates. A candidate that is not within
-/// budget continues into the joint searches, which report not implemented.
+/// A routed pair or single: its result, tracks and vias.
+type Routed = (CriticalNetResult, Vec<TrackSegment>, Vec<Via>);
+
+/// `_route_pair_group`: route one symmetric pair against the committed
+/// `tracks`/`vias`. A planned nested exit (plan R7) is tried first; a
+/// planned crossing (plan R5) tries only paired-via candidates on its
+/// planned layer, transitions inside breakout regions last. Otherwise the
+/// coarse candidate, then the bounded joint searches. `blockers` collects
+/// the other nets named by spacing findings of every rejected candidate
+/// whose first-failing gate is a spacing gate.
 #[allow(clippy::too_many_arguments)]
-fn route_pair_group(
+pub(crate) fn route_pair_group(
     board: &PhysicalBoard,
     rule: &NetRoutingRule,
     partner_rule: &NetRoutingRule,
@@ -2047,27 +2454,75 @@ fn route_pair_group(
     pair_state_limit: Option<i64>,
     pair_state_escalation: i64,
     blockers: &mut IndexSet<String>,
-) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
+    crossing: Option<&PlannedCrossing>,
+    nested: Option<&NestedExit>,
+    turns: Option<&mut IndexMap<Vec<String>, (i64, i64)>>,
+) -> Result<Routed> {
     let (first, second) = if rule.net <= partner_rule.net { (rule, partner_rule) } else { (partner_rule, rule) };
     let mut preparation = PairTerminalPreparation::not_started();
     let held = board_with(board, tracks, vias);
     crate::pair_terminals::plan_pair_supports(&held, first, second, routes)?;
     let prepared = crate::pair_terminals::prepare_pair_terminals(&held, first, second, routes, &mut preparation)?;
     let routes = prepared.routes;
-    let mut found: IndexSet<String> = IndexSet::new();
-    let (result, pair_tracks, pair_vias) = route_pair(board, rule, partner_rule, &routes, false, &held)?;
-    let (result, pair_tracks, pair_vias) = reject_reserved_plane_tracks(board, result, pair_tracks, pair_vias, rules);
-    let (result, pair_tracks, pair_vias) =
-        validate_candidate(board, result, pair_tracks, pair_vias, tracks, vias, Some(&mut found))?;
-    if !result.connected && SPACING_GATES.contains(&rejection_gate(&result.diagnostics).0.as_str()) {
-        blockers.extend(found.iter().cloned());
+    let (first_branches, second_branches) = (prepared.first_branches, prepared.second_branches);
+    let (branch_via_pairs, branch_return_vias) = (prepared.via_pairs, prepared.return_vias);
+    // `reported`: preparation evidence only when it prepared something.
+    let reported = |mut outcome: Routed, preparation: PairTerminalPreparation| -> Result<Routed> {
+        if preparation.status != "source_terminals" {
+            outcome.0.local_preparation = Some(preparation);
+        }
+        Ok(outcome)
+    };
+    let observe = |attempt: &CriticalNetResult, found: &IndexSet<String>, blockers: &mut IndexSet<String>| {
+        if !attempt.connected && SPACING_GATES.contains(&rejection_gate(&attempt.diagnostics).0.as_str()) {
+            blockers.extend(found.iter().cloned());
+        }
+    };
+    if let Some(nested) = nested
+        && let Some((turn, attempt, pair_tracks, pair_vias)) =
+            route_nested_exit(board, first, second, &routes, rules, tracks, vias, nested)?
+    {
+        if let Some(turns) = turns {
+            turns.insert(nested.group.clone(), turn);
+        }
+        return reported((attempt, pair_tracks, pair_vias), preparation);
     }
-    let guided =
-        [&rule.net, &partner_rule.net].iter().all(|name| routes.get(*name).is_some_and(|route| route.connected));
+    let (result, pair_tracks, pair_vias) = match crossing {
+        None => {
+            let mut found: IndexSet<String> = IndexSet::new();
+            let (result, pair_tracks, pair_vias) = route_pair(board, rule, partner_rule, &routes, false, &held)?;
+            let (result, pair_tracks, pair_vias) =
+                reject_reserved_plane_tracks(board, result, pair_tracks, pair_vias, rules);
+            let outcome = validate_candidate(board, result, pair_tracks, pair_vias, tracks, vias, Some(&mut found))?;
+            observe(&outcome.0, &found, blockers);
+            outcome
+        }
+        Some(crossing) => {
+            let diagnostics = match crossing.layer {
+                None => vec![format!("planned crossing is impossible: {}", crossing.reason)],
+                Some(_) => Vec::new(),
+            };
+            let mut result = CriticalNetResult::new(
+                vec![first.net.clone(), second.net.clone()],
+                false,
+                0,
+                0,
+                Vec::new(),
+                0,
+                diagnostics,
+            );
+            result.strategy = "planned_crossing".to_owned();
+            result.pair_search_order = Some("planned_crossing".to_owned());
+            if crossing.layer.is_none() {
+                return reported((result, Vec::new(), Vec::new()), preparation);
+            }
+            (result, Vec::new(), Vec::new())
+        }
+    };
     // A candidate over its length/skew budget is kept only as a fallback.
     let mut fallback = (result.connected && !result.warnings.is_empty())
         .then(|| (result.clone(), pair_tracks.clone(), pair_vias.clone()));
-    let keep = |fallback: &mut Option<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)>,
+    let keep = |fallback: &mut Option<Routed>,
                 attempt: &CriticalNetResult,
                 attempt_tracks: &[TrackSegment],
                 attempt_vias: &[Via]| {
@@ -2075,10 +2530,13 @@ fn route_pair_group(
             *fallback = Some((attempt.clone(), attempt_tracks.to_vec(), attempt_vias.to_vec()));
         }
     };
+    let guided =
+        [&rule.net, &partner_rule.net].iter().all(|name| routes.get(*name).is_some_and(|route| route.connected));
     if !within_budget(&result)
         && guided
-        && prepared.first_branches.is_empty()
-        && prepared.second_branches.is_empty()
+        && crossing.is_none()
+        && first_branches.is_empty()
+        && second_branches.is_empty()
         && [&first.net, &second.net].iter().any(|name| routes[*name].accesses.iter().any(|a| !a.tracks.is_empty()))
     {
         // A coarse guide may already carry a checked multi-leg package exit:
@@ -2089,13 +2547,13 @@ fn route_pair_group(
         let (attempt, proposed_tracks, proposed_vias) =
             validate_candidate(board, attempt, proposed_tracks, proposed_vias, tracks, vias, None)?;
         if within_budget(&attempt) {
-            let mut attempt = attempt;
-            if preparation.status != "source_terminals" {
-                attempt.local_preparation = Some(preparation);
-            }
-            return Ok((attempt, proposed_tracks, proposed_vias));
+            return reported((attempt, proposed_tracks, proposed_vias), preparation);
         }
         keep(&mut fallback, &attempt, &proposed_tracks, &proposed_vias);
+    }
+    let (mut result, mut pair_tracks, mut pair_vias) = (result, pair_tracks, pair_vias);
+    if crossing.is_some() && !guided {
+        result.diagnostics = vec!["both pair members require connected global guides".to_owned()];
     }
     let supported = match (routes.get(&first.net), routes.get(&second.net)) {
         (Some(a), Some(b)) => crate::pair_terminals::terminal_partners(a, b).is_some(),
@@ -2107,64 +2565,117 @@ fn route_pair_group(
         .iter()
         .filter(|net| net.name == first.net || net.name == second.net)
         .any(|net| net.pads.iter().any(|pad| owned.contains(pad)));
-    let (mut result, mut pair_tracks, mut pair_vias) = (result, pair_tracks, pair_vias);
     if !within_budget(&result) && supported {
         if protected_ends && !guided {
             // PENDING: pair_terminals.macro_terminal_guides_proved.
             return copper_pcb::not_implemented("critical pair search from proved macro ports");
         }
-        let search_board = board_with(board, tracks, vias);
+        let mut search_board = board_with(board, tracks, vias);
+        search_board.tracks.extend(first_branches.iter().cloned());
+        search_board.tracks.extend(second_branches.iter().cloned());
+        search_board.vias.extend(branch_via_pairs.iter().flat_map(|(a, b)| [a.clone(), b.clone()]));
+        search_board.vias.extend(branch_return_vias.iter().cloned());
         let (first_guide, second_guide) = (routes[&first.net].clone(), routes[&second.net].clone());
-        let prefer_vias = pair_prefers_via_escape(&search_board, &first_guide, &second_guide)?;
-        let order = if prefer_vias { "via_first_internal_lands" } else { "surface_first" };
-        let families = if prefer_vias { [true, false] } else { [false, true] };
+        let site_rank = match crossing {
+            Some(crossing) => Some(crossing_site_rank(board, &crossing.group)?),
+            None => None,
+        };
+        let site_rank_ref = site_rank.as_ref().map(|rank| rank as &dyn Fn(&[Via]) -> Option<i64>);
+        let crossing_layers: Vec<CopperLayer> = crossing.and_then(|item| item.layer).into_iter().collect();
+        // Each searcher: whether it is the paired-via family, and its restriction.
+        let (order, searchers): (&str, Vec<(bool, crate::pair_vias::ViaRestriction<'_>)>) = if crossing.is_some() {
+            let restriction =
+                crate::pair_vias::ViaRestriction { layers: Some(&crossing_layers), site_rank: site_rank_ref };
+            ("planned_crossing", vec![(true, restriction)])
+        } else {
+            // Internal lands should not consume all surface maze resolutions
+            // before exploring a legal paired layer escape.
+            let prefer_vias = pair_prefers_via_escape(&search_board, &first_guide, &second_guide)?;
+            let none = crate::pair_vias::ViaRestriction::default();
+            if prefer_vias {
+                ("via_first_internal_lands", vec![(true, none), (false, none)])
+            } else {
+                ("surface_first", vec![(false, none), (true, none)])
+            }
+        };
         let mut stats = crate::pair_search::PairSearchStats::default();
         let mut rejected: Vec<(String, String)> = Vec::new();
         let mut best = (result, pair_tracks, pair_vias);
+        let planned = crossing.is_some();
+        let branched = !first_branches.is_empty() || !second_branches.is_empty();
         // `checked_candidate`: every candidate passes the coarse candidate's gates.
         let check = |candidate: crate::pair_search::PairSearchCandidate,
-                     best: &mut (CriticalNetResult, Vec<TrackSegment>, Vec<Via>),
-                     fallback: &mut Option<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)>,
+                     best: &mut Routed,
+                     fallback: &mut Option<Routed>,
                      rejected: &mut Vec<(String, String)>,
                      blockers: &mut IndexSet<String>|
          -> Result<bool> {
+            let mut complete = candidate.clone();
+            complete.first = first_branches.iter().cloned().chain(candidate.first.iter().cloned()).collect();
+            complete.second = second_branches.iter().cloned().chain(candidate.second.iter().cloned()).collect();
+            complete.via_pairs = branch_via_pairs.iter().cloned().chain(candidate.via_pairs.iter().cloned()).collect();
+            complete.return_vias =
+                branch_return_vias.iter().cloned().chain(candidate.return_vias.iter().cloned()).collect();
             let mut candidate_blockers: IndexSet<String> = IndexSet::new();
-            let exact = (candidate.first.clone(), candidate.second.clone());
-            let transitions = (candidate.via_pairs.as_slice(), candidate.return_vias.as_slice());
-            let (attempt, proposed_tracks, proposed_vias) =
-                route_pair_exact(board, first, second, &routes, &exact, &search_board, transitions)?;
-            let (attempt, proposed_tracks, proposed_vias) =
-                reject_reserved_plane_tracks(board, attempt, proposed_tracks, proposed_vias, rules);
-            let (attempt, proposed_tracks, proposed_vias) = validate_candidate(
-                board,
-                attempt,
-                proposed_tracks,
-                proposed_vias,
-                tracks,
-                vias,
-                Some(&mut candidate_blockers),
-            )?;
+            let admit = |proposal: &crate::pair_search::PairSearchCandidate,
+                         candidate_blockers: &mut IndexSet<String>|
+             -> Result<Routed> {
+                let exact = (proposal.first.clone(), proposal.second.clone());
+                let transitions = (proposal.via_pairs.as_slice(), proposal.return_vias.as_slice());
+                let (attempt, proposed_tracks, proposed_vias) =
+                    route_pair_exact(board, first, second, &routes, &exact, &search_board, transitions)?;
+                let (attempt, proposed_tracks, proposed_vias) =
+                    reject_reserved_plane_tracks(board, attempt, proposed_tracks, proposed_vias, rules);
+                validate_candidate(
+                    board,
+                    attempt,
+                    proposed_tracks,
+                    proposed_vias,
+                    tracks,
+                    vias,
+                    Some(candidate_blockers),
+                )
+            };
+            let (mut attempt, mut proposed_tracks, mut proposed_vias) = admit(&complete, &mut candidate_blockers)?;
             if !attempt.connected
                 && attempt.tuned_length_nm > 0
                 && SPACING_GATES.contains(&rejection_gate(&attempt.diagnostics).0.as_str())
             {
-                // PENDING: pair_terminals._matched_local_candidates.
-                return copper_pcb::not_implemented("critical clearance-aware pair tuning retry");
+                // The legacy geometric skew bump may hit a foreign land. Retry
+                // at most two existing clearance-aware tuning proposals on the
+                // complete generated group; every gate is checked again.
+                let held = board_with(board, tracks, vias);
+                for tuned in crate::pair_terminals::matched_local_candidates(&held, first, second, &complete)? {
+                    let (revised, revised_tracks, revised_vias) = admit(&tuned, &mut candidate_blockers)?;
+                    if !revised.connected {
+                        continue;
+                    }
+                    let length = |items: &[TrackSegment]| track_length(&items.iter().collect::<Vec<_>>());
+                    let added = length(&tuned.first) + length(&tuned.second)
+                        - length(&complete.first)
+                        - length(&complete.second);
+                    attempt = revised;
+                    attempt.tuned_length_nm += added;
+                    (proposed_tracks, proposed_vias) = (revised_tracks, revised_vias);
+                    break;
+                }
             }
-            let (attempt, proposed_tracks, proposed_vias) = if attempt.connected {
-                improve_pair_spine(
-                    board,
-                    &search_board,
-                    (first, second),
-                    &routes,
-                    &candidate,
-                    (attempt, proposed_tracks, proposed_vias),
-                    tracks,
-                    vias,
-                )?
-            } else {
-                (attempt, proposed_tracks, proposed_vias)
-            };
+            if attempt.connected {
+                if planned {
+                    attempt.strategy = "planned_crossing".to_owned();
+                } else if candidate.via_pairs.is_empty() && !branched {
+                    (attempt, proposed_tracks, proposed_vias) = improve_pair_spine(
+                        board,
+                        &search_board,
+                        (first, second),
+                        &routes,
+                        &candidate,
+                        (attempt, proposed_tracks, proposed_vias),
+                        tracks,
+                        vias,
+                    )?;
+                }
+            }
             if within_budget(&attempt) {
                 *best = (attempt, proposed_tracks, proposed_vias);
                 return Ok(true);
@@ -2183,12 +2694,12 @@ fn route_pair_group(
         let mut limit = pair_state_limit;
         let tiers = |limit: Option<i64>,
                      stats: &mut crate::pair_search::PairSearchStats,
-                     best: &mut (CriticalNetResult, Vec<TrackSegment>, Vec<Via>),
-                     fallback: &mut Option<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)>,
+                     best: &mut Routed,
+                     fallback: &mut Option<Routed>,
                      rejected: &mut Vec<(String, String)>,
                      blockers: &mut IndexSet<String>|
          -> Result<()> {
-            for via_family in families {
+            for (via_family, restriction) in &searchers {
                 for pitch_nm in [1_000_000, 500_000, 250_000] {
                     let mut bounds = crate::pair_search::SearchBounds {
                         maximum_searches: 8,
@@ -2201,7 +2712,7 @@ fn route_pair_group(
                         if remaining <= 0 {
                             break;
                         }
-                        let slice = remaining.min(1.max(limit.div_euclid(6)));
+                        let slice = remaining.min(1.max(limit.div_euclid(3 * searchers.len() as i64)));
                         bounds.maximum_total_states = Some(stats.expanded_states + slice);
                         bounds.maximum_states = 1.max((slice + 1).div_euclid(2));
                         bounds.maximum_searches = 2;
@@ -2209,7 +2720,7 @@ fn route_pair_group(
                     let mut accept = |candidate, _: &mut crate::pair_search::PairSearchStats| {
                         check(candidate, best, fallback, rejected, blockers)
                     };
-                    if via_family {
+                    if *via_family {
                         crate::pair_vias::paired_via_candidates(
                             &search_board,
                             first,
@@ -2217,6 +2728,7 @@ fn route_pair_group(
                             &first_guide,
                             &second_guide,
                             bounds,
+                            *restriction,
                             stats,
                             &mut accept,
                         )?;
@@ -2282,8 +2794,12 @@ fn route_pair_group(
         result.rejection_examples = examples;
         if !result.connected {
             let reasons: Vec<String> = rejections.iter().map(|(gate, count)| format!("{gate}={count}")).collect();
+            let label = match crossing.and_then(|item| item.layer) {
+                Some(layer) => format!("planned crossing on {}", layer.value()),
+                None => "joint pair search".to_owned(),
+            };
             let mut message = format!(
-                "joint pair search: {} searches, {} states, {} candidates; none accepted",
+                "{label}: {} searches, {} states, {} candidates; none accepted",
                 stats.searches, stats.expanded_states, stats.candidates
             );
             if !reasons.is_empty() {
@@ -2294,176 +2810,426 @@ fn route_pair_group(
             result.diagnostics.extend(stats.launch_rejections.iter().take(3).cloned());
         }
     }
-    // `reported`: preparation evidence only when it prepared something.
-    if preparation.status != "source_terminals" {
-        result.local_preparation = Some(preparation);
+    reported((result, pair_tracks, pair_vias), preparation)
+}
+
+/// Plan R7: a nested exit that does not clear committed copper at its
+/// planned turn steps outward in these increments, at most this far, and
+/// shortens its turn's diagonal in chamfer steps. At most this many legal
+/// candidates are tuned, and at most this many of them go through the gates.
+const NESTED_TURN_STEP_NM: i64 = 50_000;
+const NESTED_TURN_RANGE_NM: i64 = 2_000_000;
+const NESTED_CHAMFER_STEP_NM: i64 = 50_000;
+const NESTED_CANDIDATE_LIMIT: usize = 256;
+const NESTED_VALIDATION_LIMIT: i64 = 3;
+
+/// `_route_nested_exit`: route a corner-wrapping bundle pair along its
+/// nested exit (plan R7). The accepted turn and chamfer and the result, or
+/// `None`: the caller then routes as before.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn route_nested_exit(
+    board: &PhysicalBoard,
+    first: &NetRoutingRule,
+    second: &NetRoutingRule,
+    routes: &IndexMap<String, GlobalNetRoute>,
+    rules: &IndexMap<&str, &NetRoutingRule>,
+    tracks: &[TrackSegment],
+    vias: &[Via],
+    nested: &NestedExit,
+) -> Result<Option<((i64, i64), CriticalNetResult, Vec<TrackSegment>, Vec<Via>)>> {
+    if [first, second].iter().any(|rule| routes.get(&rule.net).is_none_or(|route| !route.connected)) {
+        return Ok(None);
     }
-    Ok((result, pair_tracks, pair_vias))
-}
-
-// ---------------------------------------------------------------------------
-// Length-match groups
-
-/// `MatchTuningMember`. PENDING: owned by rust-m4-unified (critical_tuning).
-pub struct MatchTuningMember {
-    pub net: String,
-    pub length_before_nm: i64,
-    pub length_after_nm: i64,
-}
-
-/// `TuningGroupOutcome`. PENDING: owned by rust-m4-unified (critical_tuning).
-pub struct TuningGroupOutcome {
-    pub name: String,
-    pub nets: Vec<String>,
-    pub status: String,
-    pub reason: String,
-}
-
-/// `MatchTuningResult` without tuning steps. PENDING: owned by
-/// rust-m4-unified (critical_tuning).
-pub struct MatchTuningResult {
-    pub id: String,
-    pub max_skew_nm: i64,
-    pub status: String,
-    pub skew_before_nm: Option<i64>,
-    pub skew_after_nm: Option<i64>,
-    pub members: Vec<MatchTuningMember>,
-    pub bumps: i64,
-    pub reason: String,
-    pub tuning_groups: Vec<TuningGroupOutcome>,
-}
-
-/// `match_tuning_document` (no units: steps are not ported).
-pub fn match_tuning_document(item: &MatchTuningResult) -> Value {
-    let mut document = vec![
-        ("id", Value::from(item.id.as_str())),
-        ("max_skew_nm", Value::from(item.max_skew_nm)),
-        ("status", Value::from(item.status.as_str())),
-        ("skew_before_nm", optional_int(item.skew_before_nm)),
-        ("skew_after_nm", optional_int(item.skew_after_nm)),
-        (
-            "members",
-            Value::Array(
-                item.members
-                    .iter()
-                    .map(|member| {
-                        object(vec![
-                            ("net", Value::from(member.net.as_str())),
-                            ("length_before_nm", Value::from(member.length_before_nm)),
-                            ("length_after_nm", Value::from(member.length_after_nm)),
-                            ("added_length_nm", Value::from(member.length_after_nm - member.length_before_nm)),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ),
-        ("bumps", Value::from(item.bumps)),
-        ("reason", Value::from(item.reason.as_str())),
-    ];
-    if !item.tuning_groups.is_empty() {
-        document.push((
-            "tuning_groups",
-            Value::Array(
-                item.tuning_groups
-                    .iter()
-                    .map(|group| {
-                        object(vec![
-                            ("name", Value::from(group.name.as_str())),
-                            ("nets", texts(&group.nets)),
-                            ("status", Value::from(group.status.as_str())),
-                            ("reason", Value::from(group.reason.as_str())),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ));
-    }
-    object(document)
-}
-
-/// `_tuning_groups`: the units of each tuning group among `nets`, by name.
-fn tuning_groups(rules: &IndexMap<&str, &NetRoutingRule>, nets: &[String]) -> Vec<(String, Vec<Vec<String>>)> {
-    let mut groups: BTreeMap<String, IndexSet<Vec<String>>> = BTreeMap::new();
-    for net in nets {
-        let Some(rule) = rules.get(net.as_str()) else { continue };
-        let Some(name) = &rule.tuning_group else { continue };
-        let unit = match (&rule.differential_partner, is_pair_kind(rule.kind)) {
-            (Some(partner), true) if !partner.is_empty() => {
-                let mut unit = vec![net.clone(), partner.clone()];
-                unit.sort();
-                unit
+    let search_board = board_with(board, tracks, vias);
+    let index = crate::routing_clearance::RoutingClearanceIndex::new(&search_board)?;
+    let clearance =
+        board.rules.minimum_clearance_nm.max(first.clearance_nm.unwrap_or(0)).max(second.clearance_nm.unwrap_or(0));
+    let turns = (nested.turn_nm..=nested.turn_nm + NESTED_TURN_RANGE_NM).step_by(NESTED_TURN_STEP_NM as usize);
+    let mut validated = 0;
+    let mut offered = 0;
+    let mut accepted = None;
+    let mut accept = |(turn, chamfer, candidate): crate::pair_nested::NestedCandidate| -> Result<bool> {
+        offered += 1;
+        let exact = (candidate.first.clone(), candidate.second.clone());
+        let (mut attempt, mut pair_tracks, mut pair_vias) =
+            route_pair_exact(board, first, second, routes, &exact, &search_board, (&[], &[]))?;
+        let stop = |offered: usize| offered >= NESTED_CANDIDATE_LIMIT;
+        if attempt.connected && attempt.tuned_length_nm != 0 {
+            let own: Vec<TrackSegment> = pair_tracks.iter().filter(|t| t.net == first.net).cloned().collect();
+            let other: Vec<TrackSegment> = pair_tracks.iter().filter(|t| t.net != first.net).cloned().collect();
+            if !crate::pair_search::legal(&search_board, &index, &own, &other, clearance)? {
+                return Ok(stop(offered));
             }
-            _ => vec![net.clone()],
-        };
-        groups.entry(name.clone()).or_default().insert(unit);
-    }
-    groups
+        }
+        if attempt.connected {
+            (attempt, pair_tracks, pair_vias) =
+                reject_reserved_plane_tracks(board, attempt, pair_tracks, pair_vias, rules);
+        }
+        if attempt.connected {
+            (attempt, pair_tracks, pair_vias) =
+                validate_candidate(board, attempt, pair_tracks, pair_vias, tracks, vias, None)?;
+        }
+        validated += 1;
+        if attempt.connected {
+            attempt.strategy = "nested_exit".to_owned();
+            attempt.candidate_attempts = validated;
+            accepted = Some(((turn, chamfer), attempt, pair_tracks, pair_vias));
+            return Ok(true);
+        }
+        Ok(validated >= NESTED_VALIDATION_LIMIT || stop(offered))
+    };
+    crate::pair_nested::nested_exit_candidates(
+        &search_board,
+        first,
+        second,
+        &routes[&first.net],
+        &routes[&second.net],
+        &nested.component,
+        nested.direction,
+        nested.travel,
+        turns,
+        NESTED_CHAMFER_STEP_NM,
+        &mut accept,
+    )?;
+    Ok(accepted)
+}
+
+/// `_crossing_site_rank`: transition sites of a planned crossing (plan R5).
+/// A transition with a signal or return via inside any breakout region comes
+/// last; otherwise, with a reserved corridor for the pair (R4), transitions
+/// with every via inside it come first.
+fn crossing_site_rank(board: &PhysicalBoard, group: &[String]) -> Result<impl Fn(&[Via]) -> Option<i64>> {
+    let breakout = copper_drc::breakout::BreakoutRegions::new(board);
+    let corridor: Option<Vec<Point>> = copper_drc::legality::reserved_corridors(board)?
         .into_iter()
-        .map(|(name, units)| {
-            let mut units: Vec<Vec<String>> = units.into_iter().collect();
-            units.sort();
-            (name, units)
+        .find(|item| group.len() == 2 && item.nets.0 == group[0] && item.nets.1 == group[1])
+        .map(|item| item.keepout.outline.vertices.clone());
+    Ok(move |vias: &[Via]| {
+        if breakout.any() && vias.iter().any(|via| breakout.inside_any(via.position)) {
+            return Some(2);
+        }
+        match &corridor {
+            None => Some(0),
+            Some(corridor) => Some(if vias.iter().all(|via| point_in_polygon(via.position, corridor)) { 0 } else { 1 }),
+        }
+    })
+}
+
+/// The single-ended branch of `route_critical_nets`: the coarse guide, the
+/// plane reservation, validation and the surface improvement, then the exact
+/// search when the guide is not within budget (or a shorter exact tree for
+/// three or more terminals).
+#[allow(clippy::too_many_arguments)]
+fn route_single_job(
+    stage_board: &PhysicalBoard,
+    rule: &NetRoutingRule,
+    routes: &IndexMap<String, GlobalNetRoute>,
+    global_route: &GlobalRoutingResult,
+    rules: &IndexMap<&str, &NetRoutingRule>,
+    net_by_name: &IndexMap<&str, &copper_pcb::board::PhysicalNet>,
+    tracks: &[TrackSegment],
+    vias: &[Via],
+    unified: &crate::unified_router::UnifiedRouterOptions,
+) -> Result<Routed> {
+    let guide = routes.get(&rule.net);
+    let (result, net_tracks, net_vias) = route_single(stage_board, rule, guide)?;
+    let (result, net_tracks, net_vias) = reject_reserved_plane_tracks(stage_board, result, net_tracks, net_vias, rules);
+    let (result, net_tracks, net_vias) =
+        validate_candidate(stage_board, result, net_tracks, net_vias, tracks, vias, None)?;
+    let (result, net_tracks, net_vias) =
+        improve_single_surface(stage_board, rule, guide, result, net_tracks, net_vias, tracks, vias)?;
+    let guided = guide.is_some_and(|route| route.connected);
+    let point_to_point = matches!(rule.kind, RouteKind::RfFeed | RouteKind::Clock);
+    let rf_tree = rule.kind == RouteKind::RfFeed && rule.topology == "tree" && rule.max_vias == Some(0);
+    let (mut result, mut net_tracks, mut net_vias) = (result, net_tracks, net_vias);
+    if (!result.connected || !result.warnings.is_empty())
+        && guided
+        && (!point_to_point || guide.is_some_and(|route| route.accesses.len() == 2) || rf_tree)
+    {
+        let (repaired, repaired_tracks, repaired_vias) =
+            route_single_exact(stage_board, rule, global_route, tracks, vias, unified)?;
+        if !result.connected || within_or_shorter(&repaired, &result) {
+            let (attempts, guide_length) = (result.local_candidate_attempts, result.guide_length_nm);
+            (result, net_tracks, net_vias) = (repaired, repaired_tracks, repaired_vias);
+            result.local_candidate_attempts = attempts;
+            result.guide_length_nm = guide_length;
+        }
+    } else if result.connected
+        && result.strategy == "global_guide"
+        && net_by_name.get(rule.net.as_str()).is_some_and(|net| net.pads.len() >= 3)
+        && !point_to_point
+    {
+        // A coarse-guide tree joining three or more terminals can be far
+        // from the shortest; keep the exact tree when shorter, no more vias.
+        let (exact, exact_tracks, exact_vias) =
+            route_single_exact(stage_board, rule, global_route, tracks, vias, unified)?;
+        if exact.connected && exact_vias.len() <= net_vias.len() && exact.lengths_nm[0] < result.lengths_nm[0] {
+            let (attempts, guide_length) = (result.local_candidate_attempts, result.guide_length_nm);
+            (result, net_tracks, net_vias) = (exact, exact_tracks, exact_vias);
+            result.local_candidate_attempts = attempts;
+            result.guide_length_nm = guide_length;
+        }
+    }
+    Ok((result, net_tracks, net_vias))
+}
+
+/// `_crossing_outcomes`: each planned crossing of `bundle` with its routed
+/// transitions or failure.
+fn crossing_outcomes(
+    board: &PhysicalBoard,
+    bundle: &CriticalBundle,
+    rules: &IndexMap<&str, &NetRoutingRule>,
+    results: &[CriticalNetResult],
+    result_index: &IndexMap<Vec<String>, usize>,
+    committed: &crate::critical_match::Committed,
+) -> Result<Vec<PlannedCrossing>> {
+    let mut copper: IndexMap<&Vec<String>, &Vec<Via>> = IndexMap::new();
+    for (group, _, items) in committed {
+        copper.insert(group, items);
+    }
+    let mut outcomes = Vec::new();
+    for crossing in &bundle.crossings {
+        let result = &results[result_index[&crossing.group]];
+        let reason = result.diagnostics.last().cloned().unwrap_or_else(|| "no accepted candidate".to_owned());
+        let vias: &[Via] = copper.get(&crossing.group).map_or(&[], |items| items.as_slice());
+        outcomes.push(crate::critical_bundles::crossing_outcome(
+            board,
+            &bundle.components,
+            crossing,
+            rules,
+            result.connected,
+            &reason,
+            vias,
+        )?);
+    }
+    Ok(outcomes)
+}
+
+/// `_nested_outcomes`: each nested exit of `bundle`, routed with its turn
+/// and chamfer, or a fallback.
+fn nested_outcomes(
+    bundle: &CriticalBundle,
+    results: &[CriticalNetResult],
+    result_index: &IndexMap<Vec<String>, usize>,
+    turns: &IndexMap<Vec<String>, (i64, i64)>,
+) -> Vec<NestedExit> {
+    bundle
+        .nested_exits
+        .iter()
+        .map(|item| {
+            let result = &results[result_index[&item.group]];
+            let mut outcome = item.clone();
+            if result.connected && result.strategy == "nested_exit" {
+                let (turn, chamfer) = turns[&item.group];
+                outcome.status = "routed".to_owned();
+                outcome.routed_turn_nm = Some(turn);
+                outcome.routed_chamfer_nm = Some(chamfer);
+            } else {
+                outcome.status = "fallback".to_owned();
+            }
+            outcome
         })
         .collect()
 }
 
-/// `_tune_match_groups` for groups within their limit or not yet complete;
-/// a group over its `max_skew` needs the tuner and reports not implemented.
-fn tune_match_groups(
+/// `_bundle_neighbours`: the two routed bundle pairs whose lands lie nearest
+/// `group`'s (the sum over both components of the mean-land distances; ties
+/// keep `routed` order).
+fn bundle_neighbours(board: &PhysicalBoard, group: &[String], routed: &[Vec<String>]) -> Result<Vec<Vec<String>>> {
+    let Some(own) = crate::critical_bundles::lands_of(board, group)? else { return Ok(Vec::new()) };
+    let own_keys: IndexSet<&String> = own.keys().collect();
+    let mut ranked: Vec<(f64, usize, Vec<String>)> = Vec::new();
+    for (position, entry) in routed.iter().enumerate() {
+        let Some(lands) = crate::critical_bundles::lands_of(board, entry)? else { continue };
+        if lands.keys().collect::<IndexSet<&String>>() != own_keys {
+            continue;
+        }
+        let distance = copper_physical::pyfloat::sum(own.iter().map(|(reference, point)| {
+            let other = lands[reference];
+            copper_physical::pyfloat::hypot((point.x_nm - other.x_nm) as f64, (point.y_nm - other.y_nm) as f64)
+        }));
+        ranked.push((distance, position, entry.clone()));
+    }
+    ranked.sort_by(|a, b| a.0.partial_cmp(&b.0).expect("finite distances").then(a.1.cmp(&b.1)));
+    Ok(ranked.into_iter().take(2).map(|(_, _, entry)| entry).collect())
+}
+
+/// `_unrouted_lanes`: temporary keepouts over the lanes of a bundle's pairs
+/// not yet routed, each the strip between the midlines to its neighbours'
+/// lands at both bundle ends. A bundle whose pairs change order between its
+/// ends gets none.
+fn unrouted_lanes(
     board: &PhysicalBoard,
+    bundle: &CriticalBundle,
+    routed: &[Vec<String>],
     rules: &IndexMap<&str, &NetRoutingRule>,
-    base_tracks: &[TrackSegment],
-    base_vias: &[Via],
-    committed: &[(Vec<String>, Vec<TrackSegment>, Vec<Via>)],
-) -> Result<Vec<MatchTuningResult>> {
-    if board.match_groups.is_empty() {
+) -> Result<Vec<CopperKeepout>> {
+    let (first, second) = (&bundle.components.0, &bundle.components.1);
+    let mut lands: IndexMap<&Vec<String>, IndexMap<String, Point>> = IndexMap::new();
+    for group in &bundle.order {
+        match crate::critical_bundles::lands_of(board, group)? {
+            Some(item) if item.len() == 2 && item.contains_key(first) && item.contains_key(second) => {
+                lands.insert(group, item);
+            }
+            _ => return Ok(Vec::new()),
+        }
+    }
+    if lands.len() < 2 {
         return Ok(Vec::new());
     }
-    let tracks: Vec<TrackSegment> =
-        base_tracks.iter().cloned().chain(committed.iter().flat_map(|(_, items, _)| items.iter().cloned())).collect();
-    let vias: Vec<Via> =
-        base_vias.iter().cloned().chain(committed.iter().flat_map(|(_, _, items)| items.iter().cloned())).collect();
-    let current = board_with(board, &tracks, &vias);
-    let checks = copper_drc::signal_integrity::verify_match_groups(&current)?;
-    let mut outcomes = Vec::new();
-    for (check, group) in checks.iter().zip(&board.match_groups) {
-        if check.status == "fail" {
-            // PENDING: owned by rust-m4-unified (critical_tuning, _tune_match_group).
-            return copper_pcb::not_implemented("critical length-match tuning");
+    let groups: Vec<&Vec<String>> = lands.keys().copied().collect();
+    let dx: i64 = groups.iter().map(|g| lands[*g][second].x_nm - lands[*g][first].x_nm).sum();
+    let dy: i64 = groups.iter().map(|g| lands[*g][second].y_nm - lands[*g][first].y_nm).sum();
+    let across = |point: Point| point.y_nm as i128 * dx as i128 - point.x_nm as i128 * dy as i128;
+    let mut ordered = groups.clone();
+    ordered.sort_by_key(|g| across(lands[*g][first]));
+    let mut at_second = groups.clone();
+    at_second.sort_by_key(|g| across(lands[*g][second]));
+    if ordered != at_second {
+        return Ok(Vec::new());
+    }
+    let bounds = |index: usize, component: &String| -> (Point, Point) {
+        let own = lands[ordered[index]][component];
+        let mut sides = Vec::new();
+        for step in [-1i64, 1] {
+            let neighbour = index as i64 + step;
+            let other = if (0..ordered.len() as i64).contains(&neighbour) {
+                lands[ordered[neighbour as usize]][component]
+            } else {
+                let mirror = lands[ordered[(index as i64 - step) as usize]][component];
+                Point::new(2 * own.x_nm - mirror.x_nm, 2 * own.y_nm - mirror.y_nm)
+            };
+            sides.push(Point::new((own.x_nm + other.x_nm).div_euclid(2), (own.y_nm + other.y_nm).div_euclid(2)));
         }
-        let lengths: IndexMap<&str, i64> =
-            check.members.iter().map(|(net, length, _)| (net.as_str(), *length)).collect();
-        let status = if check.status == "pass" { "within_limit" } else { "incomplete" };
-        let tuning = tuning_groups(rules, &group.nets)
-            .into_iter()
-            .map(|(name, units)| TuningGroupOutcome {
-                name,
-                nets: units.into_iter().flatten().collect(),
-                status: status.to_owned(),
-                reason: String::new(),
-            })
-            .collect();
-        outcomes.push(MatchTuningResult {
-            id: group.id.clone(),
-            max_skew_nm: group.max_skew_nm,
-            status: status.to_owned(),
-            skew_before_nm: check.skew_nm,
-            skew_after_nm: check.skew_nm,
-            members: group
-                .nets
-                .iter()
-                .map(|net| MatchTuningMember {
-                    net: net.clone(),
-                    length_before_nm: lengths[net.as_str()],
-                    length_after_nm: lengths[net.as_str()],
-                })
-                .collect(),
-            bumps: 0,
-            reason: String::new(),
-            tuning_groups: tuning,
+        (sides[0], sides[1])
+    };
+    let placements: IndexMap<&str, &copper_pcb::board::Placement> =
+        board.placements.iter().map(|item| (item.reference.as_str(), item)).collect();
+    let mut keepouts = Vec::new();
+    for (index, group) in ordered.iter().enumerate() {
+        if routed.contains(group) {
+            continue;
+        }
+        let ((left_first, right_first), (left_second, right_second)) = (bounds(index, first), bounds(index, second));
+        let mut declared: Vec<CopperLayer> = Vec::new();
+        for net in group.iter() {
+            if let Some(rule) = rules.get(net.as_str()) {
+                for layer in &rule.allowed_layers {
+                    if !declared.contains(layer) {
+                        declared.push(*layer);
+                    }
+                }
+            }
+        }
+        if declared.is_empty() {
+            for component in [first, second] {
+                let layer = if placements[component.as_str()].side == copper_physical::BoardSide::Front {
+                    CopperLayer::Front
+                } else {
+                    CopperLayer::Back
+                };
+                if !declared.contains(&layer) {
+                    declared.push(layer);
+                }
+            }
+        }
+        declared.sort_by(|a, b| a.value().cmp(b.value()));
+        let Ok(vertices) = copper_physical::board::polygon_ring(&[left_first, right_first, right_second, left_second])
+        else {
+            continue;
+        };
+        keepouts.push(CopperKeepout {
+            id: format!("unrouted-lane:{}", group.join("/")),
+            layers: declared,
+            vertices,
+            block_tracks: true,
+            block_vias: true,
+            block_pads: false,
+            block_zones: false,
+            block_footprints: false,
         });
     }
-    Ok(outcomes)
+    Ok(keepouts)
+}
+
+/// `_bundle_repair`: rip up `blocker`, route `failed` first, then route
+/// `blocker` again, both under the main pass's bound and escalation against
+/// all other committed copper. Nothing is changed here: the caller commits
+/// both results only when both are accepted.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn bundle_repair(
+    board: &PhysicalBoard,
+    routes: &IndexMap<String, GlobalNetRoute>,
+    rules: &IndexMap<&str, &NetRoutingRule>,
+    pair_state_limit: Option<i64>,
+    (base_tracks, base_vias): (&[TrackSegment], &[Via]),
+    committed: &crate::critical_match::Committed,
+    (rule, partner_rule): (&NetRoutingRule, &NetRoutingRule),
+    failed: &[String],
+    blocker: &[String],
+    (crossings, nested, turns): (
+        &IndexMap<Vec<String>, PlannedCrossing>,
+        &IndexMap<Vec<String>, NestedExit>,
+        &mut IndexMap<Vec<String>, (i64, i64)>,
+    ),
+    pair_state_escalation: i64,
+) -> Result<(BundleRepair, Option<(Routed, Routed)>)> {
+    let others: Vec<&(Vec<String>, Vec<TrackSegment>, Vec<Via>)> =
+        committed.iter().filter(|entry| entry.0 != blocker).collect();
+    let mut reduced_tracks: Vec<TrackSegment> =
+        base_tracks.iter().cloned().chain(others.iter().flat_map(|(_, items, _)| items.iter().cloned())).collect();
+    let mut reduced_vias: Vec<Via> =
+        base_vias.iter().cloned().chain(others.iter().flat_map(|(_, _, items)| items.iter().cloned())).collect();
+    let record = |accepted: bool, reason: &str, first: &CriticalNetResult| BundleRepair {
+        failed: failed.to_vec(),
+        ripped_up: blocker.to_vec(),
+        accepted,
+        reason: reason.to_owned(),
+        search_states: first.search_states,
+        pair_budget_exhausted: first.pair_budget_exhausted,
+    };
+    let first = route_pair_group(
+        board,
+        rule,
+        partner_rule,
+        routes,
+        rules,
+        &reduced_tracks,
+        &reduced_vias,
+        pair_state_limit,
+        pair_state_escalation,
+        &mut IndexSet::new(),
+        crossings.get(failed),
+        nested.get(failed),
+        Some(turns),
+    )?;
+    if !first.0.connected {
+        let reason = "failed group still has no accepted candidate without the ripped-up copper";
+        return Ok((record(false, reason, &first.0), None));
+    }
+    reduced_tracks.extend(first.1.iter().cloned());
+    reduced_vias.extend(first.2.iter().cloned());
+    let second = route_pair_group(
+        board,
+        rules[blocker[0].as_str()],
+        rules[blocker[1].as_str()],
+        routes,
+        rules,
+        &reduced_tracks,
+        &reduced_vias,
+        pair_state_limit,
+        pair_state_escalation,
+        &mut IndexSet::new(),
+        crossings.get(blocker),
+        nested.get(blocker),
+        Some(turns),
+    )?;
+    if !second.0.connected {
+        let reason = "ripped-up group has no accepted candidate after the failed group";
+        return Ok((record(false, reason, &first.0), None));
+    }
+    let accepted = record(true, "both groups accepted", &first.0);
+    Ok((accepted, Some((first, second))))
 }
 
 /// `_pair_prefers_via_escape`: matched via portals first for an internally

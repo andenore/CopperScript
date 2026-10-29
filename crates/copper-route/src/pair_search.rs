@@ -185,6 +185,19 @@ pub const HEADS: [(i64, i64); 8] = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-
 /// `_PORT_LENGTHS` in nanometres (0.5, 0.75, 1, 1.5, 2 and 3 mm).
 pub const PORT_LENGTHS_NM: [i64; 6] = [500_000, 750_000, 1_000_000, 1_500_000, 2_000_000, 3_000_000];
 
+/// `nested_turn_chamfer`: the least axial leg of a nested exit's 45-degree
+/// turn, one pair pitch (plan R7).
+pub fn nested_turn_chamfer(width: i64, gap: i64) -> i64 {
+    width + gap
+}
+
+/// `nested_turn_minimum`: the least turn distance of a nested exit from its
+/// land midpoint (plan R7): the shortest port, the least chamfer and one lane
+/// offset, so the inner lane's run between port and turn survives its miter.
+pub fn nested_turn_minimum(width: i64, gap: i64) -> i64 {
+    PORT_LENGTHS_NM[0] + nested_turn_chamfer(width, gap) + (width + gap + 1).div_euclid(2)
+}
+
 /// `_Port`: a joint package escape ending at `center` along `heading`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Port {
@@ -270,7 +283,7 @@ pub fn heading(start: Point, end: Point) -> Option<usize> {
     HEADS.iter().position(|head| *head == (dx.signum(), dy.signum()))
 }
 
-fn turn(first: usize, second: usize) -> usize {
+pub(crate) fn turn(first: usize, second: usize) -> usize {
     ((first + 8 - second) % 8).min((second + 8 - first) % 8)
 }
 
@@ -1404,7 +1417,7 @@ pub fn remaining_states(stats: &PairSearchStats, maximum_states: i64, maximum_to
 }
 
 /// `_pair_profile`: width, lane offset, clearance and surface layer, or `None`.
-fn pair_profile(
+pub(crate) fn pair_profile(
     board: &PhysicalBoard,
     first_rule: &NetRoutingRule,
     second_rule: &NetRoutingRule,

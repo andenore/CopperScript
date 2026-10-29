@@ -456,3 +456,72 @@ pub fn prepare_pair_terminals(
         None => copper_pcb::not_implemented("critical paired local contact preparation"),
     }
 }
+
+/// `_matched_local_candidates`: at most two exact-clearance tuning
+/// proposals for a candidate whose skew exceeds the pair's limit, matching
+/// limits unchanged. A candidate within the limit yields only itself, which
+/// the caller has already tried: the list is then empty.
+pub fn matched_local_candidates(
+    board: &PhysicalBoard,
+    first: &NetRoutingRule,
+    second: &NetRoutingRule,
+    candidate: &crate::pair_search::PairSearchCandidate,
+) -> Result<Vec<crate::pair_search::PairSearchCandidate>> {
+    let limits: Vec<i64> = [first.max_skew_nm, second.max_skew_nm].into_iter().flatten().collect();
+    let tracks = [&candidate.first, &candidate.second];
+    let lengths = tracks.map(|items| crate::critical::track_length(&items.iter().collect::<Vec<_>>()));
+    let delta = (lengths[0] - lengths[1]).abs();
+    let Some(limit) = limits.iter().min().copied() else { return Ok(Vec::new()) };
+    if delta <= limit {
+        return Ok(Vec::new());
+    }
+    let shorter = if lengths[0] < lengths[1] { 0 } else { 1 };
+    let rule = [first, second][shorter];
+    let Some(amplitude) = rule.tuning_amplitude_limit_nm else { return Ok(Vec::new()) };
+    let vias: Vec<Via> = candidate
+        .via_pairs
+        .iter()
+        .flat_map(|(a, b)| [a.clone(), b.clone()])
+        .chain(candidate.return_vias.iter().cloned())
+        .collect();
+    let mut obstacles = board.clone();
+    obstacles.tracks.extend(tracks[1 - shorter].iter().cloned());
+    obstacles.vias.extend(vias.iter().cloned());
+    let index = crate::routing_clearance::RoutingClearanceIndex::new(&obstacles)?;
+    let own_vias: Vec<Via> = vias.iter().filter(|via| via.net == rule.net).cloned().collect();
+    let tuner = crate::critical_tuning::UnitTuner::new(
+        board,
+        &index,
+        tracks[shorter].clone(),
+        std::slice::from_ref(&rule.net),
+        0,
+        amplitude,
+        board.rules.minimum_clearance_nm.max(rule.clearance_nm.unwrap_or(0)),
+        crate::critical_tuning::TunerOptions {
+            style: rule.tuning_style,
+            leg_gap_nm: rule.tuning_spacing_nm,
+            vias: own_vias,
+            ..Default::default()
+        },
+    )?;
+    let mut amounts = vec![delta];
+    let least = delta - limit + 20_000.min(limit);
+    if least != delta {
+        amounts.push(least);
+    }
+    let width = rule.width_nm.filter(|width| *width != 0).unwrap_or(board.rules.default_track_width_nm);
+    let mut proposals = Vec::new();
+    for amount in amounts {
+        let plan = tuner.plan(amount + amount.rem_euclid(2))?;
+        let Some(planned) = plan.tracks else { continue };
+        let proposed = index.breakout.split_tracks(&planned, Some(width));
+        let mut tuned = candidate.clone();
+        if shorter == 0 {
+            tuned.first = proposed;
+        } else {
+            tuned.second = proposed;
+        }
+        proposals.push(tuned);
+    }
+    Ok(proposals)
+}
