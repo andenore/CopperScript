@@ -16669,6 +16669,28 @@
       "--report",
       "{out}/route.json"
      ]
+    },
+    {
+     "id": "route-board-options/nrf52-plane-pins",
+     "args": [
+      "route-board",
+      "examples/nrf52_coin_cell/plane_pins.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--candidates",
+      "1",
+      "--pitch-mm",
+      "0.5",
+      "--fanout",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
     }
    ]
   },

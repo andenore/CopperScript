@@ -923,3 +923,31 @@ equal. With the zone-open stand-in (Python vs Rust seconds): led-ring equal
 eight trials, budget exhausted). The stand-in has no fill polygons, so
 fragment contacts and reference coverage on real fills are covered by unit
 tests against shapely only; CI's real-KiCad `ladder` job is the check.
+
+### Main sync: unused escape vias, plane-pin halos, collar jogs (`rust-main-sync`, 2026-10-29)
+
+Ported the two Python commits merged from `main` (d23974c). From 20dbb56:
+`route_cleanup.remove_single_layer_vias` (with `_dead_end` and `_cut_back`),
+the route-board sweep before the final plane stitch (input, hard-macro and
+via-in-pad copper kept; not on direct unified runs; the `single_layer_vias`
+progress event and the DRC re-run it triggers), and `flow._plane_pin_halos`
+for ordinary escape planning. From a8ae460, the parts on ported paths:
+`pair_search._collar_paths` for the main port admission and
+`pair_vias._cramped` in the transition-pair rank. The rest of a8ae460
+(bundle `_crossing_order`, crossing site ranks inside breakout regions,
+`_tune_pair` breakout ordering, `critical_tuning` runs, slots and twin
+bumps) lies on paths that still exit 3 (critical pair bundles, intra-pair
+skew and length-match tuning).
+
+Before the port, the merged Python differed from the Rust binary in 33
+route-board and replay-critical cases (every board that keeps an unused
+escape via); after it, route-board*, replay-critical*, replay-unified*,
+route-global* and plan-layout* are all equal (or accepted/pending as
+before). New corpus case `route-board-options/nrf52-plane-pins`
+(`examples/nrf52_coin_cell/plane_pins.copper`: the nRF52 board with 0.3 mm
+vias) reaches the plane-pin halos, which no ladder board does; it is equal.
+
+Ladder after the port (Python vs Rust seconds): round-led-ring equal
+(43.8 vs 8.4), nrf52 equal (14.4 vs 3.2), full-vertical equal (175.7 vs
+26.3), cm4 equal (10.1 vs 2.8); with the zone-open stand-in, led-ring equal
+(18.2 vs 2.6) and asset-tracker equal (1704 vs 208).
