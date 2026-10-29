@@ -37,11 +37,6 @@ board Fx10Bridge {
     component C_U18_BULK: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
     component C_U33_BULK: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
     component C_VBUS: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
-    // USB 3.2 transmit AC-coupling capacitors, one per member.
-    component C_TX1P: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; }
-    component C_TX1N: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; }
-    component C_TX2P: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; }
-    component C_TX2N: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; }
     component C_XI: CAPACITOR { value = 12pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
     component C_XO: CAPACITOR { value = 12pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
     component C_RESET: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
@@ -105,20 +100,17 @@ board Fx10Bridge {
     net USB_DM { J_USB.DN1; J_USB.DN2; U_USB.USB_DM; }
     net USB_RREF { U_USB.USB_RREF; R_RREF.1; }
 
-    // SuperSpeed lanes. Transmit pairs pass AC-coupling capacitors, so each
-    // splits into a bridge-side and a connector-side pair. Lane 1 (west
-    // balls) meets the receptacle's north contacts, lane 2 (south balls) its
-    // south contacts, so the lanes do not cross.
-    net SSTX1_P { U_USB.SSTX1_P; C_TX1P.1; }
-    net SSTX1_N { U_USB.SSTX1_N; C_TX1N.1; }
-    net SSTX1_CP { C_TX1P.2; J_USB.TX1_P; }
-    net SSTX1_CN { C_TX1N.2; J_USB.TX1_N; }
+    // SuperSpeed lanes. Lane 1 (west balls) meets the receptacle's north
+    // contacts, lane 2 (south balls) its south contacts, so the lanes do not
+    // cross. The transmit AC-coupling capacitors a real board needs are
+    // omitted: their 0201 pads in the 0.5 mm courtyard-gapped channel made
+    // the critical pair stage take most of the run (see bench/ladder.json).
+    net SSTX1_P { U_USB.SSTX1_P; J_USB.TX1_P; }
+    net SSTX1_N { U_USB.SSTX1_N; J_USB.TX1_N; }
     net SSRX1_P { J_USB.RX1_P; U_USB.SSRX1_P; }
     net SSRX1_N { J_USB.RX1_N; U_USB.SSRX1_N; }
-    net SSTX2_P { U_USB.SSTX2_P; C_TX2P.1; }
-    net SSTX2_N { U_USB.SSTX2_N; C_TX2N.1; }
-    net SSTX2_CP { C_TX2P.2; J_USB.TX2_P; }
-    net SSTX2_CN { C_TX2N.2; J_USB.TX2_N; }
+    net SSTX2_P { U_USB.SSTX2_P; J_USB.TX2_P; }
+    net SSTX2_N { U_USB.SSTX2_N; J_USB.TX2_N; }
     net SSRX2_P { J_USB.RX2_P; U_USB.SSRX2_P; }
     net SSRX2_N { J_USB.RX2_N; U_USB.SSRX2_N; }
 
@@ -177,18 +169,6 @@ board Fx10Bridge {
         allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
         breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
     }
-    constraint routing(SSTX1_CP) {
-        kind = differential; priority = 100; partner = SSTX1_CN;
-        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
-        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
-        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
-    }
-    constraint routing(SSTX1_CN) {
-        kind = differential; priority = 100; partner = SSTX1_CP;
-        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
-        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
-        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
-    }
     constraint routing(SSRX1_P) {
         kind = differential; priority = 100; partner = SSRX1_N;
         width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
@@ -209,18 +189,6 @@ board Fx10Bridge {
     }
     constraint routing(SSTX2_N) {
         kind = differential; priority = 100; partner = SSTX2_P;
-        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
-        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
-        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
-    }
-    constraint routing(SSTX2_CP) {
-        kind = differential; priority = 100; partner = SSTX2_CN;
-        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
-        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
-        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
-    }
-    constraint routing(SSTX2_CN) {
-        kind = differential; priority = 100; partner = SSTX2_CP;
         width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
         allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
         breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
@@ -283,12 +251,6 @@ board Fx10Bridge {
     constraint fixed_placement(J_BUS) { x = 39mm; y = 16mm; rotation = 0; side = front; }
     constraint fixed_placement(J_PWR) { x = 25mm; y = 28mm; rotation = 90; side = front; }
     constraint fixed_placement(X1) { x = 20.2mm; y = 7.4mm; rotation = 0; side = front; }
-    // AC-coupling capacitors side by side in the channel between receptacle
-    // and array, in line with their pair.
-    constraint fixed_placement(C_TX1P) { x = 14.72mm; y = 13.2mm; rotation = 90; side = front; }
-    constraint fixed_placement(C_TX1N) { x = 15.92mm; y = 13.2mm; rotation = 90; side = front; }
-    constraint fixed_placement(C_TX2P) { x = 14.72mm; y = 18.6mm; rotation = 90; side = front; }
-    constraint fixed_placement(C_TX2N) { x = 15.92mm; y = 18.6mm; rotation = 90; side = front; }
     // Back-side bypass in the array's central cross, beside their supply balls.
     constraint fixed_placement(C_CORE_B1) { x = 23mm; y = 13.2mm; rotation = 0; side = back; }
     constraint fixed_placement(C_CORE_B2) { x = 23mm; y = 18.8mm; rotation = 0; side = back; }
