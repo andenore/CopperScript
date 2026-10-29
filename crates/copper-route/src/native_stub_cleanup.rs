@@ -126,7 +126,7 @@ pub fn native_stub_candidate(
             *entry = (*entry).max(count);
         }
     };
-    union(&mut fixed_vias, &crate::pad_via_arrays::via_in_pad_array_vias(board)?);
+    union(&mut fixed_vias, &crate::pad_via_arrays::via_in_pad_array_vias(board, None)?);
     let placements: IndexMap<String, copper_pcb::board::Placement> =
         board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
     for hard in &board.hard_macros {

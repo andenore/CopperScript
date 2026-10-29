@@ -759,7 +759,7 @@ pub fn remove_native_dangling_copper(
     );
     let mut tracks = protected_tracks.clone();
     let mut vias = protected_vias.clone();
-    let pad_vias = crate::pad_via_arrays::via_in_pad_array_vias(board).map_err(NativeError::Pcb)?;
+    let pad_vias = crate::pad_via_arrays::via_in_pad_array_vias(board, None).map_err(NativeError::Pcb)?;
     counter_union(&mut vias, &multiset(&pad_vias));
     let placements: indexmap::IndexMap<String, copper_pcb::board::Placement> =
         board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();

@@ -73,6 +73,8 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     copper_place::planner::register_decoupling_pass(|board, placements, options, progress| {
         copper_route::decoupling::improve_decoupling_placement(board, placements, options, progress)
     });
+    // Via-in-pad arrays check their sites against the routing clearance index.
+    copper_drc::macros::register_array_materializer(copper_route::pad_via_arrays::materialize_via_in_pad_arrays);
     let Some(command) = args.first() else {
         let _ = writeln!(err, "{USAGE}\ncopper: error: the following arguments are required: command");
         return 2;

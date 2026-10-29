@@ -1499,8 +1499,9 @@ pub fn macro_source(board: PhysicalBoard) -> Result<PhysicalBoard> {
         }
     }
     // A committed via-in-pad array is part of the same rebuildable prefix.
-    if board.via_in_pad_rules.iter().any(|rule| rule.rows.is_some()) {
-        return crate::not_implemented("via-in-pad via arrays");
+    let arrays = crate::pad_via_arrays::via_in_pad_array_vias(&board, None)?;
+    if crate::pad_via_arrays::multiset_contains(&board.vias, &arrays) {
+        vias.extend(arrays);
     }
     if !same_multiset(&board.tracks, &tracks) || !same_multiset(&board.vias, &vias) {
         return fail("routing planning requires no copper except immutable hard macros");

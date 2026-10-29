@@ -28,6 +28,7 @@ pub mod board;
 pub mod hard_macros;
 pub mod keepouts;
 pub mod kicad_pcb;
+pub mod pad_via_arrays;
 pub mod physicalize;
 pub mod power;
 pub mod project;

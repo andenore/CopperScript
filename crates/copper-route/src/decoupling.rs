@@ -431,8 +431,11 @@ pub fn improve_decoupling_placement(
     let mut poses = placements.clone();
     let mut fixed: IndexSet<String> = scene.fixed_placements(&poses, &options.fixed_references).into_keys().collect();
     fixed.extend(board.rigid_clusters.iter().flat_map(|c| c.members.iter().map(|m| m.reference.clone())));
-    if board.via_in_pad_rules.iter().any(|r| r.rows.is_some()) {
-        return copper_pcb::not_implemented("via-in-pad via arrays");
+    for rule in board.via_in_pad_rules.iter().filter(|r| r.rows.is_some()) {
+        if !poses.contains_key(&rule.pad.component) {
+            return copper_pcb::not_implemented("a via-in-pad array owner without a pose (Python crashes)");
+        }
+        fixed.insert(rule.pad.component.clone());
     }
     // Later-declared valid feeds are just as binding as earlier ones. Generate
     // this complete baseline once, then retain its exact generated prefix while

@@ -411,8 +411,6 @@ pub struct RouteEvidence {
     pub native: Option<(bool, bool, String)>,
     /// The final explicit-copper DRC report.
     pub drc: Option<copper_drc::Report>,
-    /// `pad_via_arrays.via_in_pad_arrays_present` (routing owns the array geometry).
-    pub via_arrays_present: Option<fn(&PhysicalBoard) -> Result<bool>>,
 }
 
 /// `_evaluate` (`route` is the routing-stage evidence, None at the placement stage).
@@ -471,9 +469,7 @@ fn evaluate(
             return outcome("fail", "via-in-pad permission/array differs from source");
         }
         if expected.rows.is_some() {
-            let Some(present) = route.and_then(|route| route.via_arrays_present) else {
-                return Err(Unresolved::NotImplemented("via-in-pad array presence".to_owned()));
-            };
+            let present = copper_pcb::pad_via_arrays::via_in_pad_arrays_present;
             let mut scoped = scene.board.clone();
             scoped.via_in_pad_rules = vec![expected.clone()];
             let found = present(&scoped).map_err(|error| match error {

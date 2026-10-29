@@ -781,6 +781,10 @@ fn route(
             let key = message.rsplit(" uses unknown part ").next().unwrap_or_default().to_owned();
             Stop::UnknownPart { message: message.clone(), key }
         }
+        // `pad_via_arrays.validate_array_fit` raises a plain `ValueError`.
+        Error::Value(message) if message.starts_with("via_in_pad array ") => {
+            Stop::Value { error_type: Some("ValueError"), message: message.clone() }
+        }
         _ => Stop::from(error),
     };
     // Proxy physicalization raises only `ValueError` (and the unknown part's KeyError).
@@ -968,6 +972,11 @@ fn route(
             None => None,
         };
         let result = run_routing_pipeline(board, pipeline, reborrow).map_err(|error| match error {
+            // A rejected array site is a `ViaArrayPlacementError` carrying its
+            // diagnostic board, which this rewrite's error record does not write.
+            Error::Value(message) if copper_route::pad_via_arrays::is_site_rejection(&message) => {
+                Stop::Value { error_type: None, message }
+            }
             Error::Value(message) => Stop::Value { error_type: Some("ValueError"), message },
             Error::NotImplemented(what) => Stop::Pending(what),
         })?;
@@ -1146,7 +1155,7 @@ fn finish(
         // inside the pipeline.)
         let board = result.board();
         let mut kept_vias = copper_route::route_cleanup::via_counter(&context.physical_board.vias);
-        for via in copper_route::pad_via_arrays::via_in_pad_array_vias(board)? {
+        for via in copper_route::pad_via_arrays::via_in_pad_array_vias(board, None)? {
             *kept_vias.entry(via).or_insert(0) += 1;
         }
         let mut kept_tracks = copper_route::route_cleanup::counter(&context.physical_board.tracks);
@@ -1673,7 +1682,6 @@ fn finish(
         drc_board_digest: Some(output_drc.token.board_digest.clone()),
         native,
         drc: Some(output_drc.report.clone()),
-        via_arrays_present: Some(copper_route::pad_via_arrays::via_in_pad_arrays_present),
     };
     let requirements =
         copper_place::requirements::verify_stage_requirements(context.design, &output_board, Some(&evidence))?;

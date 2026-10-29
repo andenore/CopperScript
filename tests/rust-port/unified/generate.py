@@ -47,6 +47,9 @@ BOARDS = {
                        "--router-iterations", "5", "--fanout", "--plane-contact-radius-mm", "5"],
     "nrf52": ["examples/nrf52_coin_cell/board.copper", "--locked", "--offline", "--layers", "6",
               "--fab-profile", "jlcpcb-six-layer", "--width-mm", "50", "--height-mm", "40"],
+    # A committed 2x2 via-in-pad array (real footprints from the board's own library).
+    "via_array": ["tests/rust-port/export-kicad-pcb/via_array.copper", "--locked", "--offline", "--layers", "6",
+                  "--fab-profile", "jlcpcb-six-layer"],
 }
 
 
@@ -183,8 +186,45 @@ def malformed() -> None:
         document = copy.deepcopy(source)
         change(document)
         _write(valid / f"{name}.state.json", document)
+    via_arrays(target, valid)
     (target / "not-json.state.json").write_text("{\"schema\": \"copperscript.state/v1\",\n", encoding="utf-8")
     print(f"malformed: {len(list(target.iterdir()))} variants")
+
+
+def via_arrays(target: Path, valid: Path) -> None:
+    """Variants of ``via_array.state.json``: its via-in-pad rule and array vias."""
+    source = json.loads((HERE / "via_array.state.json").read_text(encoding="utf-8"))
+
+    def board(document: dict) -> dict:
+        return _entry(document, "board")[1]["fields"]
+
+    def rule(**fields):
+        return lambda d: board(d)["via_in_pad_rules"]["$tuple"][0]["fields"].update(fields)
+
+    for name, change in (
+        ("via-array-process", rule(process="wet")),
+        ("via-array-rows-only", rule(columns=None)),
+        ("via-array-zero-rows", rule(rows=0, columns=0)),
+        ("via-array-bool-rows", rule(rows=True)),
+        ("via-array-pitch-only", rule(rows=None, columns=None, pitch_nm=500000)),
+        ("via-array-close-pitch", rule(rows=3, columns=3, pitch_nm=400000)),
+        ("via-array-misfit", rule(rows=1, columns=3, pitch_nm=1500000)),
+    ):
+        document = copy.deepcopy(source)
+        change(document)
+        _write(target / f"{name}.state.json", document)
+    # Valid: the committed array copper is missing, or one site is.
+    def without_array(count):
+        def change(document):
+            vias = board(document)["vias"]["$tuple"]
+            capped = [index for index, via in enumerate(vias) if via["fields"]["finish"] == "filled-capped"]
+            for index in reversed(capped[:count]):
+                del vias[index]
+        return change
+    for name, change in (("via-array-missing", without_array(4)), ("via-array-partial", without_array(1))):
+        document = copy.deepcopy(source)
+        change(document)
+        _write(valid / f"{name}.state.json", document)
 
 
 if __name__ == "__main__":
