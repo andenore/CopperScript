@@ -8,6 +8,12 @@ ROOT = Path(__file__).parents[1]
 
 
 def _zoned_board(tmp_path):
+    # valid_board imports the repository's example packages; a copy outside the
+    # checkout needs its own manifest pointing at them.
+    (tmp_path / "copper.mod").write_text(
+        "module zoned-test\nrequire github.com/copperscript/examples v0.1.0\n"
+        f"replace github.com/copperscript/examples => {(ROOT / 'examples/packages').as_posix()}\n",
+        encoding="utf-8")
     source = tmp_path / "zoned.copper"
     source.write_text((ROOT / "examples/valid_board/board.copper").read_text().rstrip()[:-1] +
         'constraint copper_zone(GND) { layers="F.Cu"; } }', encoding="utf-8")
