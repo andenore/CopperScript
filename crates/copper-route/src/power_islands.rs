@@ -3,8 +3,8 @@
 //! Each supply rail gets copper islands around its own pads and vias on one
 //! plane layer, carved out of the layer's plane by a higher zone priority: a
 //! raster Voronoi split with linked corridors, gaps between owners, and
-//! outlines traced from the raster. The ball-grid partition
-//! (`plan_ball_grid_islands`) is not rewritten yet.
+//! outlines traced from the raster; under ball grids, the via-site matrix
+//! partition (`plan_ball_grid_islands`).
 
 use std::collections::VecDeque;
 
@@ -17,6 +17,7 @@ use copper_pcb::transform::transformed_local_point;
 use copper_pcb::zones::dedicated_plane_layers;
 use copper_physical::{CopperLayer, Point};
 
+use crate::package_patterns::ball_grid;
 use crate::plane_estimate::label;
 use crate::unified_error::{Result, fail};
 use crate::unified_router::geometry::{polygon_inside, segment_distance};
@@ -85,6 +86,367 @@ pub fn auto_power_layer(board: &PhysicalBoard) -> Option<CopperLayer> {
     if candidates.is_empty() { None } else { Some(latest(&candidates)) }
 }
 
+/// `ball_grid_rails`: decoupled rails with a pad on a full ball grid.
+pub fn ball_grid_rails(board: &PhysicalBoard) -> Result<Vec<String>> {
+    let mut balls: IndexSet<(String, String)> = IndexSet::new();
+    for pose in &board.placements {
+        if let Some(grid) = ball_grid(board, &pose.reference)? {
+            balls.extend(grid.balls.iter().map(|number| (pose.reference.clone(), number.clone())));
+        }
+    }
+    let pads: IndexMap<&str, &[copper_pcb::board::PadReference]> =
+        board.nets.iter().map(|net| (net.name.as_str(), net.pads.as_slice())).collect();
+    Ok(decoupled_rails(board)
+        .into_iter()
+        .filter(|rail| {
+            pads.get(rail.as_str())
+                .is_some_and(|pads| pads.iter().any(|pad| balls.contains(&(pad.component.clone(), pad.pad.clone()))))
+        })
+        .collect())
+}
+
+/// `plan_ball_grid_islands(board, layer)` with the default options:
+/// split-plane islands under ball grids from the via-site matrix, extended
+/// to each rail's other pads by corridors.
+pub fn plan_ball_grid_islands(board: &PhysicalBoard, layer: CopperLayer) -> Result<PowerPartition> {
+    let gap_nm: i64 = 300_000;
+    let pitch_nm: i64 = 50_000;
+    let extend_nm: i64 = 12_000_000;
+    let corridor_nm: i64 = 800_000;
+    let pad_reach_nm: i64 = 600_000;
+    let core_nm: i64 = 500_000;
+    let rails = ball_grid_rails(board)?;
+    let rules: IndexMap<&str, &copper_pcb::board::NetRoutingRule> =
+        board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
+    let excluded: Vec<String> = rails
+        .iter()
+        .filter(|r| {
+            rules
+                .get(r.as_str())
+                .is_some_and(|rule| !rule.allowed_layers.is_empty() && !rule.allowed_layers.contains(&layer))
+        })
+        .cloned()
+        .collect();
+    let rails: Vec<String> = rails.into_iter().filter(|r| !excluded.contains(r)).collect();
+    let host: Vec<&CopperZone> = board.zones.iter().filter(|z| z.layers.contains(&layer)).collect();
+    if rails.is_empty() || host.is_empty() {
+        return Ok(PowerPartition {
+            layer,
+            zones: Vec::new(),
+            rails: Vec::new(),
+            skipped: excluded,
+            split: Vec::new(),
+        });
+    }
+    let rail_index: IndexMap<&str, i32> = rails.iter().enumerate().map(|(i, r)| (r.as_str(), i as i32)).collect();
+    let mut net_of: IndexMap<(&str, &str), &str> = IndexMap::new();
+    for net in &board.nets {
+        for pad in &net.pads {
+            net_of.insert((pad.component.as_str(), pad.pad.as_str()), net.name.as_str());
+        }
+    }
+    let poses = placement_map(board);
+    let (rx, ry, x0, y0, grid, allowed) = host_raster(board, layer, &host, pitch_nm);
+    let mut owner = vec![-1i32; rx * ry];
+    // (j0, j1, i0, i1) of a square, clipped (may be empty).
+    let window = |cx: i64, cy: i64, half: i64| -> (i64, i64, i64, i64) {
+        (
+            0.max((cy - half - y0).div_euclid(pitch_nm)),
+            (ry as i64 - 1).min((cy + half - y0).div_euclid(pitch_nm)),
+            0.max((cx - half - x0).div_euclid(pitch_nm)),
+            (rx as i64 - 1).min((cx + half - x0).div_euclid(pitch_nm)),
+        )
+    };
+    let paint = |owner: &mut [i32], cx: i64, cy: i64, half: i64, value: i32| {
+        let (j0, j1, i0, i1) = window(cx, cy, half);
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                owner[j as usize * rx + i as usize] = value;
+            }
+        }
+    };
+
+    // Under each ball grid: the via-site matrix.
+    let mut placements: Vec<&copper_pcb::board::Placement> = board.placements.iter().collect();
+    placements.sort_by(|a, b| a.reference.cmp(&b.reference));
+    for pose in placements {
+        let Some(array) = ball_grid(board, &pose.reference)? else { continue };
+        let (nx, ny, half) = (array.xs_nm.len() as i64, array.ys_nm.len() as i64, array.pitch_nm.div_euclid(2));
+        let centre = |cx: i64, cy: i64| {
+            transformed_local_point(
+                pose,
+                Point::new(array.xs_nm[0] + cx * array.pitch_nm + half, array.ys_nm[0] + cy * array.pitch_nm + half),
+            )
+        };
+        let mut cells: IndexMap<(i64, i64), i32> = IndexMap::new();
+        let sites: IndexMap<(i64, i64), Point> =
+            (-1..nx).flat_map(|cx| (-1..ny).map(move |cy| (cx, cy))).map(|key| (key, centre(key.0, key.1))).collect();
+        let tolerance = array.tolerance_nm + 1;
+        for via in &board.vias {
+            let Some(&index) = rail_index.get(via.net.as_str()) else { continue };
+            for (key, point) in &sites {
+                if (via.position.x_nm - point.x_nm).abs() <= tolerance
+                    && (via.position.y_nm - point.y_nm).abs() <= tolerance
+                {
+                    cells.entry(*key).or_insert(index);
+                }
+            }
+        }
+        let mut lands: Vec<&copper_physical::footprint::FootprintPad> =
+            board.footprints[&pose.footprint].pads.iter().filter(|p| array.balls.contains(&p.number)).collect();
+        lands.sort_by(|a, b| a.number.cmp(&b.number));
+        for land in lands {
+            let Some(net) = net_of.get(&(pose.reference.as_str(), land.number.as_str())) else { continue };
+            let Some(&index) = rail_index.get(net) else { continue };
+            let Some((ix, iy)) = array.index(land.position) else {
+                return fail("cannot unpack non-iterable NoneType object");
+            };
+            let (ix, iy) = (ix as i64, iy as i64);
+            if [(0, 0), (0, 1), (1, 0), (1, 1)].iter().any(|(dx, dy)| cells.get(&(ix - dx, iy - dy)) == Some(&index)) {
+                continue; // its via already marks a cell of the rail
+            }
+            let sx = if 2 * ix < nx - 1 { -1 } else { 1 };
+            let sy = if 2 * iy < ny - 1 { -1 } else { 1 };
+            cells.entry((ix - (sx < 0) as i64, iy - (sy < 0) as i64)).or_insert(index);
+        }
+        if cells.is_empty() {
+            continue;
+        }
+        let mut seeds: Vec<((i64, i64), i32)> = cells.iter().map(|(k, v)| (*k, *v)).collect();
+        seeds.sort();
+        for key in sites.keys() {
+            if !cells.contains_key(key) {
+                let nearest = seeds
+                    .iter()
+                    .min_by_key(|(at, value)| ((at.0 - key.0).pow(2) + (at.1 - key.1).pow(2), *value, *at))
+                    .expect("seeds");
+                cells.insert(*key, nearest.1);
+            }
+        }
+        for (key, &value) in &cells {
+            paint(&mut owner, sites[key].x_nm, sites[key].y_nm, half, value);
+        }
+        for (&(cx, cy), &value) in &cells {
+            for (dx, dy) in [(1, 1), (1, -1)] {
+                if cells.get(&(cx + dx, cy + dy)) == Some(&value) {
+                    let (a, b) = (sites[&(cx, cy)], sites[&(cx + dx, cy + dy)]);
+                    paint(
+                        &mut owner,
+                        (a.x_nm + b.x_nm).div_euclid(2),
+                        (a.y_nm + b.y_nm).div_euclid(2),
+                        half.div_euclid(2),
+                        value,
+                    );
+                }
+            }
+        }
+    }
+    for (o, a) in owner.iter_mut().zip(&allowed) {
+        if !a {
+            *o = -1;
+        }
+    }
+
+    // Outside the arrays: corridors from each rail's other pads to its copper.
+    let mut pads: IndexMap<i32, Vec<Point>> = rail_index.values().map(|&index| (index, Vec::new())).collect();
+    for net in &board.nets {
+        let Some(&index) = rail_index.get(net.name.as_str()) else { continue };
+        for pad in &net.pads {
+            let pose = &poses[pad.component.as_str()];
+            if let Some(land) = board.footprints[&pose.footprint].pads.iter().find(|item| item.number == pad.pad) {
+                pads[&index].push(transformed_local_point(pose, land.position));
+            }
+        }
+    }
+    let cell = |point: Point| -> (i64, i64) {
+        (
+            (ry as i64 - 1).min(0.max((point.y_nm - y0).div_euclid(pitch_nm))),
+            (rx as i64 - 1).min(0.max((point.x_nm - x0).div_euclid(pitch_nm))),
+        )
+    };
+    // The cells of a disc: (j, i) inside the window, row-major.
+    let disc = |point: Point, radius: i64| -> Vec<usize> {
+        let (j0, j1, i0, i1) = window(point.x_nm, point.y_nm, radius);
+        let mut inside = Vec::new();
+        for j in j0..=j1 {
+            for i in i0..=i1 {
+                let k = j as usize * rx + i as usize;
+                if copper_physical::pyfloat::hypot(grid.px[k] - point.x_nm as f64, grid.py[k] - point.y_nm as f64)
+                    <= radius as f64
+                {
+                    inside.push(k);
+                }
+            }
+        }
+        inside
+    };
+    let mut cores = vec![-1i32; rx * ry];
+    for (&index, points) in &pads {
+        for &point in points {
+            for k in disc(point, core_nm) {
+                if cores[k] != -1 && cores[k] != index {
+                    cores[k] = -2;
+                }
+            }
+            for k in disc(point, core_nm) {
+                if cores[k] == -1 {
+                    cores[k] = index;
+                }
+            }
+        }
+    }
+    let kg = 1.max((gap_nm as f64 / pitch_nm as f64).ceil() as i64);
+    let kw = 1.max(corridor_nm.div_euclid(2).div_euclid(pitch_nm));
+    let band: Vec<(i64, i64)> = (-kw..=kw)
+        .flat_map(|dy| (-kw..=kw).map(move |dx| (dy, dx)))
+        .filter(|(dy, dx)| dx * dx + dy * dy <= kw * kw)
+        .collect();
+    let reach = extend_nm.div_euclid(pitch_nm);
+    let (rxi, ryi) = (rx as i64, ry as i64);
+    let mut indexes: Vec<i32> = pads.keys().copied().collect();
+    indexes.sort();
+    for index in indexes {
+        let mine: Vec<bool> = owner.iter().map(|&o| o == index).collect();
+        if !mine.iter().any(|&m| m) {
+            continue;
+        }
+        let others: Vec<bool> = owner.iter().zip(&mine).map(|(&o, &m)| o >= 0 && !m).collect();
+        // Other rails' copper plus the gap (np.roll wraps around).
+        let mut grown = others.clone();
+        let disk: Vec<(i64, i64)> = (-kg..=kg)
+            .flat_map(|dy| (-kg..=kg).map(move |dx| (dy, dx)))
+            .filter(|(dy, dx)| dx * dx + dy * dy <= kg * kg)
+            .collect();
+        for (k, _) in others.iter().enumerate().filter(|(_, o)| **o) {
+            let (j, i) = ((k / rx) as i64, (k % rx) as i64);
+            for &(dy, dx) in &disk {
+                grown[((j + dy).rem_euclid(ryi) * rxi + (i + dx).rem_euclid(rxi)) as usize] = true;
+            }
+        }
+        let blocked: Vec<bool> =
+            (0..rx * ry).map(|k| !allowed[k] || grown[k] || (cores[k] != -1 && cores[k] != index)).collect();
+        let copper: Vec<(i64, i64)> =
+            (0..rx * ry).filter(|&k| mine[k]).map(|k| ((k / rx) as i64, (k % rx) as i64)).collect();
+        let distance = |point: Point| -> i64 {
+            let (j, i) = cell(point);
+            copper.iter().map(|&(cj, ci)| (cj - j).abs() + (ci - i).abs()).min().expect("copper")
+        };
+        let mut order: Vec<(i64, Point)> = pads[&index].iter().map(|&p| (distance(p), p)).collect();
+        order.sort_by_key(|&(d, p)| (d, p.x_nm, p.y_nm));
+        for (far, point) in order {
+            let start = cell(point);
+            if owner[(start.0 * rxi + start.1) as usize] == index || far > reach {
+                continue;
+            }
+            let (j0, j1) = (0.max(start.0 - reach), (ryi - 1).min(start.0 + reach));
+            let (i0, i1) = (0.max(start.1 - reach), (rxi - 1).min(start.1 + reach));
+            let mut previous: IndexMap<(i64, i64), Option<(i64, i64)>> = IndexMap::from([(start, None)]);
+            let mut queue = VecDeque::from([start]);
+            let mut found = None;
+            while let Some((j, i)) = queue.pop_front() {
+                if owner[(j * rxi + i) as usize] == index {
+                    found = Some((j, i));
+                    break;
+                }
+                for (dj, di) in [(0, 1), (1, 0), (0, -1), (-1, 0)] {
+                    let (nj, ni) = (j + dj, i + di);
+                    if j0 <= nj && nj <= j1 && i0 <= ni && ni <= i1 && !previous.contains_key(&(nj, ni)) {
+                        let k = (nj * rxi + ni) as usize;
+                        if owner[k] == index || !blocked[k] {
+                            previous.insert((nj, ni), Some((j, i)));
+                            queue.push_back((nj, ni));
+                        }
+                    }
+                }
+            }
+            // None: walled in by other rails (the router joins this pad with a track).
+            let Some(found) = found else { continue };
+            let mut step = Some(found);
+            while let Some((j, i)) = step {
+                for &(dy, dx) in &band {
+                    let (nj, ni) = (j + dy, i + dx);
+                    if 0 <= nj && nj < ryi && 0 <= ni && ni < rxi {
+                        let k = (nj * rxi + ni) as usize;
+                        if !blocked[k] && owner[k] == -1 {
+                            owner[k] = index;
+                        }
+                    }
+                }
+                step = previous[&(j, i)];
+            }
+            for k in disc(point, pad_reach_nm) {
+                if owner[k] == -1 && !blocked[k] {
+                    owner[k] = index;
+                }
+            }
+        }
+    }
+
+    // Gaps between different owners (and the host plane), then islands.
+    let k = 1.max((gap_nm as f64 / 2.0 / pitch_nm as f64).ceil() as i64);
+    let mut kept = owner.clone();
+    for dy in -k..=k {
+        for dx in -k..=k {
+            if dx * dx + dy * dy > k * k {
+                continue;
+            }
+            for j in 0..ryi {
+                for i in 0..rxi {
+                    let (sj, si) = (j - dy, i - dx);
+                    let shifted =
+                        if 0 <= sj && sj < ryi && 0 <= si && si < rxi { owner[(sj * rxi + si) as usize] } else { -2 };
+                    let at = (j * rxi + i) as usize;
+                    if shifted != owner[at] {
+                        kept[at] = -1;
+                    }
+                }
+            }
+        }
+    }
+    let priority = host.iter().map(|z| z.priority).max().expect("host") + 1;
+    let mut zones = Vec::new();
+    let mut used: IndexSet<String> = IndexSet::new();
+    for (index, rail) in rails.iter().enumerate() {
+        let mask: Vec<bool> = kept.iter().map(|&o| o == index as i32).collect();
+        if !mask.iter().any(|&v| v) {
+            continue;
+        }
+        let (labels, _) = label(&mask, ry, rx);
+        let distinct: std::collections::BTreeSet<i32> = labels.iter().copied().filter(|&l| l > 0).collect();
+        for (count, l) in distinct.into_iter().enumerate() {
+            let region: Vec<bool> = labels.iter().map(|&v| v == l).collect();
+            let Some((outer, holes)) = outline(&slit_holes(region, ry, rx), ry, rx, x0, y0, pitch_nm)? else {
+                continue;
+            };
+            if outer.len() < 3 {
+                continue;
+            }
+            used.insert(rail.clone());
+            zones.push(CopperZone {
+                id: format!("bga-power-{rail}-{}-{count}", layer.value()),
+                net: rail.clone(),
+                layers: vec![layer],
+                outer,
+                holes,
+                priority,
+                clearance_nm: None,
+                minimum_width_nm: 250_000,
+                pad_connection: ZoneConnection::Solid,
+                thermal_gap_nm: 300_000,
+                thermal_spoke_width_nm: 300_000,
+                island_policy: IslandPolicy::RemoveAll,
+                minimum_island_area_nm2: Some(10_000_000_000_000),
+                reserve_routing: false,
+                allow_same_net_hard_macro_overlap: false,
+            });
+        }
+    }
+    let kept_rails: Vec<String> = rails.iter().filter(|r| used.contains(*r)).cloned().collect();
+    let mut skipped: Vec<String> = rails.iter().filter(|r| !used.contains(*r)).cloned().collect();
+    skipped.extend(excluded);
+    Ok(PowerPartition { layer, zones, rails: kept_rails, skipped, split: Vec::new() })
+}
+
 /// A row-major `(ny, nx)` raster.
 struct Grid {
     px: Vec<f64>,
@@ -125,30 +487,15 @@ pub fn plan_power_islands(board: &PhysicalBoard, layer: CopperLayer) -> Result<P
     }
 }
 
-fn partition(board: &PhysicalBoard, layer: CopperLayer, rails: &[String]) -> Result<PowerPartition> {
-    let reach_nm: i64 = 1_600_000;
-    let gap_nm: i64 = 300_000;
-    let corridor_nm: i64 = 1_600_000;
-    let link_nm: i64 = 12_000_000;
-    let pitch_nm: i64 = 100_000;
-    let link_width_nm: i64 = 800_000;
-    let core_nm: i64 = 500_000;
-    let rules: IndexMap<&str, &copper_pcb::board::NetRoutingRule> =
-        board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
-    let excluded: Vec<String> = rails
-        .iter()
-        .filter(|r| {
-            rules
-                .get(r.as_str())
-                .is_some_and(|rule| !rule.allowed_layers.is_empty() && !rule.allowed_layers.contains(&layer))
-        })
-        .cloned()
-        .collect();
-    let rails: Vec<String> = rails.iter().filter(|r| !excluded.contains(r)).cloned().collect();
-    let host: Vec<&CopperZone> = board.zones.iter().filter(|z| z.layers.contains(&layer)).collect();
-    if rails.is_empty() || host.is_empty() {
-        return Ok(PowerPartition { layer, zones: Vec::new(), rails: Vec::new(), skipped: rails, split: Vec::new() });
-    }
+/// The board raster of a host plane: `(nx, ny, x0, y0, cell centres, the
+/// cells a rail may fill)` (inside a host zone, clear of the board edge and
+/// of zone-blocking keepouts).
+fn host_raster(
+    board: &PhysicalBoard,
+    layer: CopperLayer,
+    host: &[&CopperZone],
+    pitch_nm: i64,
+) -> (usize, usize, i64, i64, Grid, Vec<bool>) {
     let vertices = &board.outline.vertices;
     let x0 = vertices.iter().map(|p| p.x_nm).min().expect("outline");
     let y0 = vertices.iter().map(|p| p.y_nm).min().expect("outline");
@@ -165,7 +512,7 @@ fn partition(board: &PhysicalBoard, layer: CopperLayer, rails: &[String]) -> Res
         }
     }
     let mut allowed = vec![false; nx * ny];
-    for zone in &host {
+    for zone in host {
         let mut inside = grid.mask(&zone.outer);
         for hole in &zone.holes {
             for (m, h) in inside.iter_mut().zip(grid.mask(hole)) {
@@ -197,6 +544,34 @@ fn partition(board: &PhysicalBoard, layer: CopperLayer, rails: &[String]) -> Res
             }
         }
     }
+    (nx, ny, x0, y0, grid, allowed)
+}
+
+fn partition(board: &PhysicalBoard, layer: CopperLayer, rails: &[String]) -> Result<PowerPartition> {
+    let reach_nm: i64 = 1_600_000;
+    let gap_nm: i64 = 300_000;
+    let corridor_nm: i64 = 1_600_000;
+    let link_nm: i64 = 12_000_000;
+    let pitch_nm: i64 = 100_000;
+    let link_width_nm: i64 = 800_000;
+    let core_nm: i64 = 500_000;
+    let rules: IndexMap<&str, &copper_pcb::board::NetRoutingRule> =
+        board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
+    let excluded: Vec<String> = rails
+        .iter()
+        .filter(|r| {
+            rules
+                .get(r.as_str())
+                .is_some_and(|rule| !rule.allowed_layers.is_empty() && !rule.allowed_layers.contains(&layer))
+        })
+        .cloned()
+        .collect();
+    let rails: Vec<String> = rails.iter().filter(|r| !excluded.contains(r)).cloned().collect();
+    let host: Vec<&CopperZone> = board.zones.iter().filter(|z| z.layers.contains(&layer)).collect();
+    if rails.is_empty() || host.is_empty() {
+        return Ok(PowerPartition { layer, zones: Vec::new(), rails: Vec::new(), skipped: rails, split: Vec::new() });
+    }
+    let (nx, ny, x0, y0, grid, allowed) = host_raster(board, layer, &host, pitch_nm);
     let poses = placement_map(board);
     let mut seeds: IndexMap<&str, Vec<Point>> = rails.iter().map(|r| (r.as_str(), Vec::new())).collect();
     for net in &board.nets {
@@ -268,7 +643,7 @@ fn partition(board: &PhysicalBoard, layer: CopperLayer, rails: &[String]) -> Res
             *o = -1;
         }
     }
-    let k = 1.max((gap_nm as f64 / 2.0 / p).ceil() as i64);
+    let k = 1.max((gap_nm as f64 / 2.0 / pitch_nm as f64).ceil() as i64);
     let mut kept = owner.clone();
     for dy in -k..=k {
         for dx in -k..=k {

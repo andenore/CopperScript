@@ -524,7 +524,18 @@ impl Router<'_, '_> {
     pub fn penalise_points(&mut self, points: &[Point], amount: f64) {
         let g = &self.lattice;
         for &point in points {
-            for column in g.columns_around(point, &disc_offsets_cached(2.0)) {
+            let columns = match g.as_nested() {
+                None => g.columns_around(point, &disc_offsets_cached(2.0)),
+                Some(nested) => {
+                    // np.union1d: sorted and distinct.
+                    let mut columns = nested.columns_within(point, 2.0 * self.pitch as f64);
+                    columns.push(nested.nearest(0, point));
+                    columns.sort_unstable();
+                    columns.dedup();
+                    columns
+                }
+            };
+            for column in columns {
                 self.occupancy.via_history[column as usize] += amount;
                 for node in g.column_nodes(column) {
                     self.occupancy.history[node as usize] += amount;

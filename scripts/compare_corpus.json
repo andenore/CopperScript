@@ -16690,6 +16690,28 @@
       "--report",
       "{out}/route.json"
      ]
+    },
+    {
+     "args": [
+      "route-board",
+      "examples/nrf52_coin_cell/board.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--width-mm",
+      "50",
+      "--height-mm",
+      "40",
+      "--unified-set",
+      "fine_regions=dense",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
     }
    ]
   },
@@ -23988,6 +24010,124 @@
       "tests/rust-port/unified/dphy.state.json",
       "--set",
       "direct=true",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/nrf52.state.json",
+      "--set",
+      "fine_regions=dense",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/round_led_ring.state.json",
+      "--set",
+      "fine_regions=dense",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/bga_nested.state.json",
+      "--set",
+      "fine_regions=dense",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/bga_nested.state.json",
+      "--set",
+      "fine_regions=off",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/bga_power.state.json",
+      "--set",
+      "ball_field_via_sites=true",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/bga_power.state.json",
+      "--set",
+      "ball_field_via_sites=true",
+      "--set",
+      "ball_field_band=1",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/bga_power.state.json",
+      "--set",
+      "exit_reservation_cost=2",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/bga_power.state.json",
+      "--power-islands",
+      "B.Cu",
+      "--set",
+      "power_islands_ball_grid_only=true",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/bga_power.state.json",
+      "--power-islands",
+      "B.Cu",
+      "--set",
+      "power_islands_ball_grid_only=true",
+      "--set",
+      "ball_field_via_sites=true",
+      "--set",
+      "exit_reservation_cost=2",
       "--save-result",
       "{out}/result.state.json",
       "--report",

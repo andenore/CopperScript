@@ -1388,8 +1388,11 @@ fn finish(
     let board_name = &context.design.electrical.name;
     let report_path =
         PathBuf::from(arguments.path("--report").unwrap_or_else(|| format!("{board_name}.route-report.json")));
-    let fresh =
-        unified_options(arguments).map_err(|_| copper_pcb::Error::NotImplemented("_fine_region_report".to_owned()))?;
+    // `_fine_region_report` parses the options again; they parsed before routing.
+    let fresh = unified_options(arguments).map_err(|stop| match stop {
+        Stop::Value { message, .. } | Stop::UnknownPart { message, .. } => copper_pcb::Error::Value(message),
+        Stop::Pending(what) => copper_pcb::Error::NotImplemented(what),
+    })?;
     let placement_board = &result.placement_and_global.board;
     let mut report = Object::new();
     let mut put = |key: &str, value: Value| {

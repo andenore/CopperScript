@@ -71,6 +71,61 @@ def generate(name: str) -> None:
     print(f"{name}: {state.relative_to(ROOT).as_posix()} (route-board exit {completed.returncode})")
 
 
+def _bga_nested():
+    """A 5x5 0.75 mm ball array fanned out to a ring of pads, 4 layers: the
+    default fine_regions="arrays" routes it on a nested lattice."""
+    from test_unified_nested_routing import _bga_board
+    return _bga_board()
+
+
+def _bga_power():
+    """The 6x6 0.8 mm ball grid of test_escape_plan with ball 1 on a B.Cu GND
+    plane and decoupled rails N8 and N29 (each with a capacitor): the inputs
+    of the ball-grid power islands and the ball-field via sites."""
+    from dataclasses import replace
+    from pcbir import FootprintPad, PadReference, PhysicalFootprint, PhysicalNet, Placement, Point, Size
+    from pcbir.physical import DecouplingLink
+    from test_escape_plan import ball_grid
+    board = ball_grid(6, "0.45", plane=frozenset({1}))
+    cap = PhysicalFootprint("cap", (FootprintPad("1", Point.mm("-0.5", 0), Size.mm("0.5", "0.6")),
+                                    FootprintPad("2", Point.mm("0.5", 0), Size.mm("0.5", "0.6"))), Size.mm(2, 1))
+    caps = {"N8": ("C1", Point.mm(17, 9)), "N29": ("C2", Point.mm(17, 15))}
+    nets = []
+    for net in board.nets:
+        if net.name in caps:
+            net = replace(net, pads=(*net.pads, PadReference(caps[net.name][0], "1")))
+        elif net.name == "GND":
+            net = replace(net, pads=(*net.pads, *(PadReference(ref, "2") for ref, _ in caps.values())))
+        nets.append(net)
+    links = tuple(DecouplingLink(PadReference(ref, "1"), PadReference("U", net[1:]), PadReference(ref, "2"),
+                                 net, "GND") for net, (ref, _) in caps.items())
+    return replace(board, footprints={**board.footprints, "cap": cap},
+                   placements=(*board.placements, *(Placement(ref, "cap", at) for ref, at in caps.values())),
+                   nets=tuple(nets), decoupling_links=links)
+
+
+# Hand-built boards (the test suite's ball-grid boards): their states hold
+# the board, its global route and the default options.
+SYNTHETIC = {"bga_nested": _bga_nested, "bga_power": _bga_power}
+
+
+def synthetic(name: str) -> None:
+    sys.path.insert(0, str(ROOT / "tests"))
+    from dataclasses import replace
+    from pcbir import GlobalRouterOptions, nm_from_mm, route_global
+    from pcbir.state_codec import save_state
+    from pcbir.unified_router import UnifiedRouterOptions
+    board = SYNTHETIC[name]()
+    global_route = route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+    state = HERE / f"{name}.state.json"
+    save_state(str(state), {
+        "board": board, "global_route": global_route, "options": UnifiedRouterOptions(),
+        "fanout_accesses": None, "fanout_created_vias": None, "fanout_created_tracks": None,
+        "only_nets": None, "required_accesses": None,
+    }, note="route_unified inputs")
+    print(f"{name}: {state.relative_to(ROOT).as_posix()} (hand-built board)")
+
+
 def _write(path: Path, document: dict, *, digest: bool = True) -> None:
     if digest:
         body = json.dumps(document["value"], sort_keys=True, separators=(",", ":"))
@@ -133,6 +188,6 @@ def malformed() -> None:
 
 
 if __name__ == "__main__":
-    names = sys.argv[1:] or [*BOARDS, "malformed"]
+    names = sys.argv[1:] or [*BOARDS, *SYNTHETIC, "malformed"]
     for name in names:
-        malformed() if name == "malformed" else generate(name)
+        malformed() if name == "malformed" else synthetic(name) if name in SYNTHETIC else generate(name)

@@ -26,6 +26,15 @@ Each board runs, from a scratch directory, with `PYTHONUTF8=1 PYTHONHASHSEED=0`:
 | `round_led_ring` | `examples/round_led_ring/board.copper` | `--locked --layers 2 --fab-profile generic --candidates 1 --feedback-iterations 1 --router-iterations 5 --fanout --plane-contact-radius-mm 5` (the ladder's arguments; resolves footprints online) |
 | `nrf52` | `examples/nrf52_coin_cell/board.copper` | `--locked --offline --layers 6 --fab-profile jlcpcb-six-layer --width-mm 50 --height-mm 40` |
 
+Two states hold hand-built boards (`generate.py`'s `SYNTHETIC`, built with
+the test suite's ball-grid helpers; the state holds the board, its global
+route at 2 mm tiles and the default options, written without routing):
+
+| Name | Board |
+|---|---|
+| `bga_nested` | `test_unified_nested_routing._bga_board()`: a 5x5 0.75 mm ball array fanned out to a ring of pads on 4 layers; the default `fine_regions="arrays"` routes it on a nested lattice |
+| `bga_power` | `test_escape_plan.ball_grid(6, "0.45", plane={1})` plus capacitors decoupling rails `N8` and `N29` against the B.Cu `GND` plane: the ball-grid power islands (`--power-islands B.Cu` with `power_islands_ball_grid_only`), `ball_field_via_sites` and `exit_reservation_cost` |
+
 `routing`, `six_layer`, `zones`, `round_led_ring` and `nrf52` leave nets
 unrouted (route-board exits 1); their states are complete inputs either way.
 The nRF52 board with proxy footprints fails before routing (macro footprint

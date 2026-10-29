@@ -8,6 +8,7 @@
 
 pub mod astar;
 pub mod geometry;
+pub mod lattice;
 pub mod negotiate;
 mod options;
 pub mod rasters;

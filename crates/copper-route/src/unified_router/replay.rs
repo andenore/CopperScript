@@ -89,10 +89,11 @@ pub fn replay_unified(
             CopperLayer::parse(islands)
         };
         if let Some(layer) = layer {
-            if saved.options.power_islands_ball_grid_only {
-                return not_implemented("replay-unified --power-islands with power_islands_ball_grid_only");
-            }
-            let partition = crate::power_islands::plan_power_islands(&saved.board, layer)?;
+            let partition = if saved.options.power_islands_ball_grid_only {
+                crate::power_islands::plan_ball_grid_islands(&saved.board, layer)?
+            } else {
+                crate::power_islands::plan_power_islands(&saved.board, layer)?
+            };
             saved.board.zones.extend(partition.zones.iter().cloned());
             if let Some(callback) = on_progress.as_mut() {
                 callback.observe("power_islands", "finished", partition.report());

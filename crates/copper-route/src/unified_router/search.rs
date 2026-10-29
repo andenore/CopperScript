@@ -6,11 +6,12 @@ use indexmap::{IndexMap, IndexSet};
 
 use copper_physical::pyfloat::hypot;
 
-use super::astar::{FLAG_NECK, FLAG_NECK_MID, FLAG_REGION, FLAG_TARGET, Scratch, SearchInput, search};
+use super::astar::{FLAG_NECK, FLAG_NECK_MID, FLAG_REGION, FLAG_TARGET, NestedTables, Scratch, SearchInput, search};
 use super::geometry::{disc_offsets, segment_offsets};
 use super::router::{Attach, Lead, NetRoute, NetSpec, Router};
-use crate::routing_lattice::{IndexBox, MOVES};
+use crate::routing_lattice::{IndexBox, MOVES, NestedLattice};
 use crate::unified_error::{Result, not_implemented};
+use copper_physical::Point;
 
 /// Python's `round(radius, 6)` as a cache key.
 fn radius_key(radius: f64) -> u64 {
@@ -62,11 +63,21 @@ impl Router<'_, '_> {
             let mut nodes = Vec::new();
             for track in lead {
                 let layer = g.layers.iter().position(|l| *l == track.layer).expect("lead layer") as i64;
-                nodes.extend(
-                    g.segment_nodes(layer, track.start, track.end, g.pitch as f64 / 2.0 + 1.0)
-                        .into_iter()
-                        .map(|(node, _)| node),
-                );
+                match g.as_nested() {
+                    // Nodes along the lead in their own pitch, each weighted
+                    // by that pitch in base pitches (a price per base pitch).
+                    Some(nested) => nodes.extend(
+                        nested
+                            .segment_nodes_local(layer, track.start, track.end, 0.5, 1.0)
+                            .into_iter()
+                            .map(|(node, _, weight)| (node, weight)),
+                    ),
+                    None => nodes.extend(
+                        g.segment_nodes(layer, track.start, track.end, g.pitch as f64 / 2.0 + 1.0)
+                            .into_iter()
+                            .map(|(node, _)| (node, 1.0)),
+                    ),
+                }
             }
             self.lead_nodes.insert(lead.clone(), nodes);
         }
@@ -76,9 +87,15 @@ impl Router<'_, '_> {
         if nodes.is_empty() {
             return exact;
         }
+        if self.lattice.is_nested() {
+            let (hist, occ) = (&self.occupancy.history, &self.occupancy.occ);
+            return copper_physical::pyfloat::sum(
+                nodes.iter().map(|&(n, weight)| weight * (hist[n as usize] + present * occ[n as usize] as f64)),
+            );
+        }
         // numpy: hist[index].sum() + present * occ[index].sum()
-        let hist = numpy_sum(nodes.iter().map(|&n| self.occupancy.history[n as usize]));
-        let occ: i64 = nodes.iter().map(|&n| self.occupancy.occ[n as usize] as i64).sum();
+        let hist = numpy_sum(nodes.iter().map(|&(n, _)| self.occupancy.history[n as usize]));
+        let occ: i64 = nodes.iter().map(|&(n, _)| self.occupancy.occ[n as usize] as i64).sum();
         exact + (hist + present * occ as f64)
     }
 
@@ -426,6 +443,26 @@ impl Router<'_, '_> {
             return cache.clone();
         }
         let mut table = Vec::new();
+        if let Some(g) = self.lattice.as_nested() {
+            // [block][layer][move]: the costs of `_nested_search_tables`.
+            for block in 0..g.blocks.len() {
+                for layer in 0..g.nl as usize {
+                    let head = self.heading[layer];
+                    let lc = self.layer_cost[layer];
+                    for &(dx, dy, _, _, step) in g.block_moves(block) {
+                        let mut base = step * (1.0 + lc);
+                        if let Some(head) = head
+                            && ((head == "h" && dy != 0 && dx == 0) || (head == "n" && dx != 0 && dy == 0))
+                        {
+                            base += self.options.wrong_way_cost * step;
+                        }
+                        table.push(base);
+                    }
+                }
+            }
+            self.move_cache = Some(table.clone());
+            return table;
+        }
         for layer in 0..self.lattice.nl as usize {
             let head = self.heading[layer];
             let lc = self.layer_cost[layer];
@@ -518,6 +555,13 @@ impl Router<'_, '_> {
                 self.extra[node as usize] = cost;
             }
         }
+        if self.lattice.is_nested() && self.kernel_tables.is_none() {
+            let tables = self.lattice.as_nested().expect("nested lattice").kernel_tables();
+            self.kernel_tables = Some(tables.map_err(|error| match error {
+                copper_pcb::Error::Value(message) => crate::unified_error::Error::Value(message),
+                copper_pcb::Error::NotImplemented(what) => crate::unified_error::Error::NotImplemented(what),
+            })?);
+        }
         let zero_history;
         let (history, via_history) = if self.ignore_soft_costs {
             zero_history = (vec![0.0; self.occupancy.history.len()], vec![0.0; self.occupancy.via_history.len()]);
@@ -525,7 +569,7 @@ impl Router<'_, '_> {
         } else {
             (&self.occupancy.history, &self.occupancy.via_history)
         };
-        let input = SearchInput {
+        let mut input = SearchInput {
             nx: self.lattice.nx,
             ny: self.lattice.ny,
             nl: self.lattice.nl as usize,
@@ -550,7 +594,16 @@ impl Router<'_, '_> {
             guide: None,
             via_transitions: None,
             max_expansions: self.options.maximum_expansions,
+            nested: None,
         };
+        input.nested = self.kernel_tables.as_ref().map(|(blocks, block_of, ux, uy, twins, steps)| NestedTables {
+            blocks,
+            block_of,
+            ux,
+            uy,
+            twins,
+            steps,
+        });
         let scratch: &mut Scratch = &mut self.scratch;
         let path = search(&input, scratch);
         for (nodes, _) in &marks {
@@ -571,6 +624,10 @@ impl Router<'_, '_> {
 
     /// `_finish_route`: nodes, claims and length of a route.
     pub fn finish_route(&mut self, route: &mut NetRoute, index: usize) {
+        if self.lattice.is_nested() {
+            self.finish_route_nested(route, index);
+            return;
+        }
         let spec = &self.specs[index];
         let g = &self.lattice;
         let pitch = g.pitch as f64;
@@ -650,6 +707,156 @@ impl Router<'_, '_> {
             }
             via_claims.extend(g.offset_columns(xy, &disc_offsets_cached(via_via_radius)));
         }
+        route.body = body.into_iter().filter(|(node, _)| !nodes.contains(node)).collect();
+        route.nodes = nodes;
+        route.via_xy = via_xy;
+        route.claims = claims;
+        route.via_claims = via_claims;
+        route.length = length;
+    }
+}
+
+// Nested-lattice claims: a claim disc (or a step's capsule) that lies
+// wholly in its node's own block uses that block's offset tables, the
+// radius scaled by the block's factor; one reaching across a patch
+// boundary is collected geometrically from every block it overlaps.
+// Portal twins are claimed together (they are one site).
+
+/// `_nested_step_claims`.
+fn nested_step_claims(g: &NestedLattice, pitch: i64, a: i64, b: i64, pa: Point, pb: Point, radius: f64) -> Vec<i64> {
+    let block = &g.blocks[g.block_index(a.rem_euclid(g.plane))];
+    let r = radius * pitch as f64;
+    if g.owns(
+        block,
+        pa.x_nm.min(pb.x_nm) as f64 - r,
+        pa.y_nm.min(pb.y_nm) as f64 - r,
+        pa.x_nm.max(pb.x_nm) as f64 + r,
+        pa.y_nm.max(pb.y_nm) as f64 + r,
+    ) {
+        let (dx, dy) = g.delta(a, b);
+        return g.offset_nodes(a, &segment_offsets_cached(dx, dy, radius * block.factor as f64));
+    }
+    let mut nodes: Vec<i64> = g.segment_nodes(a.div_euclid(g.plane), pa, pb, r).into_iter().map(|(n, _)| n).collect();
+    nodes.extend([a, b]);
+    nodes
+}
+
+/// `_nested_disc_columns`.
+fn nested_disc_columns(g: &NestedLattice, pitch: i64, column: i64, radius: f64) -> Vec<i64> {
+    let block = &g.blocks[g.block_index(column)];
+    let point = g.column_point(column);
+    let r = radius * pitch as f64;
+    let (x, y) = (point.x_nm as f64, point.y_nm as f64);
+    if g.owns(block, x - r, y - r, x + r, y + r) {
+        return g.offset_columns(column, &disc_offsets_cached(radius * block.factor as f64));
+    }
+    // np.union1d: sorted and distinct.
+    let mut columns = g.columns_within(point, r);
+    columns.push(column);
+    columns.sort_unstable();
+    columns.dedup();
+    columns
+}
+
+impl Router<'_, '_> {
+    /// `_finish_route_nested`: `_finish_route` on a nested lattice (lengths in base pitches).
+    fn finish_route_nested(&mut self, route: &mut NetRoute, index: usize) {
+        let spec = &self.specs[index];
+        let g = self.lattice.as_nested().expect("nested lattice");
+        let (plane, pitch) = (g.plane, self.pitch);
+        let pf = pitch as f64;
+        let mut nodes: IndexSet<i64> = IndexSet::new();
+        let mut claims: IndexSet<i64> = IndexSet::new();
+        let mut via_claims: IndexSet<i64> = IndexSet::new();
+        let mut body: IndexMap<i64, i64> = IndexMap::new();
+        let default_width = self.default_width as f64;
+        let via_body = (spec.via_size as f64 - default_width) / 2.0 / pf;
+        let neighbour = self.default_width.max(spec.width) as f64;
+        let track_radius = (spec.width as f64 / 2.0 + spec.clearance as f64 + neighbour / 2.0) / pf;
+        let hole = self.board.rules.minimum_hole_clearance_nm as f64;
+        let via_reach = (spec.via_size as f64 / 2.0 + spec.clearance as f64).max(spec.via_drill as f64 / 2.0 + hole);
+        let via_radius = (via_reach + default_width / 2.0) / pf;
+        let via_via_radius = (via_reach + spec.via_size as f64 / 2.0) / pf;
+        let prospective_reach = (self.candidate_via_size as f64 / 2.0
+            + spec.clearance.max(self.candidate_clearance) as f64)
+            .max(self.candidate_via_drill as f64 / 2.0 + hole);
+        let track_via_radius = (prospective_reach + spec.width as f64 / 2.0) / pf;
+        let mut length = 0.0;
+        let mut changes: IndexMap<i64, (i64, i64)> = IndexMap::new();
+        for path in &route.paths {
+            let mut moved = false;
+            for pair in path.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                let (la, lb) = (a.div_euclid(plane), b.div_euclid(plane));
+                if la != lb {
+                    let xy = a.rem_euclid(plane);
+                    let (low, high) = changes.get(&xy).copied().unwrap_or((la, la));
+                    changes.insert(xy, (low.min(la).min(lb), high.max(la).max(lb)));
+                    moved = true;
+                    continue;
+                }
+                let (pa, pb) = (g.point(a), g.point(b));
+                if pa == pb {
+                    continue; // a portal: the twins are one site
+                }
+                moved = true;
+                length += hypot((pb.x_nm - pa.x_nm) as f64, (pb.y_nm - pa.y_nm) as f64) / pf;
+                claims.extend(nested_step_claims(g, pitch, a, b, pa, pb, track_radius));
+                via_claims.extend(
+                    nested_step_claims(g, pitch, a, b, pa, pb, track_via_radius)
+                        .into_iter()
+                        .map(|n| n.rem_euclid(plane)),
+                );
+            }
+            nodes.extend(path.iter().copied());
+            if !moved {
+                let column = path[0].rem_euclid(plane);
+                let base = path[0] - column;
+                claims.extend(nested_disc_columns(g, pitch, column, track_radius).into_iter().map(|c| c + base));
+            }
+        }
+        for leads in &route.leads {
+            for track in leads {
+                let layer = g.layers.iter().position(|l| *l == track.layer).expect("lead layer") as i64;
+                let radius_nm = track.width_nm as f64 / 2.0
+                    + spec.clearance as f64
+                    + self.default_width.max(track.width_nm) as f64 / 2.0;
+                for (node, distance) in g.segment_nodes(layer, track.start, track.end, radius_nm) {
+                    claims.insert(node);
+                    if distance <= g.step_nm(node) as f64 / 2.0 {
+                        nodes.insert(node);
+                    }
+                }
+                for (node, _) in
+                    g.segment_nodes(layer, track.start, track.end, prospective_reach + track.width_nm as f64 / 2.0)
+                {
+                    via_claims.insert(node.rem_euclid(plane));
+                }
+            }
+        }
+        let via_xy: IndexSet<i64> = changes.keys().copied().collect();
+        // Without via technologies every site is a through via.
+        let nl = g.nl;
+        for &xy in changes.keys() {
+            if via_body >= 0.5 {
+                for column in g.columns_with_twins(&nested_disc_columns(g, pitch, xy, via_body)) {
+                    for layer in 0..nl {
+                        body.insert(layer * plane + column, xy);
+                    }
+                }
+            }
+            for column in nested_disc_columns(g, pitch, xy, via_radius) {
+                for layer in 0..nl {
+                    claims.insert(layer * plane + column);
+                }
+            }
+            via_claims.extend(g.columns_with_twins(&nested_disc_columns(g, pitch, xy, via_via_radius)));
+        }
+        if !via_claims.is_empty() {
+            via_claims = g.columns_with_twins(&via_claims.into_iter().collect::<Vec<_>>()).into_iter().collect();
+        }
+        let nodes: IndexSet<i64> = g.with_twins(&nodes.into_iter().collect::<Vec<_>>()).into_iter().collect();
+        let claims: IndexSet<i64> = g.with_twins(&claims.into_iter().collect::<Vec<_>>()).into_iter().collect();
         route.body = body.into_iter().filter(|(node, _)| !nodes.contains(node)).collect();
         route.nodes = nodes;
         route.via_xy = via_xy;

@@ -14,10 +14,11 @@ use copper_pcb::transform::{placed_pad_shape, transformed_local_point};
 use copper_pcb::zones::routing_layers;
 use copper_physical::footprint::PadKind;
 use copper_physical::geometry::point_segment_distance_squared;
-use copper_physical::pyfloat::hypot;
+use copper_physical::pyfloat::{hypot, round_int};
 use copper_physical::{CopperLayer, Point};
 
 use super::geometry::spine_distance;
+use super::lattice::RouterLattice;
 use super::options::UnifiedRouterOptions;
 use super::rasters::{FOREIGN, FREE, Obstacle, Rasters};
 use crate::package_patterns::{ball_grid, circular_array};
@@ -25,7 +26,7 @@ use crate::pin_access::{LocalAccessBounds, SegmentCache, local_access_path};
 use crate::pin_escape::{RoutingAccess, checked_access_path, verified_routing_access};
 use crate::plane_estimate::label;
 use crate::routing_clearance::RoutingClearanceIndex;
-use crate::routing_lattice::UniformLattice;
+use crate::routing_lattice::{NestedLattice, UniformLattice};
 use crate::routing_layers::signal_layer_preferences;
 use crate::unified_error::{Error, Result, fail, not_implemented};
 
@@ -142,7 +143,7 @@ fn copper_layer_index(layers: &[CopperLayer], layer: CopperLayer) -> Result<usiz
 
 /// `_nearest_first`: the cover of `position` +- `reach`, nearest first
 /// (stable on ties: the cover's x-major order).
-pub fn nearest_first(lattice: &UniformLattice, position: Point, reach: f64) -> Vec<(f64, i64, i64, i64)> {
+pub fn nearest_first(lattice: &RouterLattice, position: Point, reach: f64) -> Vec<(f64, i64, i64, i64)> {
     let mut near: Vec<(f64, i64, i64, i64)> = lattice
         .cover(
             position.x_nm as f64 - reach,
@@ -182,6 +183,63 @@ pub fn aligned(grid: &crate::package_patterns::BallGrid, points: &[Point], pitch
     near(grid.pitch_nm / 2) && points.iter().all(|p| near(p.x_nm) && near(p.y_nm))
 }
 
+/// `_label_nested`: 4-connected labels of a per-column mask of a nested
+/// lattice, each block labelled on its own raster and labels of portal twins
+/// both in the mask joined; per-column labels (0: outside) and their count.
+pub fn label_nested(g: &NestedLattice, mask: &[bool]) -> (Vec<i64>, usize) {
+    let mut labels = vec![0i64; g.plane as usize];
+    let mut total = 0usize;
+    for block in &g.blocks {
+        let (start, end) = (block.column_offset as usize, (block.column_offset + block.plane) as usize);
+        let (part, count) = label(&mask[start..end], block.ny as usize, block.nx as usize);
+        for (slot, &value) in labels[start..end].iter_mut().zip(&part) {
+            *slot = if value > 0 { value as i64 + total as i64 } else { value as i64 };
+        }
+        total += count;
+    }
+    if total == 0 {
+        return (labels, 0);
+    }
+    let (base, fine) = &g.portal_pairs;
+    let mut joins: BTreeSet<(usize, usize)> = BTreeSet::new();
+    for (&a, &b) in base.iter().zip(fine) {
+        let (a, b) = (labels[a as usize], labels[b as usize]);
+        if a > 0 && b > 0 && a != b {
+            joins.insert((a as usize, b as usize));
+        }
+    }
+    let mut parent: Vec<usize> = (0..=total).collect();
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
+    for (x, y) in joins {
+        let (rx, ry) = (find(&mut parent, x), find(&mut parent, y));
+        if rx != ry {
+            parent[rx.max(ry)] = rx.min(ry);
+        }
+    }
+    let roots: Vec<usize> = (0..=total).map(|x| find(&mut parent, x)).collect();
+    // np.unique(roots, return_inverse=True): ranks of the sorted distinct roots.
+    let distinct: BTreeSet<usize> = roots.iter().copied().collect();
+    let rank: IndexMap<usize, i64> = distinct.iter().enumerate().map(|(i, &r)| (r, i as i64)).collect();
+    let compact: Vec<i64> = roots.iter().map(|r| rank[r]).collect();
+    let count = *compact.iter().max().expect("labels") as usize;
+    (labels.iter().map(|&l| compact[l as usize]).collect(), count)
+}
+
+/// `np.bincount(labels, weights=weights, minlength=count + 1)`.
+fn weighted_counts(labels: &[i64], weights: &[f64], count: usize) -> Vec<f64> {
+    let mut sizes = vec![0.0f64; count + 1];
+    for (&l, &w) in labels.iter().zip(weights) {
+        sizes[l as usize] += w;
+    }
+    sizes
+}
+
 /// `choose_pitch`.
 pub fn choose_pitch(board: &PhysicalBoard, default_nm: i64) -> Result<i64> {
     let mut pitch = default_nm;
@@ -203,7 +261,7 @@ pub struct Router<'p, 'b> {
     pub board: &'p PhysicalBoard,
     pub options: UnifiedRouterOptions,
     pub explicit_pads: IndexSet<PadReference>,
-    pub lattice: UniformLattice,
+    pub lattice: RouterLattice,
     pub pitch: i64,
     pub via_cost: f64,
     pub rules: IndexMap<String, NetRoutingRule>,
@@ -223,7 +281,9 @@ pub struct Router<'p, 'b> {
     pub candidate_clearance: i64,
     pub exit_corridors: IndexMap<String, IndexSet<i64>>,
     pub routes: IndexMap<String, NetRoute>,
-    pub lead_nodes: IndexMap<Lead, Vec<i64>>,
+    /// Nodes along each lead-in with their weight (1 on a uniform lattice;
+    /// on a nested one the node's pitch in base pitches).
+    pub lead_nodes: IndexMap<Lead, Vec<(i64, f64)>>,
     pub lead_history: IndexMap<TrackSegment, f64>,
     pub present: f64,
     pub conflict_age: IndexMap<String, i64>,
@@ -245,6 +305,8 @@ pub struct Router<'p, 'b> {
     pub exact_lead_conflicts: IndexMap<String, IndexSet<TrackSegment>>,
     pub exact_via_conflicts: IndexMap<String, IndexSet<i64>>,
     pub fine_plan: Option<crate::fine_regions::FineRegionPlan>,
+    /// The nested lattice's kernel tables (built on its first search).
+    pub kernel_tables: Option<crate::routing_lattice::KernelTables>,
 }
 
 impl<'p, 'b> Router<'p, 'b> {
@@ -276,21 +338,26 @@ impl<'p, 'b> Router<'p, 'b> {
         let via_cost = options.via_cost_mm * 1_000_000.0 / pitch as f64;
         if let Some(plan) = &fine_plan
             && !plan.patches.is_empty()
+            && options.grid_window_nm.is_some()
         {
-            if options.grid_window_nm.is_some() {
-                let references: Vec<&str> =
-                    plan.patches.iter().flat_map(|p| p.references.iter().map(String::as_str)).collect();
-                return fail(format!(
-                    "grid_window_nm is not supported with fine_regions patches ({}); set fine_regions=\"off\" for a windowed search",
-                    references.join(", ")
-                ));
-            }
-            return not_implemented("unified router nested lattice (fine-region patches)");
+            let references: Vec<&str> =
+                plan.patches.iter().flat_map(|p| p.references.iter().map(String::as_str)).collect();
+            return fail(format!(
+                "grid_window_nm is not supported with fine_regions patches ({}); set fine_regions=\"off\" for a windowed search",
+                references.join(", ")
+            ));
         }
-        let lattice = UniformLattice::new(board, pitch, options.grid_window_nm).map_err(|error| match error {
+        let pcb_error = |error| match error {
             copper_pcb::Error::Value(message) => Error::Value(message),
             copper_pcb::Error::NotImplemented(what) => Error::NotImplemented(what),
-        })?;
+        };
+        let lattice = match &fine_plan {
+            Some(plan) if !plan.patches.is_empty() => {
+                RouterLattice::nested(NestedLattice::new(board, pitch, plan, None).map_err(pcb_error)?)
+            }
+            // No patches: the plain uniform lattice.
+            _ => RouterLattice::uniform(UniformLattice::new(board, pitch, options.grid_window_nm).map_err(pcb_error)?),
+        };
         if let Some((x0, y0, x1, y1)) = options.grid_window_nm {
             let poses = placement_map(board);
             for net in nets {
@@ -367,14 +434,25 @@ impl<'p, 'b> Router<'p, 'b> {
             exact_lead_conflicts: IndexMap::new(),
             exact_via_conflicts: IndexMap::new(),
             fine_plan,
+            kernel_tables: None,
             lattice,
         };
         let (obstacles, holes) = router.obstacles()?;
-        let margin = options.raster_margin_nm.unwrap_or(pitch.div_euclid(8));
+        let nested = router.lattice.is_nested();
+        let blocks = router.lattice.blocks();
+        let margins = match options.raster_margin_nm {
+            Some(margin) => vec![margin; blocks.len()],
+            None if nested => blocks.iter().map(|block| block.pitch.div_euclid(8)).collect(),
+            None => vec![pitch.div_euclid(8); blocks.len()],
+        };
         let exact = if options.ball_field_exact { router.ball_field_boxes()? } else { Vec::new() };
-        router.rasters = Rasters::new(board, &router.lattice.blocks, nl, false, obstacles, holes, vec![margin], exact);
+        router.rasters = Rasters::new(board, blocks, nl, nested, obstacles, holes, margins, exact);
+        if let Some(g) = router.lattice.as_nested() {
+            router.rasters.shadowed = g.shadowed.iter().map(|&c| c as usize).collect();
+            router.rasters.shadowed_cells = g.shadowed_cells.iter().map(|&c| c as usize).collect();
+        }
         if options.ball_field_via_sites {
-            return not_implemented("unified router ball_field_via_sites");
+            router.rasters.via_mask = router.ball_field_via_mask()?;
         }
         let (_, headings) = signal_layer_preferences(board);
         let g = &router.lattice;
@@ -449,7 +527,7 @@ impl<'p, 'b> Router<'p, 'b> {
             );
             let side = if pose.side.value() == "front" { CopperLayer::Front } else { CopperLayer::Back };
             let layer = copper_layer_index(&self.lattice.layers, side)?;
-            for block in &self.lattice.blocks {
+            for block in self.lattice.blocks() {
                 let columns = block.window_columns(block.window(bounds.0, bounds.1, bounds.2, bounds.3), None);
                 if columns.is_empty() {
                     continue;
@@ -464,10 +542,139 @@ impl<'p, 'b> Router<'p, 'b> {
     }
 
     fn seed_exit_corridors(&mut self) -> Result<IndexMap<String, IndexSet<i64>>> {
-        if self.options.exit_reservation_cost == 0.0 {
+        let cost = self.options.exit_reservation_cost;
+        if cost == 0.0 {
             return Ok(IndexMap::new());
         }
-        not_implemented("unified router exit_reservation_cost (ball-grid exit corridors)")
+        let board = self.board;
+        let g = &self.lattice;
+        let routed: IndexSet<&str> = self.specs.iter().map(|spec| spec.name.as_str()).collect();
+        let mut net_of: IndexMap<&PadReference, &str> = IndexMap::new();
+        for net in &board.nets {
+            for pad in &net.pads {
+                net_of.insert(pad, &net.name);
+            }
+        }
+        let mut corridors: IndexMap<String, IndexSet<i64>> = IndexMap::new();
+        for (index, array, _) in ball_grids(board)? {
+            let pose = &board.placements[index];
+            let side = if pose.side.value() == "front" { CopperLayer::Front } else { CopperLayer::Back };
+            let Some(layer) = g.layers.iter().position(|l| *l == side) else { continue };
+            let (nx, ny, pitch) = (array.xs_nm.len() as i64, array.ys_nm.len() as i64, array.pitch_nm);
+            for land in &board.footprints[&pose.footprint].pads {
+                let reference = PadReference { component: pose.reference.clone(), pad: land.number.clone() };
+                let Some(&net) = net_of.get(&reference) else { continue };
+                if !routed.contains(net) || !array.balls.contains(&land.number) {
+                    continue;
+                }
+                let Some((ix, iy)) = array.index(land.position) else {
+                    return fail("cannot unpack non-iterable NoneType object");
+                };
+                let (ix, iy) = (ix as i64, iy as i64);
+                let edges = [(ix, (-1, 0)), (nx - 1 - ix, (1, 0)), (iy, (0, -1)), (ny - 1 - iy, (0, 1))];
+                let (ring, (ox, oy)) =
+                    edges.iter().copied().fold(edges[0], |best, item| if item.0 < best.0 { item } else { best });
+                if ring > 1 {
+                    continue;
+                }
+                let (mut x, mut y) = (land.position.x_nm, land.position.y_nm);
+                let mut points = vec![(x, y)];
+                if ring == 1 {
+                    // Into the gap on the side away from the array centre.
+                    let along =
+                        (if oy != 0 { ix } else { iy }) as f64 - ((if oy != 0 { nx } else { ny }) - 1) as f64 / 2.0;
+                    let lateral = if along >= 0.0 { 1 } else { -1 };
+                    (x, y) = (
+                        x + ox * pitch + (oy * lateral * pitch).div_euclid(2),
+                        y + oy * pitch + (ox * lateral * pitch).div_euclid(2),
+                    );
+                    points.push((x, y));
+                }
+                points.push((x + (ox * pitch * 3).div_euclid(2), y + (oy * pitch * 3).div_euclid(2)));
+                let nodes = corridors.entry(net.to_owned()).or_default();
+                for pair in points.windows(2) {
+                    let a = transformed_local_point(pose, Point::new(pair[0].0, pair[0].1));
+                    let b = transformed_local_point(pose, Point::new(pair[1].0, pair[1].1));
+                    let length = hypot((b.x_nm - a.x_nm) as f64, (b.y_nm - a.y_nm) as f64);
+                    let steps = 1.max((2.0 * length / g.pitch_nm as f64).floor() as i64);
+                    for k in 0..=steps {
+                        let px = a.x_nm as f64 + ((b.x_nm - a.x_nm) * k) as f64 / steps as f64;
+                        let py = a.y_nm as f64 + ((b.y_nm - a.y_nm) * k) as f64 / steps as f64;
+                        let point = Point::new(round_int(px), round_int(py));
+                        if let Some(node) = g.snap(layer as i64, point) {
+                            nodes.insert(node);
+                        }
+                    }
+                }
+            }
+        }
+        for nodes in corridors.values() {
+            for &node in nodes {
+                self.occupancy.history[node as usize] += cost;
+            }
+        }
+        Ok(corridors)
+    }
+
+    /// `_ball_field_via_mask`: inside a full ball array, new vias only at
+    /// cell centres (dogbone sites).
+    fn ball_field_via_mask(&self) -> Result<Option<Vec<bool>>> {
+        let board = self.board;
+        let g = &self.lattice;
+        let mut masks: Option<Vec<Vec<bool>>> = None;
+        for pose in &board.placements {
+            let Ok(Some(array)) = circular_array(board, &pose.reference) else { continue };
+            let masks = masks.get_or_insert_with(|| {
+                g.blocks().iter().map(|block| vec![true; (block.nx * block.ny) as usize]).collect()
+            });
+            let points: Vec<Point> = board.footprints[&pose.footprint]
+                .pads
+                .iter()
+                .map(|p| transformed_local_point(pose, p.position))
+                .collect();
+            let x0 = points.iter().map(|p| p.x_nm).min().expect("pads");
+            let x1 = points.iter().map(|p| p.x_nm).max().expect("pads");
+            let y0 = points.iter().map(|p| p.y_nm).min().expect("pads");
+            let y1 = points.iter().map(|p| p.y_nm).max().expect("pads");
+            let array_pitch = array.pitch_nm as f64;
+            // Cell centres: half a pitch off every ball row and column.
+            let centred = |value: f64, origin: i64, pitch: i64| {
+                let cells = (value - origin as f64) / array_pitch - 0.5;
+                (cells - cells.round_ties_even()).abs() * array_pitch <= pitch as f64 / 4.0
+            };
+            let band = self.options.ball_field_band;
+            // The outer cell rings stay via-free: the surface escapes of the
+            // edge balls pass there (the FX10 kit keeps rings 0-1 free).
+            let inner = |value: f64, origin: i64, count: i64| {
+                let cell = ((value - origin as f64) / array_pitch).floor() as i64;
+                cell >= band && cell <= count - 2 - band
+            };
+            for (block, mask) in g.blocks().iter().zip(masks.iter_mut()) {
+                let (ix0, iy0, ix1, iy1) = block.window(x0 as f64, y0 as f64, x1 as f64, y1 as f64);
+                if ix0 > ix1 || iy0 > iy1 {
+                    continue;
+                }
+                let on_x: Vec<bool> = (ix0..=ix1)
+                    .map(|ix| {
+                        let value = block.xs[ix as usize];
+                        centred(value, x0, block.pitch) && (band == 0 || inner(value, x0, array.xs_nm.len() as i64))
+                    })
+                    .collect();
+                let on_y: Vec<bool> = (iy0..=iy1)
+                    .map(|iy| {
+                        let value = block.ys[iy as usize];
+                        centred(value, y0, block.pitch) && (band == 0 || inner(value, y0, array.ys_nm.len() as i64))
+                    })
+                    .collect();
+                for iy in iy0..=iy1 {
+                    for ix in ix0..=ix1 {
+                        mask[(iy * block.nx + ix) as usize] = on_y[(iy - iy0) as usize] && on_x[(ix - ix0) as usize];
+                    }
+                }
+            }
+        }
+        // (ny, nx) on a uniform lattice; one entry per column on a nested one.
+        Ok(masks.map(|masks| masks.concat()))
     }
 
     fn ball_field_boxes(&self) -> Result<Vec<(i64, i64, i64, i64)>> {
@@ -1017,6 +1224,9 @@ impl<'p, 'b> Router<'p, 'b> {
             (spec.width, spec.clearance)
         };
         let owner = self.rasters.track(fill_width, fill_clearance).0.to_vec();
+        if self.lattice.is_nested() {
+            return self.zone_regions_nested(name, spec, &owner);
+        }
         let g = &self.lattice;
         let (nl, ny, nx) = (g.nl as usize, g.ny as usize, g.nx as usize);
         let plane = nx * ny;
@@ -1095,6 +1305,89 @@ impl<'p, 'b> Router<'p, 'b> {
                 islands.push(first.clone());
             }
             optional.extend(found[1..].iter().cloned());
+        }
+        (planes, islands, optional)
+    }
+
+    /// `_zone_regions_nested`: `_zone_regions` on a nested lattice; pieces
+    /// labelled per block and joined across portals, sized in base cells.
+    fn zone_regions_nested(
+        &self,
+        name: &str,
+        spec: &NetSpec,
+        owner: &[i32],
+    ) -> (IndexSet<i64>, Vec<Vec<i64>>, Vec<Vec<i64>>) {
+        let g = self.lattice.as_nested().expect("nested lattice");
+        let plane = g.plane as usize;
+        let mut per_layer: IndexMap<usize, Vec<bool>> = IndexMap::new();
+        for zone in self.board.zones.iter().filter(|z| z.net == name) {
+            let inside: Vec<bool> = (0..plane)
+                .map(|at| {
+                    let (x, y) = (g.column_x[at] as f64, g.column_y[at] as f64);
+                    super::geometry::polygon_inside(&zone.outer, x, y)
+                        && zone.holes.iter().all(|hole| !super::geometry::polygon_inside(hole, x, y))
+                })
+                .collect();
+            for layer in &zone.layers {
+                let index = g.layers.iter().position(|l| l == layer).expect("zone layer");
+                let mask: Vec<bool> = (0..plane)
+                    .map(|at| {
+                        let o = owner[index * plane + at];
+                        inside[at] && (o == FREE || o == spec.nid)
+                    })
+                    .collect();
+                match per_layer.get_mut(&index) {
+                    Some(existing) => {
+                        for (e, m) in existing.iter_mut().zip(mask) {
+                            *e |= m;
+                        }
+                    }
+                    None => {
+                        per_layer.insert(index, mask);
+                    }
+                }
+            }
+        }
+        let minimum = 4.max(self.options.plane_piece_area_nm2.div_euclid(g.pitch * g.pitch)) as f64;
+        let weights = g.column_weight();
+        let mut pieces: IndexMap<usize, Vec<(f64, Vec<i64>)>> = IndexMap::new();
+        for (&index, mask) in &per_layer {
+            let (labels, count) = label_nested(g, mask);
+            if count == 0 {
+                continue;
+            }
+            let sizes = weighted_counts(&labels, &weights, count);
+            let mut order: Vec<usize> = (1..=count).collect();
+            order.sort_by(|a, b| sizes[*b].partial_cmp(&sizes[*a]).expect("finite"));
+            let mut found = Vec::new();
+            for (k, &l) in order.iter().enumerate() {
+                if sizes[l] < minimum && k != 0 {
+                    break;
+                }
+                let nodes = labels
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, v)| **v as usize == l)
+                    .map(|(at, _)| at as i64 + index as i64 * g.plane)
+                    .collect();
+                found.push((sizes[l], nodes));
+            }
+            pieces.insert(index, found);
+        }
+        if pieces.is_empty() {
+            return (IndexSet::new(), Vec::new(), Vec::new());
+        }
+        let largest = pieces.values().map(|p| p[0].0).fold(f64::NEG_INFINITY, f64::max);
+        let mut planes = IndexSet::new();
+        let (mut islands, mut optional) = (Vec::new(), Vec::new());
+        for found in pieces.values() {
+            let (area, first) = &found[0];
+            if *area >= largest * self.options.plane_piece_fraction {
+                planes.extend(first.iter().copied());
+            } else {
+                islands.push(first.clone());
+            }
+            optional.extend(found[1..].iter().map(|(_, nodes)| nodes.clone()));
         }
         (planes, islands, optional)
     }
@@ -1219,6 +1512,26 @@ impl<'p, 'b> Router<'p, 'b> {
         let width = if spec.neck_width != 0 { spec.neck_width } else { spec.width };
         let clearance = if spec.neck_clearance != 0 { spec.neck_clearance } else { spec.clearance };
         let key = (width, clearance);
+        if !self.open_cache.contains_key(&key) && self.lattice.is_nested() {
+            let minimum = 16.max(self.options.open_space_area_nm2.div_euclid(self.pitch * self.pitch)) as f64;
+            let owner = self.rasters.track(width, clearance).0.to_vec();
+            let g = self.lattice.as_nested().expect("nested lattice");
+            let (nl, plane) = (g.nl as usize, g.plane as usize);
+            let weights = g.column_weight();
+            let mut result = vec![false; nl * plane];
+            for layer in 0..nl {
+                let mask: Vec<bool> = owner[layer * plane..(layer + 1) * plane].iter().map(|&o| o == FREE).collect();
+                let (labels, count) = label_nested(g, &mask);
+                if count == 0 {
+                    continue;
+                }
+                let sizes = weighted_counts(&labels, &weights, count);
+                for (at, &l) in labels.iter().enumerate() {
+                    result[layer * plane + at] = l != 0 && sizes[l as usize] >= minimum;
+                }
+            }
+            self.open_cache.insert(key, result);
+        }
         if !self.open_cache.contains_key(&key) {
             let g = &self.lattice;
             let (nl, ny, nx) = (g.nl as usize, g.ny as usize, g.nx as usize);
