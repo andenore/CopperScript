@@ -1108,3 +1108,11 @@ on both receptacle rows (A6/B6, A7/B7). The `route-board` suite's timeout is
 now 1800 s, since Python's default route of this board exceeds 600 s.
 Because the CI `ladder` job is gated at M4, `fx10-bridge` fails it until the
 via lattice is ported.
+
+Checks on this branch: the default gate (`compare_implementations.py
+--jobs 4`, suites to M2) passes, 3,335 equal and 33 accepted;
+`generate_rust_fixtures.py --check` is current (the parse fixture was
+regenerated for the new sources); `pytest tests -k example` and
+`tests/test_ladder.py` pass. Adding `usb_bridge` changed the shared
+`github.com/copperscript/examples` checksum, so the root and nrf52 locks
+were relocked (that module entry only).
