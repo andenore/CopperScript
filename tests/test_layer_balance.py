@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 from pcbir import (BoardOutline, CopperKeepout, CopperLayer, CopperZone, FootprintPad, GlobalRouterOptions, NetRoutingRule, PadReference, PhysicalBoard, PhysicalFootprint, PhysicalNet, Placement, Point, PolygonRing, PolygonWithHoles, RouteKind, Size, Stackup, nm_from_mm, route_global)
-from pcbir.cli import _parser
+from pcbir.cli import _parser, _unified_options
 
 SIX = (CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2,
        CopperLayer.INTERNAL_3, CopperLayer.INTERNAL_4, CopperLayer.BACK)
@@ -110,9 +110,11 @@ def test_local_demand_spreads_a_parallel_bundle_across_signal_layers():
 def test_board_router_enables_smoothing_and_keeps_layer_balance_opt_in():
     args = _parser().parse_args(["route-board", "example.copper"])
     assert (args.layer_assignment_passes, args.local_demand_cost,
-            args.no_route_smoothing) == (0, 0, False)
+            _unified_options(args).route_smoothing) == (0, 0, True)
     assert GlobalRouterOptions().layer_assignment_passes == 0
-    enabled = _parser().parse_args(["route-board", "example.copper", "--layer-assignment-passes", "3",
-                                    "--local-demand-cost", "20", "--no-route-smoothing"])
+    enabled = _parser().parse_args([
+        "route-board", "example.copper", "--layer-assignment-passes", "3", "--local-demand-cost", "20",
+        "--unified-set", "route_smoothing=false",
+    ])
     assert (enabled.layer_assignment_passes, enabled.local_demand_cost,
-            enabled.no_route_smoothing) == (3, 20, True)
+            _unified_options(enabled).route_smoothing) == (3, 20, False)

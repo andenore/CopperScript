@@ -32,8 +32,10 @@ def save_run(path, *, seconds=100, profile="none", final_report=None, running=Fa
     manifest = {
         "status": "running" if running else "unmet_gates", "exit_code": None if running else 1,
         "elapsed_seconds": None if running else seconds, "profiling": {"mode": profile},
-        "routing_command": ["python", "-u", "-m", "copperscript", "route-board", "/source.copper",
-                            "--pitch-mm", "1", "--report", str(path / "route-report.json"), "-o", str(path / "board.kicad_pcb")],
+        "routing_command": [
+            "python", "-u", "-m", "copperscript", "route-board", "/source.copper", "--report",
+            str(path / 'route-report.json'), "-o", str(path / 'board.kicad_pcb'),
+        ],
         "provenance": {"input_sha256": {"board": "a", "lock": "b"}, "python": "3.13.1", "platform": "Windows",
                        "processor": "fixture CPU", "logical_cpus": 12},
     }

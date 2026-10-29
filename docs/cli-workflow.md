@@ -99,18 +99,44 @@ single-ended critical groups. This reserves their joint exit before a flexible
 single trace can obstruct it. An explicitly higher priority still takes
 precedence; no extra search or rip-up allowance is created.
 
-The unified router's own controls are the `--unified-*` flags and
-`--no-route-smoothing`; `--fanout` options seed its pad escapes and repair
-rounds. `--pitch-mm` applies only when `--local-demand-cost` is above 0.
-When it does not apply, `route-board` emits one `router_options` / `ignored`
-progress event and lists it in the report's `work_limits.ignored_flags`;
-routing is unchanged. The removed router's options (`--router`, `--passes`,
-`--search-budget`, `--soft-ripup`, `--constrained-pins-first`,
-`--progressive-guides`, `--repair-budget-multiplier`, the package-access,
-power-area and zone-escape options and the rest) are no longer accepted, and
-`route-board` takes no abbreviated options. `--stop-after` accepts only
-`placement`. The CLI plane post-stitch (`stitch_zone_pads`, then
-`repair_cut_off_plane_pads`) still runs unless `--unified-direct`.
+Use `--routing-profile quick|balanced|thorough` for the standard work budgets,
+`--unified-time-budget-s` for negotiation time, and `--unified-pitch-mm` for the
+physical routing grid. Expert solver settings use the existing repeatable
+`--unified-set OPTION=VALUE` interface, shared with replay and benchmarks.
+`--fanout` options seed pad escapes and repair rounds. Global demand estimation
+has a separate `--local-demand-pitch-mm`, accepted only with a positive
+`--local-demand-cost`.
+
+The routing option cleanup removes duplicate switches. Migrate existing commands
+as follows; effective defaults are unchanged:
+
+| Removed option | Replacement |
+| --- | --- |
+| `--unified-direct` | `--unified-set direct=true` |
+| `--unified-no-decouplers` | `--unified-set pre_route_decouplers=false` |
+| `--unified-retain-escape-copper` | `--unified-set retain_escape_copper=true` |
+| `--unified-iterations N` | `--unified-set maximum_iterations=N` |
+| `--unified-search-states N` | `--unified-set maximum_expansions=N` |
+| `--unified-pair-states N` | `--unified-set critical_pair_state_limit=N` |
+| `--fine-regions MODE` | `--unified-set fine_regions=MODE` |
+| `--power-islands MODE` | `--unified-set power_islands=MODE`; use `null` for the former `off` |
+| `--no-route-smoothing` | `--unified-set route_smoothing=false` |
+| `--stitch-zone-pads` | Omit: declared copper zones stitch automatically |
+| `--detailed-feedback-trials D`, `--critical-feedback-trials C` | One `--congestion-feedback-trials N`; preserve the old effective budget with `N=max(previous N, D+C)` (previous N defaults to 4) |
+| `--pitch-mm P` | Omit when demand cost was zero; otherwise `--local-demand-pitch-mm P` |
+
+Removed options fail before loading the board and name their replacement. Report
+keys `work_limits.ignored_flags` and `mapped_flags` remain empty for schema
+compatibility; solver work limits record the effective expert overrides.
+Placement checkpoints made with a nondefault, unused `--pitch-mm` may reject
+reuse because their saved global-options fingerprint includes that value;
+regenerate placement rather than bypassing the checkpoint check. Saved unified
+replay inputs retain their existing option fields and remain compatible.
+The older removed-router options (`--router`, `--passes`, `--search-budget`,
+`--soft-ripup` and related recovery controls) remain unsupported. `route-board`
+takes no abbreviated options, and `--stop-after` accepts only `placement`.
+The CLI plane post-stitch (`stitch_zone_pads`, then `repair_cut_off_plane_pads`)
+runs unless `--unified-set direct=true`.
 
 `replay-critical STATE --only NET --report RUN/route-report.json -o RUN/board.kicad_pcb`
 isolates critical routing from a placement checkpoint or source-only saved input.
@@ -131,12 +157,12 @@ preparation; no support is dropped to fit a two-terminal guide.
 This diagnostic does not rerun placement, bypass preparation or native checks,
 and never establishes full-board or current-source acceptance.
 
-`route-board --unified-direct` sends ordinary and profiled
+`route-board --unified-set direct=true` sends ordinary and profiled
 nets to unified negotiation from source-fixed copper. It skips the standard
 critical, bypass, preliminary escape and late plane-contact routing stages;
 immutable macro copper and required via arrays still materialize. Escape
 seeding and native bridge repair are also disabled, even after a partial result.
-Native refill/DRC still runs, and any needed repair must re-enter unified routing. Without `--unified-direct`, the
+Native refill/DRC still runs, and any needed repair must re-enter unified routing. Without `--unified-set direct=true`, the
 unified flow keeps those bootstrap stages. `--unified-time-budget-s 1800`
 bounds negotiation starting at the unified stage; placement/global planning
 and final native verification are separate. `--unified-save-inputs STATE`
@@ -150,9 +176,9 @@ the board, and a fine patch is a rectangle (snapped to the base lattice, with
 a 1.5 mm margin around the package's pads) refined to base pitch ÷ k, where k
 is the coarsest factor that puts nodes on every ball or pin centre and on the
 channel centre lines between them; coarse and fine nodes coincide on the patch
-boundary. `--fine-regions arrays` (the default) refines full ball arrays only;
-`--fine-regions dense` also refines dense non-array packages (QFN, fine-pitch
-QFP) and is for measurement, not a default; `--fine-regions off` routes one
+boundary. `--unified-set fine_regions=arrays` (the default) refines full ball arrays only;
+`--unified-set fine_regions=dense` also refines dense non-array packages (QFN, fine-pitch
+QFP) and is for measurement, not a default; `--unified-set fine_regions=off` routes one
 uniform lattice whose pitch drops for the whole board when a ball array needs
 it. With patches, `--unified-pitch-mm` sets the base pitch (default 0.25 mm)
 and the per-package rule decides the refinement; a board without a full ball
@@ -305,7 +331,7 @@ Soft plane-aware global layer costs and
 alternating inner-layer directions can be tuned with
 `--layer-preference-cost` and `--direction-preference-cost` (zero disables
 either preference); they do not override explicit layer restrictions or DRC.
-Accepted ordinary copper is straightened unless `--no-route-smoothing` is
+Accepted ordinary copper is straightened unless `--unified-set route_smoothing=false` is
 given. Opt-in `--layer-assignment-passes` and `--local-demand-cost` move ordinary
 guide runs away from same-layer crossings and full channels; see the
 [layer-balance review](routing-backlog.md).
@@ -319,7 +345,7 @@ Use `--progress` for flushed phase/group/trial events during long runs; the
 shared Make routing workflow enables this automatically and saves them in
 `routing.log`. Full ground-feedback trials can each rebuild the routing.
 Progress is not completion or signoff evidence; see [routing progress](routing-progress.md).
-`--unified-search-states` and `--unified-time-budget-s` bound ordinary routing
+`--unified-set maximum_expansions=N` and `--unified-time-budget-s` bound ordinary routing
 work; an exhausted budget is reported per net rather than silently accepting an
 unfinished path.
 The report's `critical_lane_review` section reviews the exported copper of every
@@ -340,9 +366,7 @@ and `route_global` rate best rerun the pipeline tail (critical routing,
 plane stitch, ordinary routing, land closure, DRC), and a move is kept only if it
 lowers the whole-board score (hard DRC, opens, critical failures, unrouted nets,
 overflow, length, vias). `--congestion-feedback-trials N` bounds the reruns
-(default 4; 0 disables; a run with no failed nets never reruns); `--detailed-feedback-trials` and `--critical-feedback-trials`
-map onto it, with a budget of `max(N, detailed + critical)`, and the report
-lists them under `work_limits.mapped_flags`. The report's
+(default 4; 0 disables; a run with no failed nets never reruns). The report's
 `placement_feedback` block lists every trial, the accepted moves and up to 16
 hot tiles.
 (`--placement-feedback-trials` is the older, unrelated budget of global
@@ -502,7 +526,7 @@ python -m pytest
 ```
 
 For a search that exhausts the unified router's per-path work bound, use
-`--unified-search-states N` to choose a larger bounded search. The default is
+`--unified-set maximum_expansions=N` to choose a larger bounded search. The default is
 400000 expanded states per path. `--unified-time-budget-s` remains a separate
 wall-time limit. Both are computational settings; source and fabrication rules
 are unchanged. The effective state limit appears in `work_limits` and replay
@@ -511,7 +535,7 @@ inputs. A failed bounded search is not proof that the connection is impossible.
 
 ### Bounding pair search before unified routing
 
-`route-board --unified-pair-states 16000` caps expanded
+`route-board --unified-set critical_pair_state_limit=16000` caps expanded
 search states per differential pair in each direct critical-routing attempt,
 including the retry after releasing ordinary escape reservations. It preserves
 the existing exact copper, connectivity and pair-profile checks. Exhaustion is
@@ -522,4 +546,4 @@ The default is unchanged when the option is omitted. The separate
 `--unified-time-budget-s` controls ordinary negotiated routing. Neither option
 is a wall-time limit for placement, optional placement-feedback trials or
 native verification. For a bounded source-placement run, use
-`--critical-feedback-trials 0` and retain the final report even on failure.
+`--congestion-feedback-trials 0` and retain the final report even on failure.

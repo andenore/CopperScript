@@ -7,6 +7,13 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
+def _zoned_board(tmp_path):
+    source = tmp_path / "zoned.copper"
+    source.write_text((ROOT / "examples/valid_board/board.copper").read_text().rstrip()[:-1] +
+        'constraint copper_zone(GND) { layers="F.Cu"; } }', encoding="utf-8")
+    return str(source)
+
+
 def test_escape_spacing_controls_reach_all_planning_commands():
     from pcbir.cli import _parser, _planner_options
     from pcbir.physical import nm_from_mm
@@ -382,14 +389,10 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     pcb = tmp_path / "route-draft.kicad_pcb"
     result = subprocess.run(
         [
-            sys.executable, "-m", "copperscript", "route-board",
-            "examples/valid_board/board.copper", "--allow-proxy-footprints",
-            "--candidates", "1", "--pitch-mm", "1",
-            "--stitch-zone-pads", "--plane-stitch-step-mm", "0.25",
-            "--plane-stitch-radius-mm", "5",
-            "--plane-maze-step-mm", "0.025", "--plane-maze-budget", "50000",
-            "--critical-feedback-trials", "1",
-            "--report", str(report), "-o", str(pcb),
+            sys.executable, "-m", "copperscript", "route-board", _zoned_board(tmp_path),
+            "--allow-proxy-footprints", "--candidates", "1", "--plane-stitch-step-mm", "0.25",
+            "--plane-stitch-radius-mm", "5", "--plane-maze-step-mm", "0.025", "--plane-maze-budget", "50000",
+            "--congestion-feedback-trials", "4", "--report", str(report), "-o", str(pcb),
         ],
         cwd=ROOT, text=True, capture_output=True, check=False,
     )
@@ -421,7 +424,7 @@ def test_cli_reports_physical_route_and_drc_without_claiming_fabrication(tmp_pat
     assert "BOARD ROUTE:" in result.stdout
 
 
-def test_cli_requires_plane_stitch_and_six_layers_for_ground_via_in_pad() -> None:
+def test_cli_requires_plane_stitch_and_six_layers_for_ground_via_in_pad(tmp_path) -> None:
     command = [
         sys.executable, "-m", "copperscript", "route-board",
         "examples/valid_board/board.copper", "--allow-proxy-footprints",
@@ -433,20 +436,17 @@ def test_cli_requires_plane_stitch_and_six_layers_for_ground_via_in_pad() -> Non
     assert without_stitch.returncode != 0
     assert "requires a declared copper zone" in without_stitch.stdout
 
-    without_profile = subprocess.run(
-        [*command, "--stitch-zone-pads"], cwd=ROOT,
-        text=True, capture_output=True, check=False,
-    )
+    with_zone = [_zoned_board(tmp_path) if item == "examples/valid_board/board.copper" else item for item in command]
+    without_profile = subprocess.run(with_zone, cwd=ROOT, text=True, capture_output=True, check=False)
     assert without_profile.returncode != 0
     assert "six-layer profile" in without_profile.stdout
 
 
-def test_cli_rejects_unknown_selective_plane_pad() -> None:
+def test_cli_rejects_unknown_selective_plane_pad(tmp_path) -> None:
     result = subprocess.run(
         [
-            sys.executable, "-m", "copperscript", "route-board",
-            "examples/valid_board/board.copper", "--allow-proxy-footprints",
-            "--stitch-zone-pads", "--early-plane-pad", "UNKNOWN.1",
+            sys.executable, "-m", "copperscript", "route-board", _zoned_board(tmp_path),
+            "--allow-proxy-footprints", "--early-plane-pad", "UNKNOWN.1",
         ],
         cwd=ROOT, text=True, capture_output=True, check=False,
     )

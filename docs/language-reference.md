@@ -1768,15 +1768,15 @@ soft physical-search rates per millimetre, not electrical properties or hard
 layer restrictions. The global guide search uses half the selected rates on top
 of a baseline distance rate of 10 cost units/mm; via and bend events have
 separate fixed costs. The unified router prices its own lattice through the
-`--unified-*` options.
+`--unified-set OPTION=VALUE` options and `--unified-pitch-mm`.
 
 Opt-in `--layer-assignment-passes N` (default 0) relabels ordinary
 via-bounded guide runs onto another permitted signal layer after global
 negotiation when that avoids forced same-layer crossings (priced as one via
 pair each) or, with `--local-demand-cost` (per mm at a full edge, counted in
-`--pitch-mm` lanes), a crowded channel. Tile paths and via counts do not
+`--local-demand-pitch-mm` lanes), a crowded channel. Tile paths and via counts do not
 change; planes, explicit layers and critical/paired/power guides are fixed.
-Accepted ordinary copper is straightened by default; `--no-route-smoothing`
+Accepted ordinary copper is straightened by default; `--unified-set route_smoothing=false`
 keeps it as searched. Smoothing never moves vias, reserved or immutable copper.
 
 ## KiCad schematic export
