@@ -301,15 +301,26 @@ impl Router<'_, '_> {
         Ok((self.routes.clone(), conflicts, iteration))
     }
 
-    /// `copper`: tracks and vias of one path, with its lead-ins (through vias).
+    /// `copper`: tracks and vias of one path, with its lead-ins. `spans`
+    /// (`via_sites` of the whole route; by default of this path alone) gives
+    /// each layer-change site its via; a site without one gets the outer
+    /// span here, and commit rejects it.
     pub fn copper(
         &self,
         index: usize,
         path: &[i64],
         leads: &Lead,
-        _spans: Option<()>,
+        spans: Option<&IndexMap<i64, Option<super::search::ViaSpan>>>,
     ) -> Result<(Vec<TrackSegment>, Vec<Via>)> {
         let spec = &self.specs[index];
+        let own;
+        let spans = match spans {
+            Some(spans) => spans,
+            None => {
+                own = self.via_sites(&spec.name, std::slice::from_ref(&path.to_vec()));
+                &own
+            }
+        };
         let g = &self.lattice;
         let mut tracks: Vec<TrackSegment> = leads.clone();
         let mut vias: Vec<Via> = Vec::new();
@@ -341,14 +352,19 @@ impl Router<'_, '_> {
                     if run_start != prev {
                         tracks.push(track(run_start, prev, run_width, la));
                     }
+                    let (from_layer, to_layer, technology) = spans.get(&g.column(prev)).cloned().flatten().unwrap_or((
+                        g.layers[0],
+                        *g.layers.last().expect("layers"),
+                        None,
+                    ));
                     vias.push(Via {
                         net: spec.name.clone(),
                         position: g.point(prev),
                         size_nm: spec.via_size,
                         drill_nm: spec.via_drill,
-                        from_layer: g.layers[0],
-                        to_layer: *g.layers.last().expect("layers"),
-                        technology: None,
+                        from_layer,
+                        to_layer,
+                        technology,
                         finish: "standard".to_owned(),
                     });
                     run_start = node;
@@ -419,9 +435,26 @@ impl Router<'_, '_> {
             let mut all_ok = route.connected;
             let mut net_tracks: Vec<TrackSegment> = Vec::new();
             let mut net_vias: Vec<Via> = Vec::new();
+            let spans = self.via_sites(name, &route.paths);
+            let unserved: IndexSet<i64> = spans.iter().filter(|(_, span)| span.is_none()).map(|(xy, _)| *xy).collect();
             for (path, leads) in route.paths.iter().zip(&route.leads) {
-                let (tracks, vias) = self.copper(index, path, leads, None)?;
+                let (tracks, vias) = self.copper(index, path, leads, Some(&spans))?;
                 let mut bad: Vec<Point> = Vec::new();
+                if !unserved.is_empty() {
+                    let g = &self.lattice;
+                    for pair in path.windows(2) {
+                        if g.layer_of(pair[0]) != g.layer_of(pair[1]) && unserved.contains(&g.column(pair[0])) {
+                            bad.push(g.point(pair[0]));
+                            self.rejections.entry(name.clone()).or_default().push((
+                                g.point(pair[0]),
+                                "via".to_owned(),
+                                Vec::new(),
+                                false,
+                                "no_via_technology".to_owned(),
+                            ));
+                        }
+                    }
+                }
                 for track in &tracks {
                     if !(self.clearance.as_ref().expect("index").can_track(
                         name,

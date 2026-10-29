@@ -397,6 +397,33 @@ def _return_crossing(returns=True):
     return return_vias.crossing(returns=returns)
 
 
+def _technology_board(technologies, layers=None, *, closed=False, blocked=None):
+    # test_unified_commit_index._four_layer and test_unified_span_guides: A must
+    # change layers across a F.Cu wall, within ``layers``, with a via catalog.
+    import test_unified_commit_index as commit_index
+    import test_unified_span_guides as span_guides
+    catalog = tuple({"through": commit_index.THROUGH, "blind": commit_index.BLIND,
+                     "back-blind": span_guides.BACK_BLIND}[name] for name in technologies)
+    board = commit_index._four_layer(catalog, layers=layers)
+    if closed:
+        # test_a_layer_change_no_technology_serves_is_rejected_with_its_reason.
+        wall = PolygonWithHoles(PolygonRing(tuple(Point.mm(x, y) for x, y in
+                                                  (("12.8", 0), ("13.2", 0), ("13.2", 26), ("12.8", 26)))))
+        board = replace(board, tracks=(), copper_keepouts=(CopperKeepout(
+            "wall", (CopperLayer.FRONT,), wall, block_tracks=True, block_vias=False, block_pads=False,
+            block_zones=False),))
+    if blocked is not None:
+        # test_blind_vias_check_only_their_copper_span.
+        wall = span_guides._keepout("wall", (CopperLayer.FRONT,), ("12.8", 0, "13.2", 26), tracks=True, vias=False)
+        blocker = span_guides._keepout("via-blocker", (blocked,), (0, 0, 26, 26))
+        board = replace(board, tracks=(), copper_keepouts=(wall, blocker))
+    return board
+
+
+def _technology_guides(board):
+    return route_global(replace(board, tracks=(), vias=()), GlobalRouterOptions(tile_size_nm=nm_from_mm("2")))
+
+
 # name: (board builder, saved UnifiedRouterOptions fields[, (guide builder, only_nets)])
 UNIFIED = {
     # test_tuned_bus_copper_survives_route_smoothing; replay with --set route_smoothing=true.
@@ -412,6 +439,23 @@ UNIFIED = {
     "return-vias-missing": (lambda: _return_crossing(False),
                             {"pitch_nm": nm_from_mm("0.25"), "maximum_iterations": 3, "commit_rounds": 1},
                             (lambda board: route_global(replace(board, tracks=(), vias=())), frozenset({"S"}))),
+    # Via technologies (test_unified_commit_index, test_unified_span_guides).
+    "technology-blind": (lambda: _technology_board(("through", "blind"), (CopperLayer.FRONT, CopperLayer.INTERNAL_1)),
+                         {}, (_technology_guides, None)),
+    "technology-through": (lambda: _technology_board(("through", "blind"), (CopperLayer.FRONT, CopperLayer.BACK)),
+                           {}, (_technology_guides, None)),
+    "technology-none": (lambda: _technology_board(("blind",), (CopperLayer.FRONT, CopperLayer.BACK), closed=True),
+                        {}, (_technology_guides, None)),
+    "technology-blind-span": (lambda: _technology_board(("through", "blind"),
+                                                        (CopperLayer.FRONT, CopperLayer.INTERNAL_1),
+                                                        blocked=CopperLayer.BACK),
+                              {"maximum_iterations": 3, "commit_rounds": 1}, (_technology_guides, None)),
+    "technology-blind-blocked": (lambda: _technology_board(("through", "blind"),
+                                                           (CopperLayer.FRONT, CopperLayer.INTERNAL_1),
+                                                           blocked=CopperLayer.INTERNAL_1),
+                                 {"maximum_iterations": 3, "commit_rounds": 1}, (_technology_guides, None)),
+    "technology-catalog": (lambda: _technology_board(("through", "blind", "back-blind")), {},
+                           (_technology_guides, None)),
 }
 
 

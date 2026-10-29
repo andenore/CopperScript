@@ -2028,10 +2028,15 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
             if via.drill_nm < technology.minimum_drill_nm {
                 return fail("via drill is below its technology limit");
             }
-            if (via.size_nm - via.drill_nm) / 2 < technology.minimum_annular_ring_nm {
+            if (via.size_nm - via.drill_nm).div_euclid(2) < technology.minimum_annular_ring_nm {
                 return fail("via annular ring is below its technology limit");
             }
-            return not_implemented("via aspect ratio checks against a technology catalog");
+            let Some(depth) = crate::routing_vias::via_span_depth(&board.stackup, via.from_layer, via.to_layer) else {
+                return not_implemented("a via layer outside the physical stack-up (Python crashes)");
+            };
+            if crate::routing_vias::exceeds_aspect_ratio(depth, via.drill_nm, &technology.maximum_aspect_ratio) {
+                return fail("via aspect ratio exceeds its technology limit");
+            }
         }
     }
     let region_names: Vec<&str> = board.regions.iter().map(|r| r.name.as_str()).collect();
@@ -3970,6 +3975,43 @@ pub fn encode_unified_options(o: &UnifiedRouterOptions) -> StateValue {
             ("fine_region_options", opt(&o.fine_region_options, fine)),
         ],
     )
+}
+
+/// `save_state(save_inputs_path + ".bga.json", {...}, note="bga_fanout output")`:
+/// the ball-grid fanout copper beside the router inputs, so a replay can take
+/// it out and fan out again.
+pub fn bga_sidecar_text(
+    tracks: &[TrackSegment],
+    vias: &[Via],
+    array_flow: bool,
+    escape_plan_options: Option<&crate::escape_plan::EscapePlanOptions>,
+) -> String {
+    let options = escape_plan_options.map_or(StateValue::Null, |o| {
+        dc(
+            "pcbir.escape_plan:EscapePlanOptions",
+            vec![
+                ("cluster_pair_minimum_nets", i(o.cluster_pair_minimum_nets)),
+                ("maximum_pair_nets", i(o.maximum_pair_nets)),
+                ("field_spacing_factor", i(o.field_spacing_factor)),
+                ("field_spacing_minimum_nm", i(o.field_spacing_minimum_nm)),
+                ("two_end_order", b(o.two_end_order)),
+                ("corridor_margin_nm", i(o.corridor_margin_nm)),
+                ("layer_bias_rate", i(o.layer_bias_rate)),
+                ("array_flow", b(o.array_flow)),
+                ("bus_layers", b(o.bus_layers)),
+                ("via_lattice", b(o.via_lattice)),
+                ("lattice_band_rings", i(o.lattice_band_rings)),
+            ],
+        )
+    });
+    let entries = vec![
+        (s("tracks"), tuple(tracks, e_track)),
+        (s("vias"), tuple(vias, e_via)),
+        (s("array_flow"), b(array_flow)),
+        (s("escape_plan_options"), options),
+    ];
+    let metadata = Object::from([("note".to_owned(), Value::from("bga_fanout output"))]);
+    StateDocument::new("builtins:dict", metadata, StateValue::Map { entries, proxy: false }).to_text()
 }
 
 /// `save_state(options.save_inputs_path, {...}, note="route_unified inputs")`:

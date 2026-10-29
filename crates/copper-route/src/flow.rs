@@ -220,6 +220,30 @@ fn direct_critical(placement: &PlacementRoutingResult) -> Result<CriticalRouting
     Ok(critical_result(CriticalRoutingStatus::Warning, source, Vec::new(), fp, fp.clone()))
 }
 
+/// A via lattice's copper and the keepouts that reserve it meanwhile.
+type Lattice = (Vec<TrackSegment>, Vec<Via>, Vec<copper_physical::CopperKeepout>);
+
+/// `_plan_lattice`: ball grids' via sites (escape plan E7), or None. Planned
+/// before escapes, bypasses and critical routes can take the sites: escapes
+/// and bypasses plan with the lattice copper in their frame, critical routing
+/// sees it as keepouts, and it joins the board after critical routing.
+fn plan_lattice(
+    board: &PhysicalBoard,
+    escape_plan_options: Option<&EscapePlanOptions>,
+    surface_balls: Option<&IndexSet<copper_pcb::board::PadReference>>,
+    on_progress: &mut Option<ProgressCallback<'_>>,
+) -> Result<Option<Lattice>> {
+    let Some(options) = escape_plan_options.filter(|options| options.via_lattice) else { return Ok(None) };
+    let frame = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
+    let planned = crate::via_lattice::plan_via_lattices(&frame, surface_balls, 2, options.lattice_band_rings)?;
+    emit(on_progress, "via_lattice", "finished", planned.report());
+    if planned.vias.is_empty() {
+        return Ok(None);
+    }
+    let keepouts = copper_keepouts(board, &planned.tracks, &planned.vias, "lattice-reserve", Some(&frame));
+    Ok(Some((planned.tracks, planned.vias, keepouts)))
+}
+
 /// `_plan_array_escapes`: which ball-grid balls escape on the surface.
 fn plan_array_frames(
     board: &PhysicalBoard,
@@ -457,9 +481,11 @@ fn route_critical_stage(
     unified_fanout: Option<&FanoutOptions>,
     pair_state_limit: Option<i64>,
     plane_stitch_options: Option<&PlaneStitchOptions>,
+    lattice: Option<&Lattice>,
     on_progress: &mut Option<ProgressCallback<'_>>,
 ) -> Result<(CriticalRoutingResult, Option<Reserved>, Option<Held>, bool)> {
     let board = &placement.board;
+    let prefix: (&[TrackSegment], &[Via]) = lattice.map_or((&[], &[]), |(tracks, vias, _)| (tracks, vias));
     let planar = crate::critical::promote_planar_nets(board).1;
     if !planar.is_empty() {
         let mut sorted = planar.clone();
@@ -476,7 +502,7 @@ fn route_critical_stage(
         Some(fanout) if unified_options.escapes_first => {
             let mut keepouts = halos.clone();
             keepouts.extend(plane_pin_halos(board));
-            plan_ordinary_escapes(board, fanout, on_progress, &keepouts, &planar)?
+            plan_ordinary_escapes(board, fanout, on_progress, prefix, &keepouts, &planar)?
         }
         _ => None,
     };
@@ -484,7 +510,7 @@ fn route_critical_stage(
     if !board.decoupling_links.is_empty() && unified_options.pre_route_decouplers {
         // Bypasses route before critical nets (as package access did), so
         // a critical route cannot take a capacitor's short surface feed.
-        let (planned, kept) = plan_decouplers(board, reserved.take(), on_progress, &halos, unified_fanout)?;
+        let (planned, kept) = plan_decouplers(board, reserved.take(), on_progress, prefix, &halos, unified_fanout)?;
         reserved = kept;
         if reserved.is_some() && !planned.released.is_empty() {
             return copper_pcb::not_implemented(
@@ -533,6 +559,11 @@ fn route_critical_stage(
                 ("reason", reason.as_deref().map_or(Value::Null, text)),
             ],
         );
+        if let Some((_, _, keepouts)) = lattice {
+            // Lattice vias are reserved for their balls while critical nets
+            // route; they join the board afterwards.
+            source.copper_keepouts.extend(keepouts.iter().cloned());
+        }
         Ok((source, accesses))
     };
     let (source, bypass_accesses) =
@@ -607,8 +638,14 @@ fn complete_critical_stage(
     plane_stitch_options: Option<&PlaneStitchOptions>,
     on_progress: &mut Option<ProgressCallback<'_>>,
     array_plans: Option<&IndexMap<String, ArrayEscape>>,
+    lattice: Option<&Lattice>,
     fanout_options: Option<&FanoutOptions>,
+    escape_plan_options: Option<&EscapePlanOptions>,
 ) -> Result<(CriticalRoutingResult, Option<PlaneStitchResult>)> {
+    if let Some((tracks, vias, keepouts)) = lattice {
+        // The lattice copper joins the board first (bypasses were planned on it).
+        critical.board = join_reserved_copper(&critical.board, tracks, vias, keepouts)?;
+    }
     if let Some(held) = held.filter(|_| !held_as_copper) {
         // The critical router kept clear of the reserved bypass copper, so it
         // joins the board unchanged.
@@ -647,8 +684,19 @@ fn complete_critical_stage(
         emit(on_progress, "bga_fanout", "started", Vec::new());
         let bga = plan_bga_fanouts(&critical.board, 2, None, array_plans)?;
         emit(on_progress, "bga_fanout", "finished", bga.report());
-        if unified_options.save_inputs_path.is_some() && (!bga.tracks.is_empty() || !bga.vias.is_empty()) {
-            return copper_pcb::not_implemented("the ball-grid fanout sidecar of --unified-save-inputs");
+        if let Some(path) = unified_options.save_inputs_path.as_deref().filter(|path| !path.is_empty())
+            && (!bga.tracks.is_empty() || !bga.vias.is_empty())
+        {
+            // Beside the router inputs: the fanout copper, so a replay can
+            // take it out and fan out again.
+            let text = crate::state_codec::bga_sidecar_text(
+                &bga.tracks,
+                &bga.vias,
+                array_plans.is_some(),
+                escape_plan_options,
+            );
+            crate::unified_router::route::save_inputs(&format!("{path}.bga.json"), &text)
+                .map_err(|error| Error::NotImplemented(error.crash_line()))?;
         }
         critical.board = bga.board;
     }
@@ -904,9 +952,7 @@ pub fn run_routing_pipeline(
     if let (Some(surface), Some(fanout)) = (&surface_balls, unified_fanout.as_mut()) {
         fanout.surface_pads.extend(surface.iter().cloned());
     }
-    if escape_plan_options.is_some_and(|options| options.via_lattice) {
-        return copper_pcb::not_implemented("the via lattice (via_lattice.plan_via_lattices)");
-    }
+    let lattice = plan_lattice(&placement.board, escape_plan_options, surface_balls.as_ref(), &mut on_progress)?;
     if let Some(plan_options) = escape_plan_options.filter(|options| options.two_end_order) {
         let plan = plan_two_end_escapes(&placement.board, plan_options, None)?;
         emit(
@@ -937,6 +983,7 @@ pub fn run_routing_pipeline(
         critical_plane_options: options.plane_stitch_options.as_ref(),
         plane_stitch_options: plane_stitch_options.as_ref(),
         drc_policy: options.drc_policy,
+        escape_plan_options,
     };
     if unified_options.direct {
         emit(
@@ -946,7 +993,7 @@ pub fn run_routing_pipeline(
             vec![("reason", text("all mutable nets negotiate together; only source-fixed copper is retained"))],
         );
     }
-    let routed = route_tail(&placement, array_plans.as_ref(), &tail, &mut on_progress)?;
+    let routed = route_tail(&placement, array_plans.as_ref(), lattice.as_ref(), &tail, &mut on_progress)?;
     let feedback_budget =
         options.placement_feedback_trials.max(options.detailed_feedback_trials + options.critical_feedback_trials);
     let mut placement = placement;
@@ -985,8 +1032,10 @@ pub fn run_routing_pipeline(
             let mut trial = placement.clone();
             trial.board = trial_board.clone();
             trial.global_route = trial_global.clone();
-            let (trial_plans, _) = plan_array_frames(trial_board, escape_plan_options, progress)?;
-            let routed = route_tail(&trial, trial_plans.as_ref(), &trial_tail, progress)?;
+            // The escape frame (array plans, via lattice) of the trial placement.
+            let (trial_plans, trial_surface) = plan_array_frames(trial_board, escape_plan_options, progress)?;
+            let trial_lattice = plan_lattice(trial_board, escape_plan_options, trial_surface.as_ref(), progress)?;
+            let routed = route_tail(&trial, trial_plans.as_ref(), trial_lattice.as_ref(), &trial_tail, progress)?;
             Ok(FeedbackState {
                 board: trial_board.clone(),
                 global_route: trial_global.clone(),
@@ -1074,6 +1123,7 @@ struct TailInputs<'a> {
     critical_plane_options: Option<&'a PlaneStitchOptions>,
     plane_stitch_options: Option<&'a PlaneStitchOptions>,
     drc_policy: Policy,
+    escape_plan_options: Option<&'a EscapePlanOptions>,
 }
 
 /// The plane stitch, duplicate-pad stitch and saved-inputs path of one tail pass.
@@ -1093,6 +1143,7 @@ struct TailResult {
 fn route_tail(
     placement: &PlacementRoutingResult,
     array_plans: Option<&IndexMap<String, ArrayEscape>>,
+    lattice: Option<&Lattice>,
     tail: &TailInputs<'_>,
     on_progress: &mut Option<ProgressCallback<'_>>,
 ) -> Result<TailResult> {
@@ -1105,6 +1156,7 @@ fn route_tail(
             tail.unified_fanout,
             tail.pair_state_limit,
             tail.critical_plane_options,
+            lattice,
             on_progress,
         )?
     };
@@ -1117,7 +1169,9 @@ fn route_tail(
         tail.plane_stitch_options,
         on_progress,
         array_plans,
+        lattice,
         tail.unified_fanout,
+        tail.escape_plan_options,
     )?;
     let pre_detailed = plane_stitch.as_ref().map_or(&critical.board, |stitch| &stitch.board).clone();
     let deferred = copper_pcb::zones::deferred_zone_nets(&pre_detailed)?;
@@ -1357,6 +1411,7 @@ fn plan_ordinary_escapes(
     board: &PhysicalBoard,
     fanout_options: &FanoutOptions,
     on_progress: &mut Option<ProgressCallback<'_>>,
+    prefix: (&[TrackSegment], &[Via]),
     keepouts: &[copper_physical::CopperKeepout],
     exclude: &[String],
 ) -> Result<Option<Reserved>> {
@@ -1381,7 +1436,7 @@ fn plan_ordinary_escapes(
         return Ok(None);
     }
     emit(on_progress, "ordinary_escapes", "started", vec![("nets", int(ordinary.len() as i64))]);
-    match route_ordinary_escapes(board, fanout_options, &ordinary, (&[], &[]), keepouts) {
+    match route_ordinary_escapes(board, fanout_options, &ordinary, prefix, keepouts) {
         Err(Error::Value(message)) => {
             emit(on_progress, "ordinary_escapes", "finished", vec![("skipped", text(&message))]);
             Ok(None)
@@ -1684,6 +1739,7 @@ fn plan_decouplers(
     board: &PhysicalBoard,
     reserved: Option<Reserved>,
     on_progress: &mut Option<ProgressCallback<'_>>,
+    prefix: (&[TrackSegment], &[Via]),
     extra_keepouts: &[copper_physical::CopperKeepout],
     fanout_options: Option<&FanoutOptions>,
 ) -> Result<(Held, Option<Reserved>)> {
@@ -1691,7 +1747,9 @@ fn plan_decouplers(
     emit(on_progress, "bypass_reservation", "started", vec![("links", int(board.decoupling_links.len() as i64))]);
     let had_reserved = reserved.is_some();
     let (tracks0, vias0, keepouts) = reserved.unwrap_or_default();
-    let base = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
+    let mut base = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
+    base.tracks.extend_from_slice(prefix.0);
+    base.vias.extend_from_slice(prefix.1);
     // `extra_keepouts` (macro port halos) bind every attempt and are never
     // released for a pending link, unlike the escape reservations.
     let mut frame = base.clone();

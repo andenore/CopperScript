@@ -1,0 +1,1040 @@
+{
+ "content_digest": "sha256:3b5184a00ca49dbf1c790784652bfc707c2752cd261f2caca8c1938c4c5b7d32",
+ "kind": "builtins:dict",
+ "metadata": {
+  "note": "route_unified inputs"
+ },
+ "schema": "copperscript.state/v1",
+ "value": {
+  "$map": [
+   [
+    "board",
+    {
+     "$type": "pcbir.physical:PhysicalBoard",
+     "fields": {
+      "assembly_access": {
+       "$tuple": []
+      },
+      "assembly_envelopes": {
+       "$tuple": []
+      },
+      "attachments": {
+       "$tuple": []
+      },
+      "body_overhangs": {
+       "$tuple": []
+      },
+      "boundary_edges": {
+       "$tuple": []
+      },
+      "component_heights": {
+       "$tuple": []
+      },
+      "component_hole_clearances": {
+       "$tuple": []
+      },
+      "copper_keepouts": {
+       "$tuple": []
+      },
+      "datums": {
+       "$tuple": []
+      },
+      "decoupling_links": {
+       "$tuple": []
+      },
+      "footprints": {
+       "$map": [
+        [
+         "test/one-pad",
+         {
+          "$type": "pcbir.physical:PhysicalFootprint",
+          "fields": {
+           "body_size": {
+            "$type": "pcbir.physical:Size",
+            "fields": {
+             "height_nm": 1000000,
+             "width_nm": 1000000
+            }
+           },
+           "clearance_nm": null,
+           "courtyard": {
+            "$tuple": []
+           },
+           "exclude_from_bom": false,
+           "exclude_from_pos_files": false,
+           "graphics": {
+            "$tuple": []
+           },
+           "height_nm": null,
+           "internal_pad_groups": {
+            "$tuple": []
+           },
+           "keepouts": {
+            "$tuple": []
+           },
+           "metadata": {
+            "$map": [],
+            "proxy": true
+           },
+           "name": "test/one-pad",
+           "pads": {
+            "$tuple": [
+             {
+              "$type": "pcbir.physical:FootprintPad",
+              "fields": {
+               "connector_contact": false,
+               "drill": null,
+               "has_solder_mask": true,
+               "has_solder_paste": true,
+               "heatsink": false,
+               "kind": {
+                "$enum": "pcbir.physical:PadKind",
+                "value": "smd"
+               },
+               "number": "1",
+               "position": {
+                "$type": "pcbir.physical:Point",
+                "fields": {
+                 "x_nm": 0,
+                 "y_nm": 0
+                }
+               },
+               "remove_unused_layers": false,
+               "rotation_degrees": {
+                "$decimal": "0"
+               },
+               "roundrect_ratio_ppm": 250000,
+               "shape": {
+                "$enum": "pcbir.physical:PadShape",
+                "value": "roundrect"
+               },
+               "size": {
+                "$type": "pcbir.physical:Size",
+                "fields": {
+                 "height_nm": 600000,
+                 "width_nm": 600000
+                }
+               },
+               "zone_connection": null
+              }
+             }
+            ]
+           },
+           "source_library_id": null
+          }
+         }
+        ]
+       ],
+       "proxy": true
+      },
+      "hard_macros": {
+       "$tuple": []
+      },
+      "keepouts": {
+       "$tuple": []
+      },
+      "match_groups": {
+       "$tuple": []
+      },
+      "materialized_macros": {
+       "$tuple": []
+      },
+      "mechanical_holes": {
+       "$tuple": []
+      },
+      "mechanical_references": {
+       "$tuple": []
+      },
+      "mechanical_slots": {
+       "$tuple": []
+      },
+      "metadata": {
+       "$map": [],
+       "proxy": true
+      },
+      "name": "Unified",
+      "net_routing_rules": {
+       "$tuple": [
+        {
+         "$type": "pcbir.physical:NetRoutingRule",
+         "fields": {
+          "allowed_layers": {
+           "$tuple": [
+            {
+             "$enum": "pcbir.physical:CopperLayer",
+             "value": "F.Cu"
+            },
+            {
+             "$enum": "pcbir.physical:CopperLayer",
+             "value": "In1.Cu"
+            }
+           ]
+          },
+          "breakout_clearance_nm": null,
+          "breakout_gap_nm": null,
+          "breakout_length_nm": null,
+          "breakout_width_nm": null,
+          "clearance_nm": null,
+          "differential_partner": null,
+          "impedance_evidence_digest": null,
+          "impedance_tolerance_percent": null,
+          "kind": {
+           "$enum": "pcbir.physical:RouteKind",
+           "value": "general"
+          },
+          "layer_group": null,
+          "max_length_nm": null,
+          "max_skew_nm": null,
+          "max_vias": null,
+          "maximum_return_via_distance_nm": null,
+          "maximum_stub_length_nm": null,
+          "maximum_uncoupled_length_nm": null,
+          "net": "A",
+          "pair_gap_nm": null,
+          "priority": 0,
+          "require_return_vias": false,
+          "reserve_corridor": false,
+          "return_via_net": null,
+          "return_via_policy": {
+           "$enum": "pcbir.physical:ReturnViaPolicy",
+           "value": "always"
+          },
+          "shared_reference_layer": null,
+          "target_impedance_ohms": null,
+          "target_single_ended_ohms": null,
+          "topology": "point_to_point",
+          "tuning_amplitude_limit_nm": null,
+          "tuning_group": null,
+          "tuning_spacing_nm": null,
+          "tuning_style": {
+           "$enum": "pcbir.physical:TuningStyle",
+           "value": "bumps"
+          },
+          "width_nm": null
+         }
+        }
+       ]
+      },
+      "nets": {
+       "$tuple": [
+        {
+         "$type": "pcbir.physical:PhysicalNet",
+         "fields": {
+          "name": "A",
+          "pads": {
+           "$tuple": [
+            {
+             "$type": "pcbir.physical:PadReference",
+             "fields": {
+              "component": "A_0",
+              "pad": "1"
+             }
+            },
+            {
+             "$type": "pcbir.physical:PadReference",
+             "fields": {
+              "component": "A_1",
+              "pad": "1"
+             }
+            }
+           ]
+          }
+         }
+        },
+        {
+         "$type": "pcbir.physical:PhysicalNet",
+         "fields": {
+          "name": "W",
+          "pads": {
+           "$tuple": []
+          }
+         }
+        }
+       ]
+      },
+      "outline": {
+       "$type": "pcbir.physical:BoardOutline",
+       "fields": {
+        "boundary_path": null,
+        "circular_boundary": null,
+        "cutouts": {
+         "$tuple": []
+        },
+        "vertices": {
+         "$tuple": [
+          {
+           "$type": "pcbir.physical:Point",
+           "fields": {
+            "x_nm": 0,
+            "y_nm": 0
+           }
+          },
+          {
+           "$type": "pcbir.physical:Point",
+           "fields": {
+            "x_nm": 26000000,
+            "y_nm": 0
+           }
+          },
+          {
+           "$type": "pcbir.physical:Point",
+           "fields": {
+            "x_nm": 26000000,
+            "y_nm": 26000000
+           }
+          },
+          {
+           "$type": "pcbir.physical:Point",
+           "fields": {
+            "x_nm": 0,
+            "y_nm": 26000000
+           }
+          }
+         ]
+        }
+       }
+      },
+      "placement_groups": {
+       "$tuple": []
+      },
+      "placement_rules": {
+       "$tuple": []
+      },
+      "placements": {
+       "$tuple": [
+        {
+         "$type": "pcbir.physical:Placement",
+         "fields": {
+          "footprint": "test/one-pad",
+          "position": {
+           "$type": "pcbir.physical:Point",
+           "fields": {
+            "x_nm": 6000000,
+            "y_nm": 13000000
+           }
+          },
+          "reference": "A_0",
+          "rotation_degrees": {
+           "$decimal": "0"
+          },
+          "side": {
+           "$enum": "pcbir.physical:BoardSide",
+           "value": "front"
+          },
+          "source_path": null,
+          "value": ""
+         }
+        },
+        {
+         "$type": "pcbir.physical:Placement",
+         "fields": {
+          "footprint": "test/one-pad",
+          "position": {
+           "$type": "pcbir.physical:Point",
+           "fields": {
+            "x_nm": 20000000,
+            "y_nm": 13000000
+           }
+          },
+          "reference": "A_1",
+          "rotation_degrees": {
+           "$decimal": "0"
+          },
+          "side": {
+           "$enum": "pcbir.physical:BoardSide",
+           "value": "front"
+          },
+          "source_path": null,
+          "value": ""
+         }
+        }
+       ]
+      },
+      "polygons": {
+       "$tuple": []
+      },
+      "power_domains": {
+       "$tuple": []
+      },
+      "power_feeds": {
+       "$tuple": []
+      },
+      "regions": {
+       "$tuple": []
+      },
+      "relative_rules": {
+       "$tuple": []
+      },
+      "rigid_clusters": {
+       "$tuple": []
+      },
+      "rules": {
+       "$type": "pcbir.physical:DesignRules",
+       "fields": {
+        "default_track_width_nm": 200000,
+        "default_via_drill_nm": 300000,
+        "default_via_size_nm": 600000,
+        "minimum_clearance_nm": 150000,
+        "minimum_hole_clearance_nm": 250000,
+        "minimum_slot_width_nm": 1000000,
+        "minimum_track_width_nm": 150000,
+        "minimum_via_drill_nm": null,
+        "minimum_via_size_nm": null
+       }
+      },
+      "silkscreen": {
+       "$tuple": []
+      },
+      "stackup": {
+       "$type": "pcbir.physical:Stackup",
+       "fields": {
+        "copper_layers": {
+         "$tuple": [
+          {
+           "$enum": "pcbir.physical:CopperLayer",
+           "value": "F.Cu"
+          },
+          {
+           "$enum": "pcbir.physical:CopperLayer",
+           "value": "In1.Cu"
+          },
+          {
+           "$enum": "pcbir.physical:CopperLayer",
+           "value": "In2.Cu"
+          },
+          {
+           "$enum": "pcbir.physical:CopperLayer",
+           "value": "B.Cu"
+          }
+         ]
+        },
+        "physical_layers": {
+         "$tuple": []
+        },
+        "thickness_nm": 1600000,
+        "via_technologies": {
+         "$tuple": [
+          {
+           "$type": "pcbir.physical:ViaTechnology",
+           "fields": {
+            "from_layer": {
+             "$enum": "pcbir.physical:CopperLayer",
+             "value": "F.Cu"
+            },
+            "id": "through",
+            "kind": {
+             "$enum": "pcbir.physical:ViaKind",
+             "value": "through"
+            },
+            "maximum_aspect_ratio": {
+             "$decimal": "12"
+            },
+            "minimum_annular_ring_nm": 100000,
+            "minimum_drill_nm": 100000,
+            "to_layer": {
+             "$enum": "pcbir.physical:CopperLayer",
+             "value": "B.Cu"
+            }
+           }
+          },
+          {
+           "$type": "pcbir.physical:ViaTechnology",
+           "fields": {
+            "from_layer": {
+             "$enum": "pcbir.physical:CopperLayer",
+             "value": "F.Cu"
+            },
+            "id": "blind-f1",
+            "kind": {
+             "$enum": "pcbir.physical:ViaKind",
+             "value": "blind"
+            },
+            "maximum_aspect_ratio": {
+             "$decimal": "12"
+            },
+            "minimum_annular_ring_nm": 100000,
+            "minimum_drill_nm": 100000,
+            "to_layer": {
+             "$enum": "pcbir.physical:CopperLayer",
+             "value": "In1.Cu"
+            }
+           }
+          }
+         ]
+        }
+       }
+      },
+      "tracks": {
+       "$tuple": [
+        {
+         "$type": "pcbir.physical:TrackSegment",
+         "fields": {
+          "end": {
+           "$type": "pcbir.physical:Point",
+           "fields": {
+            "x_nm": 13000000,
+            "y_nm": 24500000
+           }
+          },
+          "layer": {
+           "$enum": "pcbir.physical:CopperLayer",
+           "value": "F.Cu"
+          },
+          "net": "W",
+          "start": {
+           "$type": "pcbir.physical:Point",
+           "fields": {
+            "x_nm": 13000000,
+            "y_nm": 1500000
+           }
+          },
+          "width_nm": 200000
+         }
+        }
+       ]
+      },
+      "via_in_pad_rules": {
+       "$tuple": []
+      },
+      "vias": {
+       "$tuple": [
+        {
+         "$type": "pcbir.physical:Via",
+         "fields": {
+          "drill_nm": 200000,
+          "finish": "standard",
+          "from_layer": {
+           "$enum": "pcbir.physical:CopperLayer",
+           "value": "F.Cu"
+          },
+          "net": "W",
+          "position": {
+           "$type": "pcbir.physical:Point",
+           "fields": {
+            "x_nm": 20000000,
+            "y_nm": 20000000
+           }
+          },
+          "size_nm": 450000,
+          "technology": null,
+          "to_layer": {
+           "$enum": "pcbir.physical:CopperLayer",
+           "value": "In1.Cu"
+          }
+         }
+        }
+       ]
+      },
+      "zone_fills": {
+       "$tuple": []
+      },
+      "zones": {
+       "$tuple": []
+      }
+     }
+    }
+   ],
+   [
+    "global_route",
+    {
+     "$type": "pcbir.routing:GlobalRoutingResult",
+     "fields": {
+      "fixed_prefix_digest": null,
+      "hotspots": {
+       "$tuple": []
+      },
+      "metrics": {
+       "$type": "pcbir.routing:GlobalRoutingMetrics",
+       "fields": {
+        "deferred_net_count": 0,
+        "iterations": 1,
+        "maximum_overflow": 0,
+        "maximum_utilization_ppm": 500000,
+        "overfull_resource_count": 0,
+        "proposed_via_count": 0,
+        "region_only_access_count": 0,
+        "routed_net_count": 1,
+        "total_length_nm": 16000000,
+        "total_overflow": 0,
+        "unrouted_net_count": 0
+       }
+      },
+      "placement_fingerprint": "72fa74b447e0d42a2aa520b2b966db6274977821aae1f71cd9b6f6434649a5d7",
+      "routes": {
+       "$tuple": [
+        {
+         "$type": "pcbir.routing:GlobalNetRoute",
+         "fields": {
+          "accesses": {
+           "$tuple": [
+            {
+             "$type": "pcbir.routing:PinAccess",
+             "fields": {
+              "access_position": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 5000000,
+                "y_nm": 13000000
+               }
+              },
+              "layer": {
+               "$enum": "pcbir.physical:CopperLayer",
+               "value": "F.Cu"
+              },
+              "node": {
+               "$type": "pcbir.routing:GridNode",
+               "fields": {
+                "layer_index": 0,
+                "x_index": 2,
+                "y_index": 6
+               }
+              },
+              "pad": {
+               "$type": "pcbir.physical:PadReference",
+               "fields": {
+                "component": "A_0",
+                "pad": "1"
+               }
+              },
+              "pad_position": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 6000000,
+                "y_nm": 13000000
+               }
+              },
+              "region_only": false,
+              "retained_via": null,
+              "tracks": {
+               "$tuple": [
+                {
+                 "$type": "pcbir.physical:TrackSegment",
+                 "fields": {
+                  "end": {
+                   "$type": "pcbir.physical:Point",
+                   "fields": {
+                    "x_nm": 5000000,
+                    "y_nm": 13000000
+                   }
+                  },
+                  "layer": {
+                   "$enum": "pcbir.physical:CopperLayer",
+                   "value": "F.Cu"
+                  },
+                  "net": "A",
+                  "start": {
+                   "$type": "pcbir.physical:Point",
+                   "fields": {
+                    "x_nm": 6000000,
+                    "y_nm": 13000000
+                   }
+                  },
+                  "width_nm": 200000
+                 }
+                }
+               ]
+              },
+              "via": null
+             }
+            },
+            {
+             "$type": "pcbir.routing:PinAccess",
+             "fields": {
+              "access_position": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 19000000,
+                "y_nm": 13000000
+               }
+              },
+              "layer": {
+               "$enum": "pcbir.physical:CopperLayer",
+               "value": "F.Cu"
+              },
+              "node": {
+               "$type": "pcbir.routing:GridNode",
+               "fields": {
+                "layer_index": 0,
+                "x_index": 9,
+                "y_index": 6
+               }
+              },
+              "pad": {
+               "$type": "pcbir.physical:PadReference",
+               "fields": {
+                "component": "A_1",
+                "pad": "1"
+               }
+              },
+              "pad_position": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 20000000,
+                "y_nm": 13000000
+               }
+              },
+              "region_only": false,
+              "retained_via": null,
+              "tracks": {
+               "$tuple": [
+                {
+                 "$type": "pcbir.physical:TrackSegment",
+                 "fields": {
+                  "end": {
+                   "$type": "pcbir.physical:Point",
+                   "fields": {
+                    "x_nm": 19000000,
+                    "y_nm": 13000000
+                   }
+                  },
+                  "layer": {
+                   "$enum": "pcbir.physical:CopperLayer",
+                   "value": "F.Cu"
+                  },
+                  "net": "A",
+                  "start": {
+                   "$type": "pcbir.physical:Point",
+                   "fields": {
+                    "x_nm": 20000000,
+                    "y_nm": 13000000
+                   }
+                  },
+                  "width_nm": 200000
+                 }
+                }
+               ]
+              },
+              "via": null
+             }
+            }
+           ]
+          },
+          "connected": true,
+          "deferred_to_zone": false,
+          "diagnostics": {
+           "$tuple": []
+          },
+          "length_nm": 16000000,
+          "net": "A",
+          "segments": {
+           "$tuple": [
+            {
+             "$type": "pcbir.routing:GlobalRouteSegment",
+             "fields": {
+              "end": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 7000000,
+                "y_nm": 13000000
+               }
+              },
+              "guide_half_width_nm": 2000000,
+              "layer": {
+               "$enum": "pcbir.physical:CopperLayer",
+               "value": "F.Cu"
+              },
+              "net": "A",
+              "resource_id": "edge:0:2:6:0:3:6",
+              "start": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 5000000,
+                "y_nm": 13000000
+               }
+              }
+             }
+            },
+            {
+             "$type": "pcbir.routing:GlobalRouteSegment",
+             "fields": {
+              "end": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 9000000,
+                "y_nm": 13000000
+               }
+              },
+              "guide_half_width_nm": 2000000,
+              "layer": {
+               "$enum": "pcbir.physical:CopperLayer",
+               "value": "F.Cu"
+              },
+              "net": "A",
+              "resource_id": "edge:0:3:6:0:4:6",
+              "start": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 7000000,
+                "y_nm": 13000000
+               }
+              }
+             }
+            },
+            {
+             "$type": "pcbir.routing:GlobalRouteSegment",
+             "fields": {
+              "end": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 11000000,
+                "y_nm": 13000000
+               }
+              },
+              "guide_half_width_nm": 2000000,
+              "layer": {
+               "$enum": "pcbir.physical:CopperLayer",
+               "value": "F.Cu"
+              },
+              "net": "A",
+              "resource_id": "edge:0:4:6:0:5:6",
+              "start": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 9000000,
+                "y_nm": 13000000
+               }
+              }
+             }
+            },
+            {
+             "$type": "pcbir.routing:GlobalRouteSegment",
+             "fields": {
+              "end": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 13000000,
+                "y_nm": 13000000
+               }
+              },
+              "guide_half_width_nm": 2000000,
+              "layer": {
+               "$enum": "pcbir.physical:CopperLayer",
+               "value": "F.Cu"
+              },
+              "net": "A",
+              "resource_id": "edge:0:5:6:0:6:6",
+              "start": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 11000000,
+                "y_nm": 13000000
+               }
+              }
+             }
+            },
+            {
+             "$type": "pcbir.routing:GlobalRouteSegment",
+             "fields": {
+              "end": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 15000000,
+                "y_nm": 13000000
+               }
+              },
+              "guide_half_width_nm": 2000000,
+              "layer": {
+               "$enum": "pcbir.physical:CopperLayer",
+               "value": "F.Cu"
+              },
+              "net": "A",
+              "resource_id": "edge:0:6:6:0:7:6",
+              "start": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 13000000,
+                "y_nm": 13000000
+               }
+              }
+             }
+            },
+            {
+             "$type": "pcbir.routing:GlobalRouteSegment",
+             "fields": {
+              "end": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 17000000,
+                "y_nm": 13000000
+               }
+              },
+              "guide_half_width_nm": 2000000,
+              "layer": {
+               "$enum": "pcbir.physical:CopperLayer",
+               "value": "F.Cu"
+              },
+              "net": "A",
+              "resource_id": "edge:0:7:6:0:8:6",
+              "start": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 15000000,
+                "y_nm": 13000000
+               }
+              }
+             }
+            },
+            {
+             "$type": "pcbir.routing:GlobalRouteSegment",
+             "fields": {
+              "end": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 19000000,
+                "y_nm": 13000000
+               }
+              },
+              "guide_half_width_nm": 2000000,
+              "layer": {
+               "$enum": "pcbir.physical:CopperLayer",
+               "value": "F.Cu"
+              },
+              "net": "A",
+              "resource_id": "edge:0:8:6:0:9:6",
+              "start": {
+               "$type": "pcbir.physical:Point",
+               "fields": {
+                "x_nm": 17000000,
+                "y_nm": 13000000
+               }
+              }
+             }
+            }
+           ]
+          },
+          "vias": {
+           "$tuple": []
+          }
+         }
+        }
+       ]
+      },
+      "routing_fingerprint": "7f27e509fced695fdf0fec2c28ae6e41812a4c668d20ba057b4581878c8dc4c3",
+      "status": {
+       "$enum": "pcbir.routing:GlobalRoutingStatus",
+       "value": "success"
+      }
+     }
+    }
+   ],
+   [
+    "options",
+    {
+     "$type": "pcbir.unified_router:UnifiedRouterOptions",
+     "fields": {
+      "attach_candidates": 6,
+      "attach_extension_reach_nm": 600000,
+      "attach_extension_steps_nm": {
+       "$tuple": [
+        300000,
+        500000,
+        750000,
+        1000000,
+        1500000
+       ]
+      },
+      "attach_radius_nm": 1500000,
+      "ball_field_band": 0,
+      "ball_field_cost": 2.0,
+      "ball_field_exact": true,
+      "ball_field_exact_reach_nm": null,
+      "ball_field_via_sites": false,
+      "bend_cost": 0.25,
+      "bga_fanout": true,
+      "bus_bundles": false,
+      "bus_length_budget": false,
+      "bus_skew_tuning": true,
+      "buses_first": true,
+      "commit_rounds": 4,
+      "congestion_tile_nm": 1000000,
+      "critical_pair_state_escalation": 10,
+      "critical_pair_state_limit": null,
+      "direct": false,
+      "escape_layer_biases": {
+       "$tuple": []
+      },
+      "escape_net_order": {
+       "$tuple": []
+      },
+      "escapes_first": true,
+      "exit_reservation_cost": 0.0,
+      "export_congestion": true,
+      "failed_retry_before_exit": true,
+      "failed_retry_every": 3,
+      "failed_retry_limit": 0,
+      "fine_region_options": null,
+      "fine_regions": "arrays",
+      "full_reroute_every": 0,
+      "grid_window_nm": null,
+      "guide_cost": 0.0,
+      "guide_margin_nm": 1000000,
+      "history_increment": 0.8,
+      "implicit_neck_nm": 2500000,
+      "length_priority": false,
+      "local_escape_detour_nm": 500000,
+      "local_escape_limit": 40,
+      "local_escape_radius_nm": 2000000,
+      "local_escape_states": 20000,
+      "local_escape_step_nm": 25000,
+      "maximum_expansions": 400000,
+      "maximum_iterations": 150,
+      "neck_radius_nm": 1200000,
+      "open_flood_limit": 600,
+      "open_space_area_nm2": 4000000000000,
+      "outer_layer_cost": 0.0,
+      "outward_axis_threshold_nm": 300000,
+      "pitch_nm": null,
+      "plane_fill_width": true,
+      "plane_piece_area_nm2": 640000000000,
+      "plane_piece_fraction": 0.25,
+      "planned_escapes_as_copper": true,
+      "pour_recheck": true,
+      "power_islands": null,
+      "power_islands_ball_grid_only": false,
+      "pre_route_decouplers": true,
+      "present_factor": 0.6,
+      "present_growth": 1.5,
+      "present_limit": 0.0,
+      "raster_margin_nm": null,
+      "rejection_marker_cost": 0.0,
+      "repair_neighbour_reach_nm": 1000000,
+      "retain_escape_copper": false,
+      "reuse_plane_vias": true,
+      "route_smoothing": true,
+      "save_inputs_path": null,
+      "share_commit_index": true,
+      "stall_iterations": 60,
+      "time_budget_s": null,
+      "via_budget_factor": 4.0,
+      "via_cost_mm": 1.5,
+      "via_overrun_factor": 10.0,
+      "window_growth_limit": 6,
+      "window_margin_nm": 2500000,
+      "wrong_way_cost": 0.5
+     }
+    }
+   ],
+   [
+    "fanout_accesses",
+    null
+   ],
+   [
+    "fanout_created_vias",
+    null
+   ],
+   [
+    "fanout_created_tracks",
+    null
+   ],
+   [
+    "only_nets",
+    null
+   ],
+   [
+    "required_accesses",
+    null
+   ]
+  ],
+  "proxy": false
+ }
+}

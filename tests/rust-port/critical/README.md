@@ -159,3 +159,8 @@ inputs under `tests/rust-port/unified/synthetic/` (`save_inputs_path`):
 | `bus-bundles` | `test_bus_bundles_route_the_nets_between_the_bus_parts_with_the_bus` (saved with `maximum_iterations=5`) | `--set bus_bundles=true` | a bus phase of three nets (C joins the A/B group) |
 | `return-vias` | `test_negotiation_uses_existing_nearby_returns_without_adding_or_dropping_them` (only `S`) | nothing | a single-ended net crossing a wall through vias beside existing return vias |
 | `return-vias-missing` | `test_missing_returns_do_not_silently_allow_signal_transitions` | nothing | no via proposal without a return barrel |
+| `technology-blind` | `test_routed_blind_vias_follow_the_declared_technology` | nothing | blind F.Cu-In1.Cu vias from a via catalog (`_via_transitions`, `_site_spans`) |
+| `technology-through` | the same with `allowed_layers=(F.Cu, B.Cu)` | nothing | through vias selected from the catalog |
+| `technology-none` | `test_a_layer_change_no_technology_serves_is_rejected_with_its_reason` | nothing | `no_via_technology for allowed layer transitions` |
+| `technology-blind-span`, `-blocked` | `test_blind_vias_check_only_their_copper_span` | nothing | blind vias past a B.Cu via block; none past an In1.Cu one |
+| `technology-catalog` | `_four_layer((THROUGH, BLIND, BACK_BLIND))` | nothing | a three-technology catalog (no layer change needed) |

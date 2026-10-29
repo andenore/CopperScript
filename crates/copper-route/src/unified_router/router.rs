@@ -299,8 +299,10 @@ pub struct Router<'p, 'b> {
     pub guide_cache: IndexMap<String, Option<std::rc::Rc<Corridor>>>,
     /// `_n_guide`: per node, `guide_cost` outside the searched net's corridor.
     pub guide_nodes: Option<Vec<f64>>,
-    /// Per net, the via raster narrowed to its required return barrels.
-    pub return_via_owners: IndexMap<String, Vec<i32>>,
+    /// Per net and via span, the via raster narrowed to its required return barrels.
+    pub return_via_owners: IndexMap<(String, Option<(usize, usize)>), Vec<i32>>,
+    /// `_via_span_cache`: the physical span of each lattice layer change.
+    pub via_span_cache: IndexMap<(usize, usize), Option<(CopperLayer, CopperLayer, Option<String>)>>,
     pub local_spent: i64,
     pub segment_cache: Option<SegmentCache>,
     pub escape_bias_cache: IndexMap<String, Option<(Vec<i64>, Vec<f64>)>>,
@@ -537,6 +539,7 @@ impl<'p, 'b> Router<'p, 'b> {
             guide_cache: IndexMap::new(),
             guide_nodes: None,
             return_via_owners: IndexMap::new(),
+            via_span_cache: IndexMap::new(),
             local_spent: 0,
             segment_cache: Some(SegmentCache::new()),
             escape_bias_cache: IndexMap::new(),

@@ -548,7 +548,7 @@ fn repair_attempt(
 
 /// `save_state`'s write: the parent directories (`mkdir`), then the text
 /// (`write_text`); a failure is the uncaught `OSError`.
-fn save_inputs(path: &str, text: &str) -> Result<()> {
+pub fn save_inputs(path: &str, text: &str) -> Result<()> {
     use copper_lang::paths::{python_os_call_error, python_os_error};
     let crash = |error: &std::io::Error, message: String| {
         let class = match error.kind() {

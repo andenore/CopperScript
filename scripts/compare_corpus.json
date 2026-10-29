@@ -24367,6 +24367,72 @@
       "--report",
       "{out}/report.json"
      ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-blind",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-blind.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-through",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-through.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-none",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-none.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-blind-span",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-blind-span.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-blind-blocked",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-blind-blocked.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/technology-catalog",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/technology-catalog.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
     }
    ]
   },
@@ -26561,6 +26627,147 @@
       "50",
       "--height-mm",
       "40",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    }
+   ]
+  },
+  {
+   "name": "route-board-bga",
+   "milestone": "M4",
+   "cases": [
+    {
+     "id": "route-board-bga/bga",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/bga.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga-save-inputs",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/bga.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "--unified-save-inputs",
+      "{out}/unified.state.json",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga-via-lattice",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/bga.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "--via-lattice",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga_open",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/bga_open.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga_open-via-lattice",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/bga_open.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "--via-lattice",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga_open-via-lattice-array-flow",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/bga_open.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "--via-lattice",
+      "--array-flow",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bga_open-via-lattice-save-inputs",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/bga_open.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "--via-lattice",
+      "--unified-save-inputs",
+      "{out}/unified.state.json",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
