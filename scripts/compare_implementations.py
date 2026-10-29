@@ -208,8 +208,12 @@ def _ladder_cases(suite: dict, base: dict, kicad_cli: str | None) -> list[Case]:
             args += ["--verify-plane-fill", kicad_cli]
         project = Path(board["project"])
         skip = None if (project / board["source"]).is_file() else f"missing {project / board['source']}"
+        # A board may be gated at a later milestone than its suite, e.g. one
+        # that needs routing the rewrite does not implement yet.
+        milestone = suite.get("board_milestones", {}).get(board["name"], base["milestone"])
+        milestone_number(milestone)
         cases.append(Case(id=f"ladder/{board['name']}", args=args, cwd=project, timeout_s=board["timeout_s"],
-                          skip_reason=skip, **base))
+                          skip_reason=skip, **{**base, "milestone": milestone}))
     return cases
 
 

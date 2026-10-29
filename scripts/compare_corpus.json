@@ -21,6 +21,15 @@
     "jlcpcb-six-layer"
    ]
   },
+  "fx10-bridge": {
+   "source": "examples/fx10_bridge/board.copper",
+   "physical": [
+    "--layers",
+    "6",
+    "--fab-profile",
+    "jlcpcb-six-layer"
+   ]
+  },
   "nrf52": {
    "source": "examples/nrf52_coin_cell/board.copper",
    "physical": [
@@ -16427,6 +16436,9 @@
     "route-report.json": [
      "summary"
     ]
+   },
+   "board_milestones": {
+    "fx10-bridge": "M5"
    }
   },
   {
@@ -16446,6 +16458,7 @@
     "--report",
     "{out}/route.json"
    ],
+   "timeout_s": 1800,
    "compare": [
     "exit",
     "files"
