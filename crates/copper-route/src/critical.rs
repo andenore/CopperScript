@@ -395,7 +395,6 @@ pub struct CriticalRoutingResult {
     /// Bundles of pairs between the same two components: order and repairs.
     pub bundles: Vec<CriticalBundle>,
     /// Length-match tuning outcome per `length_match` group, as documents.
-    /// PENDING: owned by rust-m4-unified (critical_tuning.MatchTuningResult).
     pub match_tuning: Vec<Value>,
     pub plane_reservation_track_count: i64,
     pub plane_reservation_via_count: i64,
