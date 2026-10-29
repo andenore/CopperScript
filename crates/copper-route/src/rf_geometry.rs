@@ -3,10 +3,11 @@
 //! and the positive-area overlap tests the fill-fragment contacts need.
 //!
 //! Python builds these with shapely. Here a decoded fill is its outer ring and
-//! holes, and overlaps are clipped areas in floats (decision D6: rounding is
-//! not reproduced, so only marginal contacts can differ). Topologies shapely
-//! would node or heal in ways not reproduced here (rings touching at a
-//! vertex, a vertex on another edge) report not implemented, never a guess.
+//! holes (slit linework is noded and split into faces by `fill_linework`),
+//! and overlaps are clipped areas in floats (decision D6: rounding is not
+//! reproduced, so only marginal contacts can differ). Shapely's conventions
+//! (ring start and orientation, where touching rings are split) are not
+//! reproduced; the decoded region is.
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -102,20 +103,6 @@ fn ring_area(ring: &[(i64, i64)]) -> i128 {
     twice
 }
 
-fn point_in_ring(point: (i64, i64), ring: &[(i64, i64)]) -> bool {
-    let (x, y) = (point.0 as f64, point.1 as f64);
-    let mut inside = false;
-    for (index, a) in ring.iter().enumerate() {
-        let b = ring[(index + 1) % ring.len()];
-        if (a.1 > point.1) != (b.1 > point.1)
-            && x < (b.0 - a.0) as f64 * (y - a.1 as f64) / (b.1 - a.1) as f64 + a.0 as f64
-        {
-            inside = !inside;
-        }
-    }
-    inside
-}
-
 fn floats(ring: &[(i64, i64)]) -> Vec<P> {
     ring.iter().map(|&(x, y)| (x as f64, y as f64)).collect()
 }
@@ -158,63 +145,18 @@ pub fn native_fill_polygon(vertices: &[(i64, i64)]) -> Result<NativeFill> {
     if lines.is_empty() {
         return Ok(NativeFill::Invalid);
     }
-    // Remaining linework must be disjoint simple rings (each vertex one in,
-    // one out); shapely's polygonize is not reproduced for anything else.
-    let mut successor: IndexMap<(i64, i64), usize> = IndexMap::new();
-    let mut incoming: IndexSet<(i64, i64)> = IndexSet::new();
-    for (index, (a, b)) in lines.iter().enumerate() {
-        if successor.insert(*a, index).is_some() || !incoming.insert(*b) {
-            return copper_pcb::not_implemented("native fill linework with a shared vertex (shapely polygonize)");
-        }
-    }
-    if successor.len() != incoming.len() || successor.keys().any(|point| !incoming.contains(point)) {
-        return copper_pcb::not_implemented("open native fill linework (shapely polygonize)");
-    }
-    let next: Vec<usize> = lines.iter().map(|(_, b)| successor[b]).collect();
-    if !edges_simple(&lines, &next) {
-        return copper_pcb::not_implemented("crossing or touching native fill linework (shapely polygonize)");
-    }
-    let mut seen = vec![false; lines.len()];
-    let mut rings: Vec<Vec<(i64, i64)>> = Vec::new();
-    for start in 0..lines.len() {
-        if seen[start] {
-            continue;
-        }
-        let mut ring = Vec::new();
-        let mut cursor = start;
-        while !seen[cursor] {
-            seen[cursor] = true;
-            ring.push(lines[cursor].0);
-            cursor = next[cursor];
-        }
-        if ring.len() < 3 || ring_area(&ring) == 0 {
-            return copper_pcb::not_implemented("degenerate native fill ring (shapely polygonize)");
-        }
-        rings.push(ring);
-    }
-    let depths: Vec<usize> = (0..rings.len())
-        .map(|i| (0..rings.len()).filter(|&j| j != i && point_in_ring(rings[i][0], &rings[j])).count())
-        .collect();
-    let outers: Vec<usize> = (0..rings.len()).filter(|&i| depths[i].is_multiple_of(2)).collect();
-    match outers.as_slice() {
-        [] => Ok(NativeFill::Invalid),
-        [outer] if depths[*outer] == 0 => Ok(NativeFill::Polygon(FillPolygon {
-            outer: floats(&rings[*outer]),
-            holes: (0..rings.len()).filter(|&i| depths[i] == 1).map(|i| floats(&rings[i])).collect(),
-        })),
-        _ => Ok(NativeFill::Multiple(
-            outers
-                .iter()
-                .map(|&outer| FillPolygon {
-                    outer: floats(&rings[outer]),
-                    holes: (0..rings.len())
-                        .filter(|&i| depths[i] == depths[outer] + 1 && point_in_ring(rings[i][0], &rings[outer]))
-                        .map(|i| floats(&rings[i]))
-                        .collect(),
-                })
-                .collect(),
-        )),
-    }
+    let Some(mut faces) = crate::fill_linework::odd_faces(&lines) else {
+        return Ok(NativeFill::Invalid);
+    };
+    let polygon = |(outer, holes): crate::fill_linework::Face| FillPolygon {
+        outer: floats(&outer),
+        holes: holes.iter().map(|hole| floats(hole)).collect(),
+    };
+    Ok(if faces.len() == 1 {
+        NativeFill::Polygon(polygon(faces.pop().expect("one face")))
+    } else {
+        NativeFill::Multiple(faces.into_iter().map(polygon).collect())
+    })
 }
 
 /// A straight track as `reference_coverage` reads it.
@@ -298,14 +240,6 @@ pub fn reference_coverage(
             }
         }
     }
-    // The union's area is the faces' sum only while they do not overlap.
-    for index in 0..polygons.len() {
-        for other in 0..index {
-            if polygons[index].overlap(&polygons[other]) > 0.0 {
-                return copper_pcb::not_implemented("overlapping native reference fills (shapely unary_union)");
-            }
-        }
-    }
     let mut uncovered = Vec::new();
     let mut length = 0.0;
     for (index, track) in own.iter().enumerate() {
@@ -327,7 +261,7 @@ pub fn reference_coverage(
         let envelope =
             Convex(if signed_area(&envelope.0) < 0.0 { envelope.0.into_iter().rev().collect() } else { envelope.0 });
         let area = envelope.area();
-        let covered: f64 = polygons.iter().map(|polygon| polygon.convex_overlap(&envelope)).sum();
+        let covered = union_convex_overlap(&polygons, &envelope);
         if area - covered > area * 1e-9 {
             uncovered.push(Value::from(index as i64));
         }
@@ -345,6 +279,98 @@ pub fn reference_coverage(
         "Projected conductor coverage only; no electrical/impedance proof",
         metrics,
     ))
+}
+
+/// The area of a convex polygon covered by the union of fills (shapely's
+/// `unary_union(polygons)` intersected with it): within each vertical slab
+/// free of vertices and crossings the covered height is linear in x, so its
+/// midpoint value times the slab width is exact up to float rounding.
+pub fn union_convex_overlap(polygons: &[FillPolygon], clip: &Convex) -> f64 {
+    if clip.0.len() < 3 {
+        return 0.0;
+    }
+    let bounds = |ring: &[P]| {
+        ring.iter().fold((f64::MAX, f64::MAX, f64::MIN, f64::MIN), |(a, b, c, d), p| {
+            (a.min(p.0), b.min(p.1), c.max(p.0), d.max(p.1))
+        })
+    };
+    let (left, bottom, right, top) = bounds(&clip.0);
+    let ring_edges = |ring: &[P]| -> Vec<(P, P)> {
+        (0..ring.len()).map(|index| (ring[index], ring[(index + 1) % ring.len()])).collect()
+    };
+    // Fill edges over the clip's x range, tagged by polygon (the even-odd
+    // count needs those below it too); only those near the clip and the
+    // clip's own edges can cross inside it.
+    let mut edges: Vec<(P, P, usize)> = Vec::new();
+    for (index, polygon) in polygons.iter().enumerate() {
+        for (ring, _) in polygon.rings() {
+            edges.extend(
+                ring_edges(ring)
+                    .into_iter()
+                    .filter(|(a, b)| a.0.max(b.0) >= left && a.0.min(b.0) <= right)
+                    .map(|(a, b)| (a, b, index)),
+            );
+        }
+    }
+    let boundary = ring_edges(&clip.0);
+    let segments: Vec<(P, P)> = edges
+        .iter()
+        .map(|&(a, b, _)| (a, b))
+        .filter(|(a, b)| a.1.max(b.1) >= bottom && a.1.min(b.1) <= top)
+        .chain(boundary.iter().copied())
+        .collect();
+    let mut cuts: Vec<f64> =
+        edges.iter().flat_map(|&(a, b, _)| [a.0, b.0]).chain(boundary.iter().map(|(a, _)| a.0)).collect();
+    for (index, &(a, b)) in segments.iter().enumerate() {
+        for &(c, d) in &segments[index + 1..] {
+            if a.0.max(b.0) < c.0.min(d.0) || c.0.max(d.0) < a.0.min(b.0) {
+                continue;
+            }
+            let (dx, dy, ex, ey) = (b.0 - a.0, b.1 - a.1, d.0 - c.0, d.1 - c.1);
+            let denominator = dx * ey - dy * ex;
+            if denominator == 0.0 {
+                continue;
+            }
+            let t = ((c.0 - a.0) * ey - (c.1 - a.1) * ex) / denominator;
+            let u = ((c.0 - a.0) * dy - (c.1 - a.1) * dx) / denominator;
+            if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+                cuts.push(a.0 + t * dx);
+            }
+        }
+    }
+    cuts.retain(|x| (left..=right).contains(x));
+    cuts.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
+    cuts.dedup();
+    let at = |(a, b): (P, P), x: f64| a.1 + (b.1 - a.1) * (x - a.0) / (b.0 - a.0);
+    let spans = |(a, b): (P, P), x: f64| (a.0 < x) != (b.0 < x);
+    let mut area = 0.0;
+    let mut inside = vec![false; polygons.len()];
+    for slab in cuts.windows(2) {
+        let x = (slab[0] + slab[1]) / 2.0;
+        let limits: Vec<f64> = boundary.iter().filter(|edge| spans(**edge, x)).map(|edge| at(*edge, x)).collect();
+        let (Some(low), Some(high)) =
+            (limits.iter().copied().reduce(f64::min), limits.iter().copied().reduce(f64::max))
+        else {
+            continue;
+        };
+        let mut crossings: Vec<(f64, usize)> =
+            edges.iter().filter(|&&(a, b, _)| spans((a, b), x)).map(|&(a, b, index)| (at((a, b), x), index)).collect();
+        crossings.sort_by(|a, b| a.0.partial_cmp(&b.0).expect("finite"));
+        inside.iter_mut().for_each(|flag| *flag = false);
+        let (mut depth, mut start, mut length) = (0usize, 0.0, 0.0);
+        for (y, index) in crossings {
+            let was = depth > 0;
+            inside[index] = !inside[index];
+            depth = if inside[index] { depth + 1 } else { depth - 1 };
+            if !was && depth > 0 {
+                start = y;
+            } else if was && depth == 0 {
+                length += (y.min(high) - start.max(low)).max(0.0);
+            }
+        }
+        area += length * (slab[1] - slab[0]);
+    }
+    area
 }
 
 fn signed_area(ring: &[P]) -> f64 {
@@ -663,5 +689,159 @@ mod tests {
              coverage only; no electrical/impedance proof\", \"metrics\": {\"unsupported_segment_indices\": [1], \
              \"track_count\": 3, \"total_segment_length_nm\": 254.0, \"reference_layer\": \"In1.Cu\", \"margin_nm\": 0}}"
         );
+    }
+
+    fn decoded_area(outer: &[(i64, i64)]) -> (usize, Vec<usize>, f64) {
+        let faces = match native_fill_polygon(outer).expect("decodes") {
+            NativeFill::Polygon(polygon) => vec![polygon],
+            NativeFill::Multiple(faces) => faces,
+            NativeFill::Invalid => panic!("invalid"),
+        };
+        let area = faces
+            .iter()
+            .map(|f| signed_area(&f.outer).abs() - f.holes.iter().map(|h| signed_area(h).abs()).sum::<f64>())
+            .sum();
+        (faces.len(), faces.iter().map(|f| f.holes.len()).collect(), area)
+    }
+
+    /// Walks Python's polygonize decodes (areas and hole counts are shapely's).
+    #[test]
+    fn noded_slit_walks_decode_like_shapely() {
+        // Two holes meeting at (40, 40), entered by one slit.
+        let shared = [
+            (0, 0),
+            (100, 0),
+            (100, 100),
+            (0, 100),
+            (0, 20),
+            (20, 20),
+            (20, 40),
+            (40, 40),
+            (40, 60),
+            (60, 60),
+            (60, 40),
+            (40, 40),
+            (40, 20),
+            (20, 20),
+            (0, 20),
+        ];
+        assert_eq!(decoded_area(&shared), (1, vec![2], 9200.0));
+        // A hole whose vertex (50, 0) lies on the outer ring's bottom edge.
+        let touch = [
+            (0, 0),
+            (100, 0),
+            (100, 100),
+            (0, 100),
+            (0, 50),
+            (40, 50),
+            (40, 60),
+            (60, 60),
+            (60, 40),
+            (50, 0),
+            (40, 40),
+            (40, 50),
+            (0, 50),
+        ];
+        assert_eq!(decoded_area(&touch), (1, vec![1], 9200.0));
+        // Two faces joined by a slit (a MultiPolygon).
+        let islands = [
+            (0, 0),
+            (10, 0),
+            (10, 10),
+            (0, 10),
+            (0, 5),
+            (20, 5),
+            (20, 0),
+            (30, 0),
+            (30, 10),
+            (20, 10),
+            (20, 5),
+            (0, 5),
+        ];
+        assert_eq!(decoded_area(&islands), (2, vec![0, 0], 200.0));
+        // A triangle hole touching the outer ring's edges at three vertices
+        // cuts the copper into three pieces (6, 18 and 3). Shapely's
+        // unnoded polygonize makes one face whose hole touches its shell
+        // three times, which is not a valid polygon, so Python rejects it.
+        let pinched = [(0, 0), (6, 0), (6, 6), (3, 6), (6, 4), (3, 0), (3, 6), (6, 6), (0, 6)];
+        assert_eq!(decoded_area(&pinched), (3, vec![0, 0, 0], 27.0));
+        // A hole touching the outer ring at three points with an island in
+        // it: four pieces, 24 in all. Python returns the island alone (2).
+        let island = [
+            (0, 0),
+            (6, 0),
+            (2, 3),
+            (3, 3),
+            (3, 5),
+            (2, 5),
+            (2, 3),
+            (6, 0),
+            (6, 6),
+            (0, 6),
+            (0, 4),
+            (4, 6),
+            (6, 0),
+            (0, 4),
+            (0, 6),
+        ];
+        assert_eq!(decoded_area(&island), (4, vec![0, 0, 0, 0], 24.0));
+        // A zero-area ring along the outer edge bounds nothing more.
+        let spur = [(0, 0), (6, 0), (6, 6), (1, 0), (2, 0), (3, 0), (1, 0), (6, 6), (0, 6)];
+        assert_eq!(decoded_area(&spur), (1, vec![0], 36.0));
+        // Crossing holes and dropped linework stay invalid, never healed.
+        let crossing = [
+            (0, 0),
+            (100, 0),
+            (100, 100),
+            (0, 100),
+            (0, 30),
+            (20, 30),
+            (20, 50),
+            (50, 50),
+            (50, 20),
+            (20, 20),
+            (20, 30),
+            (0, 30),
+            (0, 40),
+            (30, 40),
+            (30, 60),
+            (60, 60),
+            (60, 30),
+            (30, 30),
+            (30, 40),
+            (0, 40),
+        ];
+        assert!(matches!(native_fill_polygon(&crossing).unwrap(), NativeFill::Invalid));
+        let degenerate =
+            [(0, 0), (100, 0), (100, 100), (0, 100), (0, 50), (40, 50), (50, 50), (60, 50), (40, 50), (0, 50)];
+        assert!(matches!(native_fill_polygon(&degenerate).unwrap(), NativeFill::Invalid));
+    }
+
+    /// Coverage by overlapping fills is coverage by their union (the areas
+    /// are shapely's `unary_union(...).intersection(envelope).area`).
+    #[test]
+    fn union_coverage_matches_shapely() {
+        let square = |outer: Vec<(i64, i64)>, holes: Vec<Vec<(i64, i64)>>| FillPolygon {
+            outer: floats(&outer),
+            holes: holes.iter().map(|hole| floats(hole)).collect(),
+        };
+        let fills = [
+            square(vec![(0, 0), (60, 0), (60, 100), (0, 100)], Vec::new()),
+            square(vec![(40, 0), (100, 0), (100, 100), (40, 100)], vec![vec![(70, 40), (80, 40), (80, 60), (70, 60)]]),
+        ];
+        let envelope = |start: (f64, f64), end: (f64, f64), half: f64| {
+            let (dx, dy) = (end.0 - start.0, end.1 - start.1);
+            let span = dx.hypot(dy);
+            let (ux, uy) = (dx / span * half, dy / span * half);
+            let (sx, sy, ex, ey) = (start.0 - ux, start.1 - uy, end.0 + ux, end.1 + uy);
+            Convex(vec![(sx + uy, sy - ux), (ex + uy, ey - ux), (ex - uy, ey + ux), (sx - uy, sy + ux)])
+        };
+        close(union_convex_overlap(&fills, &envelope((10.0, 50.0), (90.0, 50.0), 2.0)), 296.0);
+        close(union_convex_overlap(&fills, &envelope((10.0, 45.0), (95.0, 45.0), 2.0)), 316.0);
+        let diagonal = envelope((5.0, 10.0), (95.0, 90.0), 3.0);
+        close(union_convex_overlap(&fills, &diagonal), 758.4956747275374);
+        close(diagonal.area(), 758.4956747275378);
+        // The sum of the faces' overlaps counts the shared band twice.
+        assert!(fills.iter().map(|fill| fill.convex_overlap(&diagonal)).sum::<f64>() > diagonal.area() * 1.1);
     }
 }
