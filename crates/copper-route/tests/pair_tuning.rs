@@ -10,7 +10,7 @@ use copper_pcb::board::{PhysicalBoard, TrackSegment, Via};
 use copper_pcb::state_codec::{integer, items, layer, string_map, text, via};
 use copper_physical::Point;
 use copper_route::pair_search::PairSearchCandidate;
-use copper_route::pair_terminals::matched_local_candidates;
+use copper_route::pair_terminals::{LocalProposal, matched_local_candidates};
 use copper_route::pair_tuning::{PairTuning, tune_pair};
 use copper_route::pair_tuning_spans::{Node, tune_virtual_pair_spans};
 use copper_state::StateValue;
@@ -224,7 +224,15 @@ fn matched_local_candidates_match_python() {
             return_vias: vias(case.fields["return_vias"]),
         };
         let [first, second] = &case.source.net_routing_rules[..] else { panic!("two rules") };
-        let proposals = matched_local_candidates(&case.source, first, second, &candidate).expect("proposals");
+        // The tuned proposals; the candidate itself and rejected plans are not compared.
+        let mut proposals = Vec::new();
+        matched_local_candidates(&case.source, first, second, &candidate, &mut |proposal| {
+            if let LocalProposal::Tuned(tuned) = proposal {
+                proposals.push(*tuned);
+            }
+            Ok(false)
+        })
+        .expect("proposals");
         let documents: Vec<Value> = proposals
             .iter()
             .map(|proposal| {

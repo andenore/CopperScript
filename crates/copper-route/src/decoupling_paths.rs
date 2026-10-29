@@ -34,7 +34,7 @@ use crate::routing_clearance::RoutingClearanceIndex;
 use crate::routing_vias::physical_via_span;
 use crate::surface_path::{track_inside_board, via_inside_board};
 
-const QUALIFICATION: &str =
+pub(crate) const QUALIFICATION: &str =
     "Physical declared-return-net join only; component internals and electrical return qualification unproved.";
 
 /// `DecouplingPathNode`.

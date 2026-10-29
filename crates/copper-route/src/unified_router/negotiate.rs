@@ -454,6 +454,20 @@ impl Router<'_, '_> {
                     if net_vias.contains(via) {
                         continue;
                     }
+                    if let Some(rule) = self.rules.get(name.as_str())
+                        && rule.require_return_vias
+                        && rule.differential_partner.is_none()
+                        && crate::return_paths::covering_return_vias(self.board, rule, via).is_empty()
+                    {
+                        bad.push(via.position);
+                        self.rejections.entry(name.clone()).or_default().push((
+                            via.position,
+                            "via".to_owned(),
+                            Vec::new(),
+                            true,
+                            "required_return_via".to_owned(),
+                        ));
+                    }
                     if !self.clearance.as_ref().expect("index").can_via(
                         name,
                         via.position,

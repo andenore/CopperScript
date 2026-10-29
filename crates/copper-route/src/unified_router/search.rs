@@ -8,6 +8,7 @@ use copper_physical::pyfloat::hypot;
 
 use super::astar::{FLAG_NECK, FLAG_NECK_MID, FLAG_REGION, FLAG_TARGET, NestedTables, Scratch, SearchInput, search};
 use super::geometry::{disc_offsets, segment_offsets};
+use super::rasters::FOREIGN;
 use super::router::{Attach, Lead, NetRoute, NetSpec, Router};
 use crate::routing_lattice::{IndexBox, MOVES, NestedLattice};
 use crate::unified_error::{Result, not_implemented};
@@ -421,6 +422,15 @@ impl Router<'_, '_> {
         let margin = self.margin(&self.specs[index]);
         let mut bbox = g.grow_box((tbox.0.min(sx0), tbox.1.min(sy0), tbox.2.max(sx1), tbox.3.max(sy1)), margin);
         let whole = g.full_box();
+        if !self.guides.is_empty() {
+            let name = self.specs[index].name.clone();
+            if let Some(corridor) = self.guide_corridor(&name)? {
+                // A guided net's window covers its corridor, so the soft guide
+                // cost can be followed where the guide detours.
+                let (cx0, cy0, cx1, cy1) = corridor.bounds;
+                bbox = (bbox.0.min(cx0), bbox.1.min(cy0), bbox.2.max(cx1), bbox.3.max(cy1));
+            }
+        }
         for attempt in 0..3 {
             let result = self.astar(index, sources, &targets, present, bbox, tbox)?;
             if result.is_some() {
@@ -501,17 +511,59 @@ impl Router<'_, '_> {
         table
     }
 
-    /// `_via_owners`: the via raster (return-via masks are not rewritten).
+    /// `_via_owners`: the via raster; a single-ended net that requires return
+    /// vias may propose a via only within reach of an existing return barrel
+    /// (a proposal: exact checks repeat at commit and in DRC).
     fn via_owner(&mut self, index: usize) -> Result<Vec<i32>> {
         let spec = &self.specs[index];
-        if let Some(rule) = self.rules.get(&spec.name)
-            && rule.require_return_vias
-            && rule.differential_partner.is_none()
-        {
-            return not_implemented("unified router required return vias");
-        }
         let (size, drill, clearance) = (spec.via_size, spec.via_drill, spec.clearance);
-        Ok(self.rasters.via(size, drill, clearance, None).to_vec())
+        let rule = match self.rules.get(&spec.name) {
+            Some(rule) if rule.require_return_vias && rule.differential_partner.is_none() => rule.clone(),
+            _ => return Ok(self.rasters.via(size, drill, clearance, None).to_vec()),
+        };
+        if let Some(cached) = self.return_via_owners.get(&spec.name) {
+            return Ok(cached.clone());
+        }
+        let name = spec.name.clone();
+        let layers = &self.lattice.layers;
+        let (low, high) = (layers[0], layers[layers.len() - 1]);
+        let mut masks: Vec<Vec<bool>> = self.rasters.views.iter().map(|view| vec![false; view.px.len()]).collect();
+        for via in &self.board.vias {
+            if rule.return_via_net.as_deref() != Some(via.net.as_str())
+                || via.net == name
+                || !crate::return_paths::return_span_covers(self.board, via, low, high)
+            {
+                continue;
+            }
+            let Some(limit) = rule.maximum_return_via_distance_nm else {
+                return not_implemented("required return vias without a maximum distance (Python crashes)");
+            };
+            let (x, y) = (via.position.x_nm, via.position.y_nm);
+            for (view, mask) in self.rasters.views.iter().zip(&mut masks) {
+                let block = &view.block;
+                let (x0, y0, x1, y1) =
+                    block.window((x - limit) as f64, (y - limit) as f64, (x + limit) as f64, (y + limit) as f64);
+                if x0 > x1 || y0 > y1 {
+                    continue;
+                }
+                for iy in y0..=y1 {
+                    for ix in x0..=x1 {
+                        let at = (iy * block.nx + ix) as usize;
+                        if (view.px[at] - x as f64).hypot(view.py[at] - y as f64) <= limit as f64 {
+                            mask[at] = true;
+                        }
+                    }
+                }
+            }
+        }
+        let mut owners = self.rasters.via(size, drill, clearance, None).to_vec();
+        for (owner, inside) in owners.iter_mut().zip(masks.iter().flatten()) {
+            if !inside {
+                *owner = FOREIGN;
+            }
+        }
+        self.return_via_owners.insert(name, owners.clone());
+        Ok(owners)
     }
 
     /// `_astar` through the native kernel's semantics.
@@ -539,6 +591,16 @@ impl Router<'_, '_> {
             spec.layers.iter().map(|&l| l as i32 | if spec.target_only.contains(&l) { 0x100 } else { 0 }).collect();
         let move_base = self.move_base();
         let turn = if self.options.bend_cost != 0.0 { Some(self.turn_table()) } else { None };
+        // Per node, guide_cost outside the searched net's corridor (`_n_guide`).
+        let corridor = if self.guides.is_empty() { None } else { self.guide_corridor(&spec.name)? };
+        if let Some(corridor) = &corridor {
+            let size = self.lattice.size as usize;
+            let cost = self.options.guide_cost;
+            let guide = self.guide_nodes.get_or_insert_with(|| vec![cost; size]);
+            for &node in &corridor.nodes {
+                guide[node as usize] = 0.0;
+            }
+        }
         let marks: Vec<(Vec<i64>, u8)> = vec![
             (spec.neck.iter().copied().collect(), FLAG_NECK),
             (spec.neck_mid.iter().copied().collect(), FLAG_NECK_MID),
@@ -591,7 +653,7 @@ impl Router<'_, '_> {
             sources,
             target_extra: targets.extra.map(|_| &self.extra[..]),
             turn: turn.as_deref(),
-            guide: None,
+            guide: corridor.as_ref().and(self.guide_nodes.as_deref()),
             via_transitions: None,
             max_expansions: self.options.maximum_expansions,
             nested: None,
@@ -614,6 +676,11 @@ impl Router<'_, '_> {
         if let Some(extra) = targets.extra {
             for &node in extra.keys() {
                 self.extra[node as usize] = 0.0;
+            }
+        }
+        if let (Some(corridor), Some(guide)) = (&corridor, self.guide_nodes.as_mut()) {
+            for &node in &corridor.nodes {
+                guide[node as usize] = self.options.guide_cost;
             }
         }
         Ok(path.map(|path| {

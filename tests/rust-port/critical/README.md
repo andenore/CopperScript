@@ -115,6 +115,35 @@ counters; times are one Python replay.
 | `bundle-tuning` | `test_bundle_tuning._bundle(HEMMED)` | 4000 | tuning while routing in a bundle (R12), two `routing` steps | 1.7 s |
 | `group-tuning` | `test_group_tuning._group_board()` | | a tuning group bent together while routing (`_tune_group`, R14) | 0.5 s |
 
+Pair terminal preparation (`pair_terminals`), single-ended guide vias and
+package-access reservations. "cleared" guides are the tests' failed coarse
+guides without accesses or copper; "unconnected" ones keep their accesses.
+The `reserved-*` inputs also save `reserved_accesses`: the bypass-only
+`FanoutResult` that route-board's critical stage receives
+(`flow._bypass_copper_reservations` of `route_decouplers`).
+
+| File | Source test/helper | `--pair-states` | Reaches |
+|---|---|---|---|
+| `terminals-crossover` | `test_local_pair_branches.fixture()` | | a matched local contact crossover (`_paired_local_contacts`, `matched_contacts`) |
+| `terminals-crossover-rejected` | the same with `max_vias=0` | 1 | a `blocked` crossover: the preparation's reason replaces the terminal diagnostic |
+| `terminals-crossover-support` | `test_crossover_with_support...`, ESD at x=23 | | a crossover joined with a nearby support (`_surface_pair_terminals` on the trial board) |
+| `terminals-crossover-support-remote` | the same, ESD at x=18 | | an `unsupported` preparation |
+| `terminals-support-joint` | `support_fixture()`, unconnected guides | 6000 | `plan_pair_supports` with surface support completion (`joint_support_contacts`) |
+| `terminals-support-joint-tiny` | `support_fixture()` | 1 | pending support contacts kept on a failed pair |
+| `terminals-support-remote`, `-ambiguous`, `-no-contract` | `test_support_contacts_require_one_source_declared_local_endpoint` | 6000 | no support plan; an `unsupported` preparation |
+| `terminals-joint-returns` | `test_joint_supports_cross_layers_with_real_returns_or_roll_back(1.5 mm)` | 6000 | transition support completion with return vias |
+| `terminals-joint-returns-far` | the same with 0.1 mm | 6000 | every return site rejected by support completion (Python 4 min) |
+| `terminals-fallback`, `-duplicates` | `test_pair_terminal_fallback.fixture()`, cleared guides | | source terminals; same-package branch ties (`surface_contacts`) |
+| `terminals-fallback-duplicates-tiny` | the duplicates board | 1 | ties under a one-state budget |
+| `terminals-support-branches`, `-tiny`, `-remote` | `support_branch_fixture()`, cleared guides | 20000, 1, - | nearby support branches, joined variants (`joined_terminal_variants`); a remote third component |
+| `terminals-hybrid-anchor`, `-renamed` | `test_pair_hybrid_contact_anchor.hybrid()` | | a plated joined contact as the main endpoint |
+| `terminals-macro-ports`, `-coarse` | `test_partial_pair_macro_ports.bound_pair`, cleared / coarse guides | | the exact search from proved macro ports (`macro_terminal_guides_proved`) |
+| `single-guide-via`, `-budget` | `test_critical_transition_without_special_technology_is_through_via` (and `max_vias=0`) | | a single-ended guide via (`_guide_via`) |
+| `reserved-bypass` | `test_bypass_checkpoint_replays_only_after_unique_edge_restore_and_fresh_admission` | | a reservation decoded, restored and admitted (no critical net) |
+| `reserved-crossface` | `test_formal_critical_pair_and_retained_clock_admit_only_complete_crossface_prefix` | 6000 | a pair and a clock routed over a cross-face bypass reservation |
+| `reserved-crossface-forged` | the same with a forged extra via | 6000 | `invalid package-access bypass reservations` |
+| `reserved-short` | the same with an ordinary reservation track across both pair lands | 6000 | a failed reservation preflight (`<package-reservations>`) |
+
 No synthetic input reaches a tuned `tune_virtual_pair_spans`, the
 clearance-aware retry `pair_terminals._matched_local_candidates`, or twin
 bumps beside vias: their tests drive them with hand-made copper or patched
@@ -128,3 +157,5 @@ inputs under `tests/rust-port/unified/synthetic/` (`save_inputs_path`):
 | `bus-skew` | `test_tuned_bus_copper_survives_route_smoothing` (saved with `buses_first=true`) | nothing, or `--set route_smoothing=true` | `_tune_bus_skew` lengthening A by 6 mm |
 | `bus-skew-untunable` | the same board without `tuning_amplitude_limit` | nothing | the bus skew note on the board |
 | `bus-bundles` | `test_bus_bundles_route_the_nets_between_the_bus_parts_with_the_bus` (saved with `maximum_iterations=5`) | `--set bus_bundles=true` | a bus phase of three nets (C joins the A/B group) |
+| `return-vias` | `test_negotiation_uses_existing_nearby_returns_without_adding_or_dropping_them` (only `S`) | nothing | a single-ended net crossing a wall through vias beside existing return vias |
+| `return-vias-missing` | `test_missing_returns_do_not_silently_allow_signal_transitions` | nothing | no via proposal without a return barrel |

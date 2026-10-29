@@ -67,11 +67,19 @@ fn within<T: Eq + std::hash::Hash>(small: &[T], large: &[T]) -> bool {
 
 /// `restore_bypass_reservation_edges`: every contribution edge and witness
 /// step must name exactly one occurrence on the board.
-pub fn restore_bypass_reservation_edges(reserved: &BypassReservation) -> std::result::Result<(), String> {
+///
+/// By default only the bypass-only prefix is supported; critical replay
+/// (`allow_ordinary`) may restore a mixed ordinary prefix, whose full
+/// ordinary ownership, source and physical checks still run afterwards.
+pub fn restore_bypass_reservation_edges(
+    reserved: &BypassReservation,
+    allow_ordinary: bool,
+) -> std::result::Result<(), String> {
     if !within(&reserved.decoupling_tracks, &reserved.created_tracks)
         || !within(&reserved.decoupling_vias, &reserved.created_vias)
-        || counts(&reserved.created_tracks) != counts(&reserved.decoupling_tracks)
-        || counts(&reserved.created_vias) != counts(&reserved.decoupling_vias)
+        || !allow_ordinary
+            && (counts(&reserved.created_tracks) != counts(&reserved.decoupling_tracks)
+                || counts(&reserved.created_vias) != counts(&reserved.decoupling_vias))
     {
         return Err("critical replay requires an exact bypass-only reservation".to_owned());
     }
@@ -218,7 +226,7 @@ pub fn bypass_copper_reservations(
 ) -> Result<(Option<BypassReservation>, Option<String>)> {
     let frame = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(source.clone())?)?;
     let reserved = BypassReservation::new(&frame, tracks, vias, witnesses);
-    if let Err(reason) = restore_bypass_reservation_edges(&reserved) {
+    if let Err(reason) = restore_bypass_reservation_edges(&reserved, false) {
         return Ok((None, Some(reason)));
     }
     let (_, _, reason) = verified_bypass_reservations(&frame, &reserved)?;
@@ -226,4 +234,240 @@ pub fn bypass_copper_reservations(
         None => (Some(reserved), None),
         Some(reason) => (None, Some(reason)),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Saved reservations
+
+/// A saved `fanout.FanoutResult` as the bypass reservation critical replay
+/// restores (`restore_bypass_reservation_edges(..., allow_ordinary=True)`):
+/// decoding errors, then (inner) the `ValueError` of that later restoration.
+/// Fanout analysis fields a reservation never carries are not decoded.
+pub fn saved_reservation(value: &copper_state::StateValue) -> Result<std::result::Result<BypassReservation, String>> {
+    use copper_pcb::state_codec::{Fields, integer, pad_reference, point, set_items, track, via};
+    use copper_state::StateValue;
+    const NAME: &str = "pcbir.fanout:FanoutResult";
+    let fields = Fields::of(value, NAME)?;
+    fields.allow(&[
+        "board",
+        "accesses",
+        "pending_pads",
+        "added_track_count",
+        "added_via_count",
+        "created_vias",
+        "pin_analysis",
+        "created_tracks",
+        "assignment",
+        "boundary_accesses",
+        "surface_accesses",
+        "decoupling_pending",
+        "decoupling_tracks",
+        "decoupling_vias",
+        "decoupling_witnesses",
+        "decoupling_pending_links",
+        "late_bypass",
+    ])?;
+    let missing: Vec<&str> = ["board", "accesses", "pending_pads", "added_track_count", "added_via_count"]
+        .into_iter()
+        .filter(|name| fields.get(name).is_none())
+        .collect();
+    if !missing.is_empty() {
+        return copper_pcb::not_implemented("a saved FanoutResult without its required fields (Python crashes)");
+    }
+    for name in ["pin_analysis", "decoupling_pending", "decoupling_pending_links"] {
+        if fields.get(name).is_some_and(|items| !matches!(items, StateValue::Tuple(items) if items.is_empty())) {
+            return copper_pcb::not_implemented(&format!("a saved FanoutResult with {name}"));
+        }
+    }
+    for name in ["assignment", "late_bypass"] {
+        if fields.get(name).is_some_and(|item| !matches!(item, StateValue::Null)) {
+            return copper_pcb::not_implemented(&format!("a saved FanoutResult with {name}"));
+        }
+    }
+    let board = copper_pcb::state_codec::board(fields.required("board")?)?;
+    // An access mapping (`$map`), only checked for emptiness after decoding.
+    let accesses = |name: &str, read_value: &dyn Fn(&StateValue) -> Result<()>| -> Result<usize> {
+        match fields.get(name) {
+            None | Some(StateValue::Null) => Ok(0),
+            Some(StateValue::Map { entries, .. }) => {
+                for (key, item) in entries {
+                    pad_reference(key)?;
+                    read_value(item)?;
+                }
+                Ok(entries.len())
+            }
+            Some(_) => copper_pcb::not_implemented(&format!("a saved FanoutResult whose {name} is not a mapping")),
+        }
+    };
+    let routed =
+        |_: &StateValue| -> Result<()> { copper_pcb::not_implemented("a saved FanoutResult with routing accesses") };
+    let mut access_count = accesses("accesses", &|item| point(item).map(|_| ()))?;
+    access_count += accesses("surface_accesses", &routed)?;
+    access_count += accesses("boundary_accesses", &routed)?;
+    let pending: Vec<PadReference> =
+        set_items(fields.required("pending_pads")?)?.iter().map(pad_reference).collect::<Result<_>>()?;
+    let untyped = || Ok(Err("critical replay has untyped bypass contribution edges".to_owned()));
+    // An immutable tuple of edges, else Python's "untyped" refusal.
+    let edges = |name: &str| -> Result<Option<&[StateValue]>> {
+        match fields.get(name) {
+            None => Ok(Some(&[])),
+            Some(StateValue::Tuple(items)) => Ok(Some(items.as_slice())),
+            Some(_) => Ok(None),
+        }
+    };
+    let mut decoded_tracks = Vec::new();
+    for name in ["created_tracks", "decoupling_tracks"] {
+        let Some(items) = edges(name)? else { return untyped() };
+        let mut tracks = Vec::new();
+        for item in items {
+            match copper_pcb::state_codec::type_name(item) {
+                Some("pcbir.physical:TrackSegment") => tracks.push(track(item)?),
+                _ => return untyped(),
+            }
+        }
+        decoded_tracks.push(tracks);
+    }
+    let mut decoded_vias = Vec::new();
+    for name in ["created_vias", "decoupling_vias"] {
+        let Some(items) = edges(name)? else { return untyped() };
+        let mut vias = Vec::new();
+        for item in items {
+            match copper_pcb::state_codec::type_name(item) {
+                Some("pcbir.physical:Via") => vias.push(via(item)?),
+                _ => return untyped(),
+            }
+        }
+        decoded_vias.push(vias);
+    }
+    let untyped_witness = || Ok(Err("critical replay has an untyped bypass witness".to_owned()));
+    let witnesses = match fields.get("decoupling_witnesses") {
+        None => Vec::new(),
+        Some(StateValue::Tuple(items)) => {
+            let mut witnesses = Vec::new();
+            for item in items {
+                match saved_witness(item)? {
+                    Some(witness) => witnesses.push(witness),
+                    None => return untyped_witness(),
+                }
+            }
+            witnesses
+        }
+        Some(_) => return untyped_witness(),
+    };
+    let decoupling_vias = decoded_vias.pop().expect("two sequences");
+    let created_vias = decoded_vias.pop().expect("two sequences");
+    let decoupling_tracks = decoded_tracks.pop().expect("two sequences");
+    let created_tracks = decoded_tracks.pop().expect("two sequences");
+    let reserved = BypassReservation {
+        board,
+        created_tracks,
+        created_vias,
+        added_track_count: integer(fields.required("added_track_count")?)?,
+        added_via_count: integer(fields.required("added_via_count")?)?,
+        decoupling_tracks,
+        decoupling_vias,
+        decoupling_witnesses: witnesses,
+    };
+    if access_count != 0 || !pending.is_empty() {
+        return Ok(Err("critical replay requires an exact bypass-only reservation".to_owned()));
+    }
+    Ok(restore_bypass_reservation_edges(&reserved, true).map(|()| reserved))
+}
+
+use copper_pcb::board::PadReference;
+
+/// A saved `DecouplingCrossLayerWitness`, or `None` when it is not one (or
+/// one of its paths or steps is untyped).
+fn saved_witness(value: &copper_state::StateValue) -> Result<Option<DecouplingCrossLayerWitness>> {
+    use copper_pcb::state_codec::{Fields, pad_reference, text, type_name};
+    if type_name(value) != Some("pcbir.decoupling_paths:DecouplingCrossLayerWitness") {
+        return Ok(None);
+    }
+    let fields = Fields::of(value, "pcbir.decoupling_paths:DecouplingCrossLayerWitness")?;
+    fields.allow(&[
+        "link",
+        "supply_path",
+        "return_target",
+        "return_path",
+        "context_digest",
+        "board_digest",
+        "qualification",
+    ])?;
+    let link = saved_link(fields.required("link")?)?;
+    let (Some(supply_path), Some(return_path)) =
+        (saved_path(fields.required("supply_path")?)?, saved_path(fields.required("return_path")?)?)
+    else {
+        return Ok(None);
+    };
+    Ok(Some(DecouplingCrossLayerWitness {
+        link,
+        supply_path,
+        return_target: pad_reference(fields.required("return_target")?)?,
+        return_path,
+        context_digest: text(fields.required("context_digest")?)?,
+        board_digest: text(fields.required("board_digest")?)?,
+        qualification: match fields.get("qualification") {
+            Some(value) => text(value)?,
+            None => crate::decoupling_paths::QUALIFICATION.to_owned(),
+        },
+    }))
+}
+
+fn saved_link(value: &copper_state::StateValue) -> Result<copper_pcb::board::DecouplingLink> {
+    use copper_pcb::state_codec::{Fields, pad_reference, text};
+    let fields = Fields::of(value, "pcbir.physical:DecouplingLink")?;
+    fields.allow(&["capacitor", "target", "return_pad", "net", "return_net"])?;
+    Ok(copper_pcb::board::DecouplingLink {
+        capacitor: pad_reference(fields.required("capacitor")?)?,
+        target: pad_reference(fields.required("target")?)?,
+        return_pad: pad_reference(fields.required("return_pad")?)?,
+        net: text(fields.required("net")?)?,
+        return_net: text(fields.required("return_net")?)?,
+    })
+}
+
+/// A saved `DecouplingCopperPath` whose steps are typed, else `None`.
+fn saved_path(value: &copper_state::StateValue) -> Result<Option<crate::decoupling_paths::DecouplingCopperPath>> {
+    use crate::decoupling_paths::{DecouplingCopperPath, DecouplingPathNode, DecouplingPathStep};
+    use copper_pcb::state_codec::{Fields, layer, pad_reference, point, text, track, type_name, via};
+    use copper_state::StateValue;
+    if type_name(value) != Some("pcbir.decoupling_paths:DecouplingCopperPath") {
+        return Ok(None);
+    }
+    let fields = Fields::of(value, "pcbir.decoupling_paths:DecouplingCopperPath")?;
+    fields.allow(&["start", "end", "net", "steps"])?;
+    let StateValue::Tuple(items) = fields.required("steps")? else { return Ok(None) };
+    let node = |value: &StateValue| -> Result<DecouplingPathNode> {
+        let fields = Fields::of(value, "pcbir.decoupling_paths:DecouplingPathNode")?;
+        fields.allow(&["position", "layer"])?;
+        Ok(DecouplingPathNode {
+            position: point(fields.required("position")?)?,
+            layer: layer(fields.required("layer")?)?,
+        })
+    };
+    let mut steps = Vec::new();
+    for item in items {
+        if type_name(item) != Some("pcbir.decoupling_paths:DecouplingPathStep") {
+            return Ok(None);
+        }
+        let fields = Fields::of(item, "pcbir.decoupling_paths:DecouplingPathStep")?;
+        fields.allow(&["edge", "start", "end"])?;
+        let edge = fields.required("edge")?;
+        let edge = match type_name(edge) {
+            Some("pcbir.physical:TrackSegment") => PathEdge::Track(track(edge)?),
+            Some("pcbir.physical:Via") => PathEdge::Via(via(edge)?),
+            _ => return Ok(None),
+        };
+        steps.push(DecouplingPathStep {
+            edge,
+            start: node(fields.required("start")?)?,
+            end: node(fields.required("end")?)?,
+        });
+    }
+    Ok(Some(DecouplingCopperPath {
+        start: pad_reference(fields.required("start")?)?,
+        end: pad_reference(fields.required("end")?)?,
+        net: text(fields.required("net")?)?,
+        steps,
+    }))
 }
