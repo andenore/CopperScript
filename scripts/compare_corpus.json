@@ -16684,8 +16684,6 @@
       "jlcpcb-six-layer",
       "--candidates",
       "1",
-      "--pitch-mm",
-      "0.5",
       "--fanout",
       "-o",
       "{out}/routed.kicad_pcb",
@@ -19756,14 +19754,14 @@
     {
      "args": [
       "explain",
-      "PAR\u00d9\u00a3"
+      "PARÙ£"
      ],
      "id": "explain/arabic-digit"
     },
     {
      "args": [
       "explain",
-      "PAR\u00d9\u00a3",
+      "PARÙ£",
       "--json"
      ],
      "id": "explain/arabic-digit-json"
@@ -19771,14 +19769,14 @@
     {
      "args": [
       "explain",
-      "\u00c3\u0178"
+      "ÃŸ"
      ],
      "id": "explain/sharp-s"
     },
     {
      "args": [
       "explain",
-      "\u00c3\u0178",
+      "ÃŸ",
       "--json"
      ],
      "id": "explain/sharp-s-json"
