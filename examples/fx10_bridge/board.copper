@@ -258,6 +258,22 @@ board Fx10Bridge {
         id = "core-plane"; layers = "In3.Cu"; inset = 0.5mm; pad_connection = solid; island_policy = "remove_all";
     }
 
+    // JLCPCB six-layer floors with its 0.45 mm / 0.2 mm multilayer via: the
+    // default 0.8 mm via cannot sit between 0.8 mm-pitch balls. 0.1 mm tracks
+    // pass one per ball gap (0.4 mm between 0.4 mm lands).
+    mechanical {
+        outline rectangle { width = 46mm; height = 32mm; }
+        rules {
+            minimum_clearance = 0.09mm;
+            minimum_track_width = 0.09mm;
+            default_track_width = 0.1mm;
+            default_via_size = 0.45mm;
+            default_via_drill = 0.2mm;
+            minimum_via_size = 0.45mm;
+            minimum_via_drill = 0.2mm;
+        }
+    }
+
     // 46 x 32 mm placement: USB-C on the west edge, the bridge centred, the bus
     // header east and power entry south. Ball A1 is the bridge's north-west corner.
     constraint fixed_placement(U_USB) { x = 22mm; y = 16mm; rotation = 0; side = front; }

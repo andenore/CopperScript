@@ -21,6 +21,15 @@
     "jlcpcb-six-layer"
    ]
   },
+  "fx10-bridge": {
+   "source": "examples/fx10_bridge/board.copper",
+   "physical": [
+    "--layers",
+    "6",
+    "--fab-profile",
+    "jlcpcb-six-layer"
+   ]
+  },
   "nrf52": {
    "source": "examples/nrf52_coin_cell/board.copper",
    "physical": [

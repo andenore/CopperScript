@@ -9,6 +9,7 @@ packages under `packages/` are separate from these board and language examples.
 | Copper hard-macro definition | `macro_definition/board.copper` |
 | Device model showcase | `device_model_showcase/board.copper` |
 | Full vertical integration board | `full_vertical/board.copper` |
+| FX10-like USB bridge, 121-ball 0.8 mm BGA (routing benchmark) | `fx10_bridge/board.copper` |
 | Hierarchical board | `hierarchical_board/board.copper` |
 | Invalid diagnostics fixture | `invalid_board/board.copper` |
 | Mechanical anchors | `mechanical_anchors/board.copper` |
