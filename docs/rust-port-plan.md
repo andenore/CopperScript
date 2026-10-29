@@ -1064,3 +1064,57 @@ final group tuning and tuning while routing (`_via_lengths` in
 the updated test (a 1.2 mm amplitude limit); `crossing-tuning-short` keeps
 the old 0.8 mm limit, which now fails for insufficient room. A track on a
 layer outside the stack-up, where Python raises `KeyError`, exits 3.
+
+### Shapely geometry (`rust-shapely`, 2026-10-29)
+
+Implemented the geometry Python gets from shapely that still exited 3, under
+the user's extension of D5/D6: shapely's conventions (ring start and
+orientation, where touching rings split or merge) are not reproduced, the
+region is. `copper_route::fill_linework` decodes slit-fractured native fill
+linework (the five `rf_geometry` guards: shared vertices, open, crossing or
+touching linework, degenerate rings): the linework is noded exactly in
+integer nanometres (a vertex on another edge splits it, coincident collinear
+pieces merge by multiplicity), a planar half-edge graph gives the faces, each
+face's even-odd parity comes from one exact ray cast, and the odd faces'
+boundary cycles are split at repeated vertices into simple shells and holes
+(holes go to their smallest enclosing shell). Proper crossings, rings
+crossing an edge at a vertex on it and even-multiplicity (dropped) linework
+stay `Invalid`, as Python's docstring requires. `reference_coverage` measures
+each envelope against the union of the reference fills
+(`union_convex_overlap`, slab integration), which removes the overlapping
+fills guard. Pure Rust, no new dependencies.
+
+Every other shapely use in `pcbir/` is either ported already or out of scope:
+`filled_connectivity` (hull buffers and overlap areas) and
+`decoupling_fill` (import check) were ported with the filled-copper stream;
+`clusters.cluster_edge_opening_rejections` (`covers`) is exact in
+`copper_pcb::hard_macros`; `cam_geometry`, `cam_geometry_adapter`,
+`rf_cross_section`, `rf_layout_review`, `pair_geometry`'s coverage and
+`engineering_qualification` belong to the D4 Python-only commands.
+
+New corpus inputs: `tests/rust-port/routing/kicad-cli/fill.awk` makes the
+stand-in kicad-cli write native filled polygons into every net zone of the
+saved board, on a 20x20 grid over the zone's bounding box, in KiCad's
+representations (`fake-kicad-cli-fill-{rect,slit,shared,touch,islands,crossing,overlap,overlap-shared}.sh`,
+and `fake-kicad-cli-zone-open-fill-{shared,touch}.sh` with zone opens). The
+suite `route-board-native-fills` (22 cases) drives them through
+reference coverage (full_vertical's RF and USB rules on In1.Cu),
+decoupling-fill contacts (`tests/rust-port/export-kicad-pcb/six_layer.copper`)
+and filled feedback (round_led_ring). All are equal; full_vertical's
+shared, touch and overlap cases and the six-layer shared and touch cases
+exited 3 before. Python vs Rust seconds: full_vertical about 160 vs 25,
+round_led_ring 20 vs 4.5, six_layer 2.2 vs 0.3.
+
+No difference is recorded: no corpus case differs. Randomised walks against
+shapely 2.1.2 differ only where Python's unnoded `polygonize` rejects a hole
+touching its shell at several points (Rust returns the pieces), keeps only
+an island, or heals crossing linework (Rust rejects it); these classes, with
+the unit tests that assert their geometry, are described at the end of
+`docs/rust-port-differences.md`.
+
+The oracle needs shapely for these cases as for edge openings (CI installs
+2.1.2). Without the package caches (`copper check --locked` per example, as
+CI's populate step does) the route-board cases fail identically in both
+implementations and compare equal without reaching the geometry. Nothing
+shapely-backed still exits 3. KiCad's real fills (the `ladder` job) were not
+run here.

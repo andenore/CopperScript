@@ -144,3 +144,33 @@ recorded here.
 | D-0108 | `route-global-errors/examples/invalid_board/board.copper --locked --offline --allow-proxy-footprints --no-check -o {out}/route.json --pcb-output {out}/placed.kicad_pcb` | `sha256:8e87092d9d5c5e2b45581b0889b7ef0da7b1e505c2c2aaa2dca4f0f1647585d4` | `sha256:22fed47ee5820d65b70e64d30e77e13c87261bf320600558ee3b599c3dde82e9` | M4 | A component uses an unknown part. Python crashes with an uncaught `KeyError` (exit 1, traceback); Rust prints `ROUTING ERROR: component 'REF' uses unknown part 'PART'` and exits 2. |
 | D-0109 | `editor-overlay/manifest-list` | `sha256:b9d8f2ddeeca39cf0da0634f83d51a9843e8f6dd1c6103518a733b65c09241cf` | `sha256:aa24842f57acdfbf1148f56914bc41eae679d3c9960e0f9358cbc3563c75d3c2` | M6 | `run.json` holds a JSON list instead of a manifest object. Python crashes with an uncaught `AttributeError: 'list' object has no attribute 'get'` (exit 1, traceback); Rust prints `EDITOR OVERLAY ERROR: AttributeError: 'list' object has no attribute 'get'` and exits 2. |
 | D-0110 | `route-board-errors/examples/invalid_board/board.copper --locked --offline --allow-proxy-footprints --no-check --ground-via-in-pad --report {out}/route.json` | `sha256:cc0778243e0390bb97a3a6a218b7c1edca7a6904d2acbb55a73910251b16a8a5` | `sha256:03bb5b420e57ece78e9297e96c3ef49e87954f80b05975fc6036f33e70e3a222` | M4 | A component uses an unknown part. Python writes its `KeyError` error record (`route.error.json`, identical in both) and then crashes with the uncaught `KeyError` (exit 1, traceback); Rust prints `ROUTING ERROR: component 'REF' uses unknown part 'PART'` before the record line and exits 2. |
+
+## Native fill decoding beyond shapely's conventions (no corpus difference)
+
+`native_fill_polygon` (`crates/copper-route/src/fill_linework.rs`) nodes
+the slit-free linework exactly and keeps its odd faces, where Python runs
+shapely's `polygonize` on the unnoded linework. Every corpus case
+(`route-board-native-fills`) is equal, and wherever Rust decodes a walk its
+region matches shapely's `polygonize(unary_union(lines))` with the same
+even-odd selection. Randomised walks (12,000 on 6-10 unit grids, compared
+with shapely 2.1.2) disagree with Python only in these classes, none of
+which a corpus case or a KiCad fill reaches. Rust unit tests assert the
+geometry of each (`rf_geometry::tests::noded_slit_walks_decode_like_shapely`,
+`fill_linework::tests`):
+
+- A hole touching the outer ring at two or more points cuts the copper into
+  pieces. Python's single unnoded face is not a valid polygon, so Python
+  reports the fill unsupported; Rust returns the pieces (a `MultiPolygon`),
+  the same point set in valid form. Fragment contacts skip multi-face fills
+  in both; only reference coverage reports on it.
+- In a few such walks with an island inside the hole, Python keeps only the
+  island and drops the rest of the copper; Rust keeps every piece.
+- Crossing linework (a proper crossing, or a ring crossing another ring's
+  edge at a vertex on it) is rejected in Rust, as Python's docstring
+  requires; Python's unnoded faces sometimes pass its checks and it returns
+  a healed region that loses holes or copper.
+
+Reference coverage measures each envelope against the union of the fills
+(slab integration, `union_convex_overlap`), as shapely's
+`unary_union(...).covers` does; its areas agree with shapely to float
+rounding on 3,000 random overlapping fills.
