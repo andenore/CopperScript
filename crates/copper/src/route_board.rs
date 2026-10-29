@@ -28,7 +28,7 @@ use copper_route::fanout::FanoutOptions;
 use copper_route::flow::{RoutingPipelineOptions, STOP_STAGES, run_routing_pipeline};
 use copper_route::iteration_checkpoints::{StageState, StageTracker, write_error_record};
 use copper_route::plane::PlaneStitchOptions;
-use copper_route::progress::{ConsoleProgress, Progress, emit, int, text as text_value};
+use copper_route::progress::{ConsoleProgress, Progress, emit, text as text_value};
 use copper_route::routeflow::PlacementRoutingFeedbackOptions;
 use copper_route::routing::GlobalRouterOptions;
 use copper_route::unified_router::UnifiedRouterOptions;
@@ -41,7 +41,92 @@ use crate::report_args::{python_float, python_int};
 const USAGE: &str = "usage: copper route-board [-h] [--locked] [--offline] [-o OUTPUT] [--report REPORT] \
 [--routing-profile {quick,balanced,thorough}] [--no-check] [options] board";
 
-const FLAGS: [&str; 22] = [
+const RETIRED_OPTIONS: &[(&str, &str)] = &[
+    ("--unified-direct", "use --unified-set direct=true"),
+    ("--unified-no-decouplers", "use --unified-set pre_route_decouplers=false"),
+    ("--unified-retain-escape-copper", "use --unified-set retain_escape_copper=true"),
+    ("--unified-iterations", "use --unified-set maximum_iterations=N"),
+    ("--unified-search-states", "use --unified-set maximum_expansions=N"),
+    ("--unified-pair-states", "use --unified-set critical_pair_state_limit=N"),
+    ("--fine-regions", "use --unified-set fine_regions=off|arrays|dense"),
+    ("--power-islands", "use --unified-set power_islands=auto|LAYER (off is power_islands=null)"),
+    ("--no-route-smoothing", "use --unified-set route_smoothing=false"),
+    ("--stitch-zone-pads", "declared copper zones are stitched automatically"),
+    (
+        "--detailed-feedback-trials",
+        "use --congestion-feedback-trials N; old effective budget was max(N, detailed + critical)",
+    ),
+    (
+        "--critical-feedback-trials",
+        "use --congestion-feedback-trials N; old effective budget was max(N, detailed + critical)",
+    ),
+    (
+        "--pitch-mm",
+        "use --unified-pitch-mm for routing, or --local-demand-pitch-mm with --local-demand-cost; omit an unused pitch",
+    ),
+];
+
+fn retired_option_error(arguments: &[String]) -> Option<String> {
+    for argument in arguments {
+        if argument == "--" {
+            break;
+        }
+        let name = argument.split('=').next().unwrap_or(argument);
+        if let Some((_, replacement)) = RETIRED_OPTIONS.iter().find(|(flag, _)| *flag == name) {
+            return Some(format!("{name} was removed; {replacement}"));
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod option_tests {
+    use super::*;
+
+    #[test]
+    fn retired_switches_fail_before_loading_source() {
+        for (flag, replacement) in RETIRED_OPTIONS {
+            for spelling in [flag.to_string(), format!("{flag}=1")] {
+                let mut out = Vec::new();
+                let mut err = Vec::new();
+                assert_eq!(run(&["missing.copper".to_owned(), spelling], &mut out, &mut err), 2);
+                assert!(out.is_empty());
+                assert_eq!(
+                    String::from_utf8(err).unwrap(),
+                    format!("copper route-board: error: {flag} was removed; {replacement}\n")
+                );
+            }
+        }
+        assert!(retired_option_error(&["--".to_owned(), "--pitch-mm".to_owned()]).is_none());
+    }
+
+    #[test]
+    fn expert_overrides_govern_direct_mode_and_reports() {
+        let argv = [
+            "board.copper",
+            "--unified-set",
+            "direct=true",
+            "--unified-set",
+            "maximum_expansions=123",
+            "--congestion-feedback-trials",
+            "2",
+        ]
+        .map(str::to_owned);
+        let parsed = option_parser::parse_exact(&argv, &specs()).unwrap();
+        let Ok(arguments) = check_arguments(parsed) else { panic!("valid options rejected") };
+        let Ok(options) = unified_options(&arguments) else { panic!("valid overrides rejected") };
+        assert!(options.direct);
+        assert!(!options.pre_route_decouplers);
+        let limits = work_limits(&arguments, &options);
+        assert_eq!(limits.get("unified_search_states"), Some(&Value::from(123i64)));
+        assert_eq!(limits.get("congestion_feedback_trials"), Some(&Value::from(2i64)));
+        assert_eq!(limits.get("filled_copper_trials"), Some(&Value::from(0i64)));
+        assert_eq!(filled_feedback_options(&arguments, options.direct).maximum_trials, 0);
+        assert_eq!(filled_feedback_options(&arguments, false).maximum_trials, 8);
+    }
+}
+
+const FLAGS: [&str; 17] = [
     "--locked",
     "--offline",
     "--no-check",
@@ -49,12 +134,7 @@ const FLAGS: [&str; 22] = [
     "--require-verified-intent",
     "--debug",
     "--progress",
-    "--unified-direct",
-    "--unified-no-decouplers",
-    "--unified-retain-escape-copper",
     "--fanout-maze",
-    "--no-route-smoothing",
-    "--stitch-zone-pads",
     "--ground-via-in-pad",
     // BooleanOptionalAction pairs.
     "--fanout",
@@ -78,7 +158,7 @@ const MORE_FLAGS: [&str; 8] = [
     "--no-early-plane-stitch",
 ];
 
-const VALUED: [&str; 66] = [
+const VALUED: [&str; 59] = [
     "--report",
     "--routing-profile",
     "--footprint-root",
@@ -106,23 +186,16 @@ const VALUED: [&str; 66] = [
     "--tile-size-mm",
     "--router-iterations",
     "--feedback-iterations",
-    "--critical-feedback-trials",
-    "--pitch-mm",
+    "--local-demand-pitch-mm",
     "--maximum-ripup-blockers",
     "--unified-pitch-mm",
-    "--fine-regions",
-    "--unified-iterations",
-    "--unified-search-states",
     "--unified-time-budget-s",
-    "--unified-pair-states",
     "--unified-save-inputs",
     "--unified-set",
-    "--power-islands",
     "--package-initial-pair-states",
     "--fanout-step-mm",
     "--fanout-geometry-candidates",
     "--fanout-refinement-step-mm",
-    "--detailed-feedback-trials",
     "--congestion-feedback-trials",
     "--zone-dependency-expansions",
     "--layer-preference-cost",
@@ -220,7 +293,6 @@ struct Arguments {
     lengths: Vec<(&'static str, String)>,
     unified_pitch_mm: Option<String>,
     unified_time_budget_s: Option<f64>,
-    unified_pair_states: Option<i64>,
     critical_pin_access_step_mm: Option<String>,
     plane_escape_width_mm: Option<String>,
     filled_copper_trials: i64,
@@ -279,7 +351,7 @@ impl Arguments {
     }
 }
 
-const INTS: [(&str, i64, IntKind); 27] = [
+const INTS: [(&str, i64, IntKind); 23] = [
     ("--candidates", 1, IntKind::Any),
     ("--escape-transit-lanes", 1, IntKind::Any),
     ("--support-pattern-trials", 0, IntKind::Any),
@@ -290,13 +362,9 @@ const INTS: [(&str, i64, IntKind); 27] = [
     ("--placement-feedback-trials", 24, IntKind::Nonnegative),
     ("--router-iterations", 5, IntKind::Any),
     ("--feedback-iterations", 1, IntKind::Any),
-    ("--critical-feedback-trials", 0, IntKind::Any),
     ("--maximum-ripup-blockers", 4, IntKind::Any),
-    ("--unified-iterations", 150, IntKind::Any),
-    ("--unified-search-states", 400_000, IntKind::Any),
     ("--package-initial-pair-states", 6000, IntKind::Nonnegative),
     ("--fanout-geometry-candidates", 0, IntKind::Nonnegative),
-    ("--detailed-feedback-trials", 0, IntKind::Any),
     ("--congestion-feedback-trials", 4, IntKind::Nonnegative),
     ("--zone-dependency-expansions", 2, IntKind::Range9),
     ("--layer-preference-cost", 4, IntKind::Any),
@@ -401,10 +469,9 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
     };
     let critical_pin_access_step_mm = optional_length("--critical-pin-access-step-mm")?;
     let plane_escape_width_mm = optional_length("--plane-escape-width-mm")?;
-    let choices: [(&str, &[&str]); 4] = [
+    let choices: [(&str, &[&str]); 3] = [
         ("--routing-profile", &["quick", "balanced", "thorough"]),
         ("--fab-profile", &["generic", "jlcpcb-four-layer", "jlcpcb-six-layer"]),
-        ("--fine-regions", &["off", "arrays", "dense"]),
         ("--stop-after", &STOP_STAGES),
     ];
     for (name, allowed) in choices {
@@ -426,13 +493,6 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
     let height_mm = float("--height-mm")?.unwrap_or(80.0);
     let domain_weight = float("--power-domain-weight")?.unwrap_or(0.25);
     let unified_time_budget_s = float("--unified-time-budget-s")?;
-    let unified_pair_states =
-        match parsed.value("--unified-pair-states") {
-            None => None,
-            Some(text) => Some(python_int(text).ok_or_else(|| {
-                Checked::Usage(format!("argument --unified-pair-states: invalid int value: '{text}'"))
-            })?),
-        };
     let seeds = match parsed.value("--placement-seeds") {
         None => None,
         Some(text) => Some(python_int(text).filter(|value| *value > 0).ok_or_else(|| {
@@ -489,7 +549,6 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
         lengths,
         unified_pitch_mm,
         unified_time_budget_s,
-        unified_pair_states,
         critical_pin_access_step_mm,
         plane_escape_width_mm,
         filled_copper_trials,
@@ -540,27 +599,9 @@ fn planner_options(arguments: &PlannerArguments) -> Result<PlannerOptions, Stop>
     .map_err(value_error)
 }
 
-/// `_unified_flag_notes`: route-board flags this run does not apply, and flags it maps.
-fn unified_flag_notes(arguments: &Arguments) -> (Vec<String>, Vec<String>) {
-    let pitch_given = arguments.text("--pitch-mm").is_some_and(|pitch| pitch != "1");
-    let ignored = if pitch_given && arguments.int("--local-demand-cost") <= 0 {
-        vec!["--pitch-mm".to_owned()]
-    } else {
-        Vec::new()
-    };
-    let mapped = ["--detailed-feedback-trials", "--critical-feedback-trials"]
-        .into_iter()
-        .filter(|name| arguments.int(name) != 0)
-        .map(str::to_owned)
-        .collect();
-    (ignored, mapped)
-}
-
-/// `_unified_options`, as far as this rewrite builds `UnifiedRouterOptions`.
-// PENDING: owned by rust-m4-unified (UnifiedRouterOptions).
+/// The one expert override surface, shared with replay and benchmarks.
 fn unified_options(arguments: &Arguments) -> Result<UnifiedRouterOptions, Stop> {
     let pitch_nm = match &arguments.unified_pitch_mm {
-        // `Decimal(text)` is falsy for zero, which keeps the default pitch.
         Some(text) => {
             let trimmed = text.trim_matches(copper_json::python_isspace);
             if copper_units::Decimal::parse(trimmed).is_ok_and(|decimal| decimal.is_zero()) {
@@ -571,26 +612,17 @@ fn unified_options(arguments: &Arguments) -> Result<UnifiedRouterOptions, Stop> 
         }
         None => None,
     };
-    let direct = arguments.flag("--unified-direct");
-    let power_islands = arguments.text("--power-islands").unwrap_or("off");
     let base = UnifiedRouterOptions {
         pitch_nm,
-        retain_escape_copper: arguments.flag("--unified-retain-escape-copper"),
-        maximum_iterations: arguments.int("--unified-iterations"),
-        maximum_expansions: arguments.int("--unified-search-states"),
         time_budget_s: arguments.unified_time_budget_s,
-        critical_pair_state_limit: arguments.unified_pair_states,
-        fine_regions: arguments.text("--fine-regions").unwrap_or("arrays").to_owned(),
-        power_islands: (power_islands != "off").then(|| power_islands.to_owned()),
-        pre_route_decouplers: !arguments.flag("--unified-no-decouplers") && !direct,
-        direct,
-        route_smoothing: !arguments.flag("--no-route-smoothing"),
         save_inputs_path: arguments.path("--unified-save-inputs"),
         ..UnifiedRouterOptions::default()
     };
-    // --unified-set reaches every option; it wins over the dedicated flags above.
-    let overrides: Vec<(String, Value)> =
-        unified_overrides(&arguments.texts("--unified-set")).map_err(value_error)?.into_iter().collect();
+    let mut overrides = unified_overrides(&arguments.texts("--unified-set")).map_err(value_error)?;
+    if overrides.get("direct") == Some(&Value::Bool(true)) && !overrides.contains_key("pre_route_decouplers") {
+        overrides.insert("pre_route_decouplers".to_owned(), Value::Bool(false));
+    }
+    let overrides: Vec<(String, Value)> = overrides.into_iter().collect();
     base.with_overrides(&overrides).map_err(|error| match error {
         copper_route::unified_error::Error::Value(message) => fail(message),
         other => Stop::Pending(other.crash_line()),
@@ -615,6 +647,10 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         let _ = writeln!(err, "{USAGE}\ncopper route-board: error: {message}");
         2
     };
+    if let Some(message) = retired_option_error(argv) {
+        let _ = writeln!(err, "copper route-board: error: {message}");
+        return 2;
+    }
     let parsed = match option_parser::parse_exact(argv, &specs()) {
         Ok(parsed) => parsed,
         Err(message) => return usage_error(err, &message),
@@ -628,6 +664,9 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         Err(Checked::Usage(message)) => return usage_error(err, &message),
         Err(Checked::Pending(what)) => return not_implemented(err, &what),
     };
+    if arguments.text("--local-demand-pitch-mm").is_some() && arguments.int("--local-demand-cost") <= 0 {
+        return usage_error(err, "--local-demand-pitch-mm requires --local-demand-cost greater than 0");
+    }
     apply_routing_profile(&mut arguments, argv);
     let debug = arguments.flag("--debug");
     let (locked, offline) = (arguments.flag("--locked"), arguments.flag("--offline"));
@@ -765,8 +804,9 @@ fn route(
         board = hard_macros::apply_hard_macro_scene(board, Path::new(&pypath::display(scene)), locked, offline)?;
     }
     let editor_source_board = board.clone();
-    let direct_unified = arguments.flag("--unified-direct");
-    let stitch_enabled = arguments.flag("--stitch-zone-pads") || !board.zones.is_empty();
+    let unified = unified_options(arguments)?;
+    let direct_unified = unified.direct;
+    let stitch_enabled = !board.zones.is_empty();
     let early_plane_pads = arguments.texts("--early-plane-pad");
     let ground_via_in_pad = arguments.flag("--ground-via-in-pad");
     if !early_plane_pads.is_empty() && !stitch_enabled {
@@ -856,7 +896,10 @@ fn route(
         direction_preference_cost: arguments.int("--direction-preference-cost").div_euclid(2).max(0),
         layer_assignment_passes: arguments.int("--layer-assignment-passes"),
         local_demand_cost: arguments.int("--local-demand-cost").max(0),
-        local_demand_pitch_nm: nm_from_mm(arguments.text("--pitch-mm").unwrap_or("1"), "--pitch-mm")?,
+        local_demand_pitch_nm: nm_from_mm(
+            arguments.text("--local-demand-pitch-mm").unwrap_or("1"),
+            "--local-demand-pitch-mm",
+        )?,
         ..GlobalRouterOptions::default()
     }
     .validated()
@@ -890,38 +933,12 @@ fn route(
     let mut tracker = console.as_mut().map(|console| StageTracker::new(Some(console as &mut dyn Progress)));
     let result = (|| -> Result<Finished, Stop> {
         let mut progress: Option<&mut dyn Progress> = tracker.as_mut().map(|tracker| tracker as &mut dyn Progress);
-        let (ignored, mapped) = unified_flag_notes(arguments);
-        let strings = |items: &[String]| Value::Array(items.iter().map(|item| text_value(item)).collect());
-        if !ignored.is_empty() {
-            emit(
-                &mut progress,
-                "router_options",
-                "ignored",
-                vec![("router", text_value("unified")), ("ignored_flags", strings(&ignored))],
-            );
-        }
-        if !mapped.is_empty() {
-            let budget = arguments
-                .int("--congestion-feedback-trials")
-                .max(arguments.int("--detailed-feedback-trials") + arguments.int("--critical-feedback-trials"));
-            emit(
-                &mut progress,
-                "router_options",
-                "mapped",
-                vec![
-                    ("router", text_value("unified")),
-                    ("mapped_flags", strings(&mapped)),
-                    ("congestion_feedback_trials", int(budget)),
-                ],
-            );
-        }
         if arguments.text("--reuse-placement").is_some() {
             return Err(Stop::Pending("--reuse-placement (placement checkpoints)".to_owned()));
         }
         if arguments.text("--checkpoint-dir").is_some() {
             return Err(Stop::Pending("--checkpoint-dir (placement checkpoints)".to_owned()));
         }
-        let unified = unified_options(arguments)?;
         let escape_plan = arguments.boolean("--escape-plan", false);
         let bus_layers = arguments.boolean("--bus-layers", false);
         let array_flow = arguments.boolean("--array-flow", false);
@@ -939,8 +956,6 @@ fn route(
             feedback_options: Some(feedback_options),
             fanout_options,
             plane_stitch_options: early_options.clone(),
-            detailed_feedback_trials: arguments.int("--detailed-feedback-trials"),
-            critical_feedback_trials: arguments.int("--critical-feedback-trials"),
             placement_feedback_trials: arguments.int("--congestion-feedback-trials"),
             critical_pair_state_limit: arguments.int("--package-initial-pair-states"),
             unified_options: Some(unified),
@@ -1064,21 +1079,30 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(format!("{stem}{suffix}"))
 }
 
+/// Share effective native repair limits between execution and reporting.
+fn filled_feedback_options(
+    arguments: &Arguments,
+    direct: bool,
+) -> copper_route::filled_feedback::FilledCopperFeedbackOptions {
+    copper_route::filled_feedback::FilledCopperFeedbackOptions {
+        maximum_trials: if direct { 0 } else { arguments.filled_copper_trials },
+        maximum_search_states: arguments.filled_copper_search_states,
+        maximum_blockers: arguments.int("--maximum-ripup-blockers"),
+        maximum_dependency_expansions: arguments.int("--zone-dependency-expansions"),
+    }
+}
+
 /// The work-limit record of the report.
-fn work_limits(arguments: &Arguments, direct: bool) -> Value {
-    let filled_trials = if direct { 0 } else { arguments.filled_copper_trials };
-    let (ignored, mapped) = unified_flag_notes(arguments);
-    let strings = |items: Vec<String>| Value::Array(items.into_iter().map(Value::Str).collect());
-    let budget = arguments
-        .int("--congestion-feedback-trials")
-        .max(arguments.int("--detailed-feedback-trials") + arguments.int("--critical-feedback-trials"));
+fn work_limits(arguments: &Arguments, unified: &UnifiedRouterOptions) -> Value {
+    let filled_trials = filled_feedback_options(arguments, unified.direct).maximum_trials;
+    let budget = arguments.int("--congestion-feedback-trials");
     object_of(vec![
-        ("unified_direct", Value::Bool(direct)),
-        ("unified_retain_escape_copper", Value::Bool(arguments.flag("--unified-retain-escape-copper"))),
-        ("unified_iterations", Value::from(arguments.int("--unified-iterations"))),
-        ("unified_time_budget_s", arguments.unified_time_budget_s.map_or(Value::Null, Value::Float)),
-        ("unified_search_states", Value::from(arguments.int("--unified-search-states"))),
-        ("fine_regions", Value::from(arguments.text("--fine-regions").unwrap_or("arrays"))),
+        ("unified_direct", Value::Bool(unified.direct)),
+        ("unified_retain_escape_copper", Value::Bool(unified.retain_escape_copper)),
+        ("unified_iterations", Value::from(unified.maximum_iterations)),
+        ("unified_time_budget_s", unified.time_budget_s.map_or(Value::Null, Value::Float)),
+        ("unified_search_states", Value::from(unified.maximum_expansions)),
+        ("fine_regions", Value::from(unified.fine_regions.as_str())),
         ("pin_access_step_mm", Value::from(arguments.length("--pin-access-step-mm"))),
         (
             "critical_pin_access_step_mm",
@@ -1096,8 +1120,8 @@ fn work_limits(arguments: &Arguments, direct: bool) -> Value {
         ("escape_spacing_passes", Value::from(arguments.planner.spacing_passes)),
         ("congestion_feedback_trials", Value::from(budget)),
         ("router", Value::from("unified")),
-        ("ignored_flags", strings(ignored)),
-        ("mapped_flags", strings(mapped)),
+        ("ignored_flags", Value::Array(Vec::new())),
+        ("mapped_flags", Value::Array(Vec::new())),
     ])
 }
 
@@ -1197,12 +1221,7 @@ fn finish(
             Some(directory) => PathBuf::from(directory),
             None => sibling(&report_location, &format!(".native-{}", random_hex(12))),
         };
-        let options = copper_route::filled_feedback::FilledCopperFeedbackOptions {
-            maximum_trials: arguments.filled_copper_trials,
-            maximum_search_states: arguments.filled_copper_search_states,
-            maximum_blockers: arguments.int("--maximum-ripup-blockers"),
-            maximum_dependency_expansions: arguments.int("--zone-dependency-expansions"),
-        };
+        let options = filled_feedback_options(arguments, context.direct_unified);
         let outcome = options.validate().map_err(NativeError::Pcb).and_then(|()| {
             copper_route::filled_feedback::improve_filled_copper(
                 &result,
@@ -1335,6 +1354,8 @@ fn finish(
     let board_name = &context.design.electrical.name;
     let report_path =
         PathBuf::from(arguments.path("--report").unwrap_or_else(|| format!("{board_name}.route-report.json")));
+    let fresh =
+        unified_options(arguments).map_err(|_| copper_pcb::Error::NotImplemented("_fine_region_report".to_owned()))?;
     let placement_board = &result.placement_and_global.board;
     let mut report = Object::new();
     let mut put = |key: &str, value: Value| {
@@ -1344,7 +1365,7 @@ fn finish(
     put("status", Value::from(closure_status.value()));
     put("erc_pass", Value::Bool(!copper_lang::erc::has_errors(context.diagnostics)));
     put("routing_profile", Value::from(arguments.text("--routing-profile").unwrap_or("custom_defaults")));
-    put("work_limits", work_limits(arguments, context.direct_unified));
+    put("work_limits", work_limits(arguments, &fresh));
     put(
         "erc_diagnostics",
         Value::Array(context.diagnostics.iter().map(|item| Value::from(item.to_string())).collect()),
@@ -1404,9 +1425,6 @@ fn finish(
         let items = copper_route::escape_plan::plan_array_escapes(placement_board, &options)?;
         put("array_escape", Value::Array(items.iter().map(|item| item.report()).collect()));
     }
-    // `_fine_region_report`: the plan of a fresh `_unified_options(args)`.
-    let fresh =
-        unified_options(arguments).map_err(|_| copper_pcb::Error::NotImplemented("_fine_region_report".to_owned()))?;
     let plan = copper_route::unified_router::fine_region_plan(&output_board, &fresh)
         .map_err(|error| copper_pcb::Error::NotImplemented(error.crash_line()))?;
     let fine = match plan {

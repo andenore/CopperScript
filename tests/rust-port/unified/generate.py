@@ -44,9 +44,9 @@ BOARDS = {
     # The benchmark ladder's arguments (bench/ladder.json); round_led_ring resolves footprints online.
     "round_led_ring": ["examples/round_led_ring/board.copper", "--locked", "--layers", "2",
                        "--fab-profile", "generic", "--candidates", "1", "--feedback-iterations", "1",
-                       "--router-iterations", "5", "--pitch-mm", "1", "--fanout", "--plane-contact-radius-mm", "5"],
+                       "--router-iterations", "5", "--fanout", "--plane-contact-radius-mm", "5"],
     "nrf52": ["examples/nrf52_coin_cell/board.copper", "--locked", "--offline", "--layers", "6",
-              "--fab-profile", "jlcpcb-six-layer", "--width-mm", "50", "--height-mm", "40", "--pitch-mm", "0.5"],
+              "--fab-profile", "jlcpcb-six-layer", "--width-mm", "50", "--height-mm", "40"],
 }
 
 

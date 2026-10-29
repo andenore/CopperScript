@@ -331,10 +331,11 @@ def _project(directory: Path, array: str) -> Path:
 def _route_report(source: Path) -> dict:
     report = source.parent / "route.json"
     result = subprocess.run(
-        [sys.executable, "-m", "copperscript", "route-board", str(source),
-         "--layers", "6", "--fab-profile", "jlcpcb-six-layer", "--width-mm", "40",
-         "--height-mm", "30", "--fanout", "--pitch-mm", "0.5",
-         "--report", str(report), "-o", str(source.parent / "out.kicad_pcb")],
+        [
+            sys.executable, "-m", "copperscript", "route-board", str(source), "--layers", "6", "--fab-profile",
+            "jlcpcb-six-layer", "--width-mm", "40", "--height-mm", "30", "--fanout", "--report", str(report),
+            "-o", str(source.parent / 'out.kicad_pcb'),
+        ],
         cwd=ROOT, text=True, capture_output=True, check=False)
     assert result.returncode in {0, 1}, result.stdout + result.stderr
     return json.loads(report.read_text())

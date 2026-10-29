@@ -65,11 +65,11 @@ def test_standard_cli_refills_repairs_or_saves_explicit_tool_failure(tmp_path, m
             (pad "2" smd rect (at 0 -2) (size 0.6 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
             {divider})''', encoding="utf-8")
     report, pcb = tmp_path / "reports" / "route.json", tmp_path / "candidate.kicad_pcb"
-    result = subprocess.run([sys.executable, "-m", "copperscript", "route-board", str(source),
-        "--footprint-root", str(root.parent),
-        "--routing-profile", "quick", "--pitch-mm", "0.5", "--progress",
-        "--verify-plane-fill", str(tmp_path / "missing.exe" if missing_tool else cli),
-        "--report", str(report), "-o", str(pcb)], capture_output=True, text=True,
+    result = subprocess.run([
+        sys.executable, "-m", "copperscript", "route-board", str(source), "--footprint-root", str(root.parent),
+        "--routing-profile", "quick", "--progress", "--verify-plane-fill",
+        str(tmp_path / 'missing.exe' if missing_tool else cli), "--report", str(report), "-o", str(pcb),
+    ], capture_output=True, text=True,
         cwd=Path(__file__).parents[1], timeout=120)
     assert report.is_file(), result.stdout + result.stderr
     document = json.loads(report.read_text())

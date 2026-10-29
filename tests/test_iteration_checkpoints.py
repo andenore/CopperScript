@@ -99,7 +99,7 @@ def test_checkpoints_from_before_the_legacy_router_removal_still_load(stopped):
 def test_reuse_with_other_options_is_refused_with_an_error_record(stopped):
     tmp_path, _, _ = stopped
     out, result = _route(tmp_path, "r3", "--reuse-placement", str(tmp_path / "ck" / "placement.state.json"),
-                         "--pitch-mm", "0.4")
+                         "--local-demand-pitch-mm", "0.4", "--local-demand-cost", "1")
     assert result.returncode == 2
     assert "different placement/global/feedback options" in result.stdout
     record = json.loads((out / "route-report.error.json").read_text())
@@ -114,7 +114,7 @@ def test_error_record_replaces_a_stale_report_and_is_cleared_by_success(stopped)
     checkpoint = str(tmp_path / "ck" / "placement.state.json")
     out, ok = _route(tmp_path, "r6", "--reuse-placement", checkpoint)
     assert ok.returncode == 0
-    _, failed = _route(tmp_path, "r6", "--reuse-placement", checkpoint, "--pitch-mm", "0.4")
+    _, failed = _route(tmp_path, "r6", "--reuse-placement", checkpoint, "--local-demand-pitch-mm", "0.4", "--local-demand-cost", "1")
     assert failed.returncode == 2 and (out / "route-report.error.json").is_file()
     assert run_issues(load_run(out))[0].code == "RUN-ERROR"
     _, missing = _route(tmp_path, "r6", "--reuse-placement", str(tmp_path / "nope.state.json"))

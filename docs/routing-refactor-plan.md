@@ -389,6 +389,16 @@ fallback for RF-feed, power and general critical kinds, which still called
 2026-10-26 progress row). The option-profile cut and the docs collapse below
 are still open.
 
+2026-10-29 option cleanup (Python and Rust): remove nine dedicated unified
+solver switches in favour of the existing `--unified-set OPTION=VALUE`, the two
+old placement-feedback budget aliases in favour of `--congestion-feedback-trials`,
+and the redundant zone-stitch request. Rename the global demand estimator's
+pitch to `--local-demand-pitch-mm`; physical routing retains
+`--unified-pitch-mm`. Effective defaults stay unchanged. Removed spellings fail
+with migration instructions; current consumer wrappers migrate with the CLI.
+This reduces the option count by twelve; folding the remaining live controls
+into profiles is still open. See the [migration table](cli-workflow.md).
+
 - Delete the retire list and its tests, and `--legacy-pipeline`.
 - Cut `route-board` options to a short profile set: `quick`, `balanced`,
   `thorough`, plus time budget, layers and fab profile.
@@ -433,6 +443,7 @@ Handoff, open items and the plan for merging to `main`:
 | 2026-10-24 | Congestion-driven placement feedback (B): one loop on the unified path (`--congestion-feedback-trials N`; `--detailed/--critical-feedback-trials` map onto it, `improve_critical_placement` no longer runs there); router map plus RUDY estimate, each normalised to its 95th percentile; screen to 2, rerun the shared pipeline tail, accept on the whole-board tuple | Ladder (default, no KiCad), with and without `--congestion-feedback-trials 4` (loop idle, no failures): round-led-ring 51/51, 48 vias, 604.833 mm; nrf52 35/35, 42, 345.115; full-vertical 86/86, 189, 1597.398; cm4 21/21, 62, 588.979; 0 DRC; boards byte-identical to `3770a2a`; total 352 s / 333 s (base 372 s). Fixture: one boxed-in net connected by one accepted move |
 | 2026-10-25 | Multi-resolution lattice S4: `--fine-regions arrays` default (fine patches over full ball arrays only); `dense` (also dense non-array packages) for measurement; `off` uniform; `choose_pitch` judges every placed ball | Ladder (default, no KiCad): round-led-ring 51/51, 48 vias, 604.833 mm; nrf52 35/35, 42, 345.115; full-vertical 86/86, 189, 1597.398; cm4 21/21, 62, 588.979; 0 DRC; no patches, boards byte-identical to `--fine-regions off` and to `53c5f6c`. `dense`: round-led-ring 51/51, 50 vias, 616.451 mm, 73.7 s (U1 k=5); nrf52 35/35, 43, 333.132, 21.6 s (U_NRF k=5); full-vertical 86/86, 187, 1596.424, 186.7 s (5 patches); cm4 21/21, 61, 583.967, 14.8 s (2 connectors k=2); 0 DRC. BGA fixture (100 x 80 mm, 6 layers, 5 x 5 at 0.75 mm): `arrays` 0.79 M nodes, 148 MB, 4.1 s; `off` (0.125 mm uniform) 3.09 M, 348 MB, 4.9 s; 25/25, 0 DRC both |
 | 2026-10-26 | P7 retire: legacy router (`--router legacy`, `route_detailed`) and every stage only it reached deleted, with tests and docs; removed `route-board` flags accepted and ignored. The single-ended critical fallback for kinds other than clock/critical (RF feed, power, general) now uses the unified router; on `main` it still called `route_detailed` | Ladder (default, no KiCad), board SHA-256 against `main` `35dc73b`: round-led-ring, nrf52, full-vertical, cm4 and CopperLedRing byte-identical (examples with the removed flags dropped from their Make arguments, CopperLedRing with its pinned consumer flags). CopperAssetTracker differs only through CELL_RF (RF feed): `unified_single_net`, 5 tracks, 17.72 mm on F.Cu instead of `local_surface_tree`, 7 tracks, 16.91 mm; ordinary routing 60/62 both (GND, V3V3 open), vias 51 -> 54, length 1389.2 -> 1391.9 mm, same DRC findings; 1596 s against 3885 s. Owner accepted the CELL_RF change as is |
+| 2026-10-29 | P7 input cleanup, mirrored in Python and Rust: 12 fewer top-level options; expert solver controls share `--unified-set`, placement-feedback aliases retire, demand pitch gets an explicit name, and declared zones stitch automatically. Current example/consumer callers migrate. Effective direct-mode limits govern native processing as well as reports. | Rust before/after against `dfc2745`: PCB bytes and route summaries identical on round-led-ring, nrf52, full-vertical, cm4, CopperLedRing and CopperAssetTracker (their existing exit 1 results remain). CopperProbe exits 3 in both with the identical unsupported nested-lattice diagnostic. Source/manifest/lock inputs match; timings include dependency-cache warming. Both CLIs pass a direct-mode native KiCad fixture with zero repair trials. 210 focused Python tests pass, 1 skips; 11 Rust CLI tests, formatting and strict CLI clippy checks pass. The existing unknown-part error discrepancy remains visible. |
 
 Open items:
 
