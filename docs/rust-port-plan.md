@@ -1096,7 +1096,7 @@ the `rust-router-guards` stream:
 | Case | Python s | "not implemented" message |
 |---|---:|---|
 | `ladder/fx10-bridge` | 558 | route-board (the via lattice (via_lattice.plan_via_lattices)) |
-| `route-board/fx10-bridge` | ROUTE_BOARD_PY | route-board (critical pair terminals with local branch ties) |
+| `route-board/fx10-bridge` | 1104 | route-board (critical pair terminals with local branch ties) |
 | `route-board-fanout-boards/fx10-bridge` | 228 | route-board (critical pair terminals with local branch ties) |
 | `route-board-nofanout-boards/fx10-bridge` | 105 | route-board (critical pair terminals with local branch ties) |
 | `route-board-save-inputs-boards/fx10-bridge` | 102 | route-board (critical pair terminals with local branch ties) |
