@@ -134,8 +134,9 @@ jobs:
   ladder:
     # The M4 acceptance run: every ladder board on both implementations, the
     # consumer boards included, with KiCad's native DRC (--verify-plane-fill)
-    # where a board asks for it. A differing board fails the job; a board the
-    # Rust binary does not route yet is reported as pending.
+    # where a board asks for it. Gated at M4: a differing board, or one the
+    # Rust binary reports as not implemented, fails the job; a board whose
+    # repository is not checked out (CopperProbe without its token) is skipped.
     if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/rust-m2'
     runs-on: ubuntu-24.04
     timeout-minutes: 300
@@ -207,7 +208,7 @@ jobs:
           COPPER_BOARDS: ${{ github.workspace }}/boards
           KICAD_FOOTPRINTS: /usr/share/kicad/footprints
         run: >-
-          python scripts/compare_implementations.py --suite ladder --kicad-cli "$KICAD_CLI" --jobs 2
+          python scripts/compare_implementations.py --suite ladder --milestone M4 --kicad-cli "$KICAD_CLI" --jobs 2
           --report build/compare/ladder.json --markdown build/compare/ladder.md
       - name: Publish the ladder summary
         if: always()

@@ -861,6 +861,15 @@ to real `kicad-cli`. A differing board fails the job; a board the binary
 does not route yet is reported as pending. Python and Rust seconds per board
 are in the job summary.
 
+M4 accepted on 2026-10-29 (rust-m2 66221ec, CI run 40790523064): every
+ladder board that CI can check out routes byte-identically on both
+implementations, with real KiCad 10 native DRC on the native boards
+(Python / Rust seconds): round-led-ring 28.5 / 5.0, nrf52 8.4 / 1.1,
+full-vertical 107.4 / 15.0, cm4 5.4 / 0.9, led-ring 42.2 / 2.9,
+asset-tracker 1285 / 160. CopperProbe is private and runs once a
+`COPPER_BOARDS_TOKEN` secret can read it. The ladder job is now gated at M4,
+so a board falling back to "not implemented" fails CI.
+
 ### M4 ladder stream (`rust-m4-ladder`, 2026-10-28)
 
 Ported for the ladder boards: `decoupling_paths._connections` (cross-layer
