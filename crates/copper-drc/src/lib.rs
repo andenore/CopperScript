@@ -775,11 +775,11 @@ fn check_length_match(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Res
     let graph = explicit_copper_connectivity(board, Candidate { only_nets: Some(&members), ..Candidate::default() })?;
     let physical: IndexMap<&str, &PhysicalNet> = board.nets.iter().map(|n| (n.name.as_str(), n)).collect();
     for group in &board.match_groups {
-        let lengths: Vec<(&str, i64, bool)> = group
-            .nets
-            .iter()
-            .map(|net| (net.as_str(), routed_length(board, net), graph.net_connected(physical[net.as_str()])))
-            .collect();
+        let mut lengths: Vec<(&str, i64, bool)> = Vec::new();
+        for net in &group.nets {
+            let length = crate::signal_integrity::routed_match_length_nm(board, net)?;
+            lengths.push((net.as_str(), length, graph.net_connected(physical[net.as_str()])));
+        }
         if !lengths.iter().all(|(_, _, routed)| *routed) {
             continue;
         }
