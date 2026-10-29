@@ -1064,3 +1064,78 @@ final group tuning and tuning while routing (`_via_lengths` in
 the updated test (a 1.2 mm amplitude limit); `crossing-tuning-short` keeps
 the old 0.8 mm limit, which now fails for insufficient room. A track on a
 layer outside the stack-up, where Python raises `KeyError`, exits 3.
+
+### Router, reservation and flow guards (`rust-router-guards`, 2026-10-29)
+
+Ported the Python behind exit-3 guards that no corpus case reached:
+
+- **Pair terminals** (`pair_terminals`): the full `_surface_pair_terminals`
+  (local contact groups, nearby supports joined to one common component,
+  checked branch ties with the `local_access_path` fallback),
+  `_paired_local_contacts` (bounded paired-via and surface crossovers, lazy
+  `_matched_local_candidates` tuning, connectivity and DRC gates, blocker
+  records), `joined_terminal_variants` (alternate joined endpoints per
+  tier), `macro_terminal_guides_proved`, and `plan_pair_supports` with
+  `PairSupportCompletion` threaded through `paired_candidates`,
+  `paired_via_candidates`, `_transitions` and `_return_via`
+  (`terminal_completion`). `route_pair_group` reports blocked/unsupported
+  preparations and joint support contacts as Python does.
+- **Critical routing**: single-ended guide vias (`_guide_via`), the failed
+  package-reservation preflight result (`<package-reservations>`), and
+  replay-critical's `reserved_accesses`: a bypass-only `FanoutResult` is
+  decoded, restored (`restore_bypass_reservation_edges(allow_ordinary=True)`)
+  and admitted by `verified_bypass_reservations`.
+- **Unified router**: `share_commit_index=false` (a fresh index per
+  router), `guide_cost` corridors (`_guide_corridor`, the kernel's per-node
+  guide penalty), required return vias of single-ended nets (`_via_owners`
+  return masks and the commit check), and via technologies:
+  `physical_via_span` with a catalog (`select_via_technology`,
+  `_via_span_depth`), per-span via masks (`_via_transitions`), `_site_spans`
+  for copper, claims and commit (`no_via_technology`), the state codec's
+  aspect-ratio check and `repr(ViaTechnology)` in the DRC board digest
+  (it was written as an empty list).
+- **Flow**: the via lattice (`via_lattice.plan_via_lattices`, the lattice
+  prefix for escape and bypass planning, keepouts while critical nets
+  route, joined first afterwards, per feedback trial) and the ball-grid
+  fanout sidecar of `--unified-save-inputs` (`PATH.bga.json`).
+- **DRC and reports**: component hole-clearance relaxation records
+  (`hole_clearance_relaxations`), routing-stage requirement verification
+  of `hole_clearance` and `length_match`, and the late bypass completion
+  projection of `summarize`.
+
+New corpus inputs, all equal: 29 replay-critical synthetic inputs
+(`terminals-*`, `single-guide-via*`, `reserved-*`; `synthetic.py`), 8
+unified synthetic inputs (`return-vias*`, `technology-*`; `synthetic.py
+--unified`), 7 technology state variants (`unified/generate.py
+technologies`), 21 replay-unified option cases (`share_commit_index=false`,
+`guide_cost`), the ball-grid boards `route-board/bga.copper` and
+`bga_open.copper` (suite `route-board-bga`: fanout sidecar, via lattice
+with and without array flow), `hole_clearance*.copper` and the si-check
+length-match boards (suite `route-board-requirements`), and summarize
+inputs `reports/runs/valid-clearance/late-*.json`. No difference was
+recorded.
+
+Environment notes for this container: the Python oracle needs the project
+installed (`pip install --no-deps -e .`, for the `tiny` library entry
+point) and `shapely==2.1.2`; the CopperLib and KiCad footprint packages must
+be in `.copper-cache` (an online `export-kicad-pcb --locked` of
+`examples/full_vertical` fetches both) for `generate_rust_fixtures.py` and
+the `python_oracle` test.
+
+Guards that remain, and why:
+
+- Support-pattern and package-support placement trials
+  (`support_patterns.improve_support_placement`,
+  `package_support.improve_package_support_placement`, and with them a
+  placement checkpoint carrying `package_patterns`): about 900 lines of
+  pose search with routing trials and exact admissions per trial; not
+  started.
+- A saved `FanoutResult` carrying fanout analysis (`pin_analysis`,
+  `assignment`, `late_bypass`, pending links): route-board never saves one
+  as a reservation; replay refuses it anyway, but decoding it needs four
+  more record types.
+- `save_inputs_path` with fanout or required accesses, and replaying
+  fanout-created copper: no CLI path passes them to the router.
+- The critical replay of a stack-up with via technologies (the
+  critical-replay board decoder): no saved critical input carries one.
+- Zone priorities beyond 64 bits, and the Python-crash guards.

@@ -1,5 +1,5 @@
 part Pair {
-    footprint = "../../via_arrays/pair.kicad_mod";
+    footprint = "../pair.kicad_mod";
     pin A { number = "1"; domains = "analog"; directions = "passive"; }
     pin B { number = "2"; domains = "analog"; directions = "passive"; }
 }

@@ -26643,7 +26643,7 @@
      "id": "route-board-bga/bga",
      "args": [
       "route-board",
-      "tests/rust-port/export-kicad-pcb/bga.copper",
+      "tests/rust-port/route-board/bga.copper",
       "--locked",
       "--offline",
       "--layers",
@@ -26661,7 +26661,7 @@
      "id": "route-board-bga/bga-save-inputs",
      "args": [
       "route-board",
-      "tests/rust-port/export-kicad-pcb/bga.copper",
+      "tests/rust-port/route-board/bga.copper",
       "--locked",
       "--offline",
       "--layers",
@@ -26681,7 +26681,7 @@
      "id": "route-board-bga/bga-via-lattice",
      "args": [
       "route-board",
-      "tests/rust-port/export-kicad-pcb/bga.copper",
+      "tests/rust-port/route-board/bga.copper",
       "--locked",
       "--offline",
       "--layers",
@@ -26700,7 +26700,7 @@
      "id": "route-board-bga/bga_open",
      "args": [
       "route-board",
-      "tests/rust-port/export-kicad-pcb/bga_open.copper",
+      "tests/rust-port/route-board/bga_open.copper",
       "--locked",
       "--offline",
       "--layers",
@@ -26718,7 +26718,7 @@
      "id": "route-board-bga/bga_open-via-lattice",
      "args": [
       "route-board",
-      "tests/rust-port/export-kicad-pcb/bga_open.copper",
+      "tests/rust-port/route-board/bga_open.copper",
       "--locked",
       "--offline",
       "--layers",
@@ -26737,7 +26737,7 @@
      "id": "route-board-bga/bga_open-via-lattice-array-flow",
      "args": [
       "route-board",
-      "tests/rust-port/export-kicad-pcb/bga_open.copper",
+      "tests/rust-port/route-board/bga_open.copper",
       "--locked",
       "--offline",
       "--layers",
@@ -26757,7 +26757,7 @@
      "id": "route-board-bga/bga_open-via-lattice-save-inputs",
      "args": [
       "route-board",
-      "tests/rust-port/export-kicad-pcb/bga_open.copper",
+      "tests/rust-port/route-board/bga_open.copper",
       "--locked",
       "--offline",
       "--layers",
@@ -26784,7 +26784,7 @@
      "id": "route-board-requirements/hole_clearance",
      "args": [
       "route-board",
-      "tests/rust-port/export-kicad-pcb/hole_clearance.copper",
+      "tests/rust-port/route-board/hole_clearance.copper",
       "--locked",
       "--offline",
       "--no-check",
@@ -26798,7 +26798,7 @@
      "id": "route-board-requirements/hole_clearance_tight",
      "args": [
       "route-board",
-      "tests/rust-port/export-kicad-pcb/hole_clearance_tight.copper",
+      "tests/rust-port/route-board/hole_clearance_tight.copper",
       "--locked",
       "--offline",
       "--no-check",
@@ -26812,7 +26812,7 @@
      "id": "route-board-requirements/hole_clearance_missing",
      "args": [
       "route-board",
-      "tests/rust-port/export-kicad-pcb/hole_clearance_missing.copper",
+      "tests/rust-port/route-board/hole_clearance_missing.copper",
       "--locked",
       "--offline",
       "--no-check",
