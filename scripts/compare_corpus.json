@@ -23993,6 +23993,54 @@
       "--report",
       "{out}/report.json"
      ]
+    },
+    {
+     "id": "replay-unified-synthetic/bus-skew",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/bus-skew.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/bus-skew-smoothing",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/bus-skew.state.json",
+      "--set",
+      "route_smoothing=true",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/bus-skew-untunable",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/bus-skew-untunable.state.json",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
+    },
+    {
+     "id": "replay-unified-synthetic/bus-bundles",
+     "args": [
+      "replay-unified",
+      "tests/rust-port/unified/synthetic/bus-bundles.state.json",
+      "--set",
+      "bus_bundles=true",
+      "--save-result",
+      "{out}/result.state.json",
+      "--report",
+      "{out}/report.json"
+     ]
     }
    ]
   },
@@ -24565,6 +24613,280 @@
       "tests/rust-port/critical/derived/asymmetric-pair.state.json",
       "--only",
       "D_P",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/crossing-routed",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/crossing-routed.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/crossing-reversal",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/crossing-reversal.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/crossing-impossible-layer",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/crossing-impossible-layer.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/crossing-impossible-vias",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/crossing-impossible-vias.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/crossing-failed",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/crossing-failed.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/crossing-steps-aside",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/crossing-steps-aside.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/crossing-shared-reference",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/crossing-shared-reference.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/crossing-breakout-inside",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/crossing-breakout-inside.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/crossing-tuned",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/crossing-tuned.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/nested-routed",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/nested-routed.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/nested-breakout",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/nested-breakout.state.json",
+      "--pair-states",
+      "4000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/nested-fallback",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/nested-fallback.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/bundle-repair",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/bundle-repair.state.json",
+      "--pair-states",
+      "4000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/bundle-repair-squeezed",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/bundle-repair-squeezed.state.json",
+      "--pair-states",
+      "20000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/loose-repair",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/loose-repair.state.json",
+      "--pair-states",
+      "2000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/match-tuned",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/match-tuned.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/match-failed",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/match-failed.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/match-within-limit",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/match-within-limit.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/match-incomplete",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/match-incomplete.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/match-breakout-regions",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/match-breakout-regions.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/match-bumps-outside-breakout",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/match-bumps-outside-breakout.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/match-serpentine",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/match-serpentine.state.json",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/bundle-tuning",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/bundle-tuning.state.json",
+      "--pair-states",
+      "4000",
+      "--report",
+      "{out}/critical-report.json",
+      "-o",
+      "{out}/board.kicad_pcb"
+     ]
+    },
+    {
+     "id": "replay-critical-synthetic/group-tuning",
+     "args": [
+      "replay-critical",
+      "tests/rust-port/critical/synthetic/group-tuning.state.json",
       "--report",
       "{out}/critical-report.json",
       "-o",

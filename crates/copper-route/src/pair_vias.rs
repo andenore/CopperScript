@@ -27,6 +27,18 @@ use crate::routing_clearance::RoutingClearanceIndex;
 use crate::routing_layers::{routing_layers, signal_layer_preferences};
 use crate::surface_path::via_inside_board;
 
+/// A caller's rank of a transition's signal and return vias: `None` drops
+/// it, lower ranks come first.
+pub type SiteRank<'a> = &'a dyn Fn(&[Via]) -> Option<i64>;
+
+/// `paired_via_candidates`' `layers` (the middle layers allowed, a planned
+/// crossing) and `site_rank`.
+#[derive(Clone, Copy, Default)]
+pub struct ViaRestriction<'a> {
+    pub layers: Option<&'a [CopperLayer]>,
+    pub site_rank: Option<SiteRank<'a>>,
+}
+
 /// `_Transition`: a collar, its signal vias, return vias and site rank.
 #[derive(Clone, Debug)]
 pub struct Transition {
@@ -632,6 +644,7 @@ fn transitions(
     surface: CopperLayer,
     layer: CopperLayer,
     include_outer: bool,
+    site_rank: Option<SiteRank<'_>>,
     trace: &mut TransitionTrace,
     stats: &mut PairSearchStats,
 ) -> Result<Vec<Transition>> {
@@ -718,6 +731,18 @@ fn transitions(
             };
             let mut transition_vias = pair.clone();
             transition_vias.extend(returns.iter().cloned());
+            // A caller's site rank may drop a transition (`None`) or order it
+            // ahead of others; it never admits a site the checks above refused.
+            let rank = match site_rank {
+                None => 0,
+                Some(rank) => match rank(&transition_vias) {
+                    Some(rank) => rank,
+                    None => {
+                        *rejections.entry("site_rank_rejected").or_default() += 1;
+                        continue;
+                    }
+                },
+            };
             let mut held = escaped.clone();
             held.vias = board.vias.iter().cloned().chain(transition_vias.iter().cloned()).collect();
             let held_index = RoutingClearanceIndex::new(&held)?;
@@ -755,7 +780,7 @@ fn transitions(
                     },
                     vias: pair.clone(),
                     returns: returns.clone(),
-                    rank: 0,
+                    rank,
                     outer: family != 0,
                 });
             }
@@ -868,6 +893,7 @@ pub fn paired_via_candidates(
     first_guide: &GlobalNetRoute,
     second_guide: &GlobalNetRoute,
     bounds: SearchBounds,
+    restriction: ViaRestriction<'_>,
     stats: &mut PairSearchStats,
     accept: &mut dyn FnMut(PairSearchCandidate, &mut PairSearchStats) -> Result<bool>,
 ) -> Result<bool> {
@@ -931,6 +957,9 @@ pub fn paired_via_candidates(
             crate::layer_index(order, *layer),
         )
     });
+    if let Some(layers) = restriction.layers {
+        targets.retain(|layer| layers.contains(layer));
+    }
     let clearance = clearance_of(board, first, second);
     let offset = (width + first.pair_gap_nm.expect("gap") + 1).div_euclid(2);
     for layer in targets {
@@ -961,6 +990,7 @@ pub fn paired_via_candidates(
                 *surface,
                 layer,
                 true,
+                restriction.site_rank,
                 &mut trace,
                 stats,
             )?);

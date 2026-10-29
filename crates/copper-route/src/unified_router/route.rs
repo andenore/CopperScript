@@ -578,14 +578,29 @@ pub fn route_unified(
     }
     let original_board = board;
     let all_nets = nets.clone();
-    let bus_names: IndexSet<&str> = board
+    let mut bus_names: IndexSet<&str> = board
         .match_groups
         .iter()
         .flat_map(|g| g.nets.iter().map(String::as_str))
         .filter(|name| nets.iter().any(|n| n.name == *name))
         .collect();
     if options.buses_first && options.bus_bundles && !bus_names.is_empty() {
-        return not_implemented("unified router bus bundles");
+        // A bus bundle: every net that lies on the parts a bus joins.
+        let pads_of: IndexMap<&str, &Vec<PadReference>> =
+            board.nets.iter().map(|net| (net.name.as_str(), &net.pads)).collect();
+        for group in &board.match_groups {
+            let parts: IndexSet<&str> = group
+                .nets
+                .iter()
+                .flat_map(|name| pads_of.get(name.as_str()).into_iter().flat_map(|pads| pads.iter()))
+                .map(|pad| pad.component.as_str())
+                .collect();
+            for net in &nets {
+                if net.pads.len() >= 2 && net.pads.iter().all(|pad| parts.contains(pad.component.as_str())) {
+                    bus_names.insert(net.name.as_str());
+                }
+            }
+        }
     }
     if !options.share_commit_index {
         return not_implemented("unified router without share_commit_index");
@@ -634,7 +649,7 @@ pub fn route_unified(
             if options.route_smoothing {
                 bus_accepted = smoothed(board, &bus_accepted)?;
             }
-            skew_notes = tune_bus_skew(board, &bus_accepted, &rules)?;
+            (bus_accepted, skew_notes) = tune_bus_skew(board, &bus_accepted, &rules)?;
         }
         shared.hold(&mut index, &bus_accepted)?;
         shared.freeze();
@@ -1166,14 +1181,19 @@ fn recheck_pours<'b>(
     Ok((current.0, complete, (iterations, report)))
 }
 
-/// `_tune_bus_skew` up to the tuner: the notes for members left over each
-/// group's `max_skew`. Lengthening a member (`critical_tuning.UnitTuner`)
-/// is not rewritten yet.
+/// `_tune_bus_skew`: lengthen short bus members so each length-match group
+/// meets its `max_skew`, with checked bumps or serpentines
+/// (`critical_tuning.UnitTuner`) against all other copper: to the longest
+/// when that fits, else by the least that brings it within the limit, never
+/// past its own `max_length`. Only a net that declares
+/// `tuning_amplitude_limit` is tuned; every member left over the limit is
+/// reported with its reason.
 fn tune_bus_skew(
     board: &PhysicalBoard,
     accepted: &Accepted,
     rules: &IndexMap<&str, &copper_pcb::board::NetRoutingRule>,
-) -> Result<Vec<String>> {
+) -> Result<(Accepted, Vec<String>)> {
+    let mut accepted = accepted.clone();
     let mut notes = Vec::new();
     for group in &board.match_groups {
         let max_skew = group.max_skew_nm;
@@ -1200,13 +1220,67 @@ fn tune_bus_skew(
                 notes.push(format!("{}: {name} is {need} nm short; its copper is not the bus router's", group.id));
                 continue;
             }
-            let rule = rules.get(name);
-            if rule.is_none_or(|r| r.tuning_amplitude_limit_nm.is_none()) {
+            let Some(rule) = rules.get(name).filter(|r| r.tuning_amplitude_limit_nm.is_some()) else {
                 notes.push(format!("{}: {name} is {need} nm short; no tuning_amplitude_limit is declared", group.id));
                 continue;
+            };
+            let (tracks, vias) = accepted[name].clone();
+            let mut others: Vec<TrackSegment> = board.tracks.clone();
+            let mut other_vias: Vec<Via> = board.vias.clone();
+            for (other, (items, other_items)) in &accepted {
+                if other != name {
+                    others.extend(items.iter().cloned());
+                    other_vias.extend(other_items.iter().cloned());
+                }
             }
-            return not_implemented("unified router bus skew tuning (critical_tuning.UnitTuner)");
+            other_vias.extend(vias.iter().cloned());
+            let mut obstacles = board.clone();
+            obstacles.tracks = others;
+            obstacles.vias = other_vias;
+            let index = RoutingClearanceIndex::new(&obstacles)?;
+            let clearance = board.rules.minimum_clearance_nm.max(rule.clearance_nm.unwrap_or(0));
+            let nets = [name.to_owned()];
+            let tuner = crate::critical_tuning::UnitTuner::new(
+                board,
+                &index,
+                tracks.clone(),
+                &nets,
+                0,
+                rule.tuning_amplitude_limit_nm.expect("declared"),
+                clearance,
+                crate::critical_tuning::TunerOptions {
+                    style: rule.tuning_style,
+                    leg_gap_nm: rule.tuning_spacing_nm,
+                    vias: vias.clone(),
+                    ..Default::default()
+                },
+            )?;
+            let room = rule.max_length_nm.map(|limit| limit - lengths[name]);
+            let (full, least) = (longest - lengths[name], need + need.rem_euclid(2));
+            let mut targets: Vec<i64> = Vec::new();
+            for target in if full == least { vec![full] } else { vec![full, least] } {
+                let even = target - target.rem_euclid(2);
+                if even >= need && room.is_none_or(|room| even <= room) {
+                    targets.push(even);
+                }
+            }
+            let mut reason = "max_length leaves no room".to_owned();
+            let mut tuned = false;
+            for target in &targets {
+                let plan = tuner.plan(*target)?;
+                if let Some(planned) = &plan.tracks {
+                    let width = rule.width_nm.filter(|w| *w != 0).unwrap_or(board.rules.default_track_width_nm);
+                    let split = index.breakout.split_tracks(planned, Some(width));
+                    accepted.insert(name.to_owned(), (split, vias.clone()));
+                    tuned = true;
+                    break;
+                }
+                reason = plan.reason.clone();
+            }
+            if !tuned {
+                notes.push(format!("{}: {name} is {need} nm short; {reason}", group.id));
+            }
         }
     }
-    Ok(notes)
+    Ok((accepted, notes))
 }
