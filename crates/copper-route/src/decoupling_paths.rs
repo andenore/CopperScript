@@ -16,10 +16,11 @@ use copper_pcb::board::{
 };
 use copper_pcb::hard_macros::{macro_source, resolved_macro_geometry};
 use copper_pcb::keepouts::placement_map;
-use copper_pcb::transform::transformed_local_point;
+use copper_pcb::transform::{placed_pad_shape, transformed_local_point};
 use copper_pcb::zones::routing_layers;
 use copper_pcb::{Error, Result};
 use copper_physical::footprint::{FootprintPad, PadKind, PadShape};
+use copper_physical::geometry::circle_inside_shape;
 use copper_physical::{BoardSide, CopperLayer, Point};
 
 use crate::access_sites::{circular_cell_sites, obstacle_boundary_sites};
@@ -144,9 +145,6 @@ fn context(board: &PhysicalBoard) -> Result<String> {
     let mut source = if board.materialized_macros.is_empty() {
         board.clone()
     } else {
-        if has_array_rules(board) {
-            return copper_pcb::not_implemented("via-in-pad via arrays");
-        }
         let placements = placement_map(board);
         let (mut tracks, mut vias) = (Vec::new(), Vec::new());
         for item in &board.hard_macros {
@@ -159,6 +157,7 @@ fn context(board: &PhysicalBoard) -> Result<String> {
         // macro_source accepts exactly the immutable prefix, not a routed board.
         let mut prefix = board.clone();
         prefix.tracks = tracks;
+        vias.extend(crate::pad_via_arrays::via_in_pad_array_vias(board, None)?);
         prefix.vias = vias;
         macro_source(prefix)?
     };
@@ -212,9 +211,9 @@ fn source_reason(board: &PhysicalBoard, link: &DecouplingLink) -> Result<&'stati
     if owned.contains(&link.capacitor) || owned.contains(&link.target) || owned.contains(&link.return_pad) {
         return Ok("immutable_macro_association");
     }
-    if has_array_rules(board) {
-        // require_via_in_pad_arrays needs the array geometry.
-        return copper_pcb::not_implemented("via-in-pad via arrays");
+    match crate::pad_via_arrays::require_via_in_pad_arrays(board, "cross-layer decoupling") {
+        Err(Error::Value(_)) => return Ok("missing_required_array"),
+        other => other?,
     }
     if rule(board, &link.net).is_some_and(|r| r.kind != RouteKind::General) {
         return Ok("specialized_supply_owner");
@@ -297,11 +296,42 @@ fn path_via(board: &PhysicalBoard, index: &RoutingClearanceIndex<'_>, via: &Via)
     if via.finish == "standard" {
         return normal_via(board, index, via);
     }
-    // `_source_array_owner`: only an original occurrence of required array geometry.
-    if via.finish != "filled-capped" || !has_array_rules(board) {
+    let Some(owner) = source_array_owner(board, via)? else {
         return Ok(false);
+    };
+    Ok(via_inside_board(board, via.position, via.size_nm)?
+        && index.can_via(
+            &via.net,
+            via.position,
+            via.size_nm,
+            via.from_layer,
+            via.to_layer,
+            Some(via.drill_nm),
+            false,
+            Some(&owner),
+        )?)
+}
+
+/// `_source_array_owner`: recognize only an original occurrence of exact
+/// required array geometry. Python asks for the identical object in
+/// `board.vias`; every filled-capped via reaching here is read from it, so
+/// equality stands in for identity.
+fn source_array_owner(board: &PhysicalBoard, via: &Via) -> Result<Option<PadReference>> {
+    if via.finish != "filled-capped" || !has_array_rules(board) || !board.vias.contains(via) {
+        return Ok(None);
     }
-    copper_pcb::not_implemented("via-in-pad via arrays")
+    if !crate::pad_via_arrays::via_in_pad_array_vias(board, None)?.contains(via) {
+        return Ok(None);
+    }
+    for rule in crate::pad_via_arrays::array_rules(board) {
+        let Some((pose, pad, node)) = land(board, &rule.pad) else {
+            return copper_pcb::not_implemented("a via-in-pad array owner without its land (Python crashes)");
+        };
+        if circle_inside_shape(via.position, via.size_nm / 2, &placed_pad_shape(node.position, pad, pose)) {
+            return Ok(Some(rule.pad.clone()));
+        }
+    }
+    Ok(None)
 }
 
 fn on(point: Point, track: &TrackSegment) -> bool {
@@ -1032,7 +1062,6 @@ fn existing_launches(
     sites.sort_by_key(|v| (squared(v.position, b.2.position), v.position.x_nm, v.position.y_nm));
     let mut launches = Vec::new();
     for via in sites.into_iter().take(site_limit as usize) {
-        // `_source_array_owner` needs array rules, which `path_via` refuses.
         if !path_via(board, index, via)? {
             continue;
         }

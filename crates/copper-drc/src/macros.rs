@@ -20,11 +20,34 @@ fn fail<T>(message: impl Into<String>) -> Result<T> {
     Err(Error::Value(message.into()))
 }
 
-/// `materialize_hard_macros`: commit the entire set, or reject the board unchanged.
-pub fn materialize_hard_macros(board: PhysicalBoard) -> Result<PhysicalBoard> {
-    if board.via_in_pad_rules.iter().any(|rule| rule.rows.is_some()) {
-        return copper_pcb::not_implemented("via-in-pad via arrays");
+/// Commits required via-in-pad arrays
+/// (`pad_via_arrays.materialize_via_in_pad_arrays`). It checks every site
+/// against the routing clearance index, which lives in `copper-route` (a
+/// dependent of this crate), so the binary registers it.
+pub type ArrayMaterializer = fn(&PhysicalBoard) -> Result<PhysicalBoard>;
+
+static ARRAY_MATERIALIZER: std::sync::OnceLock<ArrayMaterializer> = std::sync::OnceLock::new();
+
+/// Install the via-in-pad array materializer; the first registration wins.
+pub fn register_array_materializer(materializer: ArrayMaterializer) {
+    let _ = ARRAY_MATERIALIZER.set(materializer);
+}
+
+/// `materialize_via_in_pad_arrays` through the registered materializer.
+pub fn materialize_via_in_pad_arrays(board: PhysicalBoard) -> Result<PhysicalBoard> {
+    if !board.via_in_pad_rules.iter().any(|rule| rule.rows.is_some()) {
+        return Ok(board);
     }
+    match ARRAY_MATERIALIZER.get() {
+        Some(materialize) => materialize(&board),
+        None => copper_pcb::not_implemented("via-in-pad via arrays (no array materializer is registered)"),
+    }
+}
+
+/// `materialize_hard_macros`: commit the entire set, or reject the board
+/// unchanged. Required via-in-pad arrays join this immutable prefix after
+/// macro copper.
+pub fn materialize_hard_macros(board: PhysicalBoard) -> Result<PhysicalBoard> {
     if !board.materialized_macros.is_empty() {
         validate_hard_macros(&board)?;
         let owners: IndexSet<&str> = board.hard_macros.iter().map(|m| m.cluster.as_str()).collect();
@@ -32,12 +55,12 @@ pub fn materialize_hard_macros(board: PhysicalBoard) -> Result<PhysicalBoard> {
         if owners != materialized {
             return fail("partial hard-macro materialization is unsupported");
         }
-        return Ok(board);
+        return materialize_via_in_pad_arrays(board); // idempotent; no duplicate owner copper
     }
     if board.hard_macros.is_empty() {
-        return Ok(board);
+        return materialize_via_in_pad_arrays(board);
     }
-    materialize_macro_copper(board)
+    materialize_via_in_pad_arrays(materialize_macro_copper(board)?)
 }
 
 /// `materialize_macro_copper`: macro copper plus its physical acceptance.

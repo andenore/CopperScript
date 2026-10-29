@@ -1,0 +1,20 @@
+part Qfn {
+    footprint = "../qfn.kicad_mod";
+    pin P1 { number = "1"; domains = "analog"; directions = "passive"; }
+    pin P2 { number = "2"; domains = "analog"; directions = "passive"; }
+    pin P3 { number = "3"; domains = "analog"; directions = "passive"; }
+    pin P4 { number = "4"; domains = "analog"; directions = "passive"; }
+    pin P5 { number = "5"; domains = "analog"; directions = "passive"; }
+    pin P6 { number = "6"; domains = "analog"; directions = "passive"; }
+    pin P7 { number = "7"; domains = "analog"; directions = "passive"; }
+    pin P8 { number = "8"; domains = "analog"; directions = "passive"; }
+    pin P9 { number = "9"; domains = "analog"; directions = "passive"; }
+    pin P10 { number = "10"; domains = "analog"; directions = "passive"; }
+    pin P11 { number = "11"; domains = "analog"; directions = "passive"; }
+    pin P12 { number = "12"; domains = "analog"; directions = "passive"; }
+    pin P13 { number = "13"; domains = "analog"; directions = "passive"; }
+    pin P14 { number = "14"; domains = "analog"; directions = "passive"; }
+    pin P15 { number = "15"; domains = "analog"; directions = "passive"; }
+    pin P16 { number = "16"; domains = "analog"; directions = "passive"; }
+    pin EP { number = "17"; domains = "analog"; directions = "passive"; }
+}

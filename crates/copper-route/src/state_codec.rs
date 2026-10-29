@@ -1212,21 +1212,36 @@ fn component_hole_clearance(value: &StateValue) -> Result<ComponentHoleClearance
 fn via_in_pad_rule(value: &StateValue) -> Result<PadViaInPadRule> {
     dataclass!(reader, value, "pcbir.physical:PadViaInPadRule", {
         "pad" => pad = pad_reference;
-        "process" => process = text;
-        "rows" => rows = |v| optional(v, int);
-        "columns" => columns = |v| optional(v, int);
+        "process" => process = |v: &StateValue| Ok::<StateValue, Error>(v.clone());
+        "rows" => rows = |v: &StateValue| Ok::<StateValue, Error>(v.clone());
+        "columns" => columns = |v: &StateValue| Ok::<StateValue, Error>(v.clone());
         "pitch_nm" => pitch = |v| optional(v, int);
     });
     reader.required(&[("pad", pad.is_none())])?;
-    if process.is_some_and(|p| p != "filled-capped") {
-        return not_implemented("a via-in-pad rule with a process other than filled-capped");
+    // `PadViaInPadRule.__post_init__`.
+    if process.is_some_and(|p| !matches!(p, StateValue::Str(ref text) if text == "filled-capped")) {
+        return fail("via-in-pad supports only the filled-capped process");
     }
-    Ok(PadViaInPadRule {
-        pad: pad.expect("required"),
-        rows: rows.flatten(),
-        columns: columns.flatten(),
-        pitch_nm: pitch.flatten(),
-    })
+    let given = |count: &Option<StateValue>| count.as_ref().is_some_and(|v| !matches!(v, StateValue::Null));
+    if given(&rows) != given(&columns) {
+        return fail("via-in-pad array rows and columns must be given together");
+    }
+    let (rows, columns) = if given(&rows) {
+        let message = "via-in-pad array rows and columns must be positive integers";
+        let count = |v: &Option<StateValue>| strict_int(v.as_ref().expect("given"), message);
+        let (rows, columns) = (count(&rows)?, count(&columns)?);
+        if rows <= 0 || columns <= 0 {
+            return fail(message);
+        }
+        (Some(rows), Some(columns))
+    } else {
+        (None, None)
+    };
+    let pitch = pitch.flatten();
+    if pitch.is_some_and(|pitch| rows.is_none() || pitch <= 0) {
+        return fail("via-in-pad array pitch must be positive and requires rows and columns");
+    }
+    Ok(PadViaInPadRule { pad: pad.expect("required"), rows, columns, pitch_nm: pitch })
 }
 
 fn mechanical_hole(value: &StateValue) -> Result<MechanicalHole> {
@@ -1978,7 +1993,7 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
             return fail("via-in-pad permission requires a declared inner GND zone");
         }
         if rule.rows.is_some() {
-            return not_implemented("via-in-pad arrays");
+            copper_pcb::pad_via_arrays::validate_array_fit(board, rule, &lands)?;
         }
     }
     for track in &board.tracks {

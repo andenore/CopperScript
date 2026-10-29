@@ -1,0 +1,15 @@
+// Rust-port corpus input: a rotated owner and a neighbour beside a required via array; not a circuit.
+board ViaArray {
+    import parts "./via_arrays/parts";
+    component U1: parts.Qfn;
+    component R1: parts.Pair;
+    component R2: parts.Pair;
+    net GND { U1.EP; U1.P4; R1.A; }
+    net A { U1.P1; R1.B; }
+    net B { U1.P9; R2.A; }
+    constraint fixed_placement(U1) { x = 15 mm; y = 10 mm; rotation = 90; }
+    constraint copper_zone(GND) { layers = "In1.Cu"; pad_connection = solid; }
+    constraint via_in_pad(U1.EP) { process = "filled-capped"; rows = 1; columns = 3; pitch = 0.8mm; }
+    constraint fixed_placement(R2) { x = 15 mm; y = 17 mm; rotation = 90; }
+    constraint fixed_placement(R1) { x = 19.5 mm; y = 10 mm; rotation = 0; side = back; }
+}

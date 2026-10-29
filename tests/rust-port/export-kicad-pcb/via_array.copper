@@ -1,0 +1,13 @@
+// Rust-port corpus input: a required 2x2 filled/capped via array in an exposed pad; not a circuit.
+board ViaArray {
+    import parts "./via_arrays/parts";
+    component U1: parts.Qfn;
+    component R1: parts.Pair;
+    component R2: parts.Pair;
+    net GND { U1.EP; U1.P4; R1.A; }
+    net A { U1.P1; R1.B; }
+    net B { U1.P9; R2.A; }
+    constraint fixed_placement(U1) { x = 15 mm; y = 10 mm; rotation = 0; }
+    constraint copper_zone(GND) { layers = "In1.Cu"; pad_connection = solid; }
+    constraint via_in_pad(U1.EP) { process = "filled-capped"; rows = 2; columns = 2; }
+}

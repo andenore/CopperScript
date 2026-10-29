@@ -89,19 +89,20 @@ pub fn preview_copper(board: &PhysicalBoard) -> Result<(PhysicalBoard, Option<St
     if board.hard_macros.is_empty() {
         return Ok((board.clone(), None));
     }
-    if !board.materialized_macros.is_empty() {
-        return Ok((copper_drc::macros::materialize_hard_macros(board.clone())?, None));
-    }
-    if let Some(message) = cache_key_failure(board)? {
-        return Ok((board.clone(), Some(message)));
-    }
-    match copper_drc::macros::materialize_macro_copper(board.clone()) {
-        Ok(copper) => {
-            if board.via_in_pad_rules.iter().any(|rule| rule.rows.is_some()) {
-                return Err(Error::NotImplemented("via-in-pad via arrays".to_owned()));
-            }
-            Ok((copper, None))
+    let copper = if !board.materialized_macros.is_empty() {
+        copper_drc::macros::materialize_hard_macros(board.clone())
+    } else {
+        if let Some(message) = cache_key_failure(board)? {
+            return Ok((board.clone(), Some(message)));
         }
+        // Cached macro copper on this board's poses; arrays follow the current pads.
+        copper_drc::macros::materialize_macro_copper(board.clone())
+            .and_then(copper_drc::macros::materialize_via_in_pad_arrays)
+    };
+    match copper {
+        Ok(copper) => Ok((copper, None)),
+        // Inspection-grid poses may not yet form a legal macro. Keep the viewer
+        // usable for legalization, but grant no private-copper connectivity.
         Err(copper_pcb::Error::Value(message)) => Ok((board.clone(), Some(message))),
         Err(error) => Err(error.into()),
     }

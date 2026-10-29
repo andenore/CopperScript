@@ -2203,7 +2203,7 @@ fn validate_references(
             return fail("via-in-pad permission requires a declared inner GND zone");
         }
         if rule.rows.is_some() {
-            return crate::not_implemented("via-in-pad via arrays");
+            crate::pad_via_arrays::validate_array_fit(board, rule, &lands)?;
         }
     }
     for track in &board.tracks {

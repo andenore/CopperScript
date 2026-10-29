@@ -11,6 +11,7 @@ use copper_lang::mechanical::assembly::body_outline;
 use copper_pcb::board::*;
 use copper_pcb::hard_macros::{cluster_placement_matches, resolved_macro_geometry, via_span};
 use copper_pcb::keepouts::{placement_map, resolved_cluster_keepouts};
+use copper_pcb::pad_via_arrays::{array_sites, array_via, net_by_pad, owner_net, via_in_pad_array_vias};
 use copper_pcb::transform::{placed_pad_shape, transform_local, transformed_local_point};
 use copper_pcb::{Error, Result};
 use copper_physical::footprint::PadKind;
@@ -759,8 +760,163 @@ fn drills_clear_courtyard(
     Ok(true)
 }
 
-fn array_owners(board: &PhysicalBoard) -> bool {
-    board.via_in_pad_rules.iter().any(|r| r.rows.is_some())
+/// `_array_owners`: components owning a required via-in-pad array.
+fn array_owners(board: &PhysicalBoard) -> IndexSet<&str> {
+    board.via_in_pad_rules.iter().filter(|r| r.rows.is_some()).map(|r| r.pad.component.as_str()).collect()
+}
+
+/// `_array_vias`: an owner's required arrays at an accepted pose.
+fn array_vias(board: &PhysicalBoard, pose: &Placement) -> Result<Vec<Via>> {
+    if !array_owners(board).contains(pose.reference.as_str()) {
+        return Ok(Vec::new());
+    }
+    let poses: Poses = [(pose.reference.clone(), pose.clone())].into_iter().collect();
+    via_in_pad_array_vias(board, Some(&poses))
+}
+
+/// `_array_peer_clear`: an owner's array annuli and drills against one peer's
+/// lands, holes and own arrays.
+fn array_peer_clear(board: &PhysicalBoard, vias: &[Via], peer: &Placement) -> Result<bool> {
+    if vias.is_empty() {
+        return Ok(true);
+    }
+    let geometry = footprint_geometry(board, peer)?;
+    let footprint = &board.footprints[&peer.footprint];
+    let nets = net_by_pad(board);
+    let mut clearances: IndexMap<&str, i64> = IndexMap::new();
+    for rule in &board.net_routing_rules {
+        clearances.insert(rule.net.as_str(), rule.clearance_nm.unwrap_or(0));
+    }
+    let clearance_of = |net: Option<&str>| net.and_then(|net| clearances.get(net).copied()).unwrap_or(0);
+    let minimum = board.rules.minimum_clearance_nm;
+    let hole = board.rules.minimum_hole_clearance_nm;
+    let peer_vias = array_vias(board, peer)?;
+    for via in vias {
+        let annulus = shape(vec![via.position], via.size_nm / 2)?;
+        let drill = shape(vec![via.position], via.drill_nm / 2)?;
+        for (number, _, copper) in &geometry.lands {
+            // Array materialization forbids contact with every foreign land,
+            // including same-net lands, independently of the drilled clearance.
+            if !shapes_clear(&annulus, copper, 1) {
+                return Ok(false);
+            }
+            let net = nets.get(&PadReference::new(&peer.reference, number)).copied();
+            if net != Some(via.net.as_str()) {
+                let gap = minimum
+                    .max(footprint.clearance_nm.unwrap_or(0))
+                    .max(clearance_of(net))
+                    .max(clearance_of(Some(&via.net)));
+                if !shapes_clear(&annulus, copper, gap) || !shapes_clear(&drill, copper, gap.max(hole)) {
+                    return Ok(false);
+                }
+            }
+        }
+        if geometry.holes.iter().any(|(item, _)| !shapes_clear(&drill, item, hole)) {
+            return Ok(false);
+        }
+        for other in &peer_vias {
+            let other_drill = shape(vec![other.position], other.drill_nm / 2)?;
+            if !shapes_clear(&drill, &other_drill, hole) {
+                return Ok(false);
+            }
+            if other.net != via.net {
+                let other_copper = shape(vec![other.position], other.size_nm / 2)?;
+                let gap = minimum.max(clearance_of(Some(&other.net))).max(clearance_of(Some(&via.net)));
+                if !shapes_clear(&annulus, &other_copper, gap)
+                    || !shapes_clear(&drill, &other_copper, gap.max(hole))
+                    || !shapes_clear(&annulus, &other_drill, gap.max(hole))
+                {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// `_required_arrays_clear`: held owners' arrays against the candidate, and
+/// a candidate owner's arrays against every held peer.
+fn required_arrays_clear(board: &PhysicalBoard, candidate: &Placement, held: &Poses) -> Result<bool> {
+    let owners = array_owners(board);
+    if owners.is_empty() {
+        return Ok(true);
+    }
+    if owners.contains(candidate.reference.as_str()) {
+        let vias = array_vias(board, candidate)?;
+        for (reference, other) in held {
+            if *reference != candidate.reference && !array_peer_clear(board, &vias, other)? {
+                return Ok(false);
+            }
+        }
+    }
+    for (reference, pose) in held {
+        if owners.contains(reference.as_str())
+            && *reference != candidate.reference
+            && !array_peer_clear(board, &array_vias(board, pose)?, candidate)?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// `_required_array_copper`: an owner's arrays at a pose, per owner pad, in declaration order.
+fn required_array_copper(board: &PhysicalBoard, pose: &Placement) -> Result<Vec<(PadReference, Vec<Via>)>> {
+    let nets = net_by_pad(board);
+    let mut arrays = Vec::new();
+    for rule in board.via_in_pad_rules.iter().filter(|r| r.rows.is_some() && r.pad.component == pose.reference) {
+        let net = owner_net(&nets, rule)?;
+        let vias = array_sites(board, rule, Some(pose))?.into_iter().map(|(_, _, site)| array_via(board, net, site));
+        arrays.push((rule.pad.clone(), vias.collect()));
+    }
+    Ok(arrays)
+}
+
+/// `_lands_touch_required_array`: the full array annulus cannot overlap even a same-net foreign land.
+fn lands_touch_required_array(
+    board: &PhysicalBoard,
+    pose: &Placement,
+    owner_pad: &PadReference,
+    vias: &[Via],
+) -> Result<bool> {
+    for (pad, land) in land_shapes(board, pose) {
+        if PadReference::new(&pose.reference, &pad.number) == *owner_pad {
+            continue;
+        }
+        for via in vias {
+            if !shapes_clear(&land, &shape(vec![via.position], via.size_nm / 2)?, 1) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// `_required_array_lands_clear`: reserve declared through-array copper on both sides before routing.
+fn required_array_lands_clear(board: &PhysicalBoard, candidate: &Placement, placed: &Poses) -> Result<bool> {
+    let owners = array_owners(board);
+    if owners.is_empty() {
+        return Ok(true);
+    }
+    let mut poses = placed.clone();
+    poses.insert(candidate.reference.clone(), candidate.clone());
+    for reference in owners {
+        let Some(owner) = poses.get(reference) else { continue };
+        // Moving an owner must recheck every held neighbor; moving a neighbor
+        // only needs its own lands checked against each held owner's array.
+        let obstacles: Vec<&Placement> =
+            if reference == candidate.reference { poses.values().collect() } else { vec![candidate] };
+        for (owner_pad, vias) in required_array_copper(board, owner)? {
+            for obstacle in &obstacles {
+                if lands_touch_required_array(board, obstacle, &owner_pad, &vias)?
+                    || lands_meet_macro_copper(board, obstacle, &[], &vias)?
+                {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// `footprint_holes_clear`: candidate and accepted peers, symmetrically on both faces.
@@ -768,8 +924,8 @@ pub fn footprint_holes_clear(board: &PhysicalBoard, candidate: &Placement, held:
     if held.iter().any(|(reference, pose)| *reference != pose.reference) {
         return Ok(false);
     }
-    if array_owners(board) {
-        return copper_pcb::not_implemented("via-in-pad via arrays");
+    if !required_arrays_clear(board, candidate, held)? {
+        return Ok(false);
     }
     let clearance = board.rules.minimum_hole_clearance_nm;
     let candidate_has_holes = has_drills(board, candidate);
@@ -978,8 +1134,8 @@ impl<'a> Checker<'a> {
         if !footprint_holes_clear(board, candidate, placed)? {
             return Ok(false);
         }
-        if array_owners(board) {
-            return copper_pcb::not_implemented("via-in-pad via arrays");
+        if !required_array_lands_clear(board, candidate, placed)? {
+            return Ok(false);
         }
         let edge = rule.and_then(|r| r.edge_clearance_nm).unwrap_or(self.policy.edge_clearance_nm);
         let outline = &board.outline;

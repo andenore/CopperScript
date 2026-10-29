@@ -82,8 +82,11 @@ fn improve_decoupling_placement(scene: &Scene, refined: &Poses, options: &Planne
     }
     let mut fixed: IndexSet<String> = scene.fixed_placements(refined, &options.fixed_references).into_keys().collect();
     fixed.extend(board.rigid_clusters.iter().flat_map(|c| c.members.iter().map(|m| m.reference.clone())));
-    if board.via_in_pad_rules.iter().any(|r| r.rows.is_some()) {
-        return copper_pcb::not_implemented("via-in-pad via arrays");
+    for rule in board.via_in_pad_rules.iter().filter(|r| r.rows.is_some()) {
+        if !refined.contains_key(&rule.pad.component) {
+            return copper_pcb::not_implemented("a via-in-pad array owner without a pose (Python crashes)");
+        }
+        fixed.insert(rule.pad.component.clone());
     }
     let mut frame = board.clone();
     frame.placements = refined.values().cloned().collect();
