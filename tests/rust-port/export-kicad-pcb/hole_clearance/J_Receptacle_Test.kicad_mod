@@ -1,0 +1,9 @@
+(footprint "J_Receptacle_Test"
+  (layer "F.Cu")
+  (attr smd)
+  (pad "" np_thru_hole circle (at -2 0) (size 0.65 0.65) (drill 0.65) (layers "*.Cu" "*.Mask"))
+  (pad "" np_thru_hole circle (at 2 0) (size 0.65 0.65) (drill 0.65) (layers "*.Cu" "*.Mask"))
+  (pad "1" smd rect (at -2 -0.819) (size 0.6 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (pad "2" smd rect (at 2 -0.819) (size 0.6 0.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+  (fp_rect (start -3 -1.5) (end 3 1.5) (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd"))
+)

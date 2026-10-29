@@ -486,13 +486,65 @@ fn evaluate(
     if constraint.kind == ConstraintKind::Routing {
         return routing(constraint, &lowered, scene.board, route.and_then(|route| route.drc.as_ref()));
     }
-    match constraint.kind {
-        ConstraintKind::LengthMatch | ConstraintKind::HoleClearance => Err(Unresolved::NotImplemented(format!(
-            "routing-stage verification of {} declarations",
-            constraint.kind.value()
-        ))),
-        _ => outcome("blocked", "no supported verifier for this declaration"),
+    let mut selected = flat.clone();
+    selected.constraints = vec![constraint.clone()];
+    if constraint.kind == ConstraintKind::LengthMatch {
+        let mut board = scene.board.clone();
+        board.match_groups = copper_pcb::physicalize::lower_match_groups(&selected)?
+            .into_iter()
+            .map(|(id, nets, max_skew_nm)| copper_pcb::board::NetMatchGroup { id, nets, max_skew_nm })
+            .collect();
+        let results = copper_drc::signal_integrity::verify_match_groups(&board)?;
+        let Some(result) = results.first() else { return outcome("blocked", "no match-group measurement") };
+        let status = if ["pass", "fail"].contains(&result.status) { result.status } else { "blocked" };
+        let measurement = Value::Object(
+            [
+                ("property", text("skew")),
+                ("actual_nm", result.skew_nm.map_or(Value::Null, int)),
+                ("limit_nm", int(result.max_skew_nm)),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+        );
+        return Ok((
+            status.to_owned(),
+            "explicit connected track-length skew; no delay/impedance qualification".to_owned(),
+            vec![measurement],
+        ));
     }
+    if constraint.kind == ConstraintKind::HoleClearance {
+        let board = scene.board;
+        let proxy = board.metadata.get("prototype_footprints").is_some_and(|value| value == "true");
+        let expected = copper_pcb::physicalize::lower_hole_clearances(
+            &selected,
+            &board.footprints,
+            &board.placements,
+            &board.rules,
+            proxy,
+        )?;
+        if expected.is_empty() || !expected.iter().all(|rule| board.component_hole_clearances.contains(rule)) {
+            return outcome("blocked", "scoped hole-clearance rule absent or unresolved");
+        }
+        let drc = route.and_then(|route| route.drc.as_ref());
+        let covered = drc.is_some_and(|drc| {
+            drc.coverage.iter().any(|item| {
+                item.check == "component_hole_clearance" && item.status == copper_drc::CoverageStatus::Executed
+            })
+        });
+        let Some(drc) = drc.filter(|_| covered) else {
+            return outcome("blocked", "current scoped hole-clearance DRC coverage is missing");
+        };
+        let errors = drc
+            .findings
+            .iter()
+            .any(|item| item.code == "DRC-HOLE-CLEARANCE" && item.severity == copper_drc::Severity::Error);
+        return outcome(
+            if errors { "fail" } else { "pass" },
+            "current exact hole-clearance DRC (board-wide conservative scope)",
+        );
+    }
+    outcome("blocked", "no supported verifier for this declaration")
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {

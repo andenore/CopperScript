@@ -251,9 +251,40 @@ pub fn summarize_report(report: &Value, report_path: &str, report_digest: &str) 
             ));
         }
     }
-    if truthy(report.get("fanout").and_then(|f| f.get("late_bypass_completion"))) {
-        return copper_pcb::not_implemented("summaries of late bypass completion");
-    }
+    // `late_completion`: the late bypass pass of the fanout, when reported.
+    let late = report.get("fanout").and_then(|f| f.get("late_bypass_completion"));
+    let late_summary = match late {
+        None => Value::Null,
+        Some(value) if !truthy(Some(value)) => Value::Null,
+        Some(Value::Object(late)) => {
+            let count = |key: &str| -> Result<Value> {
+                match late.get(key) {
+                    None => Ok(int(0)),
+                    Some(Value::Array(items)) => Ok(int(items.len() as i64)),
+                    Some(Value::Object(items)) => Ok(int(items.len() as i64)),
+                    Some(Value::Str(text)) => Ok(int(text.chars().count() as i64)),
+                    Some(_) => {
+                        copper_pcb::not_implemented(&format!("a late bypass {key} without a length (Python crashes)"))
+                    }
+                }
+            };
+            let field = |key: &str| late.get(key).cloned().unwrap_or(Value::Null);
+            object(vec![
+                ("status", field("status")),
+                ("passes", field("passes")),
+                ("maximum_passes", field("maximum_passes")),
+                ("selected", count("selected_links")?),
+                ("completed", count("completed_links")?),
+                ("remaining", count("remaining_links")?),
+                ("added_tracks", field("added_tracks")),
+                ("added_vias", field("added_vias")),
+                ("reason", late.get("reason").cloned().unwrap_or_else(|| text(""))),
+            ])
+        }
+        Some(_) => {
+            return copper_pcb::not_implemented("a late bypass completion that is not an object (Python crashes)");
+        }
+    };
     let priority = |stage: &str| match stage {
         "native" => 0,
         "physical" => 1,
@@ -362,7 +393,7 @@ pub fn summarize_report(report: &Value, report_path: &str, report_digest: &str) 
             object(vec![
                 ("total", int(decoupling.len() as i64)),
                 ("surface_connected", int(surface)),
-                ("late_completion", Value::Null),
+                ("late_completion", late_summary),
             ]),
         ),
         ("issue_count", int(issues.len() as i64)),
@@ -414,6 +445,24 @@ pub fn summary_lines(summary: &Value) -> Vec<String> {
             field("decoupling", "surface_connected"),
             field("decoupling", "total")
         ));
+    }
+    let late = summary.get("decoupling").and_then(|d| d.get("late_completion")).filter(|late| truthy(Some(late)));
+    if let Some(late) = late
+        && (truthy(late.get("passes")) || late.get("status") == Some(&text("rejected")))
+    {
+        let value = |key: &str| late.get(key).map_or_else(|| "None".to_owned(), py_str);
+        lines.push(format!(
+            "Late bypass pass: {}; {}/{} passes; {}/{} associations completed; {} pending",
+            value("status"),
+            value("passes"),
+            value("maximum_passes"),
+            value("completed"),
+            value("selected"),
+            value("remaining")
+        ));
+        if truthy(late.get("reason")) {
+            lines.push(format!("  {}", value("reason")));
+        }
     }
     let issues = list(summary.get("issues"));
     for row in issues {

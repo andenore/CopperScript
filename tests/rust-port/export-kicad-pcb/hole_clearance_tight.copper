@@ -1,0 +1,12 @@
+// Rust-port corpus input (test_component_hole_clearance): a scoped hole_clearance the pads do not meet; not a circuit.
+board Receptacle {
+    use library "tiny";
+    component J1: RESISTOR { value = 1kohm; footprint = "./hole_clearance/J_Receptacle_Test.kicad_mod"; }
+    component R1: RESISTOR { value = 1kohm; footprint = "./hole_clearance/R_0402_Test.kicad_mod"; }
+    net GND { J1.1; J1.2; R1.1; }
+    net SIG { R1.2; }
+    constraint hole_clearance(J1) {
+        clearance = 0.2mm;
+        reason = "A scoped clearance the pads do not meet";
+    }
+}

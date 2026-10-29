@@ -26775,6 +26775,96 @@
      ]
     }
    ]
+  },
+  {
+   "name": "route-board-requirements",
+   "milestone": "M4",
+   "cases": [
+    {
+     "id": "route-board-requirements/hole_clearance",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/hole_clearance.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-requirements/hole_clearance_tight",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/hole_clearance_tight.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-requirements/hole_clearance_missing",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/hole_clearance_missing.copper",
+      "--locked",
+      "--offline",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-requirements/no_stackup",
+     "args": [
+      "route-board",
+      "tests/rust-port/si-check/no_stackup.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--routing-profile",
+      "quick",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-requirements/layer_groups",
+     "args": [
+      "route-board",
+      "tests/rust-port/si-check/layer_groups.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--routing-profile",
+      "quick",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    }
+   ]
   }
  ]
 }
