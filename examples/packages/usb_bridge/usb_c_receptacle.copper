@@ -1,0 +1,36 @@
+// Support part for the FX10-like bridge example: KiCad stock footprint,
+// reference-only pin contract, not an orderable selection.
+// USB Type-C 24-position receptacle, KiCad
+// Connector_USB:USB_C_Receptacle_Amphenol_12401610E4-2A. Pin names follow the
+// USB Type-C receptacle signal table (A/B rows, TX/RX from this device's
+// receptacle side). S1 is the plated shell, four tabs.
+part USB_C_RECEPTACLE_24P {
+    category = "connector.usb_c.usb3";
+    footprint = "Connector_USB:USB_C_Receptacle_Amphenol_12401610E4-2A";
+    source_document = "USB Type-C Cable and Connector Specification, receptacle interface definition";
+    pin GND_A1 { number = "A1"; domains = "ground"; directions = "passive"; }
+    pin TX1_P { number = "A2"; domains = "digital"; directions = "passive"; }
+    pin TX1_N { number = "A3"; domains = "digital"; directions = "passive"; }
+    pin VBUS_A4 { number = "A4"; domains = "power"; directions = "passive"; }
+    pin CC1 { number = "A5"; domains = "analog"; directions = "passive"; traits = "usb_cc"; }
+    pin DP1 { number = "A6"; domains = "digital"; directions = "passive"; traits = "usb_dp"; }
+    pin DN1 { number = "A7"; domains = "digital"; directions = "passive"; traits = "usb_dm"; }
+    pin SBU1 { number = "A8"; domains = "analog,digital"; directions = "passive"; connection = optional; }
+    pin VBUS_A9 { number = "A9"; domains = "power"; directions = "passive"; }
+    pin RX2_N { number = "A10"; domains = "digital"; directions = "passive"; }
+    pin RX2_P { number = "A11"; domains = "digital"; directions = "passive"; }
+    pin GND_A12 { number = "A12"; domains = "ground"; directions = "passive"; }
+    pin GND_B1 { number = "B1"; domains = "ground"; directions = "passive"; }
+    pin TX2_P { number = "B2"; domains = "digital"; directions = "passive"; }
+    pin TX2_N { number = "B3"; domains = "digital"; directions = "passive"; }
+    pin VBUS_B4 { number = "B4"; domains = "power"; directions = "passive"; }
+    pin CC2 { number = "B5"; domains = "analog"; directions = "passive"; traits = "usb_cc"; }
+    pin DP2 { number = "B6"; domains = "digital"; directions = "passive"; traits = "usb_dp"; }
+    pin DN2 { number = "B7"; domains = "digital"; directions = "passive"; traits = "usb_dm"; }
+    pin SBU2 { number = "B8"; domains = "analog,digital"; directions = "passive"; connection = optional; }
+    pin VBUS_B9 { number = "B9"; domains = "power"; directions = "passive"; }
+    pin RX1_N { number = "B10"; domains = "digital"; directions = "passive"; }
+    pin RX1_P { number = "B11"; domains = "digital"; directions = "passive"; }
+    pin GND_B12 { number = "B12"; domains = "ground"; directions = "passive"; }
+    pin SHIELD { number = "S1"; domains = "ground"; directions = "passive"; }
+}

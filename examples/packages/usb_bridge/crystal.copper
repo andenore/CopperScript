@@ -1,0 +1,12 @@
+// Support part for the FX10-like bridge example: KiCad stock footprint,
+// reference-only pin contract, not an orderable selection.
+// Reference crystal contract, NOT an orderable part. KiCad Crystal_GND24
+// convention: oscillator terminals 1/3, case ground 2/4.
+part REFERENCE_XTAL_3225 {
+    category = "passive.crystal";
+    footprint = "Crystal:Crystal_SMD_3225-4Pin_3.2x2.5mm";
+    pin X1 { number = "1"; domains = "analog"; directions = "passive"; }
+    pin X2 { number = "3"; domains = "analog"; directions = "passive"; }
+    pin CASE_2 { number = "2"; domains = "ground"; directions = "passive"; }
+    pin CASE_4 { number = "4"; domains = "ground"; directions = "passive"; }
+}

@@ -1,0 +1,161 @@
+// FX10-like 121-ball USB bridge. NOT a verified Infineon pin map.
+// Modeled on the public EZ-USB FX10 (CYUSB4014-FCAXI) arrangement -- 121 balls,
+// full 11 x 11 array, 10 x 10 mm, 0.8 mm pitch, signals on the outer rings,
+// supplies and ground inside -- so the BGA routing paths have a public test.
+// Ball assignments, rail voltages and pad capabilities are plausible
+// illustrations only; do not build hardware from this file.
+
+// Ball map (row A at the top, column 1 at the left, as KiCad's footprint):
+//             1        2        3        4        5        6        7        8        9       10       11
+//   A       GND  SSTX2_P  SSTX2_N      GND  SSRX2_P  SSRX2_N      GND      CC1      CC2  I2C_SCL  I2C_SDA
+//   B   SSTX1_P      GND      GND   VUSB18      GND   VUSB33      TCK      TMS    GPIO3     P0EN     P0D0
+//   C   SSTX1_N   VUSB33      GND   VUSB18      GND    VCORE      GND    VCORE    VDDIO     P0D8     P0D1
+//   D       GND      GND   VUSB33    VCORE      GND    VCORE      GND    VCORE      GND     P0D9     P0D2
+//   E   SSRX1_P   VUSB18      GND      GND      GND      GND      GND      GND    VDDIO    P0D10     P0D3
+//   F   SSRX1_N      GND   VUSB18    VCORE      GND      GND      GND    VCORE      GND    P0D11    P0CLK
+//   G       GND   VUSB18      GND      GND      GND      GND      GND      GND    VDDIO    P0D12     P0D4
+//   H    USB_DP      GND   VUSB33    VCORE      GND    VCORE      GND    VCORE      GND    P0D13     P0D5
+//   J    USB_DM   VUSB33      GND    VCORE      GND    VCORE      GND    VDDIO      GND    P0D14     P0D6
+//   K       GND      GND    VDDIO    GPIO2    VCORE      GND    VDDIO      TDI      TDO    P0D15     P0D7
+//   L  USB_RREF  XTAL_IN XTAL_OUT  UART_RX  RESET_N VBUS_DET    GPIO0    GPIO1  UART_TX     P0OE    P0OVR
+//
+// Rings: 0 = outer edge ... 5 = centre ball F6. Signals sit in rings 0-1,
+// supplies in rings 1-3 and ground in rings 2-5, so every ring-2+ ball
+// needs a via. Supply/ground pins carry their ball as a suffix.
+//
+// Footprint: package-local copy of KiCad Package_BGA:TFBGA-121_10x10mm_
+// Layout11x11_P0.8mm (kicad-footprints 7ebfa6b, sha256 67d721b4...01f0) with
+// identical pads and outline. The stock file's module-level
+// solder_mask_margin 0.035 / solder_paste_margin 0.000001 are dropped:
+// CopperScript rejects footprint-wide mask/paste overrides, so the board
+// fabrication profile's mask rules apply to these 0.4 mm SMD lands.
+// Counts: GND 43, VCORE 13, VDDIO 6, VUSB18 5, VUSB33 5, signals 49.
+part FX10_LIKE_BGA121 {
+    category = "controller.usb";
+    manufacturer = "Example (FX10-like, unverified)";
+    footprint = "footprints/Package_BGA.pretty/TFBGA-121_10x10mm_Layout11x11_P0.8mm.kicad_mod";
+    device = FX10_LIKE_USB_BRIDGE;
+    source_document = "Illustrative FX10-like ball map; not an Infineon document";
+
+    pin GND_A1 { number = "A1"; bond = GND; }
+    pin SSTX2_P { number = "A2"; bond = SSTX2_P; }
+    pin SSTX2_N { number = "A3"; bond = SSTX2_N; }
+    pin GND_A4 { number = "A4"; bond = GND; }
+    pin SSRX2_P { number = "A5"; bond = SSRX2_P; }
+    pin SSRX2_N { number = "A6"; bond = SSRX2_N; }
+    pin GND_A7 { number = "A7"; bond = GND; }
+    pin CC1 { number = "A8"; bond = CC1; }
+    pin CC2 { number = "A9"; bond = CC2; }
+    pin I2C_SCL { number = "A10"; bond = I2C_SCL; }
+    pin I2C_SDA { number = "A11"; bond = I2C_SDA; }
+    pin SSTX1_P { number = "B1"; bond = SSTX1_P; }
+    pin GND_B2 { number = "B2"; bond = GND; }
+    pin GND_B3 { number = "B3"; bond = GND; }
+    pin VUSB18_B4 { number = "B4"; bond = VUSB18; }
+    pin GND_B5 { number = "B5"; bond = GND; }
+    pin VUSB33_B6 { number = "B6"; bond = VUSB33; }
+    pin TCK { number = "B7"; bond = TCK; }
+    pin TMS { number = "B8"; bond = TMS; }
+    pin GPIO3 { number = "B9"; bond = GPIO3; }
+    pin P0EN { number = "B10"; bond = P0EN; }
+    pin P0D0 { number = "B11"; bond = P0D0; }
+    pin SSTX1_N { number = "C1"; bond = SSTX1_N; }
+    pin VUSB33_C2 { number = "C2"; bond = VUSB33; }
+    pin GND_C3 { number = "C3"; bond = GND; }
+    pin VUSB18_C4 { number = "C4"; bond = VUSB18; }
+    pin GND_C5 { number = "C5"; bond = GND; }
+    pin VCORE_C6 { number = "C6"; bond = VCORE; }
+    pin GND_C7 { number = "C7"; bond = GND; }
+    pin VCORE_C8 { number = "C8"; bond = VCORE; }
+    pin VDDIO_C9 { number = "C9"; bond = VDDIO; }
+    pin P0D8 { number = "C10"; bond = P0D8; }
+    pin P0D1 { number = "C11"; bond = P0D1; }
+    pin GND_D1 { number = "D1"; bond = GND; }
+    pin GND_D2 { number = "D2"; bond = GND; }
+    pin VUSB33_D3 { number = "D3"; bond = VUSB33; }
+    pin VCORE_D4 { number = "D4"; bond = VCORE; }
+    pin GND_D5 { number = "D5"; bond = GND; }
+    pin VCORE_D6 { number = "D6"; bond = VCORE; }
+    pin GND_D7 { number = "D7"; bond = GND; }
+    pin VCORE_D8 { number = "D8"; bond = VCORE; }
+    pin GND_D9 { number = "D9"; bond = GND; }
+    pin P0D9 { number = "D10"; bond = P0D9; }
+    pin P0D2 { number = "D11"; bond = P0D2; }
+    pin SSRX1_P { number = "E1"; bond = SSRX1_P; }
+    pin VUSB18_E2 { number = "E2"; bond = VUSB18; }
+    pin GND_E3 { number = "E3"; bond = GND; }
+    pin GND_E4 { number = "E4"; bond = GND; }
+    pin GND_E5 { number = "E5"; bond = GND; }
+    pin GND_E6 { number = "E6"; bond = GND; }
+    pin GND_E7 { number = "E7"; bond = GND; }
+    pin GND_E8 { number = "E8"; bond = GND; }
+    pin VDDIO_E9 { number = "E9"; bond = VDDIO; }
+    pin P0D10 { number = "E10"; bond = P0D10; }
+    pin P0D3 { number = "E11"; bond = P0D3; }
+    pin SSRX1_N { number = "F1"; bond = SSRX1_N; }
+    pin GND_F2 { number = "F2"; bond = GND; }
+    pin VUSB18_F3 { number = "F3"; bond = VUSB18; }
+    pin VCORE_F4 { number = "F4"; bond = VCORE; }
+    pin GND_F5 { number = "F5"; bond = GND; }
+    pin GND_F6 { number = "F6"; bond = GND; }
+    pin GND_F7 { number = "F7"; bond = GND; }
+    pin VCORE_F8 { number = "F8"; bond = VCORE; }
+    pin GND_F9 { number = "F9"; bond = GND; }
+    pin P0D11 { number = "F10"; bond = P0D11; }
+    pin P0CLK { number = "F11"; bond = P0CLK; }
+    pin GND_G1 { number = "G1"; bond = GND; }
+    pin VUSB18_G2 { number = "G2"; bond = VUSB18; }
+    pin GND_G3 { number = "G3"; bond = GND; }
+    pin GND_G4 { number = "G4"; bond = GND; }
+    pin GND_G5 { number = "G5"; bond = GND; }
+    pin GND_G6 { number = "G6"; bond = GND; }
+    pin GND_G7 { number = "G7"; bond = GND; }
+    pin GND_G8 { number = "G8"; bond = GND; }
+    pin VDDIO_G9 { number = "G9"; bond = VDDIO; }
+    pin P0D12 { number = "G10"; bond = P0D12; }
+    pin P0D4 { number = "G11"; bond = P0D4; }
+    pin USB_DP { number = "H1"; bond = USB_DP; }
+    pin GND_H2 { number = "H2"; bond = GND; }
+    pin VUSB33_H3 { number = "H3"; bond = VUSB33; }
+    pin VCORE_H4 { number = "H4"; bond = VCORE; }
+    pin GND_H5 { number = "H5"; bond = GND; }
+    pin VCORE_H6 { number = "H6"; bond = VCORE; }
+    pin GND_H7 { number = "H7"; bond = GND; }
+    pin VCORE_H8 { number = "H8"; bond = VCORE; }
+    pin GND_H9 { number = "H9"; bond = GND; }
+    pin P0D13 { number = "H10"; bond = P0D13; }
+    pin P0D5 { number = "H11"; bond = P0D5; }
+    pin USB_DM { number = "J1"; bond = USB_DM; }
+    pin VUSB33_J2 { number = "J2"; bond = VUSB33; }
+    pin GND_J3 { number = "J3"; bond = GND; }
+    pin VCORE_J4 { number = "J4"; bond = VCORE; }
+    pin GND_J5 { number = "J5"; bond = GND; }
+    pin VCORE_J6 { number = "J6"; bond = VCORE; }
+    pin GND_J7 { number = "J7"; bond = GND; }
+    pin VDDIO_J8 { number = "J8"; bond = VDDIO; }
+    pin GND_J9 { number = "J9"; bond = GND; }
+    pin P0D14 { number = "J10"; bond = P0D14; }
+    pin P0D6 { number = "J11"; bond = P0D6; }
+    pin GND_K1 { number = "K1"; bond = GND; }
+    pin GND_K2 { number = "K2"; bond = GND; }
+    pin VDDIO_K3 { number = "K3"; bond = VDDIO; }
+    pin GPIO2 { number = "K4"; bond = GPIO2; }
+    pin VCORE_K5 { number = "K5"; bond = VCORE; }
+    pin GND_K6 { number = "K6"; bond = GND; }
+    pin VDDIO_K7 { number = "K7"; bond = VDDIO; }
+    pin TDI { number = "K8"; bond = TDI; }
+    pin TDO { number = "K9"; bond = TDO; }
+    pin P0D15 { number = "K10"; bond = P0D15; }
+    pin P0D7 { number = "K11"; bond = P0D7; }
+    pin USB_RREF { number = "L1"; bond = USB_RREF; }
+    pin XTAL_IN { number = "L2"; bond = XTAL_IN; }
+    pin XTAL_OUT { number = "L3"; bond = XTAL_OUT; }
+    pin UART_RX { number = "L4"; bond = UART_RX; }
+    pin RESET_N { number = "L5"; bond = RESET_N; }
+    pin VBUS_DET { number = "L6"; bond = VBUS_DET; }
+    pin GPIO0 { number = "L7"; bond = GPIO0; }
+    pin GPIO1 { number = "L8"; bond = GPIO1; }
+    pin UART_TX { number = "L9"; bond = UART_TX; }
+    pin P0OE { number = "L10"; bond = P0OE; }
+    pin P0OVR { number = "L11"; bond = P0OVR; }
+}

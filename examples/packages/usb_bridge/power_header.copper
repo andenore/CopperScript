@@ -1,0 +1,11 @@
+// Support part for the FX10-like bridge example: KiCad stock footprint,
+// reference-only pin contract, not an orderable selection.
+// 1 x 4, 2.54 mm power entry header: 3.3 V, 1.8 V, 1.1 V, GND.
+part POWER_HEADER_1X04 {
+    category = "connector.header";
+    footprint = "Connector_PinHeader_2.54mm:PinHeader_1x04_P2.54mm_Vertical";
+    pin 1 { number = "1"; domains = "power"; directions = "passive"; }
+    pin 2 { number = "2"; domains = "power"; directions = "passive"; }
+    pin 3 { number = "3"; domains = "power"; directions = "passive"; }
+    pin 4 { number = "4"; domains = "ground"; directions = "passive"; }
+}

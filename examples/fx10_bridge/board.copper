@@ -1,0 +1,273 @@
+// FX10-like USB 3.2 bridge example: a tight, fully populated 0.8 mm BGA
+// (121 balls, 11 x 11, 10 x 10 mm) between a USB-C receptacle and a 2 x 13
+// parallel capture header. The bridge is FX10-like, NOT a verified Infineon
+// pin map (see packages/usb_bridge). Not fabrication- or SI-qualified: the
+// routing profiles below are provisional geometric intent, not impedance
+// evidence. Its job is a public routing benchmark for BGA escape paths.
+board Fx10Bridge {
+    use library "tiny";
+    import bridge "github.com/copperscript/examples/usb_bridge";
+
+    component U_USB: bridge.FX10_LIKE_BGA121;
+    component J_USB: bridge.USB_C_RECEPTACLE_24P;
+    component J_BUS: bridge.BUS_HEADER_2X13;
+    component J_PWR: bridge.POWER_HEADER_1X04 { value = "3V3 / 1V8 / 1V1 / GND"; }
+    component X1: bridge.REFERENCE_XTAL_3225 { value = 19.2MHz; }
+    component FB_USB33: bridge.REFERENCE_FERRITE_0603 { value = "600ohm@100MHz"; }
+    component FB_USB18: bridge.REFERENCE_FERRITE_0603 { value = "600ohm@100MHz"; }
+
+    // Pin-associated bypass capacitors. *_B* sit on the back side under the
+    // array, in the central cross as on the Infineon KIT_FX10_FMC_001.
+    component C_CORE1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = "U_USB.VCORE_D4"; }
+    component C_CORE2: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = "U_USB.VCORE_D8"; }
+    component C_CORE3: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = "U_USB.VCORE_H4"; }
+    component C_CORE4: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = "U_USB.VCORE_H8"; }
+    component C_CORE_B1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; role = decoupling; decouples = "U_USB.VCORE_D6"; }
+    component C_CORE_B2: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; role = decoupling; decouples = "U_USB.VCORE_H6"; }
+    component C_IO1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = "U_USB.VDDIO_C9"; }
+    component C_IO2: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = "U_USB.VDDIO_K7"; }
+    component C_IO_B1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; role = decoupling; decouples = "U_USB.VDDIO_G9"; }
+    component C_U18_1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = "U_USB.VUSB18_E2"; }
+    component C_U18_B1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; role = decoupling; decouples = "U_USB.VUSB18_F3"; }
+    component C_U33_1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = "U_USB.VUSB33_C2"; }
+    component C_U33_2: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; role = decoupling; decouples = "U_USB.VUSB33_J2"; }
+    // Bulk reservoirs after each ferrite and at the entry rails.
+    component C_CORE_BULK: CAPACITOR { value = 10uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_IO_BULK: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_U18_BULK: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_U33_BULK: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_VBUS: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    // USB 3.2 transmit AC-coupling capacitors, one per member.
+    component C_TX1P: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; }
+    component C_TX1N: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; }
+    component C_TX2P: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; }
+    component C_TX2N: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0201_0603Metric"; }
+    component C_XI: CAPACITOR { value = 12pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_XO: CAPACITOR { value = 12pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_RESET: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component R_CC1: RESISTOR { value = 5.1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_CC2: RESISTOR { value = 5.1kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_VBUS_TOP: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_VBUS_BOT: RESISTOR { value = 20kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_RREF: RESISTOR { value = 6.04kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_RESET: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_SCL: RESISTOR { value = 2.2kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+    component R_SDA: RESISTOR { value = 2.2kohm; footprint = "Resistor_SMD:R_0402_1005Metric"; }
+
+    // Supply entry and rails. VDDIO is the 1.8 V entry rail; the USB PHY
+    // rails are ferrite-filtered branches of the 3.3 V and 1.8 V entries.
+    net V3V3 { J_PWR.1; FB_USB33.1; }
+    net V1V8 {
+        J_PWR.2; FB_USB18.1; C_IO_BULK.1; R_RESET.1; R_SCL.1; R_SDA.1;
+        U_USB.VDDIO_C9; U_USB.VDDIO_E9; U_USB.VDDIO_G9; U_USB.VDDIO_J8; U_USB.VDDIO_K3; U_USB.VDDIO_K7;
+        C_IO1.1; C_IO2.1; C_IO_B1.1;
+    }
+    net VCORE {
+        J_PWR.3; C_CORE_BULK.1;
+        U_USB.VCORE_C6; U_USB.VCORE_C8; U_USB.VCORE_D4; U_USB.VCORE_D6; U_USB.VCORE_D8; U_USB.VCORE_F4;
+        U_USB.VCORE_F8; U_USB.VCORE_H4; U_USB.VCORE_H6; U_USB.VCORE_H8; U_USB.VCORE_J4; U_USB.VCORE_J6;
+        U_USB.VCORE_K5; C_CORE1.1; C_CORE2.1; C_CORE3.1; C_CORE4.1; C_CORE_B1.1;
+        C_CORE_B2.1;
+    }
+    net VUSB18 {
+        FB_USB18.2; C_U18_BULK.1;
+        U_USB.VUSB18_B4; U_USB.VUSB18_C4; U_USB.VUSB18_E2; U_USB.VUSB18_F3; U_USB.VUSB18_G2; C_U18_1.1;
+        C_U18_B1.1;
+    }
+    net VUSB33 {
+        FB_USB33.2; C_U33_BULK.1;
+        U_USB.VUSB33_B6; U_USB.VUSB33_C2; U_USB.VUSB33_D3; U_USB.VUSB33_H3; U_USB.VUSB33_J2; C_U33_1.1;
+        C_U33_2.1;
+    }
+    net GND {
+        J_PWR.4; J_USB.GND_A1; J_USB.GND_A12; J_USB.GND_B1; J_USB.GND_B12; J_USB.SHIELD;
+        J_BUS.14; J_BUS.23; J_BUS.25; J_BUS.26; X1.CASE_2; X1.CASE_4;
+        C_XI.2; C_XO.2; C_RESET.2; R_CC1.2; R_CC2.2; R_VBUS_BOT.2;
+        R_RREF.2; C_CORE1.2; C_CORE2.2; C_CORE3.2; C_CORE4.2; C_CORE_B1.2;
+        C_CORE_B2.2; C_IO1.2; C_IO2.2; C_IO_B1.2; C_U18_1.2; C_U18_B1.2;
+        C_U33_1.2; C_U33_2.2; C_CORE_BULK.2; C_IO_BULK.2; C_U18_BULK.2; C_U33_BULK.2;
+        C_VBUS.2; U_USB.GND_A1; U_USB.GND_A4; U_USB.GND_A7; U_USB.GND_B2; U_USB.GND_B3;
+        U_USB.GND_B5; U_USB.GND_C3; U_USB.GND_C5; U_USB.GND_C7; U_USB.GND_D1; U_USB.GND_D2;
+        U_USB.GND_D5; U_USB.GND_D7; U_USB.GND_D9; U_USB.GND_E3; U_USB.GND_E4; U_USB.GND_E5;
+        U_USB.GND_E6; U_USB.GND_E7; U_USB.GND_E8; U_USB.GND_F2; U_USB.GND_F5; U_USB.GND_F6;
+        U_USB.GND_F7; U_USB.GND_F9; U_USB.GND_G1; U_USB.GND_G3; U_USB.GND_G4; U_USB.GND_G5;
+        U_USB.GND_G6; U_USB.GND_G7; U_USB.GND_G8; U_USB.GND_H2; U_USB.GND_H5; U_USB.GND_H7;
+        U_USB.GND_H9; U_USB.GND_J3; U_USB.GND_J5; U_USB.GND_J7; U_USB.GND_J9; U_USB.GND_K1;
+        U_USB.GND_K2; U_USB.GND_K6;
+    }
+
+    // USB-C: VBUS sense divider, sink Rd terminations on CC, both D+/D- rows.
+    net VBUS { J_USB.VBUS_A4; J_USB.VBUS_A9; J_USB.VBUS_B4; J_USB.VBUS_B9; C_VBUS.1; R_VBUS_TOP.1; }
+    net VBUS_DET { R_VBUS_TOP.2; R_VBUS_BOT.1; U_USB.VBUS_DET; }
+    net CC1 { J_USB.CC1; R_CC1.1; U_USB.CC1; }
+    net CC2 { J_USB.CC2; R_CC2.1; U_USB.CC2; }
+    net USB_DP { J_USB.DP1; J_USB.DP2; U_USB.USB_DP; }
+    net USB_DM { J_USB.DN1; J_USB.DN2; U_USB.USB_DM; }
+    net USB_RREF { U_USB.USB_RREF; R_RREF.1; }
+
+    // SuperSpeed lanes. Transmit pairs pass AC-coupling capacitors, so each
+    // splits into a bridge-side and a connector-side pair.
+    net SSTX1_P { U_USB.SSTX1_P; C_TX1P.1; }
+    net SSTX1_N { U_USB.SSTX1_N; C_TX1N.1; }
+    net SSTX1_CP { C_TX1P.2; J_USB.TX1_P; }
+    net SSTX1_CN { C_TX1N.2; J_USB.TX1_N; }
+    net SSRX1_P { J_USB.RX1_P; U_USB.SSRX1_P; }
+    net SSRX1_N { J_USB.RX1_N; U_USB.SSRX1_N; }
+    net SSTX2_P { U_USB.SSTX2_P; C_TX2P.1; }
+    net SSTX2_N { U_USB.SSTX2_N; C_TX2N.1; }
+    net SSTX2_CP { C_TX2P.2; J_USB.TX2_P; }
+    net SSTX2_CN { C_TX2N.2; J_USB.TX2_N; }
+    net SSRX2_P { J_USB.RX2_P; U_USB.SSRX2_P; }
+    net SSRX2_N { J_USB.RX2_N; U_USB.SSRX2_N; }
+
+    net XTAL_IN { U_USB.XTAL_IN; X1.X1; C_XI.1; }
+    net XTAL_OUT { U_USB.XTAL_OUT; X1.X2; C_XO.1; }
+    net RESET_N { U_USB.RESET_N; R_RESET.2; C_RESET.1; }
+    net I2C_SCL { U_USB.I2C_SCL; R_SCL.2; J_BUS.1; }
+    net I2C_SDA { U_USB.I2C_SDA; R_SDA.2; J_BUS.2; }
+
+    // Parallel capture bus (ADC-style source on J_BUS): 16 data lines, the
+    // data clock, overrange, enable and output enable.
+    net ADC_D0 { U_USB.P0D0; J_BUS.3; }
+    net ADC_D1 { U_USB.P0D1; J_BUS.5; }
+    net ADC_D2 { U_USB.P0D2; J_BUS.7; }
+    net ADC_D3 { U_USB.P0D3; J_BUS.9; }
+    net ADC_DCO { U_USB.P0CLK; J_BUS.11; }
+    net ADC_D4 { U_USB.P0D4; J_BUS.13; }
+    net ADC_D5 { U_USB.P0D5; J_BUS.15; }
+    net ADC_D6 { U_USB.P0D6; J_BUS.17; }
+    net ADC_D7 { U_USB.P0D7; J_BUS.19; }
+    net ADC_OVR { U_USB.P0OVR; J_BUS.21; }
+    net ADC_EN { U_USB.P0EN; J_BUS.4; }
+    net ADC_D8 { U_USB.P0D8; J_BUS.6; }
+    net ADC_D9 { U_USB.P0D9; J_BUS.8; }
+    net ADC_D10 { U_USB.P0D10; J_BUS.10; }
+    net ADC_D11 { U_USB.P0D11; J_BUS.12; }
+    net ADC_D12 { U_USB.P0D12; J_BUS.16; }
+    net ADC_D13 { U_USB.P0D13; J_BUS.18; }
+    net ADC_D14 { U_USB.P0D14; J_BUS.20; }
+    net ADC_D15 { U_USB.P0D15; J_BUS.22; }
+    net ADC_OE { U_USB.P0OE; J_BUS.24; }
+
+    no_connect U_USB.TCK, U_USB.TMS, U_USB.TDI, U_USB.TDO { reason = "JTAG not brought out on this example"; }
+    no_connect U_USB.GPIO0, U_USB.GPIO1, U_USB.GPIO2, U_USB.GPIO3, U_USB.UART_TX, U_USB.UART_RX {
+        reason = "spare bridge GPIO and debug UART unused";
+    }
+
+    supply V3V3 { voltage = 3.3V; external = true; }
+    supply V1V8 { voltage = 1.8V; external = true; }
+    supply VCORE { voltage = 1.1V; external = true; }
+    supply VUSB33 { voltage = 3.3V; external = false; }
+    supply VUSB18 { voltage = 1.8V; external = false; }
+    supply VBUS { voltage = 5V; external = true; }
+    supply GND { voltage = 0V; external = true; }
+
+    // Provisional 90-ohm pair intent; widths are geometry, not stackup evidence.
+    constraint routing(SSTX1_P) {
+        kind = differential; priority = 100; partner = SSTX1_N;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(SSTX1_N) {
+        kind = differential; priority = 100; partner = SSTX1_P;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(SSTX1_CP) {
+        kind = differential; priority = 100; partner = SSTX1_CN;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(SSTX1_CN) {
+        kind = differential; priority = 100; partner = SSTX1_CP;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(SSRX1_P) {
+        kind = differential; priority = 100; partner = SSRX1_N;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(SSRX1_N) {
+        kind = differential; priority = 100; partner = SSRX1_P;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(SSTX2_P) {
+        kind = differential; priority = 100; partner = SSTX2_N;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(SSTX2_N) {
+        kind = differential; priority = 100; partner = SSTX2_P;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(SSTX2_CP) {
+        kind = differential; priority = 100; partner = SSTX2_CN;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(SSTX2_CN) {
+        kind = differential; priority = 100; partner = SSTX2_CP;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(SSRX2_P) {
+        kind = differential; priority = 100; partner = SSRX2_N;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(SSRX2_N) {
+        kind = differential; priority = 100; partner = SSRX2_P;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(USB_DP) {
+        kind = differential; priority = 100; partner = USB_DM;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    constraint routing(USB_DM) {
+        kind = differential; priority = 100; partner = USB_DP;
+        width = 0.12mm; pair_gap = 0.15mm; target_impedance_ohms = 90;
+        allowed_layers = "F.Cu,In2.Cu"; max_vias = 2; max_skew = 0.15mm;
+        breakout_length = 1.5mm; breakout_width = 0.1mm; breakout_gap = 0.1mm;
+    }
+    // Source-synchronous capture bus: data lines matched to the data clock.
+    constraint length_match(ADC_D0, ADC_D1, ADC_D2, ADC_D3, ADC_DCO, ADC_D4, ADC_D5, ADC_D6, ADC_D7, ADC_D8, ADC_D9, ADC_D10, ADC_D11, ADC_D12, ADC_D13, ADC_D14, ADC_D15) {
+        id = "adc-bus"; max_skew = 5mm;
+    }
+
+    // Six-layer stack: In1.Cu ground reference under the USB pairs, In3.Cu core plane.
+    constraint copper_zone(GND) { id = "ground-reference"; layers = "In1.Cu"; inset = 0.5mm; pad_connection = solid; }
+    constraint copper_zone(VCORE) {
+        id = "core-plane"; layers = "In3.Cu"; inset = 0.5mm; pad_connection = solid; island_policy = "remove_all";
+    }
+
+    // 46 x 32 mm placement: USB-C on the west edge, the bridge centred, the bus
+    // header east and power entry south. Ball A1 is the bridge's north-west corner.
+    constraint fixed_placement(U_USB) { x = 22mm; y = 16mm; rotation = 0; side = front; }
+    constraint fixed_placement(J_USB) { x = 8mm; y = 16mm; rotation = 270; side = front; }
+    constraint fixed_placement(J_BUS) { x = 39mm; y = 16mm; rotation = 0; side = front; }
+    constraint fixed_placement(J_PWR) { x = 24mm; y = 28mm; rotation = 90; side = front; }
+    constraint fixed_placement(X1) { x = 17mm; y = 25mm; rotation = 0; side = front; }
+    // Back-side bypass in the array's central cross, beside their supply balls.
+    constraint fixed_placement(C_CORE_B1) { x = 22mm; y = 13.2mm; rotation = 0; side = back; }
+    constraint fixed_placement(C_CORE_B2) { x = 22mm; y = 18.8mm; rotation = 0; side = back; }
+    constraint fixed_placement(C_IO_B1) { x = 24.8mm; y = 16mm; rotation = 90; side = back; }
+    constraint fixed_placement(C_U18_B1) { x = 19.2mm; y = 16mm; rotation = 90; side = back; }
+}

@@ -1,0 +1,33 @@
+// Support part for the FX10-like bridge example: KiCad stock footprint,
+// reference-only pin contract, not an orderable selection.
+// 2 x 13, 1.27 mm SMD header for the parallel capture bus (ADC-style source).
+part BUS_HEADER_2X13 {
+    category = "connector.header";
+    footprint = "Connector_PinHeader_1.27mm:PinHeader_2x13_P1.27mm_Vertical_SMD";
+    pin 1 { number = "1"; domains = "digital"; directions = "passive"; }
+    pin 2 { number = "2"; domains = "digital"; directions = "passive"; }
+    pin 3 { number = "3"; domains = "digital"; directions = "passive"; }
+    pin 4 { number = "4"; domains = "digital"; directions = "passive"; }
+    pin 5 { number = "5"; domains = "digital"; directions = "passive"; }
+    pin 6 { number = "6"; domains = "digital"; directions = "passive"; }
+    pin 7 { number = "7"; domains = "digital"; directions = "passive"; }
+    pin 8 { number = "8"; domains = "digital"; directions = "passive"; }
+    pin 9 { number = "9"; domains = "digital"; directions = "passive"; }
+    pin 10 { number = "10"; domains = "digital"; directions = "passive"; }
+    pin 11 { number = "11"; domains = "digital"; directions = "passive"; }
+    pin 12 { number = "12"; domains = "digital"; directions = "passive"; }
+    pin 13 { number = "13"; domains = "digital"; directions = "passive"; }
+    pin 14 { number = "14"; domains = "digital"; directions = "passive"; }
+    pin 15 { number = "15"; domains = "digital"; directions = "passive"; }
+    pin 16 { number = "16"; domains = "digital"; directions = "passive"; }
+    pin 17 { number = "17"; domains = "digital"; directions = "passive"; }
+    pin 18 { number = "18"; domains = "digital"; directions = "passive"; }
+    pin 19 { number = "19"; domains = "digital"; directions = "passive"; }
+    pin 20 { number = "20"; domains = "digital"; directions = "passive"; }
+    pin 21 { number = "21"; domains = "digital"; directions = "passive"; }
+    pin 22 { number = "22"; domains = "digital"; directions = "passive"; }
+    pin 23 { number = "23"; domains = "digital"; directions = "passive"; }
+    pin 24 { number = "24"; domains = "digital"; directions = "passive"; }
+    pin 25 { number = "25"; domains = "digital"; directions = "passive"; }
+    pin 26 { number = "26"; domains = "digital"; directions = "passive"; }
+}

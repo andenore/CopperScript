@@ -1,0 +1,10 @@
+// Support part for the FX10-like bridge example: KiCad stock footprint,
+// reference-only pin contract, not an orderable selection.
+// Reference 0603 supply ferrite: a DC feed between two rails, no impedance model.
+part REFERENCE_FERRITE_0603 {
+    category = "passive.ferrite";
+    footprint = "Inductor_SMD:L_0603_1608Metric";
+    dc_power_path = "1,2";
+    pin 1 { number = "1"; domains = "power"; directions = "passive"; }
+    pin 2 { number = "2"; domains = "power"; directions = "passive"; }
+}
