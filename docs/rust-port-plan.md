@@ -981,3 +981,38 @@ route-board* and replay-unified* 332 equal / 1 accepted / 1 pending
 
 CopperProbe's ladder entry was not run: the session could not attach the
 private repository, so the BUFFER critical-routing nested case is unchecked.
+
+### Via-in-pad via arrays (`rust-via-in-pad`, 2026-10-29)
+
+Ported `pad_via_arrays` end to end. The placement-independent geometry
+(`array_rules`, `array_pitch_nm`, site offsets and poses, `validate_array_fit`,
+`via_in_pad_array_vias` with optional accepted owner poses, the presence
+check and the report record) lives in `copper_pcb::pad_via_arrays`, since
+physicalize, DRC, placement and routing all read it; committing an array
+(`materialize_via_in_pad_arrays`, every site against the routing clearance
+index) is in `copper_route::pad_via_arrays` and reaches copper-drc's
+`materialize_hard_macros` through a registered materializer (the
+`register_decoupling_pass` pattern). Callers ported with it: physicalize and
+state-codec validation (with `PadViaInPadRule.__post_init__`), placement
+legality (`placement_holes._required_arrays_clear`,
+`placement._required_array_lands_clear`), decoupling (array owners fixed,
+`_source_array_owner` admission, the copper-free context digest),
+`macro_source`, requirement verification and the editor preview. Only
+Python crashes and out-of-memory sizes still exit 3. A rejected array site
+(`ViaArrayPlacementError`) under `route-board --report` also exits 3: Python
+writes its diagnostic board into the error record, which this rewrite does
+not (the same holds today for `PlacementAlgorithmError`, which the Rust
+record mislabels `ValueError`; not changed here).
+
+Corpus: `tests/rust-port/export-kicad-pcb/via_array*.copper` (fit, close
+pitch, a site outside the land, a back-side land under the array, a rotated
+owner, a decoupler beside the owner; a local QFN library under
+`via_arrays/`), `examples/nrf52_coin_cell/via_array.copper`, the replay
+state `tests/rust-port/unified/via_array.state.json` with malformed rule
+variants and missing/partial-array variants, and the suites
+`via-in-pad-arrays` (38) and `route-board-via-in-pad` (7): all equal, as are
+the default gate and the check*, export-kicad-pcb*, si-check*, plan-layout*,
+replay-unified* and route-board* suites. nrf52 with a 2x2 array: route-board
+equal (11.0 vs 1.3 s); full-vertical with an array in the modem's exposed
+pad: plan-layout equal (both reject the site, 90 vs 16 s). CopperBench was
+not run (the repository could not be attached in this session).
