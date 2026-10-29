@@ -833,10 +833,14 @@ a non-crossing set with as many pairs that cannot swap as possible, then as
 many pairs as possible; every other pair gets one paired layer swap on an
 allowed layer (of its `layer_group` where declared, with an adjacent declared
 zone where any qualifies), never the layer of another moving pair it crosses.
-Moving pairs route first, using only the existing paired-via proposer on that
-layer: matched vias at `transition_spacing`, return vias or a declared shared
-reference (CS-160), no transition via in a breakout region, the reserved
-corridor first. Every candidate passes the unchanged profile, plane and atomic
+Moving pairs route first, then the pairs they cross, then the remaining
+surface pairs nearest a moving pair (in terminal-row rank) first, instead of
+the outside-in bundle order: the transition vias are the obstruction, and
+outer pairs routed first would wall in the pairs that must step aside for
+them. Moving pairs use only the existing paired-via proposer on that layer:
+matched vias at `transition_spacing`, return vias or a declared shared
+reference (CS-160), the reserved corridor first and breakout-region sites
+last. Every candidate passes the unchanged profile, plane and atomic
 native-DRC gates. A member whose `max_vias` is below 2, or a pair with no
 layer left, is reported impossible and fails without a surface or coarse
 fallback. The bundle record lists each crossing, its layer, transitions and

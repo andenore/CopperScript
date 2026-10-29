@@ -445,3 +445,54 @@ def test_tuned_copper_of_breakout_nets_follows_the_breakout_regions() -> None:
     # necked inside a region, the net's own width outside.
     assert BreakoutRegions(result.board).split_tracks(tracks, WIDTH) == tracks
     assert {track.width_nm for track in tracks} == {WIDTH, nm_from_mm("0.15")}
+
+
+def test_tuning_bumps_stay_out_of_breakout_regions_where_there_is_room_elsewhere() -> None:
+    from pcbir.breakout import BreakoutRegions
+
+    # LANE_B (x 5 to 29 mm) is 4 mm short of LANE_A and needs 0.3 mm. It
+    # has 4 mm breakout regions at both ends. Below it is blocked; above it
+    # the free room is a full 1 mm inside both regions but only about 0.4 mm
+    # in the open run just before the J2 region (x 21 to 24.6 mm). A bump in
+    # a region would take the room neighbouring lands need to escape, so the
+    # lower slot outside the regions is used first.
+    board = _lanes_board(TWO_LANES, max_skew="3.7", keepouts=(
+        _keepout("below", 6, 11, 28, "13.69"), _keepout("above-middle", "9.5", "14.31", 21, 17),
+        _keepout("above-low", 21, "14.81", "24.6", 17)))
+    board = replace(board, net_routing_rules=tuple(
+        replace(rule, breakout_length_nm=nm_from_mm("4"), breakout_clearance_nm=nm_from_mm("0.1"))
+        for rule in board.net_routing_rules))
+    result = route_critical_nets(board, route_global(board))
+    (tuning,) = result.match_tuning
+    assert tuning.status == "tuned", tuning.reason
+    regions = BreakoutRegions(result.board)
+    raised = [t for t in _lane(result.board.tracks, "LANE_B")
+              if max(t.start.y_nm, t.end.y_nm) > nm_from_mm("14.2")]
+    assert raised
+    assert not any(regions.inside_any(point) for t in raised for point in (t.start, t.end))
+    assert not _hard(result.board)
+
+
+@pytest.mark.parametrize(("partner_y", "tuned"), (("8.8", True), ("8.3", False)))
+def test_pair_members_beside_vias_wider_than_the_lane_spacing_still_take_bumps(partner_y, tuned) -> None:
+    # A pair runs 1.2 mm apart between its vias (three lane spacings), as
+    # beside a paired via transition: both members bulge apart over the same
+    # intervals and gain the same length. 1.7 mm apart they are no run.
+    board = PhysicalBoard("Empty", BoardOutline.rectangle(60, 60), {}, (), ())
+    layer = CopperLayer.FRONT
+    tracks = (TrackSegment("A", Point.mm(5, 10), Point.mm(45, 10), WIDTH, layer),
+              TrackSegment("B", Point.mm(5, partner_y), Point.mm(45, partner_y), WIDTH, layer))
+    tuner = UnitTuner(board, RoutingClearanceIndex(board), tracks, ("A", "B"), SPACING, AMPLITUDE,
+                      nm_from_mm("0.1"))
+    added = nm_from_mm("0.5")
+    result, bumps, reason = tuner.tune(added)
+    if not tuned:
+        assert result is None and "insufficient tuning room" in reason
+        return
+    assert reason == "" and bumps
+    for net, base in (("A", nm_from_mm(40)), ("B", nm_from_mm(40))):
+        assert _track_length(tuple(t for t in result if t.net == net)) == base + added
+    # A bulges up (+y), away from B below it, and B down.
+    assert max(max(t.start.y_nm, t.end.y_nm) for t in result if t.net == "A") > nm_from_mm(10)
+    assert min(min(t.start.y_nm, t.end.y_nm) for t in result if t.net == "A") == nm_from_mm(10)
+    assert min(min(t.start.y_nm, t.end.y_nm) for t in result if t.net == "B") < nm_from_mm("8.8")

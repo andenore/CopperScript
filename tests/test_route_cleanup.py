@@ -167,3 +167,53 @@ def test_final_sweep_cuts_an_open_dogbone_back_to_the_land_it_crosses():
     from pcbir.physical import RouteKind
     critical, _ = _overhang_board(kind=RouteKind.CRITICAL)
     assert trim_dangling_overhangs(critical, Counter()) is critical
+
+
+def test_an_escape_via_the_route_never_left_its_layer_through_is_removed():
+    from pcbir.route_cleanup import remove_single_layer_vias
+
+    # The escape ends in a via at (5, 6); the route carries on along F.Cu from
+    # it. Nothing meets the via on any other layer, so it goes; the route
+    # through its centre keeps the net connected. A via that does change
+    # layer, and a protected one, stay.
+    escape = Via("S", Point.mm(5, 6), nm_from_mm("0.45"), nm_from_mm("0.2"))
+    used = (Via("S", Point.mm(11, 6), nm_from_mm("0.45"), nm_from_mm("0.2")),
+            Via("S", Point.mm(15, 6), nm_from_mm("0.45"), nm_from_mm("0.2")))
+    copper = (track((3, 6), (5, 6)), track((5, 6), (11, 6)),
+              track((11, 6), (15, 6), CopperLayer.BACK), track((15, 6), (17, 6)))
+    routed = replace(board(), tracks=copper, vias=(escape, *used))
+    swept = remove_single_layer_vias(routed, Counter())
+    assert swept.vias == used and Counter(swept.tracks) == Counter(copper)
+    assert "DRC-OPEN-NET" not in {f.code for f in run_physical_drc(swept).findings}
+    assert remove_single_layer_vias(routed, Counter((escape,))) is routed
+
+
+def test_an_escape_left_behind_by_the_route_goes_with_its_via():
+    from pcbir.route_cleanup import remove_single_layer_vias
+
+    # The escape from J1 runs down to a via at (3, 8); the route leaves J1
+    # along F.Cu instead. The via joins nothing below, and its escape track
+    # then ends nowhere: both go, the route stays.
+    escape = Via("S", Point.mm(3, 8), nm_from_mm("0.45"), nm_from_mm("0.2"))
+    route = (track((3, 6), (17, 6)),)
+    routed = replace(board(), tracks=(track((3, 6), (3, 8)), *route), vias=(escape,))
+    swept = remove_single_layer_vias(routed, Counter())
+    assert swept.vias == () and Counter(swept.tracks) == Counter(route)
+    # Protected escape copper stays.
+    kept = remove_single_layer_vias(routed, Counter(), Counter((track((3, 6), (3, 8)),)))
+    assert Counter(kept.tracks) == Counter(routed.tracks)
+
+
+def test_an_escape_the_route_joins_part_way_is_cut_back_to_the_joint():
+    from pcbir.route_cleanup import remove_single_layer_vias
+
+    # The escape from J1 runs to a via at (7, 6); the route leaves the escape
+    # at (5, 6), part way along. The via goes and the escape is cut back to
+    # the joint, so no dead end is left beyond it.
+    escape = Via("S", Point.mm(7, 6), nm_from_mm("0.45"), nm_from_mm("0.2"))
+    route = (track((5, 6), (5, 8)), track((5, 8), (17, 8)), track((17, 8), (17, 6)))
+    routed = replace(board(), tracks=(track((3, 6), (7, 6)), *route), vias=(escape,))
+    swept = remove_single_layer_vias(routed, Counter())
+    assert swept.vias == ()
+    assert Counter(swept.tracks) == Counter((track((3, 6), (5, 6)), *route))
+    assert "DRC-OPEN-NET" not in {f.code for f in run_physical_drc(swept).findings}

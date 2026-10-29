@@ -1511,7 +1511,7 @@ def _route_pair_group(
 
     A planned crossing (plan R5) tries neither the coarse candidate nor the
     surface search: only paired-via candidates on its planned layer, whose
-    transitions avoid breakout regions (``_crossing_site_rank``). An
+    transitions inside breakout regions come last (``_crossing_site_rank``). An
     impossible crossing fails at once with its reason. Every candidate passes
     the same gates and atomic validation.
     """
@@ -1853,8 +1853,11 @@ def _crossing_site_rank(
     """Transition sites of a planned crossing (plan R5).
 
     A transition whose signal or return via centre lies in any breakout
-    region (R1) is dropped. With a reserved corridor for the pair (R4),
-    transitions with every via inside it come first.
+    region (R1) comes last: the crossing pair may need to change layer just
+    after its escape, before the pair it crosses fans out. Such a via is held
+    to the region's breakout clearance, as the pair's own breakout copper is.
+    Otherwise, with a reserved corridor for the pair (R4), transitions with
+    every via inside it come first.
     """
     from .placement import reserved_corridors
 
@@ -1864,7 +1867,7 @@ def _crossing_site_rank(
 
     def rank(vias: tuple[Via, ...]) -> int | None:
         if breakout and any(breakout.inside_any(via.position) for via in vias):
-            return None
+            return 2
         if corridor is None:
             return 0
         return 0 if all(point_in_polygon(via.position, corridor) for via in vias) else 1
@@ -2551,7 +2554,8 @@ def _route_pair(
                                                           second.tuning_amplitude_limit_nm)
                                       if value is not None)
                                   if first.tuning_amplitude_limit_nm is not None or second.tuning_amplitude_limit_nm is not None
-                                  else 0, _BREAKOUT_TUNING_MARGIN_NM if breakout else 0)
+                                  else 0, _BREAKOUT_TUNING_MARGIN_NM if breakout else 0,
+                                  breakout or None)
     if (max_skew is not None and not tuned_length and tuning_board is not None
             and (exact_tracks is not None or not guide.vias)):
         from .pair_tuning_spans import tune_virtual_pair_spans
@@ -2825,13 +2829,16 @@ _BREAKOUT_TUNING_MARGIN_NM = 32
 
 
 def _tune_pair(first: list[TrackSegment], second: list[TrackSegment],
-               max_skew_nm: int, amplitude_limit_nm: int, margin_nm: int = 0) -> int:
+               max_skew_nm: int, amplitude_limit_nm: int, margin_nm: int = 0,
+               breakout: BreakoutRegions | None = None) -> int:
     """Compensate excess intra-pair skew next to where the mismatch arises.
 
     The shorter member receives serpentine bumps on its axis-aligned segments
     nearest the terminal or bend where the length difference accumulates,
     starting at the segment end nearest that point and bulging away from the
-    partner. Every bump is at most ``amplitude_limit_nm`` tall and 3 x width
+    partner. Segments inside a ``breakout`` region (R1) come last: there the
+    clearance is relaxed for the dense lands, and a bump takes the room that
+    the neighbouring lands' pairs need to escape. Every bump is at most ``amplitude_limit_nm`` tall and 3 x width
     wide, and stays 3 x width from the next bump and from both segment ends.
     Its corners are 45-degree chamfers (plan R9, ``bump_chamfers``) whose leg
     is at most the member's narrowest width, so a bump adds ``bump_gain``.
@@ -2864,7 +2871,14 @@ def _tune_pair(first: list[TrackSegment], second: list[TrackSegment],
         low, height = (middle, height) if count * gain(middle) < excess else (low, middle)
     placements: dict[int, tuple[bool, int]] = {}
     remaining = count
-    for index, from_start in _tuning_sites(target, partner):
+    sites = _tuning_sites(target, partner)
+    if breakout:
+        def inside(index: int) -> bool:
+            track = target[index]
+            return breakout.inside_any(Point((track.start.x_nm + track.end.x_nm) // 2,
+                                             (track.start.y_nm + track.end.y_nm) // 2))
+        sites.sort(key=lambda site: inside(site[0]))
+    for index, from_start in sites:
         track = target[index]
         length = abs(track.end.x_nm - track.start.x_nm) + abs(track.end.y_nm - track.start.y_nm)
         # n bumps of pitch p need (2n + 1) * p along the segment.

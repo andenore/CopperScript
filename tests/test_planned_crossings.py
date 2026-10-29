@@ -233,6 +233,46 @@ def test_full_reversal_gives_each_crossing_pair_its_own_layer() -> None:
     assert limited.status is CriticalRoutingStatus.FAILED
 
 
+def _crossing_beside(package: tuple[str, ...], connector: tuple[str, ...], names: tuple[str, ...],
+                     moving: str) -> PhysicalBoard:
+    """Lanes 0.45 mm apart outside 2 mm breakouts, too close for a via pair.
+
+    Only ``moving`` may change layer, so it is the planned crossing pair.
+    """
+    board = _crossing_board(package, connector, names)
+    return replace(board, net_routing_rules=tuple(
+        replace(rule, clearance_nm=nm_from_mm("0.45"), breakout_length_nm=nm_from_mm("2"),
+                breakout_clearance_nm=nm_from_mm("0.1"), max_vias=2 if rule.net.startswith(moving) else 0)
+        for rule in board.net_routing_rules))
+
+
+def test_a_crossing_bundle_routes_from_its_moving_pairs_outward() -> None:
+    # Four lanes A B C D at U1; C and D swap at J1. The moving pair comes
+    # first, then the pair it crosses, then B before the outer A.
+    board = _crossing_beside(("-1.5", "-0.5", "0.5", "1.5"), ("-2.25", "-0.75", "2.25", "0.75"),
+                             ("LANE_A", "LANE_B", "LANE_C", "LANE_D"), "LANE_C")
+    bundle = _bundle(board)
+    assert [(item.group, item.crosses) for item in bundle.crossings] == [(_group("LANE_C"), (_group("LANE_D"),))]
+    assert bundle.order == (_group("LANE_C"), _group("LANE_D"), _group("LANE_B"), _group("LANE_A"))
+    # Without crossings the order stays outside-in.
+    assert _bundle(board, plan_crossings=False).order[:2] == (_group("LANE_A"), _group("LANE_D"))
+
+
+def test_the_crossed_pair_steps_aside_for_wide_transition_vias_without_repair() -> None:
+    # B and C swap. C's transition vias (0.8 mm, 1.0 mm apart) are wider
+    # than the 1 mm lane pitch with 0.45 mm clearance, so B must step aside
+    # for them. Routed before the outer A, it can; routed after A (outside-in)
+    # it was walled in and only a rip-up of C routed it.
+    board = _crossing_beside(("-1", "0", "1"), ("-1.5", "1.5", "0"), ("LANE_A", "LANE_B", "LANE_C"), "LANE_C")
+    result = route_critical_nets(board, route_global(board))
+    _assert_one_paired_swap(result, "LANE_C", IN2)
+    assert [item.nets for item in result.nets] == [_group("LANE_C"), _group("LANE_B"), _group("LANE_A")]
+    assert all(item.connected for item in result.nets)
+    (bundle,) = result.bundles
+    assert bundle.repairs == ()
+    assert not _hard(result.board)
+
+
 @pytest.mark.parametrize("max_vias", (0, 1))
 def test_a_via_budget_below_two_reports_the_crossing_as_impossible(max_vias) -> None:
     board = _swapped(max_vias=max_vias)
@@ -283,6 +323,49 @@ def test_crossing_transitions_stay_outside_breakout_regions() -> None:
     assert not _hard(result.board)
 
 
+def test_crossing_collars_widen_to_via_spacing_beyond_flanking_ground_lands() -> None:
+    # Ground lands sit 0.4 mm either side of the moving pair's connector lands,
+    # as a connector's ground pins do. Its transition vias need 1.0 mm
+    # spacing, so a collar that widens at the lands runs into them, and a
+    # collar short enough to avoid that leaves its vias inside the breakout.
+    # The collar must leave the lands straight and widen further out.
+    board = _swapped()
+    connector = board.footprints["test/connector-row"]
+    ground = tuple(FootprintPad(number, Point.mm("-1.4", y), Size.mm("0.6", "0.2"))
+                   for number, y in (("G1", "-1.6"), ("G2", "-0.4")))
+    board = replace(board,
+        footprints={**board.footprints, connector.name: replace(connector, pads=(*connector.pads, *ground))},
+        nets=tuple(replace(net, pads=(PadReference("J1", "G1"), PadReference("J1", "G2")))
+                   if net.name == "GND" else net for net in board.nets),
+        net_routing_rules=tuple(
+            replace(rule, breakout_length_nm=nm_from_mm("2"), breakout_clearance_nm=nm_from_mm("0.1"))
+            for rule in board.net_routing_rules))
+    result = route_critical_nets(board, route_global(board))
+    _assert_one_paired_swap(result, "LANE_B", IN2)
+    regions = BreakoutRegions(board)
+    crossing_vias = [via for via in result.board.vias if via.net.startswith("LANE_B")]
+    assert crossing_vias and not any(regions.inside_any(via.position) for via in crossing_vias)
+    # The ground lands wait for plane stitching; nothing else may be open.
+    errors = [finding for finding in run_physical_drc(result.board).findings
+              if finding.severity.value == "error" and finding.code != "DRC-ROUTE-INCOMPLETE"]
+    assert [(finding.code, finding.nets) for finding in errors] == [("DRC-OPEN-NET", ("GND",))]
+
+
+def test_crossing_falls_back_to_transitions_inside_breakout_regions() -> None:
+    # Breakouts long enough to cover the whole board leave no site outside
+    # every region. The crossing pair may then change layer just
+    # after its escape, inside a region, instead of staying open.
+    board = _swapped()
+    board = replace(board, net_routing_rules=tuple(
+        replace(rule, breakout_length_nm=nm_from_mm("15"), breakout_clearance_nm=nm_from_mm("0.1"))
+        for rule in board.net_routing_rules))
+    regions = BreakoutRegions(board)
+    assert all(regions.inside_any(Point.mm(x, y)) for x in range(0, 31) for y in range(0, 21))
+    result = route_critical_nets(board, route_global(board))
+    _assert_one_paired_swap(result, "LANE_B", IN2)
+    assert not _hard(result.board)
+
+
 def test_transition_sites_skip_breakout_regions_and_prefer_the_reserved_corridor() -> None:
     board = _swapped()
     rule = ComponentPlacementRule
@@ -300,8 +383,8 @@ def test_transition_sites_skip_breakout_regions_and_prefer_the_reserved_corridor
     # LANE_B runs from (9.4, 11.0) at U1 to (20.6, 9.0) at J1.
     assert rank(vias((15, 10), (15, "10.2"))) == 0  # inside its corridor
     assert rank(vias((15, 10), (15, 13))) == 1  # one via outside it
-    assert rank(vias(("10.2", 11), (15, 10))) is None  # in a land's breakout region
-    assert rank(vias(("10.2", 9), (15, 10))) is None  # also another net's region
+    assert rank(vias(("10.2", 11), (15, 10))) == 2  # in a land's breakout region: last
+    assert rank(vias(("10.2", 9), (15, 10))) == 2  # also another net's region
     plain = _crossing_site_rank(_swapped(), _group("LANE_B"))
     assert plain(vias((15, 13), ("10.2", 11))) == 0
 

@@ -382,8 +382,8 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, pair_st
         # Ordinary pins of crowded packages get escapes planned before the
         # critical router runs; the critical router sees them as keepouts,
         # so it cannot wall those pins in (one exact pass, no gate).
-        reserved = _plan_ordinary_escapes(board, unified_fanout, on_progress, prefix=prefix, keepouts=halos,
-                                          exclude=planar)
+        reserved = _plan_ordinary_escapes(board, unified_fanout, on_progress, prefix=prefix,
+                                          keepouts=(*halos, *_plane_pin_halos(board)), exclude=planar)
     if board.decoupling_links and unified_options.pre_route_decouplers:
         # Bypasses route before critical nets (as package access did), so
         # a critical route cannot take a capacitor's short surface feed.
@@ -393,7 +393,8 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, pair_st
             reserved, held, restored = _revalidate_released_escapes(board, reserved, held)
             emit(on_progress, "ordinary_escapes", "revalidated", **restored)
             if restored.get("unrestored_nets") and unified_fanout is not None:
-                reserved = _resite_escapes(board, unified_fanout, reserved, held, prefix, halos,
+                reserved = _resite_escapes(board, unified_fanout, reserved, held, prefix,
+                                           (*halos, *_plane_pin_halos(board)),
                                            frozenset(restored["unrestored_nets"]), on_progress)
         # The witnesses were admitted in the planning context (port halos,
         # pre-release reservations); the critical router's context has only
@@ -469,6 +470,73 @@ def _route_critical_stage(placement, *, unified_options, unified_fanout, pair_st
                     reserved = (reserved[0], reserved[1], kept)
                     held_as_copper = retry_accesses is not None
     return critical, reserved, held, held_as_copper
+
+
+def _plane_pin_halos(board):
+    """Keepouts in front of fine-pitch plane pins, for ordinary escape planning.
+
+    A pin of a distribution zone net without a zone on its own layer reaches
+    its plane through a stitching via placed after routing. Ordinary escapes
+    are planned first and may put a neighbouring pin's via or jog right in
+    front of it, so the stitch later finds the pin walled in. The halo keeps
+    one via site free: from one clearance past the land's outer end, a via
+    and a clearance outward, one via plus clearance wide, on the land's
+    layer. Outward is along the land's long axis, away from the package
+    centre; lands that are not at least 1.5 times longer than wide have no
+    such axis and get none. A halo is only set where the neighbouring pins'
+    straight escapes (a default track) still pass beside it, so pitches too
+    fine for a via in front of a pin, and pins farther than 0.65 mm from
+    their nearest neighbour, are left alone.
+    """
+    from .drc import placed_pad_shape
+    from .physical import BoardSide, CopperKeepout, CopperLayer, PadKind, Point, PolygonRing, PolygonWithHoles
+    from .placement import transformed_local_point
+    from .zone_geometry import distribution_zone_nets
+    zone_nets = distribution_zone_nets(board)
+    if not zone_nets:
+        return ()
+    zone_layers = {}
+    for zone in board.zones:
+        zone_layers.setdefault(zone.net, set()).update(zone.layers)
+    gap = board.rules.minimum_clearance_nm
+    via = board.rules.default_via_size_nm
+    half = via // 2 + gap
+    track = board.rules.default_track_width_nm
+    nets = {(pad.component, pad.pad): net.name for net in board.nets for pad in net.pads}
+    halos = []
+    for placement in board.placements:
+        footprint = board.footprints[placement.footprint]
+        side = CopperLayer.FRONT if placement.side is BoardSide.FRONT else CopperLayer.BACK
+        centres = {pad.number: transformed_local_point(placement, pad.position) for pad in footprint.pads}
+        for pad in footprint.pads:
+            net = nets.get((placement.reference, pad.number))
+            if (net not in zone_nets or side in zone_layers[net] or pad.kind is not PadKind.SMD):
+                continue
+            centre = centres[pad.number]
+            bounds = placed_pad_shape(centre, pad, placement).bounds
+            width, height = bounds.max_x - bounds.min_x, bounds.max_y - bounds.min_y
+            if 2 * max(width, height) < 3 * min(width, height):
+                continue
+            dx, dy = centre.x_nm - placement.position.x_nm, centre.y_nm - placement.position.y_nm
+            ox, oy = ((1 if dx > 0 else -1), 0) if width > height else (0, (1 if dy > 0 else -1))
+            if (ox and not dx) or (oy and not dy):
+                continue
+            # Nearest neighbouring land across the outward axis.
+            across = [abs(point.y_nm - centre.y_nm) if ox else abs(point.x_nm - centre.x_nm)
+                      for other, point in centres.items() if other != pad.number
+                      and abs(point.x_nm - centre.x_nm) + abs(point.y_nm - centre.y_nm) <= nm_from_mm("0.65")]
+            if not across or half + gap + (track + 1) // 2 > min(across):
+                continue
+            edge = (bounds.max_x if ox > 0 else bounds.min_x) if ox else (bounds.max_y if oy > 0 else bounds.min_y)
+            near, far = edge + (ox or oy) * gap, edge + (ox or oy) * (2 * gap + via)
+            if ox:
+                xs, ys = sorted((near, far)), (centre.y_nm - half, centre.y_nm + half)
+            else:
+                xs, ys = (centre.x_nm - half, centre.x_nm + half), sorted((near, far))
+            ring = PolygonRing((Point(xs[0], ys[0]), Point(xs[1], ys[0]), Point(xs[1], ys[1]), Point(xs[0], ys[1])))
+            halos.append(CopperKeepout(f"plane-pin-halo-{len(halos)}", (side,), PolygonWithHoles(ring),
+                                       block_tracks=True, block_vias=True, block_zones=False))
+    return tuple(halos)
 
 
 def _macro_port_halos(board):

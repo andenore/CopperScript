@@ -20,19 +20,24 @@ at both top corners, the other member the reverse, so each gains exactly
 low for c >= 1 has one 45-degree ramp per side instead and gains
 2(round(h sqrt 2) - h).
 
-Placement rule. Candidate slots lie on straight axis-aligned runs: a coupled
-run where both pair members are parallel at the pair spacing, or any
-axis-aligned segment of a single net. Slots keep 3 x width from both run ends,
+Placement rule. Candidate slots lie on straight axis-aligned runs: a run
+where both pair members are parallel at the pair spacing, or any axis-aligned
+segment of a single net. Where the members run parallel but wider apart, up
+to three times the spacing (beside a pair's vias), a slot is a twin bump: both
+members bulge apart over the same interval, each as a single net. Slots keep 3 x width from both run ends,
 and bumps are 3 x width wide (plus twice the lane spacing for the outer member
 of a pair) and 3 x width apart, on a grid centred in the run, bulging to either
 side. The *room* of a slot is the tallest bump, at most the amplitude limit,
 whose swept area clears foreign copper, lands, keep-outs, holes and the board
 edge by the applicable clearance. The swept area is the convex outline of the
 bulge-side member's chamfered bump, which holds every member's bump copper
-outside the pair's own lanes. Slots are used in order of most room first, then
-farthest from the unit's terminals, then by position; the fewest bumps that
-provide the length are taken and their heights are levelled. Native DRC still
-validates the result atomically.
+outside the pair's own lanes. Slots outside breakout regions (R1) come
+first: inside one the clearance is relaxed for the dense lands, and a bump
+there takes the room the neighbouring lands' lanes need to escape. Then slots
+are used in order of most room first, then farthest from the unit's
+terminals, then by position; the fewest bumps that provide the length are
+taken and their heights are levelled. Native DRC still validates the result
+atomically.
 
 S-shaped serpentines (plan R10). A unit whose rules declare ``tuning_style =
 "serpentine"`` snakes about the original line instead. Its collinear pieces
@@ -52,7 +57,10 @@ top and largest foot chamfer, so it holds the copper for any c. A run takes
 one serpentine (a window of at least two consecutive tops with room on their
 sides); windows with the most capacity come first, the last one trimmed to
 the fewest tops. Runs without one keep R3's one-sided bumps, and a unit
-whose serpentines do not provide the length falls back to bumps alone. At most
+whose serpentines do not provide the length falls back to bumps alone. Both
+are tried outside breakout regions first (serpentines, then bumps), and only
+then anywhere, so a serpentine beside the lands never wins over bumps in the
+open run. At most
 ``MATCH_TUNING_LEG_LIMIT`` legs are used (a bump has two); heights are
 levelled across tops and bumps, and c is lowered until it suits every leg
 and makes the length exact. Bump-style units keep one run per piece, so they
@@ -84,6 +92,9 @@ MATCH_TUNING_LEG_LIMIT = 2 * MATCH_TUNING_BUMP_LIMIT
 # Pair lanes count as coupled within this geometric tolerance, as in
 # ``critical._coupled_length``.
 _LANE_TOLERANCE_NM = 4
+# Parallel pair members at most this many lane spacings apart still form a
+# run (``_runs``).
+_WIDE_LANES = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +254,9 @@ class _Slot:
     end: int
     spacing: int                # lane distance of a pair, 0 for a single net
     width: int
+    # A twin bump: the members of a wide run bulge apart, the inner one from
+    # this normal coordinate toward -side (``_slots``).
+    twin_base: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,27 +321,37 @@ class UnitTuner:
             self.segments = {lead: line for lead, (_, line) in lines.items()}
             self.lead_of = {index: lead for lead, (indices, _) in lines.items() for index in indices}
         runs = _runs(self.segments, nets, spacing_nm) if amplitude_limit_nm > 0 else []
-        slots = _slots(self.segments, runs)
+        slots = _slots(self.segments, runs, spacing_nm)
         self.rooms = {slot: _room(board, obstacles, nets, slot, amplitude_limit_nm) for slot in slots}
         ends = _terminal_ends(tracks)
+        breakout = obstacles.breakout
+
+        def centre(slot: _Slot) -> Point:
+            middle = (slot.start + slot.end) // 2
+            return Point(middle, slot.base) if slot.horizontal else Point(slot.base, middle)
 
         def remoteness(slot: _Slot) -> int:
-            middle = (slot.start + slot.end) // 2
-            point = Point(middle, slot.base) if slot.horizontal else Point(slot.base, middle)
+            point = centre(slot)
             return min(((point.x_nm - end.x_nm) ** 2 + (point.y_nm - end.y_nm) ** 2 for end in ends),
                        default=0)
 
+        def inside(slot: _Slot) -> bool:
+            return bool(breakout) and breakout.inside_any(centre(slot))
+
         self.remoteness = remoteness
+        self.inside = inside
         self.ordered = sorted((slot for slot in slots if self.rooms[slot] > 0), key=lambda slot: (
-            -self.rooms[slot], -remoteness(slot), slot.layer.value, not slot.horizontal, slot.base,
-            slot.start, slot.side))
+            inside(slot), -self.rooms[slot], -remoteness(slot), slot.layer.value, not slot.horizontal,
+            slot.base, slot.start, slot.side))
         self.windows: list[_Window] = []
         if serpentine:
             for run in runs:
+                if run[1] >= 0 and run[5] > spacing_nm + _LANE_TOLERANCE_NM:
+                    continue  # Wide runs take twin bumps only (``_slots``).
                 self.windows.extend(_windows(board, obstacles, self.segments, nets, run, amplitude_limit_nm,
                                              leg_gap_nm, clearance_nm))
             self.windows.sort(key=lambda window: (
-                -_window_capacity(window, window.rooms), -remoteness(_span(window)),
+                any(map(inside, window.tops)), -_window_capacity(window, window.rooms), -remoteness(_span(window)),
                 window.tops[0].layer.value, not window.tops[0].horizontal, window.tops[0].base,
                 window.tops[0].start, window.tops[0].side))
 
@@ -343,24 +367,33 @@ class UnitTuner:
         return result.tracks, result.bumps, result.reason
 
     def plan(self, added_nm: int) -> UnitTuning:
-        """Add ``added_nm`` to every net of the unit: serpentines first, else bumps alone."""
+        """Add ``added_nm`` to every net of the unit: serpentines first, else bumps alone.
+
+        Both are tried outside breakout regions first, then anywhere.
+        """
         if added_nm <= 0:
             return UnitTuning(None, reason="no length to add")
+        outside = (not any(map(self.inside, self.ordered))
+                   and not any(self.inside(top) for window in self.windows for top in window.tops))
+        for anywhere in ((True,) if outside else (False, True)):
+            if self.windows:
+                serpentine = self._serpentines(added_nm, anywhere)
+                if serpentine.tracks is not None:
+                    return serpentine
+            bumps = self._bumps(added_nm, anywhere)
+            if bumps.tracks is not None:
+                return bumps
         if not self.windows:
-            return self._bumps(added_nm)
-        serpentine = self._serpentines(added_nm)
-        if serpentine.tracks is not None:
-            return serpentine
-        bumps = self._bumps(added_nm)
-        if bumps.tracks is None:
-            return replace(bumps, reason=f"{bumps.reason}; serpentine: {serpentine.reason}")
-        return bumps
+            return bumps
+        return replace(bumps, reason=f"{bumps.reason}; serpentine: {serpentine.reason}")
 
-    def _bumps(self, added_nm: int) -> UnitTuning:
+    def _bumps(self, added_nm: int, anywhere: bool = True) -> UnitTuning:
         """One-sided bumps only (plan R3), most room first."""
         chosen: list[_Slot] = []
         capacity = 0
         for slot in self.ordered:
+            if not anywhere and self.inside(slot):
+                continue
             if capacity >= added_nm or len(chosen) >= self.bump_limit:
                 break
             if any(_conflict(slot, other, self.rooms[slot], self.rooms[other], self.clearance_nm)
@@ -378,13 +411,15 @@ class UnitTuner:
         used = _add_bumps(features, chosen, heights)
         return UnitTuning(self._spliced(features), len(used), 0, tuple(used))
 
-    def _serpentines(self, added_nm: int) -> UnitTuning:
+    def _serpentines(self, added_nm: int, anywhere: bool = True) -> UnitTuning:
         """Serpentine windows, most capacity first, then bumps on the other runs."""
         chosen: list[_Window] = []
         legs = capacity = 0
         for window in self.windows:
             if capacity >= added_nm or legs + 3 > self.leg_limit:
                 break
+            if not anywhere and any(map(self.inside, window.tops)):
+                continue
             if any(window.tops[0].run == other.tops[0].run
                    or _near(_window_bounds(window), _window_bounds(other),
                             window.tops[0].width // 2 + other.tops[0].width // 2 + self.clearance_nm)
@@ -399,8 +434,8 @@ class UnitTuner:
         for slot in self.ordered:
             if not chosen or capacity >= added_nm or legs + 2 > self.leg_limit:
                 break
-            bounds = _swept(slot, self.rooms[slot]).bounds
-            if (slot.run in runs
+            bounds = _slot_bounds(slot, self.rooms[slot])
+            if (slot.run in runs or not anywhere and self.inside(slot)
                     or any(_near(bounds, _window_bounds(window),
                                  slot.width // 2 + window.tops[0].width // 2 + self.clearance_nm)
                            for window in chosen)
@@ -496,7 +531,10 @@ def _add_bumps(features: dict[int, list[list[tuple[int, int]]]], slots: list[_Sl
         inside, outside = bump_chamfers(height, slot.width, slot.spacing)
         features.setdefault(slot.outer, []).append(
             [(along, slot.side * rise) for along, rise in bump_path(slot.start, slot.end, height, inside, outside)])
-        if slot.inner is not None:
+        if slot.twin_base is not None:
+            features.setdefault(slot.inner, []).append(
+                [(along, -slot.side * rise) for along, rise in bump_path(slot.start, slot.end, height, inside, outside)])
+        elif slot.inner is not None:
             features.setdefault(slot.inner, []).append(
                 [(along, slot.side * rise) for along, rise in bump_path(
                     slot.start + slot.spacing, slot.end - slot.spacing, height, outside, inside)])
@@ -639,8 +677,10 @@ def _runs(segments: dict[int, TrackSegment], nets: tuple[str, ...], spacing_nm: 
     """Straight runs of the unit: ``(first, second, horizontal, low, high, distance)``.
 
     For a pair, ``first``/``second`` key the parallel ``segments`` of both
-    members on one layer, ``spacing_nm`` apart, over their common interval;
-    for a single net every axis-aligned segment, with ``second`` -1.
+    members on one layer over their common interval, ``spacing_nm`` apart or
+    wider up to ``_WIDE_LANES`` times it (beside a pair's vias, whose pitch
+    is wider than the lane spacing; ``_slots`` gives those twin bumps). For a
+    single net every axis-aligned segment, with ``second`` -1.
     """
     runs: list[_Run] = []
     for first, track in segments.items():
@@ -656,7 +696,7 @@ def _runs(segments: dict[int, TrackSegment], nets: tuple[str, ...], spacing_nm: 
                     or _horizontal(partner) is not horizontal):
                 continue
             distance = abs(_normal(track.start, horizontal) - _normal(partner.start, horizontal))
-            if abs(distance - spacing_nm) > _LANE_TOLERANCE_NM:
+            if not spacing_nm - _LANE_TOLERANCE_NM <= distance <= _WIDE_LANES * spacing_nm:
                 continue
             other_low, other_high = sorted((_axial(partner.start, horizontal), _axial(partner.end, horizontal)))
             if max(low, other_low) < min(high, other_high):
@@ -676,19 +716,32 @@ def _run_slot(tracks: dict[int, TrackSegment], run: _Run, position: int, side: i
                  _normal(tracks[outer].start, horizontal), start, end, distance, width)
 
 
-def _slots(tracks: dict[int, TrackSegment], runs: list[_Run]) -> list[_Slot]:
-    """Every candidate bump slot of the unit, on both sides of each straight run."""
+def _slots(tracks: dict[int, TrackSegment], runs: list[_Run], spacing_nm: int = 0) -> list[_Slot]:
+    """Every candidate bump slot of the unit, on both sides of each straight run.
+
+    A run whose members lie wider apart than ``spacing_nm`` (beside a pair's
+    vias) takes twin bumps instead: both members bulge apart over the same
+    interval, each as a single net, so each gains the same length and the
+    bump is only 3 x width wide rather than 3 x width plus twice the distance.
+    """
     slots: list[_Slot] = []
     for run in runs:
-        first, second, _, low, high, distance = run
+        first, second, horizontal, low, high, distance = run
         width = max(tracks[first].width_nm, tracks[second].width_nm if second >= 0 else 0)
         pitch = 3 * width
-        bump = pitch + 2 * distance
+        twin = second >= 0 and distance > spacing_nm + _LANE_TOLERANCE_NM
+        bump = pitch if twin else pitch + 2 * distance
         usable = high - low - 2 * pitch
         count = (usable + pitch) // (bump + pitch) if usable >= bump else 0
         offset = low + pitch + (usable - count * bump - (count - 1) * pitch) // 2
         for position in range(count):
             start = offset + position * (bump + pitch)
+            if twin:
+                outer, inner = sorted((first, second), key=lambda index: -_normal(tracks[index].start, horizontal))
+                slots.append(_Slot((first, second), position, tracks[first].layer, horizontal, 1, outer, inner,
+                                   _normal(tracks[outer].start, horizontal), start, start + bump, 0, width,
+                                   _normal(tracks[inner].start, horizontal)))
+                continue
             for side in (1, -1):
                 slots.append(_run_slot(tracks, run, position, side, start, start + bump, width))
     return slots
@@ -863,16 +916,31 @@ def _swept(slot: _Slot, height: int, chamfers: tuple[int, int] | None = None) ->
     return RoundedConvexShape(tuple(point(*corner) for corner in corners), slot.width // 2)
 
 
+def _swept_areas(slot: _Slot, height: int,
+                 chamfers: tuple[int, int] | None = None) -> tuple[RoundedConvexShape, ...]:
+    """``_swept``, plus the inner member's own bulge for a twin bump."""
+    if slot.twin_base is None:
+        return (_swept(slot, height, chamfers),)
+    return (_swept(slot, height, chamfers),
+            _swept(replace(slot, base=slot.twin_base, side=-slot.side, twin_base=None), height, chamfers))
+
+
+def _slot_bounds(slot: _Slot, height: int) -> Bounds:
+    areas = [shape.bounds for shape in _swept_areas(slot, height)]
+    return Bounds(min(area.min_x for area in areas), min(area.min_y for area in areas),
+                  max(area.max_x for area in areas), max(area.max_y for area in areas))
+
+
 def _room(board: PhysicalBoard, obstacles: RoutingClearanceIndex, nets: tuple[str, ...],
           slot: _Slot, limit: int, floor: int = 1, chamfers: tuple[int, int] | None = None) -> int:
     """Tallest clear bump height in ``floor..limit``, else 0 (the swept area only grows)."""
     def clear(height: int) -> bool:
-        shape = _swept(slot, height, chamfers)
         # Each member is checked as its own net, so the other member's lands
         # count as foreign copper too.
-        return (shape_in_board(board, shape, board.rules.minimum_clearance_nm,
-                               board.rules.minimum_hole_clearance_nm)
-                and all(obstacles.can_area(net, shape, slot.layer) for net in nets))
+        return all(shape_in_board(board, shape, board.rules.minimum_clearance_nm,
+                                  board.rules.minimum_hole_clearance_nm)
+                   and all(obstacles.can_area(net, shape, slot.layer) for net in nets)
+                   for shape in _swept_areas(slot, height, chamfers))
 
     if floor > limit or not clear(floor):
         return 0
@@ -896,7 +964,7 @@ def _conflict(slot: _Slot, other: _Slot, room: int, other_room: int, clearance_n
         return slot.position == other.position
     if slot.layer is not other.layer:
         return False
-    return _near(_swept(slot, room).bounds, _swept(other, other_room).bounds,
+    return _near(_slot_bounds(slot, room), _slot_bounds(other, other_room),
                  slot.width // 2 + other.width // 2 + clearance_nm)
 
 
