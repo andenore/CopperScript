@@ -759,7 +759,36 @@ mod tests {
             (0, 5),
         ];
         assert_eq!(decoded_area(&islands), (2, vec![0, 0], 200.0));
-        // Crossing holes and collinear leftovers stay invalid, never healed.
+        // A triangle hole touching the outer ring's edges at three vertices
+        // cuts the copper into three pieces (6, 18 and 3). Shapely's
+        // unnoded polygonize makes one face whose hole touches its shell
+        // three times, which is not a valid polygon, so Python rejects it.
+        let pinched = [(0, 0), (6, 0), (6, 6), (3, 6), (6, 4), (3, 0), (3, 6), (6, 6), (0, 6)];
+        assert_eq!(decoded_area(&pinched), (3, vec![0, 0, 0], 27.0));
+        // A hole touching the outer ring at three points with an island in
+        // it: four pieces, 24 in all. Python returns the island alone (2).
+        let island = [
+            (0, 0),
+            (6, 0),
+            (2, 3),
+            (3, 3),
+            (3, 5),
+            (2, 5),
+            (2, 3),
+            (6, 0),
+            (6, 6),
+            (0, 6),
+            (0, 4),
+            (4, 6),
+            (6, 0),
+            (0, 4),
+            (0, 6),
+        ];
+        assert_eq!(decoded_area(&island), (4, vec![0, 0, 0, 0], 24.0));
+        // A zero-area ring along the outer edge bounds nothing more.
+        let spur = [(0, 0), (6, 0), (6, 6), (1, 0), (2, 0), (3, 0), (1, 0), (6, 6), (0, 6)];
+        assert_eq!(decoded_area(&spur), (1, vec![0], 36.0));
+        // Crossing holes and dropped linework stay invalid, never healed.
         let crossing = [
             (0, 0),
             (100, 0),

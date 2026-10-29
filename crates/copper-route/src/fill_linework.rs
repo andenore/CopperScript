@@ -3,9 +3,10 @@
 //! its even-odd face selection and `unary_union`.
 //!
 //! The linework (the walk's edges less its reversed slit pairs) is noded
-//! exactly: a vertex on another edge splits that edge, while a proper
-//! crossing or a collinear overlap rejects the walk (Python's "dropped or
-//! crossing linework"). Every vertex of the noded arrangement then has even
+//! exactly: a vertex on another edge splits that edge and coincident pieces
+//! of collinear edges merge, while a proper crossing, a piece covered an even
+//! number of times or a ring crossing an edge at a vertex on it rejects the
+//! walk (Python's "dropped or crossing linework"). Every vertex of the noded arrangement then has even
 //! degree and adjacent faces have opposite even-odd parity, so the selected
 //! region's boundary is the boundary cycles of its odd faces. Those cycles
 //! are split at repeated vertices into simple rings, the OGC form shapely
@@ -31,9 +32,9 @@ fn strictly_inside(p: I, a: I, b: I) -> bool {
     p != a && p != b && a.0.min(b.0) <= p.0 && p.0 <= a.0.max(b.0) && a.1.min(b.1) <= p.1 && p.1 <= a.1.max(b.1)
 }
 
-/// The segments split at every vertex lying on another segment's interior;
-/// `None` for a proper crossing or a collinear overlap of positive length.
-fn node(lines: &[Segment]) -> Option<Vec<Segment>> {
+/// The segments split at every vertex lying on another segment's interior,
+/// each piece with its segment's index; `None` for a proper crossing.
+fn node(lines: &[Segment]) -> Option<(Vec<Segment>, Vec<usize>)> {
     let mut cuts: Vec<Vec<I>> = vec![Vec::new(); lines.len()];
     let mut order: Vec<usize> = (0..lines.len()).collect();
     order.sort_by_key(|&i| lines[i].0.0.min(lines[i].1.0));
@@ -49,15 +50,6 @@ fn node(lines: &[Segment]) -> Option<Vec<Segment>> {
                 continue;
             }
             let (o1, o2) = (orientation(a, b, c), orientation(a, b, d));
-            if o1 == 0 && o2 == 0 {
-                let along = |p: I| if (b.0 - a.0).abs() >= (b.1 - a.1).abs() { p.0 } else { p.1 };
-                let (low, high) = (along(a).min(along(b)), along(a).max(along(b)));
-                let (other_low, other_high) = (along(c).min(along(d)), along(c).max(along(d)));
-                if high.min(other_high) > low.max(other_low) {
-                    return None;
-                }
-                continue;
-            }
             let (o3, o4) = (orientation(c, d, a), orientation(c, d, b));
             if o1.signum() * o2.signum() < 0 && o3.signum() * o4.signum() < 0 {
                 return None;
@@ -71,18 +63,19 @@ fn node(lines: &[Segment]) -> Option<Vec<Segment>> {
             }
         }
     }
-    let mut pieces = Vec::new();
-    for (&(a, b), mut points) in lines.iter().zip(cuts) {
+    let (mut pieces, mut parents) = (Vec::new(), Vec::new());
+    for (parent, (&(a, b), mut points)) in lines.iter().zip(cuts).enumerate() {
         let distance = |p: &I| i128::from(p.0 - a.0).abs() + i128::from(p.1 - a.1).abs();
         points.sort_by_key(distance);
         points.dedup();
         let mut start = a;
         for point in points.into_iter().chain([b]) {
             pieces.push((start, point));
+            parents.push(parent);
             start = point;
         }
     }
-    Some(pieces)
+    Some((pieces, parents))
 }
 
 /// Counter-clockwise angular order of direction vectors from the +x axis.
@@ -163,12 +156,28 @@ fn simple_rings(walk: &[usize]) -> Vec<Vec<usize>> {
 }
 
 /// The odd faces of the linework, or `None` when it is not a valid
-/// arrangement (crossing or overlapping linework, no selected face).
+/// arrangement (crossing or dropped linework, no selected face).
 pub fn odd_faces(lines: &[Segment]) -> Option<Vec<Face>> {
-    let pieces = node(lines)?;
+    let (split, parents) = node(lines)?;
+    // Coincident pieces of collinear segments merge: an odd count bounds the
+    // region once, an even count bounds nothing (dropped linework).
+    let mut merged: IndexMap<Segment, usize> = IndexMap::new();
+    let mut reversed = Vec::with_capacity(split.len());
+    let mut unique = Vec::with_capacity(split.len());
+    for &(a, b) in &split {
+        let key = if a < b { (a, b) } else { (b, a) };
+        let entry = merged.entry(key);
+        unique.push(entry.index());
+        *entry.or_default() += 1;
+        reversed.push(a > b);
+    }
+    if merged.values().any(|count| count.is_multiple_of(2)) {
+        return None;
+    }
+    let pieces: Vec<Segment> = merged.into_keys().collect();
     let mut vertices: IndexMap<I, Vec<usize>> = IndexMap::new();
     // Half-edge 2k runs along piece k, 2k + 1 against it.
-    let origin = |half: usize| if half % 2 == 0 { pieces[half / 2].0 } else { pieces[half / 2].1 };
+    let origin = |half: usize| if half.is_multiple_of(2) { pieces[half / 2].0 } else { pieces[half / 2].1 };
     let target = |half: usize| origin(half ^ 1);
     for half in 0..2 * pieces.len() {
         vertices.entry(origin(half)).or_default().push(half);
@@ -191,6 +200,8 @@ pub fn odd_faces(lines: &[Segment]) -> Option<Vec<Face>> {
         outgoing[(slot[twin] + outgoing.len() - 1) % outgoing.len()]
     };
     let mut seen = vec![false; 2 * pieces.len()];
+    // Whether the selected region lies left of each piece, along its segment.
+    let mut left = vec![false; pieces.len()];
     let mut shells: Vec<Vec<I>> = Vec::new();
     let mut holes: Vec<Vec<I>> = Vec::new();
     for start in 0..2 * pieces.len() {
@@ -215,6 +226,9 @@ pub fn odd_faces(lines: &[Segment]) -> Option<Vec<Face>> {
         if !odd {
             continue;
         }
+        for &half in &cycle {
+            left[half / 2] = half.is_multiple_of(2);
+        }
         let walk: Vec<usize> =
             cycle.iter().map(|&half| vertices.get_index_of(&origin(half)).expect("vertex")).collect();
         for ring in simple_rings(&walk) {
@@ -225,6 +239,12 @@ pub fn odd_faces(lines: &[Segment]) -> Option<Vec<Face>> {
                 _ => holes.push(ring),
             }
         }
+    }
+    // A vertex on a segment is a touch only when the region keeps its side
+    // of the segment there; otherwise another ring crosses it at that vertex.
+    let side = |piece: usize| left[unique[piece]] != reversed[piece];
+    if (1..split.len()).any(|piece| parents[piece] == parents[piece - 1] && side(piece) != side(piece - 1)) {
+        return None;
     }
     if shells.is_empty() {
         return None;
@@ -310,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn crossings_and_overlaps_are_rejected() {
+    fn crossing_and_dropped_linework_is_rejected() {
         let mut crossing = ring(&[(0, 0), (100, 0), (100, 100), (0, 100)]);
         crossing.extend(ring(&[(20, 20), (50, 20), (50, 50), (20, 50)]));
         crossing.extend(ring(&[(30, 30), (60, 30), (60, 60), (30, 60)]));
@@ -318,12 +338,28 @@ mod tests {
         let mut overlap = ring(&[(0, 0), (100, 0), (100, 100), (0, 100)]);
         overlap.extend([((40, 50), (50, 50)), ((50, 50), (60, 50)), ((60, 50), (40, 50))]);
         assert!(odd_faces(&overlap).is_none());
+        // A triangle hole crossing a square hole's edges at vertices on them.
+        let mut through = ring(&[(0, 0), (80, 0), (80, 80), (0, 80)]);
+        through.extend(ring(&[(60, 30), (40, 30), (40, 60), (60, 60)]));
+        through.extend(ring(&[(70, 10), (50, 30), (60, 40)]));
+        assert!(odd_faces(&through).is_none());
     }
 
     #[test]
-    fn rings_crossing_at_a_shared_vertex_take_even_odd_faces() {
-        // Two triangles crossing only at their shared apex (a bow tie of
-        // two rings): both lobes are filled.
+    fn a_zero_area_ring_along_an_edge_bounds_nothing_more() {
+        // Back and forth along the shell's bottom edge: the edge is covered
+        // three times there, so it still bounds the region once.
+        let mut lines = ring(&[(0, 0), (60, 0), (60, 60), (0, 60)]);
+        lines.extend([((10, 0), (20, 0)), ((20, 0), (30, 0)), ((30, 0), (10, 0))]);
+        let faces = odd_faces(&lines).expect("valid");
+        assert_eq!(faces.len(), 1);
+        assert!(faces[0].1.is_empty());
+        assert_eq!(area(&faces[0]), 2 * 3600);
+    }
+
+    #[test]
+    fn rings_touching_at_a_shared_apex_are_separate_faces() {
+        // Two triangles meeting only at their shared apex: both are filled.
         let mut lines = ring(&[(0, 0), (10, 10), (0, 20)]);
         lines.extend(ring(&[(20, 0), (10, 10), (20, 20)]));
         let faces = odd_faces(&lines).expect("valid");
