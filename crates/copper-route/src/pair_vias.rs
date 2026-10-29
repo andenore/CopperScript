@@ -799,10 +799,25 @@ fn facing_turns(first: &Port, second: &Port) -> usize {
     turns(first, second) + turns(second, first)
 }
 
+/// `_cramped`: facing ports nearer along their headings than a 45-degree
+/// side step across them, plus a search step out of one port and into the
+/// other, needs; such a pair could only be joined by a loop.
+fn cramped(first: &Port, second: &Port, pitch_nm: i64) -> bool {
+    if (first.heading + 8 - second.heading) % 8 != 4 {
+        return false;
+    }
+    let (dx, dy) = HEADS[first.heading];
+    let (vx, vy) = (second.center.x_nm - first.center.x_nm, second.center.y_nm - first.center.y_nm);
+    // Both projections are scaled by the heading's length; so is the margin.
+    ((vx * dx + vy * dy) as f64)
+        < ((vx * dy - vy * dx).abs() as f64) + 2.0 * pitch_nm as f64 * hypot(dx as f64, dy as f64)
+}
+
 /// `_transition_pairs`: compatible transition pairs, family by family, ranked.
 fn transition_pairs(
     groups: &[Vec<Transition>],
     departure_rank: &mut dyn FnMut(&Transition) -> Result<i64>,
+    pitch_nm: i64,
 ) -> Result<(usize, Vec<(Transition, Transition)>)> {
     let keys = [(false, false), (true, true), (false, true), (true, false)];
     let mut families: Vec<Vec<(Transition, Transition)>> = vec![Vec::new(); 4];
@@ -823,6 +838,7 @@ fn transition_pairs(
                 a.rank + b.rank,
                 departure,
                 facing_turns(&a.port, &b.port) as i64,
+                cramped(&a.port, &b.port, pitch_nm),
                 a.port.preference + b.port.preference,
                 hypot(
                     (a.port.center.x_nm - b.port.center.x_nm) as f64,
@@ -995,7 +1011,7 @@ pub fn paired_via_candidates(
             departure_cache.push((item.clone(), rank));
             Ok(rank)
         };
-        let (total_pairs, combinations) = transition_pairs(&groups, &mut departure_rank)?;
+        let (total_pairs, combinations) = transition_pairs(&groups, &mut departure_rank, bounds.pitch_nm)?;
         if total_pairs == 0 {
             let parts: Vec<String> = accesses
                 .iter()

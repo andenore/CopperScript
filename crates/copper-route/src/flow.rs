@@ -299,6 +299,114 @@ fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::Copper
     Ok(halos)
 }
 
+/// `_plane_pin_halos`: keepouts in front of fine-pitch plane pins, for
+/// ordinary escape planning. A pin of a distribution zone net without a zone
+/// on its own layer reaches its plane through a stitching via placed after
+/// routing; the halo keeps one via site free from one clearance past the
+/// land's outer end, along the land's long axis away from the package
+/// centre, where the neighbouring pins' straight escapes still pass beside it.
+fn plane_pin_halos(board: &PhysicalBoard) -> Vec<copper_physical::CopperKeepout> {
+    use copper_physical::footprint::PadKind;
+    use copper_physical::{BoardSide, CopperLayer, Point};
+    let zone_nets = copper_pcb::zones::distribution_zone_nets(board);
+    if zone_nets.is_empty() {
+        return Vec::new();
+    }
+    let mut zone_layers: IndexMap<&str, IndexSet<CopperLayer>> = IndexMap::new();
+    for zone in &board.zones {
+        zone_layers.entry(zone.net.as_str()).or_default().extend(zone.layers.iter().copied());
+    }
+    let gap = board.rules.minimum_clearance_nm;
+    let via = board.rules.default_via_size_nm;
+    let half = via.div_euclid(2) + gap;
+    let track = board.rules.default_track_width_nm;
+    let mut nets: IndexMap<(&str, &str), &str> = IndexMap::new();
+    for net in &board.nets {
+        for pad in &net.pads {
+            nets.insert((pad.component.as_str(), pad.pad.as_str()), net.name.as_str());
+        }
+    }
+    let mut halos = Vec::new();
+    for placement in &board.placements {
+        let footprint = &board.footprints[&placement.footprint];
+        let side = if placement.side == BoardSide::Front { CopperLayer::Front } else { CopperLayer::Back };
+        let mut centres: IndexMap<&str, Point> = IndexMap::new();
+        for pad in &footprint.pads {
+            centres
+                .insert(pad.number.as_str(), copper_pcb::transform::transformed_local_point(placement, pad.position));
+        }
+        for pad in &footprint.pads {
+            let Some(net) = nets.get(&(placement.reference.as_str(), pad.number.as_str())) else { continue };
+            if !zone_nets.contains(*net)
+                || zone_layers.get(net).is_some_and(|layers| layers.contains(&side))
+                || pad.kind != PadKind::Smd
+            {
+                continue;
+            }
+            let centre = centres[pad.number.as_str()];
+            let bounds = copper_pcb::transform::placed_pad_shape(centre, pad, placement).bounds;
+            let (width, height) = (bounds.max_x - bounds.min_x, bounds.max_y - bounds.min_y);
+            if 2 * width.max(height) < 3 * width.min(height) {
+                continue;
+            }
+            let (dx, dy) = (centre.x_nm - placement.position.x_nm, centre.y_nm - placement.position.y_nm);
+            let (ox, oy) =
+                if width > height { (if dx > 0 { 1 } else { -1 }, 0) } else { (0, if dy > 0 { 1 } else { -1 }) };
+            if (ox != 0 && dx == 0) || (oy != 0 && dy == 0) {
+                continue;
+            }
+            // Nearest neighbouring land across the outward axis.
+            let across = centres
+                .iter()
+                .filter(|(other, point)| {
+                    **other != pad.number.as_str()
+                        && (point.x_nm - centre.x_nm).abs() + (point.y_nm - centre.y_nm).abs() <= 650_000
+                })
+                .map(
+                    |(_, point)| {
+                        if ox != 0 { (point.y_nm - centre.y_nm).abs() } else { (point.x_nm - centre.x_nm).abs() }
+                    },
+                )
+                .min();
+            let Some(across) = across else { continue };
+            if half + gap + (track + 1).div_euclid(2) > across {
+                continue;
+            }
+            let step = if ox != 0 { ox } else { oy };
+            let edge = if ox != 0 {
+                if ox > 0 { bounds.max_x } else { bounds.min_x }
+            } else if oy > 0 {
+                bounds.max_y
+            } else {
+                bounds.min_y
+            };
+            let (near, far) = (edge + step * gap, edge + step * (2 * gap + via));
+            let sorted = (near.min(far), near.max(far));
+            let (xs, ys) = if ox != 0 {
+                (sorted, (centre.y_nm - half, centre.y_nm + half))
+            } else {
+                ((centre.x_nm - half, centre.x_nm + half), sorted)
+            };
+            halos.push(copper_physical::CopperKeepout {
+                id: format!("plane-pin-halo-{}", halos.len()),
+                layers: vec![side],
+                vertices: vec![
+                    Point::new(xs.0, ys.0),
+                    Point::new(xs.1, ys.0),
+                    Point::new(xs.1, ys.1),
+                    Point::new(xs.0, ys.1),
+                ],
+                block_tracks: true,
+                block_vias: true,
+                block_pads: false,
+                block_zones: false,
+                block_footprints: false,
+            });
+        }
+    }
+    halos
+}
+
 /// The installed progress observer, reborrowed for one call.
 pub(crate) fn reborrow<'a>(on_progress: &'a mut Option<ProgressCallback<'_>>) -> Option<ProgressCallback<'a>> {
     match on_progress {
@@ -366,7 +474,9 @@ fn route_critical_stage(
     let halos = macro_port_halos(board)?;
     let mut reserved = match unified_fanout {
         Some(fanout) if unified_options.escapes_first => {
-            plan_ordinary_escapes(board, fanout, on_progress, &halos, &planar)?
+            let mut keepouts = halos.clone();
+            keepouts.extend(plane_pin_halos(board));
+            plan_ordinary_escapes(board, fanout, on_progress, &keepouts, &planar)?
         }
         _ => None,
     };

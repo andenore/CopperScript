@@ -1114,6 +1114,39 @@ fn finish(
     if !stopped {
         emit(progress, "final_contacts_native_drc", "started", Vec::new());
     }
+    let mut swept_single_layer_vias = false;
+    if !stopped && !context.direct_unified {
+        // Escape vias the ordinary routes did not use would otherwise stay as
+        // drills and take the room plane pins need for their stitching vias,
+        // so they go before the stitch below. (Direct unified runs stitch
+        // inside the pipeline.)
+        let board = result.board();
+        let mut kept_vias = copper_route::route_cleanup::via_counter(&context.physical_board.vias);
+        for via in copper_route::pad_via_arrays::via_in_pad_array_vias(board)? {
+            *kept_vias.entry(via).or_insert(0) += 1;
+        }
+        let mut kept_tracks = copper_route::route_cleanup::counter(&context.physical_board.tracks);
+        let placements: indexmap::IndexMap<String, copper_pcb::board::Placement> =
+            board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+        for hard in &board.hard_macros {
+            if board.materialized_macros.contains(&hard.cluster) {
+                let geometry = copper_pcb::hard_macros::resolved_macro_geometry(board, hard, &placements)?;
+                for track in &geometry.tracks {
+                    *kept_tracks.entry(track.clone()).or_insert(0) += 1;
+                }
+                for via in &geometry.vias {
+                    *kept_vias.entry(via.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+        let (swept, changed) = copper_route::route_cleanup::remove_single_layer_vias(board, &kept_vias, &kept_tracks)?;
+        if changed {
+            let removed = board.vias.len() - swept.vias.len();
+            emit(progress, "single_layer_vias", "removed", vec![("vias", Value::from(removed as i64))]);
+            result.detailed.board = swept;
+            swept_single_layer_vias = true;
+        }
+    }
     let mut stitch = if !stopped && context.stitch_enabled && !context.direct_unified {
         Some(copper_route::plane::stitch_zone_pads(result.board(), Some(context.plane_options))?)
     } else {
@@ -1170,7 +1203,8 @@ fn finish(
     let output_drc = if !stopped
         && ((context.stitch_enabled && stitch.is_some())
             || duplicate_stitch.added_track_count != 0
-            || trimmed_overhangs)
+            || trimmed_overhangs
+            || swept_single_layer_vias)
     {
         copper_route::drc_report::run_physical_drc(&output_board, copper_drc::Policy::default())?
     } else {

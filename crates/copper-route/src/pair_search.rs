@@ -291,6 +291,31 @@ pub fn paths(start: Point, end: Point) -> Vec<Vec<Point>> {
     ]
 }
 
+/// Shortest straight leg of a mid-way collar jog (`_collar_paths`).
+const COLLAR_LEG_NM: i64 = 50_000;
+
+/// `_collar_paths`: `paths` plus a collar that leaves its land straight,
+/// takes the 45-degree jog mid-way and finishes straight into the port, when
+/// each straight leg is at least `COLLAR_LEG_NM`.
+pub fn collar_paths(start: Point, end: Point) -> Vec<Vec<Point>> {
+    let mut result = paths(start, end);
+    let (dx, dy) = (end.x_nm - start.x_nm, end.y_nm - start.y_nm);
+    let (jog, run) = (dx.abs().min(dy.abs()), dx.abs().max(dy.abs()));
+    if jog == 0 || run - jog < 2 * COLLAR_LEG_NM {
+        return result;
+    }
+    let (sx, sy) = (if dx > 0 { 1 } else { -1 }, if dy > 0 { 1 } else { -1 });
+    let lead = (run - jog).div_euclid(2);
+    let first = if dy.abs() > dx.abs() {
+        pt(start.x_nm, start.y_nm + sy * lead)
+    } else {
+        pt(start.x_nm + sx * lead, start.y_nm)
+    };
+    let second = pt(first.x_nm + sx * jog, first.y_nm + sy * jog);
+    result.push(vec![start, first, second, end]);
+    result
+}
+
 /// `_tracks`: lane copper, cut at breakout regions as it will be emitted.
 pub fn tracks(
     net: &str,
@@ -781,7 +806,7 @@ impl PortRequest<'_> {
                     let center = pt(middle.x_nm + dx * step, middle.y_nm + dy * step);
                     let targets = [shift(center, lane_normal, sign), shift(center, lane_normal, -sign)];
                     let mut admitted =
-                        self.admit(center, heading_index, sign, &targets, preference as i64, &mut ports)?;
+                        self.admit(center, heading_index, sign, &targets, preference as i64, true, &mut ports)?;
                     if !admitted
                         && dot != 0
                         && heading_index % 2 == 0
@@ -796,6 +821,7 @@ impl PortRequest<'_> {
                                 sign,
                                 &shifted_targets,
                                 preference as i64,
+                                false,
                                 &mut ports,
                             )? {
                                 admitted = true;
@@ -923,7 +949,9 @@ impl PortRequest<'_> {
         Ok(())
     }
 
-    /// The first legal one-corner collar to `targets` that reaches them along `heading`.
+    /// The first legal collar to `targets` that reaches them along `heading`:
+    /// one-corner paths, plus the mid-way jog when `collar`.
+    #[allow(clippy::too_many_arguments)]
     fn admit(
         &self,
         center: Point,
@@ -931,10 +959,12 @@ impl PortRequest<'_> {
         sign: i64,
         targets: &[Point; 2],
         preference: i64,
+        collar: bool,
         ports: &mut Vec<Port>,
     ) -> Result<bool> {
-        for a in paths(self.first, targets[0]) {
-            for b in paths(self.second, targets[1]) {
+        let candidates = if collar { collar_paths } else { paths };
+        for a in candidates(self.first, targets[0]) {
+            for b in candidates(self.second, targets[1]) {
                 if heading(a[a.len() - 2], a[a.len() - 1]) != Some(heading_index)
                     || heading(b[b.len() - 2], b[b.len() - 1]) != Some(heading_index)
                 {
