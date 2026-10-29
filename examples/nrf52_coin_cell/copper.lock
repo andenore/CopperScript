@@ -60892,7 +60892,7 @@
       "version": "50655eff5613690a606c9dd1de456b2adae249df"
     },
     {
-      "checksum": "sha256:9014f5a77a0be41fb428a5efd8c6c685dd8f829bf8750a25f8b67156568b614f",
+      "checksum": "sha256:68e0c0bc9ad25802533f9e344deb6444a48898e214f02947d3e88e4a21cff600",
       "files": [
         {
           "path": "compatibility/ad4134_device.copper",
@@ -60983,6 +60983,46 @@
           "path": "stm32/stm32g0b1cbt6.copper",
           "sha256": "eb8913333fc9b41fe1172d44168034fa3275acf320142b0bdf161b8f62a1fe24",
           "size": 754
+        },
+        {
+          "path": "usb_bridge/bus_header.copper",
+          "sha256": "d24cb53f35d581c240b6941704522dee4385b9d107573d18f558207c526d815f",
+          "size": 2286
+        },
+        {
+          "path": "usb_bridge/crystal.copper",
+          "sha256": "b67b59cf07e1f2a396583bff06d580dbe6eec35d8b2590c2b44a15133b582d8c",
+          "size": 687
+        },
+        {
+          "path": "usb_bridge/ferrite.copper",
+          "sha256": "9e38fc0b0afc7abe4181e4b4d044577c108cdce4704ad7bcbefe004b29e7bce9",
+          "size": 501
+        },
+        {
+          "path": "usb_bridge/footprints/Package_BGA.pretty/TFBGA-121_10x10mm_Layout11x11_P0.8mm.kicad_mod",
+          "sha256": "9d914ff16e922578979b06b9f4d734eb8921762d25041e81ad3e9eb0ee055e79",
+          "size": 11181
+        },
+        {
+          "path": "usb_bridge/fx10_like_bga121.copper",
+          "sha256": "935da98bc21718ea96bb632a625fc5c16eba35b2c77ae4f5401f957028db2759",
+          "size": 8640
+        },
+        {
+          "path": "usb_bridge/fx10_like_device.copper",
+          "sha256": "f0f88293af303f9865d175be74182aae2f4a197395bb730e91c75ebee8cc5816",
+          "size": 6808
+        },
+        {
+          "path": "usb_bridge/power_header.copper",
+          "sha256": "78015e0b183eb3ce4dbc862867885c85e1e76479eb27576dea2b2481715f9344",
+          "size": 622
+        },
+        {
+          "path": "usb_bridge/usb_c_receptacle.copper",
+          "sha256": "e1d44a83c197b39e83a2b4cf251661088e6eac42b1e4cbb93871b946e2cb4c9c",
+          "size": 2747
         },
         {
           "path": "vertical_support/open_drain_driver.copper",
