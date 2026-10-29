@@ -25426,10 +25426,6 @@
       "6",
       "--fab-profile",
       "jlcpcb-six-layer",
-      "--width-mm",
-      "50",
-      "--height-mm",
-      "40",
       "--json"
      ]
     },

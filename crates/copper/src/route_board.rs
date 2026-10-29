@@ -781,6 +781,10 @@ fn route(
             let key = message.rsplit(" uses unknown part ").next().unwrap_or_default().to_owned();
             Stop::UnknownPart { message: message.clone(), key }
         }
+        // `pad_via_arrays.validate_array_fit` raises a plain `ValueError`.
+        Error::Value(message) if message.starts_with("via_in_pad array ") => {
+            Stop::Value { error_type: Some("ValueError"), message: message.clone() }
+        }
         _ => Stop::from(error),
     };
     // Proxy physicalization raises only `ValueError` (and the unknown part's KeyError).
