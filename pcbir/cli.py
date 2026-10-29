@@ -888,10 +888,8 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--tile-size-mm", default="5")
     board_route_parser.add_argument("--router-iterations", type=int, default=5)
     board_route_parser.add_argument("--feedback-iterations", type=int, default=1)
-    board_route_parser.add_argument("--critical-feedback-trials", type=int, default=0,
-                                    help="adds to the congestion-driven placement feedback budget "
-                                         "(see --congestion-feedback-trials)")
-    board_route_parser.add_argument("--pitch-mm", default="1")
+    board_route_parser.add_argument("--local-demand-pitch-mm", default="1",
+        help="global local-demand estimate pitch; requires --local-demand-cost > 0")
     board_route_parser.add_argument("--debug", action="store_true",
         help="print the full traceback of an error before its one-line summary")
     board_route_parser.add_argument("--progress", action="store_true",
@@ -918,38 +916,18 @@ def _parser() -> argparse.ArgumentParser:
              "chosen jointly per package (escape plan E7, docs/escape-planning.md)")
     board_route_parser.add_argument("--unified-pitch-mm", type=Decimal, default=None,
         help="grid pitch of the unified router (default: 0.25 mm); the base pitch under fine "
-             "patches with --fine-regions arrays|dense, the whole-board pitch with --fine-regions off "
+             "patches with --unified-set fine_regions=arrays|dense, the whole-board pitch with fine_regions=off "
              "(default there: 0.25 mm, finer to align with ball grids)")
-    board_route_parser.add_argument("--fine-regions", choices=("off", "arrays", "dense"), default="arrays",
-        help="unified router lattice: fine patches over full ball arrays (arrays, default), also over "
-             "dense non-array packages (dense, for measurement), or one uniform lattice (off)")
-    board_route_parser.add_argument("--unified-iterations", type=int, default=150,
-        help="maximum negotiation iterations of the unified router; it also stops after 60 "
-             "iterations without improvement (default: 150)")
-    board_route_parser.add_argument("--unified-search-states", type=int, default=400_000,
-        help="maximum expanded states per unified path search (default: 400000); "
-             "a bounded search failure is not proof that no legal route exists")
     board_route_parser.add_argument("--unified-time-budget-s", type=float, default=None,
         help="wall-time budget for the unified router; it returns its best result when exceeded")
-    board_route_parser.add_argument("--unified-pair-states", type=int, default=None,
-        help="per-pair expanded-state cap for the critical stage preceding unified routing")
     board_route_parser.add_argument("--unified-save-inputs", type=Path, default=None, metavar="STATE",
         help="unified router: save its inputs as a state file for replay_unified")
-    board_route_parser.add_argument("--unified-direct", action="store_true",
-        help="unified router: negotiate all nets from source-fixed copper without critical or bypass routing")
     board_route_parser.add_argument("--unified-set", action="append", default=[], metavar="OPTION=VALUE",
         help="unified router: set any UnifiedRouterOptions field (JSON value, else text; repeatable), "
              "e.g. --unified-set buses_first=true")
-    board_route_parser.add_argument("--unified-no-decouplers", action="store_true",
-        help="unified router: route decoupling capacitors with everything else instead of first")
-    board_route_parser.add_argument("--unified-retain-escape-copper", action="store_true",
-        help="retain whole endangered ordinary escape groups when critical retries release their masks")
-    board_route_parser.add_argument("--power-islands", default="off", metavar="auto|off|LAYER",
-        help="unified router: carve islands for decoupled supply rails out of a spare plane layer "
-             "(auto picks the outermost layer of a net with two plane layers)")
     board_route_parser.add_argument("--package-initial-pair-states", type=_nonnegative_int, default=6000,
         help="per-pair search state cap of the critical stage (default: 6000; 0: no cap); "
-             "--unified-pair-states takes precedence")
+             "--unified-set critical_pair_state_limit=N takes precedence")
     board_route_parser.add_argument("--fanout-step-mm", type=_positive_mm, default="0.5",
         help="coarse package escape candidate step (default: 0.5 mm)")
     board_route_parser.add_argument("--fanout-maze", action="store_true",
@@ -959,13 +937,9 @@ def _parser() -> argparse.ArgumentParser:
     board_route_parser.add_argument("--fanout-refinement-step-mm", type=_positive_mm, default="0.1",
         help="adaptive step for empty/conflicting escape domains; <= coarse step (default: 0.1 mm)")
     board_route_parser.add_argument(
-        "--detailed-feedback-trials", type=int, default=0,
-        help="adds to the congestion-driven placement feedback budget (see --congestion-feedback-trials)",
-    )
-    board_route_parser.add_argument(
         "--congestion-feedback-trials", type=_nonnegative_int, default=4,
         help="congestion-driven placement feedback, at most this many full reruns of the "
-             "pipeline tail; the budget is max(N, --detailed-feedback-trials + --critical-feedback-trials) "
+             "pipeline tail "
              "(default: 4; 0 disables; costs nothing when every net routes)",
     )
     board_route_parser.add_argument(
@@ -986,15 +960,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument(
         "--local-demand-cost", type=int, default=0,
-        help="soft per-mm layer-assignment cost of a full global edge at --pitch-mm lanes (default: 0)",
-    )
-    board_route_parser.add_argument(
-        "--no-route-smoothing", action="store_true",
-        help="keep accepted ordinary copper instead of straightening removable bends and detours",
-    )
-    board_route_parser.add_argument(
-        "--stitch-zone-pads", action="store_true",
-        help="explicitly request the default DRC-checked pad escapes for declared zones",
+        help="soft per-mm layer-assignment cost of a full global edge at --local-demand-pitch-mm lanes (default: 0)",
     )
     board_route_parser.add_argument(
         "--stitch-surface-zones", action=argparse.BooleanOptionalAction, default=True,
@@ -1046,7 +1012,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     board_route_parser.add_argument(
         "--early-plane-pad", action="append", default=[], metavar="REF.PAD",
-        help="reserve only this zone-net pad early; repeat as needed and combine with --stitch-zone-pads",
+        help="reserve only this declared zone-net pad early; repeat as needed",
     )
     board_route_parser.add_argument(
         "--verify-plane-fill", type=Path, metavar="KICAD_CLI",
@@ -1137,51 +1103,18 @@ def _apply_routing_profile(args, argv):
 def _unified_options(args):
     from .bench import unified_overrides
     from .unified_router import UnifiedRouterOptions
-    # Absent attributes (a namespace not built by the route-board parser) keep
-    # the route-board defaults, i.e. the UnifiedRouterOptions defaults.
-    defaults = _parser().parse_args(["route-board", "board.copper"])
-    def value(name):
-        return getattr(args, name, getattr(defaults, name))
-    pitch_mm, direct, save_inputs = value("unified_pitch_mm"), value("unified_direct"), value("unified_save_inputs")
+    pitch_mm = getattr(args, "unified_pitch_mm", None)
+    save_inputs = getattr(args, "unified_save_inputs", None)
+    overrides = unified_overrides(getattr(args, "unified_set", ()))
+    # Direct mode also skips the disposable decoupler pass unless explicitly
+    # overridden. The same effective options govern the pipeline and CLI tail.
+    if overrides.get("direct") is True and "pre_route_decouplers" not in overrides:
+        overrides["pre_route_decouplers"] = False
     options = dict(pitch_nm=nm_from_mm(pitch_mm) if pitch_mm else None,
-                   retain_escape_copper=value("unified_retain_escape_copper"),
-                   maximum_iterations=value("unified_iterations"),
-                   maximum_expansions=value("unified_search_states"),
-                   time_budget_s=value("unified_time_budget_s"),
-                   critical_pair_state_limit=value("unified_pair_states"),
-                   fine_regions=value("fine_regions"),
-                   power_islands=None if value("power_islands") == "off" else value("power_islands"),
-                   pre_route_decouplers=not value("unified_no_decouplers") and not direct,
-                   direct=direct,
-                   route_smoothing=not value("no_route_smoothing"),
+                   time_budget_s=getattr(args, "unified_time_budget_s", None),
                    save_inputs_path=str(save_inputs) if save_inputs else None)
-    # --unified-set reaches every option; it wins over the dedicated flags above.
-    options.update(unified_overrides(value("unified_set")))
+    options.update(overrides)
     return UnifiedRouterOptions(**options)
-
-
-# Placement-feedback flags whose budget the congestion-driven loop
-# (run_placement_feedback) spends.
-_UNIFIED_MAPPED_FLAGS = ("detailed_feedback_trials", "critical_feedback_trials")
-
-
-def _unified_flag_notes(args) -> dict[str, list[str]]:
-    """Name route-board flags this run does not apply, and flags it maps.
-
-    ``ignored_flags`` lists ``--pitch-mm`` when no ``--local-demand-cost``
-    reads it. ``mapped_flags`` lists non-zero
-    placement-feedback flags the congestion loop's budget includes.
-    Advisory only: routing is unchanged.
-    """
-    defaults = _parser().parse_args(["route-board", str(getattr(args, "board", "board.copper"))])
-    def given(name):
-        # An absent attribute was not given on this command line.
-        return getattr(args, name, getattr(defaults, name)) != getattr(defaults, name)
-    ignored = (["--pitch-mm"] if given("pitch_mm") and getattr(args, "local_demand_cost", 0) <= 0
-               else [])
-    mapped = ["--" + name.replace("_", "-") for name in _UNIFIED_MAPPED_FLAGS
-              if given(name) and getattr(args, name)]
-    return {"ignored_flags": ignored, "mapped_flags": mapped}
 
 
 def _fine_region_report(args, board) -> dict:
@@ -1200,8 +1133,7 @@ def _fine_region_report(args, board) -> dict:
 
 def _congestion_feedback_budget(args) -> int:
     """Trials of the congestion-driven placement loop."""
-    return max(getattr(args, "congestion_feedback_trials", 0),
-               getattr(args, "detailed_feedback_trials", 0) + getattr(args, "critical_feedback_trials", 0))
+    return getattr(args, "congestion_feedback_trials", 0)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1209,7 +1141,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if argv[:1] == ["bench"]:
         from .ladder import main as bench_main
         return bench_main(argv[1:])
-    args = _parser().parse_args(argv)
+    if argv[:1] == ["route-board"]:
+        from .route_options import retired_option_error
+        message = retired_option_error(argv[1:])
+        if message:
+            print(f"copper route-board: error: {message}", file=sys.stderr)
+            return 2
+    parser = _parser()
+    args = parser.parse_args(argv)
+    option_argv = argv[:argv.index("--")] if "--" in argv else argv
+    if args.command == "route-board" and any(a.split("=", 1)[0] == "--local-demand-pitch-mm" for a in option_argv):
+        if args.local_demand_cost <= 0:
+            parser.error("--local-demand-pitch-mm requires --local-demand-cost greater than 0")
     _apply_routing_profile(args, argv)
     if args.command == "compile-macro":
         from .macro_definitions import compile_macro_file, canonical_macro_bytes
@@ -1613,7 +1556,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("Board routing stopped because ERC reported errors.")
                 return 1
             stage_tracker, placement_reuse, checkpoints = None, None, {}
-            unified_flag_notes = _unified_flag_notes(args)
             try:
                 physical_options = PrototypePhysicalOptions(
                     copper_layers=args.layers, fabrication_profile=args.fab_profile,
@@ -1637,11 +1579,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     physical_board = apply_hard_macro_scene(physical_board, scene,
                         locked=args.locked, offline=args.offline)
                 editor_source_board = physical_board
-                direct_unified = args.unified_direct
+                unified_options = _unified_options(args)
+                direct_unified = unified_options.direct
                 if direct_unified:
                     # Native verification is read-only here: no filled-copper re-entry.
                     args.filled_copper_trials = 0
-                stitch_enabled = args.stitch_zone_pads or bool(physical_board.zones)
+                stitch_enabled = bool(physical_board.zones)
                 early_pads: set[PadReference] = set()
                 if args.early_plane_pad and not stitch_enabled:
                     raise ValueError("--early-plane-pad requires a declared copper zone")
@@ -1717,7 +1660,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     direction_preference_cost=max(0, args.direction_preference_cost // 2),
                     layer_assignment_passes=args.layer_assignment_passes,
                     local_demand_cost=max(0, args.local_demand_cost),
-                    local_demand_pitch_nm=nm_from_mm(args.pitch_mm),
+                    local_demand_pitch_nm=nm_from_mm(args.local_demand_pitch_mm),
                 )
                 placement_options = _planner_options(args)
                 feedback_options = PlacementRoutingFeedbackOptions(
@@ -1738,14 +1681,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if progress is not None:
                     # Remember the open stage so a failure leaves a located record.
                     stage_tracker = progress = StageTracker(progress)
-                if unified_flag_notes["ignored_flags"]:
-                    # Advisory: these flags do not reach the pipeline.
-                    emit(progress, "router_options", "ignored", router="unified",
-                         ignored_flags=unified_flag_notes["ignored_flags"])
-                if unified_flag_notes["mapped_flags"]:
-                    emit(progress, "router_options", "mapped", router="unified",
-                         mapped_flags=unified_flag_notes["mapped_flags"],
-                         congestion_feedback_trials=_congestion_feedback_budget(args))
                 checkpoint_key = (placement_key(physical_board, placement_options, router_options,
                                                 feedback_options)
                                   if args.checkpoint_dir or args.reuse_placement else None)
@@ -1788,12 +1723,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     feedback_options=feedback_options,
                     fanout_options=fanout_options,
                     plane_stitch_options=early_options,
-                    detailed_feedback_trials=args.detailed_feedback_trials,
-                    critical_feedback_trials=args.critical_feedback_trials,
                     placement_feedback_trials=getattr(args, "congestion_feedback_trials", 0),
                     critical_pair_state_limit=args.package_initial_pair_states,
                     on_progress=progress,
-                    unified_options=_unified_options(args),
+                    unified_options=unified_options,
                     escape_plan_options=(EscapePlanOptions(two_end_order=args.escape_plan or args.bus_layers,
                                                            bus_layers=args.bus_layers, array_flow=args.array_flow,
                                                            via_lattice=args.via_lattice)
@@ -1960,17 +1893,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "erc_pass": not has_errors(diagnostics),
                 "routing_profile": args.routing_profile or "custom_defaults",
                 "work_limits": {name: getattr(args, name) for name in (
-                    "unified_direct", "unified_retain_escape_copper", "unified_iterations",
-                    "unified_time_budget_s", "unified_search_states", "fine_regions",
                     "pin_access_step_mm", "critical_pin_access_step_mm", "placement_feedback_trials",
                     "package_initial_pair_states", "zone_dependency_expansions", "maximum_ripup_blockers",
                     "filled_copper_trials", "filled_copper_search_states", "decoupling_placement_trials",
                     "placement_seeds", "placement_refinement_passes", "escape_spacing_passes")} | {
+                    "unified_direct": unified_options.direct,
+                    "unified_retain_escape_copper": unified_options.retain_escape_copper,
+                    "unified_iterations": unified_options.maximum_iterations,
+                    "unified_time_budget_s": unified_options.time_budget_s,
+                    "unified_search_states": unified_options.maximum_expansions,
+                    "fine_regions": unified_options.fine_regions,
                     "congestion_feedback_trials": _congestion_feedback_budget(args),
                     # Older reports name the router; there is only one now.
                     "router": "unified",
-                    "ignored_flags": unified_flag_notes["ignored_flags"],
-                    "mapped_flags": unified_flag_notes["mapped_flags"]},
+                    "ignored_flags": [],
+                    "mapped_flags": []},
                 "erc_diagnostics": [str(item) for item in diagnostics],
                 **({"stopped_after": result.stopped_after, "native_verification": "skipped_for_stopped_run",
                     "final_copper_processing": "skipped_for_stopped_run"}

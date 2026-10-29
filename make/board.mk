@@ -21,7 +21,7 @@ HARD_MACRO ?=
 HARD_MACROS ?=
 ROUTE_CANDIDATES ?= 1
 ROUTE_ARGS ?= --candidates $(ROUTE_CANDIDATES) --feedback-iterations 1 \
- --router-iterations 5 --pitch-mm 1 --progress --fanout --plane-contact-radius-mm 5
+ --router-iterations 5 --progress --fanout --plane-contact-radius-mm 5
 EXTRA_ROUTE_ARGS ?=
 BUILD_ARGS ?=
 EDITOR_ARGS ?=

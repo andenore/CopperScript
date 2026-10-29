@@ -16587,7 +16587,8 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
@@ -16912,10 +16913,12 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--pitch-mm",
+      "--local-demand-pitch-mm",
       "-1",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--local-demand-cost",
+      "1"
      ]
     },
     {
@@ -16973,7 +16976,8 @@
       "-1",
       "--report",
       "{out}/route.json"
-     ]
+     ],
+     "id": "route-board-errors/case-22-valid_board"
     },
     {
      "args": [
@@ -17008,8 +17012,8 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-pair-states",
-      "0",
+      "--unified-set",
+      "critical_pair_state_limit=0",
       "--report",
       "{out}/route.json"
      ]
@@ -17047,8 +17051,8 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-iterations",
-      "0",
+      "--unified-set",
+      "maximum_iterations=0",
       "--report",
       "{out}/route.json"
      ]
@@ -17060,8 +17064,8 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-search-states",
-      "-1",
+      "--unified-set",
+      "maximum_expansions=-1",
       "--report",
       "{out}/route.json"
      ]
@@ -17216,8 +17220,8 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--fine-regions",
-      "bogus",
+      "--unified-set",
+      "fine_regions=bogus",
       "--report",
       "{out}/route.json"
      ],
@@ -17354,15 +17358,17 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-01-valid_board"
     },
     {
      "args": [
@@ -17371,17 +17377,19 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--routing-profile",
       "quick",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-02-valid_board"
     },
     {
      "args": [
@@ -17390,10 +17398,9 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--layers",
       "4",
       "--fab-profile",
@@ -17401,8 +17408,11 @@
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-03-valid_board"
     },
     {
      "args": [
@@ -17411,10 +17421,9 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--layers",
       "6",
       "--fab-profile",
@@ -17422,8 +17431,11 @@
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-04-valid_board"
     },
     {
      "args": [
@@ -17432,17 +17444,19 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
-      "--unified-iterations",
-      "3",
+      "--unified-set",
+      "maximum_iterations=3",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-05-valid_board"
     },
     {
      "args": [
@@ -17451,17 +17465,19 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
-      "--fine-regions",
-      "off",
+      "--unified-set",
+      "fine_regions=off",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-06-valid_board"
     },
     {
      "args": [
@@ -17470,17 +17486,19 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--unified-pitch-mm",
       "0.5",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-07-valid_board"
     },
     {
      "args": [
@@ -17489,16 +17507,19 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
-      "--no-route-smoothing",
+      "--unified-set",
+      "route_smoothing=false",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-08-valid_board"
     },
     {
      "args": [
@@ -17507,16 +17528,18 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--require-verified-intent",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-09-valid_board"
     },
     {
      "args": [
@@ -17525,17 +17548,19 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--unified-set",
       "buses_first=true",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-10-valid_board"
     },
     {
      "args": [
@@ -17544,17 +17569,19 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--unified-save-inputs",
       "{out}/unified.state.json",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-11-valid_board"
     },
     {
      "args": [
@@ -17563,17 +17590,19 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--stop-after",
       "placement",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-12-valid_board"
     },
     {
      "args": [
@@ -17582,10 +17611,9 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--candidates",
       "2",
       "--placement-candidate",
@@ -17593,8 +17621,11 @@
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
-     ]
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
+     ],
+     "id": "route-board-direct/case-13-valid_board"
     },
     {
      "args": [
@@ -17603,20 +17634,22 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--progress",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
      ],
      "compare": [
       "exit",
       "files"
-     ]
+     ],
+     "id": "route-board-direct/case-14-valid_board"
     },
     {
      "args": [
@@ -17624,14 +17657,15 @@
       "examples/round_led_ring/board.copper",
       "--locked",
       "--offline",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
      ]
     },
     {
@@ -17640,14 +17674,15 @@
       "examples/mechanical_outline/board.copper",
       "--locked",
       "--offline",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
      ]
     },
     {
@@ -17658,12 +17693,12 @@
       "--offline",
       "--allow-proxy-footprints",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
      ]
     },
     {
@@ -17674,14 +17709,14 @@
       "--offline",
       "--allow-proxy-footprints",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--layers",
       "4",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
      ]
     },
     {
@@ -17691,12 +17726,12 @@
       "--locked",
       "--offline",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
      ]
     },
     {
@@ -17720,7 +17755,8 @@
       "--locked",
       "--offline",
       "--allow-proxy-footprints",
-      "--unified-direct",
+      "--unified-set",
+      "direct=true",
       "--no-fanout",
       "-o",
       "{out}/routed.kicad_pcb",
@@ -17771,14 +17807,15 @@
     "{physical}",
     "--candidates",
     "1",
-    "--unified-direct",
+    "--unified-set",
+    "direct=true",
     "--no-fanout",
-    "--congestion-feedback-trials",
-    "0",
     "-o",
     "{out}/routed.kicad_pcb",
     "--report",
-    "{out}/route.json"
+    "{out}/route.json",
+    "--congestion-feedback-trials",
+    "0"
    ]
   },
   {
@@ -17794,12 +17831,12 @@
     "--candidates",
     "1",
     "--no-fanout",
-    "--congestion-feedback-trials",
-    "0",
     "-o",
     "{out}/routed.kicad_pcb",
     "--report",
-    "{out}/route.json"
+    "{out}/route.json",
+    "--congestion-feedback-trials",
+    "0"
    ]
   },
   {
@@ -17815,14 +17852,14 @@
     "--candidates",
     "1",
     "--no-fanout",
-    "--congestion-feedback-trials",
-    "0",
     "--unified-save-inputs",
     "{out}/unified.state.json",
     "-o",
     "{out}/routed.kicad_pcb",
     "--report",
-    "{out}/route.json"
+    "{out}/route.json",
+    "--congestion-feedback-trials",
+    "0"
    ],
    "compare": [
     "exit",
@@ -17844,12 +17881,12 @@
     "{physical}",
     "--candidates",
     "1",
-    "--congestion-feedback-trials",
-    "0",
     "-o",
     "{out}/routed.kicad_pcb",
     "--report",
-    "{out}/route.json"
+    "{out}/route.json",
+    "--congestion-feedback-trials",
+    "0"
    ]
   },
   {
@@ -17894,8 +17931,6 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--verify-plane-fill",
       "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli.sh",
       "--native-evidence-directory",
@@ -17903,7 +17938,9 @@
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
      ]
     },
     {
@@ -18105,8 +18142,6 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--verify-plane-fill",
       "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli-zone-open.sh",
       "--native-evidence-directory",
@@ -18114,7 +18149,9 @@
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
      ]
     },
     {
@@ -18131,8 +18168,6 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--verify-plane-fill",
       "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli-zone-open-always.sh",
       "--native-evidence-directory",
@@ -18140,7 +18175,9 @@
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
      ]
     },
     {
@@ -18157,8 +18194,6 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--verify-plane-fill",
       "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli-dangling.sh",
       "--native-evidence-directory",
@@ -18166,7 +18201,9 @@
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
      ]
     },
     {
@@ -18183,8 +18220,6 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--congestion-feedback-trials",
-      "0",
       "--verify-plane-fill",
       "{root}/tests/rust-port/routing/kicad-cli/fake-kicad-cli-zone-open-dangling.sh",
       "--native-evidence-directory",
@@ -18192,7 +18227,9 @@
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "0"
      ]
     },
     {
@@ -18262,12 +18299,12 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--unified-iterations",
-      "1",
+      "--unified-set",
+      "maximum_iterations=1",
       "--locked",
       "--offline",
-      "--unified-search-states",
-      "200",
+      "--unified-set",
+      "maximum_expansions=200",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
@@ -18283,12 +18320,12 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--unified-iterations",
-      "1",
+      "--unified-set",
+      "maximum_iterations=1",
       "--locked",
       "--offline",
-      "--unified-search-states",
-      "100",
+      "--unified-set",
+      "maximum_expansions=100",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
@@ -18304,12 +18341,12 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--unified-iterations",
-      "1",
+      "--unified-set",
+      "maximum_iterations=1",
       "--locked",
       "--offline",
-      "--unified-search-states",
-      "300",
+      "--unified-set",
+      "maximum_expansions=300",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
@@ -18325,18 +18362,18 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--unified-iterations",
-      "1",
+      "--unified-set",
+      "maximum_iterations=1",
       "--locked",
       "--offline",
-      "--unified-search-states",
-      "300",
-      "--congestion-feedback-trials",
-      "2",
+      "--unified-set",
+      "maximum_expansions=300",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
-      "{out}/route.json"
+      "{out}/route.json",
+      "--congestion-feedback-trials",
+      "2"
      ]
     },
     {
@@ -18351,12 +18388,12 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--unified-iterations",
-      "1",
+      "--unified-set",
+      "maximum_iterations=1",
       "--locked",
       "--offline",
-      "--unified-search-states",
-      "200",
+      "--unified-set",
+      "maximum_expansions=200",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
@@ -18371,12 +18408,12 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--unified-iterations",
-      "1",
+      "--unified-set",
+      "maximum_iterations=1",
       "--locked",
       "--offline",
-      "--unified-search-states",
-      "100",
+      "--unified-set",
+      "maximum_expansions=100",
       "-o",
       "{out}/routed.kicad_pcb",
       "--report",
@@ -18406,12 +18443,12 @@
       "--candidates",
       "1",
       "--no-fanout",
-      "--unified-iterations",
-      "1",
+      "--unified-set",
+      "maximum_iterations=1",
       "--locked",
       "--offline",
-      "--unified-search-states",
-      "300",
+      "--unified-set",
+      "maximum_expansions=300",
       "--unified-save-inputs",
       "{out}/unified.state.json",
       "-o",
@@ -19719,14 +19756,14 @@
     {
      "args": [
       "explain",
-      "PAR٣"
+      "PAR\u00d9\u00a3"
      ],
      "id": "explain/arabic-digit"
     },
     {
      "args": [
       "explain",
-      "PAR٣",
+      "PAR\u00d9\u00a3",
       "--json"
      ],
      "id": "explain/arabic-digit-json"
@@ -19734,14 +19771,14 @@
     {
      "args": [
       "explain",
-      "ß"
+      "\u00c3\u0178"
      ],
      "id": "explain/sharp-s"
     },
     {
      "args": [
       "explain",
-      "ß",
+      "\u00c3\u0178",
       "--json"
      ],
      "id": "explain/sharp-s-json"
@@ -24790,6 +24827,116 @@
    "args": [
     "replay-critical",
     "{input}"
+   ]
+  },
+  {
+   "name": "route-board-retired-options",
+   "milestone": "M4",
+   "cases": [
+    {
+     "id": "route-board-retired-options/unified-direct",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--unified-direct"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/unified-no-decouplers",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--unified-no-decouplers"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/unified-retain-escape-copper",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--unified-retain-escape-copper"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/unified-iterations",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--unified-iterations"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/unified-search-states",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--unified-search-states"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/unified-pair-states",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--unified-pair-states"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/fine-regions",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--fine-regions"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/power-islands",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--power-islands"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/no-route-smoothing",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--no-route-smoothing"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/stitch-zone-pads",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--stitch-zone-pads"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/detailed-feedback-trials",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--detailed-feedback-trials"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/critical-feedback-trials",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--critical-feedback-trials"
+     ]
+    },
+    {
+     "id": "route-board-retired-options/pitch-mm",
+     "args": [
+      "route-board",
+      "missing.copper",
+      "--pitch-mm"
+     ]
+    }
    ]
   }
  ]

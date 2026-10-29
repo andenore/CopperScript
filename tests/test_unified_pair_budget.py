@@ -12,7 +12,7 @@ def _board():
         (Placement("A","one",Point.mm(3,6)),Placement("B","one",Point.mm(17,6))),
         (PhysicalNet("S",(PadReference("A","1"),PadReference("B","1"))),))
 
-# (--unified-pair-states, the stage bound route-board passes from
+# (--unified-set critical_pair_state_limit=N, the stage bound route-board passes from
 # --package-initial-pair-states, the bound route_critical_nets receives).
 @pytest.mark.parametrize("limit,stage,expected", (
     (None, 6000, 6000), (16000, 6000, 16000), (None, 1, 1), (None, 0, None)))

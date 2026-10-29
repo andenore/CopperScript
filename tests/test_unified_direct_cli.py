@@ -44,14 +44,14 @@ def test_direct_cli_has_no_legacy_contact_or_native_repair_routing(tmp_path, mon
         return actual_verify(*args, **kwargs)
     monkeypatch.setattr(cli, "improve_filled_copper", verify_only)
     report = tmp_path / "route.json"
-    code = cli.main(["route-board", str(source), "--footprint-root", str(library.parent),
-        "--unified-direct", "--unified-time-budget-s", "10",
-        "--unified-search-states", str(search_states),
-        "--unified-save-inputs", str(tmp_path / "inputs.state.json"),
-        "--checkpoint-dir", str(tmp_path / "checkpoint"),
-        "--candidates", "1", "--feedback-iterations", "1", "--router-iterations", "1",
-        "--verify-plane-fill", str(tmp_path / "missing-kicad.exe"),
-        "--report", str(report), "-o", str(tmp_path / "board.kicad_pcb")])
+    code = cli.main([
+        "route-board", str(source), "--footprint-root", str(library.parent), "--unified-set", "direct=true",
+        "--unified-time-budget-s", "10", "--unified-set", f'maximum_expansions={str(search_states)}',
+        "--unified-save-inputs", str(tmp_path / 'inputs.state.json'), "--checkpoint-dir",
+        str(tmp_path / 'checkpoint'), "--candidates", "1", "--feedback-iterations", "1", "--router-iterations",
+        "1", "--verify-plane-fill", str(tmp_path / 'missing-kicad.exe'), "--report", str(report), "-o",
+        str(tmp_path / 'board.kicad_pcb'),
+    ])
     assert code != 0  # A missing verifier remains a failure, never a routing success.
     data = json.loads(report.read_text())
     assert observed == [0]

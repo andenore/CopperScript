@@ -65,7 +65,7 @@ def main(argv=None):
         args.output_dir.mkdir(parents=True,exist_ok=True)
         command = ["route-board",str(SOURCE),"--locked","--width-mm","50","--height-mm","40",
             "--layers","6","--fab-profile","jlcpcb-six-layer",
-            "--pitch-mm","0.5","--fanout",
+            "--fanout",
             "--plane-contact-radius-mm","5","--early-plane-stitch","--progress",
             "--report",str(args.output_dir / "route-report.json"),
             "-o",str(args.output_dir / "nrf52-coin-cell.kicad_pcb")]

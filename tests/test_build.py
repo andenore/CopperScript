@@ -25,8 +25,8 @@ def test_shared_route_defaults_auto_select_placement_without_make():
     assert args.placement_candidate is None
     assert args.fanout
     # The shared recipe passes no removed router flag.
-    from pcbir.cli import _unified_flag_notes
-    assert _unified_flag_notes(args)["ignored_flags"] == []
+    from pcbir.route_options import retired_option_error
+    assert retired_option_error(options) is None
 
 
 def evidence(output):
@@ -228,7 +228,7 @@ def test_shared_make_routes_use_generic_runner_and_exact_settings(make, example,
         assert args.hard_macro == []
         assert args.candidates == 3
         assert args.placement_candidate == "candidate-00"
-        assert args.zone_dependency_expansions == 2 and args.critical_feedback_trials == 0
+        assert args.zone_dependency_expansions == 2 and args.congestion_feedback_trials == 4
     if example == "nrf52":
         assert args.hard_macro == []
 
