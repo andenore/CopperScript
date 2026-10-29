@@ -1605,8 +1605,10 @@ constraint length_match(CSI_SRC_CKP, CSI_SRC_CKN, CSI_SRC_DA0P, CSI_SRC_DA0N) {
   (not pins), each existing net may belong to only one group, and
   `max_skew` (a positive length) is the only parameter besides the ownership
   metadata. A group without `id` is named `length_match:<index>`. A member's
-  length is its total routed track length (via barrels are not counted) and
-  the group skew is the longest minus the shortest member. Once every member
+  length is its total routed track length plus, for each of its vias, the
+  depth between the outermost copper layers its tracks end on there (from the
+  declared stack-up, else the layers spread evenly over the board thickness),
+  and the group skew is the longest minus the shortest member. Once every member
   net is connected, a skew above `max_skew` is the DRC review warning
   `DRC-LENGTH-MATCH` (requirement verification fails it); before that the
   group is reported as incomplete. The

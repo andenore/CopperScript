@@ -430,10 +430,13 @@ def test_planned_crossings_are_deterministic() -> None:
 
 
 def test_a_length_match_group_with_a_crossing_pair_is_tuned() -> None:
+    # The crossing pair's two via paths to In2.Cu (about 1.07 mm each on this
+    # evenly spread 1.6 mm board) count toward its length, so the straight
+    # pair needs about 2.4 mm: taller bumps than the crossing alone needs.
     board = _shared_reference(_swapped())
     nets = tuple(net.name for net in board.nets if net.name != "GND")
     board = replace(board, match_groups=(NetMatchGroup("lanes", nets, nm_from_mm("0.1")),),
-                    net_routing_rules=tuple(replace(rule, tuning_amplitude_limit_nm=nm_from_mm("0.8"))
+                    net_routing_rules=tuple(replace(rule, tuning_amplitude_limit_nm=nm_from_mm("1.2"))
                                             for rule in board.net_routing_rules))
     result = route_critical_nets(board, route_global(board))
     (tuning,) = result.match_tuning

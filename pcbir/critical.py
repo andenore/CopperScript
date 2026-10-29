@@ -1021,8 +1021,9 @@ def _tune_match_groups(
         after = dict(lengths)
         if trial is not None:
             copper = (*base_tracks, *(t for _, items, _ in trial for t in items))
+            via_paths = _via_lengths(current, current.tracks, current.vias, group.nets)
             for net in group.nets:
-                after[net] = _track_length(tuple(t for t in copper if t.net == net))
+                after[net] = _track_length(tuple(t for t in copper if t.net == net)) + via_paths[net]
             spread = max(after.values()) - min(after.values())
             if spread > group.max_skew_nm:
                 trial, after, reason = None, dict(lengths), f"skew is still {spread} nm after tuning"
@@ -1157,7 +1158,9 @@ def _tune_bundle_pairs(
     """
     members = set(group.nets)
     copper = (*base_tracks, *(t for _, items, _ in committed for t in items))
-    lengths = {net: _track_length(tuple(t for t in copper if t.net == net))
+    via_paths = _via_lengths(board, copper, (*base_vias, *(v for _, _, items in committed for v in items)),
+                        group.nets)
+    lengths = {net: _track_length(tuple(t for t in copper if t.net == net)) + via_paths[net]
                for net in group.nets if any(t.net == net for t in copper)}
     longest = max(lengths.values())
     breakout = BreakoutRegions(board)
@@ -1187,7 +1190,8 @@ def _tune_bundle_pairs(
             as_routed.setdefault(unit, (items, results[result_index[unit]]))
             committed[index] = (unit, proposed[index], unit_vias)
             results[result_index[unit]] = candidates[unit]
-            lengths.update(zip(candidates[unit].nets, candidates[unit].lengths_nm))
+            lengths.update((net, length + via_paths.get(net, 0))
+                           for net, length in zip(candidates[unit].nets, candidates[unit].lengths_nm))
         early.append(MatchTuningUnit(key, "routing", plan.style, added, plan.bumps, plan.legs,
                                      plan.amplitudes_nm, name, plan.lanes))
         if group_failures is not None:
@@ -1210,7 +1214,8 @@ def _tune_bundle_pairs(
         as_routed.setdefault(unit, (items, results[result_index[unit]]))
         committed[index] = (unit, proposed, committed[index][2])
         results[result_index[unit]] = candidate
-        lengths.update(zip(candidate.nets, candidate.lengths_nm))
+        lengths.update((net, length + via_paths.get(net, 0))
+                       for net, length in zip(candidate.nets, candidate.lengths_nm))
         early.append(MatchTuningUnit(unit, "routing", plan.style, added, plan.bumps, plan.legs,
                                      plan.amplitudes_nm))
         changed = True
@@ -1254,6 +1259,8 @@ def _tune_match_group(
     attempts: dict[str, TuningGroupOutcome] = {}
     breakout = BreakoutRegions(board)
     lengths = dict(lengths)
+    via_paths = _via_lengths(board, (*base_tracks, *(t for _, items, _ in committed for t in items)),
+                        (*base_vias, *(v for _, _, items in committed for v in items)), nets)
     for name, group_units in _tuning_groups(rules, nets).items():
         positions = [index for index in units if trial[index][0] in group_units]
         key = tuple(net for unit in group_units for net in unit)
@@ -1270,7 +1277,8 @@ def _tune_match_group(
             unit = trial[index][0]
             trial[index] = (unit, proposed[index], trial[index][2])
             tuned[unit] = candidates[unit]
-            lengths.update(zip(candidates[unit].nets, candidates[unit].lengths_nm))
+            lengths.update((net, length + via_paths.get(net, 0))
+                           for net, length in zip(candidates[unit].nets, candidates[unit].lengths_nm))
         steps.append(MatchTuningUnit(key, "final", plan.style, added, plan.bumps, plan.legs, plan.amplitudes_nm,
                                      name, plan.lanes))
         attempts[name] = TuningGroupOutcome(name, key, "tuned")
@@ -3359,6 +3367,17 @@ def _external_assumptions(rule: NetRoutingRule) -> tuple[str, ...]:
 
 def _external_evidence(rule: NetRoutingRule) -> tuple[str, ...]:
     return (rule.impedance_evidence_digest,) if rule.impedance_evidence_digest else ()
+
+
+def _via_lengths(board: PhysicalBoard, tracks, vias, nets) -> dict[str, int]:
+    """Each net's via path length in ``tracks``/``vias`` (``via_length_nm``).
+
+    Tuning never moves vias, so a ``length_match`` member's length is its
+    track length plus this constant.
+    """
+    from .signal_integrity import via_length_nm
+    view = replace(board, tracks=tuple(tracks), vias=tuple(vias))
+    return {net: via_length_nm(view, net) for net in nets}
 
 
 def _track_length(tracks: tuple[TrackSegment, ...]) -> int:
