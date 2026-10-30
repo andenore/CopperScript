@@ -179,6 +179,8 @@ jobs:
         if: always()
         run: |
           if [ -f build/bench/results.md ]; then cat build/bench/results.md >> "$GITHUB_STEP_SUMMARY"; fi
+          # The full results, for refreshing bench/ladder-baseline.json from the log.
+          if [ -f build/bench/results.json ]; then echo "LADDER-RESULTS $(jq -c . build/bench/results.json)"; fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
