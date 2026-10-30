@@ -1371,10 +1371,9 @@ Python-written checkpoints is not needed.
   `Stage::Placement` / `Stage::CriticalInputs`. Congestion-feedback trials
   observe nothing, as in Python. `critical.rs` decodes placement checkpoints
   with the shared `iteration_checkpoints::placement_result`.
-- **Rust-only verification (scope change).** The parent session relayed a
-  change from the user: no Python comparison for this stream. So there are
-  no corpus cases, no harness `setup` step, and neither the default gate nor
-  the route-board*/replay-* suites were run. The board and options digests
+- **Rust-only verification (D8).** This stream compares nothing with Python,
+  so there are no corpus cases and no harness `setup` step, and neither the
+  default gate nor the route-board*/replay-* suites were run. The board and options digests
   follow Python's definitions, but their parity is not proven.
   `crates/copper/tests/route_board_checkpoints.rs` runs the binary on
   `examples/valid_board` (proxy footprints) and covers:
