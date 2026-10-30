@@ -1276,3 +1276,41 @@ time, absent on the older boards) and the `report_sha256` of `route.json` in
 copper after a keepout release (`rebind_bypass_keepout_removal`)". A routing
 error the rewrite does not name (e.g. a package-cache miss, PKG011, before
 routing) also exits 3 where Python writes its error record.
+
+### Bypass keepout rebind and preparation error classes (`rust-bypass-rebind`, 2026-10-30)
+
+- **`rebind_bypass_keepout_removal`** is ported
+  (`bypass_reservations.rs`). The critical retry after an ordinary-escape
+  keepout release passes the first attempt's inputs and held reservation,
+  so held bypass copper is re-proved on the released board (fresh
+  cross-layer witnesses) instead of exiting 3. `route-board/fx10-bridge`
+  (Python 1319 s, Rust 534 s) and `route-board-fanout-boards/fx10-bridge`
+  (281 s / 107 s) are now equal. `tests/rust-port/route-board/bypass_release.copper`
+  is a small input that reaches the same path: a back-side bypass
+  capacitor plus a surface-only pair that fails past ordinary escape
+  keepouts. It runs in Python in 60 s; it is in `route-board-bga`, with and
+  without feedback trials, and both cases are equal.
+- **Route-board error records** now name the Python class of a preparation
+  failure: `FootprintResolutionError` (the resolver records its last
+  failure, e.g. PKG010/PKG011), `MacroPreparationError` (MAC005; proxy runs
+  used to record `ValueError`), and `ValueError` for physicalization,
+  placement templates and hard-macro scenes. They still exit 3 for a
+  hard-macro acceptance failure (Python's record carries a diagnostic board)
+  and for an uncaught `CopperScriptError` (a Python crash). There are eight
+  new `route-board-errors` cases, among them `tests/rust-port/route-board/cache_miss`
+  (a locked module missing from the cache, `--offline`). The new macro input
+  `macros/net_mapping.copper` joins `export-kicad-pcb-macros`; its mutation
+  `#m2` is the known unknown-part crash (D-0113).
+- Unchanged: a `PlacementAlgorithmError` under `--report` still records
+  `ValueError`. Python's record also carries a diagnostic board and
+  components, so the fix is not a one-liner.
+
+Next: `--checkpoint-dir` and `--reuse-placement` still exit 3. The user has
+decided that the Python CLI will be retired with a new major version, so
+these should be designed for Rust rather than to match Python's files. In
+Python, `code_digest()` (SHA-256 of `pcbir/*.py`) never blocks reuse. Reuse
+is decided by the board and options digests only; the code digest just sets
+`code_changed`, a warning that a different implementation made the
+placement. A Rust key should hold the Rust build's own identity (crate
+version plus a source digest made at build time). Compatibility with
+Python-written checkpoints is not needed.
