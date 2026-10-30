@@ -27,6 +27,7 @@ on:
       - 'scripts/ci_install_kicad10.sh'
       - '.github/board-toolchain.json'
       - 'pyproject.toml'
+      - '.gitattributes'
   pull_request:
     paths:
       - '.github/workflows/rust.yml'
@@ -48,6 +49,7 @@ on:
       - 'scripts/ci_install_kicad10.sh'
       - '.github/board-toolchain.json'
       - 'pyproject.toml'
+      - '.gitattributes'
   workflow_dispatch:
 
 permissions:
