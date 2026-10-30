@@ -517,3 +517,23 @@ def test_match_lengths_count_each_via_between_the_layers_its_tracks_use():
     routed = replace(board, tracks=tracks, vias=vias)
     assert via_length_nm(routed, "LANE_A_P") == 2 * nm_from_mm("1.6")
     assert routed_match_length_nm(routed, "LANE_A_P") == nm_from_mm(28) + 2 * nm_from_mm("1.6")
+
+
+def test_blind_and_stacked_vias_count_only_the_layers_they_plate():
+    from pcbir.physical import Stackup, Via
+    from pcbir.signal_integrity import copper_layer_depths_nm, via_length_nm
+
+    # F.Cu -> In1.Cu through a blind via, In1.Cu -> B.Cu through a buried via
+    # stacked on it: the path is the full board depth, not each via's reach
+    # over every layer whose tracks end at that point.
+    front, in1, in2, back = (CopperLayer.FRONT, CopperLayer.INTERNAL_1, CopperLayer.INTERNAL_2,
+                             CopperLayer.BACK)
+    board = replace(_lanes_board(TWO_LANES), stackup=Stackup(copper_layers=(front, in1, in2, back)))
+    depths = copper_layer_depths_nm(board.stackup)
+    tracks = (TrackSegment("LANE_A_P", Point.mm(5, 6), Point.mm(10, 6), WIDTH, front),
+              TrackSegment("LANE_A_P", Point.mm(10, 6), Point.mm(10, "6.3"), WIDTH, in1),
+              TrackSegment("LANE_A_P", Point.mm(10, "6.3"), Point.mm(20, "6.3"), WIDTH, back))
+    vias = (Via("LANE_A_P", Point.mm(10, 6), nm_from_mm("0.6"), nm_from_mm("0.3"), front, in1),
+            Via("LANE_A_P", Point.mm(10, "6.3"), nm_from_mm("0.6"), nm_from_mm("0.3"), in1, back))
+    routed = replace(board, tracks=tracks, vias=vias)
+    assert via_length_nm(routed, "LANE_A_P") == depths[back] - depths[front] == nm_from_mm("1.6")
