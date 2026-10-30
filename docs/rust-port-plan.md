@@ -1331,3 +1331,56 @@ is decided by the board and options digests only; the code digest just sets
 placement. A Rust key should hold the Rust build's own identity (crate
 version plus a source digest made at build time). Compatibility with
 Python-written checkpoints is not needed.
+
+### Rust-native placement checkpoints (`rust-checkpoints`, 2026-10-30)
+
+- `route-board --checkpoint-dir DIR` and `--reuse-placement PATH` no longer
+  exit 3. They are designed for Rust (D7) and recorded in
+  [the differences file](rust-port-differences.md#placement-checkpoints-d7-rust-only-not-compared).
+  - `DIR/placement.state.json` is the `copperscript.state/v1` encoding of the
+    `PlacementRoutingResult`. Its metadata `key` holds Python's
+    `physical_board_digest`, Python's `_options_digest` of the placement,
+    global and feedback options, and `code`, this binary's build identity:
+    `copper VERSION sha256:HEX`, where `crates/copper/build.rs` digests every
+    `crates/**/*.rs` file, LF-normalised.
+  - The same directory receives `critical-inputs.state.json`,
+    `critical-retry-inputs.state.json` (when the critical stage retries) and
+    `final-board.state.json`. `replay-critical` reads both input states,
+    held bypass reservations included.
+  - Reuse is refused with Python's messages and exit 2 for an unreadable
+    path, a file that is not a placement checkpoint, a different board and
+    different options. A different build sets `placement_reuse.code_changed`
+    and the reuse message suffix, and nothing else. The report carries
+    `placement_reuse` (with `final_candidate`) and `checkpoints`. A failed
+    save is recorded and the run continues.
+- The pipeline (`flow::run_routing_pipeline_staged`) gained an initial
+  placement (the `placement_global` `reused` event) and a stage observer,
+  `Stage::Placement` / `Stage::CriticalInputs`. Congestion-feedback trials
+  observe nothing, as in Python. `critical.rs` decodes placement checkpoints
+  with the shared `iteration_checkpoints::placement_result`.
+- **Rust-only verification (scope change).** The parent session relayed a
+  change from the user: no Python comparison for this stream. So there are
+  no corpus cases, no harness `setup` step, and neither the default gate nor
+  the route-board*/replay-* suites were run. The board and options digests
+  follow Python's definitions, but their parity is not proven.
+  `crates/copper/tests/route_board_checkpoints.rs` runs the binary on
+  `examples/valid_board` (proxy footprints) and covers:
+  - writing a checkpoint, the key and the build identity;
+  - Rust reading its checkpoint back to the identical file;
+  - reuse whose report, KiCad board, stdout and critical-input/final-board
+    states equal a fresh run's;
+  - `--stop-after placement` then reuse;
+  - a different build;
+  - every refusal: board, three option kinds, another state file, a
+    non-state file, invalid JSON, a digest mismatch, a missing path and a
+    directory;
+  - a failed save.
+
+  By hand, `tests/rust-port/route-board/bypass_release.copper` (held bypass
+  copper and a critical retry, with feedback trials) gave identical output
+  from a fresh run and a reuse run.
+- Checks: `cargo fmt --all --check`, clippy with `-D warnings` on Linux and
+  `x86_64-pc-windows-gnu`, and `cargo test --workspace --release`. Nothing
+  in `pcbir/` changed.
+- Not done: a placement checkpoint carrying package patterns (support-pattern
+  trials) is still not implemented, and `--debug` is unchanged.

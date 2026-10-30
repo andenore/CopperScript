@@ -495,6 +495,7 @@ pub fn critical_return_plane_options(
 
 /// `_route_critical_stage` without escape or bypass reservations: planar
 /// promotion, then critical routing on the placed board.
+#[allow(clippy::too_many_arguments)]
 fn route_critical_stage(
     placement: &PlacementRoutingResult,
     unified_options: &UnifiedRouterOptions,
@@ -970,7 +971,9 @@ pub fn run_routing_pipeline_staged(
     let placement = if let Some(placement) = options.initial_placement.take() {
         let names = |board: &PhysicalBoard| board.nets.iter().map(|net| net.name.clone()).collect::<IndexSet<_>>();
         let (saved, current) = (names(&placement.board), names(&board));
-        if placement.board.name != board.name || saved.len() != current.len() || !saved.iter().all(|n| current.contains(n))
+        if placement.board.name != board.name
+            || saved.len() != current.len()
+            || !saved.iter().all(|n| current.contains(n))
         {
             return Err(Error::Value("the supplied placement belongs to a different board".to_owned()));
         }

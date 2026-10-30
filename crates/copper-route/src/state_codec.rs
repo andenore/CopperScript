@@ -4204,7 +4204,10 @@ fn e_decoupling_link(link: &DecouplingLink) -> StateValue {
 fn e_copper_path(path: &crate::decoupling_paths::DecouplingCopperPath) -> StateValue {
     use crate::decoupling_paths::{DecouplingPathNode, PathEdge};
     let node = |n: &DecouplingPathNode| {
-        dc("pcbir.decoupling_paths:DecouplingPathNode", vec![("position", e_point(&n.position)), ("layer", e_layer(&n.layer))])
+        dc(
+            "pcbir.decoupling_paths:DecouplingPathNode",
+            vec![("position", e_point(&n.position)), ("layer", e_layer(&n.layer))],
+        )
     };
     dc(
         "pcbir.decoupling_paths:DecouplingCopperPath",

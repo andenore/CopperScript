@@ -999,9 +999,8 @@ fn route(
     let mut checkpoints = Object::new();
     let result = (|| -> Result<Finished, Stop> {
         let mut progress: Option<&mut dyn Progress> = tracker.as_mut().map(|tracker| tracker as &mut dyn Progress);
-        let key = (checkpoint_dir.is_some() || reuse_path.is_some()).then(|| {
-            placement_key(&board, &placement_options, &router_options, &feedback_options, BUILD_IDENTITY)
-        });
+        let key = (checkpoint_dir.is_some() || reuse_path.is_some())
+            .then(|| placement_key(&board, &placement_options, &router_options, &feedback_options, BUILD_IDENTITY));
         let mut initial_placement = None;
         let mut placement_reuse: Option<PlacementReuse> = None;
         if let (Some(path), Some(key)) = (&reuse_path, &key) {
@@ -1086,7 +1085,6 @@ fn route(
             None => None,
         };
         let staged = run_routing_pipeline_staged(board, pipeline, reborrow, Some(&mut on_stage));
-        drop(on_stage);
         let result = staged.map_err(|error| match error {
             // A rejected array site is a `ViaArrayPlacementError` carrying its
             // diagnostic board, which this rewrite's error record does not write.
@@ -1196,7 +1194,8 @@ fn save_state_file(path: &Path, text: &str) -> std::result::Result<(), (&'static
     {
         return Err((class(&error), paths::python_os_call_error(&error, Some(&paths::display(parent)))));
     }
-    text::write_text(path, text).map_err(|error| (class(&error), paths::python_os_error(&error, Some(&paths::display(path)))))
+    text::write_text(path, text)
+        .map_err(|error| (class(&error), paths::python_os_error(&error, Some(&paths::display(path)))))
 }
 
 fn pads_value(pads: &[PadReference]) -> Value {

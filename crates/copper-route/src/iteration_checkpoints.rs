@@ -23,10 +23,10 @@ use copper_place::PlannerOptions;
 use copper_state::{StateDocument, StateError, StateValue};
 use sha2::{Digest, Sha256};
 
+use crate::Result;
 use crate::progress::Progress;
 use crate::routeflow::{FeedbackIteration, FeedbackStatus, PlacementRoutingFeedbackOptions, PlacementRoutingResult};
 use crate::routing::GlobalRouterOptions;
-use crate::Result;
 
 pub const ERROR_SCHEMA: &str = "copperscript-route-error/v1";
 

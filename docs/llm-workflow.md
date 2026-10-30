@@ -72,11 +72,13 @@ final native verification, and never passes; its open nets read "run stopped
 after ...". `copper issues` shows the stop in its header.
 
 `--checkpoint-dir DIR` saves `DIR/placement.state.json`, keyed on the physical
-board, the placement/global/feedback options and the compiler code. A failed save is reported and the run continues.
+board, the placement/global/feedback options and the build identity of the
+`copper` binary that wrote it (its version and a digest of its sources). A failed save is reported and the run continues.
 `--reuse-placement` refuses a checkpoint whose board or options differ; a
-compiler change is allowed (that is the point of holding placement fixed) and
-recorded as `placement_reuse.code_changed` in the report. Rerun placement
-before signoff whenever placement code or inputs changed.
+checkpoint from a different `copper` build is allowed (that is the point of
+holding placement fixed), and the report records it as `placement_reuse.code_changed`. Rerun placement
+before signoff whenever placement code or inputs changed. A checkpoint
+written by the retired Python CLI always counts as a different build.
 
 The same directory also receives `critical-inputs.state.json` (and
 `critical-retry-inputs.state.json` when the critical stage retries) with the
