@@ -21,6 +21,8 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | unified_nested_routing | 13 | 13 | 0 | 0 | `tests/unified_nested_routing.rs` (12), `src/unified_router/tests.rs` (1) |
 | route_path_geometry | 13 | 0 | 13 | 0 | none |
 | corridor_reservation | 13 | 13 | 0 | 0 | `crates/copper-place/tests/corridor_reservation.rs` (12), `crates/copper/tests/corridor_cli.rs` (1) |
+| unified_commit_index | 12 | 10 | 2 | 0 | `tests/unified_commit_index.rs` (10) |
+| placement_global_progress | 11 | 3 | 8 | 0 | `tests/placement_global_progress.rs` (3) |
 | routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
 ## Notes per file
@@ -150,9 +152,35 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 - Owned by `copper-place`/`copper-drc`. Python's `reserved_corridors(...).skipped`
   is `copper_drc::legality::corridor_reservation`'s second value.
 
+### unified_commit_index
+- **Rust bug fixed:** `Router::new` accepted any clearance index. Python's
+  `_Router` refused a shared index that does not hold exactly its board's
+  copper (`_index_holds`); the Rust router now checks the same
+  (`router::index_holds`, `same_but_copper`).
+- Skipped: `test_hold_rips_nets_out_and_answers_as_a_fresh_index` and
+  `test_shared_index_ends_holding_the_returned_copper` test the private
+  `_SharedIndex` (`Shared` in `route.rs`) directly / through a patched
+  subclass; the shared-vs-fresh result tests cover its behaviour.
+- Adapted: the index build/removal counters of
+  `test_repair_on_the_shared_index_commits_the_same_copper` are dropped.
+
+### placement_global_progress
+- Skipped (monkeypatched routing internals to record call order or force
+  outcomes): `test_iteration_limit_improvement_and_layer_assignment_do_not_add_work`,
+  `test_interrupt_never_invents_a_finished_stage`,
+  `test_callback_exception_propagates_before_unstarted_work`,
+  `test_routeflow_reports_existing_seed_failure_without_extra_attempts`,
+  `test_fatal_fixed_source_placement_keeps_original_error_without_retry_or_finish`,
+  `test_routeflow_keeps_candidate_trials_and_final_certification_in_order`,
+  `test_zero_global_feedback_budget_skips_proposals_but_retains_failed_certification`;
+  `test_nested_progress_aggregation_keeps_one_pipeline_count_and_inclusive_spans`
+  needs `routing_benchmark.summarize_run`, which is not ported.
+- Adapted: the call-order half of
+  `test_global_real_result_and_work_order_are_identical_with_callback` is dropped.
+
 ## Remaining files (in order)
 
-unified_commit_index, placement_global_progress, routing_lattice,
+routing_lattice,
 congestion_feedback_flow, unified_router_options, unified_congestion_export,
 unified_search_costs, unified_review_constraints, routing_clearance_remove,
 global_target_via_cost, global_search_static_cache, routing_acceptance,
