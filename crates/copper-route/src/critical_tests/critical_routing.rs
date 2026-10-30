@@ -269,8 +269,7 @@ fn joint_search_is_bounded_fail_closed_and_does_not_mutate_input() {
     let snapshot = board.clone();
     let mut stats = PairSearchStats::default();
     let mut found = 0;
-    let bounds =
-        SearchBounds { maximum_searches: 2, maximum_states: 12, pitch_nm: 500_000, maximum_total_states: None };
+    let bounds = SearchBounds { maximum_searches: 2, maximum_states: 12, pitch_nm: MM, maximum_total_states: None };
     let rules = &board.net_routing_rules;
     paired_candidates(
         &board,

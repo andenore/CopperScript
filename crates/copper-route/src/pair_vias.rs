@@ -153,7 +153,7 @@ fn reserve_vias(board: &PhysicalBoard, index: &mut RoutingClearanceIndex<'_>, vi
 }
 
 /// `_signal_drills_outside_smd`: no open signal drill in a solderable SMD land of its net.
-fn signal_drills_outside_smd(board: &PhysicalBoard, pair: &[Via]) -> Result<bool> {
+pub(crate) fn signal_drills_outside_smd(board: &PhysicalBoard, pair: &[Via]) -> Result<bool> {
     let mut assigned: IndexMap<PadReference, &str> = IndexMap::new();
     for net in &board.nets {
         for pad in &net.pads {
@@ -886,7 +886,7 @@ fn facing_turns(first: &Port, second: &Port) -> usize {
 /// `_cramped`: facing ports nearer along their headings than a 45-degree
 /// side step across them, plus a search step out of one port and into the
 /// other, needs; such a pair could only be joined by a loop.
-fn cramped(first: &Port, second: &Port, pitch_nm: i64) -> bool {
+pub(crate) fn cramped(first: &Port, second: &Port, pitch_nm: i64) -> bool {
     if (first.heading + 8 - second.heading) % 8 != 4 {
         return false;
     }

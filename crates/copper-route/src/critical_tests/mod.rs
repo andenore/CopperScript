@@ -5,4 +5,5 @@
 mod critical_bundles;
 mod critical_routing;
 mod local_critical;
+mod pair_vias;
 mod planned_crossings;

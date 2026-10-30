@@ -13,6 +13,7 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_critical_routing.py | 21 | 21 | 0 | 0 | `src/critical_tests/critical_routing.rs`; the three `_tune_pair` cases in `tests/pair_tuning.rs` |
 | test_planned_crossings.py | 17 | 17 | 0 | 0 | `src/critical_tests/planned_crossings.rs` |
 | test_dphy_routing_intent.py | 14 | 14 | 0 | 0 | `crates/copper-drc/tests/dphy_routing_intent.rs` |
+| test_pair_vias.py | 12 | 12 | 0 | 0 | `src/critical_tests/pair_vias.rs` |
 
 ## Notes
 
@@ -69,3 +70,17 @@ dropped because the Python API has no Rust counterpart:
 `normalize_constraints` (constraint ownership report). Python's
 `NetMatchGroup.__post_init__` one-net refusal is checked at the compiler
 (`CMP111`) instead.
+
+### test_pair_vias.py
+
+Adapted (monkeypatched engines):
+- `critical_owner_accepts_via_pair_without_surface_refinement` and
+  `easy_via_pair_is_still_exactly_accepted_with_initial_cap`: the surface
+  engine was patched away; the full-height F.Cu walls already leave only the
+  via route.
+- `aggregate_state_cap_is_shared_across_candidate_calls`: an exhausting
+  `_search` stub recorded per-call budgets; the real search must stay within
+  and keep the shared cap.
+- `critical_limited_tier_samples_both_families_and_all_pitches`: the stubbed
+  per-pitch slices are internal; the aggregate (60 states spent, exhausted,
+  nothing committed) is checked.

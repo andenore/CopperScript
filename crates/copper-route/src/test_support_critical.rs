@@ -336,3 +336,74 @@ pub(crate) fn row_pair_board(
     board.net_routing_rules = rules;
     board
 }
+
+/// `Via(net, position, size, drill)`: a standard F.Cu-B.Cu through via.
+pub(crate) fn through_via(net: &str, position: Point, size_nm: i64, drill_nm: i64) -> copper_pcb::board::Via {
+    copper_pcb::board::Via {
+        net: net.to_owned(),
+        position,
+        size_nm,
+        drill_nm,
+        from_layer: CopperLayer::Front,
+        to_layer: CopperLayer::Back,
+        technology: None,
+        finish: "standard".to_owned(),
+    }
+}
+
+/// The joint searches' default bounds (`maximum_searches=8`,
+/// `maximum_states=30_000`, `pitch_nm=1 mm`, no aggregate cap).
+pub(crate) fn search_bounds() -> crate::pair_search::SearchBounds {
+    crate::pair_search::SearchBounds {
+        maximum_searches: 8,
+        maximum_states: 30_000,
+        pitch_nm: MM,
+        maximum_total_states: None,
+    }
+}
+
+/// Every candidate of `paired_via_candidates` (`via = true`) or
+/// `paired_candidates`, at most `limit`.
+pub(crate) fn pair_candidates(
+    board: &PhysicalBoard,
+    routes: &IndexMap<String, crate::routing::GlobalNetRoute>,
+    (first, second): (&str, &str),
+    via: bool,
+    bounds: crate::pair_search::SearchBounds,
+    stats: &mut crate::pair_search::PairSearchStats,
+    limit: usize,
+) -> crate::Result<Vec<crate::pair_search::PairSearchCandidate>> {
+    let rule = |net: &str| board.net_routing_rules.iter().find(|r| r.net == net).expect("a pair rule").clone();
+    let (first_rule, second_rule) = (rule(first), rule(second));
+    let mut found = Vec::new();
+    let mut accept = |candidate, _: &mut crate::pair_search::PairSearchStats| {
+        found.push(candidate);
+        Ok(found.len() >= limit)
+    };
+    if via {
+        crate::pair_vias::paired_via_candidates(
+            board,
+            &first_rule,
+            &second_rule,
+            &routes[first],
+            &routes[second],
+            bounds,
+            crate::pair_vias::ViaRestriction::default(),
+            stats,
+            &mut accept,
+        )?;
+    } else {
+        crate::pair_search::paired_candidates(
+            board,
+            &first_rule,
+            &second_rule,
+            &routes[first],
+            &routes[second],
+            bounds,
+            None,
+            stats,
+            &mut accept,
+        )?;
+    }
+    Ok(found)
+}
