@@ -56,11 +56,11 @@ fn selected_jobs_keep_all_rules_and_reject_unowned_input_copper() {
     assert_eq!(result.board.net_routing_rules, board.net_routing_rules);
     let mut copper = board.clone();
     copper.tracks = vec![track("CLK", mm(8, 4), mm(30, 4), 250_000, CopperLayer::Front)];
-    let error = route_critical_nets(copper, &global, &options, None).err().expect("unowned copper");
+    let error = route_critical_nets(copper, &global, &options, None).expect_err("unowned copper");
     assert!(error.to_string().contains("no copper except immutable"), "{error}");
     let missing: IndexSet<String> = ["missing".to_owned()].into_iter().collect();
     let options = CriticalOptions { only_nets: Some(&missing), ..CriticalOptions::default() };
-    let error = route_critical_nets(board, &global, &options, None).err().expect("unknown net");
+    let error = route_critical_nets(board, &global, &options, None).expect_err("unknown net");
     assert!(error.to_string().contains("unknown critical nets"), "{error}");
 }
 

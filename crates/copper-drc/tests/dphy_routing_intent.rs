@@ -132,8 +132,7 @@ fn invalid_signal_integrity_properties_fail_with_locations() {
 
 #[test]
 fn breakout_gap_requires_a_pair_gap() {
-    let error =
-        compile("constraint routing(CKP) { breakout_length = 1mm; breakout_gap = 0.1mm; }").err().expect("error");
+    let error = compile("constraint routing(CKP) { breakout_length = 1mm; breakout_gap = 0.1mm; }").expect_err("error");
     assert!(error.message.contains("requires a differential 'pair_gap'"), "{}", error.message);
 }
 
@@ -334,7 +333,7 @@ fn physical_board_rejects_inconsistent_match_groups() {
     }
     // Python's `NetMatchGroup.__post_init__` refused a one-net group; the
     // compiler (`CMP111`) is where Rust enforces it.
-    let error = compile("constraint length_match(CKP) { max_skew = 1mm; }").err().expect("one net");
+    let error = compile("constraint length_match(CKP) { max_skew = 1mm; }").expect_err("one net");
     assert!(error.message.contains("at least two nets"));
 }
 

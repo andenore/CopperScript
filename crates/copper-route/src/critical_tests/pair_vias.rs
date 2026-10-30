@@ -253,8 +253,7 @@ fn aggregate_state_cap_is_shared_across_candidate_calls() {
         assert!(board.tracks.is_empty() && board.vias.is_empty());
         let zero = SearchBounds { maximum_total_states: Some(0), ..search_bounds() };
         let error = pair_candidates(&board, &routes, ("A", "B"), via, zero, &mut PairSearchStats::default(), 1)
-            .err()
-            .expect("zero cap fails");
+            .expect_err("zero cap fails");
         assert!(error.to_string().contains("aggregate"), "{error}");
     }
 }
@@ -289,7 +288,7 @@ fn critical_limited_tier_samples_both_families_and_all_pitches() {
     assert!(result.board.tracks.is_empty() && result.board.vias.is_empty());
     let guides = global_route(&board, crate::routing::GlobalRouterOptions::default().tile_size_nm);
     let zero = CriticalOptions { pair_state_limit: Some(0), ..CriticalOptions::default() };
-    let error = route_critical_nets(board.clone(), &guides, &zero, None).err().expect("zero limit fails");
+    let error = route_critical_nets(board.clone(), &guides, &zero, None).expect_err("zero limit fails");
     assert!(error.to_string().contains("aggregate"), "{error}");
 }
 

@@ -304,8 +304,7 @@ fn joint_search_is_bounded_fail_closed_and_does_not_mutate_input() {
         &mut stats,
         &mut |_, _| Ok(false),
     )
-    .err()
-    .expect("zero bounds fail");
+    .expect_err("zero bounds fail");
     assert!(error.to_string().contains("bounds"), "{error}");
 }
 
