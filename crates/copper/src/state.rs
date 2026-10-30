@@ -1,4 +1,4 @@
-//! `copper state show FILE`: the `state` command of the Python CLI.
+//! `copper state show FILE`: inspect a `copperscript.state` file.
 
 use std::io::{ErrorKind, Write};
 use std::path::Path;
