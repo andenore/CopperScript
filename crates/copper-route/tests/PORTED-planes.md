@@ -25,6 +25,7 @@ test that loops over its cases.
 | test_two_leg_fanout.py | 7 | 0 | 0 | `tests/two_leg_fanout.rs` (5, the parametrized anchor cases loop); `src/test_support_planes.rs` (2: `two_leg_candidates`, `maze_choices`) |
 | test_pad_via_in_pad.py | 7 | 0 (the `PadViaInPadRule(..., "open")` constructor check is a source-lowering check: see notes) | 0 | `tests/pad_via_in_pad.rs` |
 | test_native_routing_clearance.py | 5 | 1: native refill with an installed KiCad CLI/Python (`kicad-cli` not installed) | 0 | `tests/native_routing_clearance.rs` |
+| test_local_pair_branches.py | 6 | 0 | 0 | `tests/local_pair_branches.rs` (parametrized cases loop) |
 
 ## Notes
 
@@ -142,3 +143,8 @@ test that loops over its cases.
   generated `.kicad_dru` (no file is written when there are none, Python's
   empty tuple). The tests live with the other ported routing tests for the
   shared builders.
+
+- `test_local_pair_branches.py`: scenes are in `support_planes/pairs.rs`
+  (`crossed_contacts`, and `pair_board`, the `_pair_board` of
+  `test_critical_routing.py`). The fixture's float land rows are built on an
+  exact quarter-millimetre grid.

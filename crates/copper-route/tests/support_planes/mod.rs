@@ -9,6 +9,7 @@ pub mod decoupling;
 pub mod fanout;
 pub mod groups;
 pub mod lanes;
+pub mod pairs;
 pub mod paths;
 
 use std::collections::BTreeSet;
