@@ -197,6 +197,7 @@ name = "copper-route"
 version = "0.1.0"
 dependencies = [
  "copper-drc",
+ "copper-editor",
  "copper-json",
  "copper-lang",
  "copper-pcb",

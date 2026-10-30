@@ -23,6 +23,8 @@ test that loops over its cases.
 | test_route_closure.py | 8 | 0 | 0 | `tests/route_closure.rs` |
 | test_fanout_access_pressure.py | 6 | 2: the failed-native-gate rollback (`run_physical_drc` monkeypatch: Python internals); pin analysis is observational (`FanoutPinAnalysis` is not modelled in Rust) | 0 | `tests/fanout_access_pressure.rs` |
 | test_two_leg_fanout.py | 7 | 0 | 0 | `tests/two_leg_fanout.rs` (5, the parametrized anchor cases loop); `src/test_support_planes.rs` (2: `two_leg_candidates`, `maze_choices`) |
+| test_pad_via_in_pad.py | 7 | 0 (the `PadViaInPadRule(..., "open")` constructor check is a source-lowering check: see notes) | 0 | `tests/pad_via_in_pad.rs` |
+| test_native_routing_clearance.py | 5 | 1: native refill with an installed KiCad CLI/Python (`kicad-cli` not installed) | 0 | `tests/native_routing_clearance.rs` |
 
 ## Notes
 
@@ -128,3 +130,15 @@ test that loops over its cases.
   (verified anchor, DRC, determinism, budget 1 finds nothing). The
   `pin_analysis` two-leg counts are not modelled. A zero site budget is
   rejected by `FanoutOptions::validated`.
+
+- `test_pad_via_in_pad.py`: the `replace(board, via_in_pad_rules=...)`
+  checks are `copper_pcb::physicalize::revalidate`. Rust's `PadViaInPadRule`
+  has no process field, so the wrong-process case is the `"open"` source
+  case. The editor-digest case uses `copper_editor::overlay` (a
+  `copper-route` dev-dependency); Rust boards have no `zone_fills`.
+
+- `test_native_routing_clearance.py`: `routing_clearance_rules` is private
+  to `copper_pcb::kicad_pcb`; the tests read the net clearance rules from the
+  generated `.kicad_dru` (no file is written when there are none, Python's
+  empty tuple). The tests live with the other ported routing tests for the
+  shared builders.
