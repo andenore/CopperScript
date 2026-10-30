@@ -13,6 +13,7 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 |---|---|---|---|---|---|
 | unified_router | 48 | 46 | 2 | 0 | `tests/unified_router.rs` (36), `src/unified_router/tests.rs` (9), `crates/copper/tests/replay_unified_cli.rs` (1) |
 | escape_plan | 43 | 42 | 1 | 0 | `tests/escape_plan.rs` (41), `src/escape_plan.rs` `tests` (1) |
+| escape_placement | 40 | 33 | 7 | 0 | `crates/copper-place/tests/escape_placement.rs` (32), `crates/copper-place/src/legalize.rs` `tests` (1) |
 
 ## Notes per file
 
@@ -45,9 +46,30 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 - Parametrized cases (`swap_sides`, `rotation`) loop inside one Rust test.
 - `test_closed_tile_diagonals_...` calls the private `_array_flow`: unit test.
 
+### escape_placement
+- Owned by `copper-place`; its tests include `support_routers/boards.rs` (the
+  builders that need no `copper-route`).
+- Skipped (they replaced engine internals with monkeypatched fakes and
+  counted calls; Rust has no injection seam for them):
+  `test_nonimproving_escape_trials_do_not_repeat_complete_geometry`,
+  `test_spreading_rejects_coarse_congestion_regression`,
+  `test_exhausted_large_anchor_pack_retries_independent_close_pair`,
+  `test_impossible_local_placement_bounds_illegal_probes`,
+  `test_joint_search_retains_search_budget_when_lookahead_is_exhausted`,
+  `test_local_domain_keeps_outer_candidates_within_the_probe_budget`,
+  `test_invalid_local_domain_does_not_starve_a_legal_region_grid`.
+- Adapted: cache-size and call-count assertions of
+  `test_pair_cache_matches_fresh_models...` and
+  `test_deficit_single_move_only_revisits_incident_pairs` (now
+  `deficit_after_a_single_move_matches_full_geometry`) are dropped; the
+  results are still compared with fresh models. The random trials use a
+  fixed LCG instead of `random.Random(41)`. `_project_coordinate` (private)
+  is not called by `region_sampling_...`; the profile immutability check is
+  enforced by the type (`Rc`).
+
 ## Remaining files (in order)
 
-escape_placement, routing, routing_clearance_pad_cache,
+ routing, routing_clearance_pad_cache,
 congestion_feedback, routing_quality, escape_assignment,
 unified_nested_routing, route_path_geometry, corridor_reservation,
 unified_commit_index, placement_global_progress, routing_lattice,

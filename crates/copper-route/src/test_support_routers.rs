@@ -2,9 +2,9 @@
 //! crate-private unit tests.
 
 #[path = "../tests/support_routers/mod.rs"]
-mod boards;
+mod support;
 
-pub(crate) use boards::*;
+pub(crate) use support::*;
 
 use copper_pcb::board::{PhysicalBoard, PhysicalNet};
 use indexmap::IndexSet;
