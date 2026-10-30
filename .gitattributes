@@ -8,3 +8,5 @@ examples/packages/**/*.kicad_mod text eol=lf
 *.json text eol=lf
 # Showcase illustration hashes describe exact SVG bytes on every platform.
 site/assets/*.svg text eol=lf
+# The site's logo copies must match the editor's bytes on every platform.
+crates/copper-editor/assets/*.svg text eol=lf

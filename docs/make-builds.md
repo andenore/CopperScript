@@ -67,9 +67,10 @@ Each route gets a fresh `build/<board-name>/runs/<UTC-id>/`; open its
 past evidence. Set `RUN_DIR` to a **new/empty path below project `build/`** if a
 fixed CI destination is needed.
 
-The `route` target runs `bash make/route-build.sh`. It runs `copper check` to
-resolve this board's imports through its nearest manifest (fetching only pinned
-URL dependencies), then routes offline:
+The `route` target runs `bash make/route-build.sh`. It runs `copper check
+--macro-inputs` to resolve this board's imports and physical macro assets
+through its nearest manifest (fetching only pinned URL dependencies; `run.json`
+records the SHA-256 of every macro input the board binds), then routes offline:
 
 1. `copper route-board SOURCE ... --offline --verify-plane-fill KICAD_CLI
    --report RUN/route-report.json -o RUN/board.kicad_pcb`;

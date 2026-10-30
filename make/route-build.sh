@@ -82,22 +82,28 @@ route=("$compiler" route-board "$source_file" "${locked[@]}" --offline --footpri
 fill=("$kicad_cli" pcb drc --refill-zones --save-board --severity-all --format json
   --output "$output/kicad-drc.json" "$output/board.kicad_pcb")
 
-# Resolve this board's imports through its nearest manifest (fetching only
-# pinned dependencies unless offline); routing itself then runs offline.
+# Resolve this board's imports and physical macro assets through its nearest
+# manifest (fetching only pinned dependencies unless offline); routing itself
+# then runs offline. The check lists every macro input for the provenance.
 check_offline=("${offline[@]}")
 [ "$dry_run" = 0 ] || check_offline=(--offline)
-"$compiler" check "$source_file" "${locked[@]}" "${check_offline[@]}" > /dev/null || die "copper check failed for $source_file"
+macro_inputs="$(mktemp)" || die "cannot create a temporary file"
+trap 'rm -f "$macro_inputs"' EXIT
+"$compiler" check "$source_file" "${locked[@]}" "${check_offline[@]}" --macro-inputs "$macro_inputs" > /dev/null ||
+  die "copper check failed for $source_file"
 
 echo "Output: $output"
 quote "${route[@]}"
 quote "${fill[@]}"
 [ "$dry_run" = 0 ] || exit 0
 
-# Project-owned sources and manifests, excluding generated and cache trees;
+# Project-owned sources and manifests, excluding generated and cache trees,
+# plus the macro inputs the source binds and those the options name;
 # external package inventories are authenticated by the committed lock.
 inputs="$(
   {
     echo "$source_file"
+    cat "$macro_inputs"
     find "$project" \( -name build -o -name dist -o -name .git -o -name .copper-cache -o -name target \) -prune -o \
       -type f \( -name '*.copper' -o -name '*.mk' -o -name copper.mod -o -name copper.lock -o -name Makefile \) -print
     for ((i = 0; i < ${#options[@]}; i++)); do
