@@ -388,3 +388,88 @@ mod group_tuning {
         assert!(!drop_group_steps(&[c], &mut committed, &mut results, &index, &mut tuning));
     }
 }
+
+/// `tests/test_breakout_regions.py`: the router entry points under breakout regions.
+mod breakout_regions {
+    use super::support_planes::breakout::Row;
+    use super::support_planes::*;
+    use crate::critical::{route_pair, route_single, validate_candidate};
+    use copper_drc::breakout::BreakoutRegions;
+    use copper_pcb::board::{NetRoutingRule, RouteKind};
+    use indexmap::IndexMap;
+    use std::collections::BTreeSet;
+
+    fn region(regions: &BreakoutRegions, track: &copper_pcb::board::TrackSegment) -> Option<String> {
+        regions.region(&track.net, &[track.start, track.end])
+    }
+
+    #[test]
+    fn a_single_ended_guide_candidate_is_cut_at_the_region_boundary() {
+        let mut board = Row { obstacle: false, ..Row::default() }.build();
+        let clock = NetRoutingRule {
+            kind: RouteKind::Clock,
+            priority: 100,
+            width_nm: Some(nm(0.15)),
+            clearance_nm: Some(nm(0.5)),
+            breakout_length_nm: Some(nm(1.0)),
+            breakout_width_nm: Some(nm(0.12)),
+            breakout_clearance_nm: Some(nm(0.15)),
+            ..rule("LANE_P")
+        };
+        board.net_routing_rules = vec![clock.clone()];
+        let guides = global(&board);
+        let guide = guides.routes.iter().find(|route| route.net == "LANE_P");
+        let (result, tracks, _) = route_single(&board, &clock, guide).unwrap();
+        let regions = BreakoutRegions::new(&board);
+        assert!(result.connected, "{:?}", result.diagnostics);
+        let lands: BTreeSet<Option<String>> = tracks.iter().map(|track| region(&regions, track)).collect();
+        assert_eq!(lands, [Some("pad:U1.3:2".to_owned()), Some("pad:J1.3:2".to_owned()), None].into_iter().collect());
+        for track in &tracks {
+            let expected = if region(&regions, track).is_none() { nm(0.15) } else { nm(0.12) };
+            assert_eq!(track.width_nm, expected, "{track:?}");
+        }
+        let mut routed = board.clone();
+        routed.tracks = tracks;
+        let codes: BTreeSet<String> = copper_drc::run_physical_drc(&routed, copper_drc::Policy::default())
+            .unwrap()
+            .findings
+            .into_iter()
+            .filter(|finding| finding.nets.iter().any(|net| net == "LANE_P"))
+            .map(|finding| finding.code)
+            .collect();
+        assert!(
+            !codes.iter().any(|code| ["DRC-CLEARANCE", "DRC-SHORT", "DRC-TRACK-WIDTH"].contains(&code.as_str())),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn critical_validation_applies_the_region_rules() {
+        let board = Row { obstacle: false, ..Row::default() }.build();
+        let routes: IndexMap<String, crate::routing::GlobalNetRoute> =
+            global(&board).routes.into_iter().map(|route| (route.net.clone(), route)).collect();
+        let (first, second) = (&board.net_routing_rules[0], &board.net_routing_rules[1]);
+        let (proposed, tracks, vias) = route_pair(&board, first, second, &routes, false, &board).unwrap();
+        assert_eq!(proposed.strategy, "aligned_pair");
+        assert!(proposed.connected, "{:?}", proposed.diagnostics);
+        let (accepted, kept, _) =
+            validate_candidate(&board, proposed.clone(), tracks.clone(), vias.clone(), &[], &[], None).unwrap();
+        assert!(accepted.connected, "{:?}", accepted.diagnostics);
+        assert_eq!(kept, tracks);
+        // The same copper is illegal when the clearance applies in the pin field...
+        let plain = Row { obstacle: false, breakout: None, ..Row::default() }.build();
+        let (rejected, kept, _) =
+            validate_candidate(&plain, proposed.clone(), tracks.clone(), vias.clone(), &[], &[], None).unwrap();
+        assert!(!rejected.connected && kept.is_empty());
+        assert!(
+            rejected.diagnostics.iter().any(|message| message.starts_with("DRC-CLEARANCE")),
+            "{:?}",
+            rejected.diagnostics
+        );
+        // ...and in the channel, where it passes the test point 0.3 mm away.
+        let obstructed = Row::default().build();
+        let (rejected, _, _) = validate_candidate(&obstructed, proposed, tracks, vias, &[], &[], None).unwrap();
+        assert!(!rejected.connected);
+        assert!(rejected.diagnostics.iter().any(|message| message.contains("TP1.1")), "{:?}", rejected.diagnostics);
+    }
+}

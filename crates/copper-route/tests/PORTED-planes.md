@@ -16,6 +16,7 @@ test that loops over its cases.
 | test_serpentine_tuning.py | 12 | 0 | 0 | `src/test_support_planes.rs` (7 `UnitTuner` cases); `tests/serpentine_tuning.rs` (5) |
 | test_nested_lattice.py | 12 | 0 | 0 | `tests/nested_lattice.rs` (each case runs on both fixtures; Python's seeded `random` is a fixed LCG) |
 | test_group_tuning.py | 11 | 0 (parts of 2 tests: see notes) | 0 | `tests/group_tuning.rs` (10); `src/test_support_planes.rs` (`drop_group_steps`) |
+| test_breakout_regions.py | 11 | 0 | 0 | `tests/breakout_regions.rs` (9); `src/test_support_planes.rs` (2: `route_single`, `route_pair` + `validate_candidate`) |
 
 ## Notes
 
@@ -63,3 +64,12 @@ test that loops over its cases.
   them in `RoutingTuning` and results are told apart by `strategy`.
   `tuning_result` (match-tuning document to `MatchTuningResult`) moved to
   `support_planes` and now reads units, groups and lanes.
+
+- `test_breakout_regions.py`: `route_single` and `route_pair` are
+  `pub(crate)` for the two crate-private cases (`route_pair` gets the board
+  itself as its tuning board and no access-track preference, the Python
+  defaults). `_test_point_spacing` used shapely-free exact distances in
+  Python too; Rust takes the square root of the exact squared distance in
+  `f64`. The JSON checks read `copper_route::drc_report::run_physical_drc`'s
+  document. `a_pair_escapes_the_pin_field_only_with_breakout_values` takes
+  about 9 s in release (three unroutable searches at a 20 000-state limit).

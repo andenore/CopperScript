@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+pub mod breakout;
 pub mod groups;
 pub mod lanes;
 pub mod paths;

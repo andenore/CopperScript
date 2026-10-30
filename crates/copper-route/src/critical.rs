@@ -2034,7 +2034,7 @@ fn min_declared(first: Option<i64>, second: Option<i64>) -> Option<i64> {
 /// `_route_pair` for the coarse candidate: the aligned channel between the
 /// guides' terminals. Offset guides, guide vias and length tuning report not
 /// implemented.
-fn route_pair(
+pub(crate) fn route_pair(
     board: &PhysicalBoard,
     first_rule: &NetRoutingRule,
     second_rule: &NetRoutingRule,
@@ -3375,7 +3375,7 @@ fn pin_stubs(net: &str, guide: &GlobalNetRoute, width: i64) -> Vec<TrackSegment>
 }
 
 /// `_route_single`: the global guide's segments, pin stubs and vias.
-fn route_single(
+pub(crate) fn route_single(
     board: &PhysicalBoard,
     rule: &NetRoutingRule,
     guide: Option<&GlobalNetRoute>,
