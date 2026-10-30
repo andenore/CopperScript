@@ -40,3 +40,259 @@ mod length_match_tuning {
         assert!(!rejected.diagnostics.iter().any(|message| message.starts_with("DRC-LENGTH-MATCH")));
     }
 }
+
+/// `tests/test_serpentine_tuning.py`: S-shaped (two-sided) serpentines (D-PHY plan R10).
+mod serpentine_tuning {
+    use super::support_planes::paths::*;
+    use super::support_planes::*;
+    use crate::RoutingClearanceIndex;
+    use crate::critical::track_length;
+    use crate::critical_tuning::{
+        MATCH_TUNING_LEG_LIMIT, TunerOptions, UnitTuner, UnitTuning, leg_loss, serpentine_path, window_capacity,
+    };
+    use copper_pcb::board::{PhysicalBoard, TrackSegment, TuningStyle};
+    use copper_physical::{CopperLayer, Point};
+
+    const WIDTH: i64 = 140_000;
+    const GAP: i64 = 260_000;
+    const SPACING: i64 = WIDTH + GAP;
+    const AMPLITUDE: i64 = 350_000;
+    const CLEARANCE: i64 = 520_000;
+    const LAYER: CopperLayer = CopperLayer::Front;
+
+    fn empty() -> PhysicalBoard {
+        board("Empty", 60.0, 60.0)
+    }
+
+    fn lane(net: &str, a: Point, b: Point) -> TrackSegment {
+        track(net, a, b, WIDTH, LAYER)
+    }
+
+    /// `PAIRS`: along x, and members in opposite directions along y.
+    fn pairs() -> Vec<(&'static str, Vec<TrackSegment>)> {
+        vec![
+            ("along x", vec![lane("A", mm(5.0, 10.0), mm(45.0, 10.0)), lane("B", mm(5.0, 9.6), mm(45.0, 9.6))]),
+            ("reversed", vec![lane("A", mm(30.0, 50.0), mm(30.0, 10.0)), lane("B", mm(30.4, 10.0), mm(30.4, 50.0))]),
+        ]
+    }
+
+    fn serpentine() -> TunerOptions {
+        TunerOptions { style: TuningStyle::Serpentine, ..TunerOptions::default() }
+    }
+
+    fn tuner(
+        tracks: &[TrackSegment],
+        board: &PhysicalBoard,
+        nets: &[&str],
+        spacing: i64,
+        options: TunerOptions,
+    ) -> UnitTuner {
+        let obstacles = RoutingClearanceIndex::new(board).unwrap();
+        let nets: Vec<String> = nets.iter().map(|net| net.to_string()).collect();
+        UnitTuner::new(board, &obstacles, tracks.to_vec(), &nets, spacing, AMPLITUDE, CLEARANCE, options).unwrap()
+    }
+
+    fn pair_tuner(tracks: &[TrackSegment], board: &PhysicalBoard) -> UnitTuner {
+        tuner(tracks, board, &["A", "B"], SPACING, serpentine())
+    }
+
+    fn length(tracks: &[TrackSegment]) -> i64 {
+        track_length(&tracks.iter().collect::<Vec<_>>())
+    }
+
+    /// Signed distance of every corner from the original line (`_offsets`).
+    fn offsets(path: &[TrackSegment], line: i64, horizontal: bool) -> Vec<i64> {
+        ends(path).map(|p| if horizontal { p.y_nm } else { p.x_nm } - line).collect()
+    }
+
+    fn tracks(plan: &UnitTuning) -> &[TrackSegment] {
+        plan.tracks.as_deref().expect("tuned copper")
+    }
+
+    #[test]
+    fn serpentine_legs_alternate_sides_and_add_exact_equal_lengths() {
+        for (shape, lanes) in pairs() {
+            let tuner = pair_tuner(&lanes, &empty());
+            // The leg pitch is the lane width plus the default leg gap, the
+            // larger of 3 x width and the clearance.
+            assert_eq!(tuner.windows[0].pitch, SPACING + WIDTH + CLEARANCE);
+            for added in [nm(1.5), nm(4.1), nm(7.0)] {
+                let plan = tuner.plan(added).unwrap();
+                assert!(plan.reason.is_empty() && plan.style() == "serpentine" && plan.bumps == 0, "{shape}");
+                assert_eq!(plan.legs as usize, plan.amplitudes_nm.len() + 1);
+                assert!(plan.amplitudes_nm.iter().all(|h| nm(0.234) < *h && *h <= AMPLITUDE));
+                let (low, high) = (plan.amplitudes_nm.iter().min().unwrap(), plan.amplitudes_nm.iter().max().unwrap());
+                assert!(high - low <= 1, "levelled");
+                let (a, b) = (of_net(tracks(&plan), "A"), of_net(tracks(&plan), "B"));
+                for (net, path) in [("A", &a), ("B", &b)] {
+                    // Each member gains exactly the length asked for, stays
+                    // continuous and turns by 45 degrees at most.
+                    assert_eq!(length(path), length(&of_net(&lanes, net)) + added);
+                    assert!(continuous(path));
+                    assert!(sharp_bends(path, &[]).is_empty());
+                }
+                // The members keep the pair spacing through every leg and corner.
+                assert_eq!(least_gap_squared(&a, &b), squared(SPACING));
+                for (first, second) in [(&a, &b), (&b, &a)] {
+                    assert!(
+                        lane_offsets(first, second).iter().all(|o| squared(SPACING) <= *o && *o < squared(SPACING + 2))
+                    );
+                }
+                // The tops alternate sides: the trace crosses its original
+                // line and never rises more than the amplitude limit off it.
+                let horizontal = shape == "along x";
+                let line = if horizontal { lanes[0].start.y_nm } else { lanes[0].start.x_nm };
+                let off = offsets(&a, line, horizontal);
+                assert!(*off.iter().min().unwrap() < 0 && *off.iter().max().unwrap() > 0);
+                assert_eq!(off.iter().map(|o| o.abs()).max().unwrap(), *high);
+            }
+        }
+    }
+
+    #[test]
+    fn each_leg_adds_its_length_less_one_leg_loss_for_both_members() {
+        // Serpentines of one to five tops, at uneven heights: every member
+        // gains 2 x the sum of heights less (tops + 1) leg losses.
+        let pitch = SPACING + WIDTH + CLEARANCE;
+        let cases: [&[i64]; 4] = [
+            &[300_000],
+            &[300_000, 280_001],
+            &[250_017, 333_333, 300_000],
+            &[240_000, 350_000, 240_000, 350_000, 299_999],
+        ];
+        for heights in cases {
+            let sides: Vec<i64> = (0..heights.len()).map(|i| if i % 2 == 0 { 1 } else { -1 }).collect();
+            // Every leg is at least 240 um long: up to (240 um - d) // 2.
+            for chamfer in [1, 1_000, 2_843] {
+                let expected =
+                    2 * heights.iter().sum::<i64>() - (heights.len() as i64 + 1) * leg_loss(chamfer, SPACING);
+                for member in [1, -1] {
+                    let corners = serpentine_path(nm(10.0), pitch, SPACING, &sides, heights, member, chamfer);
+                    let mut points = vec![Point::new(nm(5.0), 0)];
+                    points.extend(corners.iter().map(|(x, y)| Point::new(*x, *y)));
+                    points.push(Point::new(nm(40.0), 0));
+                    let path: Vec<TrackSegment> = points
+                        .windows(2)
+                        .filter(|pair| pair[0] != pair[1])
+                        .map(|pair| lane("A", pair[0], pair[1]))
+                        .collect();
+                    assert_eq!(length(&path) - nm(35.0), expected, "{heights:?} chamfer {chamfer}");
+                }
+            }
+        }
+        // A single net (no partner) loses 2 x (2c - round(c sqrt 2)) per leg.
+        assert_eq!(leg_loss(7_000, 0), 2 * (14_000 - 9_899));
+    }
+
+    #[test]
+    fn a_single_net_snakes_about_its_own_line() {
+        let single = vec![lane("A", mm(5.0, 10.0), mm(45.0, 10.0))];
+        let tuner = tuner(&single, &empty(), &["A"], 0, serpentine());
+        assert_eq!(tuner.windows[0].pitch, WIDTH + CLEARANCE);
+        let plan = tuner.plan(nm(5.0)).unwrap();
+        assert_eq!(plan.style(), "serpentine");
+        let path = of_net(tracks(&plan), "A");
+        assert_eq!(length(&path), nm(45.0));
+        assert!(sharp_bends(&path, &[]).is_empty());
+        let off = offsets(&path, nm(10.0), true);
+        assert!(off.iter().any(|o| *o > 0) && off.iter().any(|o| *o < 0));
+    }
+
+    fn walled(x1: f64) -> PhysicalBoard {
+        let mut board = empty();
+        board.copper_keepouts =
+            vec![keepout("wall", &[CopperLayer::Front, CopperLayer::Back], rect(4.0, 7.0, x1, 9.33))];
+        board
+    }
+
+    #[test]
+    fn serpentines_fall_back_to_one_sided_bumps() {
+        // A wall at the clearance below the pair leaves room on one side
+        // only: no serpentine fits, so the unit gets R3's one-sided bumps upward.
+        let board = walled(46.0);
+        let lanes = pairs().remove(0).1;
+        let tuner = pair_tuner(&lanes, &board);
+        assert!(tuner.windows.is_empty());
+        let plan = tuner.plan(nm(1.0)).unwrap();
+        assert!(plan.reason.is_empty() && plan.style() == "bumps" && plan.legs == 0 && plan.bumps != 0);
+        assert!(offsets(&of_net(tracks(&plan), "B"), nm(9.6), true).iter().all(|o| *o >= 0));
+        let bumps = tuner_bumps(&lanes, &board).tune(nm(1.0)).unwrap().0;
+        assert_eq!(plan.tracks, bumps);
+        // Too little length for tops tall enough to have 45-degree corners on
+        // both members also falls back to bumps.
+        let small = pair_tuner(&lanes, &empty()).plan(nm(0.2)).unwrap();
+        assert!(small.style() == "bumps" && small.bumps != 0);
+        // A wall on one side over part of the run: the serpentine takes the
+        // free stretch, another run keeps bumps.
+        let plan = pair_tuner(&lanes, &walled(25.0)).plan(nm(3.0)).unwrap();
+        assert_eq!(plan.style(), "serpentine");
+        assert!(tracks(&plan).iter().filter(|t| t.start.y_nm < nm(9.6)).all(|t| t.start.x_nm > nm(25.0)));
+    }
+
+    fn tuner_bumps(lanes: &[TrackSegment], board: &PhysicalBoard) -> UnitTuner {
+        tuner(lanes, board, &["A", "B"], SPACING, TunerOptions::default())
+    }
+
+    #[test]
+    fn the_leg_count_is_bounded() {
+        let lanes = pairs().remove(0).1;
+        let options = TunerOptions { leg_limit: 6, bump_limit: 3, ..serpentine() };
+        let tuner = tuner(&lanes, &empty(), &["A", "B"], SPACING, options);
+        // Six legs hold five tops: their full capacity fits, more does not
+        // (nor in the three bumps of the fallback).
+        let five = window_capacity(&tuner.windows[0], &[AMPLITUDE; 5]);
+        let plan = tuner.plan(five - five % 2).unwrap();
+        assert!(plan.reason.is_empty() && plan.legs == 6, "{}", plan.reason);
+        let plan = tuner.plan(five + 2).unwrap();
+        assert!(plan.tracks.is_none());
+        assert!(plan.reason.contains("the limit of 3 bumps; serpentine: insufficient tuning room"), "{}", plan.reason);
+        assert!(plan.reason.ends_with("in 6 leg(s), the limit of 6 legs"), "{}", plan.reason);
+        assert_eq!(MATCH_TUNING_LEG_LIMIT, 32);
+    }
+
+    #[test]
+    fn a_declared_leg_gap_sets_the_pitch() {
+        let lanes = pairs().remove(0).1;
+        let options = TunerOptions { leg_gap_nm: Some(nm(0.8)), ..serpentine() };
+        let tuner = tuner(&lanes, &empty(), &["A", "B"], SPACING, options);
+        assert_eq!(tuner.windows[0].pitch, SPACING + WIDTH + nm(0.8));
+        let plan = tuner.plan(nm(3.0)).unwrap();
+        let mut legs: Vec<i64> =
+            of_net(tracks(&plan), "A").iter().filter(|t| t.start.x_nm == t.end.x_nm).map(|t| t.start.x_nm).collect();
+        legs.sort();
+        legs.dedup();
+        // Facing legs of one member are the gap plus one width apart (centres).
+        assert_eq!(legs.windows(2).map(|pair| pair[1] - pair[0]).min(), Some(nm(0.8) + WIDTH));
+    }
+
+    #[test]
+    fn bumps_in_the_open_run_win_over_a_serpentine_beside_the_lands() {
+        // One net along x. Below it, x 25 to 45 mm is blocked, so a
+        // serpentine only fits at x < 25 mm. Every slot starting before
+        // x = 26 mm counts as inside a breakout region beside the lands here.
+        // One-sided bumps further along add the length outside it and win;
+        // with every slot outside, the serpentine still comes first.
+        let mut board = empty();
+        board.copper_keepouts =
+            vec![keepout("below", &[CopperLayer::Front, CopperLayer::Back], rect(25.0, 8.0, 46.0, 9.8))];
+        let single = vec![lane("A", mm(5.0, 10.0), mm(45.0, 10.0))];
+        let added = nm(1.2);
+        let free = tuner(&single, &board, &["A"], 0, serpentine()).plan(added).unwrap();
+        assert!(free.legs != 0 && free.tracks.is_some());
+        let mut beside = tuner(&single, &board, &["A"], 0, serpentine());
+        let near: Vec<_> = beside
+            .ordered
+            .iter()
+            .copied()
+            .chain(beside.windows.iter().flat_map(|window| window.tops.iter().copied()))
+            .filter(|slot| slot.start < nm(26.0))
+            .collect();
+        beside.inside = near.into_iter().collect();
+        let plan = beside.plan(added).unwrap();
+        assert!(plan.tracks.is_some() && plan.legs == 0);
+        let moved: Vec<_> =
+            tracks(&plan).iter().filter(|t| t.start.y_nm != nm(10.0) || t.end.y_nm != nm(10.0)).collect();
+        assert!(!moved.is_empty() && moved.iter().all(|t| t.start.x_nm.min(t.end.x_nm) > nm(25.5)));
+        assert_eq!(length(tracks(&plan)), nm(40.0) + added);
+    }
+}

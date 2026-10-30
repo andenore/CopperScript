@@ -384,9 +384,9 @@ pub struct UnitTuner {
     rooms: IndexMap<Slot, i64>,
     ends: Vec<Point>,
     /// Slots (with room, and window tops) whose centre lies in a breakout region.
-    inside: IndexSet<Slot>,
-    ordered: Vec<Slot>,
-    windows: Vec<Window>,
+    pub(crate) inside: IndexSet<Slot>,
+    pub(crate) ordered: Vec<Slot>,
+    pub(crate) windows: Vec<Window>,
 }
 
 /// `centre` of `UnitTuner`: the middle of a slot on its outer member's line.
@@ -1244,7 +1244,7 @@ fn window_chamfer(window: &Window, heights: &[i64]) -> i64 {
 }
 
 /// `_window_capacity`: length a serpentine of `heights` adds to each member (0 if it has no corners).
-fn window_capacity(window: &Window, heights: &[i64]) -> i64 {
+pub(crate) fn window_capacity(window: &Window, heights: &[i64]) -> i64 {
     let chamfer = window_chamfer(window, heights);
     if chamfer < 1 {
         return 0;

@@ -13,8 +13,15 @@ test that loops over its cases.
 | test_fanout_and_plane_verify.py | 11 | 3: `run_physical_drc` monkeypatch (Python internals); 2 installed-KiCad cases (`kicad-cli` not installed) | 0 | `tests/fanout_and_plane_verify.rs` |
 | test_pad_via_arrays.py | 13 | 0 (the critical-preflight half of the report test: the command is gone) | 0 | `tests/pad_via_arrays.rs`; `crates/copper/tests/via_in_pad_reports.rs` |
 | test_pad_stitch.py | 11 | 2: installed-KiCad cases (`kicad-cli` not installed) | 0 | `tests/pad_stitch.rs` |
+| test_serpentine_tuning.py | 12 | 0 | 0 | `src/test_support_planes.rs` (7 `UnitTuner` cases); `tests/serpentine_tuning.rs` (5) |
 
 ## Notes
+
+- `test_serpentine_tuning.py`: `UnitTuner.windows`, `.inside`, `.ordered` and
+  `window_capacity` are `pub(crate)` for the crate-private cases; the Python
+  `tuner.inside = lambda ...` override becomes an explicit `inside` slot set.
+  A `tuning_style = "zigzag"` rule cannot be constructed in Rust
+  (`TuningStyle::parse` rejects it).
 
 - `test_pad_via_arrays.py`: `ViaArrayPlacementError.diagnostic_board` is not
   carried in Rust; the test asserts the named site rejection and an unchanged

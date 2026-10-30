@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 pub mod lanes;
+pub mod paths;
 
 use std::collections::BTreeSet;
 
@@ -353,4 +354,25 @@ pub fn scratch(name: &str) -> std::path::PathBuf {
     let _ = std::fs::remove_dir_all(&directory);
     std::fs::create_dir_all(&directory).expect("scratch directory");
     directory
+}
+
+/// `compile_source(source)` (written to `name` in a fresh scratch directory).
+pub fn load_source(
+    name: &str,
+    source: &str,
+) -> Result<copper_lang::compiler::Design, copper_lang::compiler::LoadError> {
+    let directory = scratch(&format!("source-{}", name.replace(['/', '.'], "-")));
+    let path = directory.join(name);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("source directory");
+    std::fs::write(&path, source).expect("source");
+    copper_lang::compiler::load_design(&path, false, false)
+}
+
+/// `prototype_physicalize(compile_source(source), PrototypePhysicalOptions(...))`
+/// on the default 100 x 80 mm prototype board with proxy footprints.
+pub fn physicalize_source(name: &str, source: &str, layers: i64, profile: &str) -> Result<PhysicalBoard, String> {
+    use copper_pcb::physicalize::{Footprints, PhysicalOptions, physicalize};
+    let design = load_source(name, source).map_err(|error| error.to_string())?;
+    let options = PhysicalOptions::new(100.0, 80.0, layers, profile).map_err(|error| error.to_string())?;
+    physicalize(&design, Footprints::Proxy, &options, false, false).map_err(|error| error.to_string())
 }

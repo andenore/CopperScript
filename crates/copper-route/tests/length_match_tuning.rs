@@ -17,9 +17,8 @@ use copper_route::critical::{
     route_critical_nets,
 };
 use copper_route::critical_tuning::{TunerOptions, UnitTuner, bump_chamfers, bump_gain};
-use num_bigint::BigInt;
-use num_rational::BigRational;
 use support_planes::lanes::*;
+use support_planes::paths::*;
 use support_planes::*;
 
 fn critical(board: &PhysicalBoard) -> CriticalRoutingResult {
@@ -70,69 +69,6 @@ fn budget_warnings(board: &PhysicalBoard) -> Vec<String> {
 fn lane(tracks: &[TrackSegment], name: &str) -> Vec<TrackSegment> {
     let prefix = format!("{name}_");
     tracks.iter().filter(|track| track.net.starts_with(&prefix)).cloned().collect()
-}
-
-fn of_net(tracks: &[TrackSegment], net: &str) -> Vec<TrackSegment> {
-    tracks.iter().filter(|track| track.net == net).cloned().collect()
-}
-
-fn ends(tracks: &[TrackSegment]) -> impl Iterator<Item = Point> + '_ {
-    tracks.iter().flat_map(|track| [track.start, track.end])
-}
-
-fn squared(value: i64) -> BigRational {
-    BigRational::from_integer(BigInt::from(value) * BigInt::from(value))
-}
-
-/// Least squared distance between any track of `first` and any of `second`.
-fn least_gap_squared(first: &[TrackSegment], second: &[TrackSegment]) -> BigRational {
-    first
-        .iter()
-        .flat_map(|a| second.iter().map(move |b| segment_distance_squared(a.start, a.end, b.start, b.end)))
-        .min()
-        .expect("tracks")
-}
-
-const COMPASS: [(i64, i64); 8] = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)];
-
-/// Compass index of an axis-aligned or exactly 45-degree track (`_heading`).
-fn heading(track: &TrackSegment) -> usize {
-    let (dx, dy) = (track.end.x_nm - track.start.x_nm, track.end.y_nm - track.start.y_nm);
-    assert!((dx == 0) != (dy == 0) || (dx.abs() == dy.abs() && dx != 0), "{track:?}");
-    COMPASS.iter().position(|step| *step == (dx.signum(), dy.signum())).unwrap()
-}
-
-/// Vertices of a continuous path that turn by more than 45 degrees, except `keep`.
-fn sharp_bends(path: &[TrackSegment], keep: &[Point]) -> Vec<Point> {
-    path.windows(2)
-        .filter(|pair| {
-            let (a, b) = (heading(&pair[0]), heading(&pair[1]));
-            !keep.contains(&pair[0].end) && ((b + 8 - a) % 8).min((a + 8 - b) % 8) > 1
-        })
-        .map(|pair| pair[0].end)
-        .collect()
-}
-
-fn continuous(path: &[TrackSegment]) -> bool {
-    path.windows(2).all(|pair| pair[0].end == pair[1].start)
-}
-
-/// Squared line distance from each track of `first` to its nearest parallel track of `second`.
-fn lane_offsets(first: &[TrackSegment], second: &[TrackSegment]) -> Vec<BigRational> {
-    first
-        .iter()
-        .map(|a| {
-            let nearest = second
-                .iter()
-                .filter(|b| heading(b) % 4 == heading(a) % 4)
-                .min_by_key(|b| segment_distance_squared(a.start, a.end, b.start, b.end))
-                .expect("parallel track");
-            let (dx, dy) = (i128::from(a.end.x_nm - a.start.x_nm), i128::from(a.end.y_nm - a.start.y_nm));
-            let cross =
-                dx * i128::from(nearest.start.y_nm - a.start.y_nm) - dy * i128::from(nearest.start.x_nm - a.start.x_nm);
-            BigRational::new(BigInt::from(cross * cross), BigInt::from(dx * dx + dy * dy))
-        })
-        .collect()
 }
 
 fn empty_board() -> PhysicalBoard {
