@@ -8,8 +8,19 @@ test that loops over its cases.
 | Python file | Ported | Skipped (why) | Ignored | Rust test file |
 |---|---|---|---|---|
 | test_plane_stitch.py | 24 | 0 | 0 | `tests/plane_stitch.rs` |
+| test_length_match_tuning.py | 19 | 0 | 0 | `tests/length_match_tuning.rs`; `src/test_support_planes.rs` (`validate_candidate`) |
 
 ## Notes
+
+- Crate-private items are tested in `src/test_support_planes.rs`, which
+  includes `tests/support_planes` by path (`extern crate self as copper_route`
+  under `cfg(test)` lets the shared builders name the crate).
+- `test_length_match_tuning.py::test_preflight_prints_one_line_per_match_group`
+  drove the Python `critical_preflight` CLI with routing monkeypatched; the
+  Rust test checks the same console line through `match_tuning_line`.
+- `test_candidates_completing_an_over_skew_group_are_not_rejected_during_routing`
+  is split: the DRC half is an integration test, the `validate_candidate`
+  half a crate-private one.
 
 - `test_plane_stitch.py::test_preferred_ground_search_stops_when_later_vias_cannot_win`
   monkeypatched `_candidate_points` to count evaluated candidates; the Rust

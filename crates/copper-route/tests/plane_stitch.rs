@@ -12,7 +12,10 @@ const ESCAPE_DRC: [&str; 4] = ["DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING"
 /// `_plane_board`: two one-pad GND connectors over an In1.Cu ground plane.
 fn plane_board() -> copper_pcb::board::PhysicalBoard {
     let mut board = board("PlaneStitch", 20.0, 12.0);
-    add_footprint(&mut board, footprint("test/one-pad", vec![pad("1", Point::new(0, 0), size(0.6, 0.6))], size(1.0, 1.0)));
+    add_footprint(
+        &mut board,
+        footprint("test/one-pad", vec![pad("1", Point::new(0, 0), size(0.6, 0.6))], size(1.0, 1.0)),
+    );
     board.placements = vec![place("J1", "test/one-pad", mm(3.0, 6.0)), place("J2", "test/one-pad", mm(17.0, 6.0))];
     board.nets = vec![net("GND", &[("J1", "1"), ("J2", "1")])];
     board.stackup = four_layers();
@@ -80,7 +83,11 @@ fn preferred_ground_pad_chooses_short_local_via_over_long_reuse() {
     let only = Some(pads(&[("J1", "1")]));
     let baseline = stitch(
         &board,
-        PlaneStitchOptions { only_pads: only.clone(), preferred_ground_pads: Some(Default::default()), ..Default::default() },
+        PlaneStitchOptions {
+            only_pads: only.clone(),
+            preferred_ground_pads: Some(Default::default()),
+            ..Default::default()
+        },
     );
     let preferred_options =
         PlaneStitchOptions { only_pads: only.clone(), preferred_ground_pads: only.clone(), ..Default::default() };
@@ -103,8 +110,10 @@ fn preferred_ground_pad_reuses_short_existing_via() {
     let existing = gnd_via(4.0, 6.0);
     board.vias = vec![existing.clone()];
     let only = Some(pads(&[("J1", "1")]));
-    let result =
-        stitch(&board, PlaneStitchOptions { only_pads: only.clone(), preferred_ground_pads: only, ..Default::default() });
+    let result = stitch(
+        &board,
+        PlaneStitchOptions { only_pads: only.clone(), preferred_ground_pads: only, ..Default::default() },
+    );
     assert!(result.complete() && result.added_via_count == 0);
     assert!(touches(&result.board.tracks, existing.position));
 }
@@ -222,7 +231,10 @@ fn reuses_off_grid_same_net_via_before_adding_drill() {
 #[test]
 fn existing_via_can_be_reached_with_legal_two_segment_escape() {
     let mut board = plane_board();
-    add_footprint(&mut board, footprint("test/blocker", vec![pad("1", Point::new(0, 0), size(0.6, 0.6))], size(1.0, 1.0)));
+    add_footprint(
+        &mut board,
+        footprint("test/blocker", vec![pad("1", Point::new(0, 0), size(0.6, 0.6))], size(1.0, 1.0)),
+    );
     let existing = via("GND", mm(5.0, 8.0), nm(0.8), nm(0.4));
     board.placements.push(place("U1", "test/blocker", mm(4.0, 7.0)));
     board.nets.push(net("SIGNAL", &[("U1", "1")]));
@@ -285,7 +297,10 @@ fn blocked_elbows_can_use_bounded_three_segment_escape() {
 #[test]
 fn dense_package_escape_can_route_around_pad_to_one_legal_via() {
     let mut board = plane_board();
-    add_footprint(&mut board, footprint("test/escape-obstacle", vec![pad("1", Point::new(0, 0), size(1.0, 2.0))], size(1.0, 2.0)));
+    add_footprint(
+        &mut board,
+        footprint("test/escape-obstacle", vec![pad("1", Point::new(0, 0), size(1.0, 2.0))], size(1.0, 2.0)),
+    );
     board.placements.push(place("U_BLOCK", "test/escape-obstacle", mm(5.0, 6.0)));
     board.nets.push(net("BLOCKED", &[("U_BLOCK", "1")]));
     board.zones[0].outer = rect(6.8, 5.8, 7.2, 6.2);
@@ -394,8 +409,7 @@ fn selected_early_escape_is_not_duplicated_by_late_pass() {
 #[test]
 fn blocked_stitches_remain_explicitly_pending() {
     let mut board = plane_board();
-    board.copper_keepouts =
-        vec![keepout("all-vias", &board.stackup.copper_layers.clone(), rect(1.0, 1.0, 19.0, 11.0))];
+    board.copper_keepouts = vec![keepout("all-vias", &board.stackup.copper_layers.clone(), rect(1.0, 1.0, 19.0, 11.0))];
     let result = stitch_zone_pads(&board, None).unwrap();
     assert!(!result.complete());
     assert_eq!(result.pending_pads.len(), 2);
@@ -408,7 +422,10 @@ fn large_land_uses_same_side_pour_without_inventing_via_or_fill() {
     for (same_side, block_fill) in [(true, false), (false, false), (true, true)] {
         let mut board = plane_board();
         board.footprints.clear();
-        add_footprint(&mut board, footprint("test/large-land", vec![pad("1", Point::new(0, 0), size(12.0, 8.0))], size(12.0, 8.0)));
+        add_footprint(
+            &mut board,
+            footprint("test/large-land", vec![pad("1", Point::new(0, 0), size(12.0, 8.0))], size(12.0, 8.0)),
+        );
         let mut back = board.zones[0].clone();
         back.layers = vec![CopperLayer::Back];
         board.placements = vec![place("J1", "test/large-land", mm(10.0, 6.0))];

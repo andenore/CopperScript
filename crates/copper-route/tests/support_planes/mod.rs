@@ -4,6 +4,8 @@
 
 #![allow(dead_code)]
 
+pub mod lanes;
+
 use std::collections::BTreeSet;
 
 use copper_pcb::board::{CopperZone, IslandPolicy, PadReference, PhysicalBoard, PhysicalNet, Placement, Stackup};
@@ -275,4 +277,48 @@ pub fn rule(net: &str) -> copper_pcb::board::NetRoutingRule {
         tuning_spacing_nm: None,
         tuning_group: None,
     }
+}
+
+/// `document[key]` of a JSON object.
+pub fn field<'a>(document: &'a copper_json::Value, key: &str) -> &'a copper_json::Value {
+    document.as_object().and_then(|object| object.get(key)).unwrap_or_else(|| panic!("missing {key}"))
+}
+
+/// An integer JSON value, `None` for `null`.
+pub fn int(value: &copper_json::Value) -> Option<i64> {
+    match value {
+        copper_json::Value::Int(number) => Some(i64::try_from(number).expect("i64")),
+        copper_json::Value::Null => None,
+        other => panic!("integer expected, got {other:?}"),
+    }
+}
+
+pub fn text(value: &copper_json::Value) -> &str {
+    value.as_str().expect("string")
+}
+
+/// Hard DRC errors besides the expected partial-routing state (`_hard`).
+pub fn hard_findings(board: &PhysicalBoard) -> BTreeSet<String> {
+    copper_drc::run_physical_drc(board, copper_drc::Policy::default())
+        .expect("drc")
+        .findings
+        .into_iter()
+        .filter(|finding| {
+            finding.severity == copper_drc::Severity::Error
+                && finding.code != "DRC-ROUTE-INCOMPLETE"
+                && finding.code != "DRC-OPEN-NET"
+        })
+        .map(|finding| finding.code)
+        .collect()
+}
+
+/// `route_global(board)` with the default options.
+pub fn global(board: &PhysicalBoard) -> copper_route::GlobalRoutingResult {
+    copper_route::route_global(board, &copper_route::GlobalRouterOptions::default(), None, None, None).expect("global")
+}
+
+/// The summed length of `net`'s tracks (`_track_length`).
+pub fn net_length(tracks: &[TrackSegment], net: &str) -> i64 {
+    let mine: Vec<&TrackSegment> = tracks.iter().filter(|track| track.net == net).collect();
+    copper_route::critical::track_length(&mine)
 }

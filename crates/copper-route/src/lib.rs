@@ -113,6 +113,13 @@ pub mod unified_error;
 pub mod unified_router;
 pub mod via_lattice;
 
+// The crate-private half of the ported planes/stitching/tuning tests, which
+// share `tests/support_planes` (its `copper_route::` paths name this crate).
+#[cfg(test)]
+extern crate self as copper_route;
+#[cfg(test)]
+mod test_support_planes;
+
 pub use copper_pcb::{Error, Result};
 pub use progress::{Progress, emit};
 pub use pypath::display as pypath_display;
