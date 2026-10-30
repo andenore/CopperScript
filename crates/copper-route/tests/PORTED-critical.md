@@ -20,6 +20,8 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_pair_tuning_spans.py | 10 | 10 | 0 | 0 | `src/critical_tests/pair_tuning_spans.rs` |
 | test_pair_return_boundaries.py | 9 | 9 | 0 | 0 | `src/critical_tests/pair_return_boundaries.rs` |
 | test_pair_terminal_fallback.py | 8 | 8 | 0 | 0 | `src/critical_tests/pair_terminal_fallback.rs`; the CLI case in `crates/copper/tests/critical_cli.rs` |
+| test_pair_geometry.py | 8 | 0 | 8 | 0 | none: `pcbir.pair_geometry` was not ported |
+| test_critical_bundles.py | 8 | 6 | 2 | 0 | `src/critical_tests/critical_bundles.rs` (the frozen-fixture comparison stays in `tests/critical_bundles.rs`) |
 
 ## Notes
 
@@ -159,3 +161,23 @@ Rust divergence fixed: `route-board` refused a non-positive length option with
 "expected a finite length in mm", dropping Python's "positive"/"nonnegative"
 bound, so `cli_exposes_positive_computational_pin_access_step` failed. The
 Python messages are restored.
+
+### test_pair_geometry.py
+
+All skipped: `differential_pair_inventory` (the read-only
+`differential_pair_screens` report) has no Rust port. The routing-refactor
+plan still lists `pair_geometry` as a kept read-only report, so this is a
+missing port rather than a retired feature.
+
+### test_critical_bundles.py
+
+Rust bug found and fixed: `route_critical_nets` accepted a negative
+`bundle_repair_limit` (silently disabling repair) where Python raised
+"critical bundle repair limit cannot be negative".
+
+Skipped:
+- `rejected_bundle_repair_restores_the_previous_state_exactly`: injects a
+  rejection into `_route_pair_group` after a successful repair leg; no Rust
+  seam, and no natural board rejects a connected leg.
+- `preflight_reports_the_bundle_order_and_repairs`: the `critical_preflight`
+  CLI is not ported.

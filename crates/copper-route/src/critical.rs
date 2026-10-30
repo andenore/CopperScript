@@ -854,6 +854,9 @@ pub fn route_critical_nets(
     if options.pair_state_limit.is_some_and(|limit| limit <= 0) {
         return Err(Error::Value("critical pair aggregate state bound must be positive".to_owned()));
     }
+    if options.bundle_repair_limit < 0 {
+        return Err(Error::Value("critical bundle repair limit cannot be negative".to_owned()));
+    }
     let board = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board)?)?;
     if !board.hard_macros.is_empty() && global_route.placement_fingerprint != placement_fingerprint(&board) {
         return Err(Error::Value("critical global guides are stale".to_owned()));
