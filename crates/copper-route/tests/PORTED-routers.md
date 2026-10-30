@@ -26,6 +26,18 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | routing_lattice | 9 | 9 | 0 | 0 | `tests/routing_lattice.rs` (9) |
 | routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
+**Status (session a1 stopped here):** 14 of 51 files done: 284 Python tests,
+237 ported (1 of them `#[ignore]`d), 47 skipped. The next file is
+`congestion_feedback_flow`; about 157 tests in 37 files remain (list below).
+
+Rust changes made for the ports: `router::index_holds` guard in
+`Router::new` (bug fix, see unified_commit_index); `pub(crate)` on
+`rejection_text`, `tune_bus_skew`, `congestion_map`,
+`Router::{escape_bias, ball_field_via_mask, zone_regions, plane_via_taps}`;
+`#[cfg(test)]` modules in `routing.rs`, `fanout.rs`, `escape_plan.rs`,
+`escape_assignment.rs`, `unified_router/tests.rs` and copper-place
+`legalize.rs`.
+
 ## Notes per file
 
 ### unified_router

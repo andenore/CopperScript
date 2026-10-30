@@ -242,7 +242,7 @@ fn copper_emits_the_physical_via_span_of_each_layer_change() {
         let (_, vias) = router.copper(0, &path, &Vec::new(), None).expect("copper");
         let expected = physical_via_span(&board, F, second).expect("span");
         let spans: Vec<_> = vias.iter().map(|v| (v.from_layer, v.to_layer, v.technology.clone())).collect();
-        assert_eq!(spans, [expected.clone()]);
+        assert_eq!(spans, std::slice::from_ref(&expected));
         let mut route = NetRoute { paths: vec![path], leads: vec![Vec::new()], ..NetRoute::empty(true, "") };
         router.finish_route(&mut route, 0);
         assert_eq!(route.via_xy, IndexSet::from([xy]));
