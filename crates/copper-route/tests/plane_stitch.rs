@@ -9,20 +9,6 @@ use support_planes::*;
 const STITCH_DRC: [&str; 4] = ["DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING", "DRC-HOLE-CLEARANCE"];
 const ESCAPE_DRC: [&str; 4] = ["DRC-SHORT", "DRC-CLEARANCE", "DRC-DRILL-SPACING", "DRC-BOARD-EDGE"];
 
-/// `_plane_board`: two one-pad GND connectors over an In1.Cu ground plane.
-fn plane_board() -> copper_pcb::board::PhysicalBoard {
-    let mut board = board("PlaneStitch", 20.0, 12.0);
-    add_footprint(
-        &mut board,
-        footprint("test/one-pad", vec![pad("1", Point::new(0, 0), size(0.6, 0.6))], size(1.0, 1.0)),
-    );
-    board.placements = vec![place("J1", "test/one-pad", mm(3.0, 6.0)), place("J2", "test/one-pad", mm(17.0, 6.0))];
-    board.nets = vec![net("GND", &[("J1", "1"), ("J2", "1")])];
-    board.stackup = four_layers();
-    board.zones = vec![zone("ground-plane", "GND", &[CopperLayer::In1], rect(1.0, 1.0, 19.0, 11.0))];
-    board
-}
-
 fn stitch(board: &copper_pcb::board::PhysicalBoard, options: PlaneStitchOptions) -> PlaneStitchResult {
     stitch_zone_pads(board, Some(&options)).expect("stitch")
 }

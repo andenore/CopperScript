@@ -21,6 +21,8 @@ test that loops over its cases.
 | test_fanout_late_bypass_completion.py | 7 | 2: the 7-fault rollback test (substituted `route_decouplers` proposals: Python internals, Rust has no seam); the compact-report test (`LateBypassCompletionReport` is not modelled in Rust) | 0 | `tests/fanout_late_bypass_completion.rs` |
 | test_surface_power_breakout.py | 8 | 0 | 0 | `tests/surface_power_breakout.rs` |
 | test_route_closure.py | 8 | 0 | 0 | `tests/route_closure.rs` |
+| test_fanout_access_pressure.py | 6 | 2: the failed-native-gate rollback (`run_physical_drc` monkeypatch: Python internals); pin analysis is observational (`FanoutPinAnalysis` is not modelled in Rust) | 0 | `tests/fanout_access_pressure.rs` |
+| test_two_leg_fanout.py | 7 | 0 | 0 | `tests/two_leg_fanout.rs` (5, the parametrized anchor cases loop); `src/test_support_planes.rs` (2: `two_leg_candidates`, `maze_choices`) |
 
 ## Notes
 
@@ -106,3 +108,23 @@ test that loops over its cases.
   `RoutingPipelineResult`, so the tests run the pipeline once on the
   closure board and set the fields each case names (status, certification,
   global guide, critical status and nets, detailed result).
+
+- `test_fanout_access_pressure.py`: Rust has no `_candidates` seam, so the
+  four tests that scripted candidate domains run on the physical-window board
+  of the Python `test_real_candidate_generation...` case (via keepouts tile the
+  board and leave whole-via windows open): U.1 reaches (3, 6) and (5, 4), U.2
+  only (3, 6). The locked-exit case opens only (3, 6). `FanoutPinAnalysis` is
+  not modelled; the candidate-count and diagnostic checks become accesses,
+  pending pads and unchanged copper (constrained-first order shows as the
+  access order). `refined_candidate_count` of the radial-sampling case is
+  covered by the off-grid (4.9, 6) access the 0.5 mm coarse grid cannot reach.
+  Scene builders (`trap_board`, `via_windows`, `two_leg_board`) are in
+  `support_planes/fanout.rs`.
+
+- `test_two_leg_fanout.py`: `two_leg_candidates` and `maze_choices` are
+  already `pub(crate)`. The bounded-maze case emptied `_legal_choices` to reach
+  the maze through `route_fanout`; Rust has no seam, so it calls
+  `maze_choices` on the same pin and checks its candidate as committed copper
+  (verified anchor, DRC, determinism, budget 1 finds nothing). The
+  `pin_analysis` two-leg counts are not modelled. A zero site budget is
+  rejected by `FanoutOptions::validated`.

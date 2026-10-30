@@ -6,6 +6,7 @@
 
 pub mod breakout;
 pub mod decoupling;
+pub mod fanout;
 pub mod groups;
 pub mod lanes;
 pub mod paths;
@@ -505,5 +506,20 @@ pub fn interstitial_board() -> PhysicalBoard {
         default_via_drill_nm: 200_000,
         ..DesignRules::default()
     };
+    board
+}
+
+/// `_plane_board` of `tests/test_plane_stitch.py`: two one-pad GND
+/// terminals J1 and J2 over an In1.Cu GND plane on a four-layer board.
+pub fn plane_board() -> PhysicalBoard {
+    let mut board = board("PlaneStitch", 20.0, 12.0);
+    add_footprint(
+        &mut board,
+        footprint("test/one-pad", vec![pad("1", Point::new(0, 0), size(0.6, 0.6))], size(1.0, 1.0)),
+    );
+    board.placements = vec![place("J1", "test/one-pad", mm(3.0, 6.0)), place("J2", "test/one-pad", mm(17.0, 6.0))];
+    board.nets = vec![net("GND", &[("J1", "1"), ("J2", "1")])];
+    board.stackup = four_layers();
+    board.zones = vec![zone("ground-plane", "GND", &[CopperLayer::In1], rect(1.0, 1.0, 19.0, 11.0))];
     board
 }
