@@ -868,15 +868,19 @@ fn run_all(
         }
         return results;
     }
-    let (sender, receiver) = mpsc::channel::<(usize, Result<Object, String>)>();
+    // Workers only send events; this thread does all the printing. `out` may
+    // hold the stdout lock, so a worker printing itself would block forever.
+    enum Event {
+        Started(usize),
+        Finished(usize, Result<Object, String>),
+    }
+    let (sender, receiver) = mpsc::channel::<Event>();
     let mut results: Vec<Option<Result<Object, String>>> = (0..boards.len()).map(|_| None).collect();
     let next = std::sync::Mutex::new(0usize);
-    let announced = std::sync::Mutex::new(());
     std::thread::scope(|scope| {
         for _ in 0..jobs.min(boards.len().max(1)) {
             let sender = sender.clone();
             let next = &next;
-            let announced = &announced;
             scope.spawn(move || {
                 loop {
                     let index = {
@@ -886,21 +890,28 @@ fn run_all(
                         index
                     };
                     let Some(board) = boards.get(index) else { break };
-                    {
-                        let _guard = announced.lock().unwrap_or_else(|poison| poison.into_inner());
-                        println!("[bench] {} ...", board.name);
+                    if sender.send(Event::Started(index)).is_err() {
+                        break;
                     }
                     let result = run_board(board, out_dir, options);
-                    if sender.send((index, result)).is_err() {
+                    if sender.send(Event::Finished(index, result)).is_err() {
                         break;
                     }
                 }
             });
         }
         drop(sender);
-        for (index, result) in receiver {
-            announce(out, &result, &boards[index].name);
-            results[index] = Some(result);
+        for event in receiver {
+            match event {
+                Event::Started(index) => {
+                    let _ = copper_json::text::print(out, &format!("[bench] {} ...", boards[index].name));
+                    let _ = out.flush();
+                }
+                Event::Finished(index, result) => {
+                    announce(out, &result, &boards[index].name);
+                    results[index] = Some(result);
+                }
+            }
         }
     });
     results.into_iter().map(|result| result.unwrap_or_else(|| Err("board not run".to_owned()))).collect()
