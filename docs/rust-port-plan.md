@@ -298,8 +298,14 @@ do not shrink as much.
   default gate locally, and new features get no Python-comparison corpus
   cases. They are checked with cargo fmt, clippy (Linux and Windows), `cargo
   test --workspace` and Rust integration tests that run the `copper` binary.
-  The existing comparison corpus and CI's comparison and ladder jobs are left
-  as they are.
+  CI is Rust-only too: `build-and-test` (Linux, Windows) runs fmt, clippy,
+  the release build, a package-cache fill with the Rust binary and `cargo
+  test`; the `ladder` job routes every ladder board with `copper bench`
+  (KiCad native DRC where a board asks for it) and fails on a board that
+  errors (exit 3 included) or times out, and on regressions against
+  `bench/ladder-baseline.json` once one is committed. The comparison
+  harness, corpus and oracle fixtures stay in the repository but no longer
+  run in CI.
 
 ## 9. Next steps
 
