@@ -20,6 +20,7 @@ test that loops over its cases.
 | test_interstitial_fanout.py | 10 | 0 (installed-KiCad half of the native-project test and the `MAX_TERMINAL_CAPACITY_PROPOSALS` monkeypatch dropped: see notes) | 0 | `tests/interstitial_fanout.rs` (7); `src/test_support_planes.rs` (3: `legal_choices`, `maze_choices`) |
 | test_fanout_late_bypass_completion.py | 7 | 2: the 7-fault rollback test (substituted `route_decouplers` proposals: Python internals, Rust has no seam); the compact-report test (`LateBypassCompletionReport` is not modelled in Rust) | 0 | `tests/fanout_late_bypass_completion.rs` |
 | test_surface_power_breakout.py | 8 | 0 | 0 | `tests/surface_power_breakout.rs` |
+| test_route_closure.py | 8 | 0 | 0 | `tests/route_closure.rs` |
 
 ## Notes
 
@@ -99,3 +100,9 @@ test that loops over its cases.
   substituted proposal and is dropped. The one-capacitor-two-targets board
   check runs where Rust makes it, when a board state is decoded. Scene
   builders are in `support_planes/decoupling.rs`.
+
+- `test_route_closure.py`: the Python tests passed a `SimpleNamespace` as
+  the pipeline; Rust's `routing_complete_with_fill` takes a
+  `RoutingPipelineResult`, so the tests run the pipeline once on the
+  closure board and set the fields each case names (status, certification,
+  global guide, critical status and nets, detailed result).
