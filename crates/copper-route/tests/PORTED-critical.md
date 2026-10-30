@@ -12,6 +12,7 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_local_critical.py | 26 | 26 | 0 | 0 | `src/critical_tests/local_critical.rs` |
 | test_critical_routing.py | 21 | 21 | 0 | 0 | `src/critical_tests/critical_routing.rs`; the three `_tune_pair` cases in `tests/pair_tuning.rs` |
 | test_planned_crossings.py | 17 | 17 | 0 | 0 | `src/critical_tests/planned_crossings.rs` |
+| test_dphy_routing_intent.py | 14 | 14 | 0 | 0 | `crates/copper-drc/tests/dphy_routing_intent.rs` |
 
 ## Notes
 
@@ -58,3 +59,13 @@ crossings and nested exits); `plan_bundles` keeps the switch.
   without crossing planning must agree, and no bundle document has `crossings`.
 - `preflight_prints_each_planned_crossing`: the preflight CLI ran on a patched
   router; the printed line is `crossing_line`, checked on the routed crossing.
+
+### test_dphy_routing_intent.py
+
+Compiler, physicalization and DRC behaviour, so the port lives in
+`copper-drc` (which depends on `copper-lang` and `copper-pcb`). Sub-assertions
+dropped because the Python API has no Rust counterpart:
+`effective_impedance_tolerance_percent` (the 10 % default property) and
+`normalize_constraints` (constraint ownership report). Python's
+`NetMatchGroup.__post_init__` one-net refusal is checked at the compiler
+(`CMP111`) instead.

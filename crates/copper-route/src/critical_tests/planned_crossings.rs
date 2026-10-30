@@ -6,7 +6,9 @@ use copper_pcb::board::{
     ComponentPlacementRule, CopperZone, NetMatchGroup, NetRoutingRule, PadReference, PhysicalBoard, ReturnViaPolicy,
     Stackup, Via,
 };
-use copper_physical::CopperLayer::{self, Back as BACK, Front as FRONT, In1 as IN1, In2 as IN2, In3 as IN3, In4 as IN4};
+use copper_physical::CopperLayer::{
+    self, Back as BACK, Front as FRONT, In1 as IN1, In2 as IN2, In3 as IN3, In4 as IN4,
+};
 use copper_physical::footprint::{FootprintPad, Size, ZoneConnection};
 use copper_units::Decimal;
 use indexmap::IndexMap;
@@ -22,18 +24,24 @@ const RETURN_DISTANCE: i64 = 1_500_000;
 /// an inverted lane order cannot be wound around a component on F.Cu. Four
 /// layers: In1.Cu is a GND plane, pairs may use F.Cu and In2.Cu and require
 /// GND return vias within 1.5 mm.
-pub(super) fn crossing_board(package: &[&str], connector: &[&str], names: &[&str], max_vias: Option<i64>) -> PhysicalBoard {
-    let mut board = row_pair_board("PlannedCrossing", &rows(package, "0.5"), &rows(connector, "0.4"), names, |_, net, partner| {
-        NetRoutingRule {
-            priority: 100,
-            allowed_layers: vec![FRONT, IN2],
-            max_vias,
-            require_return_vias: true,
-            return_via_net: Some("GND".to_owned()),
-            maximum_return_via_distance_nm: Some(RETURN_DISTANCE),
-            ..differential_rule(net, partner, 200_000, 200_000)
-        }
-    });
+pub(super) fn crossing_board(
+    package: &[&str],
+    connector: &[&str],
+    names: &[&str],
+    max_vias: Option<i64>,
+) -> PhysicalBoard {
+    let mut board =
+        row_pair_board("PlannedCrossing", &rows(package, "0.5"), &rows(connector, "0.4"), names, |_, net, partner| {
+            NetRoutingRule {
+                priority: 100,
+                allowed_layers: vec![FRONT, IN2],
+                max_vias,
+                require_return_vias: true,
+                return_via_net: Some("GND".to_owned()),
+                maximum_return_via_distance_nm: Some(RETURN_DISTANCE),
+                ..differential_rule(net, partner, 200_000, 200_000)
+            }
+        });
     board.nets.push(net("GND", &[]));
     board.stackup = Stackup::new(vec![FRONT, IN1, IN2, BACK]);
     board.zones = vec![CopperZone {
@@ -345,7 +353,10 @@ fn a_via_budget_below_two_reports_the_crossing_as_impossible() {
         let result = route(&swapped(Some(max_vias)), None);
         let [crossing] = &result.bundles[0].crossings[..] else { panic!("one crossing") };
         let reason = format!("max_vias {max_vias} on LANE_B_N allows no paired layer swap; it needs 2 vias per member");
-        assert_eq!((crossing.status.as_str(), crossing.layer, crossing.reason.as_str()), ("impossible", None, reason.as_str()));
+        assert_eq!(
+            (crossing.status.as_str(), crossing.layer, crossing.reason.as_str()),
+            ("impossible", None, reason.as_str())
+        );
         let pair = self::result(&result, "LANE_B");
         // No silent fallback: no coarse candidate, no surface search, no copper.
         assert!(!pair.connected);
@@ -382,7 +393,10 @@ fn a_declared_shared_reference_replaces_the_return_vias() {
     assert_eq!(self::result(&result, "LANE_B").shared_reference_transition_count, 2);
     let [crossing] = &result.bundles[0].crossings[..] else { panic!("one crossing") };
     for item in &crossing.transitions {
-        assert_eq!((item.reference.as_str(), item.shared_reference_layer, item.return_vias.len()), ("shared_reference", Some(IN1), 0));
+        assert_eq!(
+            (item.reference.as_str(), item.shared_reference_layer, item.return_vias.len()),
+            ("shared_reference", Some(IN1), 0)
+        );
     }
     assert_eq!(crossing.transitions.len(), 2);
     assert_eq!(hard(&result.board), Vec::<String>::new());
@@ -592,10 +606,8 @@ fn preflight_prints_each_planned_crossing() {
     let [crossing] = &routed.bundles[0].crossings[..] else { panic!("one crossing") };
     assert_eq!(crossing.status, "routed");
     let mm_text = |points: &[copper_physical::Point]| {
-        let parts: Vec<String> = points
-            .iter()
-            .map(|p| format!("({:.3}, {:.3})", p.x_nm as f64 / 1e6, p.y_nm as f64 / 1e6))
-            .collect();
+        let parts: Vec<String> =
+            points.iter().map(|p| format!("({:.3}, {:.3})", p.x_nm as f64 / 1e6, p.y_nm as f64 / 1e6)).collect();
         format!("{} mm", parts.join("/"))
     };
     let sites: Vec<(String, String)> = crossing

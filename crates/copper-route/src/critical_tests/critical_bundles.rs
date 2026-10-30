@@ -25,12 +25,11 @@ pub(super) fn bundle_board(
     names: &[&str],
     priorities: &IndexMap<&str, i64>,
 ) -> PhysicalBoard {
-    let mut board = row_pair_board("PairBundle", package_rows, connector_rows, names, |lane, net, partner| {
-        NetRoutingRule {
+    let mut board =
+        row_pair_board("PairBundle", package_rows, connector_rows, names, |lane, net, partner| NetRoutingRule {
             priority: priorities.get(lane).copied().unwrap_or(100),
             ..differential_rule(net, partner, 200_000, 200_000)
-        }
-    });
+        });
     board.copper_keepouts = keepouts;
     board
 }

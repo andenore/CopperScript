@@ -214,7 +214,8 @@ fn pair_rejects_unsafe_exact_geometry_atomically() {
         let guides = coarse(&board);
         match obstacle {
             "pad" => {
-                let blocker = footprint("blocker", vec![smd_pad("1", mm(0, 0), MM)], Size { width_nm: MM, height_nm: MM });
+                let blocker =
+                    footprint("blocker", vec![smd_pad("1", mm(0, 0), MM)], Size { width_nm: MM, height_nm: MM });
                 board.footprints.insert("blocker".to_owned(), blocker);
                 board.placements.push(pose("X", "blocker", mm(20, 12)));
             }
@@ -223,7 +224,8 @@ fn pair_rejects_unsafe_exact_geometry_atomically() {
             _ => map_rules(&mut board, |rule| NetRoutingRule { pair_gap_nm: Some(50_000), ..rule }),
         }
         let (proposed, tracks, vias) = pair_attempt(&board, &guides);
-        let (result, tracks, vias) = validate_candidate(&board, proposed, tracks, vias, &[], &[], None).expect("validated");
+        let (result, tracks, vias) =
+            validate_candidate(&board, proposed, tracks, vias, &[], &[], None).expect("validated");
         assert!(!result.connected && result.candidate_rejected && !result.diagnostics.is_empty(), "{obstacle}");
         assert!(tracks.is_empty() && vias.is_empty(), "{obstacle}");
     }
@@ -267,12 +269,23 @@ fn joint_search_is_bounded_fail_closed_and_does_not_mutate_input() {
     let snapshot = board.clone();
     let mut stats = PairSearchStats::default();
     let mut found = 0;
-    let bounds = SearchBounds { maximum_searches: 2, maximum_states: 12, pitch_nm: 500_000, maximum_total_states: None };
+    let bounds =
+        SearchBounds { maximum_searches: 2, maximum_states: 12, pitch_nm: 500_000, maximum_total_states: None };
     let rules = &board.net_routing_rules;
-    paired_candidates(&board, &rules[0], &rules[1], &guides["USB_DP"], &guides["USB_DM"], bounds, None, &mut stats, &mut |_, _| {
-        found += 1;
-        Ok(false)
-    })
+    paired_candidates(
+        &board,
+        &rules[0],
+        &rules[1],
+        &guides["USB_DP"],
+        &guides["USB_DM"],
+        bounds,
+        None,
+        &mut stats,
+        &mut |_, _| {
+            found += 1;
+            Ok(false)
+        },
+    )
     .expect("bounded search");
     assert_eq!(found, 0);
     assert!(0 < stats.searches && stats.searches <= 2, "{}", stats.searches);
@@ -281,9 +294,19 @@ fn joint_search_is_bounded_fail_closed_and_does_not_mutate_input() {
     assert_eq!(board, snapshot);
     assert!(board.tracks.is_empty() && board.vias.is_empty());
     let zero = SearchBounds { maximum_states: 0, ..bounds };
-    let error = paired_candidates(&board, &rules[0], &rules[1], &guides["USB_DP"], &guides["USB_DM"], zero, None, &mut stats, &mut |_, _| Ok(false))
-        .err()
-        .expect("zero bounds fail");
+    let error = paired_candidates(
+        &board,
+        &rules[0],
+        &rules[1],
+        &guides["USB_DP"],
+        &guides["USB_DM"],
+        zero,
+        None,
+        &mut stats,
+        &mut |_, _| Ok(false),
+    )
+    .err()
+    .expect("zero bounds fail");
     assert!(error.to_string().contains("bounds"), "{error}");
 }
 
@@ -360,8 +383,14 @@ fn joint_search_does_not_invent_copper_behind_a_tapered_port() {
     let (a, b) = lane_paths(&[at(4_500_000, 12 * MM), start.center, at(6_500_000, 12 * MM)], 0, 0, offset, start.sign)
         .expect("fictitious lanes");
     assert!(
-        !legal(&escaped, &escaped_index, &tracks("USB_DP", &a, width, layer, None), &tracks("USB_DM", &b, width, layer, None), clearance)
-            .expect("legal")
+        !legal(
+            &escaped,
+            &escaped_index,
+            &tracks("USB_DP", &a, width, layer, None),
+            &tracks("USB_DM", &b, width, layer, None),
+            clearance
+        )
+        .expect("legal")
     );
     let search = crate::pair_search::SpineSearch::new("USB_DP", "USB_DM", &start, &end, width, offset, clearance, MM);
     let mut continuation = Continuation {
@@ -397,7 +426,8 @@ fn single_ended_critical_net_repairs_stale_guide_with_exact_clearance() {
         ..rule("USB_DP", RouteKind::Critical)
     }];
     let guides = default_guides(&board);
-    let blocker = footprint("blocker", vec![smd_pad("1", mm(0, 0), 2 * MM)], Size { width_nm: 2 * MM, height_nm: 2 * MM });
+    let blocker =
+        footprint("blocker", vec![smd_pad("1", mm(0, 0), 2 * MM)], Size { width_nm: 2 * MM, height_nm: 2 * MM });
     board.footprints.insert("blocker".to_owned(), blocker);
     board.placements.push(pose("X", "blocker", at(20 * MM, 11_500_000)));
     let result = route(&board, &guides);
@@ -440,5 +470,7 @@ fn critical_transition_without_special_technology_is_through_via() {
     }
     let result = route(&board, &guides);
     assert!(!result.locked_vias.is_empty());
-    assert!(result.locked_vias.iter().all(|via| via.from_layer == CopperLayer::Front && via.to_layer == CopperLayer::Back));
+    assert!(
+        result.locked_vias.iter().all(|via| via.from_layer == CopperLayer::Front && via.to_layer == CopperLayer::Back)
+    );
 }

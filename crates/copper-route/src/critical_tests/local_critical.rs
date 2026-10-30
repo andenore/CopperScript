@@ -47,7 +47,11 @@ fn rule_of(board: &PhysicalBoard) -> NetRoutingRule {
 }
 
 /// `board` with net `MATCH` (its rule and guide too) renamed to `name`.
-fn renamed(mut board: PhysicalBoard, mut global: GlobalRoutingResult, name: &str) -> (PhysicalBoard, GlobalRoutingResult) {
+fn renamed(
+    mut board: PhysicalBoard,
+    mut global: GlobalRoutingResult,
+    name: &str,
+) -> (PhysicalBoard, GlobalRoutingResult) {
     board.nets[0].name = name.to_owned();
     for rule in &mut board.net_routing_rules {
         rule.net = name.to_owned();
@@ -310,7 +314,10 @@ fn previous_critical_reservation_is_not_crossed_or_mutated() {
 fn repeated_pads(board: &mut PhysicalBoard, ys: &[i64]) {
     let footprint = board.footprints.get_mut("terminal").expect("terminal");
     let template = footprint.pads[0].clone();
-    footprint.pads = ys.iter().map(|y| copper_physical::footprint::FootprintPad { position: mm(0, *y), ..template.clone() }).collect();
+    footprint.pads = ys
+        .iter()
+        .map(|y| copper_physical::footprint::FootprintPad { position: mm(0, *y), ..template.clone() })
+        .collect();
 }
 
 #[test]
@@ -521,9 +528,13 @@ fn explicit_via_free_rf_tree_preserves_every_shunt_and_original_budgets() {
             assert_eq!(result.board.placements, board.placements);
             assert!(result.board.vias.is_empty());
             assert_eq!(hard_findings(&result.board), Vec::<String>::new());
-            assert!(result.board.tracks.iter().all(|t| t.net == name
-                && Some(t.width_nm) == rule.width_nm
-                && t.layer == CopperLayer::Front));
+            assert!(
+                result
+                    .board
+                    .tracks
+                    .iter()
+                    .all(|t| t.net == name && Some(t.width_nm) == rule.width_nm && t.layer == CopperLayer::Front)
+            );
             if length_mm == 12 {
                 assert_eq!(net.strategy, "local_surface_tree");
                 assert!(net.lengths_nm[0] <= rule.max_length_nm.unwrap() && net.warnings.is_empty());

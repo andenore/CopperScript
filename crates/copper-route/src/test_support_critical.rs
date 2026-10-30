@@ -131,7 +131,12 @@ pub(crate) fn global_route(board: &PhysicalBoard, tile_size_nm: i64) -> GlobalRo
 }
 
 /// `GlobalRouteSegment(net, layer, a, b, half_width, resource)` along a polyline.
-pub(crate) fn guide_segments(net: &str, layer: CopperLayer, vertices: &[Point], resource: &str) -> Vec<GlobalRouteSegment> {
+pub(crate) fn guide_segments(
+    net: &str,
+    layer: CopperLayer,
+    vertices: &[Point],
+    resource: &str,
+) -> Vec<GlobalRouteSegment> {
     vertices
         .windows(2)
         .map(|pair| GlobalRouteSegment {
@@ -246,7 +251,12 @@ pub(crate) fn guides_by_net(global: &GlobalRoutingResult) -> IndexMap<String, cr
 }
 
 /// `GlobalViaProposal(net, position, from, to, "test-via")`.
-pub(crate) fn via_proposal(net: &str, position: Point, from: CopperLayer, to: CopperLayer) -> crate::routing::GlobalViaProposal {
+pub(crate) fn via_proposal(
+    net: &str,
+    position: Point,
+    from: CopperLayer,
+    to: CopperLayer,
+) -> crate::routing::GlobalViaProposal {
     crate::routing::GlobalViaProposal {
         net: net.to_owned(),
         position,
@@ -305,9 +315,7 @@ pub(crate) fn row_pair_board(
         size: Size { width_nm: 600_000, height_nm: height },
         ..smd_pad(number, at(x, y), 600_000)
     };
-    for (index, ((up, un), ((jp, jn), lane))) in
-        package_rows.iter().zip(connector_rows.iter().zip(names)).enumerate()
-    {
+    for (index, ((up, un), ((jp, jn), lane))) in package_rows.iter().zip(connector_rows.iter().zip(names)).enumerate() {
         let (p, n) = ((2 * index + 1).to_string(), (2 * index + 2).to_string());
         package_pads.extend([land(&p, 1_400_000, *up, 250_000), land(&n, 1_400_000, *un, 250_000)]);
         connector_pads.extend([land(&p, -1_400_000, *jp, 200_000), land(&n, -1_400_000, *jn, 200_000)]);
