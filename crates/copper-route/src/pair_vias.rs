@@ -20,7 +20,7 @@ use crate::pair_search::{
     PairTransitionInventory, Port, PortRequest, SearchBounds, SpineSearch, can_depart, legal, normal, remaining_states,
     shift, tracks,
 };
-use crate::pair_terminals::{terminal_copper_layers, terminal_partners};
+use crate::pair_terminals::{contains_all, terminal_copper_layers, terminal_partners, without_copper};
 use crate::pin_access::{LocalAccessBounds, LocalAccessStats, local_access_path};
 use crate::routing::GlobalNetRoute;
 use crate::routing_clearance::RoutingClearanceIndex;
@@ -241,7 +241,7 @@ fn via_separation(board: &PhysicalBoard, returned: &Via, signal: &Via, clearance
 
 /// `_return_positions`: the old axial/lattice slots still possible, with the
 /// futile ones replaced by bounded actual circle/ring sites.
-fn return_positions(
+pub(crate) fn return_positions(
     board: &PhysicalBoard,
     port: &Port,
     pair: &[Via],
@@ -347,7 +347,7 @@ fn return_positions(
 /// `_return_via`: the return vias of a paired transition, or none when no
 /// legal site within the profile's distance exists.
 #[allow(clippy::too_many_arguments)]
-fn return_via(
+pub(crate) fn return_via(
     board: &PhysicalBoard,
     index: &RoutingClearanceIndex<'_>,
     port: &Port,
@@ -384,8 +384,13 @@ fn return_via(
         trace.record("return_invalid_signal_contract", &[], None, &[], &[], None)?;
         return Ok(None);
     }
-    // The index holds the caller's escape and signal reservations.
-    if !index.candidate_vias_clear(pair)? {
+    // The caller may reserve additional collars/vias, but not use an index
+    // bound to old source, rules, placements or missing occurrence geometry.
+    let stale = !std::ptr::eq(index.board, board)
+        && (without_copper(index.board) != without_copper(board)
+            || !contains_all(&index.board.tracks, &board.tracks)
+            || !contains_all(&index.board.vias, &board.vias));
+    if stale || !index.candidate_vias_clear(pair)? {
         trace.record("return_invalid_index_or_signal_geometry", &[], None, &[], &[], None)?;
         return Ok(None);
     }

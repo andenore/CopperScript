@@ -18,6 +18,7 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_critical_diagnostics.py | 12 | 9 | 3 | 0 | `src/critical_tests/critical_diagnostics.rs` |
 | test_critical_reuse.py | 11 | 0 | 11 | 0 | none: `pcbir.critical_reuse` was not ported |
 | test_pair_tuning_spans.py | 10 | 10 | 0 | 0 | `src/critical_tests/pair_tuning_spans.rs` |
+| test_pair_return_boundaries.py | 9 | 9 | 0 | 0 | `src/critical_tests/pair_return_boundaries.rs` |
 
 ## Notes
 
@@ -143,3 +144,10 @@ pipeline stage called it.
 - `legacy_success_never_enters_span_fallback`: Python patched the fallback to
   raise; here the exact pair's tuned length must equal the legacy tuner's.
 - Python's identity checks (`a is b`) are equality checks.
+
+### test_pair_return_boundaries.py
+
+Rust bug found and fixed: `pair_vias::return_via` did not refuse a clearance
+index bound to another source (different non-copper fields, or missing source
+track/via occurrences), so `old_geometry_index_cannot_authorize_current_source`
+failed. The Python binding check is restored.

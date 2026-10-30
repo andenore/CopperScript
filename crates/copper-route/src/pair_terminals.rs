@@ -468,7 +468,7 @@ struct CompletionKey {
 
 /// Every item of `wanted` occurs in `items` at least as often
 /// (`Counter(items) >= Counter(wanted)`).
-fn contains_all<T: Eq + std::hash::Hash>(items: &[T], wanted: &[T]) -> bool {
+pub(crate) fn contains_all<T: Eq + std::hash::Hash>(items: &[T], wanted: &[T]) -> bool {
     let mut counts: IndexMap<&T, i64> = IndexMap::new();
     for item in items {
         *counts.entry(item).or_default() += 1;
@@ -510,7 +510,7 @@ pub struct PairSupportCompletion {
 pub type Completion<'a> = Option<&'a std::cell::RefCell<PairSupportCompletion>>;
 
 /// A board without its tracks and vias, for comparing every other field.
-fn without_copper(board: &PhysicalBoard) -> PhysicalBoard {
+pub(crate) fn without_copper(board: &PhysicalBoard) -> PhysicalBoard {
     let mut stripped = board.clone();
     stripped.tracks.clear();
     stripped.vias.clear();
