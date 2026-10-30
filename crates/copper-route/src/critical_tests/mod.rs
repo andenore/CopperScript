@@ -7,5 +7,6 @@ mod critical_diagnostics;
 mod critical_replay;
 mod critical_routing;
 mod local_critical;
+mod pair_tuning_spans;
 mod pair_vias;
 mod planned_crossings;

@@ -16,6 +16,8 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_pair_vias.py | 12 | 12 | 0 | 0 | `src/critical_tests/pair_vias.rs` |
 | test_critical_replay.py | 12 | 8 | 4 | 0 | `src/critical_tests/critical_replay.rs`; the CLI case in `crates/copper/tests/critical_replay_cli.rs` |
 | test_critical_diagnostics.py | 12 | 9 | 3 | 0 | `src/critical_tests/critical_diagnostics.rs` |
+| test_critical_reuse.py | 11 | 0 | 11 | 0 | none: `pcbir.critical_reuse` was not ported |
+| test_pair_tuning_spans.py | 10 | 10 | 0 | 0 | `src/critical_tests/pair_tuning_spans.rs` |
 
 ## Notes
 
@@ -125,3 +127,19 @@ Skipped:
 
 `lane_table_estimates_screening_delay_from_the_declared_stackup` computes
 Python's `propagation_delay` inline (length x sqrt(er) / c).
+
+### test_critical_reuse.py
+
+All skipped: `prepare_single_critical_reuse`, `validate_single_critical_reuse`
+and `route_critical_nets(retained_critical=..., retained_accesses=...)` have no
+Rust counterpart. The module is on the routing-refactor retire list and no
+pipeline stage called it.
+
+### test_pair_tuning_spans.py
+
+- `exact_constructor_uses_fallback_only_with_full_held_context`: Python's
+  `tuning_board=None` (no span fallback) has no Rust form; every caller passes
+  the held board, so only the tuned outcome is checked.
+- `legacy_success_never_enters_span_fallback`: Python patched the fallback to
+  raise; here the exact pair's tuned length must equal the legacy tuner's.
+- Python's identity checks (`a is b`) are equality checks.
