@@ -1301,6 +1301,18 @@ routing) also exits 3 where Python writes its error record.
   (a locked module missing from the cache, `--offline`). The new macro input
   `macros/net_mapping.copper` joins `export-kicad-pcb-macros`; its mutation
   `#m2` is the known unknown-part crash (D-0113).
+- New inputs reach other suites through globs. Their unknown-part
+  mutations (`net_mapping.copper#m2`, `bypass_release.copper#m1`) differ
+  only in Python's `KeyError` crash, the known difference recorded as
+  D-0113 to D-0117.
+- Checks after merging rust-m2 (366efe7): fmt, both clippy targets,
+  `cargo test --workspace --release` and `generate_rust_fixtures.py --check`
+  pass, and so does the default gate. The sweep of the route-board*, replay-*,
+  si-check* and check* suites at M6 has no differences. Its only
+  non-equal cases are the two Python-crash guards that were already
+  pending (`replay-unified-malformed/option-text-pitch`,
+  `replay-critical-bad/reserved-accesses`). This stream changed nothing in
+  `pcbir/` (D7).
 - Unchanged: a `PlacementAlgorithmError` under `--report` still records
   `ValueError`. Python's record also carries a diagnostic board and
   components, so the fix is not a one-liner.
