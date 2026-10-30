@@ -22,8 +22,8 @@ uses no component-name special cases and is independent of placement rotation.
 The report's `pair_search_order` records the choice. All search bounds and atomic
 acceptance gates are unchanged; the other topology remains fallback.
 
-`pcbir/pair_vias.py` proposes complete paired candidates after the surface-only
-joint search fails. It never modifies locked input copper or routes members
+`crates/copper-route/src/pair_vias.rs` proposes complete paired candidates
+after the surface-only joint search fails. It never modifies locked input copper or routes members
 independently. The sequence is:
 
 1. Enumerate straight/45-degree terminal collars on the actual pad-side layer.

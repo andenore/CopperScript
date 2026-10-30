@@ -1,8 +1,7 @@
 # Agent bootstrap through the CLI
 
-Run `copper agent-guide` (or `python -m copperscript agent-guide`) in the active
-CopperScript environment. Guidance ships with the CLI and needs no manifest,
-network or repository checkout. Retrieve one topic only when needed:
+Run `copper agent-guide` with the `copper` binary on PATH. Guidance ships with
+the CLI and needs no manifest, network or repository checkout. Retrieve one topic only when needed:
 `syntax`, `libraries`, `verification` or `recovery`; use `--json` for the versioned
 `copperscript.agent-guide/v1` response with package version and topic digest.
 The digest identifies guidance, not a Git revision or qualification certificate.

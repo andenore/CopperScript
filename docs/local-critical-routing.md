@@ -6,7 +6,7 @@ review R5, not a replacement global/detailed router or complete Steiner solver.
 
 ## Candidate contract
 
-`pcbir.local_critical.local_surface_candidates` resolves actual physical lands,
+`copper_route::local_critical::local_surface_candidates` resolves actual physical lands,
 including separate lands with the same pad number. It accepts two to eight lands
 on a common allowed copper layer; missing, non-copper or mixed-side SMD access
 fails without inventing a connection. Clock/RF feed profiles remain logical
@@ -52,8 +52,9 @@ tree joins the lands directly.
 `route_critical_nets(..., on_progress=callback)` emits `started`/`finished`
 notifications for each single net or coupled pair. Notifications are
 observational: clocks and progress records are excluded from geometry and route
-fingerprints. `pcbir.critical_preflight` saves the running group before its search
-and records completed results and elapsed seconds afterward. An interruption
+fingerprints. The former Python `critical_preflight` diagnostic saved the running
+group before its search and recorded completed results and elapsed seconds
+afterward. An interruption
 retains `complete: false`; a finished group is not proof of complete board routing.
 The scene byte identity is also retained when placement templates are selected.
 

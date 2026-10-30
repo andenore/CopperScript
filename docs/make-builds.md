@@ -2,18 +2,15 @@
 
 Every board uses the same recipes in `make/board.mk`. Board settings live in
 `make/examples/*.mk`; electrical/mechanical intent and physical macro bindings
-remain in `.copper`, while macro geometry and placement scenes remain data files. There are no CM4 or
-full-vertical Python routing wrappers. CI uses these same Make configurations;
-it explicitly sets `PLACEMENT_TEMPLATES=` for its full-vertical run to preserve
-its source-only placement policy, and owns timeout/artifact handling separately.
+remain in `.copper`, while macro geometry and placement scenes remain data files. There are no
+per-board routing wrappers. CI (the `make-targets` job in
+`.github/workflows/rust.yml`) uses these same Make configurations.
 
-Requires GNU Make, the Rust `copper` executable installed with
-`cargo install --path crates/copper --locked`, a Python helper/test environment
-(`uv sync --extra test`), and KiCad 10 plus its footprints for physical targets.
-Compiler commands use `CARGO_HOME/bin/copper` (normally `~/.cargo/bin/copper`),
-so a virtual environment's Python `copper` entry point cannot shadow Rust.
-Override `COPPER` with another executable path when needed. Python remains for
-orchestration, input/macro provenance and project-specific analysis helpers.
+Requires GNU Make, the `copper` executable on PATH (installed with
+`cargo install --locked --path crates/copper`, or a release binary), and KiCad 10
+plus its footprints for physical targets. The `route` target also needs bash,
+`jq`, `sha256sum` (or `shasum`) and KiCad's `kicad-cli`. `make/board.mk` sets
+`COPPER ?= copper`; override `COPPER` with another executable path when needed.
 On Windows GNU Make is an additional tool, not bundled with CopperScript;
 `mingw32-make` can be used wherever commands below say `make`.
 
@@ -58,24 +55,36 @@ status. See the [deprecation notes](round-led-ring.md).
 routing. CI additionally runs the `layout` and non-interactive `edit` targets for the
 physical examples and compatibility fixtures (`cm4`, `full-vertical`, `nrf52`,
 the deprecated `round-led-ring`, the mechanical
-examples, and `resolved-footprint`) on each commit. Electrical and simulation fixtures
+examples, and `resolved-footprint`) on each push. Electrical and simulation fixtures
 without complete footprint identities still run their complete fast target set. Actual
-routing remains limited to release tags.
+routing runs in the separate `ladder` job (`copper bench bench/ladder.json`).
 
 Compilation/placement outputs live under ignored `build/<board-name>/`.
 Each route gets a fresh `build/<board-name>/runs/<UTC-id>/`; open its
 `board.kicad_pcb` alongside its generated `.kicad_pro`, `fp-lib-table` and local
-`.pretty` library. The directory also contains the route/native reports, logs,
-profiling summaries, hashes and `run.json`. No recursive clean target deletes
+`.pretty` library. The directory also contains the route/native reports, `routing.log` and
+`run.json` with the input and output hashes. No recursive clean target deletes
 past evidence. Set `RUN_DIR` to a **new/empty path below project `build/`** if a
 fixed CI destination is needed.
 
-The generic `pcbir.build --copper PATH --profile none` runner resolves this board's imports through its
-nearest manifest, fetches only pinned URL dependencies, then routes offline.
-It never assumes CopperLib or a sibling checkout. It preserves routing errors,
-saves filled copper in the deliverable and accepts success only with ERC pass,
-complete routing, native fill verification, zero violations of any severity
-and zero unconnected items. Profiling does not change exit semantics.
+The `route` target runs `bash make/route-build.sh`. It runs `copper check` to
+resolve this board's imports through its nearest manifest (fetching only pinned
+URL dependencies), then routes offline:
+
+1. `copper route-board SOURCE ... --offline --verify-plane-fill KICAD_CLI
+   --report RUN/route-report.json -o RUN/board.kicad_pcb`;
+2. `kicad-cli pcb drc --refill-zones --save-board` on the routed board, which
+   saves the filled copper in the deliverable and writes `kicad-drc.json`;
+3. a `jq` completion check: success needs report status `pass`, ERC pass,
+   complete routing, native fill verification, no unrouted ordinary nets, and
+   zero native violations and unconnected items;
+4. `run.json` with commands, provenance and the SHA-256 bindings
+   `editor_intent_sha256`, `draft_board_sha256`, `filled_board_sha256` and
+   `native_drc_sha256` that `copper editor-overlay` checks.
+
+It never assumes CopperLib or a sibling checkout and preserves routing errors.
+Exit status: 0 passed, 1 unmet completion gates, 2 setup or runner error, 3
+unsupported (the compiler's not-implemented exit), 130 interrupted.
 The shared default chooses among the placement planner's actual legal candidates;
 it does not force `candidate-00`, which may have been rejected. To reproduce an
 explicit candidate, set `EXTRA_ROUTE_ARGS="--placement-candidate candidate-01"`;
@@ -117,7 +126,8 @@ make SOURCE=path/to/my_board.copper route LAYERS=4 FAB_PROFILE=jlcpcb-four-layer
 
 Use the default `EXAMPLE=valid` when overriding `SOURCE` to avoid carrying
 another example's optional physical scenes. For an independent repository,
-include or copy the shared `make/board.mk`, install CopperScript and use a
+include or copy the shared `make/board.mk` and `make/route-build.sh`, install
+`copper` and use a
 settings-only Makefile such as:
 
 ```make
@@ -128,10 +138,10 @@ include make/board.mk
 ```
 
 The independent project owns its manifest/lock and `build/` gitignore entry;
-it needs no example-specific Python script. Its `PYTHON` setting must select
-the environment with the CopperScript helper package installed; `COPPER` selects
-the Rust executable. Rust's unsupported features fail explicitly without switching
-to Python, and `cProfile` is unavailable for a native executable. In this checkout the CM4 local
+it needs no example-specific script. `COPPER` selects the executable, and
+`make/route-build.sh` must be next to `board.mk`. Unsupported features fail
+explicitly (exit 3). `KICAD_PYTHON` selects KiCad's own Python for
+`make editor-overlay` (`copper editor-overlay --kicad-python`). In this checkout the CM4 local
 Makefile also includes the shared recipes: `make -C examples/cm4_baseboard route`.
 
 Successful routing is **not manufacturing signoff**. Power/current review,

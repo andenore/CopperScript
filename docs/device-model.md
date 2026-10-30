@@ -1,8 +1,8 @@
 # Device and package semantics
 
 The electrical model is implemented. Use [language reference](language-reference.md)
-for source syntax and [device generation](device-generation.md) for generator
-schemas; this guide explains the model's invariants and scope.
+for source syntax (the Python device generator was removed with the Python
+implementation); this guide explains the model's invariants and scope.
 
 ## Physical identities and semantic views
 

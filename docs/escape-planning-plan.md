@@ -24,8 +24,9 @@ working copy for contributors and agents in this repository.
 | E12 | | |
 | Exact | `claude/plan-escape-e7-bga-lattice` | Analytical track. `escape_capacity` (certificate): CopperProbe FX10 73/73 signal balls escapable, no cut above 60 %; kit FX10 121/121, SIG1 cut 2 at 50/51; global route without overflow, so the open nets are a detailed-routing failure. `exact_escape` (CP-SAT, extra `exact`): all 62 (then 31 non-zone) FX10 signal balls escape on the real board state (OPTIMAL in about 1 min); `exact_escape_copper` makes 26 of 31 legal copper (lanes, exact local maze, lazy cuts). Fixed as copper they make the FX10 fast case worse (mean 17 against 12): the model does not yet carry net rules (width beyond breakout length: 0.15 mm ADC lines do not fit between lattice vias; via budgets) nor the ADC bus order at the array edge |
 
-Update this table when a step's PR merges: the D3 clean count (before → after),
-boards gained, full-vertical fingerprint outcome, and the ladder table if it changed.
+Update this table when a step's PR merges with the ladder table and the
+full-vertical outcome. The PCBWorld D3 benchmark was removed with the Python
+implementation; earlier rows quote its clean counts as history.
 
 ## Summary
 
@@ -36,19 +37,19 @@ CopperScript has the pieces around such a planner but not the planner. Today:
 - the global router chooses pin access per pin, independently;
 - the D3 step 3.8 repair finds crossing conflicts only after detailed routing, by trial and error.
 
-**Proposal:** a new `pcbir/escape_plan.py` stage, run after placement and before global routing, in six PR-sized steps (E0–E5) plus a later placement-feedback step (E6). It is advisory: every escape it suggests is still built and checked by the existing exact geometry and DRC.
+**Proposal:** a new escape-plan stage (now `crates/copper-route/src/escape_plan.rs`), run after placement and before global routing, in six PR-sized steps (E0–E5) plus a later placement-feedback step (E6). It is advisory: every escape it suggests is still built and checked by the existing exact geometry and DRC.
 
 **First targets:**
 - D3-A boards 0048–0051, two-ended crossings at a radio header;
 - the CopperProbe ADC bus at the FX10 (about 11 of its 30 open nets);
-- the D3-B tier, which CI does not run yet.
+- the D3-B tier (the PCBWorld tiers were later removed with the Python implementation).
 
 ## Why escape planning
 
 - **D3-A, 92/99 clean.** Four of the seven remaining boards fail the same way. On the MySRaspiGW boards, the nets between module U1's pin column and the 2×4 header P1 cross. Each gap between header pins holds exactly one track: 2.54 mm pitch minus a 1.727 mm pad leaves 0.813 mm, and a 0.254 mm track with 0.254 mm clearance on each side needs 0.762 mm. Routing the nets one at a time lets the first ones take the gaps the later ones need.
 - **What the original designer did.** The board's own routing in PCBench escapes CE and MISO through vias, so the crossing nets move to the other layer. That is a layer assignment of crossing nets, exactly what simultaneous escape planning computes up front.
-- **D3 plan step 3.8 (`_enclosure_repair` in `pcbir/detailed.py`) is the after-the-fact version.** Its enclosure repair rips up and reroutes nets in a window. It fixed 0049 but costs minutes per board, so it is limited to boards with at most two open nets.
-- **CopperProbe** ([routing refactor handoff](routing-refactor-handoff.md)): the ADC data lines route alone, but lose the corridor south of the FX10 to other nets. The handoff names "an escape plan or corridor reservation for the bus at the FX10 south edge" as the next lever.
+- **D3 plan step 3.8 (`_enclosure_repair` in the detailed router) is the after-the-fact version.** Its enclosure repair rips up and reroutes nets in a window. It fixed 0049 but costs minutes per board, so it is limited to boards with at most two open nets.
+- **CopperProbe** (2026-10-21 routing refactor handoff): the ADC data lines route alone, but lose the corridor south of the FX10 to other nets. The handoff names "an escape plan or corridor reservation for the bus at the FX10 south edge" as the next lever.
 
 ## State of the art
 
@@ -74,15 +75,15 @@ All results are as reported by the authors. Most use private industrial boards, 
 
 From a code survey of `main` (2026-10-21, after PR #18):
 
-- **`fanout.py`** covers any dense SMD package, not only BGAs.
+- **`fanout`** covers any dense SMD package, not only BGAs.
   - Each pin gets candidates in a cascade (interstitial vias, rays, two-leg, maze, surface).
   - Pins are reserved greedily, constrained pins first; `escape_assignment` then runs a local constraint solver (MRV with forward checking) on the exact conflict graph; then a DRC gate.
   - **There is no global objective, no flow and no channel model.**
-- **`boundary_access.py`** has ports on a package's collar edges, with an edge and layer per port. This is the only per-pin record of escape direction.
-- **`placement_escape.py`** has `EscapeSide`, `EscapeDemand` and `EscapeChannel`, a soft channel-capacity estimate, but it is used only by placement.
-- **`package_patterns.circular_array`** detects only complete square-pitch circular arrays. `bga_fanout.py` places fixed quadrant dogbones with no search.
-- **`critical_bundles.py`** orders diff pairs between the same two components physically (`_physical_order`). This is the closest existing idea to SER ordering, but only for critical pairs.
-- **`layer_assignment.py`** relabels the layers of global runs after routing to reduce crossings, but never moves runs touching a pin access.
+- **`boundary_access`** has ports on a package's collar edges, with an edge and layer per port. This is the only per-pin record of escape direction.
+- **`placement_escape`** has `EscapeSide`, `EscapeDemand` and `EscapeChannel`, a soft channel-capacity estimate, but it is used only by placement.
+- **`package_patterns.circular_array`** detects only complete square-pitch circular arrays. `bga_fanout` places fixed quadrant dogbones with no search.
+- **`critical_bundles`** orders diff pairs between the same two components physically (`_physical_order`). This is the closest existing idea to SER ordering, but only for critical pairs.
+- **`layer_assignment`** relabels the layers of global runs after routing to reduce crossings, but never moves runs touching a pin access.
 - **Global and detailed access are per pin** (`_pin_access_candidates`, `_access_candidates`). Net order is by pad count and span.
 - **The unified router** ignores `fanout_accesses`. Pre-planned stubs reach it only as fixed copper (as the BGA dogbones do) or as reservation keepouts (`flow._plan_ordinary_escapes`).
 
@@ -90,7 +91,7 @@ From a code survey of `main` (2026-10-21, after PR #18):
 
 ## Design
 
-`pcbir/escape_plan.py`, with options on `EscapePlanOptions`, off by default until a step shows no losses.
+`crates/copper-route/src/escape_plan.rs`, with options on `EscapePlanOptions`, off by default until a step shows no losses.
 
 **Placement in the flow.** It runs after placement and before global routing. It produces an `EscapePlan`: for each planned pin, the escape side or exit port, the layer, the order index along the collar, an optional via site, and diagnostics. The diagnostics cover each channel's demand against its capacity, crossings that cannot be avoided, and pins the plan could not place.
 
@@ -127,7 +128,7 @@ From a code survey of `main` (2026-10-21, after PR #18):
 | Step | Content | Target | Size |
 |---|---|---|---|
 | E0 | **Diagnostics and coverage.** Report each cluster's channel demand against capacity and its crossing count in route results and `copper issues`. Classify every remaining D3 failure and the CopperProbe open nets. Add the 10-board **D3-B** tier to the CI benchmark (Freerouting 0.78 there). | Every open net has a cause class; a D3-B baseline exists | S |
-| E1 | **Cluster and channel model** (`escape_plan.py`), with no routing change. | Capacities match hand calculations, e.g. 1 track per MySRaspiGW header gap; Yan & Wong's diagonal counter-example handled | M |
+| E1 | **Cluster and channel model** (`escape_plan`), with no routing change. | Capacities match hand calculations, e.g. 1 track per MySRaspiGW header gap; Yan & Wong's diagonal counter-example handled | M |
 | E2 | **Min-cost-flow escape for arrays**, feeding fanout candidate ranking and `bga_fanout` via choice. | Fewer fanout pending pads; CopperProbe FX10 opens; cm4 | M |
 | E3 | **Two-end ordering and planar layer assignment** for cluster pairs. | D3-A 0048–0051; fewer 3.8 windows; time per board | M |
 | E4 | **Router integration**: global access bias, detailed net order, unified reservations; then default on. | Benchmark ladder: asset-tracker, nrf52, full-vertical, cm4, led-ring, copper-probe | M |
@@ -166,35 +167,29 @@ spread, and nets that fail in every run are the structural targets.
 Report per variant: open nets, balls without a site,
 sealed planned exits, exact-commit rejections near the package, seconds.
 
-**Verification for every step** follows the D3 fix-plan pattern (see "How to carry out a step" below):
+**Verification for every step** (see "How to carry out a step" below):
 - unit tests that fail with the change removed;
-- D3-A, and from E0 also D3-B, compared board by board against the baseline, with no clean board lost;
-- the full-vertical comparison, with fingerprints identical while the option is off and every change explained when it turns on;
-- the benchmark ladder from E2 on;
+- the benchmark ladder, compared board by board against the baseline, with no complete board lost (the D3-A and D3-B PCBWorld tiers used for the earlier steps were removed with the Python implementation);
+- the full-vertical result, with copper identical while the option is off and every change explained when it turns on;
 - run time per board;
 - docs in a new `docs/escape-planning.md` describing the implemented contract (this plan stays the plan).
 
 ## How to carry out a step
 
-1. Branch from current `main` as `claude/plan-escape-<step>-<topic>` (the
-   `claude/plan-*` prefix also triggers the full-vertical comparison workflow;
-   any `claude/**` push that touches `pcbir/**` triggers the D3 benchmark).
-2. Read only what the step needs: this plan, the modules it names, and
-   [routing-benchmark.md](routing-benchmark.md) for the benchmark tooling.
+1. Branch from current `main` as `claude/plan-escape-<step>-<topic>`.
+2. Read only what the step needs: this plan and the modules it names.
 3. Add the option to `EscapePlanOptions` (off by default) and unit tests that
    fail with the change removed (mutation-check them).
-4. Before spending CI time, reroute the target boards locally with
-   `python -m pcbir.bench route <board.kicad_pcb> --out <dir>` and compare
-   unrouted nets, vias, length and seconds with `main`.
-5. Push and read the D3 result: the job fails if a clean board is lost; the
-   comparison with `.github/routing-benchmark-baseline.json` is published as
-   the "Benchmark comparison" annotation. Read the full-vertical comparison's
-   fingerprint table.
-6. From E2 on, run the benchmark ladder (`copper bench bench/ladder.json`, see
-   the [routing refactor handoff](routing-refactor-handoff.md)) and record it.
-7. Open a PR with the numbers. After merge, refresh the D3 baseline
-   (`python -m pcbir.bench baseline <record> --from-record --source ...`,
-   update the clean count in `tests/test_bench.py`) and this file's status table.
+4. Before spending CI time, route the target boards locally with
+   `copper bench bench/ladder.json --out <dir> --only <board>` (or
+   `copper route-board`) and compare opens, vias, length and seconds with
+   `main`.
+5. Run the full ladder (`copper bench bench/ladder.json --out <dir> --baseline
+   bench/ladder-baseline.json`, or the `ladder` job in
+   `.github/workflows/rust.yml`) and record it.
+6. Open a PR with the numbers. After merge, refresh
+   `bench/ladder-baseline.json` if the ladder changed, and this file's status
+   table.
 
 ## Risks and open questions
 

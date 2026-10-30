@@ -17,27 +17,26 @@ and installed-component continuity remain distinct.
 
 CopperLib parts, footprints and macro assets download automatically from their
 pinned GitHub revisions through `copper.mod`/`copper.lock`. No library checkout or
-lock refresh is required. Run from CopperScript's root (PowerShell):
+lock refresh is required. Run from CopperScript's root:
 
-```powershell
-uv sync --extra test
-uv run python -m copperscript check examples/nrf52_coin_cell/board.copper --locked
-uv run python -m examples.nrf52_coin_cell.nrf52_example --offline
+```sh
+copper check examples/nrf52_coin_cell/board.copper --locked
+make EXAMPLE=nrf52 layout
 ```
 
-`build/nrf52-coin-cell/` is ignored by Git. It contains a self-contained KiCad
-PCB/project/local footprint library, electrical and physical reports, a physical
-snapshot and `profile.pstats`/`profile.txt`. `--output-dir` changes the destination.
-Add `--offline` to `check` after the cache is populated. Never refresh a lock
-just to suppress an unexplained mismatch.
+`build/nrf52-coin-cell/` is ignored by Git. `layout` writes the placed draft
+(`placed.kicad_pcb`) and its placement report there. The former Python example
+builder was removed with the Python implementation; the Make targets use the
+same source declarations. Add `--offline` to `check` after the cache is
+populated. Never refresh a lock just to suppress an unexplained mismatch.
 
 ## What is implemented
 
 The provisional board is 50 x 40 mm. The coin-cell holder is on the left,
 SWD at the upper left, antenna at the upper-right corner, and user controls
 below the radio. All non-macro poses are explicit source placement constraints;
-the seven-member macro is transformed from its fixed U_NRF anchor. The builder
-checks placement legality before transactional copper materialization.
+the seven-member macro is transformed from its fixed U_NRF anchor. Physical
+lowering checks placement legality before transactional copper materialization.
 
 The existing asset requires six layers, so this example keeps its exact layer
 contract rather than claiming a qualified, cheaper two-layer adaptation. It
@@ -48,23 +47,21 @@ remains exclusively in the `.copper` file; physical assets cannot redefine it.
 
 The board imports the macro asset URL and declares all member/net bindings in
 `physical_macro nordic-antenna-trial`. Dependency hashes come from the existing
-package lock. The builder and Make targets use that source declaration without
-separate scene files or `--hard-macro` arguments.
-The builder consumes the full design so source artwork is retained; branding is
+package lock. The Make targets use that source declaration without separate
+scene files or `--hard-macro` arguments. The full design is consumed, so source
+artwork is retained; branding is
 placed on the back near the lower edge to clear the SWD header's silk and pads.
 
-Without `--route` this remains a placed draft. To attempt the full standard
-placement/global/package-access/critical/plane/detailed pipeline:
+`layout` is a placed draft. To attempt the full standard routing pipeline with
+native refill and DRC:
 
-```powershell
-uv run python -m examples.nrf52_coin_cell.nrf52_example --route `
-  --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe" `
-  --output-dir build/nrf52-routed
+```sh
+make EXAMPLE=nrf52 route KICAD_CLI="C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"
 ```
 
 The run preserves immutable RF copper, uses the actual off-pad ground via
-as a macro boundary terminal and retains an In1.Cu ground-fill intent. Reports
-and profiles are saved on partial completion; exit 1 means failed gates.
+as a macro boundary terminal and retains an In1.Cu ground-fill intent. Reports are
+saved on partial completion; exit 1 means failed gates.
 
 ## Latest documented status
 

@@ -244,7 +244,8 @@ proof to avoid host routing; a remote zone does not prove that a public port is
 connected. The unified router preserves that distinction without exposing
 private pads or vias as alternate host attachment points.
 
-`pcbir.workbench.check_power_path_widths(board, requirements)` checks an additional
+The Python helper `check_power_path_widths(board, requirements)` (removed with the
+Python implementation; the `copper` binary has no equivalent yet) checked an additional
 consumer-owned intent: selected load terminals must remain connected after
 excluding tracks below the required width. Each `PowerPathWidth` specifies a
 net, at least two `PadReference` terminals and integer `minimum_width_nm`.
@@ -313,19 +314,10 @@ tee values and enclosure/radiation behavior remain unqualified. Copying
 evaluation values does not tune the combined system. Full-vertical now includes
 this physical trial as a prototype; its antenna tuning remains unqualified.
 
-From CopperScript with the pinned Git footprint providers (CopperLib is
-URL-resolved):
-
-```powershell
-uv sync --extra test
-uv run python -m examples.nrf_antenna_macro.hard_macro_trial --offline
-```
-
-Ignored `build/nrf-hard-macro/` contains PCB/project/local library, a diagnostic
-physical snapshot, native DRC report, explicit `erc.json` and default cumulative-time profiling
-(`profile.pstats`, `profile.txt`). Add `--rotation 45 --output-dir
-build/nrf-hard-macro-45` for a larger centred transform probe, **not** qualified
-45-degree corner mounting.
+The dedicated Python geometry trial for this probe
+(`examples/nrf_antenna_macro`, with its `--rotation 45` transform probe) was
+removed with the Python implementation. The source remains, and
+`make EXAMPLE=antenna-macro check` still reports its expected ERC errors.
 
 Library-author maintenance only (not required for using the examples): from
 the CopperLib repository, regenerate using the locally cached official source:
@@ -342,9 +334,9 @@ oscillator and decoupling circuit are absent. No operational-radio or
 manufacturing-readiness claim follows from these results.
 
 Normal `copper check/compile` intentionally rejects this incomplete electrical
-probe with three unsourced VDD input errors. The dedicated geometry trial retains
+probe with three unsourced VDD input errors. The removed geometry trial retained
 those findings in `erc.json` without waivers; its locked/offline parser loading
-is not an ERC success or permission to release the design.
+was not an ERC success or permission to release the design.
 
 An independent KiCad refill regression adds blanket GND zones, queries actual
 filled polygons (with a positive fill control), and confirms that matching C3
@@ -357,7 +349,7 @@ or full-board RF qualification.
 The [coin-cell example](nrf52-coin-cell.md) adds the powered MCU support
 circuit, SWD and user controls without changing this macro's electrical or
 physical contract. It remains a placed draft; the non-RF connections are not
-routed by its dedicated builder.
+routed.
 
 - [Nordic reference guidance](https://docs.nordicsemi.com/r/bundle/ps_nrf52832/page/ref_circuitry.html?contentId=Deg~HuyXWjteAChpH2NzWw):
   chip matching, C3 return through VSS 31 and inner-layer exclusions.

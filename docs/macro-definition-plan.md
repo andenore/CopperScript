@@ -57,7 +57,7 @@ with one host-dependent case skipped (the definition cases overlap the first
 suite). The final macro/source/LSP run passed 100 tests after the portability
 and output-input protection checks. Seven actual TextMate highlighting tests
 passed. Commands used the
-repository Python environment and disposable `build/macro-definition-tests*`
+then-current Python environment and disposable `build/macro-definition-tests*`
 temporary directories.
 
 Coverage includes equivalent source/generated-JSON binding and materialization,

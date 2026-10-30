@@ -115,14 +115,11 @@ and keepout tests verify enforcement at translated/rotated physical positions.
 See [KiCad's footprint flip implementation](https://github.com/KiCad/kicad-source-mirror/blob/10.0/pcbnew/footprint.cpp)
 for the target's normalization convention.
 
-## Python API
+## Rust API
 
-```python
-from pathlib import Path
-from pcbir import KiCadPcbBackend, write_kicad_project
-
-manifest = KiCadPcbBackend().generate(physical_board)
-write_kicad_project(manifest, Path("build/my-board/board.kicad_pcb"))
+```rust
+let manifest = copper_pcb::kicad_pcb::generate(&physical_board)?;
+copper_pcb::project::write_kicad_project(&manifest, Path::new("build/my-board/board.kicad_pcb"))?;
 ```
 
 `generate` remains a pure artifact producer. Call the writer rather than saving

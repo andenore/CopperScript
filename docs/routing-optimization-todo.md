@@ -63,6 +63,7 @@ Require current profiles and exact-output/quality comparisons before optimizatio
 
 - [ ] Re-profile after O1–O4; select a narrowly bounded remaining hot kernel.
 
-- [ ] Retain the Python oracle and prove integer-overflow/exact-predicate behavior.
+- [ ] Prove integer-overflow/exact-predicate behavior of the Rust kernels with
+  dedicated tests (the Python reference was removed).
 
 - [ ] Verify deterministic tie-breaking and cross-platform deployment before adoption.

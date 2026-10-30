@@ -465,7 +465,7 @@ power_state STANDBY {
 ```
 
 Each name must refer to a declared supply and each value is `on`, `off`, or
-`unknown`. Run `python -m copperscript power-check board.copper` to validate
+`unknown`. Run `copper power-check board.copper` to validate
 these scenarios. The current analysis warns about possible back-power into an
 off device domain; it is not transient or firmware simulation. Power states are
 board-level declarations in v0.1.
@@ -1260,7 +1260,7 @@ as the main pass. Both are kept only when both are accepted; otherwise the
 state is restored exactly. Candidates are the blocking groups in acceptance
 order, one per attempt, at most 4 attempts per bundle (the
 `bundle_repair_limit` argument of `route_critical_nets`; `BUNDLE_REPAIR_LIMIT`
-in `pcbir.critical_bundles`). Spacing findings come from the coarse candidate
+in `copper_route::critical_bundles`). Spacing findings come from the coarse candidate
 and from exact candidates. When the failed group has no spacing finding at all
 (its exact searches found no candidate, as for a middle pair squeezed between
 pairs routed before it), the candidates are instead its two physically nearest
@@ -1271,7 +1271,7 @@ reports it again as `started`/`finished`. The critical report's `bundles` list
 gives, per bundle, the `components`, `kind`, `priority`, the `order` used,
 the default `name_order`, `repair_limit`, `repairs_attempted`,
 `repairs_accepted` and each repair (`failed`, `ripped_up`, `accepted`,
-`reason`). `python -m pcbir.critical_preflight` prints one line per bundle.
+`reason`). `copper replay-critical` prints one line per bundle.
 
 When the pair order of a bundle is inverted between its two components, as on
 a mirrored connector pinout, some pairs must cross others. Each pair's rank at
@@ -1370,7 +1370,7 @@ the clearance is relaxed for the dense lands, and a bump there takes the room
 the neighbouring lands' lanes need to escape), then slots with the most room,
 then those farthest from the unit's terminals, then by position. The fewest bumps that
 provide the length are used, at most 16 per unit (`MATCH_TUNING_BUMP_LIMIT` in
-`pcbir.critical_tuning`), with levelled heights. Each tuned unit passes the same profile gates (length and via
+`copper_route::critical_tuning`), with levelled heights. Each tuned unit passes the same profile gates (length and via
 budgets, pair skew and `maximum_uncoupled_length`) and atomic native-DRC
 validation against all other copper as a routed candidate. In the coupled-length
 measure, a pair bump adds up to about 3.3 lane spacings of uncoupled length per
@@ -1389,7 +1389,7 @@ group, `id`, `max_skew_nm`, `status` (`within_limit`, `tuned`, `failed` or
 `incomplete`), `skew_before_nm`, `skew_after_nm`, the `members` with
 `length_before_nm`, `length_after_nm` and `added_length_nm`, the number of
 `bumps` and the `reason`. The `nets` entries and `lanes` table report the
-tuned copper. `python -m pcbir.critical_preflight` prints one line per group.
+tuned copper. `copper replay-critical` prints one line per group.
 
 A unit whose rules declare `tuning_style = "serpentine"` (D-PHY plan R10)
 snakes about its original line instead of bumping off it. Its pieces are first
@@ -1497,7 +1497,7 @@ the Hammerstad-Jensen microstrip effective permittivity of the inward dielectric
 and the net's dominant width. Inner layers use the thickness-weighted
 permittivity of both adjacent dielectrics. Via barrels are excluded. Without a
 stack-up the delay is `null` with `delay_reason: "no stack-up declared"`.
-`python -m pcbir.critical_preflight` also prints one line per lane.
+`copper replay-critical` also prints one line per lane.
 
 The `route-board` report's `critical_lane_review` section reviews the exported
 copper of the critical nets against common layout guidance; the critical
@@ -1528,7 +1528,7 @@ and the total coupled length:
 CRITICAL LANES: 5 nets; pairs=2, worst skew=0.800 mm, over max_skew=1; match groups=1, over max_skew=0; min spacing outside breakout: critical=0.300 mm (A_N to B_P), signal=0.507 mm (A_P to S); coupled length=20.763 mm; bends>45deg=2 (sharpest 90.0 deg)
 ```
 
-`route-board --debug` and `python -m pcbir.critical_preflight --debug` print the
+`route-board --debug` prints the
 full traceback of an error before the usual one-line message. Without the flag,
 output is unchanged.
 
@@ -1795,7 +1795,7 @@ keeps it as searched. Smoothing never moves vias, reserved or immutable copper.
 Generate a KiCad 8 schematic after ERC succeeds:
 
 ```console
-python -m copperscript export-kicad board.copper -o board.kicad_sch
+copper export-kicad board.copper -o board.kicad_sch
 ```
 
 The generated schematic is a derived artifact, not CopperScript source. The

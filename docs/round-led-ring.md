@@ -2,8 +2,8 @@
 
 Use [CopperLedRing](https://github.com/andenore/CopperLedRing) for the maintained
 LED-ring board project, current build instructions and routing evidence.
-The in-repository `examples/round_led_ring/` source and optional wrapper are
-deprecated as of 2026-10-20. They remain for compiler regression coverage and
+The in-repository `examples/round_led_ring/` source is deprecated as of
+2026-10-20. It remains for compiler regression coverage and
 command compatibility; new board work and routing benchmarks should use the
 independently versioned project.
 
@@ -52,30 +52,25 @@ From the repository root, with the pinned Git footprint providers (PowerShell):
 Use the generic compiler directly (no example builder required):
 
 ```powershell
-uv run copper export-kicad-pcb examples/round_led_ring/board.copper --locked `
+copper export-kicad-pcb examples/round_led_ring/board.copper --locked `
   -o build/round-led-ring/round_led_ring.kicad_pcb
 ```
 
-The optional repository-only wrapper adds previews, profiling and native checks:
+The optional Python wrapper (previews and native checks) was removed with the
+Python implementation. Use the shared Make targets instead:
 
 ```powershell
-uv run python -m copperscript check examples/round_led_ring/board.copper --locked
-uv run python -m examples.round_led_ring.round_led_example `
-  --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe"
+copper check examples/round_led_ring/board.copper --locked
+make EXAMPLE=round-led-ring layout
 ```
 
-Output: ignored `build/round-led-ring/`. The default is a placed, **unrouted**
-inspection project with source/local KiCad footprints, front/back placement SVGs,
-physical DRC, native KiCad DRC, summary and `profile.pstats`/`profile.txt`. Add
-`--offline` after the URL package cache is populated. `--output-dir` changes the
-destination. Performance profiling is always enabled.
+Output: ignored `build/round-led-ring/`. `layout` writes a placed, **unrouted**
+draft and its report. Add `--offline` after the URL package cache is populated.
 
 To attempt package escapes and detailed signal routing with native ground refill:
 
 ```powershell
-uv run python -m examples.round_led_ring.round_led_example --route `
-  --kicad-cli "C:\Program Files\KiCad\10.0\bin\kicad-cli.exe" `
-  --output-dir build/round-led-ring-routed
+make EXAMPLE=round-led-ring route KICAD_CLI="C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"
 ```
 
 Package/global access radius remains explicitly 5 mm for this example. The
@@ -160,8 +155,7 @@ coin cell inaccessible to children in the final enclosure.
 ## Mechanical implementation and limitations
 
 Electrical connectivity, the separate mechanical section, fixed ring placements
-and ground-pour intent are all in `.copper`. The optional Python wrapper is
-repository-only rendering/verification tooling, not a hidden design input.
+and ground-pour intent are all in `.copper`.
 Named datums and bounded advanced mechanical intent are available in the language. `BoardOutline.circle()` retains an
 authoritative `CircularBoardBoundary` and an explicitly bounded inscribed query
 ring (default chord error 0.01 mm). Every ring edge is integer/Fraction-certified

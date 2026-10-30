@@ -385,8 +385,7 @@ code.
 
 ## 4. Language and compiler
 
-`.copper` is the only user-facing source format. Executable Python is permitted
-only in internal tests and development fixtures.
+`.copper` is the only user-facing source format.
 
 The compiler pipeline is:
 

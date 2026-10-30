@@ -97,7 +97,7 @@ than producing an unsafe approximation. Zones exclude polygonal cutouts;
 native refill handles NPTH clearances and must independently prove connectivity.
 Insets intersecting a cutout are rejected until polygon-boolean clipping exists.
 
-Example builders and fictitious library data live outside `pcbir`. Generic
+Example builders and fictitious library data live outside the compiler crates. Generic
 compiler, placement, routing and backend modules must not import examples or
 encode example references/paths. The round LED source owns its circle, fixed
 ring placements, clearance rules and rear ground-pour intent.

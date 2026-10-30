@@ -1,14 +1,16 @@
 # Physical editor and VS Code backlog
 
-Findings from the 2026-10-20 review of `copper edit` (pcbir/editor) and the VS Code
-extension with its language server (integrations/vscode, pcbir/lsp). Measured on
+Findings from the 2026-10-20 review of `copper edit` and the VS Code extension with
+its language server (integrations/vscode), made on the former Python
+implementation. The editor is now `copper edit-mechanical` (`crates/copper-editor`)
+and the server `copper lsp` (`crates/copper-lsp`). Measured on
 examples/mechanical_editor_demo and examples/full_vertical (55 parts). Most
 important first; check current code before starting an item.
 
 ## Defects
 
 - [x] Language server: decode VS Code file URIs before reading the drive letter.
-  VS Code sends `file:///c%3A/...`; `pcbir/lsp/text.py` turns that into `\c:\...`,
+  VS Code sends `file:///c%3A/...`; the server's URI conversion turned that into `\c:\...`,
   so imports and `copper.mod` do not resolve and published diagnostics do not match
   the open document on Windows. Tests only used `file:///C:/`.
 - [x] Language server: publish diagnostics and definitions under the URI the client
@@ -36,7 +38,8 @@ important first; check current code before starting an item.
 - [x] VS Code: restart a crashed or timed-out language server with backoff and show
   its state; today every feature returns nothing until a manual restart.
 - [x] VS Code: closing the editor tab while it prepares (up to 300 s) leaks the
-  Python backend (`panel.onDidDispose` is registered after preparation).
+  editor backend (`panel.onDidDispose` is registered after preparation). The
+  custom editor was removed in extension 0.4.0.
 - [x] Grammar: `no_connect` is not highlighted; add a test comparing parser keywords
   with the grammar.
 - [x] Editor: a stale `.editor-lock` blocks saving forever; record PID/time, detect
@@ -54,8 +57,8 @@ important first; check current code before starting an item.
   the layout) at full precision such as `28.333333mm`; offer grid snapping or
   rounding for parts that were never fixed.
 - [x] VS Code: severity mapping is error/else warning; the file watcher reports every
-  change as "changed"; unknown notifications are logged as errors; `package.py`
-  hardcodes the engine version.
+  change as "changed"; unknown notifications are logged as errors; the offline
+  packager (since removed; packaging uses `vsce`) hardcoded the engine version.
 - [x] Docs: the rear view is described as mirrored (the UI says it is not); the tab list
   omits Properties.
 
@@ -82,7 +85,9 @@ important first; check current code before starting an item.
   for component, net, no_connect, supply and interface.
 - [ ] Outline: nested document symbols, distinct kinds for supplies; workspace symbols.
 - [ ] Semantic tokens for components, nets, pins and parts; scope-aware rename/references.
-- [ ] Run `tests/vscode/integration.cjs` in Windows CI with `@vscode/test-electron`.
+- [ ] Add an Extension Development Host test with `@vscode/test-electron` to Windows
+  CI (the earlier `tests/vscode/integration.cjs` was deleted with the mechanical
+  custom editor).
 - [x] `language-configuration.json` word pattern including `-`.
 
 ## Follow-ups from the fix review
