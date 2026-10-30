@@ -854,6 +854,9 @@ pub fn route_critical_nets(
     if options.pair_state_limit.is_some_and(|limit| limit <= 0) {
         return Err(Error::Value("critical pair aggregate state bound must be positive".to_owned()));
     }
+    if options.bundle_repair_limit < 0 {
+        return Err(Error::Value("critical bundle repair limit cannot be negative".to_owned()));
+    }
     let board = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board)?)?;
     if !board.hard_macros.is_empty() && global_route.placement_fingerprint != placement_fingerprint(&board) {
         return Err(Error::Value("critical global guides are stale".to_owned()));
@@ -1782,7 +1785,7 @@ pub(crate) fn validate_candidate(
 }
 
 /// `_reject_reserved_plane_tracks`: a candidate on another net's dedicated plane layer.
-fn reject_reserved_plane_tracks(
+pub(crate) fn reject_reserved_plane_tracks(
     board: &PhysicalBoard,
     mut result: CriticalNetResult,
     tracks: Vec<TrackSegment>,
@@ -1809,7 +1812,7 @@ fn reject_reserved_plane_tracks(
     (result, Vec::new(), Vec::new())
 }
 
-type Lane = Vec<(CopperLayer, Point, Point)>;
+pub(crate) type Lane = Vec<(CopperLayer, Point, Point)>;
 
 /// `_coarse_transition_conflict`: why the coarse candidate may not place
 /// its guide transitions: a profile with no via budget or one common signal
@@ -2034,7 +2037,7 @@ fn min_declared(first: Option<i64>, second: Option<i64>) -> Option<i64> {
 /// `_route_pair` for the coarse candidate: the aligned channel between the
 /// guides' terminals. Offset guides, guide vias and length tuning report not
 /// implemented.
-fn route_pair(
+pub(crate) fn route_pair(
     board: &PhysicalBoard,
     first_rule: &NetRoutingRule,
     second_rule: &NetRoutingRule,
@@ -2975,7 +2978,7 @@ fn route_nested_exit(
 /// A transition with a signal or return via inside any breakout region comes
 /// last; otherwise, with a reserved corridor for the pair (R4), transitions
 /// with every via inside it come first.
-fn crossing_site_rank(board: &PhysicalBoard, group: &[String]) -> Result<impl Fn(&[Via]) -> Option<i64>> {
+pub(crate) fn crossing_site_rank(board: &PhysicalBoard, group: &[String]) -> Result<impl Fn(&[Via]) -> Option<i64>> {
     let breakout = copper_drc::breakout::BreakoutRegions::new(board);
     let corridor: Option<Vec<Point>> = copper_drc::legality::reserved_corridors(board)?
         .into_iter()
@@ -3234,7 +3237,7 @@ fn unrouted_lanes(
 /// all other committed copper. Nothing is changed here: the caller commits
 /// both results only when both are accepted.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn bundle_repair(
+pub(crate) fn bundle_repair(
     board: &PhysicalBoard,
     routes: &IndexMap<String, GlobalNetRoute>,
     rules: &IndexMap<&str, &NetRoutingRule>,
@@ -3375,7 +3378,7 @@ fn pin_stubs(net: &str, guide: &GlobalNetRoute, width: i64) -> Vec<TrackSegment>
 }
 
 /// `_route_single`: the global guide's segments, pin stubs and vias.
-fn route_single(
+pub(crate) fn route_single(
     board: &PhysicalBoard,
     rule: &NetRoutingRule,
     guide: Option<&GlobalNetRoute>,
@@ -3436,7 +3439,7 @@ fn route_single(
 /// `_improve_single_surface`: a shorter fully checked via-free surface tree
 /// replaces the guide's copper (or an open result).
 #[allow(clippy::too_many_arguments)]
-fn improve_single_surface(
+pub(crate) fn improve_single_surface(
     board: &PhysicalBoard,
     rule: &NetRoutingRule,
     guide: Option<&GlobalNetRoute>,
@@ -3559,7 +3562,7 @@ fn join_offset_junctions(
 /// the outside of the lanes; with `retain_access_tracks`, the access's
 /// checked lead-in and a checked tail where one exists.
 #[allow(clippy::too_many_arguments)]
-fn pair_pin_stubs(
+pub(crate) fn pair_pin_stubs(
     board: &PhysicalBoard,
     net: &str,
     guide: &GlobalNetRoute,
@@ -3707,7 +3710,7 @@ fn unified_error(error: crate::unified_error::Error) -> Error {
 }
 
 /// One owner's proposal: its result and new copper.
-type Proposal = (CriticalNetResult, Vec<TrackSegment>, Vec<Via>);
+pub(crate) type Proposal = (CriticalNetResult, Vec<TrackSegment>, Vec<Via>);
 
 /// The unified router's bounded critical options (`replace(unified_options,
 /// direct=True, ...)`), with `budget` seconds unless the caller's is smaller.
@@ -3815,7 +3818,7 @@ fn route_critical_cohort(
 
 /// `_route_single_exact`: bounded single-net repair against immutable earlier
 /// critical copper, the net routing alone in the unified router.
-fn route_single_exact(
+pub(crate) fn route_single_exact(
     board: &PhysicalBoard,
     rule: &NetRoutingRule,
     global_route: &GlobalRoutingResult,
@@ -3948,7 +3951,7 @@ fn within_or_shorter(candidate: &CriticalNetResult, incumbent: &CriticalNetResul
 
 /// `_rejection_summary`: counted first-failing gates (most frequent first)
 /// and three examples, distinct gates first.
-fn rejection_summary(rejected: &[(String, String)]) -> (Vec<(String, i64)>, Vec<String>) {
+pub(crate) fn rejection_summary(rejected: &[(String, String)]) -> (Vec<(String, i64)>, Vec<String>) {
     let mut counts: IndexMap<String, i64> = IndexMap::new();
     for (gate, _) in rejected {
         *counts.entry(gate.clone()).or_default() += 1;

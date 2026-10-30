@@ -505,7 +505,10 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
         let text = parsed.value(name).unwrap_or(default).to_owned();
         match checked_length(&text, positive) {
             Ok(true) => lengths.push((name, text)),
-            Ok(false) => return usage(format!("argument {name}: expected a finite length in mm, got '{text}'")),
+            Ok(false) => {
+                let bound = if positive { "positive" } else { "nonnegative" };
+                return usage(format!("argument {name}: expected a {bound} finite length in mm, got '{text}'"));
+            }
             Err(Stop::Pending(what)) => return Err(Checked::Pending(what)),
             Err(Stop::Value { message, .. } | Stop::UnknownPart { message, .. }) => return usage(message),
         }
@@ -515,7 +518,9 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
             None => Ok(None),
             Some(text) => match checked_length(text, true) {
                 Ok(true) => Ok(Some(text.to_owned())),
-                Ok(false) => Err(Checked::Usage(format!("argument {name}: expected a positive length, got '{text}'"))),
+                Ok(false) => Err(Checked::Usage(format!(
+                    "argument {name}: expected a positive finite length in mm, got '{text}'"
+                ))),
                 Err(Stop::Pending(what)) => Err(Checked::Pending(what)),
                 Err(Stop::Value { message, .. } | Stop::UnknownPart { message, .. }) => Err(Checked::Usage(message)),
             },

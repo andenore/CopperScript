@@ -113,6 +113,11 @@ pub mod unified_error;
 pub mod unified_router;
 pub mod via_lattice;
 
+#[cfg(test)]
+mod critical_tests;
+#[cfg(test)]
+pub(crate) mod test_support_critical;
+
 pub use copper_pcb::{Error, Result};
 pub use progress::{Progress, emit};
 pub use pypath::display as pypath_display;
