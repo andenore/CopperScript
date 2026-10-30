@@ -18,6 +18,7 @@ test that loops over its cases.
 | test_group_tuning.py | 11 | 0 (parts of 2 tests: see notes) | 0 | `tests/group_tuning.rs` (10); `src/test_support_planes.rs` (`drop_group_steps`) |
 | test_breakout_regions.py | 11 | 0 | 0 | `tests/breakout_regions.rs` (9); `src/test_support_planes.rs` (2: `route_single`, `route_pair` + `validate_candidate`) |
 | test_interstitial_fanout.py | 10 | 0 (installed-KiCad half of the native-project test and the `MAX_TERMINAL_CAPACITY_PROPOSALS` monkeypatch dropped: see notes) | 0 | `tests/interstitial_fanout.rs` (7); `src/test_support_planes.rs` (3: `legal_choices`, `maze_choices`) |
+| test_fanout_late_bypass_completion.py | 7 | 2: the 7-fault rollback test (substituted `route_decouplers` proposals: Python internals, Rust has no seam); the compact-report test (`LateBypassCompletionReport` is not modelled in Rust) | 0 | `tests/fanout_late_bypass_completion.rs` |
 
 ## Notes
 
@@ -84,3 +85,16 @@ test that loops over its cases.
   terminal-budget part that set `MAX_TERMINAL_CAPACITY_PROPOSALS` to 0 is
   dropped (a Rust constant). Rust's `can_via` always checks hole copper
   (Python's `check_hole_copper=True`).
+
+- `test_fanout_late_bypass_completion.py`: Rust's `complete_late_bypasses`
+  returns no completion report (no `late_bypass` status, passes or reason)
+  and `FanoutResult` carries no `pin_analysis`; a completed pass is checked
+  as cleared pending obligations with appended back-side semantic tracks,
+  an unchanged one as a field-by-field copy of the incumbent. The normal
+  fanout case patched `_legal_choices` away to force the early bypass to
+  fail and observed `route_decouplers`; without those seams it checks the
+  shared end state (link verified, ledger covered, created copper equal to
+  the board's). The obstructed half of the old-witness case needed a
+  substituted proposal and is dropped. The one-capacitor-two-targets board
+  check runs where Rust makes it, when a board state is decoded. Scene
+  builders are in `support_planes/decoupling.rs`.

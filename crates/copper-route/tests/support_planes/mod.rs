@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 pub mod breakout;
+pub mod decoupling;
 pub mod groups;
 pub mod lanes;
 pub mod paths;
