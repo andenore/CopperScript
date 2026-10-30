@@ -18,6 +18,7 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | routing_clearance_pad_cache | 18 | 14 | 4 | 0 | `tests/routing_clearance_pad_cache.rs` (14) |
 | congestion_feedback | 17 | 15 | 2 | 0 | `tests/congestion_feedback.rs` (15) |
 | escape_assignment | 14 | 8 | 6 | 0 | `tests/escape_assignment.rs` (4), `src/escape_assignment.rs` `tests` (4) |
+| unified_nested_routing | 13 | 13 | 0 | 0 | `tests/unified_nested_routing.rs` (12), `src/unified_router/tests.rs` (1) |
 | routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
 ## Notes per file
@@ -129,9 +130,19 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 - `EscapeConflicts::compatible` is private: unit tests. Trials are compared by
   their `Debug` text (no `PartialEq`).
 
+### unified_nested_routing
+- `test_bga_routes_completely_on_the_nested_lattice` and
+  `test_uniform_fine_pitch_reaches_the_same_completion` share one Rust test
+  (Python shared a module fixture). The congestion test is split: the routed
+  map is checked in the integration test, the empty-board capacities against
+  the private `congestion_map` (now `pub(crate)`) in a unit test.
+- The memory fixture (100 x 80 mm, six layers) runs in about 0.5 s in
+  release, so it is not ignored (Python skipped it without the native kernel).
+- The state rewrite of the replay test uses `copper_state::content_digest`.
+
 ## Remaining files (in order)
 
-unified_nested_routing, route_path_geometry, corridor_reservation,
+route_path_geometry, corridor_reservation,
 unified_commit_index, placement_global_progress, routing_lattice,
 congestion_feedback_flow, unified_router_options, unified_congestion_export,
 unified_search_costs, unified_review_constraints, routing_clearance_remove,

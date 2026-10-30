@@ -247,3 +247,42 @@ fn bus_skew_tuning_needs_an_amplitude_contract_and_room_under_max_length() {
     let only_b: Accepted = IndexMap::from([("B".to_owned(), before["B"].clone())]);
     assert_eq!(tune_bus_skew(&board, &only_b, &rules(&board)).expect("tune"), (only_b.clone(), Vec::new()));
 }
+
+/// `tests/test_unified_nested_routing.py::test_congestion_capacity_is_per_area_on_both_lattices`
+/// (the empty-board half; the routed half is in `tests/unified_nested_routing.rs`).
+#[test]
+fn congestion_capacity_is_per_area_on_both_lattices() {
+    use super::route::congestion_map;
+    let mut board = board(
+        "NestedBGA",
+        20.0,
+        20.0,
+        vec![ball_array("test/bga25_0.75", 5, 0.75, 0.35)],
+        vec![placement("U1", "test/bga25_0.75", 10.0, 10.0)],
+        Vec::new(),
+    );
+    board.stackup = copper_pcb::board::Stackup::new(layers(4));
+    board.rules = copper_physical::DesignRules {
+        minimum_clearance_nm: mm(0.1),
+        minimum_track_width_nm: mm(0.1),
+        default_track_width_nm: mm(0.1),
+        default_via_size_nm: mm(0.4),
+        default_via_drill_nm: mm(0.2),
+        minimum_hole_clearance_nm: mm(0.15),
+        ..copper_physical::DesignRules::default()
+    };
+    let options = UnifiedRouterOptions { fine_regions: "dense".to_owned(), congestion_tile_nm: mm(1.0), ..opts() };
+    let mut nested = router(&board, &options, &[]);
+    let congestion = congestion_map(&mut nested, &[], mm(1.0));
+    let patch = &nested.lattice.blocks()[1];
+    // Tile (7, 7) lies in the patch's margin between its edge and the balls;
+    // tile (1, 10) is free board far from every pad.
+    assert!(patch.x0 < mm(7.0) && patch.y0 < mm(7.0));
+    let (ix, iy) = congestion.tile_of(pt(7.5, 7.5));
+    let (ox, oy) = congestion.tile_of(pt(1.5, 10.5));
+    let (fine, coarse) = (congestion.capacity[iy][ix], congestion.capacity[oy][ox]);
+    assert!(coarse > 0.0 && (fine - coarse).abs() <= 0.1 * coarse, "{fine} against {coarse}");
+    let uniform_options = UnifiedRouterOptions { congestion_tile_nm: mm(1.0), ..opts() };
+    let mut uniform = router(&board, &uniform_options, &[]);
+    assert!(congestion_map(&mut uniform, &[], mm(1.0)).capacity.iter().flatten().all(|c| c.is_finite()));
+}
