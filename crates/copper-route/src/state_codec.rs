@@ -4044,3 +4044,247 @@ pub fn inputs_state_text(
     let metadata = Object::from([("note".to_owned(), Value::from("route_unified inputs"))]);
     Ok(StateDocument::new("builtins:dict", metadata, StateValue::Map { entries, proxy: false }).to_text())
 }
+
+// ---------------------------------------------------------------------------
+// Writing route-board checkpoints
+
+fn e_frozenset_of<T>(items: impl IntoIterator<Item = T>, encode: impl Fn(T) -> StateValue) -> StateValue {
+    StateValue::FrozenSet(items.into_iter().map(encode).collect())
+}
+
+/// `encode(options)`: the `PlacementPlannerOptions` dataclass.
+pub fn encode_planner_options(o: &copper_place::PlannerOptions) -> StateValue {
+    dc(
+        "pcbir.placement:PlacementPlannerOptions",
+        vec![
+            ("grid_step_nm", i(o.grid_step_nm)),
+            ("edge_clearance_nm", i(o.edge_clearance_nm)),
+            ("component_clearance_nm", i(o.component_clearance_nm)),
+            ("congestion_bin_nm", i(o.congestion_bin_nm)),
+            ("analytical_iterations", i(o.analytical_iterations)),
+            ("satellite_seeding", b(o.satellite_seeding)),
+            ("auto_pair_corridors", b(o.auto_pair_corridors)),
+            ("analytical_step_mm", f(o.analytical_step_mm)),
+            ("analytical_momentum", f(o.analytical_momentum)),
+            ("refinement_passes", i(o.refinement_passes)),
+            ("refinement_radius_steps", i(o.refinement_radius_steps)),
+            ("candidate_count", i(o.candidate_count)),
+            ("legalization_candidates", i(o.legalization_candidates)),
+            ("exact_repair_limit", i(o.exact_repair_limit)),
+            ("exact_repair_candidates", i(o.exact_repair_candidates)),
+            ("fixed_references", e_frozenset_of(&o.fixed_references, |r| s(r))),
+            ("escape_margin_nm", i(o.escape_margin_nm)),
+            ("escape_transit_lanes", i(o.escape_transit_lanes)),
+            ("escape_spacing_passes", i(o.escape_spacing_passes)),
+            ("escape_max_movement_nm", i(o.escape_max_movement_nm)),
+            ("power_domain_weight", f(o.power_domain_weight)),
+            ("support_pattern_trials", i(o.support_pattern_trials)),
+            ("package_support_trials", i(o.package_support_trials)),
+            ("decoupling_placement_trials", i(o.decoupling_placement_trials)),
+            ("seed_count", opt_int(o.seed_count)),
+        ],
+    )
+}
+
+/// `encode(options)`: the `GlobalRouterOptions` dataclass.
+pub fn encode_global_options(o: &GlobalRouterOptions) -> StateValue {
+    dc(
+        "pcbir.routing:GlobalRouterOptions",
+        vec![
+            ("tile_size_nm", i(o.tile_size_nm)),
+            ("maximum_iterations", i(o.maximum_iterations)),
+            ("present_penalty", i(o.present_penalty)),
+            ("present_penalty_growth", i(o.present_penalty_growth)),
+            ("history_penalty", i(o.history_penalty)),
+            ("via_cost", i(o.via_cost)),
+            ("bend_cost", i(o.bend_cost)),
+            ("layer_preference_cost", i(o.layer_preference_cost)),
+            ("direction_preference_cost", i(o.direction_preference_cost)),
+            ("guide_half_width_tiles", i(o.guide_half_width_tiles)),
+            ("layer_assignment_passes", i(o.layer_assignment_passes)),
+            ("local_demand_cost", i(o.local_demand_cost)),
+            ("local_demand_pitch_nm", i(o.local_demand_pitch_nm)),
+            ("pin_access_candidates", i(o.pin_access_candidates)),
+            ("escape_radius_nm", i(o.escape_radius_nm)),
+            ("escape_step_nm", i(o.escape_step_nm)),
+            ("critical_escape_step_nm", opt_int(o.critical_escape_step_nm)),
+        ],
+    )
+}
+
+/// `encode(options)`: the `PlacementRoutingFeedbackOptions` dataclass.
+pub fn encode_feedback_options(o: &crate::routeflow::PlacementRoutingFeedbackOptions) -> StateValue {
+    dc(
+        "pcbir.routeflow:PlacementRoutingFeedbackOptions",
+        vec![
+            ("maximum_iterations", i(o.maximum_iterations)),
+            ("initial_movement_nm", i(o.initial_movement_nm)),
+            ("minimum_movement_nm", i(o.minimum_movement_nm)),
+            ("maximum_trials_per_iteration", i(o.maximum_trials_per_iteration)),
+            ("stagnation_limit", i(o.stagnation_limit)),
+            ("preferred_candidate_id", opt_text(&o.preferred_candidate_id)),
+        ],
+    )
+}
+
+/// `encode(result)`: the `PlacementRoutingResult` a placement checkpoint holds
+/// (no package patterns: support-pattern trials are not rewritten).
+pub fn encode_placement_result(result: &crate::routeflow::PlacementRoutingResult) -> StateValue {
+    dc(
+        "pcbir.routeflow:PlacementRoutingResult",
+        vec![
+            ("status", en("pcbir.routeflow:FeedbackStatus", result.status.value())),
+            ("board", encode_board(&result.board)),
+            ("global_route", encode_global_route(&result.global_route)),
+            ("placement_candidate", s(&result.placement_candidate)),
+            (
+                "iterations",
+                tuple(&result.iterations, |item| {
+                    dc(
+                        "pcbir.routeflow:FeedbackIteration",
+                        vec![
+                            ("iteration", i(item.iteration)),
+                            ("accepted", b(item.accepted)),
+                            ("movement_nm", i(item.movement_nm)),
+                            ("trials", i(item.trials)),
+                            ("unrouted_net_count", i(item.unrouted_net_count)),
+                            ("total_overflow", i(item.total_overflow)),
+                            ("maximum_overflow", i(item.maximum_overflow)),
+                            ("routing_fingerprint", s(&item.routing_fingerprint)),
+                        ],
+                    )
+                }),
+            ),
+            ("accepted_moves", i(result.accepted_moves)),
+            ("full_route_certified", b(result.full_route_certified)),
+            ("package_patterns", StateValue::Tuple(Vec::new())),
+        ],
+    )
+}
+
+/// `encode(options)`: the `PlaneStitchOptions` dataclass.
+pub fn encode_plane_stitch_options(o: &crate::plane::PlaneStitchOptions) -> StateValue {
+    let pads = |pads: &Option<std::collections::BTreeSet<PadReference>>| {
+        opt(pads, |pads| e_frozenset_of(pads, e_pad_reference))
+    };
+    dc(
+        "pcbir.plane:PlaneStitchOptions",
+        vec![
+            ("step_nm", i(o.step_nm)),
+            ("maximum_radius_nm", i(o.maximum_radius_nm)),
+            ("maximum_contact_radius_nm", i(o.maximum_contact_radius_nm)),
+            ("maximum_detour_nm", i(o.maximum_detour_nm)),
+            ("maze_step_nm", i(o.maze_step_nm)),
+            ("maze_state_budget", i(o.maze_state_budget)),
+            ("candidate_bias", opt_text(&o.candidate_bias)),
+            ("escape_width_nm", opt_int(o.escape_width_nm)),
+            ("only_pads", pads(&o.only_pads)),
+            ("preferred_ground_pads", pads(&o.preferred_ground_pads)),
+            ("ground_via_in_pad", b(o.ground_via_in_pad)),
+            ("include_surface_zones", b(o.include_surface_zones)),
+            ("require_explicit", b(o.require_explicit)),
+            ("keepouts", tuple(&o.keepouts, e_keepout)),
+        ],
+    )
+}
+
+fn e_decoupling_link(link: &DecouplingLink) -> StateValue {
+    dc(
+        "pcbir.physical:DecouplingLink",
+        vec![
+            ("capacitor", e_pad_reference(&link.capacitor)),
+            ("target", e_pad_reference(&link.target)),
+            ("return_pad", e_pad_reference(&link.return_pad)),
+            ("net", s(&link.net)),
+            ("return_net", s(&link.return_net)),
+        ],
+    )
+}
+
+fn e_copper_path(path: &crate::decoupling_paths::DecouplingCopperPath) -> StateValue {
+    use crate::decoupling_paths::{DecouplingPathNode, PathEdge};
+    let node = |n: &DecouplingPathNode| {
+        dc("pcbir.decoupling_paths:DecouplingPathNode", vec![("position", e_point(&n.position)), ("layer", e_layer(&n.layer))])
+    };
+    dc(
+        "pcbir.decoupling_paths:DecouplingCopperPath",
+        vec![
+            ("start", e_pad_reference(&path.start)),
+            ("end", e_pad_reference(&path.end)),
+            ("net", s(&path.net)),
+            (
+                "steps",
+                tuple(&path.steps, |step| {
+                    let edge = match &step.edge {
+                        PathEdge::Track(track) => e_track(track),
+                        PathEdge::Via(via) => e_via(via),
+                    };
+                    dc(
+                        "pcbir.decoupling_paths:DecouplingPathStep",
+                        vec![("edge", edge), ("start", node(&step.start)), ("end", node(&step.end))],
+                    )
+                }),
+            ),
+        ],
+    )
+}
+
+fn e_witness(witness: &crate::decoupling_paths::DecouplingCrossLayerWitness) -> StateValue {
+    dc(
+        "pcbir.decoupling_paths:DecouplingCrossLayerWitness",
+        vec![
+            ("link", e_decoupling_link(&witness.link)),
+            ("supply_path", e_copper_path(&witness.supply_path)),
+            ("return_target", e_pad_reference(&witness.return_target)),
+            ("return_path", e_copper_path(&witness.return_path)),
+            ("context_digest", s(&witness.context_digest)),
+            ("board_digest", s(&witness.board_digest)),
+            ("qualification", s(&witness.qualification)),
+        ],
+    )
+}
+
+/// `encode(reserved)`: a bypass-only `FanoutResult` (no accesses, pending
+/// pads or fanout analysis), as the critical stage receives it.
+pub fn encode_bypass_reservation(reserved: &crate::bypass_reservations::BypassReservation) -> StateValue {
+    dc(
+        "pcbir.fanout:FanoutResult",
+        vec![
+            ("board", encode_board(&reserved.board)),
+            ("accesses", StateValue::Map { entries: Vec::new(), proxy: false }),
+            ("pending_pads", StateValue::Tuple(Vec::new())),
+            ("added_track_count", i(reserved.added_track_count)),
+            ("added_via_count", i(reserved.added_via_count)),
+            ("created_vias", tuple(&reserved.created_vias, e_via)),
+            ("pin_analysis", StateValue::Tuple(Vec::new())),
+            ("created_tracks", tuple(&reserved.created_tracks, e_track)),
+            ("assignment", StateValue::Null),
+            ("boundary_accesses", StateValue::Null),
+            ("surface_accesses", StateValue::Null),
+            ("decoupling_pending", StateValue::Tuple(Vec::new())),
+            ("decoupling_tracks", tuple(&reserved.decoupling_tracks, e_track)),
+            ("decoupling_vias", tuple(&reserved.decoupling_vias, e_via)),
+            ("decoupling_witnesses", tuple(&reserved.decoupling_witnesses, e_witness)),
+            ("decoupling_pending_links", StateValue::Tuple(Vec::new())),
+            ("late_bypass", StateValue::Null),
+        ],
+    )
+}
+
+/// The dict the critical stage saves as `critical-inputs` (and
+/// `critical-retry-inputs`): the board and global route it starts from, the
+/// held bypass reservation and the return-plane stitch options.
+pub fn critical_inputs_state_text(
+    board: &PhysicalBoard,
+    global_route: &GlobalRoutingResult,
+    reserved_accesses: Option<&crate::bypass_reservations::BypassReservation>,
+    plane_stitch_options: Option<&crate::plane::PlaneStitchOptions>,
+) -> String {
+    let entries = vec![
+        (s("board"), encode_board(board)),
+        (s("global_route"), encode_global_route(global_route)),
+        (s("reserved_accesses"), reserved_accesses.map_or(StateValue::Null, encode_bypass_reservation)),
+        (s("plane_stitch_options"), plane_stitch_options.map_or(StateValue::Null, encode_plane_stitch_options)),
+    ];
+    StateDocument::new("builtins:dict", Object::new(), StateValue::Map { entries, proxy: false }).to_text()
+}
