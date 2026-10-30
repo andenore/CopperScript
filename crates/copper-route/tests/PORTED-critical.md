@@ -24,6 +24,30 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_critical_bundles.py | 8 | 6 | 2 | 0 | `src/critical_tests/critical_bundles.rs` (the frozen-fixture comparison stays in `tests/critical_bundles.rs`) |
 | test_single_ended_return_vias.py | 7 | 4 | 3 | 0 | `src/critical_tests/single_ended_return_vias.rs` |
 
+**Totals so far:** 14 of 46 files, 178 Python tests: 144 ported, 34
+skipped, 0 ignored.
+
+Rust bugs found and fixed by the ports:
+- `pair_vias::return_via` accepted a clearance index bound to another source
+  (`test_pair_return_boundaries.py`).
+- `route_critical_nets` accepted a negative `bundle_repair_limit`
+  (`test_critical_bundles.py`).
+- `route-board` length-option errors lost Python's positive/nonnegative wording
+  (`test_pair_terminal_fallback.py`).
+
+Remaining files, in the assigned order: pair_search_resume,
+pair_joint_supports, critical_preflight (no `critical-preflight` command in
+Rust), pair_opposite_faces, pair_converging_ports, critical_lane_review,
+pair_taper, pair_recessed_via_ports, pair_refine, pair_budget_escalation,
+critical_search_order, recessed_pair_ports, planned_escape_copper,
+pair_tuning_span_copper_contacts, pair_through_hole_contacts,
+pair_hybrid_contact_anchor, pair_collinear_fork, critical_stage_planning,
+critical_return_preparation, bundle_tuning, partial_pair_macro_ports,
+pair_transition_diagnostics, pair_outer_transitions, pair_offset_ports,
+pair_obstacle_tuning_fallback, pair_approach_ranking, loose_pair_repair,
+collinear_pair_ports, pair_transition_families, pair_staggered_contacts,
+pair_lateral_ports, pair_departure.
+
 ## Notes
 
 ### test_local_critical.py
