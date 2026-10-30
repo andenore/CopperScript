@@ -1,0 +1,6 @@
+part R0402 {
+    category = "passive.resistor";
+    footprint = "Resistor_SMD:R_0402_1005Metric";
+    pin A { number = "1"; domains = "analog"; directions = "passive"; }
+    pin B { number = "2"; domains = "analog"; directions = "passive"; }
+}

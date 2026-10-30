@@ -526,7 +526,7 @@ fn route_critical_stage(
         held = Some(planned);
     }
     let critical_inputs = |keepouts: &[copper_physical::CopperKeepout],
-                           previous: Option<bool>,
+                           previous: Option<(&PhysicalBoard, &crate::bypass_reservations::BypassReservation)>,
                            on_progress: &mut Option<ProgressCallback<'_>>|
      -> Result<(PhysicalBoard, Option<crate::bypass_reservations::BypassReservation>)> {
         let mut source = board.clone();
@@ -540,11 +540,12 @@ fn route_critical_stage(
             )?,
             None => (None, None),
         };
-        if accesses.is_none() && previous == Some(true) {
-            return copper_pcb::not_implemented(
-                "rebinding bypass copper after a keepout release (rebind_bypass_keepout_removal)",
-            );
-        }
+        let (accesses, reason) = match (accesses, previous) {
+            (None, Some((previous, reserved))) => {
+                crate::bypass_reservations::rebind_bypass_keepout_removal(previous, reserved, &source)?
+            }
+            (accesses, _) => (accesses, reason),
+        };
         if let (Some(held), None) = (&held, &accesses) {
             // Unsupported/ambiguous ownership keeps its original conservative
             // reservation. Never drop it or infer semantic authority by net.
@@ -577,6 +578,8 @@ fn route_critical_stage(
         reserved_accesses: bypass_accesses.as_ref(),
         ..Default::default()
     };
+    // A keepout release re-proves held copper against these inputs.
+    let retry_base = (reserved.is_some() && bypass_accesses.is_some()).then(|| source.clone());
     let mut critical =
         crate::critical::route_critical_nets(source, &placement.global_route, &options, reborrow(on_progress))?;
     if let Some(planned) = reserved.as_mut() {
@@ -605,7 +608,7 @@ fn route_critical_stage(
                     ],
                 );
                 let (retry_source, retry_accesses) =
-                    critical_inputs(&kept, Some(bypass_accesses.is_some()), on_progress)?;
+                    critical_inputs(&kept, retry_base.as_ref().zip(bypass_accesses.as_ref()), on_progress)?;
                 let retry_options =
                     crate::critical::CriticalOptions { reserved_accesses: retry_accesses.as_ref(), ..options };
                 let retry = crate::critical::route_critical_nets(

@@ -236,6 +236,84 @@ pub fn bypass_copper_reservations(
     })
 }
 
+/// `rebind_bypass_keepout_removal`: re-prove unchanged bypass copper after an
+/// explicit keepout-only removal.
+///
+/// The original reservation must already be admissible. No source rule,
+/// pose, copper occurrence or ownership changes are allowed. Paths are
+/// derived again from the new board; an old context digest is never
+/// overwritten or waived. Failure returns no replacement and leaves the
+/// original value untouched.
+pub fn rebind_bypass_keepout_removal(
+    source: &PhysicalBoard,
+    reserved: &BypassReservation,
+    updated_source: &PhysicalBoard,
+) -> Result<(Option<BypassReservation>, Option<String>)> {
+    let reject = |reason: String| Ok((None, Some(reason)));
+    let mut intent = updated_source.clone();
+    intent.copper_keepouts = source.copper_keepouts.clone();
+    if intent != *source {
+        return reject("keepout rebind changed non-keepout source intent".to_owned());
+    }
+    let (before, after) = (&source.copper_keepouts, &updated_source.copper_keepouts);
+    // Keepouts are not hashable; Python's set checks, by equality.
+    let unique =
+        |items: &[copper_physical::CopperKeepout]| items.iter().enumerate().all(|(i, item)| !items[..i].contains(item));
+    let ordered: Vec<_> = before.iter().filter(|k| after.contains(k)).collect();
+    if !unique(before)
+        || !unique(after)
+        || !after.iter().all(|k| before.contains(k))
+        || ordered != after.iter().collect::<Vec<_>>()
+    {
+        return reject("keepout rebind is not an ordered removal".to_owned());
+    }
+    let materialize = |board: &PhysicalBoard| {
+        copper_pcb::hard_macros::macro_source(board.clone()).and_then(copper_drc::macros::materialize_hard_macros)
+    };
+    let (frame, updated) = match (materialize(source), materialize(updated_source)) {
+        (Ok(frame), Ok(updated)) => (frame, updated),
+        (Err(crate::Error::Value(reason)), _) | (_, Err(crate::Error::Value(reason))) => return reject(reason),
+        (Err(error), _) | (_, Err(error)) => return Err(error),
+    };
+    if let Err(reason) = restore_bypass_reservation_edges(reserved, false) {
+        return reject(reason);
+    }
+    let (_, _, reason) = verified_bypass_reservations(&frame, reserved)?;
+    if let Some(reason) = reason {
+        return reject(format!("keepout rebind original rejected: {reason}"));
+    }
+    let mut candidate = reserved.clone();
+    candidate.board = updated.clone();
+    candidate.board.tracks.extend(reserved.created_tracks.iter().cloned());
+    candidate.board.vias.extend(reserved.created_vias.iter().cloned());
+    // Rematerialization changes immutable edge identities, never their values.
+    if let Err(reason) = restore_bypass_reservation_edges(&candidate, false) {
+        return reject(reason);
+    }
+    let index = crate::RoutingClearanceIndex::new(&candidate.board)?;
+    let mut witnesses = Vec::new();
+    for old in &candidate.decoupling_witnesses {
+        let measured = crate::decoupling_paths::verify_crosslayer_decoupling(
+            &candidate.board,
+            &old.link,
+            Some(&old.return_target),
+            10_000,
+            Some(&index),
+        )?;
+        match measured.witness {
+            Some(witness) => witnesses.push(witness),
+            None => return reject(format!("keepout rebind path rejected: {}", measured.reason)),
+        }
+    }
+    drop(index);
+    candidate.decoupling_witnesses = witnesses;
+    let (_, _, reason) = verified_bypass_reservations(&updated, &candidate)?;
+    Ok(match reason {
+        None => (Some(candidate), None),
+        Some(reason) => (None, Some(reason)),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Saved reservations
 
