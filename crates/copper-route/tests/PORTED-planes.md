@@ -15,6 +15,7 @@ test that loops over its cases.
 | test_pad_stitch.py | 11 | 2: installed-KiCad cases (`kicad-cli` not installed) | 0 | `tests/pad_stitch.rs` |
 | test_serpentine_tuning.py | 12 | 0 | 0 | `src/test_support_planes.rs` (7 `UnitTuner` cases); `tests/serpentine_tuning.rs` (5) |
 | test_nested_lattice.py | 12 | 0 | 0 | `tests/nested_lattice.rs` (each case runs on both fixtures; Python's seeded `random` is a fixed LCG) |
+| test_group_tuning.py | 11 | 0 (parts of 2 tests: see notes) | 0 | `tests/group_tuning.rs` (10); `src/test_support_planes.rs` (`drop_group_steps`) |
 
 ## Notes
 
@@ -51,3 +52,14 @@ test that loops over its cases.
 - `test_large_land_uses_same_side_pour_without_inventing_via_or_fill` checked
   `board.zone_fills`; the Rust board has no zone fills, so the test asserts no
   copper polygon is invented instead.
+
+- `test_group_tuning.py`: the hemmed-bundle test's last part monkeypatched
+  `_tune_bundle_pairs` away to exercise the final pass alone, and
+  `test_boards_without_tuning_groups_never_reach_the_group_tuner` replaced
+  `GroupTuner` with a refusing stub; Rust has no such seams, so those parts
+  are dropped and the observable reports (no group units, no
+  `tuning_groups`, no `tuning group` in the line) are kept. Python's
+  `_drop_group_steps` took the tuning state as separate dicts; Rust bundles
+  them in `RoutingTuning` and results are told apart by `strategy`.
+  `tuning_result` (match-tuning document to `MatchTuningResult`) moved to
+  `support_planes` and now reads units, groups and lanes.

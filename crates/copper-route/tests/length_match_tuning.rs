@@ -510,32 +510,6 @@ fn preflight_line_reports_the_tuned_group() {
     assert!(line.contains(&expected), "{line}");
 }
 
-/// A `MatchTuningResult` rebuilt from its document (units omitted: the
-/// plain bump line does not report them).
-fn tuning_result(document: &Value) -> copper_route::critical_tuning::MatchTuningResult {
-    copper_route::critical_tuning::MatchTuningResult {
-        id: text(field(document, "id")).to_owned(),
-        max_skew_nm: int(field(document, "max_skew_nm")).unwrap(),
-        status: status(document).to_owned(),
-        skew_before_nm: int(field(document, "skew_before_nm")),
-        skew_after_nm: int(field(document, "skew_after_nm")),
-        members: field(document, "members")
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|member| copper_route::critical_tuning::MatchTuningMember {
-                net: text(field(member, "net")).to_owned(),
-                length_before_nm: int(field(member, "length_before_nm")).unwrap(),
-                length_after_nm: int(field(member, "length_after_nm")).unwrap(),
-            })
-            .collect(),
-        bumps: int(field(document, "bumps")).unwrap(),
-        reason: text(field(document, "reason")).to_owned(),
-        units: Vec::new(),
-        tuning_groups: Vec::new(),
-    }
-}
-
 #[test]
 fn tuned_copper_of_breakout_nets_follows_the_breakout_regions() {
     let mut board = Lanes::new(&THREE_LANES).build();

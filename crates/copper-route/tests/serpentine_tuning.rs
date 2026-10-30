@@ -68,55 +68,6 @@ fn group_tuning_uses_serpentines_clear_of_neighbours_under_native_drc() {
     assert_eq!(again.to_json().unwrap(), result.to_json().unwrap());
 }
 
-/// A `MatchTuningResult` rebuilt from its document, units included.
-fn tuning_result(document: &copper_json::Value) -> copper_route::critical_tuning::MatchTuningResult {
-    use copper_route::critical_tuning::{MatchTuningMember, MatchTuningResult, MatchTuningUnit};
-    let texts = |value: &copper_json::Value| -> Vec<String> {
-        value.as_array().unwrap().iter().map(|item| text(item).to_owned()).collect()
-    };
-    MatchTuningResult {
-        id: text(field(document, "id")).to_owned(),
-        max_skew_nm: int(field(document, "max_skew_nm")).unwrap(),
-        status: text(field(document, "status")).to_owned(),
-        skew_before_nm: int(field(document, "skew_before_nm")),
-        skew_after_nm: int(field(document, "skew_after_nm")),
-        members: field(document, "members")
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|member| MatchTuningMember {
-                net: text(field(member, "net")).to_owned(),
-                length_before_nm: int(field(member, "length_before_nm")).unwrap(),
-                length_after_nm: int(field(member, "length_after_nm")).unwrap(),
-            })
-            .collect(),
-        bumps: int(field(document, "bumps")).unwrap(),
-        reason: text(field(document, "reason")).to_owned(),
-        units: field(document, "units")
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|unit| MatchTuningUnit {
-                nets: texts(field(unit, "nets")),
-                stage: text(field(unit, "stage")).to_owned(),
-                style: text(field(unit, "style")).to_owned(),
-                added_length_nm: int(field(unit, "added_length_nm")).unwrap(),
-                bumps: int(field(unit, "bumps")).unwrap(),
-                legs: int(field(unit, "legs")).unwrap(),
-                amplitudes_nm: field(unit, "amplitudes_nm")
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|a| int(a).unwrap())
-                    .collect(),
-                group: String::new(),
-                lanes: Vec::new(),
-            })
-            .collect(),
-        tuning_groups: Vec::new(),
-    }
-}
-
 #[test]
 fn bumps_style_reports_and_routes_as_before() {
     let board = Lanes::new(&TWO_LANES).build();

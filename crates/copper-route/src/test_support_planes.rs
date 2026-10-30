@@ -296,3 +296,95 @@ mod serpentine_tuning {
         assert_eq!(length(tracks(&plan)), nm(40.0) + added);
     }
 }
+
+/// `tests/test_group_tuning.py::test_tuning_group_steps_are_dropped_when_a_unit_reroutes`.
+mod group_tuning {
+    use super::support_planes::track;
+    use crate::critical::CriticalNetResult;
+    use crate::critical_match::{Committed, RoutingTuning, drop_group_steps};
+    use crate::critical_tuning::MatchTuningUnit;
+    use copper_pcb::board::TrackSegment;
+    use copper_physical::{CopperLayer, Point};
+    use indexmap::IndexMap;
+
+    fn unit(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// A result told apart by its `strategy` (the Python test used strings).
+    fn result(name: &str) -> CriticalNetResult {
+        CriticalNetResult {
+            strategy: name.to_owned(),
+            ..CriticalNetResult::new(Vec::new(), true, 0, 0, Vec::new(), 0, Vec::new())
+        }
+    }
+
+    fn step(nets: Vec<String>, group: &str) -> MatchTuningUnit {
+        MatchTuningUnit {
+            lanes: if group.is_empty() { Vec::new() } else { nets.clone() },
+            nets,
+            stage: "routing".to_owned(),
+            style: "bumps".to_owned(),
+            added_length_nm: 2,
+            bumps: 1,
+            legs: 0,
+            amplitudes_nm: vec![5],
+            group: group.to_owned(),
+        }
+    }
+
+    fn strategies(results: &[CriticalNetResult]) -> Vec<&str> {
+        results.iter().map(|result| result.strategy.as_str()).collect()
+    }
+
+    #[test]
+    fn tuning_group_steps_are_dropped_when_a_unit_reroutes() {
+        let (a, b, c) = (unit(&["A_N", "A_P"]), unit(&["B_N", "B_P"]), unit(&["C_N", "C_P"]));
+        let tracks: Vec<Vec<TrackSegment>> = [&a, &b, &c]
+            .iter()
+            .enumerate()
+            .map(|(index, unit)| {
+                let y = index as i64;
+                vec![track(&unit[0], Point::new(0, y), Point::new(10, y), 1, CopperLayer::Front)]
+            })
+            .collect();
+        let tuned = |index: usize| [tracks[index].clone(), tracks[index].clone()].concat();
+        let mut committed: Committed = vec![
+            (a.clone(), tuned(0), Vec::new()),
+            (b.clone(), tuned(1), Vec::new()),
+            (c.clone(), tracks[2].clone(), Vec::new()),
+        ];
+        let mut results = vec![result("a"), result("b-tuned"), result("c")];
+        let index: IndexMap<Vec<String>, usize> =
+            [(a.clone(), 0), (b.clone(), 1), (c.clone(), 2)].into_iter().collect();
+        let ab = [a.clone(), b.clone()].concat();
+        let mut tuning = RoutingTuning {
+            early: vec![step(ab.clone(), "pair-ab"), step(a.clone(), "")],
+            routed: ["A_N", "A_P", "B_N", "B_P"].iter().map(|net| ((*net).to_owned(), 1)).collect(),
+            failed_targets: [(ab, 3), (c.clone(), 3)].into_iter().collect(),
+            as_routed: [
+                (a.clone(), (tracks[0].clone(), result("a-routed"))),
+                (b.clone(), (tracks[1].clone(), result("b-routed"))),
+            ]
+            .into_iter()
+            .collect(),
+            group_failures: IndexMap::new(),
+        };
+        // A re-routed: B goes back to its copper as routed, every step of A and B goes.
+        assert!(drop_group_steps(std::slice::from_ref(&a), &mut committed, &mut results, &index, &mut tuning));
+        assert_eq!(committed[1], (b.clone(), tracks[1].clone(), Vec::new()));
+        assert_eq!(strategies(&results), ["a", "b-routed", "c"]);
+        assert!(tuning.early.is_empty());
+        assert_eq!(tuning.failed_targets.clone().into_iter().collect::<Vec<_>>(), [(c.clone(), 3)]);
+        let kept: Vec<(&Vec<String>, &str)> =
+            tuning.as_routed.iter().map(|(unit, (_, result))| (unit, result.strategy.as_str())).collect();
+        assert_eq!(kept, [(&a, "a-routed")]);
+        assert_eq!(tuning.as_routed[&a].0, tracks[0]);
+        assert_eq!(
+            tuning.routed.clone().into_iter().collect::<Vec<_>>(),
+            [("A_N".to_owned(), 1), ("A_P".to_owned(), 1)]
+        );
+        // Without group steps nothing changes.
+        assert!(!drop_group_steps(&[c], &mut committed, &mut results, &index, &mut tuning));
+    }
+}

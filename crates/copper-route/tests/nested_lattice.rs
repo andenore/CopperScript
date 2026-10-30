@@ -360,7 +360,10 @@ fn invalid_patches_and_windows_are_refused() {
     let (board, plan, _) = one_patch();
     let p = plan.patches[0].clone();
     let refused = |plan: &FineRegionPlan, window: Option<(i64, i64, i64, i64)>| -> String {
-        NestedLattice::new(&board, BASE, plan, window).err().expect("refused").to_string()
+        match NestedLattice::new(&board, BASE, plan, window) {
+            Ok(_) => panic!("refused"),
+            Err(error) => error.to_string(),
+        }
     };
     assert!(refused(&plan, Some((0, 0, 10, 10))).contains("grid_window_nm"));
     let shifted = with_patches(&plan, vec![FinePatch { x0_nm: p.x0_nm + 1, ..p.clone() }]);

@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+pub mod groups;
 pub mod lanes;
 pub mod paths;
 
@@ -413,4 +414,64 @@ pub fn fine_board(
     copper.push(CopperLayer::Back);
     board.stackup = Stackup::new(copper);
     board
+}
+
+/// A `MatchTuningResult` rebuilt from its `match_tuning` document (absent
+/// `units`, `group`, `lanes` and `tuning_groups` read as empty).
+pub fn tuning_result(document: &copper_json::Value) -> copper_route::critical_tuning::MatchTuningResult {
+    use copper_route::critical_tuning::{MatchTuningMember, MatchTuningResult, MatchTuningUnit, TuningGroupOutcome};
+    let object = document.as_object().expect("match tuning document");
+    let texts = |value: Option<&copper_json::Value>| -> Vec<String> {
+        value
+            .map_or_else(Vec::new, |value| value.as_array().unwrap().iter().map(|item| text(item).to_owned()).collect())
+    };
+    let items = |key: &str| object.get(key).map_or_else(Vec::new, |value| value.as_array().unwrap().to_vec());
+    MatchTuningResult {
+        id: text(field(document, "id")).to_owned(),
+        max_skew_nm: int(field(document, "max_skew_nm")).unwrap(),
+        status: text(field(document, "status")).to_owned(),
+        skew_before_nm: int(field(document, "skew_before_nm")),
+        skew_after_nm: int(field(document, "skew_after_nm")),
+        members: items("members")
+            .iter()
+            .map(|member| MatchTuningMember {
+                net: text(field(member, "net")).to_owned(),
+                length_before_nm: int(field(member, "length_before_nm")).unwrap(),
+                length_after_nm: int(field(member, "length_after_nm")).unwrap(),
+            })
+            .collect(),
+        bumps: int(field(document, "bumps")).unwrap(),
+        reason: text(field(document, "reason")).to_owned(),
+        units: items("units")
+            .iter()
+            .map(|unit| {
+                let unit_object = unit.as_object().unwrap();
+                MatchTuningUnit {
+                    nets: texts(unit_object.get("nets")),
+                    stage: text(field(unit, "stage")).to_owned(),
+                    style: text(field(unit, "style")).to_owned(),
+                    added_length_nm: int(field(unit, "added_length_nm")).unwrap(),
+                    bumps: int(field(unit, "bumps")).unwrap(),
+                    legs: int(field(unit, "legs")).unwrap(),
+                    amplitudes_nm: field(unit, "amplitudes_nm")
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|a| int(a).unwrap())
+                        .collect(),
+                    group: unit_object.get("group").map_or_else(String::new, |group| text(group).to_owned()),
+                    lanes: texts(unit_object.get("lanes")),
+                }
+            })
+            .collect(),
+        tuning_groups: items("tuning_groups")
+            .iter()
+            .map(|group| TuningGroupOutcome {
+                name: text(field(group, "name")).to_owned(),
+                nets: texts(group.as_object().unwrap().get("nets")),
+                status: text(field(group, "status")).to_owned(),
+                reason: text(field(group, "reason")).to_owned(),
+            })
+            .collect(),
+    }
 }
