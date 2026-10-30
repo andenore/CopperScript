@@ -1,9 +1,9 @@
 # Shared GNU Make rules: set SOURCE, layers and options before including.
 # Geometry and part identities belong in .copper, never in these recipes.
 .DEFAULT_GOAL := all
-PYTHON ?= uv run --no-sync python
-CARGO_HOME ?= $(if $(USERPROFILE),$(subst \,/,$(USERPROFILE))/.cargo,$(HOME)/.cargo)
-COPPER ?= "$(CARGO_HOME)/bin/copper$(if $(filter Windows_NT,$(OS)),.exe,)"
+BOARD_MK_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+# The copper executable: on PATH after `cargo install --path crates/copper`.
+COPPER ?= copper
 PROJECT_ROOT ?= $(CURDIR)
 SOURCE ?= board.copper
 BOARD_NAME ?= $(basename $(notdir $(SOURCE)))
@@ -11,7 +11,6 @@ OUT ?= $(PROJECT_ROOT)/build/$(BOARD_NAME)
 LAYERS ?= 2
 FAB_PROFILE ?= generic
 RESOLVE_ARGS ?= --locked
-PROFILE ?= none
 KICAD_CLI ?=
 # Optional native KiCad path for independent refill/DRC; CopperScript resolves
 # managed footprints from the Git dependencies declared by each example.
@@ -52,4 +51,4 @@ editor-overlay:
 # Atomic route + saved fill + native DRC. Every default run has a fresh directory.
 # RUN_DIR selects a new/empty path; intentionally no recursive clean target.
 route:
-	$(PYTHON) -u -m pcbir.build "$(SOURCE)" --copper $(COPPER) --project-root "$(PROJECT_ROOT)" --output-root "$(OUT)/runs" $(if $(strip $(RUN_DIR)),--output-dir "$(RUN_DIR)") --profile $(PROFILE) $(RESOLVE_ARGS) $(_paths) $(BUILD_ARGS) -- $(_physical) $(ROUTE_ARGS) $(EXTRA_ROUTE_ARGS)
+	bash "$(BOARD_MK_DIR)/route-build.sh" "$(SOURCE)" --copper "$(COPPER)" --project-root "$(PROJECT_ROOT)" --output-root "$(OUT)/runs" $(if $(strip $(RUN_DIR)),--output-dir "$(RUN_DIR)") $(RESOLVE_ARGS) $(_paths) $(BUILD_ARGS) -- $(_physical) $(ROUTE_ARGS) $(EXTRA_ROUTE_ARGS)

@@ -1,10 +1,10 @@
 "use strict";
-const {resolveCompiler} = require("./compiler.cjs");
+const {selectCommand} = require("./compiler.cjs");
 
 function activateSetup(vscode, context, languageTools) {
   async function showSetup(selected) {
     if (!vscode.workspace.isTrusted) {
-      await vscode.window.showInformationMessage("Trust this workspace before running the CopperScript project interpreter.");
+      await vscode.window.showInformationMessage("Trust this workspace before running the CopperScript language server.");
       return;
     }
     const folders = (vscode.workspace.workspaceFolders || []).filter(f => f.uri.scheme === "file");
@@ -19,23 +19,16 @@ function activateSetup(vscode, context, languageTools) {
     const output = languageTools.output;
     output.show(true);
     output.appendLine(`\nCopperScript setup: ${folder.uri.fsPath}`);
-    output.appendLine("Python 3.11 or newer is accepted, with no upper version limit. Install the project's declared CopperScript dependencies first.");
-    output.appendLine("Automatic discovery uses .venv, then an existing uv.lock with uv run --locked --offline --no-sync python. Explicit compilerCommand settings take priority.");
-    for (const feature of ["lsp", "mechanical"]) {
-      try {
-        const config = vscode.workspace.getConfiguration(`copperscript.${feature}`, folder.uri);
-        const compiler = await resolveCompiler(config.get("compilerCommand", []), folder.uri.fsPath, feature);
-        output.appendLine(`${feature}: Python ${compiler.python.join(".")}; CopperScript ${compiler.compilerVersion}; ${compiler.executable}`);
-        output.appendLine(`Selected command: ${JSON.stringify(compiler.command)} (${compiler.source})`);
-        output.appendLine(`Feature module: ${compiler.module}`);
-        if (feature === "mechanical") {
-          output.appendLine(`Fingerprint command (run argv in the project): ${JSON.stringify([...compiler.command, "-m", "pcbir.editor.document", "--fingerprint"])}`);
-          output.appendLine("Review that fingerprint and set copperscript.mechanical.compilerDigest before editing.");
-        }
-      } catch (error) { output.appendLine(error.message); }
-    }
-    output.appendLine("After fixing the environment, run CopperScript: Restart Language Server. Show Setup does not install packages or change project pins.");
-    const choice = await vscode.window.showInformationMessage("CopperScript environment details are in the Output panel.", "Open Settings");
+    output.appendLine("The language server is the copper binary's `copper lsp` command. By default `copper` is found on PATH; an explicit copperscript.lsp.compilerCommand argv takes priority.");
+    try {
+      const compiler = selectCommand(vscode.workspace.getConfiguration("copperscript.lsp", folder.uri).get("compilerCommand", ["copper"]));
+      output.appendLine(`Selected command: ${JSON.stringify([...compiler.command, "lsp"])} (${compiler.source})`);
+      const running = languageTools.clients?.get(folder.uri.toString());
+      output.appendLine(running?.started ? `Running: ${running.server}` : "Language server is not running for this folder; see the log above for startup errors.");
+    } catch (error) { output.appendLine(error.message); }
+    output.appendLine("The mechanical editor runs in the browser: copper edit-mechanical BOARD.copper");
+    output.appendLine("After fixing the command, run CopperScript: Restart Language Server. Show Setup does not install anything or change project pins.");
+    const choice = await vscode.window.showInformationMessage("CopperScript setup details are in the Output panel.", "Open Settings");
     if (choice === "Open Settings") await vscode.commands.executeCommand("workbench.action.openWorkspaceSettings", "copperscript");
   }
   context.subscriptions.push(

@@ -9,118 +9,69 @@ The regular `.copper` text editor also includes completion, hover, go to definit
 document symbols, live syntax/compiler/ERC diagnostics and quick fixes (suggested
 replacements, declaring `no_connect` for unconnected pins). Language features use
 the standard [CopperScript LSP](https://github.com/andenore/CopperScript/blob/main/docs/language-server.md) and activate only
-in trusted local workspaces. The existing mechanical editor remains optional.
+in trusted local workspaces.
 
-Python **3.11 or newer** is supported, without an upper version limit. Install
-your project's declared CopperScript dependencies first, then open its folder.
-The extension discovers `.venv/Scripts/python.exe` on Windows or
-`.venv/bin/python` on Linux/macOS. If no `.venv` exists, a project with both
-`pyproject.toml` and `uv.lock` uses
-`["uv", "run", "--locked", "--offline", "--no-sync", "python"]` to discover an
-existing project environment. Discovery does not synchronize or install packages
-and rejects a system-interpreter fallback. The resolved interpreter then runs
-the language server directly.
+The language server is the `copper` binary's `copper lsp` command; no Python
+installation is needed. Install `copper` on your `PATH` (for example with
+`cargo install --locked --path crates/copper` from a CopperScript checkout), then open
+your project folder. The extension starts `copper lsp` in that folder.
 
-Both `compilerCommand` settings default to `[]` for automatic discovery. An
-explicit argv overrides discovery, for example:
+`copperscript.lsp.compilerCommand` is an argv array, never a shell string, and
+defaults to `["copper"]`. The extension appends `lsp`. Select another binary
+explicitly, for example:
 
 ```json
 {
-  "copperscript.lsp.compilerCommand": ["/absolute/path/to/.venv/bin/python"]
+  "copperscript.lsp.compilerCommand": ["/absolute/path/to/copper"]
 }
 ```
 
-The selected interpreter must contain `pcbir.lsp.server`. Startup checks the
-actual feature module and accepts newer Python versions. An incompatible project
-environment reports a setup error; it does not switch to another compiler.
-Projects pinned to an older compiler can explicitly select a newer interpreter
-for editor guidance without changing their build pins.
-
-Run **CopperScript: Show Setup** to inspect the interpreter, compiler version,
-feature modules and mechanical fingerprint command in the Output panel. It does
-not install packages or change project settings. Run **CopperScript: Restart
-Language Server** after changing the environment. Interpreter settings changes
-restart the LSP automatically. `copperscript.lsp.enabled` disables language
-features. Logs appear in **CopperScript Language Server**.
+Run **CopperScript: Show Setup** to see the selected command and the running
+server in the Output panel. It does not install anything or change project
+settings. Run **CopperScript: Restart Language Server** after replacing the
+binary. Changes to `copperscript.lsp.*` settings restart the server
+automatically, and a crashed server restarts with backoff.
+`copperscript.lsp.enabled` disables language features. Logs appear in
+**CopperScript Language Server**.
 
 The client sends unsaved documents, handles native completions/navigation and
 invalidates on `.copper`/manifest/lock changes. Dependency resolution remains
 locked/offline. The server does not write source, fetch packages or route boards.
-Both the Python server and the VS Code client have no added runtime dependencies.
+The VS Code client has no npm runtime dependencies.
 
-Optional custom text editor for `.copper` boards. Source stays authoritative;
-reviewed edits use native WorkspaceEdit, document Undo/Redo, encoding and Save.
-Unsaved text edits are compiled in memory. The editor prepares dependencies on
-initial open, using the versions declared in `copper.mod`. Missing inventory pins
-are added atomically to `copper.lock`; existing pins are verified and preserved.
-Set `copperscript.mechanical.offline` to use only cached/local dependencies.
-Preparation displays cancellable progress; reopen the editor to retry a failure.
-Source review and edits remain locked/offline. A trusted **local workspace** is required.
+## Mechanical editor
 
-Pin CopperScript in your project dependencies/lock first and compute the exact
-compiler content identity:
+The mechanical / floorplan editor is no longer a VS Code custom editor. It runs
+in your browser from the `copper` binary:
 
 ```sh
-uv run --locked --offline python -m pcbir.editor.document --fingerprint
+copper edit-mechanical BOARD.copper
 ```
 
-Set `copperscript.mechanical.compilerDigest` to that 64-character result and
-`copperscript.mechanical.footprintRoots` to installed KiCad footprint directories.
-The mechanical editor uses the same automatic interpreter discovery, with its
-own `copperscript.mechanical.compilerCommand` override. Its interpreter must
-contain `pcbir.editor.document`. Show Setup prints the fingerprint argv for the
-actual selected environment; use that command if you are not using uv.
-Commands are argv arrays, never shell strings. Compiler changes fail closed until
-you intentionally update the digest. Layer/profile/template/macro settings must
-match your build. The layer setting defaults to `0` (derive from source stackup,
-layer constraints and macros); choose `2`, `4` or `6` to fix it explicitly.
-Fabrication profiles remain explicit. Missing manifests or undeclared URL dependencies require an
-explicit `copper.mod` requirement; the editor does not select floating versions.
+## Development and packaging
 
-Build shared assets with `node integrations/vscode/build.cjs`, then launch an
+Stage the extension with `node integrations/vscode/build.cjs`, then launch an
 Extension Development Host with `code --extensionDevelopmentPath=<absolute
-build/vscode-extension/extension> <project-directory>`. On a `.copper` tab use
-**Reopen Editor With → CopperScript Mechanical / Floorplan**. It is not the default
-text editor. Select a component and **Show component source declaration** to open
-its root declaration (or hierarchical instance) beside the board view.
+build/vscode-extension/extension> <project-directory>`.
 
-Use **CopperScript: Open Mechanical Editor** from the Command Palette or the
-context menu on a `.copper` file. Without an active `.copper` text tab, the command
-opens a board file picker. The same trusted workspace and compiler pin checks apply.
-
-Use the Components, Mechanics and View sidebar tabs. The file bar shows source
-status and **Save reviewed changes**; **More** contains source reload/history.
-Temporary placement has its own toolbar and history. **Open board…** opens the
-native picker directly from the mechanical view.
-
-Review source edits and choose **Save reviewed changes**. Native document changes
-invalidate old previews; invalid text remains editable in the regular text view
-and can recover on the next valid document version. Native Undo/Redo restores
-source, while temporary placement history is separate. A failed save leaves the
-reviewed native edit dirty and undoable, rather than writing around VS Code.
-
-This host deliberately uses VS Code's [custom text editor API](https://code.visualstudio.com/api/extension-guides/custom-editors)
-and [workspace trust](https://code.visualstudio.com/api/extension-guides/workspace-trust).
-Routed-reference import is currently available in the standalone host; advanced
-mechanical formats remain governed by the main editor checklist.
-
-Offline installable artifact (no npm/marketplace build dependencies):
+Package a VSIX with Microsoft's locked `vsce` tooling:
 
 ```sh
+npm ci --prefix integrations/vscode/tools --ignore-scripts --no-audit --no-fund
 node integrations/vscode/build.cjs
-python integrations/vscode/package.py -o build/copperscript-0.3.2.vsix
-code --install-extension build/copperscript-0.3.2.vsix
+cd build/vscode-extension/extension
+../../../integrations/vscode/tools/node_modules/.bin/vsce package --no-dependencies --out ../../copperscript-0.4.0.vsix
+code --install-extension ../../copperscript-0.4.0.vsix
 ```
 
-Packaging uses fixed archive timestamps and whitelisted runtime assets. Existing
-VSIX files are never overwritten. The extension identity is now
-`andenore.copperscript`; uninstall the earlier development extension
-`andenore.copperscript-mechanical` before installing it to avoid duplicate tools.
+The extension identity is `andenore.copperscript`; uninstall the earlier
+development extension `andenore.copperscript-mechanical` before installing it
+to avoid duplicate tools.
 
-The separate extension CI checks Python 3.11 through 3.15 and packages with
-Microsoft's locked `vsce` tooling. Marketplace publication is prepared but needs
-publisher account configuration. The
+The separate extension CI builds `copper` and runs the client tests against it
+on Linux, Windows and macOS, then packages with `vsce`. Marketplace publication
+is prepared but needs publisher account configuration. The
 [release plan](https://github.com/andenore/CopperScript/blob/main/docs/extension-release-plan.md)
 describes one-time publisher/OIDC setup and the independent `extension-v<version>`
 release tags. Users install a Marketplace release once and receive normal VS Code
-extension updates; their project compiler stays separately selected.
+extension updates; their `copper` binary stays separately installed.

@@ -5,12 +5,14 @@ on:
     branches: [main]
     paths:
       - 'site/**'
-      - 'scripts/check_site.py'
+      - 'scripts/check_site.cjs'
+      - 'crates/copper-editor/assets/copper-logo.*'
       - '.github/workflows/pages.yml'
   pull_request:
     paths:
       - 'site/**'
-      - 'scripts/check_site.py'
+      - 'scripts/check_site.cjs'
+      - 'crates/copper-editor/assets/copper-logo.*'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -30,7 +32,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check static site and snapshot assets
-        run: python3 scripts/check_site.py
+        run: node scripts/check_site.cjs
 
   deploy:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

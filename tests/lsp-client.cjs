@@ -3,19 +3,13 @@ const {test} = require("node:test"), assert = require("node:assert/strict"), cp 
 const {EventEmitter} = require("node:events"), Module = require("node:module"), path = require("node:path");
 const {pathToFileURL, fileURLToPath} = require("node:url");
 const {Connection, activateLsp} = require("../integrations/vscode/lsp-client.cjs");
-const python = process.env.COPPER_TEST_PYTHON;
+// COPPER_TEST_BIN is the copper binary (for example target/release/copper); the
+// client starts it as `<COPPER_TEST_BIN> lsp`, exactly as the extension does.
+const copper = process.env.COPPER_TEST_BIN && path.resolve(process.env.COPPER_TEST_BIN);
 const root = path.resolve(__dirname, "..");
-// COPPER_TEST_LSP_BINARY runs the Rust `copper lsp` wherever the extension starts
-// `python -u -m pcbir.lsp.server`; the interpreter probe still uses COPPER_TEST_PYTHON.
-const binary = process.env.COPPER_TEST_LSP_BINARY;
-if (binary) {
-  const spawn = cp.spawn;
-  cp.spawn = (command, args, options) => args.slice(-3).join(" ") === "-u -m pcbir.lsp.server"
-    ? spawn(binary, ["lsp"], options) : spawn(command, args, options);
-}
 
-test("actual stdio client initializes, queries, and shuts down", {skip: !python}, async () => {
-  const errors = [], c = new Connection([python], root, () => {}, e => errors.push(e));
+test("actual stdio client initializes, queries, and shuts down", {skip: !copper}, async () => {
+  const errors = [], c = new Connection([copper], root, () => {}, e => errors.push(e));
   try {
   const init = await c.request("initialize", {capabilities: {}});
   assert.equal(init.capabilities.positionEncoding, "utf-16");
@@ -35,6 +29,18 @@ test("actual stdio client initializes, queries, and shuts down", {skip: !python}
   assert.deepEqual(errors, []);
 });
 
+test("client spawns `<command...> lsp` without a shell and explains a missing binary", async () => {
+  const original = cp.spawn, calls = [];
+  cp.spawn = (...args) => { calls.push(args); return original(...args); };
+  try {
+    const failed = new Promise(resolve => new Connection([path.join(root, "nonexistent-copper"), "--flag"], root, () => {}, resolve));
+    assert.deepEqual(calls[0].slice(0, 2), [path.join(root, "nonexistent-copper"), ["--flag", "lsp"]]);
+    assert.equal(calls[0][2].shell, false);
+    assert.match((await failed).message, /not found[\s\S]*copperscript\.lsp\.compilerCommand/);
+  } finally { cp.spawn = original; }
+  assert.throws(() => new Connection("copper lsp", root, () => {}, () => {}), /argv array/);
+});
+
 test("client parses fragmented multibyte and concatenated messages", () => {
   const messages = [], c = Object.create(Connection.prototype);
   c.buffer = Buffer.alloc(0); c.pending = new Map(); c.onNotification = (method, params) => messages.push({method, params});
@@ -45,13 +51,13 @@ test("client parses fragmented multibyte and concatenated messages", () => {
   assert.throws(() => c.receive(Buffer.from("Content-Length: 999999999\r\n\r\n")), /Oversized/);
 });
 
-test("workspace providers use actual server with unsaved versions", {skip: !python}, async () => {
+test("workspace providers use actual server with unsaved versions", {skip: !copper}, async () => {
   const providers = {}, listeners = {}, subscriptions = [], notices = [];
   const disposable = {dispose() {}};
   const uri = s => ({scheme: "file", fsPath: fileURLToPath(s), toString: () => s});
   const folder = {uri: uri(pathToFileURL(root).href)};
   let text = 'board D { use library "tiny"; component R1: RESISTOR { value = 100ohm; } net N { R1.1; } }';
-  let command = [path.join(root, "nonexistent-python")];
+  let command = [path.join(root, "nonexistent-copper")];
   const warnings = [];
   const doc = {uri: uri(pathToFileURL(path.join(root, "build/provider-unsaved.copper")).href), languageId: "copper", version: 1, getText: () => text};
   class Range {constructor(...args) {this.args = args;}}
@@ -81,7 +87,7 @@ test("workspace providers use actual server with unsaved versions", {skip: !pyth
     assert.equal(await providers.Hover.provideHover(doc, {line: 0, character: 0}), undefined);
     assert.equal(await providers.Hover.provideHover(doc, {line: 0, character: 0}), undefined);
     assert.equal(warnings.length, 1, "failed setup should not warn for every keystroke");
-    command = [python];
+    command = [copper];
     api.restart();
     const item = await providers.Hover.provideHover(doc, {line: 0, character: text.indexOf("R1.1")});
     assert.match(item.args[0].value, /100 ohm/);
@@ -97,7 +103,7 @@ test("workspace providers use actual server with unsaved versions", {skip: !pyth
   } finally {for (const d of subscriptions) d.dispose();}
 });
 
-test("untrusted workspaces never start an interpreter", () => {
+test("untrusted workspaces never start the language server", () => {
   const subscriptions = [], disposable = {dispose() {}};
   const original = cp.spawn; cp.spawn = () => { throw new Error("must not spawn"); };
   const doc = {languageId: "copper", uri: {scheme: "file"}};
@@ -113,7 +119,7 @@ test("untrusted workspaces never start an interpreter", () => {
   finally {cp.spawn = original; for (const s of subscriptions) s.dispose();}
 });
 
-test("quick fixes, severities and automatic restart after a crash", {skip: !python}, async () => {
+test("quick fixes, severities and automatic restart after a crash", {skip: !copper}, async () => {
   const providers = {}, subscriptions = [], sets = [];
   const disposable = {dispose() {}};
   const uri = s => ({scheme: "file", fsPath: fileURLToPath(s), toString: () => s});
@@ -139,7 +145,7 @@ test("quick fixes, severities and automatic restart after a crash", {skip: !pyth
       async showWarningMessage() {}},
     workspace: {
       isTrusted: true, textDocuments: [doc], getWorkspaceFolder: () => folder,
-      getConfiguration: () => ({get: name => name === "compilerCommand" ? [python] : true}),
+      getConfiguration: () => ({get: name => name === "compilerCommand" ? [copper] : true}),
       ...Object.fromEntries(["OpenTextDocument", "ChangeTextDocument", "SaveTextDocument", "CloseTextDocument", "ChangeConfiguration"].map(kind =>
         [`onDid${kind}`, () => disposable])),
       createFileSystemWatcher: () => ({...disposable, onDidCreate: () => disposable, onDidChange: () => disposable, onDidDelete: () => disposable})
