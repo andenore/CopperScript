@@ -10,6 +10,7 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | Python file | Tests | Ported | Skipped | Ignored | Rust test file |
 |---|---|---|---|---|---|
 | test_local_critical.py | 26 | 26 | 0 | 0 | `src/critical_tests/local_critical.rs` |
+| test_critical_routing.py | 21 | 21 | 0 | 0 | `src/critical_tests/critical_routing.rs`; the three `_tune_pair` cases in `tests/pair_tuning.rs` |
 
 ## Notes
 
@@ -35,3 +36,12 @@ Adapted (monkeypatch-only observations dropped, outcome kept):
   checked legal and octilinear.
 - `progress_is_observational_and_does_not_change_route_identity`: Python's
   `(event, nets, result)` callback is the `critical_group` progress phase.
+
+### test_critical_routing.py
+
+- `tuning_bumps_leave_breakout_regions_to_the_escaping_lanes`: Python's
+  stand-in region object (`x > 14 mm`) is a real `BreakoutRegions` with one
+  land whose reach covers the east piece only.
+- `joint_search_does_not_invent_copper_behind_a_tapered_port`: Python's
+  `_search` generator is driven through a `Continuation` over the escaped board.
+- The SHA-256 evidence digest is a fixed 64-hex string rather than a hash.

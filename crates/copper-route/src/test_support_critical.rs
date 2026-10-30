@@ -196,3 +196,62 @@ pub(crate) fn octilinear(tracks: &[TrackSegment]) -> bool {
             || (t.start.x_nm - t.end.x_nm).abs() == (t.start.y_nm - t.end.y_nm).abs()
     })
 }
+
+/// `NetRoutingRule(net, DIFFERENTIAL, partner, width, gap)`.
+pub(crate) fn differential_rule(net: &str, partner: &str, width_nm: i64, gap_nm: i64) -> NetRoutingRule {
+    NetRoutingRule {
+        width_nm: Some(width_nm),
+        differential_partner: Some(partner.to_owned()),
+        pair_gap_nm: Some(gap_nm),
+        ..rule(net, RouteKind::Differential)
+    }
+}
+
+/// `tests/test_critical_routing.py::_pair_board`: a USB pair between two
+/// two-pad terminals J1 (5, 12) and J2 (35, 12) on a 40 x 25 mm board.
+pub(crate) fn usb_pair_board() -> PhysicalBoard {
+    let pads = vec![smd_pad("1", at(0, -500_000), 400_000), smd_pad("2", at(0, 500_000), 400_000)];
+    let pair = footprint("test/two-pad-pair", pads, Size { width_nm: MM, height_nm: 2 * MM });
+    let poses = vec![pose("J1", &pair.name, mm(5, 12)), pose("J2", &pair.name, mm(35, 12))];
+    let nets = vec![net("USB_DP", &[("J1", "1"), ("J2", "1")]), net("USB_DM", &[("J1", "2"), ("J2", "2")])];
+    let mut board = board("CriticalPair", 40, 25, vec![pair], poses, nets);
+    board.net_routing_rules = [("USB_DP", "USB_DM"), ("USB_DM", "USB_DP")]
+        .into_iter()
+        .map(|(net, partner)| NetRoutingRule {
+            priority: 100,
+            max_skew_nm: Some(10 * MM),
+            maximum_uncoupled_length_nm: Some(10 * MM),
+            target_impedance_ohms: Some(90),
+            ..differential_rule(net, partner, 250_000, 200_000)
+        })
+        .collect();
+    board
+}
+
+/// The codes of every physical DRC finding of `board`.
+pub(crate) fn finding_codes(board: &PhysicalBoard) -> indexmap::IndexSet<String> {
+    let report = crate::drc_report::run_physical_drc(board, copper_drc::Policy::default()).expect("physical DRC");
+    report.report.findings.iter().map(|f| f.code.clone()).collect()
+}
+
+/// Whether `board` has none of the given DRC codes.
+pub(crate) fn free_of(board: &PhysicalBoard, codes: &[&str]) -> bool {
+    let found = finding_codes(board);
+    !codes.iter().any(|code| found.contains(*code))
+}
+
+/// The guides of `global` by net, as `_route_pair` takes them.
+pub(crate) fn guides_by_net(global: &GlobalRoutingResult) -> IndexMap<String, crate::routing::GlobalNetRoute> {
+    global.routes.iter().map(|route| (route.net.clone(), route.clone())).collect()
+}
+
+/// `GlobalViaProposal(net, position, from, to, "test-via")`.
+pub(crate) fn via_proposal(net: &str, position: Point, from: CopperLayer, to: CopperLayer) -> crate::routing::GlobalViaProposal {
+    crate::routing::GlobalViaProposal {
+        net: net.to_owned(),
+        position,
+        from_layer: from,
+        to_layer: to,
+        resource_id: "test-via".to_owned(),
+    }
+}
