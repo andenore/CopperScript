@@ -14,6 +14,8 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | unified_router | 48 | 46 | 2 | 0 | `tests/unified_router.rs` (36), `src/unified_router/tests.rs` (9), `crates/copper/tests/replay_unified_cli.rs` (1) |
 | escape_plan | 43 | 42 | 1 | 0 | `tests/escape_plan.rs` (41), `src/escape_plan.rs` `tests` (1) |
 | escape_placement | 40 | 33 | 7 | 0 | `crates/copper-place/tests/escape_placement.rs` (32), `crates/copper-place/src/legalize.rs` `tests` (1) |
+| routing | 19 | 18 | 1 | 0 | `tests/routing.rs` (17), `src/routing.rs` `tests` (1) |
+| routing_clearance_pad_cache | 18 | 14 | 4 | 0 | `tests/routing_clearance_pad_cache.rs` (14) |
 
 ## Notes per file
 
@@ -66,6 +68,28 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
   fixed LCG instead of `random.Random(41)`. `_project_coordinate` (private)
   is not called by `region_sampling_...`; the profile immutability check is
   enforced by the type (`Rc`).
+
+### routing
+- Skipped: `test_legal_pad_exit_can_attach_to_region_without_center_stub`
+  passed a duck-typed fake clearance index; `pin_access_candidates` takes the
+  concrete `RoutingClearanceIndex`.
+- `_route_net` is private: unit test. Rule validation that Python ran in
+  `replace(board, ...)` is `copper_pcb::physicalize::revalidate`.
+
+### routing_clearance_pad_cache
+- Python shared an LRU pad template between indexes; Rust builds it per
+  index. Kept: every behavioural assertion (fresh answers after each source
+  change, index independence, pad/NC/hole geometry, breakout owners against a
+  linear oracle, validation errors). Dropped: cache hits, object identity and
+  call counts.
+- Skipped: `test_bounded_geometry_work_across_copper_snapshots`,
+  `test_cache_bounds_and_strong_original_identity`,
+  `test_owner_geometry_work_is_once_per_complete_source_epoch` (cache work
+  only), `test_required_array_occurrences_remain_current_original_vias`
+  (built on the decoupling cross-layer fixture of another test file).
+- Adapted: `test_materialized_macro_prefix_is_indexed_fresh_after_template_hit`
+  became `existing_copper_is_indexed_in_source_order_as_locked_additions` on a
+  plain board (the macro fixture lived in `test_hard_macros.py`).
 
 ## Remaining files (in order)
 
