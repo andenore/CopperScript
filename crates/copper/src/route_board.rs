@@ -265,6 +265,38 @@ fn fail(message: String) -> Stop {
     Stop::Value { error_type: Some("ValueError"), message }
 }
 
+/// The Python class of a board-preparation error (physicalization, placement
+/// templates, hard-macro scenes), when this rewrite reproduces its record:
+/// the footprint resolver's own failure, a `MacroPreparationError` (MAC005),
+/// or a plain `ValueError`. A hard-macro acceptance failure (its record
+/// carries a diagnostic board) and an uncaught `CopperScriptError` (a Python
+/// crash) stay unnamed.
+fn preparation_class(message: &str, footprint: Option<&(String, &'static str)>) -> Option<&'static str> {
+    if let Some((_, class)) = footprint.filter(|(failed, _)| failed == message) {
+        return Some(class);
+    }
+    if message.starts_with("hard-macro physical acceptance failed: ") {
+        return None;
+    }
+    match compile_code(message) {
+        Some("MAC005") => Some("MacroPreparationError"),
+        Some("MAC006") | None => Some("ValueError"),
+        Some(_) => None,
+    }
+}
+
+/// The code of a `CopperScriptError`-shaped message, `FILE:LINE:COLUMN: CODE: ...`.
+fn compile_code(message: &str) -> Option<&str> {
+    let (location, rest) = message.split_once(": ")?;
+    let code = rest.split_once(": ")?.0;
+    let mut parts = location.rsplitn(3, ':');
+    let numeric = |part: Option<&str>| part.is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    let shaped = code.len() == 6
+        && code[..3].bytes().all(|b| b.is_ascii_uppercase())
+        && code[3..].bytes().all(|b| b.is_ascii_digit());
+    (numeric(parts.next()) && numeric(parts.next()) && shaped).then_some(code)
+}
+
 /// `nm_from_mm(text)` of an unchecked option string: `int(Decimal(...))` of a
 /// NaN is a `ValueError`; other bad text crashes Python (not reproduced).
 fn nm_from_mm(text: &str, option: &str) -> Result<i64, Stop> {
@@ -787,25 +819,30 @@ fn route(
         }
         _ => Stop::from(error),
     };
-    // Proxy physicalization raises only `ValueError` (and the unknown part's KeyError).
-    let proxy_error = |error: Error| match unknown_part(error) {
-        Stop::Value { message, .. } => Stop::Value { error_type: Some("ValueError"), message },
+    let classified = |error: Stop, footprint: Option<&(String, &'static str)>| match error {
+        Stop::Value { error_type: None, message } => {
+            Stop::Value { error_type: preparation_class(&message, footprint), message }
+        }
         other => other,
     };
     let mut board = if arguments.flag("--allow-proxy-footprints") {
-        physicalize(design, Footprints::Proxy, &options, locked, offline).map_err(proxy_error)?
+        physicalize(design, Footprints::Proxy, &options, locked, offline)
+            .map_err(|error| classified(unknown_part(error), None))?
     } else {
         let base = paths::resolve(Path::new(board_path)).parent().map(Path::to_path_buf).unwrap_or_default();
         let roots: Vec<PathBuf> =
             arguments.texts("--footprint-root").iter().map(|root| PathBuf::from(pypath::display(root))).collect();
         let mut resolver = FootprintResolver::new(&base, &roots, false, locked, offline);
-        physicalize(design, Footprints::Resolved(&mut resolver), &options, locked, offline).map_err(unknown_part)?
+        let physical = physicalize(design, Footprints::Resolved(&mut resolver), &options, locked, offline);
+        physical.map_err(|error| classified(unknown_part(error), resolver.failure.as_ref()))?
     };
     if let Some(scene) = arguments.path("--placement-templates") {
-        board = templates::apply_placement_templates(board, Path::new(&scene), locked, offline)?;
+        board = templates::apply_placement_templates(board, Path::new(&scene), locked, offline)
+            .map_err(|error| classified(Stop::from(error), None))?;
     }
     for scene in arguments.texts("--hard-macro") {
-        board = hard_macros::apply_hard_macro_scene(board, Path::new(&pypath::display(scene)), locked, offline)?;
+        board = hard_macros::apply_hard_macro_scene(board, Path::new(&pypath::display(scene)), locked, offline)
+            .map_err(|error| classified(Stop::from(error), None))?;
     }
     let editor_source_board = board.clone();
     let unified = unified_options(arguments)?;

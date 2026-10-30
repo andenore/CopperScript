@@ -17330,6 +17330,103 @@
      "compare": [
       "exit"
      ]
+    },
+    {
+     "id": "route-board-errors/cache-miss",
+     "args": [
+      "route-board",
+      "tests/rust-port/route-board/cache_miss/board.copper",
+      "--locked",
+      "--offline",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-errors/managed-unlocked",
+     "args": [
+      "route-board",
+      "examples/managed_footprints/board.copper",
+      "--locked",
+      "--offline",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-errors/unresolved-footprint",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-errors/macro-preparation",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/macros/net_mapping.copper",
+      "--locked",
+      "--offline",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-errors/macro-preparation-proxy",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/macros/net_mapping.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-errors/macro-binding",
+     "args": [
+      "route-board",
+      "tests/rust-port/export-kicad-pcb/macros/copper_set.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--no-check",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-errors/missing-scene",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--hard-macro",
+      "examples/missing-scene.json",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-errors/missing-templates",
+     "args": [
+      "route-board",
+      "examples/valid_board/board.copper",
+      "--locked",
+      "--offline",
+      "--allow-proxy-footprints",
+      "--placement-templates",
+      "examples/missing-templates.json",
+      "--report",
+      "{out}/route.json"
+     ]
     }
    ]
   },

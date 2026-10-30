@@ -46,6 +46,10 @@ pub struct FootprintResolver {
     pub offline: bool,
     packages: Option<PackageResolver>,
     verified: IndexMap<String, ResolvedPackage>,
+    /// The last failed `resolve`: its message and Python error class
+    /// (`FootprintResolutionError`, or the `ValueError` of an import's
+    /// dataclass check that Python lets escape unwrapped).
+    pub failure: Option<(String, &'static str)>,
 }
 
 impl FootprintResolver {
@@ -58,6 +62,7 @@ impl FootprintResolver {
             offline,
             packages: None,
             verified: IndexMap::new(),
+            failure: None,
         }
     }
 
@@ -181,6 +186,16 @@ impl FootprintResolver {
 
     /// `resolve`: load one reference, keeping it as the footprint's identity.
     pub fn resolve(&mut self, reference: &str) -> Result<FootprintImportResult> {
+        let mut value_error = false;
+        let result = self.resolve_reference(reference, &mut value_error);
+        if let Err(message) = &result {
+            let class = if value_error { "ValueError" } else { "FootprintResolutionError" };
+            self.failure = Some((message.clone(), class));
+        }
+        result
+    }
+
+    fn resolve_reference(&mut self, reference: &str, value_error: &mut bool) -> Result<FootprintImportResult> {
         if reference.is_empty() || reference.contains('\0') {
             return Err("footprint reference cannot be empty".to_owned());
         }
@@ -242,8 +257,10 @@ impl FootprintResolver {
             return Err(format!("footprint {} is ambiguous: {}", repr(reference), joined.join(", ")));
         }
         let path = &matches[0];
-        let imported =
-            load_kicad_mod(path, &paths::display(path), self.strict).map_err(|failure| failure.to_string())?;
+        let imported = load_kicad_mod(path, &paths::display(path), self.strict).map_err(|failure| {
+            *value_error = matches!(failure, copper_physical::kicad_mod::ImportError::Value(_));
+            failure.to_string()
+        })?;
         if let Some(asset) = &asset
             && imported.footprint.metadata.get("source_sha256") != Some(&asset.sha256)
         {
