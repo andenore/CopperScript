@@ -93,7 +93,6 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 
 ## Remaining files (in order)
 
- routing, routing_clearance_pad_cache,
 congestion_feedback, routing_quality, escape_assignment,
 unified_nested_routing, route_path_geometry, corridor_reservation,
 unified_commit_index, placement_global_progress, routing_lattice,
