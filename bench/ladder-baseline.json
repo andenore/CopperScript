@@ -1,0 +1,522 @@
+{
+  "schema": "copperscript-bench/v1",
+  "label": "9e60960",
+  "started_utc": "2026-10-30T11:49:53+00:00",
+  "copperscript_commit": "9e60960",
+  "ladder": "bench/ladder.json",
+  "results": [
+    {
+      "name": "round-led-ring",
+      "project": "/home/runner/work/CopperScript/CopperScript/examples/round_led_ring",
+      "tags": [
+        "small",
+        "examples"
+      ],
+      "exit_code": 1,
+      "elapsed_s": 6.4,
+      "command": [
+        "route-board",
+        "board.copper",
+        "--locked",
+        "--layers",
+        "2",
+        "--fab-profile",
+        "generic",
+        "--candidates",
+        "1",
+        "--feedback-iterations",
+        "1",
+        "--router-iterations",
+        "5",
+        "--progress",
+        "--fanout",
+        "--plane-contact-radius-mm",
+        "5",
+        "--report",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/round-led-ring/route-report.json",
+        "-o",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/round-led-ring/board.kicad_pcb"
+      ],
+      "status": "completed",
+      "route_status": "fail",
+      "summary": {
+        "copper": {
+          "track_length_mm": 591.871,
+          "tracks": 312,
+          "vias": 47
+        },
+        "drc": {
+          "budget_warnings_by_code": {},
+          "decision": "fail",
+          "errors": 0,
+          "errors_by_code": {}
+        },
+        "plane": {
+          "connections": 12,
+          "estimated_open_nets": [],
+          "estimated_open_pads": {},
+          "estimated_opens": 0,
+          "explicit_opens": 9,
+          "nets": 1
+        },
+        "schema": "copperscript-route-summary/v1",
+        "signal": {
+          "completion": 0.9804,
+          "connections": 51,
+          "nets": 31,
+          "open_nets": [
+            "DEC3"
+          ],
+          "opens": 1
+        }
+      },
+      "phases": {}
+    },
+    {
+      "name": "nrf52",
+      "project": "/home/runner/work/CopperScript/CopperScript/examples/nrf52_coin_cell",
+      "tags": [
+        "small",
+        "examples"
+      ],
+      "exit_code": 1,
+      "elapsed_s": 1.5,
+      "command": [
+        "route-board",
+        "board.copper",
+        "--locked",
+        "--layers",
+        "6",
+        "--fab-profile",
+        "jlcpcb-six-layer",
+        "--width-mm",
+        "50",
+        "--height-mm",
+        "40",
+        "--fanout",
+        "--plane-contact-radius-mm",
+        "5",
+        "--early-plane-stitch",
+        "--progress",
+        "--report",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/nrf52/route-report.json",
+        "-o",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/nrf52/board.kicad_pcb"
+      ],
+      "status": "completed",
+      "route_status": "fail",
+      "summary": {
+        "copper": {
+          "track_length_mm": 347.531,
+          "tracks": 216,
+          "vias": 42
+        },
+        "drc": {
+          "budget_warnings_by_code": {},
+          "decision": "fail",
+          "errors": 0,
+          "errors_by_code": {}
+        },
+        "plane": {
+          "connections": 22,
+          "estimated_open_nets": [],
+          "estimated_open_pads": {},
+          "estimated_opens": 0,
+          "explicit_opens": 18,
+          "nets": 1
+        },
+        "schema": "copperscript-route-summary/v1",
+        "signal": {
+          "completion": 1.0,
+          "connections": 35,
+          "nets": 19,
+          "open_nets": [],
+          "opens": 0
+        }
+      },
+      "phases": {}
+    },
+    {
+      "name": "full-vertical",
+      "project": "/home/runner/work/CopperScript/CopperScript/examples/full_vertical",
+      "tags": [
+        "medium",
+        "examples"
+      ],
+      "exit_code": 1,
+      "elapsed_s": 19.7,
+      "command": [
+        "route-board",
+        "board.copper",
+        "--locked",
+        "--layers",
+        "6",
+        "--fab-profile",
+        "jlcpcb-six-layer",
+        "--candidates",
+        "3",
+        "--feedback-iterations",
+        "1",
+        "--router-iterations",
+        "5",
+        "--progress",
+        "--fanout",
+        "--plane-contact-radius-mm",
+        "5",
+        "--placement-candidate",
+        "candidate-00",
+        "--report",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/full-vertical/route-report.json",
+        "-o",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/full-vertical/board.kicad_pcb"
+      ],
+      "status": "completed",
+      "route_status": "fail",
+      "summary": {
+        "copper": {
+          "track_length_mm": 1645.98,
+          "tracks": 793,
+          "vias": 206
+        },
+        "drc": {
+          "budget_warnings_by_code": {},
+          "decision": "fail",
+          "errors": 0,
+          "errors_by_code": {}
+        },
+        "plane": {
+          "connections": 114,
+          "estimated_open_nets": [],
+          "estimated_open_pads": {},
+          "estimated_opens": 0,
+          "explicit_opens": 108,
+          "nets": 2
+        },
+        "schema": "copperscript-route-summary/v1",
+        "signal": {
+          "completion": 1.0,
+          "connections": 86,
+          "nets": 58,
+          "open_nets": [],
+          "opens": 0
+        }
+      },
+      "phases": {}
+    },
+    {
+      "name": "cm4",
+      "project": "/home/runner/work/CopperScript/CopperScript/examples/cm4_baseboard",
+      "tags": [
+        "medium",
+        "examples"
+      ],
+      "exit_code": 1,
+      "elapsed_s": 1.0,
+      "command": [
+        "route-board",
+        "board.copper",
+        "--locked",
+        "--layers",
+        "4",
+        "--fab-profile",
+        "jlcpcb-four-layer",
+        "--candidates",
+        "1",
+        "--feedback-iterations",
+        "1",
+        "--router-iterations",
+        "5",
+        "--progress",
+        "--fanout",
+        "--plane-contact-radius-mm",
+        "5",
+        "--fanout-maze",
+        "--report",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/cm4/route-report.json",
+        "-o",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/cm4/board.kicad_pcb"
+      ],
+      "status": "completed",
+      "route_status": "fail",
+      "summary": {
+        "copper": {
+          "track_length_mm": 604.878,
+          "tracks": 161,
+          "vias": 66
+        },
+        "drc": {
+          "budget_warnings_by_code": {},
+          "decision": "fail",
+          "errors": 0,
+          "errors_by_code": {}
+        },
+        "plane": {
+          "connections": 55,
+          "estimated_open_nets": [],
+          "estimated_open_pads": {},
+          "estimated_opens": 0,
+          "explicit_opens": 54,
+          "nets": 1
+        },
+        "schema": "copperscript-route-summary/v1",
+        "signal": {
+          "completion": 1.0,
+          "connections": 21,
+          "nets": 11,
+          "open_nets": [],
+          "opens": 0
+        }
+      },
+      "phases": {}
+    },
+    {
+      "name": "fx10-bridge",
+      "project": "/home/runner/work/CopperScript/CopperScript/examples/fx10_bridge",
+      "tags": [
+        "medium",
+        "examples",
+        "bga"
+      ],
+      "exit_code": 1,
+      "elapsed_s": 80.4,
+      "command": [
+        "route-board",
+        "board.copper",
+        "--locked",
+        "--offline",
+        "--layers",
+        "6",
+        "--fab-profile",
+        "jlcpcb-six-layer",
+        "--candidates",
+        "1",
+        "--feedback-iterations",
+        "1",
+        "--router-iterations",
+        "5",
+        "--progress",
+        "--fanout",
+        "--via-lattice",
+        "--plane-contact-radius-mm",
+        "5",
+        "--report",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/fx10-bridge/route-report.json",
+        "-o",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/fx10-bridge/board.kicad_pcb"
+      ],
+      "status": "completed",
+      "route_status": "fail",
+      "summary": {
+        "copper": {
+          "track_length_mm": 770.494,
+          "tracks": 851,
+          "vias": 156
+        },
+        "drc": {
+          "budget_warnings_by_code": {
+            "DRC-DIFF-SKEW": 2,
+            "DRC-LENGTH-MATCH": 1
+          },
+          "decision": "fail",
+          "errors": 0,
+          "errors_by_code": {}
+        },
+        "plane": {
+          "connections": 100,
+          "estimated_open_nets": [],
+          "estimated_open_pads": {},
+          "estimated_opens": 0,
+          "explicit_opens": 88,
+          "nets": 2
+        },
+        "schema": "copperscript-route-summary/v1",
+        "signal": {
+          "completion": 0.9529,
+          "connections": 85,
+          "nets": 44,
+          "open_nets": [
+            "USB_DM",
+            "USB_DP"
+          ],
+          "opens": 4
+        }
+      },
+      "phases": {}
+    },
+    {
+      "name": "led-ring",
+      "project": "/home/runner/work/CopperScript/CopperScript/boards/CopperLedRing",
+      "tags": [
+        "consumer"
+      ],
+      "exit_code": 1,
+      "elapsed_s": 3.7,
+      "command": [
+        "route-board",
+        "board.copper",
+        "--locked",
+        "--offline",
+        "--layers",
+        "2",
+        "--candidates",
+        "1",
+        "--fanout",
+        "--fanout-maze",
+        "--early-plane-stitch",
+        "--stitch-surface-zones",
+        "--plane-stitch-radius-mm",
+        "5",
+        "--plane-contact-radius-mm",
+        "8",
+        "--plane-stitch-detour-mm",
+        "3",
+        "--progress",
+        "--footprint-root",
+        "/usr/share/kicad/footprints",
+        "--report",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/led-ring/route-report.json",
+        "-o",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/led-ring/board.kicad_pcb",
+        "--verify-plane-fill",
+        "/usr/bin/kicad-cli"
+      ],
+      "status": "completed",
+      "route_status": "fail",
+      "summary": {
+        "copper": {
+          "track_length_mm": 553.853,
+          "tracks": 323,
+          "vias": 42
+        },
+        "drc": {
+          "budget_warnings_by_code": {},
+          "decision": "fail",
+          "errors": 0,
+          "errors_by_code": {}
+        },
+        "native": {
+          "islands": 0,
+          "passed": false,
+          "unconnected": 1,
+          "violations": 1
+        },
+        "plane": {
+          "connections": 12,
+          "estimated_open_nets": [],
+          "estimated_open_pads": {},
+          "estimated_opens": 0,
+          "explicit_opens": 11,
+          "nets": 1
+        },
+        "schema": "copperscript-route-summary/v1",
+        "signal": {
+          "completion": 1.0,
+          "connections": 51,
+          "nets": 31,
+          "open_nets": [],
+          "opens": 0
+        }
+      },
+      "phases": {}
+    },
+    {
+      "name": "asset-tracker",
+      "project": "/home/runner/work/CopperScript/CopperScript/boards/CopperAssetTracker",
+      "tags": [
+        "consumer"
+      ],
+      "exit_code": 1,
+      "elapsed_s": 206.3,
+      "command": [
+        "route-board",
+        "board.copper",
+        "--locked",
+        "--offline",
+        "--layers",
+        "6",
+        "--fab-profile",
+        "jlcpcb-six-layer",
+        "--candidates",
+        "1",
+        "--fanout",
+        "--fanout-maze",
+        "--package-initial-pair-states",
+        "0",
+        "--no-early-plane-stitch",
+        "--plane-stitch-step-mm",
+        "0.1",
+        "--plane-maze-step-mm",
+        "0.025",
+        "--plane-maze-budget",
+        "50000",
+        "--plane-contact-radius-mm",
+        "3",
+        "--plane-stitch-detour-mm",
+        "1.5",
+        "--progress",
+        "--report",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/asset-tracker/route-report.json",
+        "-o",
+        "/home/runner/work/CopperScript/CopperScript/build/bench/asset-tracker/board.kicad_pcb",
+        "--verify-plane-fill",
+        "/usr/bin/kicad-cli"
+      ],
+      "status": "completed",
+      "route_status": "fail",
+      "summary": {
+        "copper": {
+          "track_length_mm": 2002.358,
+          "tracks": 1171,
+          "vias": 274
+        },
+        "drc": {
+          "budget_warnings_by_code": {},
+          "decision": "fail",
+          "errors": 0,
+          "errors_by_code": {}
+        },
+        "native": {
+          "islands": 0,
+          "passed": false,
+          "unconnected": 3,
+          "violations": 3
+        },
+        "plane": {
+          "connections": 172,
+          "estimated_open_nets": [
+            "V3V3"
+          ],
+          "estimated_open_pads": {
+            "V3V3": [
+              "U_MODEM_LEVEL.7"
+            ]
+          },
+          "estimated_opens": 1,
+          "explicit_opens": 135,
+          "nets": 2
+        },
+        "schema": "copperscript-route-summary/v1",
+        "signal": {
+          "completion": 0.9833,
+          "connections": 120,
+          "nets": 71,
+          "open_nets": [
+            "NRF_XC2"
+          ],
+          "opens": 2
+        }
+      },
+      "phases": {}
+    },
+    {
+      "name": "copper-probe",
+      "project": "/home/runner/work/CopperScript/CopperScript/boards/CopperProbe",
+      "tags": [
+        "consumer",
+        "hard"
+      ],
+      "status": "skipped",
+      "reason": "missing /home/runner/work/CopperScript/CopperScript/boards/CopperProbe/board.copper"
+    }
+  ]
+}

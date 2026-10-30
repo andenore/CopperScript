@@ -303,9 +303,11 @@ do not shrink as much.
   test`; the `ladder` job routes every ladder board with `copper bench`
   (KiCad native DRC where a board asks for it) and fails on a board that
   errors (exit 3 included) or times out, and on regressions against
-  `bench/ladder-baseline.json` once one is committed. The comparison
-  harness, corpus and oracle fixtures stay in the repository but no longer
-  run in CI.
+  `bench/ladder-baseline.json`. The baseline is the first Rust-only ladder
+  run (CI run 41050195178 on 9e60960): every board completed, copper-probe
+  skipped; refresh it from the `LADDER-RESULTS` line of a ladder job's log
+  after an intended change in routing quality. The comparison harness,
+  corpus and oracle fixtures stay in the repository but no longer run in CI.
 
 ## 9. Next steps
 
