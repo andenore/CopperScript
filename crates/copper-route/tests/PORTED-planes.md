@@ -11,8 +11,16 @@ test that loops over its cases.
 | test_length_match_tuning.py | 19 | 0 | 0 | `tests/length_match_tuning.rs`; `src/test_support_planes.rs` (`validate_candidate`) |
 | test_route_cleanup.py | 1 (+3 already in `src/route_cleanup.rs`) | 10: 9 `prune_track_stubs` cases (not ported to Rust: its settler never owns mutable copper, see the `route_cleanup` module doc); 1 installed-KiCad case (`kicad-cli` not installed) | 0 | `tests/route_cleanup.rs` |
 | test_fanout_and_plane_verify.py | 11 | 3: `run_physical_drc` monkeypatch (Python internals); 2 installed-KiCad cases (`kicad-cli` not installed) | 0 | `tests/fanout_and_plane_verify.rs` |
+| test_pad_via_arrays.py | 13 | 0 (the critical-preflight half of the report test: the command is gone) | 0 | `tests/pad_via_arrays.rs`; `crates/copper/tests/via_in_pad_reports.rs` |
 
 ## Notes
+
+- `test_pad_via_arrays.py`: `ViaArrayPlacementError.diagnostic_board` is not
+  carried in Rust; the test asserts the named site rejection and an unchanged
+  board. `PadViaInPadRule`'s constructor checks are source-lowering checks in
+  Rust (covered by the invalid-parameter cases). Placement legality uses
+  `copper_drc::legality::Checker` (`_legal`). The hard-macro case registers
+  the array materializer as the `copper` binary does.
 
 - The fake KiCad runner of the Python native-verification tests is a
   stand-in `kicad-cli` shell script (`support_planes::fake_kicad_cli`,
