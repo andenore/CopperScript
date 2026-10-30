@@ -552,3 +552,66 @@ mod interstitial_fanout {
         );
     }
 }
+
+/// `tests/test_two_leg_fanout.py`: the off-ray site budget and the bounded
+/// maze fallback.
+mod two_leg_fanout {
+    use super::support_planes::fanout::*;
+    use super::support_planes::*;
+    use crate::RoutingClearanceIndex;
+    use crate::fanout::{FanoutOptions, maze_choices, two_leg_candidates};
+    use crate::pin_escape::verified_fanout_path;
+    use copper_pcb::board::PadReference;
+    use std::collections::BTreeSet;
+
+    fn opts() -> FanoutOptions {
+        FanoutOptions { minimum_component_pads: 2, maximum_neighbor_distance_nm: nm(3.0), ..FanoutOptions::default() }
+    }
+
+    #[test]
+    fn two_leg_site_budget_is_bounded_near_to_far_and_has_no_radial_duplicates() {
+        let settings = FanoutOptions { maximum_two_leg_candidates: 17, ..opts() };
+        let candidates = two_leg_candidates(mm(5.0, 6.0), mm(5.0, 7.0), &settings);
+        let distinct: BTreeSet<(i64, i64)> = candidates.iter().map(|p| (p.x_nm, p.y_nm)).collect();
+        assert_eq!((candidates.len(), distinct.len()), (17, 17));
+        let mut radii = Vec::new();
+        for point in &candidates {
+            let (dx, dy) = ((point.x_nm - nm(5.0)).abs(), (point.y_nm - nm(6.0)).abs());
+            assert!(dx != 0 && dy != 0 && dx != dy, "{point:?} lies on a radial ray");
+            radii.push(dx.max(dy));
+        }
+        assert!(radii.windows(2).all(|pair| pair[0] <= pair[1]), "{radii:?}");
+    }
+
+    /// Python emptied `_legal_choices` to reach the maze through
+    /// `route_fanout`; Rust has no seam, so the maze owner is called directly
+    /// on the same pin and its candidate is checked as committed copper.
+    #[test]
+    fn bounded_maze_fallback_retains_exact_clearance_and_determinism() {
+        let board = two_leg_board(true);
+        let settings = FanoutOptions { maze_escapes: true, joint_escapes: false, surface_fallback: false, ..opts() };
+        let pose = &board.placements[0];
+        let pad = &board.footprints["two"].pads[0];
+        let pins = [(nm(2.0), PadReference::new("U", "1"), mm(5.0, 6.0), pose, pad)];
+        let maze = |options: &FanoutOptions| {
+            maze_choices(&board, &RoutingClearanceIndex::new(&board).unwrap(), "A", &pins, options).unwrap()
+        };
+        let choices = maze(&settings);
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices, maze(&settings));
+        let (path, via) = choices[0].clone();
+        let via = via.expect("the maze escape ends in a via");
+        assert_eq!(path.last().unwrap().end, via.position);
+        let mut routed = board.clone();
+        routed.tracks = path.clone();
+        routed.vias = vec![via.clone()];
+        let index = RoutingClearanceIndex::new(&routed).unwrap();
+        let verified = verified_fanout_path(&routed, &PadReference::new("U", "1"), "A", via.position, &index).unwrap();
+        assert!(verified.is_some());
+        assert_drc_clear(
+            &routed,
+            &["DRC-SHORT", "DRC-CLEARANCE", "DRC-VIA-PAD-OVERLAP", "DRC-COPPER-KEEPOUT", "DRC-BOARD-EDGE"],
+        );
+        assert!(maze(&FanoutOptions { maze_state_budget: 1, ..settings }).is_empty());
+    }
+}
