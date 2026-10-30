@@ -24,7 +24,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
     };
     if parsed.flags.contains(&"--help") {
-        let _ = writeln!(out, "{USAGE}\n\ninspect copperscript.state files written by pcbir.workbench");
+        let _ =
+            writeln!(out, "{USAGE}\n\ninspect copperscript.state files (routing checkpoints and saved solver inputs)");
         return 0;
     }
     let file = match parsed.positionals.as_slice() {

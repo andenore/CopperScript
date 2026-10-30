@@ -101,10 +101,10 @@ pub fn replay_unified(
         }
     }
     if request.bga_fanout.is_some() {
-        return not_implemented("replay-unified --refanout (pcbir.bga_fanout)");
+        return not_implemented("replay-unified --refanout (BGA fanout)");
     }
     if request.exact_escape.is_some() {
-        return not_implemented("replay-unified --exact-escape (pcbir.exact_escape)");
+        return not_implemented("replay-unified --exact-escape (exact escape)");
     }
     let map = |items: &Option<Vec<(copper_pcb::board::PadReference, crate::pin_escape::RoutingAccess)>>| {
         items.as_ref().map(|items| items.iter().cloned().collect::<indexmap::IndexMap<_, _>>())
