@@ -1,6 +1,0 @@
-{
-  "case_id": "ad4134bcpz",
-  "sources": [
-    {"id":"adi-ad4134-ds","document":"AD4134 datasheet","revision":"Rev. 0, 2021","url":"https://www.analog.com/media/en/technical-documentation/data-sheets/ad4134.pdf","locator":"Table 8, Pin Function Descriptions, pp. 14-16; ordering guide p. 92; SPI/data interface pp. 52, 62-64"}
-  ]
-}

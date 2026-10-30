@@ -48,12 +48,12 @@ pub fn token_urlsafe(count: usize) -> String {
     text
 }
 
-/// The bundled browser client, served as Python's package resources.
+/// The bundled browser client (`assets/`).
 const ASSETS: [(&str, &[u8], &str); 4] = [
-    ("/", include_bytes!("../../../pcbir/editor/assets/index.html"), "text/html; charset=utf-8"),
-    ("/editor.js", include_bytes!("../../../pcbir/editor/assets/editor.js"), "text/javascript; charset=utf-8"),
-    ("/editor.css", include_bytes!("../../../pcbir/editor/assets/editor.css"), "text/css; charset=utf-8"),
-    ("/copper-logo.svg", include_bytes!("../../../pcbir/editor/assets/copper-logo.svg"), "image/svg+xml"),
+    ("/", include_bytes!("../assets/index.html"), "text/html; charset=utf-8"),
+    ("/editor.js", include_bytes!("../assets/editor.js"), "text/javascript; charset=utf-8"),
+    ("/editor.css", include_bytes!("../assets/editor.css"), "text/css; charset=utf-8"),
+    ("/copper-logo.svg", include_bytes!("../assets/copper-logo.svg"), "image/svg+xml"),
 ];
 
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
@@ -75,7 +75,7 @@ impl Request {
     }
 }
 
-/// What the transport answers, or that the rewrite cannot.
+/// What the transport answers, or that this implementation cannot.
 enum Outcome {
     Respond(u16, Vec<u8>, &'static str),
     NotImplemented(String),
@@ -338,7 +338,7 @@ struct Shared {
 }
 
 /// `serve`: answer requests until the process is stopped; `err_exit` ends
-/// the process when a request reaches behaviour the rewrite lacks.
+/// the process when a request reaches behaviour this implementation lacks.
 pub fn serve(server: EditorServer, err_exit: &'static (dyn Fn(&str) + Sync)) {
     let shared = Shared { session: server.session.clone(), definitions: server.definitions.clone(), err_exit };
     std::thread::scope(|scope| {

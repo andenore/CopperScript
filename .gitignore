@@ -1,15 +1,3 @@
-__pycache__/
-*.py[cod]
-.pytest_cache/
-# Temporary directories from pytest --basetemp runs.
-/.pytest-*/
-.coverage
-htmlcov/
-
-.venv/
-venv/
-
-*.egg-info/
 # Generated routing boards, reports and per-run logs.
 /build/
 # Legacy root-level compiler output; new examples write under build/.
@@ -24,8 +12,5 @@ dist/
 # Publishing tools are locked separately and never shipped as extension runtime.
 /integrations/vscode/tools/node_modules/
 
-# Rust rewrite build output.
+# Cargo build output.
 /target/
-
-# Seeded mutations the comparison harness writes beside their sources while it runs.
-.compare-mutation-*

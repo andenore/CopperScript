@@ -1,6 +1,0 @@
-{
-  "case_id": "cyusb4014-fcaxi",
-  "sources": [
-    {"id":"infineon-fx10-ds","document":"CYUSB401x EZ-USB FX10 USB 10 Gbps peripheral controller datasheet","revision":"002-40837 Rev. *C, 2026-03-10","url":"https://www.infineon.com/dgdl/Infineon-CYUSB401x_EZ-USB_FX10_USB_10_Gbps_peripheral_controller-DataSheet-v02_00-EN.pdf?fileId=8ac78c8c956a0a4701959618c62d4947","locator":"package information p. 2; pin definitions Table 9 p. 31 and Table 11 pp. 35-36; ordering information p. 82"}
-  ]
-}
