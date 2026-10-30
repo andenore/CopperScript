@@ -16,6 +16,8 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | escape_placement | 40 | 33 | 7 | 0 | `crates/copper-place/tests/escape_placement.rs` (32), `crates/copper-place/src/legalize.rs` `tests` (1) |
 | routing | 19 | 18 | 1 | 0 | `tests/routing.rs` (17), `src/routing.rs` `tests` (1) |
 | routing_clearance_pad_cache | 18 | 14 | 4 | 0 | `tests/routing_clearance_pad_cache.rs` (14) |
+| congestion_feedback | 17 | 15 | 2 | 0 | `tests/congestion_feedback.rs` (15) |
+| routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
 ## Notes per file
 
@@ -91,9 +93,32 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
   became `existing_copper_is_indexed_in_source_order_as_locked_additions` on a
   plain board (the macro fixture lived in `test_hard_macros.py`).
 
+### congestion_feedback
+- The Rust module keeps only what the pipeline uses. Dropped parts of tests:
+  numpy read-only arrays and constructor shape checks, `value_at`,
+  `tile_bounds` IndexError, `gradient_at(radius_tiles=3)` (the corner case
+  runs at the fixed radius 2), `estimate_demand(nets=)`,
+  `propose_moves(rotations=, limit=)` (the fixed limit of 24 is checked) and
+  the private `rank` (group and step order are read from `reason`).
+- Adapted: `test_combined_requires_same_lattice_and_keeps_own_capacity`
+  tests the lattice/capacity/failure-point contract on `combine_normalised`
+  (Python's raw `combined` is not ported).
+- Skipped: `test_to_json_round_trips_the_lattice_and_maps_compare_by_value`
+  (no `to_json`), `test_screen_orders_by_global_score_and_keep_bounds_the_result`
+  (monkeypatched `route_global`).
+
+### routing_quality
+- Ignored: `default_planner_consumes_decoupling_role_without_distance_rules`:
+  copper-place's decoupling-access phase reports NotImplemented for a
+  movable pin-associated decoupler (Rust gap, not a test problem).
+- Skipped: `test_nested_module_decoupling_endpoint_is_qualified` exercised the
+  private elaboration helpers `_expand_one`/`_Template` of the language.
+- The prototype board is `compile_design_source` + `physicalize(Proxy)` at
+  Python's `PrototypePhysicalOptions` defaults.
+
 ## Remaining files (in order)
 
-congestion_feedback, routing_quality, escape_assignment,
+escape_assignment,
 unified_nested_routing, route_path_geometry, corridor_reservation,
 unified_commit_index, placement_global_progress, routing_lattice,
 congestion_feedback_flow, unified_router_options, unified_congestion_export,

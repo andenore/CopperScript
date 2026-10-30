@@ -463,3 +463,22 @@ pub fn improve_escape_assignment(
         },
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support_routers::*;
+
+    /// `tests/test_routing_quality.py::test_greedy_and_joint_assignment_reject_the_same_net_x` (joint half).
+    #[test]
+    fn joint_assignment_rejects_the_same_net_x() {
+        let board = board("quality", 10.0, 10.0, Vec::new(), Vec::new(), vec![net("P", &[])]);
+        let wire = |a, b| track("P", a, b, 0.2, copper_physical::CopperLayer::Front);
+        let first: EscapeCandidate = (vec![wire((2.0, 2.0), (4.0, 4.0))], None);
+        let second: EscapeCandidate = (vec![wire((4.0, 2.0), (2.0, 4.0))], None);
+        let joined: EscapeCandidate = (vec![wire((4.0, 4.0), (5.0, 3.0))], None);
+        let mut conflicts = EscapeConflicts::new(&board, 10, 2_000_000);
+        assert!(!conflicts.compatible(&first, &second).ok().expect("in budget"));
+        assert!(conflicts.compatible(&first, &joined).ok().expect("in budget"));
+    }
+}
