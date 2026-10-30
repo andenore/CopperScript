@@ -1,9 +1,0 @@
-{
-  "started_utc": "2026-10-27T00:00:00+00:00",
-  "status": "passed",
-  "fabrication_ready": false,
-  "editor_intent_sha256": "6ff755129b2429a27479331d2395270297dbd9b2921e881b6700e9089cd4e10a",
-  "draft_board_sha256": "13bba852a7c35bfdb64c7a229dca239deb37a0c882f1f60dd4d91dd292e51070",
-  "exit_code": 0,
-  "elapsed_seconds": 1.0
-}

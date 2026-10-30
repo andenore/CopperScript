@@ -1,6 +1,5 @@
-# Rust rewrite workspace (docs/rust-port-plan.md). One crate per layer; the
-# `copper` crate builds the binary. The Python package stays the oracle until
-# cutover.
+# The CopperScript workspace. One crate per layer; the `copper` crate builds
+# the binary.
 [workspace]
 resolver = "3"
 members = ["crates/*"]

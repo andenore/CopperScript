@@ -5,7 +5,7 @@
 //!
 //! [`run_physical_drc`] returns the findings, coverage and decision. The
 //! signoff token (board and report digests), waivers and the breakout and
-//! hole-clearance relaxation records are not yet rewritten; they never
+//! hole-clearance relaxation records are not yet implemented; they never
 //! change a finding. Filled-zone checks need zone fills, which only the
 //! KiCad manufacturing stage produces.
 
@@ -75,7 +75,7 @@ impl Severity {
     }
 }
 
-/// `DrcFinding` (always active: waivers are not rewritten).
+/// `DrcFinding` (always active: waivers are not implemented).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Finding {
     pub code: String,

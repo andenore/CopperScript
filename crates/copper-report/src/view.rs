@@ -6,7 +6,7 @@
 //! what is in the window, so a text-only reader still gets the facts.
 //!
 //! The picture is the SVG the Python implementation writes when Pillow is not
-//! installed, which is the oracle's configuration (the qualification
+//! installed, which was the reference configuration (the qualification
 //! environment installs no imaging library). A view is a reading aid: it
 //! neither refills zones nor checks clearances.
 

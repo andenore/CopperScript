@@ -1,7 +1,7 @@
 //! Source-located, machine-readable diagnostics (`pcbir.diagnostics`).
 //!
 //! ERC works on the IR; this maps a finding's subject (`U1`, `U1.VDD`,
-//! `PWR/U1.VDD`) back to tokens of the root source, the way the Python CLI
+//! `PWR/U1.VDD`) back to tokens of the root source, the way the former Python implementation
 //! does, so output carries `file:line:column` and machine-applicable fixes.
 
 use copper_json::{Object, Value, python_str_repr as repr};

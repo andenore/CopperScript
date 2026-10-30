@@ -8,10 +8,10 @@ share one repository download and one complete content inventory.
 From the repository root, install the compiler and prepare the dependency:
 
 ```text
-python -m pip install -e .
-python -m copperscript lock examples/managed_footprints/board.copper
-python -m copperscript audit-footprints examples/managed_footprints/board.copper --locked --offline --json
-python -m copperscript export-kicad-pcb examples/managed_footprints/board.copper --locked --offline -o build/managed-footprints.kicad_pcb
+cargo install --locked --path crates/copper
+copper lock examples/managed_footprints/board.copper
+copper audit-footprints examples/managed_footprints/board.copper --locked --offline --json
+copper export-kicad-pcb examples/managed_footprints/board.copper --locked --offline -o build/managed-footprints.kicad_pcb
 ```
 
 The first command that resolves managed geometry downloads the complete pinned

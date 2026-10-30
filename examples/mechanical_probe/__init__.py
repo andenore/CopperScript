@@ -1,1 +1,0 @@
-"""Standalone mechanical routing probe."""

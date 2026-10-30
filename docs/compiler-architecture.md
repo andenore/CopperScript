@@ -18,66 +18,49 @@
 The stages are intentionally separate so editor tooling and the [language
 server](language-server.md) can reuse parsing, semantic lowering, and ERC independently.
 
-Key modules:
+The implementation is the Rust workspace in `crates/`; the `copper` binary
+wires the crates into commands. Key crates:
 
-- `pcbir.lsp` � versioned editor workspace, recovering source index, compiler-backed diagnostics and standard LSP stdio server.
-- `pcbir.lexer` and `pcbir.parser` — dependency-free source frontend.
-- `pcbir.syntax` — source locations and syntax-tree declarations.
-- `pcbir.compiler` — semantic lowering and typed unit validation.
-- `pcbir.packages` — manifests, package resolution, Git cache, and checksums.
-- `pcbir.model` and `pcbir.quantities` — immutable semantic IR.
-- `pcbir.elaborate` — explicit hierarchy-to-flat derivation for consumers that
-  require a global connectivity view.
-- `pcbir.erc` — reusable electrical-rules passes.
-- `pcbir.power` — explicit steady-state power-domain analysis.
-- `pcbir.physical` — immutable, backend-neutral board geometry, footprints,
-  placements, nets, tracks, vias, stackup, and design rules.
-- `pcbir.footprints` — deterministic `.kicad_mod` reference resolution from
-  board-relative paths or explicit KiCad library roots.
-- `pcbir.physicalize` — resolved-footprint and typed placement-constraint
-  lowering; proxy geometry is an explicit development fallback.
-- `pcbir.placement` — hierarchy-aware analytical placement, hybrid
-  legalization, route-aware detailed refinement, and deterministic Pareto
-  candidate generation.
-- `pcbir.layout` — four-gate readiness orchestration and placement reporting.
-- `pcbir.routing` — deterministic multilayer global routing with
-  negotiated-congestion guides and explicit overflow diagnostics.
-- `pcbir.routeflow` — full-route candidate selection, bounded legal placement
-  moves, atomic rollback, stagnation control, and fresh-route certification.
-- `pcbir.critical` — profile-driven locked copper for critical, differential,
-  clock, CAN, RF-feed, power, and length/via-constrained routes.
-- `pcbir.unified_router` — negotiated-congestion (PathFinder) ordinary routing
-  on a shared multilayer lattice with legal pad access, exact foreign-copper
-  clearance and locked critical copper; `pcbir.detailed` holds its result
-  types. See [detailed-routing research](detailed-routing-research.md).
-- `pcbir.geometry` — shared exact integer predicates.
-- `pcbir.drc` — fail-closed exact-copper checks, explicit coverage, scoped
-  waivers, and content-bound physical signoff tokens.
-- `pcbir.flow` — compatible global/critical/detailed routing and DRC
-  orchestration with no proxy-to-copper shortcuts.
-- `pcbir.manufacturing` — gated KiCad 10 Gerber/drill/netlist releases with
-  independent structural CAM parsing, manifests, checksums, and atomic publish.
-- `pcbir.process_drc` — separate provenance-bearing fabrication, stencil, and
-  assembly capability gates.
-- `pcbir.engineering` — evidence-graded screening results that explicitly state
-  claim scope and model limitations.
-- `pcbir.cam_qualification` and `pcbir.constraint_coverage` — fail-closed
-  independent-tool evidence and end-to-end ownership of hard constraints.
-- `pcbir.physical` — immutable placement, exact copper, typed zone/keepout
-  intent, and content-bound external fill provenance. Manufacturing boards with
-  zones are authoritatively refilled and saved by the pinned KiCad toolchain.
-- `pcbir.importers.kicad_mod` — dependency-free, fail-safe KiCad footprint
-  parser and normalizer.
-- `pcbir.devicegen` — compact JSON/CSV device bundles, bounded extraction work
-  packets, validation, and deterministic library generation.
-- `pcbir.backends` — immutable backend artifacts and the KiCad schematic and
-  PCB generators.
-- `pcbir.serializer` — versioned JSON IR output.
-- `pcbir.cli` — checking, compilation, KiCad export, and footprint inspection
-  commands.
+- `copper-lang` — lexer, recovering parser and source-aware syntax tree,
+  package resolution (manifests, Git cache, checksums, locks), semantic
+  lowering with typed unit validation (electrical, mechanical, silkscreen),
+  hierarchy elaboration, ERC, power-state analysis, footprint references,
+  the JSON IR serializer and the KiCad schematic backend.
+- `copper-units` — exact decimals, integer nanometres, fractions, quantities
+  and the shared `100 nF` formatter.
+- `copper-json` — deterministic JSON parsing and output.
+- `copper-state` — the `copperscript.state/v1` file format.
+- `copper-physical` — exact board geometry (outlines, cutouts, holes, slots,
+  line/arc paths), footprints and the dependency-free `.kicad_mod` importer.
+- `copper-pcb` — the physical board IR (placements, nets, tracks, vias, zones,
+  keepouts, stackup and rules), physicalization of resolved footprints (proxy
+  geometry is an explicit development fallback), placement templates,
+  hard-macro scenes and the KiCad PCB/project backend.
+- `copper-place` — the placement planner behind `plan-layout`: seeds,
+  legalization, rigid clusters, route-aware refinement, escape spacing,
+  candidate selection and requirement verification.
+- `copper-route` — global routing with negotiated-congestion guides, layer
+  assignment, placement/routing feedback, escape planning, critical and
+  differential-pair routing, the negotiated-congestion (PathFinder) unified
+  router on a shared multilayer lattice with exact clearance, fanout, plane
+  stitch, decoupling, native KiCad plane verification, the `route-board`
+  pipeline and the `bench` ladder runner. See
+  [detailed-routing research](detailed-routing-research.md).
+- `copper-drc` — exact physical DRC with explicit coverage, copper
+  connectivity, breakout spacing, placement legality, hard-macro
+  materialization and signal-integrity screening (`si-check`).
+- `copper-assembly` — assembly locks and checks, BOM/CPL and ordering CSVs,
+  and native KiCad manufacturing files.
+- `copper-report` — diagnostic explanations, a run's issues grouped by cause,
+  board window views and engineering summaries.
+- `copper-editor` — the routed editor overlay and the `edit-mechanical`
+  browser editor (sessions, scene, reviewed source transactions, loopback
+  HTTP server).
+- `copper-lsp` — the language server behind `copper lsp`.
+- `copper` — the binary and its command line.
 
-Python IR constructions are confined to test fixtures. `.copper` is the only
-user-facing source format accepted by the compiler.
+`.copper` is the only user-facing source format accepted by the compiler.
+
 
 The [full-vertical acceptance design](full-vertical-example.md) combines
 an STM32G0C1, CAN, an EG800G cellular modem over UART and USB, an nRF52832
@@ -113,10 +96,10 @@ minimum/maximum distance, and explicit placement groups become typed physical
 IR and are enforced by `plan-layout`. Hierarchy, interfaces, and proximity
 constraints also produce soft semantic placement groups.
 
-The physical Python API also supports [rigid reference-layout clusters](rigid-placement-clusters.md).
+The placement planner also supports [rigid reference-layout clusters](rigid-placement-clusters.md).
 Unlike soft groups, these retain identity-bound local footprint poses and
 keepouts during whole-cluster placement/refinement and routing feedback.
 Full-vertical now binds the experimental TPS62130A and Nordic/Johanson
 [hard macros](physical-hard-macros.md) by default. Their local copper is
 locked, but regulator current/thermal performance and RF/antenna tuning remain
-unqualified. See the [integration plan](full-vertical-macro-ground-plan.md).
+unqualified.

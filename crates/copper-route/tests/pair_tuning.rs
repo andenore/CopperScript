@@ -1,6 +1,6 @@
 //! `tune_virtual_pair_spans`, `tune_pair` and `matched_local_candidates`
-//! against fixtures recorded from Python by `fixtures/pair_tuning/generate.py`
-//! on the inputs of the Python unit tests (no replay input reaches them).
+//! against frozen fixtures recorded from the former Python implementation
+//! (`fixtures/pair_tuning/`, not regenerated) on the inputs of the Python unit tests (no replay input reaches them).
 
 use std::path::Path;
 

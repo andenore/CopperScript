@@ -1,8 +1,8 @@
 {
   "name": "copperscript",
   "displayName": "CopperScript",
-  "description": "CopperScript language server and source-authoritative mechanical editor, using a selected local compiler",
-  "version": "0.3.2",
+  "description": "CopperScript syntax highlighting and language server, using the local copper binary",
+  "version": "0.4.0",
   "publisher": "andenore",
   "license": "MIT",
   "icon": "media/copper-logo.png",
@@ -11,13 +11,12 @@
   "bugs": {"url": "https://github.com/andenore/CopperScript/issues"},
   "categories": ["Programming Languages", "Other"],
   "keywords": ["copper", "copperscript", "pcb", "hardware", "language server"],
-  "files": ["extension.cjs", "lsp-client.cjs", "compiler.cjs", "setup.cjs", "language-configuration.json", "README.md", "CHANGELOG.md", "LICENSE", "media/**", "syntaxes/**"],
+  "files": ["extension.cjs", "lsp-client.cjs", "compiler.cjs", "setup.cjs", "language-configuration.json", "README.md", "CHANGELOG.md", "LICENSE", "media/copper-logo.png", "syntaxes/**"],
   "engines": {
     "vscode": "^1.90.0"
   },
   "main": "./extension.cjs",
   "activationEvents": [
-    "onCustomEditor:copperscript.mechanical",
     "onLanguage:copper"
   ],
   "capabilities": {
@@ -30,94 +29,12 @@
   },
   "contributes": {
     "commands": [
-      {"command": "copperscript.openMechanical", "title": "Open Mechanical Editor", "category": "CopperScript"},
       {"command": "copperscript.showSetup", "title": "Show Setup", "category": "CopperScript"},
       {"command": "copperscript.restartLanguageServer", "title": "Restart Language Server", "category": "CopperScript"}
-    ],
-    "menus": {
-      "explorer/context": [{"command": "copperscript.openMechanical", "when": "resourceExtname == .copper", "group": "navigation"}],
-      "editor/title/context": [{"command": "copperscript.openMechanical", "when": "resourceExtname == .copper", "group": "navigation"}]
-    },
-    "customEditors": [
-      {
-        "viewType": "copperscript.mechanical",
-        "displayName": "CopperScript Mechanical / Floorplan",
-        "selector": [
-          {
-            "filenamePattern": "*.copper"
-          }
-        ],
-        "priority": "option"
-      }
     ],
     "configuration": {
       "title": "CopperScript",
       "properties": {
-        "copperscript.mechanical.compilerCommand": {
-          "scope": "resource",
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Interpreter argv; [] discovers the project's .venv or locked/offline uv environment. Requires Python 3.11 or newer and CopperScript mechanical support."
-        },
-        "copperscript.mechanical.compilerDigest": {
-          "scope": "resource",
-          "type": "string",
-          "default": "",
-          "description": "Required compiler fingerprint from python -m pcbir.editor.document --fingerprint. Update explicitly when upgrading the pinned compiler."
-        },
-        "copperscript.mechanical.footprintRoots": {
-          "scope": "resource",
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Local KiCad footprint roots. Declared module dependencies are prepared when the editor opens."
-        },
-        "copperscript.mechanical.offline": {
-          "scope": "resource",
-          "type": "boolean",
-          "default": false,
-          "description": "Prepare dependencies using cached or local inputs only. Editing and source review always remain offline."
-        },
-        "copperscript.mechanical.layers": {
-          "scope": "resource",
-          "type": "number",
-          "enum": [
-            0,
-            2,
-            4,
-            6
-          ],
-          "default": 0,
-          "description": "Copper-layer count. Zero derives the count from the source stackup and layer requirements; 2, 4 or 6 explicitly fixes it."
-        },
-        "copperscript.mechanical.fabricationProfile": {
-          "scope": "resource",
-          "type": "string",
-          "enum": [
-            "generic",
-            "jlcpcb-four-layer",
-            "jlcpcb-six-layer"
-          ],
-          "default": "generic"
-        },
-        "copperscript.mechanical.placementTemplates": {
-          "scope": "resource",
-          "type": "string",
-          "default": ""
-        },
-        "copperscript.mechanical.hardMacros": {
-          "scope": "resource",
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
-        },
         "copperscript.lsp.enabled": {
           "scope": "resource",
           "type": "boolean",
@@ -130,8 +47,8 @@
           "items": {
             "type": "string"
           },
-          "default": [],
-          "description": "Interpreter argv; [] discovers the project's .venv or locked/offline uv environment. Requires Python 3.11 or newer and CopperScript LSP support."
+          "default": ["copper"],
+          "description": "Argv of the copper binary, without the lsp subcommand, for example [\"/absolute/path/to/copper\"]. The extension starts <command...> lsp. The default runs copper from PATH; [] also selects the default. Never a shell string."
         }
       }
     },

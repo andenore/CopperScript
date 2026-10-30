@@ -10,22 +10,24 @@ and selects its physical implementation with a `physical_macro` declaration.
 The package exports `TPS62130A_MANAGED_ALWAYS_ON` and
 `TPS62130A_MANAGED_ENABLED` as Copper definitions with exact footprint URLs.
 They preserve the existing managed-footprint adaptations' copper and evidence;
-the former local JSON files remain historical regression snapshots. A `source.copper.txt` diagnostic
-snapshot records the selected variant; the committed source and repository
-manifest/lock remain authoritative.
+the former local JSON files remain historical regression snapshots. The committed source and repository
+manifest/lock are authoritative.
 
 From the CopperScript repository root, after preparing its pinned dependencies:
 
 ```sh
-python -m copperscript lock examples/tps62130a_macro/board.copper --locked
-python -m examples.tps62130a_macro.trial --offline
+copper lock examples/tps62130a_macro/board.copper --locked
+copper plan-layout examples/tps62130a_macro/board.copper --locked --offline \
+  --layers 6 --fab-profile jlcpcb-six-layer --candidates 1 \
+  -o build/tps62130a-macro/board.kicad_pcb --report build/tps62130a-macro/placement.json
 ```
 
-Use `--output-dir PATH`, repeatable `--footprint-root PATH`, `--offline`,
-`--enabled`, or `--rotation 90` to vary the isolated probe. The script runs
-KiCad 10 refill and DRC when `kicad-cli` is installed, and requires each owned
-GND zone to have actual filled copper and the fixed VIN, SW and VOUT polygons
-to remain netted.
+This places the rigid macro and writes the KiCad board with its locked copper.
+
+The former Python trial script (with `--enabled`, `--rotation 90` and a KiCad 10
+refill/DRC check that each owned GND zone has filled copper and the fixed VIN,
+SW and VOUT polygons stay netted) was removed with the Python implementation.
+Refill and check the exported board with KiCad separately.
 No sibling library checkout or executable library-side generator is required.
 This is a geometry probe,
 not a production regulator qualification.

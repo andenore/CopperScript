@@ -115,7 +115,7 @@ in deterministic compilation. No credentials belong in a lockfile or Git.
 Supplier offers should eventually live beside exact reusable CopperLib parts.
 This bounded prototype uses explicit board-side selections without changing
 the electrical language or claiming generic passives are qualified replacements.
-There are no board-specific rules or selections in `pcbir`.
+There are no board-specific rules or selections in the compiler.
 
 ## Unapproved review candidates
 

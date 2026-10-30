@@ -1,8 +1,0 @@
-Comment,Designator,Footprint,LCSC Part #,Manufacturer,MPN
-10 kohm,R_LED,Resistor_SMD:R_0603_1608Metric,C148880,UNI-ROYAL(Uniroyal Elec),UNIROYAL_0603WAF1002T5E-10kohm-R_0603_1608Metric
-100 nF,C_VREF,Capacitor_SMD:C_0402_1005Metric,C216635,Samsung Electro-Mechanics,SAMSUNG_CL05B104KO5NNNC-100nF-C_0402_1005Metric
-3V3 / GPIO2 / GPIO3 / GPIO17 / GPIO27 / GND,J_GPIO,Connector_PinHeader_2.54mm:PinHeader_1x06_P2.54mm_Vertical,C515457,Generic Passives,HEADER_1X06-3V3/GPIO2/GPIO3/GPIO17/GPIO27/GND-PinHeader_1x06_P2.54mm_Vertical
-5V IN / GND,J_POWER,Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical,C182970,Generic Passives,HEADER_1X02-5VIN/GND-PinHeader_1x02_P2.54mm_Vertical
-DF40C-100DS-0.4V(51),J_CM4_GPIO,github.com/andenore/CopperLib/packages/profiles/raspberry_pi/cm4/footprints/Connector_Hirose_DF40.pretty/Hirose_DF40C-100DS-0.4V_2x50_P0.4mm.kicad_mod,C319193,Hirose Electric,CM4_GPIO_SOCKET-DF40C-100DS-0.4V(51)-Hirose_DF40C-100DS-0.4V_2x50_P0.4mm.kicad_mod
-DF40C-100DS-0.4V(51),J_CM4_HS,github.com/andenore/CopperLib/packages/profiles/raspberry_pi/cm4/footprints/Connector_Hirose_DF40.pretty/Hirose_DF40C-100DS-0.4V_2x50_P0.4mm.kicad_mod,C354791,Hirose Electric,CM4_HS_SOCKET-DF40C-100DS-0.4V(51)-Hirose_DF40C-100DS-0.4V_2x50_P0.4mm.kicad_mod
-KENTO_KT0603R-KENTO_KT0603R,D1,KENTO:KENTO_KT0603R,C308614,Hubei KENTO Elec,KENTO_KT0603R-KENTO_KT0603R

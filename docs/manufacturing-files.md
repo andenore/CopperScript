@@ -15,8 +15,8 @@ copper export-manufacturing build/board.kicad_pcb \
 ```
 
 The explicit acknowledgement is mandatory. This is **manufacturing-file
-generation**, not the independently qualified release API. That API and its
-strict circular-outline qualification gate remain unchanged. Firmware is not
+generation**, not a qualified release. The Python implementation's strict
+release API and its qualification gates were removed with it. Firmware is not
 required to manufacture an unprogrammed board.
 
 The command stages a copy, refills its zones, runs native KiCad DRC at all

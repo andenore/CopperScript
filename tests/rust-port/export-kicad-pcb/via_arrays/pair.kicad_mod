@@ -1,6 +1,0 @@
-(footprint "pair" (version 20240108) (generator "test")
-    (layer "F.Cu")
-    (fp_rect (start -1.6 -0.9) (end 1.6 0.9)
-        (stroke (width 0.05) (type default)) (fill none) (layer "F.CrtYd"))
-    (pad "1" smd rect (at -0.8 0) (size 0.8 0.9) (layers "F.Cu" "F.Paste" "F.Mask"))
-    (pad "2" smd rect (at 0.8 0) (size 0.8 0.9) (layers "F.Cu" "F.Paste" "F.Mask")))

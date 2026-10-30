@@ -1,22 +1,22 @@
 "use strict";
 /* Small LSP client for the advertised CopperScript subset; no npm runtime. */
 const cp = require("node:child_process"), path = require("node:path");
-const {resolveCompiler} = require("./compiler.cjs");
+const {selectCommand, startError} = require("./compiler.cjs");
 const MAX_MESSAGE = 16 * 1024 * 1024, MAX_HEADER = 8192;
 
 class Connection {
   constructor(command, cwd, onNotification, onError) {
     if (!Array.isArray(command) || !command.length || command.length > 32 ||
         command.some(s => typeof s !== "string" || !s || s.length > 8192))
-      throw new Error("Configure copperscript.lsp.compilerCommand as an interpreter argv array");
+      throw new Error("Configure copperscript.lsp.compilerCommand as an argv array for the copper binary");
     this.pending = new Map(); this.nextId = 0; this.buffer = Buffer.alloc(0); this.closed = false;
     this.onNotification = onNotification; this.onError = onError;
-    this.child = cp.spawn(command[0], [...command.slice(1), "-u", "-m", "pcbir.lsp.server"],
+    this.child = cp.spawn(command[0], [...command.slice(1), "lsp"],
       {cwd, shell: false, windowsHide: true, stdio: ["pipe", "pipe", "pipe"]});
     this.child.stdout.on("data", bytes => { try { this.receive(bytes); } catch (error) { this.fail(error); } });
     this.child.stderr.on("data", bytes => onNotification("window/logMessage", {type: 3, message: bytes.toString()}));
     this.child.stdin.on("error", error => this.fail(error));
-    this.child.on("error", error => this.fail(error));
+    this.child.on("error", error => this.fail(startError(command, error)));
     this.child.on("exit", () => this.fail(new Error("CopperScript language server exited")));
   }
   send(message) {
@@ -191,24 +191,28 @@ function activateLsp(vscode, context) {
         if (vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.toString() === id) diagnostics.delete(doc.uri);
       if (!entry.warned) {
         entry.warned = true;
-        void vscode.window.showWarningMessage?.("CopperScript language tools could not start. Check the selected project environment.", "Show Setup")
+        void vscode.window.showWarningMessage?.("CopperScript language tools could not start. Check the copper command.", "Show Setup")
           .then(choice => { if (choice === "Show Setup") return vscode.commands.executeCommand("copperscript.showSetup", folder); });
       }
     };
     clients.set(id, entry);
     showStatus("starting");
-    entry.ready = resolveCompiler(config.get("compilerCommand", []), folder.uri.fsPath).then(async compiler => {
+    entry.ready = Promise.resolve().then(async () => {
+        const compiler = selectCommand(config.get("compilerCommand", ["copper"]));
         if (entry.retired || disposed) return;
         entry.compiler = compiler;
-        output.appendLine(`${folder.uri.fsPath}: ${compiler.source}; Python ${compiler.python.join(".")}; CopperScript ${compiler.compilerVersion}; ${compiler.module}`);
+        output.appendLine(`${folder.uri.fsPath}: starting ${JSON.stringify([...compiler.command, "lsp"])} (${compiler.source})`);
         entry.connection = new Connection(compiler.command, folder.uri.fsPath,
           (method, params) => notify(entry, method, params), report);
-        await entry.connection.request("initialize", {processId: process.pid, rootUri: folder.uri.toString(),
+        const init = await entry.connection.request("initialize", {processId: process.pid, rootUri: folder.uri.toString(),
           capabilities: {general: {positionEncodings: ["utf-16"]}, textDocument: {publishDiagnostics: {versionSupport: true}}}});
         if (entry.retired || disposed) return;
         entry.connection.notify("initialized", {});
         entry.started = true;
-        showStatus("ready", `${compiler.source}, CopperScript ${compiler.compilerVersion}`);
+        const info = init?.serverInfo, server = info ? `${info.name || "CopperScript"} ${info.version || ""}`.trim() : "CopperScript";
+        entry.server = server;
+        output.appendLine(`${folder.uri.fsPath}: ${server} language server ready`);
+        showStatus("ready", `${compiler.source}, ${server}`);
         for (const doc of vscode.workspace.textDocuments) sync(entry, doc);
       });
     entry.ready.catch(report);

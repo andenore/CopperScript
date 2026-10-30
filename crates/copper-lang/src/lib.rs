@@ -1,9 +1,9 @@
 //! The CopperScript language frontend.
 //!
-//! A rewrite of `pcbir.lexer`, `pcbir.parser` and `pcbir.syntax`: the same
-//! grammar, the same tree and the same diagnostics (codes, messages and
-//! source locations), so `copper check` reports parse errors exactly as the
-//! Python CLI does. Offsets and columns count Unicode code points, as Python
+//! The lexer, parser and syntax tree (originally `pcbir.lexer`, `pcbir.parser`
+//! and `pcbir.syntax`): the grammar, the tree and the diagnostics (codes,
+//! messages and source locations) of the Python implementation, which
+//! CopperScript replaced. Offsets and columns count Unicode code points, as Python
 //! strings do.
 
 pub mod compiler;

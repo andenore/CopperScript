@@ -70,7 +70,8 @@ in the intended enclosure, bound to the actual built revision and components.
 Implemented: explicit `no_connect` with `UNMARKED_PIN`, located `check`
 diagnostics with hints and `--json` fixes, `copper explain` and `copper query`;
 for routing iterations `copper issues` (grouped, located failures), `copper view`
-(per-layer windows with reference overlays) and `pcbir.workbench` state files.
+(per-layer windows with reference overlays) and `copperscript.state/v1` state
+files (`copper state show`).
 Proposed next, each to be measured with item 1 before claiming savings:
 
 - Arrays, loops and pin groups (`component LED[1..12]`, `U1.VSS*`) and

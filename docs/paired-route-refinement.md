@@ -1,7 +1,7 @@
 # Bounded paired-route refinement
 
 Joint package-escape search keeps its accepted raw candidate as a fallback.
-Before locking it, `pcbir.pair_refine.paired_shortcuts` proposes bounded local
+Before locking it, `copper_route::pair_refine::paired_shortcuts` proposes bounded local
 alternatives on the **shared spine**, not independent lane cleanup or arbitrary
 track deletion. Both members retain coupled geometry and acceptance.
 

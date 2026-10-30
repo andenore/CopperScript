@@ -41,7 +41,7 @@ pub enum Error {
     Os(String),
     /// A located compiler diagnostic.
     Copper(CopperScriptError),
-    /// Behaviour not rewritten yet (exit 3 in the command line).
+    /// Behaviour not implemented yet (exit 3 in the command line).
     NotImplemented(String),
     /// An exception Python does not catch on this path: `Class: message`.
     Uncaught(String),
@@ -73,7 +73,7 @@ impl From<copper_pcb::Error> for Error {
 
 impl From<CopperScriptError> for Error {
     fn from(error: CopperScriptError) -> Self {
-        // A limit of the rewrite's lowering, never a diagnostic Python reports.
+        // A limit of this implementation's lowering, never a diagnostic Python reports.
         if error.code == copper_lang::mechanical::NOT_IMPLEMENTED {
             return Error::NotImplemented(error.message.clone());
         }

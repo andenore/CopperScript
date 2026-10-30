@@ -1,1 +1,0 @@
-module assembly-dnp-fixture

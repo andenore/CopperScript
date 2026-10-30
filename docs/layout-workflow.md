@@ -8,7 +8,7 @@ accepts actual copper.
 
 ## Placement planner
 
-`pcbir.layout.plan_placement()` currently performs:
+`copper_place::layout::plan_placement` currently performs:
 
 1. validation of polygonal board boundaries, footprint courtyards, placement
    regions, keepouts, fixed components, legal orientations, relative rules,
@@ -36,7 +36,7 @@ KiCad output, and reports.
 Run it with:
 
 ```console
-python -m copperscript plan-layout examples/valid_board/board.copper \
+copper plan-layout examples/valid_board/board.copper \
   --allow-proxy-footprints \
   --candidates 3 \
   -o build/planned.kicad_pcb \
@@ -75,7 +75,7 @@ routing-bin capacity, overflow, and maximum estimated utilization.
 
 ## Global routing
 
-`pcbir.routing.route_global()` builds a deterministic multilayer G-cell graph,
+`copper_route::routing::route_global` builds a deterministic multilayer G-cell graph,
 derives pad-access nodes, accounts for per-net width and clearance demand, and
 grows multi-terminal trees with multi-source A*. Bounded PathFinder-style
 negotiation adds present and historical congestion costs across reroute passes.
@@ -88,7 +88,7 @@ or masquerade as routed copper. Exact geometry remains the responsibility of
 the specialized and general detailed routers, followed by independent physical
 DRC.
 
-`pcbir.routeflow.optimize_placement_for_routing()` wraps placement and global
+`copper_route::routeflow::optimize_placement_for_routing` wraps placement and global
 routing in a transactional feedback loop. It globally routes every retained
 placement candidate, keeps the best lexicographic checkpoint, and attempts
 bounded legal moves for components contributing to hotspots. A move is accepted
@@ -98,7 +98,7 @@ loop, and the accepted placement is always certified by a fresh full reroute.
 A feedback `pass` therefore means global feasibility, not detailed routing or
 physical signoff.
 
-`pcbir.critical.route_critical_nets()` consumes those guides first for nets
+`copper_route::critical::route_critical_nets` consumes those guides first for nets
 with explicit non-general routing profiles. It materializes locked exact tracks
 and vias, routes differential/CAN members as coupled bundles, checks geometric
 length, skew, and via budgets, and reports external assumptions for impedance,
@@ -106,7 +106,7 @@ RF, current, and thermal qualification. Coupled fanout is always rechecked by
 the authoritative physical DRC; a geometric proxy never constitutes SI/RF or
 thermal signoff.
 
-`pcbir.unified_router.route_unified()` routes the remaining ordinary nets on a
+`copper_route::unified_router` (`route_unified`) routes the remaining ordinary nets on a
 shared multilayer lattice. It derives legal pin-access points, follows the
 global-route corridors, preserves critical tracks and vias as locked obstacles,
 and negotiates congestion with deterministic A* and PathFinder-style present
@@ -114,7 +114,7 @@ and historical costs. Its output is exact `TrackSegment` and `Via`
 geometry in physical IR. A partial result remains explicitly non-fabrication-
 ready, and even a successful result must pass the separate physical DRC gate.
 
-`pcbir.drc.run_physical_drc()` is that gate for the geometry CopperScript can
+`copper_route::drc_report::run_physical_drc` is that gate for the geometry CopperScript can
 currently represent. It checks completed routing, exact net connectivity,
 cross-net shorts and clearance, track/routing-profile widths, layer/length/via
 budgets, via structure, and copper-to-board-edge clearance. The report keeps
@@ -126,14 +126,13 @@ fingerprint and retain reason and approver. A SHA-256 signoff token binds the
 decision to exact board geometry, routing rules, policy, and report so any
 subsequent copper change invalidates it.
 
-`pcbir.flow.run_routing_pipeline()` composes placement feedback, global guides,
-critical routing, general routing, and physical DRC without translating through
-a backend format. `pcbir.manufacturing.build_manufacturing_release()` accepts
-only the resulting exact board and matching complete pass token. It invokes a
-qualified KiCad CLI for a second DRC plus explicit Gerber X2, metric Excellon,
-and IPC-D-356 exports; a separate structural CAM parser checks the generated
-files before an atomic publish. The release includes a provenance manifest and
-SHA-256 checksum inventory. See `docs/routing-manufacturing-research.md` for the
+`copper_route::flow::run_routing_pipeline` composes placement feedback, global
+guides, critical routing, general routing, and physical DRC without translating
+through a backend format. `copper export-manufacturing` then takes the final
+routed KiCad board, refills it, reruns native KiCad DRC and exports Gerber X2,
+metric Excellon and IPC-D-356 files with a manifest and SHA-256 checksums; see
+[manufacturing files](manufacturing-files.md). The Python release API with its
+structural CAM parser was removed with the Python implementation. See `docs/routing-manufacturing-research.md` for the
 individual research tasks, recommendations, limitations, and sources.
 
 

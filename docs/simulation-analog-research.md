@@ -1,5 +1,9 @@
 # SPICE simulation improvements and an analog example board
 
+> The `copper sim` command and its ngspice backend were removed with the Python
+> implementation (last Python commit `b16122a`). This note is kept as research;
+> paths and test counts below describe that removed implementation.
+
 Research date: 13 October 2026.
 
 Implementation follow-up: the [analog example](../examples/simulation/analog_frontend/README.md)
@@ -14,9 +18,8 @@ followed by numerical refinement and noise analysis. A precision sensor front en
 with four amplifier stages would expose practical gaps that the current passive
 examples cannot exercise.
 
-This is a development proposal. Supported commands and schemas remain in
-[simulation](simulation.md); acceptance requirements remain in
-[simulation qualification](simulation-qualification.md).
+This is a development proposal. The former simulation guide and simulation
+qualification requirements were removed with the command.
 
 The compact [board specification](../examples/simulation/analog_frontend/SPEC.md)
 defines the proposed consumer. [Integrated simulation options](integrated-simulation-research.md)
@@ -39,12 +42,13 @@ Simulation does not rewrite the electrical board.
 | Reports | Offline interactive HTML, SVG/PNG, complex CSV/JSON, decks/logs, engine identity and artifact hashes |
 | Execution | Bounded processes or disposable DLL workers, controlled startup and fresh output directories |
 
-Implementation lives in `pcbir/simulation/` and `pcbir/backends/ngspice.py`.
+The implementation lived in the Python `simulation` package and its ngspice
+backend.
 The committed examples are `examples/simulation/rc_filter.*` and `inrush.*`.
-CI pins ngspice 47 in `.github/simulation-toolchain.json` and runs those examples
-through `scripts/ci_simulation.py`.
+CI pinned ngspice 47 and ran those examples through a simulation CI script
+(both since removed; the `.copper` boards remain).
 
-Local verification passed **37 tests** in `tests/test_simulation.py`, including
+Local verification passed **37 tests** in the Python simulation suite, including
 simulator integration, with KiCad's ngspice 46 DLL. Coverage includes analytic RC
 gain/phase, sweep grids, nonuniform integration, source-current polarity, boundary
 and model rejection, and incomplete evidence. The amplifier fixture in

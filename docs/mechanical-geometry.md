@@ -45,8 +45,7 @@ Independent outline topology, web/tool tolerances, zone material coverage and
 curved/slot CAM qualification remain separate release obligations. A KiCad DRC
 pass, STEP view or unfilled zone outline cannot close them.
 
-The IR-only probe is `uv run python -m examples.mechanical_probe.mechanical_example`.
-It uses synthetic terminals to exercise geometry; it is not a functional circuit.
+The IR-only Python mechanical probe was removed with the Python implementation.
 Real board status lives with each project, including
 [CopperLedRing](https://github.com/andenore/CopperLedRing).
 The [old LED-ring fixture](round-led-ring.md) is deprecated and retained for

@@ -44,7 +44,7 @@ mechanical {
 Imports select directories, not individual files; each `.copper` member exports
 one part, device, electrical module or `board_profile`. URL-like package imports
 use existing `copper.mod` requirements, hashes and `copper.lock`; downloaded code
-is never executed. Profiles authored for reuse belong in CopperLib, not `pcbir`.
+is never executed. Profiles authored for reuse belong in CopperLib, not the compiler.
 The compiler repository contains only deliberately generic examples/tests.
 
 Relative imports (`./mechanics`, `../common`) are relative to the importing

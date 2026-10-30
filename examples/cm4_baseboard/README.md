@@ -45,16 +45,17 @@ cooling and surrounding metal in 3D before manufacture.
 
 ## Run from a CopperScript checkout
 
-At the repository root, install the project once with `uv sync --extra test`.
+At the repository root, install `copper` once with
+`cargo install --locked --path crates/copper`.
 The pinned Git footprint providers are resolved from `copper.lock`. On Windows:
 
 ```powershell
-uv run --no-sync copper check examples/cm4_baseboard/board.copper --locked
-uv run --no-sync copper plan-layout examples/cm4_baseboard/board.copper --locked `
+copper check examples/cm4_baseboard/board.copper --locked
+copper plan-layout examples/cm4_baseboard/board.copper --locked `
   --layers 4 --fab-profile jlcpcb-four-layer `
   -o build/cm4-baseboard/cm4_baseboard.kicad_pcb `
   --report build/cm4-baseboard/placement.json
-uv run --no-sync copper edit-mechanical examples/cm4_baseboard/board.copper --locked `
+copper edit-mechanical examples/cm4_baseboard/board.copper --locked `
   --layers 4 --fab-profile jlcpcb-four-layer
 ```
 
@@ -92,12 +93,12 @@ make EXAMPLE=cm4 route
 ```
 
 The shared [Make workflow](../../docs/make-builds.md) fetches pinned imports if needed, runs package escape
-and detailed routing with profiling enabled, then **saves the ground fills**
+and detailed routing, then **saves the ground fills**
 and runs native KiCad DRC on that exact output board. No rule relaxation or
 via-in-pad permission is added. Default outputs go in a timestamped directory
 under ignored `build/cm4-baseboard/runs/`; open its `board.kicad_pcb` in KiCad.
-`route-report.json`, `kicad-drc.json`, logs, input/output hashes and performance
-reports are retained together. Success requires zero native violations and
+`route-report.json`, `kicad-drc.json`, `routing.log` and `run.json` with the
+input/output hashes are retained together. Success requires zero native violations and
 zero unconnected items; a failed build returns nonzero and retains diagnostics.
 
 For Linux/macOS or another KiCad installation, supply paths explicitly:
@@ -112,10 +113,9 @@ make route KICAD_CLI=/usr/bin/kicad-cli KICAD_FOOTPRINTS=/usr/share/kicad/footpr
 
 Set `RESOLVE_ARGS="--locked --offline"` after the first dependency download.
 `RUN_DIR` selects a new/empty directory below the repository's `build/`; repeat
-runs default to fresh timestamped directories. Use `PROFILE=none` for timing
-comparisons. GNU Make is required (`mingw32-make` is also supported on Windows).
+runs default to fresh timestamped directories. GNU Make is required (`mingw32-make` is also supported on Windows).
 The example Makefile contains settings only; the same `make/board.mk` recipes
-compile and route other boards without custom per-example Python scripts.
+compile and route other boards without custom per-example scripts.
 
 ## Header wiring
 

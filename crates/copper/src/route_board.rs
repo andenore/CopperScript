@@ -6,7 +6,7 @@
 //! `ROUTING ERROR` line and the `.error.json` record next to `--report`. The
 //! pipeline itself runs as far as its stages have landed and reports not
 //! implemented (exit 3) at the first one that has not; so do the few paths
-//! whose Python behaviour this rewrite cannot reproduce yet (a crash, a
+//! whose Python behaviour this implementation cannot reproduce yet (a crash, a
 //! `--debug` traceback, typed `--unified-set` values).
 //!
 //! `--checkpoint-dir` and `--reuse-placement` are this binary's own: the
@@ -255,13 +255,13 @@ fn specs() -> Vec<Spec> {
 /// Why the run stops before or inside the pipeline.
 enum Stop {
     /// A `ValueError` (`ROUTING ERROR`, exit 2); `error_type` is the Python
-    /// class when this rewrite knows it.
+    /// class when this implementation knows it.
     Value { error_type: Option<&'static str>, message: String },
     /// Python's uncaught `KeyError` of an unknown part (a recorded
-    /// difference): its error record holds the key; this rewrite also prints
+    /// difference): its error record holds the key; this implementation also prints
     /// `ROUTING ERROR` and exits 2.
     UnknownPart { message: String, key: String },
-    /// A path this rewrite does not reproduce yet.
+    /// A path this implementation does not reproduce yet.
     Pending(String),
 }
 
@@ -287,7 +287,7 @@ fn fail(message: String) -> Stop {
 }
 
 /// The Python class of a board-preparation error (physicalization, placement
-/// templates, hard-macro scenes), when this rewrite reproduces its record:
+/// templates, hard-macro scenes), when this implementation reproduces its record:
 /// the footprint resolver's own failure, a `MacroPreparationError` (MAC005),
 /// or a plain `ValueError`. A hard-macro acceptance failure (its record
 /// carries a diagnostic board) and an uncaught `CopperScriptError` (a Python
@@ -783,7 +783,7 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
             let _ = text::print(out, &format!("ROUTING ERROR: {message}"));
             let Some(report) = arguments.path("--report") else { return 2 };
             let Some(error_type) = error_type else {
-                return not_implemented(err, "the error record of an error class this rewrite does not name");
+                return not_implemented(err, "the error record of an error class this implementation does not name");
             };
             let mut summary = Object::new();
             let optional = |value: Option<&str>| value.map_or(Value::Null, Value::from);
@@ -1097,7 +1097,7 @@ fn route(
         let staged = run_routing_pipeline_staged(board, pipeline, reborrow, Some(&mut on_stage));
         let result = staged.map_err(|error| match error {
             // A rejected array site is a `ViaArrayPlacementError` carrying its
-            // diagnostic board, which this rewrite's error record does not write.
+            // diagnostic board, which this implementation's error record does not write.
             Error::Value(message) if copper_route::pad_via_arrays::is_site_rejection(&message) => {
                 Stop::Value { error_type: None, message }
             }

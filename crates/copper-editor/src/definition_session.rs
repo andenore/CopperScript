@@ -496,7 +496,7 @@ fn profile_scene(
         .collect();
     let has_outline = items.iter().any(|i| i.kind == "outline");
     if !has_outline {
-        // Python's viewport is 2 km square, beyond the rewrite's 2^40 nm
+        // Python's viewport is 2 km square, beyond this implementation's 2^40 nm
         // lengths: lower against a 2^40 nm stand-in, then substitute it.
         let viewport = copper_lang::parse(
             "board_profile Viewport { outline rectangle { width = 1099511.627776 mm; height = 1099511.627776 mm; origin = (-549755.813888 mm, -549755.813888 mm); } }",

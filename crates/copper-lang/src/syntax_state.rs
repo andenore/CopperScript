@@ -1,5 +1,5 @@
 //! The parsed syntax tree as Python's `state_codec` sees it: dataclasses
-//! with their `pcbir` class and field names. The parser oracle compares it;
+//! with their `pcbir` class and field names. The parser's golden test compares it;
 //! `copper library` derives its source-declaration records from it.
 
 use copper_state::StateValue;

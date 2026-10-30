@@ -1,1 +1,0 @@
-{"id":"stm32g0b1cbt6-lqfp48-gpio-core","request":"stm32g0b1cbt6-lqfp48-poc","source_ids":["st-ds13560-rev6"],"fields":["package_pin","alternate_functions"],"subjects":["PA0","PA1","PC0","PC1"],"max_facts":8}

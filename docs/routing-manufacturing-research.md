@@ -26,7 +26,7 @@ detailed router and permits deliberate capacity derating.
 multi-source A* for multi-terminal trees, and bounded PathFinder-style
 negotiation. Represent width plus clearance as physical demand. Emit corridors,
 proposed layer changes, overflow and stable fingerprints, never tracks or vias.
-Implemented in `pcbir.routing`.
+Implemented in `copper_route::routing`.
 
 ## 5. Placement–routing feedback loop
 
@@ -44,7 +44,7 @@ wirelength proxy.
 select by a lexicographic vector led by unrouted nets and overflow; make bounded
 hotspot-driven legal moves; reroute; accept only strict improvements; otherwise
 roll back atomically and reduce movement. Stop on stagnation and certify the
-winner with a fresh full global route. Implemented in `pcbir.routeflow`.
+winner with a fresh full global route. Implemented in `copper_route::routeflow`.
 
 ## 6. Specialized critical-net routing
 
@@ -63,7 +63,7 @@ critical. Order them by declared priority; route differential/CAN nets as
 coupled bundles; handle clock, RF-feed, power and other constrained single nets;
 materialize their exact copper first and lock it. Check representable geometric
 budgets and retain explicit external impedance/SI/RF/current/thermal assumptions.
-Implemented in `pcbir.critical`.
+Implemented in `copper_route::critical`.
 
 ## 7. General detailed router
 
@@ -81,7 +81,8 @@ multilayer grid, treat critical copper and component bodies as hard obstacles,
 prefer but permit bounded deviation from global guides, grow multi-terminal
 trees with deterministic A*, and repeat with present and historical resource
 costs. Materialize exact `TrackSegment` and `Via` objects and fail partially
-rather than claiming success with conflicts. Implemented in `pcbir.detailed`.
+rather than claiming success with conflicts. First implemented in the Python detailed router; the unified router
+(`copper_route::unified_router`) replaced it.
 
 The baseline is orthogonal and grid based. It does not yet provide push-and-
 shove, arcs, arbitrary-angle traces, plane fills, neck-down escape shapes or
@@ -106,7 +107,7 @@ via budgets, and via structure. List unsupported analyses explicitly. A required
 check that cannot run makes coverage incomplete and the decision fail. Bind
 waivers to a stable finding fingerprint, and bind the signoff token to canonical
 footprint, placement, copper, board, rule, policy and report digests. Implemented
-in `pcbir.drc`; KiCad DRC runs again during export as a second engine.
+in `copper_route::drc_report` and `copper-drc`; KiCad DRC runs again during export as a second engine.
 
 The initial geometric engine conservatively bounds non-circular pads by their
 maximum radius. This may reject legal dense geometry, but it cannot silently
@@ -131,23 +132,27 @@ run KiCad DRC with violation exit codes; generate explicit-layer Gerber X2,
 metric separated drill files, and IPC-D-356; parse outputs independently for
 format, units, layer function/polarity, termination and expected file counts;
 write SHA-256 checksums and a provenance manifest. Build in a sibling staging
-directory and rename it into place only after all gates pass. Implemented in
-`pcbir.manufacturing`.
+directory and rename it into place only after all gates pass. The Python
+implementation had this release API; it was removed with it. `copper
+export-manufacturing` keeps the native KiCad DRC, exports, staging, manifest and
+checksums, without the signoff-token binding or independent CAM parsing.
 
 ## Compatibility contract and sequence
 
-`pcbir.flow.run_routing_pipeline()` composes steps 4–8:
+`copper_route::flow::run_routing_pipeline` composes steps 4–8:
 
 1. placement/global-route feedback produces one certified placement and global
    guide fingerprint;
 2. critical routing consumes those guides and adds locked exact copper;
 3. detailed routing preserves that copper and routes ordinary nets;
 4. physical DRC digests the exact routed board and produces its signoff token;
-5. manufacturing export accepts only that same board/token pair.
+5. manufacturing export accepted only that same board/token pair (the removed
+   Python release API; `copper export-manufacturing` instead requires a clean
+   native KiCad DRC of the final board).
 
 Failures and partial results remain inspectable but cannot advance the release
 gate. Manufacturing output is never written into its requested final directory
-until both KiCad and the independent CAM parser succeed.
+until KiCad DRC and every export succeed.
 
 ## Primary sources
 

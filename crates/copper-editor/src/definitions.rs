@@ -1,7 +1,7 @@
 //! `pcbir.editor.definitions`: definition documents (macro and
 //! board_profile) and the read-only macro instances of a board.
 //!
-//! Definition sessions are not rewritten yet; `board_macro_features` is.
+//! Definition sessions are not implemented yet; `board_macro_features` is.
 
 use copper_json::{Value, python_str_repr as repr};
 use copper_pcb::board::{CopperZone, PadReference, PhysicalBoard, PhysicalHardMacro};

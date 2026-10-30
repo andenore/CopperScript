@@ -7,11 +7,10 @@
 # its newest build, so a pin goes stale when KiCad releases a point version;
 # then the job fails with an annotation naming the versions on offer, so the
 # pins in .github/board-toolchain.json can be bumped without the job log.
-# KICAD_PINS names another pin file (the comparison installs the candidate's
-# KiCad on both sides).
+# KICAD_PINS names another pin file.
 set -euo pipefail
 pins=${KICAD_PINS:-.github/board-toolchain.json}
-pin() { python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$pins" "$1"; }
+pin() { jq -r --arg key "$1" '.[$key]' "$pins"; }
 expected=$(pin kicad_ubuntu_version)
 package=$(pin kicad_ubuntu_package_version)
 attempts=${KICAD_INSTALL_ATTEMPTS:-6}

@@ -9,12 +9,13 @@ hardware qualification; see [definition syntax and contracts](macro-definitions.
 Read only the section needed for the current task. Commands use the repository
 examples; consumer projects must supply their own configuration and pins.
 
-Python 3.11 or newer is required. From the repository root:
+Install the `copper` binary with `cargo install --locked --path crates/copper`
+(or use a release binary). From the repository root:
 
 ```console
-python -m copperscript check examples/valid_board/board.copper
-python -m copperscript check examples/invalid_board/board.copper
-python -m copperscript power-check examples/valid_board/board.copper
+copper check examples/valid_board/board.copper
+copper check examples/invalid_board/board.copper
+copper power-check examples/valid_board/board.copper
 ```
 
 `check` prints `file:line:column` for each finding it can locate in the root
@@ -27,9 +28,9 @@ document with exit code 2. `--pins warn|error|off` controls `UNMARKED_PIN`
 (see [no-connect pins](language-reference.md#no-connect-pins)).
 
 ```console
-python -m copperscript check examples/invalid_board/board.copper --json
-python -m copperscript explain UNMARKED_PIN
-python -m copperscript explain --list
+copper check examples/invalid_board/board.copper --json
+copper explain UNMARKED_PIN
+copper explain --list
 ```
 
 `query` answers compact questions about the compiled flat design without
@@ -38,12 +39,12 @@ fail with exit 2 and a close-match suggestion. `--json` emits deterministic,
 compact `copperscript.query/v1` documents.
 
 ```console
-python -m copperscript query BOARD.copper pins U1          # pin, number, net, status, type, notes
-python -m copperscript query BOARD.copper net GND          # members, supply, decoupling capacitors
-python -m copperscript query BOARD.copper component C1     # part, value, footprint, properties, pins
-python -m copperscript query BOARD.copper unconnected      # open pins grouped by why they are open
-python -m copperscript query BOARD.copper components       # one line per component
-python -m copperscript query BOARD.copper nets             # one line per net
+copper query BOARD.copper pins U1          # pin, number, net, status, type, notes
+copper query BOARD.copper net GND          # members, supply, decoupling capacitors
+copper query BOARD.copper component C1     # part, value, footprint, properties, pins
+copper query BOARD.copper unconnected      # open pins grouped by why they are open
+copper query BOARD.copper components       # one line per component
+copper query BOARD.copper nets             # one line per net
 ```
 
 After a routing or layout run, `issues` lists grouped, located failures and `view`
@@ -193,9 +194,9 @@ saved state with another mode; states saved before the option existed load
 with the default.
 
 ```console
-python -m copperscript issues build/BOARD/runs/STAMP
-python -m copperscript view build/BOARD/runs/STAMP --issue R1 -o build/views/R1.png
-python -m copperscript state show build/trials/candidate.state.json
+copper issues build/BOARD/runs/STAMP
+copper view build/BOARD/runs/STAMP --issue R1 -o build/views/R1.png
+copper state show build/trials/candidate.state.json
 ```
 
 Pin status is `connected`, `no_connect`, `part_do_not_connect`, `unmarked`,
@@ -207,15 +208,15 @@ The examples already have a committed lock. Populate the URL dependency cache,
 then reproduce without network access:
 
 ```console
-python -m copperscript check examples/full_vertical/board.copper --locked
-python -m copperscript check examples/full_vertical/board.copper --locked --offline
-python -m copperscript audit-footprints examples/full_vertical/board.copper --locked --offline
+copper check examples/full_vertical/board.copper --locked
+copper check examples/full_vertical/board.copper --locked --offline
+copper audit-footprints examples/full_vertical/board.copper --locked --offline
 ```
 
 Compile a valid design to normalized JSON IR:
 
 ```console
-python -m copperscript compile examples/valid_board/board.copper -o build/board.json
+copper compile examples/valid_board/board.copper -o build/board.json
 ```
 
 Source `physical_macro` declarations and their module-owned bindings survive
@@ -232,13 +233,13 @@ existing lock without rewriting it; add `--offline` to require cached inputs.
 Generate a self-contained KiCad 8 schematic:
 
 ```console
-python -m copperscript export-kicad examples/valid_board/board.copper -o build/valid_board.kicad_sch
+copper export-kicad examples/valid_board/board.copper -o build/valid_board.kicad_sch
 ```
 
 Generate a KiCad 8 PCB draft with resolved footprint geometry:
 
 ```console
-python -m copperscript export-kicad-pcb examples/resolved_footprint_board/board.copper -o build/resolved/board.kicad_pcb
+copper export-kicad-pcb examples/resolved_footprint_board/board.copper -o build/resolved/board.kicad_pcb
 ```
 
 All PCB export commands automatically write a same-stem `.kicad_pro`, a
@@ -261,7 +262,7 @@ source; board-local paths resolve from the board. Unbound KiCad identifiers can
 still use explicit roots:
 
 ```console
-python -m copperscript export-kicad-pcb board.copper --footprint-root path/to/kicad-footprints
+copper export-kicad-pcb board.copper --footprint-root path/to/kicad-footprints
 ```
 
 Placement remains a deterministic inspection grid and routing is not generated,
@@ -269,14 +270,14 @@ so the output is not yet fabrication-ready. Generated proxy pads remain
 available for backend development through explicit opt-in:
 
 ```console
-python -m copperscript export-kicad-pcb examples/valid_board/board.copper --allow-proxy-footprints
+copper export-kicad-pcb examples/valid_board/board.copper --allow-proxy-footprints
 ```
 
 Produce a deterministic legal placement candidate and a four-gate readiness
 report:
 
 ```console
-python -m copperscript plan-layout examples/valid_board/board.copper --allow-proxy-footprints --candidates 3 -o build/planned.kicad_pcb --report build/layout-report.json
+copper plan-layout examples/valid_board/board.copper --allow-proxy-footprints --candidates 3 -o build/planned.kicad_pcb --report build/layout-report.json
 ```
 
 The planner estimates global routing congestion but does not generate copper.
@@ -306,7 +307,7 @@ Produce deterministic multilayer global-routing guides after transactional
 placement feedback:
 
 ```console
-python -m copperscript route-global examples/valid_board/board.copper --allow-proxy-footprints -o build/global-route.json
+copper route-global examples/valid_board/board.copper --allow-proxy-footprints -o build/global-route.json
 ```
 
 Global guides reserve corridors, layers, and proposed transitions for ordinary
@@ -317,7 +318,7 @@ Attempt detailed routing and write a native DRC report plus an inspection-only
 KiCad PCB draft:
 
 ```console
-python -m copperscript route-board examples/valid_board/board.copper --allow-proxy-footprints --report build/route-report.json -o build/routed-draft.kicad_pcb
+copper route-board examples/valid_board/board.copper --allow-proxy-footprints --report build/route-report.json -o build/routed-draft.kicad_pcb
 ```
 
 Detailed signal tracks prefer long straight runs and 45-degree bends. Nets with
@@ -351,8 +352,8 @@ unfinished path.
 The report's `critical_lane_review` section reviews the exported copper of every
 critical net: track lengths, layers and vias, pair and `length_match` skew,
 spacing to other copper inside and outside breakout regions, coupled length to
-other pairs and bends. `route-board` and `python -m pcbir.critical_preflight`
-(for its critical copper) print it as one `CRITICAL LANES:` line; see the
+other pairs and bends. `route-board` and `copper replay-critical`
+(for the critical copper of a saved checkpoint) print it as one `CRITICAL LANES:` line; see the
 [language reference](language-reference.md#critical-routing-and-qualification).
 `--fanout` seeds the unified router's pad escapes; `--no-fanout` routes without
 them. These options do not waive physical DRC.
@@ -387,18 +388,19 @@ separate gates; local escape witnesses alone do not prove board closure.
 Exact component/internal-contact and coupled-winding evidence is required even
 when copper DRC passes. See [routing invariants](filled-copper-feedback.md).
 
-Install Git, [uv](https://docs.astral.sh/uv/getting-started/installation/), and
-KiCad 10 with its footprint libraries first. The latest closure run used
-KiCad 10.0.6 and Python 3.13.1. Only CopperScript needs checking out:
+Install Git, a Rust toolchain ([rustup](https://rustup.rs/)), Git Bash (for
+`make/route-build.sh`, with `jq`) and KiCad 10 with its footprint libraries
+first. The latest closure run used KiCad 10.0.6. Only CopperScript needs
+checking out:
 
 ```powershell
 # Use consistent package line endings in these new checkouts.
 git clone -c core.autocrlf=false -c core.eol=lf https://github.com/andenore/CopperScript.git
 Set-Location CopperScript
 
-uv sync --python 3.13
+cargo install --locked --path crates/copper
 # Fetch the exact locked URL dependency (subsequent runs can use --offline).
-uv run --no-sync python -m copperscript check examples/full_vertical/board.copper --locked
+copper check examples/full_vertical/board.copper --locked
 ```
 
 `copper.mod` pins CopperLib's GitHub commit; `copper.lock` verifies its exact
@@ -408,9 +410,8 @@ package line endings are declared in `.gitattributes`. This reproduces routing
 inputs/options, not byte-identical historical output. After fetching,
 `--locked --offline` verifies every package byte without changing the lock.
 If resolution fails, investigate changed bytes/revisions rather than relocking.
-Initial cloning, `uv sync` and uncached URL dependencies need network access.
-See uv's
-[project workflow](https://docs.astral.sh/uv/guides/projects/) for environment setup.
+Initial cloning, `cargo install` and uncached URL dependencies need network
+access.
 
 After the setup above, run the complete workflow with:
 
@@ -423,12 +424,12 @@ settings below, including the pinned placement scene, critical routing, fanout,
 ordinary routing, ground feedback, native DRC and independent KiCad plane
 verification and saves native filled copper. Each run writes a fresh `build/full-vertical/runs/<UTC-run-id>/` with
 `board.kicad_pcb`, `board.kicad_pro`, `route-report.json`, `routing.log` and
-`run.json` (command, timestamps, elapsed time and exit code). `build/` is ignored
+`run.json` (commands, timestamps, elapsed time, exit code and SHA-256 bindings). `build/` is ignored
 by Git. Errors/interruption may leave only logs/partial artifacts; file existence
 does not imply routing success. No Gerbers are generated.
 
-The generic runner uses the current Python/uv environment and downloads the locked
-dependencies if uncached; it never updates `copper.lock`. Set `RESOLVE_ARGS="--locked --offline"`
+The runner (`make/route-build.sh`) uses `copper` on PATH (override with
+`COPPER=PATH`) and downloads the locked dependencies if uncached; it never updates `copper.lock`. Set `RESOLVE_ARGS="--locked --offline"`
 to prohibit fetching. It discovers `kicad-cli` on PATH or the standard Windows
 KiCad 10 installation. Managed Git footprints are resolved from the lock; the
 optional `KICAD_FOOTPRINTS` setting is used for native KiCad verification.
@@ -444,23 +445,22 @@ make EXAMPLE=full-vertical route `
 ```
 
 The runner preserves the router's exit code: **1** means unmet routing/DRC
-gates, **2** means setup/execution error, and **130** means interruption.
+gates, **2** means setup/execution error, **3** means an unsupported path (the
+compiler's not-implemented exit) and **130** means interruption.
 GNU Make itself returns nonzero (usually 2) when its recipe fails.
 An existing nonempty output directory is rejected so old results cannot be
 mistaken for a new run. Exit 0 still does not constitute manufacturing signoff.
 Allow tens of minutes for a full-vertical run; the shared workflow is not a claim
 that every example has passed complete routing.
 
-Function profiling is enabled by default. Each run also saves `routing.prof`,
-readable/JSON hotspot summaries and `phase-timings.json` under the same ignored
-directory. Instrumentation adds overhead; use `PROFILE=none` for uninstrumented
-speed comparisons (phase events are still saved). See
+Runs are not function-profiled. See
 [profiling and optimization assessment](routing-performance.md) for details,
 current evidence and the prioritized optimization work list.
 The detailed [optimization todos](routing-optimization-todo.md) track implementation.
 Filled-copper repair supports bounded blocker-cone expansion; use
 `EXTRA_ROUTE_ARGS="--zone-dependency-expansions 0"` to compare without that extension.
-Inspect a run without changing it using `uv run --no-sync python -m pcbir.routing_benchmark summarize "build/full-vertical/runs/<run-id>"`.
+Inspect a run without changing it with `copper issues "build/full-vertical/runs/<run-id>"`
+or `copper summarize "build/full-vertical/runs/<run-id>/route-report.json"`.
 The [performance guide](routing-performance.md) explains guarded before/after comparisons.
 
 Use the [build guide](make-builds.md) for effective command configuration.
@@ -481,7 +481,7 @@ After a run passes, generate native Gerbers/drills from its saved filled board
 using the [manufacturing-file workflow](manufacturing-files.md):
 
 ```powershell
-uv run --no-sync python -m copperscript export-manufacturing `
+copper export-manufacturing `
   "build/full-vertical/runs/<run-id>/board.kicad_pcb" `
   --kicad-cli "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe" `
   --skip-independent-cam `
@@ -514,15 +514,15 @@ Validate and inspect a KiCad footprint before resolving it into a physical
 design:
 
 ```console
-python -m copperscript check-footprint path/to/package.kicad_mod --strict
+copper check-footprint path/to/package.kicad_mod --strict
 ```
 
-For a development installation with the `copper` command:
+For a development build of the `copper` command:
 
 ```console
-python -m pip install -e ".[test]"
-copper check examples/valid_board/board.copper
-python -m pytest
+cargo build --release -p copper
+target/release/copper check examples/valid_board/board.copper
+cargo test --workspace
 ```
 
 For a search that exhausts the unified router's per-path work bound, use

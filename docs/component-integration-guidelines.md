@@ -85,10 +85,10 @@ reference-derived part contracts/macros in independently versioned libraries.
    distances must be mutually feasible before copper-access optimization.
    For co-located transmitters/receivers, quantify maximum transmitted power
    including tolerance, minimum measured isolation, filter rejection and the
-   receiver's immunity in its actual gain mode. The shared
-   `pcbir.rf_coexistence.isolation_budget` API accepts integer mdB bounds and
-   leaves unknown isolation/rejection incomplete. Point samples cannot be
-   interpolated into band guarantees. Review filter passband loss, power/ESD,
+   receiver's immunity in its actual gain mode. Keep the budget in integer mdB
+   bounds and leave unknown isolation/rejection incomplete (the Python
+   `isolation_budget` helper was removed with the Python implementation).
+   Point samples cannot be interpolated into band guarantees. Review filter passband loss, power/ESD,
    harmonics and non-antenna coupling independently; a favourable budget is
    not installed RF approval.
    Preserve antenna copper/component exclusions and avoid generic ground fills
@@ -146,7 +146,6 @@ Implementation references:
 
 - [Physical hard macros](physical-hard-macros.md)
 - [Language constraints and routing profiles](language-reference.md)
-- [Device and part generation](device-generation.md)
 - [CopperLib hard-macro review checklist](https://github.com/andenore/CopperLib/blob/main/docs/hard-macro-review-checklist.md)
 
 ## Via-free RF support trees

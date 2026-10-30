@@ -1,6 +1,6 @@
 //! Pipeline-independent completion metrics for a routed board
 //! (`pcbir.route_summary.connection_summary`). The raster plane estimate of
-//! boards with zones is not rewritten yet (reported not implemented).
+//! boards with zones is not implemented yet (reported not implemented).
 
 use indexmap::{IndexMap, IndexSet};
 

@@ -1,3 +1,9 @@
+Dated sections record measurements up to 2026-10-29, most of them on the
+former Python implementation and its C search kernel. The Python commands,
+scripts and `bench/` measurement drivers they name were removed with that
+implementation; current measurements use `copper bench` (see
+[Profiling future runs](#profiling-future-runs)).
+
 ## Generic fixes for the CopperProbe open connections (2026-10-25)
 
 Each cause in the section below got a generic change on the unified path;
@@ -307,8 +313,8 @@ fixtures cover both search backends, occupied and unoccupied span layers, drill
 spacing, return coverage, through-via fallback and guide handoff. The broader
 router/index/CLI/checkpoint set passes 170 tests.
 
-Both native kernels are rebuilt with Zig 0.13.0 using
-`python tools/build_kernel.py --zig PATH_TO_ZIG`. The Windows kernel and Python
+Both native kernels were rebuilt with Zig 0.13.0 by the (since removed)
+kernel build tool. The Windows kernel and Python
 fallback are exercised locally; the Linux kernel is cross-built but not run on
 this Windows host. The C source uses LF to keep its digest platform independent.
 
@@ -822,8 +828,8 @@ healed, rounded, buffered, or cached; representation rejection and linework
 checks remain unchanged. The median lower endpoint gives the interval tree a
 finite, balanced construction even when coordinates repeat.
 
-`bench/native_fill.py` measures the public decoder, using `pcbir.workbench`
-to load native PCB fills. On the identical 15,005-vertex synthetic walk,
+The removed `bench/native_fill` driver measured the public decoder on loaded
+native PCB fills. On the identical 15,005-vertex synthetic walk,
 controls223 took 7.57 s before and 1.65 s after. On the saved consumer native
 37,210-vertex GND/In1.Cu region, controls224/223 took 6.83 s and 3.72 s.
 Input hashes, area and normalized WKB hashes match exactly in each comparison.
@@ -1059,7 +1065,7 @@ The 64-test detailed/reuse/grid set passed 63 tests and initially rejected a
 new invalid test fixture that named a layer outside its board stackup. The
 corrected fixture and both existing grid-equivalence checks then passed.
 All 32 critical/pipeline tests also passed. A warm same-checkout nRF52 ladder comparison used the exact original
-`detailed.py` for the baseline and restored the committed candidate for the
+`detailed` module for the baseline and restored the committed candidate for the
 second run. Both completed 35/35 signal connections with zero exact DRC errors,
 40 vias and 346.483 mm; the emitted KiCad PCB bytes were identical
 (SHA-256 `9f05741a655c1d478e1d53beeec7d1aaef80c5e75ea8e14ef6a539680b6014d3`).
@@ -1080,17 +1086,9 @@ macro via-permission geometry, repeated maze-edge work and placement legality.
 The pre-change sources used by the experiments match that profile's source
 hashes, including its uncommitted routing work.
 
-The repeatable fixture runner is
-[`scripts/benchmark_routing_hotspots.py`](../scripts/benchmark_routing_hotspots.py).
-Snapshot the working `pcbir` sources before an intervention, retaining the
-`backends/kicad_pcb.py` subdirectory, then run:
-
-```powershell
-.venv/Scripts/python.exe -m scripts.benchmark_routing_hotspots `
-  --baseline-dir build/performance-research-20261012/baseline `
-  --output build/performance-research-20261012/isolated-results.json
-```
-
+The repeatable fixture runner `scripts/benchmark_routing_hotspots` ran
+against a snapshot of the Python sources; it was removed with the Python
+implementation.
 `--only macro|construction|placement` isolates a research area. The runner
 loads selected baseline functions against the current unchanged helpers/types,
 so each comparison isolates that intervention. It checks exact return values,
@@ -1211,21 +1209,17 @@ revision; they do not verify those later export changes. See
 
 ## Branch comparison runs
 
-`.github/workflows/routing-comparison.yml` runs on pushes to `claude/plan-*`
-branches (and on manual dispatch). It routes full-vertical twice on matched
-GitHub runners, unprofiled and with the release route job's settings: once at
-the commit named by `baseline_ref` in `.github/routing-comparison.json` and
-once at the pushed commit. Each run directory is kept as an artifact; the
-compare job writes `python -m pcbir.routing_benchmark table` to the run
-summary and keeps `summarize`/`compare` JSON. A plan step sets
-`baseline_ref` to the commit it builds on.
+The `routing-comparison.yml` workflow, which routed full-vertical at a
+baseline commit and at the pushed commit on matched runners, was removed with
+the Python implementation. Compare branches with the benchmark ladder: the
+`ladder` job in `.github/workflows/rust.yml` routes `bench/ladder.json` with
+`copper bench` and compares the result with `bench/ladder-baseline.json`.
 
 Expanded states, outcomes and copper are deterministic and compare exactly.
 Wall times on shared runners vary between jobs, so a timing claim needs the
 same direction on repeated runs. Results are measurements, never signoff or
 an automatic acceptance gate. The 2026-10-12 profile above used KiCad 10.0.6
-on Windows; branch comparisons use KiCad 10.0.7 on Ubuntu and are not
-comparable with it.
+on Windows; CI runs use KiCad 10.0.7 on Ubuntu and are not comparable with it.
 
 ### Phase 1 baseline (2026-10-20)
 
@@ -1272,98 +1266,41 @@ manufacturing signoff claim. Ignored diagnostic reports are in
 
 ## Profiling future runs
 
-The complete workflow now enables standard-library `cProfile` function profiling
-and streamed phase events by default; no additional dependency is required:
+The Make `route` target runs the native binary without function profiling:
 
-```powershell
+```sh
 make EXAMPLE=full-vertical route
 ```
 
-Each fresh ignored `build/full-vertical/runs/<UTC-run-id>/` contains:
+Each fresh ignored `build/full-vertical/runs/<run-id>/` contains
+`routing.log` (the router's output, with progress events under `--progress`),
+`route-report.json`, `kicad-drc.json` and `run.json` (routing and fill
+commands, compiler path and SHA-256, Git commit and tracked-diff hash, input
+hashes and exit status). See [Make builds](make-builds.md).
 
-- `routing.prof`: complete Python call statistics, including callers/callees.
-- `profile-summary.txt` and `profile-summary.json`: top 50 functions by self time
-  and cumulative time, plus call counts.
-- `phase-timings.json`: paired start/finish events, inclusive elapsed spans,
-  trial decisions, malformed-event count and unfinished phases.
-- `routing.log`: the original events and diagnostics.
-- `run.json`: actual launch and routing commands, Python/platform/CPU information,
-  Git commit and tracked-diff hash, input hashes, profile status and router exit code.
-
-Direct `python -m copperscript route-board ...` remains unprofiled. To profile
-another module invocation, preserving failure exit codes:
-
-```powershell
-New-Item -ItemType Directory -Force build/profile | Out-Null
-uv run --no-sync python -m pcbir.profiling --output build/profile/routing.prof `
-  --module copperscript -- route-board examples/valid_board/board.copper `
-  --allow-proxy-footprints --report build/profile/route-report.json `
-  -o build/profile/board.kicad_pcb
-```
-
-The proxy-footprint invocation above is only a small diagnostic example, not the
-full-board or manufacturing workflow. Existing profile files can be inspected
-with `uv run --no-sync python -m pstats <path-to-routing.prof>`.
+For a function-level profile, run the release binary under a native sampling
+profiler, for example `perf record -g target/release/copper route-board ...`
+on Linux or Windows Performance Recorder on Windows. Build with
+`CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release -p copper` for
+symbols. The former `cProfile` instrumentation, its profiling wrapper and the
+`routing_benchmark summarize`/`compare` commands were removed with the Python
+implementation.
 
 Profiling is observational, not signoff evidence. The router's exit 1 remains
-exit 1, even if profile collection succeeds. This wrapper intentionally does not
-use `python -m cProfile`: its utility catches `SystemExit`. A forcibly terminated
-process may leave no profile; the manifest reports `missing`, not success.
-Normal exceptions and in-process interrupts attempt to save partial statistics;
-they do not establish a completed routing result. Profiling/report failures are
-recorded separately and cannot replace the router's exit status.
+exit 1. A profile covers the `copper` process, not KiCad's internal CPU work.
 
-Function profiling adds overhead, potentially substantial in a function-call-heavy
-maze search. Cumulative times include callees and must not be summed; phase spans
-also overlap when trials contain whole pipelines. The profile covers the routing
-Python process, not KiCad's internal CPU work; subprocess wait time and the
-independent-KiCad phase are visible, but native KiCad internals are not attributed.
-See the [Python profiling documentation](https://docs.python.org/3.13/library/profile.html).
+For uninstrumented wall-time and quality comparisons, use the ladder:
 
-For uninstrumented wall-time comparisons, keep progress events but disable
-function instrumentation:
-
-```powershell
-make EXAMPLE=full-vertical route PROFILE=none
+```sh
+copper bench bench/ladder.json --out build/bench/base --label base
+copper bench bench/ladder.json --out build/bench/candidate --label candidate \
+  --baseline build/bench/base/results.json
 ```
 
-Inspect a run (including an unfinished run) without modifying its artifacts:
-
-```powershell
-uv run --no-sync python -m pcbir.routing_benchmark summarize "build/full-vertical/runs/<run-id>"
-```
-
-For the O1b comparison, first complete the function-profile run, then run these
-uninstrumented variants sequentially on the same otherwise idle machine. Repeat
-in alternating order before drawing a wall-time conclusion:
-
-```powershell
-make EXAMPLE=full-vertical route PROFILE=none EXTRA_ROUTE_ARGS="--zone-dependency-expansions 0"
-make EXAMPLE=full-vertical route PROFILE=none
-uv run --no-sync python -m pcbir.routing_benchmark compare "build/full-vertical/runs/<baseline-id>" "build/full-vertical/runs/<candidate-id>"
-```
-
-`routing_benchmark` checks named failed signal/critical nets, pending ground,
-duplicate-land and fanout pads, native hard finding categories/affected nets,
-required native-check coverage, overflow and independent KiCad findings. It
-reports selected-route length/via/layer metrics rather than trading them away
-implicitly. A comparison with new failures, missing final data, changed recorded
-inputs/tools/settings or either run function-profiled produces **no timing ratio**.
-Exit 0 means eligible for timing review, 1 means a quality regression, and 2 means
-incomparable/incomplete data or an input error; none means manufacturing signoff.
-The standalone `summarize` command returns 0 for valid observations, even if a run
-is still active, and clearly marks its completion state.
-
-The explicit repair switch `--zone-dependency-expansions` is an intervention
-under test and may differ. Other
-settings, including search budgets, must match. Runtime provenance does not hash
-all footprint files or capture machine load, so an eligible ratio still requires
-external-library verification and repeated measurements. This is a review aid,
-not automatic optimization acceptance. Structured progress provides completed
-full/incremental trial and subset/probe counts, including rejected work; a legacy
-plain log uses a clearly labelled final-report lower bound instead of inventing
-zero work. General-area expanded maze states and peak memory are not yet recorded
-by this tool; paired critical searches do report their expanded states.
+`copper bench` writes `results.json` and `results.md` per run and lists
+completion, DRC and native-connectivity regressions against the baseline.
+Run variants sequentially on the same otherwise idle machine, and repeat in
+alternating order before drawing a wall-time conclusion.
 
 ### Placement and global progress
 
@@ -1419,14 +1356,13 @@ original manifest unfinalized. Check process liveness as well as its status.
 Inclusive phase durations overlap and are not percentages or an ETA.
 
 Compare repeated runs with identical source/lock, actual footprint files, options,
-KiCad/Python versions and machine load. The recorded hashes do not fingerprint
+KiCad and `copper` versions and machine load. The recorded hashes do not fingerprint
 every footprint or external tool; record CopperLib revision and KiCad version
 alongside a benchmark. Compare connectivity, exact geometry/fingerprints, DRC,
 pending escapes, wire length and via counts as well as time. Report wall time and
 peak memory; distinguish cold and warm runs. Do not infer speedups by comparing
-instrumented and uninstrumented times. An out-of-process sampler such as
-[py-spy](https://github.com/benfred/py-spy) is a useful lower-overhead cross-check,
-but is not a required dependency or enabled by the shared build workflow.
+instrumented and uninstrumented times. A native sampling profiler is a useful lower-overhead cross-check, but is not
+a required dependency or enabled by the shared build workflow.
 
 ## Where parallelism is unsafe or unlikely to help first
 
@@ -1437,10 +1373,9 @@ conflict detection, deterministic reconciliation and rerouting. Spatial partitio
 likewise require boundary/halo ownership and cross-partition repair. Treat these as
 algorithm changes, not a `ThreadPoolExecutor` wrapper.
 
-The usual GIL-enabled CPython build does not run CPU-bound Python bytecode in
-parallel through ordinary threads. Processes can bypass that limitation, but need
-picklable inputs/results and an importable entry point; Windows spawn costs and
-memory copies matter. See [Python's process-executor documentation](https://docs.python.org/3.13/library/concurrent.futures.html#processpoolexecutor).
+The Rust binary can run threads, and `copper bench --jobs` already routes
+ladder boards in parallel processes, but threads inside one route still need
+the deterministic reconciliation above.
 Parallel rendering/logging or independent CAM checks may improve convenience, but
 the historical few seconds of KiCad verification do not justify making them the
 first optimization target. No parallel router or relaxed correctness gates have
@@ -1605,7 +1540,7 @@ smaller sorted interval. The original integer collinearity test, distance order,
 track/via occurrences and BFS state bound remain authoritative. The index is
 local to one graph construction; it caches no witness or clearance decision.
 
-`bench/decoupling_paths.py` loads saved inputs through `pcbir.workbench` and calls
+The removed `bench/decoupling_paths` driver loaded saved inputs and called
 the public verifier. Before259/after261 on eight opposite-surface associations
 retain identical input and path hashes: 0.4969 s versus 0.2367 s. This is a
 prepared-prefix measurement, not a whole-board runtime claim. A 55-case related

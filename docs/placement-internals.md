@@ -32,7 +32,7 @@ the shared placer.
 5. Translate whole rigid/proximity units, including decouplers, in bounded
    deficit-derived grid steps into unused material. Recheck complete legality
    and non-increasing coarse congestion before accepting a move. Preserve fixed
-   poses and macro rotations. No example references or coordinates in pcbir.
+   poses and macro rotations. No example references or coordinates in the compiler.
    Score proposals before complete geometric validation, so non-improving
    trials do not repeat the full-board checks. Every selected move still
    receives complete legality validation. Progress identifies the active
@@ -99,7 +99,7 @@ combination-check allowance per placement seed, not a fabrication constraint.
 The stage does not move accepted routed/frozen copper. Public output remains
 unrouted source poses; proof copper is separate.
 
-`support_patterns.py` groups explicit pin-associated capacitor roles by target
+The `support_patterns` module groups explicit pin-associated capacitor roles by target
 pad, supply and return, without swapping same-rail components or values. A rail
 feeding different package balls retains separate local banks, jointly selected
 against each other. The physical IR requires one explicit target per capacitor.

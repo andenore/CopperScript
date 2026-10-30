@@ -34,49 +34,17 @@ orientations, regions, courtyards, edge clearance, keepouts and relative rules
 still apply. Member sets cannot overlap between macros. A failed bounded search
 reports failure; it does not relax geometry or split the unit.
 
-## Python integration
+## Library integration
 
-Attach the template after footprints have been resolved, before `plan_placement`
-or `run_routing_pipeline`. For example, using **synthetic**, origin-anchored
-reference coordinates (not a usable RF layout):
+In the Rust crates a template is a `copper_pcb::board::RigidPlacementCluster`
+of `RigidPlacementMember`s, each bound to its footprint by
+`copper_physical::footprint::footprint_geometry_digest`. Attach it to the
+physical board after footprints have been resolved, before `plan_placement` or
+`run_routing_pipeline`, and merge the members' allowed orientations into the
+existing component rules rather than duplicating references. Users normally
+supply templates through the CLI scene below.
 
-```python
-from dataclasses import replace
-from pcbir import (
-    ComponentPlacementRule, PlacementTarget, Point, RigidPlacementCluster,
-    RigidPlacementMember, plan_placement,
-)
-from pcbir.clusters import footprint_geometry_digest
-
-poses = {p.reference: p for p in physical.placements}
-
-def member(reference, position, rotation=0):
-    footprint = physical.footprints[poses[reference].footprint]
-    return RigidPlacementMember(
-        reference, footprint.name, footprint_geometry_digest(footprint),
-        position, rotation,
-    )
-
-template = RigidPlacementCluster(
-    name="test-matching",
-    anchor=PlacementTarget("U_RF"),
-    members=(member("U_RF", Point.mm(0, 0)),
-             member("L_MATCH", Point.mm(3, 0), 90)),
-    source="synthetic test fixture; replace with audited vendor evidence",
-    allowed_rotations=(0, 45, 90, 180, 270),
-)
-# Merge these into existing component rules rather than duplicating references.
-rules = {r.reference: r for r in physical.placement_rules}
-rules["U_RF"] = replace(rules.get("U_RF", ComponentPlacementRule("U_RF")),
-                        allowed_orientations=(0, 45, 90, 180, 270))
-rules["L_MATCH"] = replace(rules.get("L_MATCH", ComponentPlacementRule("L_MATCH")),
-                           allowed_orientations=(0, 90, 135, 180, 270))
-physical = replace(physical, rigid_clusters=(template,),
-                   placement_rules=tuple(rules.values()))
-planned = plan_placement(physical)
-```
-
-For a pad-anchored template, use `PlacementTarget("U_RF", "30")` and set the
+For a pad-anchored template, anchor on a pad target (component `U_RF`, pad `30`) and set the
 anchor member's local center to negative pad 30's actual position. Never infer
 the physical pad from a logical pin name: use resolved package bindings first.
 Preserve source-specific matching ground topology separately; relative poses
@@ -94,18 +62,17 @@ are relative to the scene. Explicit component orientation restrictions are
 retained, not broadened. The scene allows 45-degree macro rotations when all
 members' component rules permit them.
 
-Example, from the CopperScript root with the sibling CopperLib checkout:
+Example, from the CopperScript root:
 
 ```powershell
-uv run python -m pcbir.critical_preflight examples/full_vertical/board.copper `
+copper plan-layout examples/full_vertical/board.copper `
   --locked --offline --layers 6 --fab-profile jlcpcb-six-layer `
   --placement-templates examples/full_vertical/placement_templates.json `
   --footprint-root "C:\Program Files\KiCad\10.0\share\kicad\footprints" `
-  --footprint-root "..\CopperLib\footprints" `
-  --report build/rf-preflight.json -o build/rf-critical.kicad_pcb
+  --report build/rf-layout.json -o build/rf-placed.kicad_pcb
 ```
 
-The same option is accepted by `plan-layout`, `route-global`, `route-board` and
+The same option is accepted by `route-global`, `route-board` and
 `export-kicad-pcb`. Proxy/different footprints fail the pinned identity check.
 Templates are opt-in; there is no implicit filename-based discovery.
 

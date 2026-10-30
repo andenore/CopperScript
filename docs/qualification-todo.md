@@ -1,18 +1,20 @@
 # Qualification implementation backlog
 
-Current commands/contracts are in [engineering qualification](engineering-qualification.md)
-and [manufacturing files](manufacturing-files.md). Reusable source requirements
-belong to libraries; operating choices and measurements belong to consumers.
+Qualification principles are in [engineering qualification](engineering-qualification.md)
+and [manufacturing files](manufacturing-files.md). The automated `audit-cam`,
+`assess-engineering` and `qualification-gate` commands were removed with the
+Python implementation. Reusable source requirements belong to libraries;
+operating choices and measurements belong to consumers.
 
 - [ ] Qualify Gerber polarity/drill/curve vector extraction and fabrication-profile
   integration for copper connectivity, clearance, annulus, mask/paste and alignment.
-  Existing adapter-neutral algorithms do not qualify final artwork by themselves.
+  The removed Python adapter-neutral algorithms did not qualify final artwork either.
 - [ ] Add source/model-specific capacitance derating, inductor/current limits and
   switching-loop/feedback/thermal geometry extraction; origin distances are not proof.
-- [ ] Extend the strict physical-IR release API with final-native six-layer evidence
-  and profiles. Existing qualification-gate results do not authorize an order.
+- [ ] Restore an automated CAM/engineering assessment and checkpoint for the final
+  native board, if needed. Old qualification-gate results do not authorize an order.
 - [ ] Add qualified coupled/embedded/stripline and discontinuity solver integration.
-  Existing pair inventories/path geometry remain auxiliary screens.
+  Pair inventories and path geometry are auxiliary screens.
 - [ ] Provision/pin a second independent CAM parser and qualify its corpus/matrix:
   polarity, arcs, aperture macros, regions, slots and metamorphic comparisons.
 - [x] Support partially-assembled boards: a per-selection `populate` mode

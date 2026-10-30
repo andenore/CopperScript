@@ -246,7 +246,7 @@ pub struct Refusal {
 
 /// `load_placement_checkpoint`: the saved placement and its provenance, or
 /// why it does not apply (`Ok(Err(..))`). `display` is the path as the
-/// command line names it. A checkpoint this rewrite cannot decode yet (one
+/// command line names it. A checkpoint this implementation cannot decode yet (one
 /// with package patterns) is not implemented.
 pub fn load_placement_checkpoint(
     path: &Path,

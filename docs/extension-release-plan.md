@@ -2,35 +2,32 @@
 
 ## Decisions
 
-Keep the language server and optional mechanical editor in CopperScript's
-`integrations/vscode` extension. Use the permanent Marketplace identity
-`andenore.copperscript`, displayed as **CopperScript**. Extension versions and
-release tags are independent of compiler and board qualification releases.
+Keep the language server client in CopperScript's `integrations/vscode`
+extension. Use the permanent Marketplace identity `andenore.copperscript`,
+displayed as **CopperScript**. Extension versions and release tags are
+independent of compiler and board qualification releases.
 
-Python support is **3.11 or newer**, without an upper cap. Package metadata
-already expresses that policy. Editor startup checks the actual required
-compiler module instead of requiring one exact Python or compiler release.
-The mechanical editor still requires its reviewed compiler content fingerprint.
+The extension runs the language server as `copper lsp` from the `copper`
+binary (version 0.4.0 onward). It needs no Python. The mechanical custom
+editor was removed in 0.4.0; the browser editor is
+`copper edit-mechanical BOARD.copper`.
 
 ## Implementation and acceptance
 
-1. **Interpreter setup — implemented.** Default both interpreter settings to
-   automatic discovery: use the workspace's `.venv`, then an existing locked
-   uv project. Explicit argv settings take priority. Never fall back from an
-   incompatible selected environment to a different compiler. Report the Python
-   version, compiler module and interpreter in Output; provide Show Setup and
-   Restart Language Server commands. Do not install packages, upgrade build
-   pins or alter source/locks during discovery.
+1. **Compiler setup — implemented.** `copperscript.lsp.compilerCommand` is the
+   `copper` binary's argv and defaults to `["copper"]` on PATH. An explicit
+   argv takes priority. Never fall back from a failing selected binary to a
+   different compiler. Report the selected command in Output; provide Show
+   Setup and Restart Language Server commands. Do not install anything,
+   upgrade build pins or alter source/locks.
 2. **Marketplace package — implemented.** Rename the extension before its first
-   publication, add repository/support metadata and a changelog, preserve the
-   optional mechanical editor and PNG branding. Keep offline deterministic VSIX
-   packaging; use Microsoft's pinned `vsce` with a separate npm tooling lock for
-   Marketplace validation and publishing. No npm runtime dependencies are added.
-3. **Compatibility/release CI — implemented and passed.** Run core
-   compiler, LSP, mechanical host, packaging and actual client/provider tests on
-   Python 3.11 through 3.15 on Linux, plus 3.15 on Windows and macOS. Extend this
-   matrix when Python adds a stable minor version; newer versions remain accepted
-   even before they enter CI. Keep board toolchain/evidence pins unchanged.
+   publication, add repository/support metadata, a changelog and PNG branding.
+   Package with Microsoft's pinned `vsce` and a separate npm tooling lock
+   (`integrations/vscode/tools`). No npm runtime dependencies are added.
+3. **Compatibility/release CI — implemented.** `vscode-extension.yml` builds
+   `copper` and runs the compiler and LSP client tests against it on Linux,
+   Windows and macOS, tests the grammar, then packages with `vsce`. Keep board
+   toolchain/evidence pins unchanged.
 4. **Release automation — implemented, account configuration pending.** Build
    and retain a VSIX after the matrix succeeds. An `extension-v<version>` tag must
    match the extension manifest. Publish that exact artifact using GitHub OIDC
@@ -67,27 +64,23 @@ and [Azure Login OIDC setup](https://github.com/Azure/login#login-with-openid-co
    Set repository variable `COPPER_MARKETPLACE_ENABLED=true` when ready to enable
    tag publication. No access-token secrets are stored by this workflow.
 6. Commit the extension version and changelog, then create and push the matching
-   `extension-v0.3.2` tag for this version. Ordinary compiler `v*` tags and manual
+   `extension-v0.4.0` tag for this version. Ordinary compiler `v*` tags and manual
    package checks do not publish the extension. An existing Marketplace version
    is not silently replaced; use a new extension version for the next release.
 
 ## Local checks
 
-```console
-python -m pytest tests/test_compiler.py tests/test_packages.py tests/test_lsp.py tests/test_editor_document.py tests/test_editor_packaging.py
-# Set COPPER_TEST_PYTHON to the selected interpreter before the Node tests.
-node --test tests/compiler-client.cjs tests/lsp-client.cjs
-node integrations/vscode/build.cjs
-python integrations/vscode/package.py -o build/copperscript-0.3.2.vsix
-```
-
-For the official package check, use Node 22 or newer:
+Use Node 22 or newer:
 
 ```console
+cargo build --release -p copper
+COPPER_TEST_BIN=target/release/copper node --test tests/compiler-client.cjs tests/lsp-client.cjs
 npm ci --prefix integrations/vscode/tools --ignore-scripts --no-audit --no-fund
+node --test tests/syntax-highlighting.cjs
+node integrations/vscode/build.cjs
 cd build/vscode-extension/extension
 # Unix shell; on Windows use the corresponding vsce.cmd launcher.
-../../../integrations/vscode/tools/node_modules/.bin/vsce package --no-dependencies --out ../../copperscript-marketplace-0.3.2.vsix
+../../../integrations/vscode/tools/node_modules/.bin/vsce package --no-dependencies --out ../../copperscript-0.4.0.vsix
 ```
 
 Bundled runtimes, downloads and automatic compiler upgrades are deferred until
@@ -97,16 +90,13 @@ its diagnostics are guidance from that selected version.
 
 ## Local verification, 2026-10-12
 
-The focused suite passed locally on Windows with Python 3.13 and final Python
-3.15.0: 64 Python tests and 12 Node client/setup/release tests for each runtime.
-The 3.15 checks used an isolated installed checkout, including its library entry
-points. The client tests exercised real stdio processes and recovery after a
-failed selected interpreter. Offline VSIX packaging and official `vsce` 4.0.0
-packaging passed; Actionlint 1.7.12 accepted the new workflow. The complete
-Linux/macOS/Windows CI matrix and Marketplace packaging subsequently passed for
-commit `a8f5680` on GitHub Actions. Authenticated publication remains unverified.
+Version 0.3.2 (Python language server) passed its focused suite locally on
+Windows and the Linux/macOS/Windows CI matrix and Marketplace packaging for
+commit `a8f5680`. Authenticated publication remains unverified. Version 0.4.0
+replaces the Python server with `copper lsp`.
 
-Version 0.3.2 adds quick fixes, automatic language-server restarts and Windows
+Version 0.4.0 runs `copper lsp`, removes the mechanical custom editor and
+packages only with `vsce`. Version 0.3.2 added quick fixes, automatic language-server restarts and Windows
 URI fixes. Version 0.3.1 added compiler-independent syntax highlighting. The release workflow
 tests the grammar with VS Code's actual TextMate/Oniguruma tokenizer before
-packaging; both the offline and official VSIX must include the registered grammar.
+packaging; the VSIX must include the registered grammar.

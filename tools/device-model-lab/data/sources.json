@@ -1,7 +1,0 @@
-{
-  "sources": [
-    {"id":"st-product-stm32g0b1cb","url":"https://www.st.com/en/microcontrollers-microprocessors/stm32g0b1cb.html","revision":"accessed 2026-09-20","role":"product identity"},
-    {"id":"st-ds13560-rev6","url":"https://www.st.com/resource/en/datasheet/stm32g0b1cc.pdf","revision":"DS13560 Rev 6 (February 2026)","role":"pin names, package pins, alternate functions"},
-    {"id":"copperscript-ee63d69","url":"https://github.com/andenore/CopperScript/tree/ee63d69","revision":"ee63d69","role":"bundle contract"}
-  ]
-}

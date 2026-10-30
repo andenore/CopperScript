@@ -1,7 +1,0 @@
-{"fact_id":"opa.package","subject":"OPA2197ID","field":"package","value":"8-pin SOIC (D)","status":"verified","source_id":"ti-opa2197-ds","locator":"p. 3 and package addendum p. 34"}
-{"fact_id":"opa.units","subject":"OPA2197ID","field":"functional_units","value":["A","B"],"status":"verified","source_id":"ti-opa2197-ds","locator":"Pin Functions table p. 3"}
-{"fact_id":"opa.unit_a","subject":"A","field":"pins","value":{"+IN":"3","-IN":"2","OUT":"1"},"status":"verified","source_id":"ti-opa2197-ds","locator":"Pin Functions table p. 3"}
-{"fact_id":"opa.unit_b","subject":"B","field":"pins","value":{"+IN":"5","-IN":"6","OUT":"7"},"status":"verified","source_id":"ti-opa2197-ds","locator":"Pin Functions table p. 3"}
-{"fact_id":"opa.shared_supplies","subject":"OPA2197ID","field":"shared_power_pins","value":{"V+":"8","V-":"4"},"status":"verified","source_id":"ti-opa2197-ds","locator":"Pin Functions table p. 3"}
-{"fact_id":"opa.supply_range","subject":"OPA2197ID","field":"supply_range","value":{"dual":"±2.25 V to ±18 V","single":"4.5 V to 36 V"},"status":"verified","source_id":"ti-opa2197-ds","locator":"Recommended Operating Conditions p. 5"}
-{"fact_id":"opa.direction","subject":"OPA2197ID","field":"directions","value":{"inputs":"I","outputs":"O"},"status":"verified","source_id":"ti-opa2197-ds","locator":"Pin Functions table p. 3"}

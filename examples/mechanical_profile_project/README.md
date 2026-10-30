@@ -18,9 +18,9 @@ boards, or published in a versioned library and imported by URL-like package pat
 From the CopperScript repository root:
 
 ```powershell
-uv run copper check examples/mechanical_profile_project/board.copper --locked
-uv run copper edit-mechanical examples/mechanical_profile_project/board.copper --locked
-uv run copper export-kicad-pcb examples/mechanical_profile_project/board.copper --locked -o build/mechanical-profile/demo.kicad_pcb
+copper check examples/mechanical_profile_project/board.copper --locked
+copper edit-mechanical examples/mechanical_profile_project/board.copper --locked
+copper export-kicad-pcb examples/mechanical_profile_project/board.copper --locked -o build/mechanical-profile/demo.kicad_pcb
 ```
 
 Add `--offline` after dependencies are cached. This example inherits the

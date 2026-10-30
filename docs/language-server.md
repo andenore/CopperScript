@@ -32,24 +32,21 @@ definitions; consumer boards configure the selected compiler and locked inputs.
    document changes, save/close and watched-file notifications. Debounce
    semantic checks in one worker; discard obsolete workspace results.
 5. **Editor integration and acceptance — delivered.** Extend the existing offline
-   VS Code extension, preserving its mechanical editor and dependency-free VSIX
-   build. Test actual stdio exchanges, providers, unsaved imports, locked failures,
+   VS Code extension. Test actual stdio exchanges, providers, unsaved imports, locked failures,
    malformed frames, Unicode edits, recovery and stale result suppression.
 
-The transport uses Python's standard library, so the ordinary compiler remains
-dependency-free and no separate LSP installation extra is required. The small
+The server is the `copper lsp` command of the `copper` binary (crate
+`copper-lsp`); no separate installation is required. The small
 VS Code client implements only the capabilities advertised by this server.
 Other editors can use their existing standard LSP clients.
 
 ## Launch
 
-Use a CopperScript release/checkout that includes this server:
+Install `copper` on PATH (`cargo install --locked --path crates/copper`, or a
+release binary), then run:
 
 ```sh
-uv run --locked --offline copper lsp
-# Equivalent direct entry points:
-python -m pcbir.lsp.server
-copper-lsp
+copper lsp
 ```
 
 The command is a stdio protocol process, not an interactive terminal command.
@@ -61,7 +58,7 @@ For Neovim 0.11+, an example client configuration is:
 ```lua
 vim.filetype.add({ extension = { copper = 'copper' } })
 vim.lsp.config('copper', {
-  cmd = { 'uv', 'run', '--locked', '--offline', 'copper', 'lsp' },
+  cmd = { 'copper', 'lsp' },
   filetypes = { 'copper' },
   root_markers = { 'copper.mod', '.git' },
 })
@@ -81,24 +78,24 @@ engineering units. It works independently of the compiler process; semantic
 tokens remain follow-up work in the LSP.
 
 Text `.copper` documents automatically activate the language tools in trusted
-local workspaces. `copperscript.lsp.compilerCommand` selects an interpreter argv
-array. Its default `[]` discovers the project's `.venv`, then an existing
-`pyproject.toml`/`uv.lock` project through locked/offline uv. An explicit array
-overrides discovery. Python 3.11 or newer is accepted without an upper bound;
-startup checks that the actual LSP module imports successfully.
-The extension appends `-u -m pcbir.lsp.server` without using a shell.
+local workspaces. `copperscript.lsp.compilerCommand` is the argv array of the
+`copper` binary, never a shell string. Its default `["copper"]` runs `copper`
+from PATH (`[]` also selects it); an explicit array such as
+`["/absolute/path/to/copper"]` selects another binary. The extension appends
+`lsp` without using a shell.
 
-Use **CopperScript: Show Setup** to inspect the selected environment and
-**CopperScript: Restart Language Server** after changing installed dependencies.
-Startup failures offer setup guidance; an incompatible selected environment
-does not silently select a different compiler. The
+Use **CopperScript: Show Setup** to inspect the selected command and
+**CopperScript: Restart Language Server** after replacing the binary.
+Startup failures offer setup guidance; a failing selected binary does not
+silently select a different compiler. The
 [extension release plan](extension-release-plan.md) covers packaging,
 compatibility CI and Marketplace distribution.
 
 Projects pinned to an older compiler must explicitly select an LSP-capable
-environment, or disable the LSP with `copperscript.lsp.enabled`. An explicitly
+binary, or disable the LSP with `copperscript.lsp.enabled`. An explicitly
 selected newer compiler is editor guidance; it does not upgrade the project's
-build pin. The mechanical editor retains its separate compiler digest check.
+build pin. The mechanical editor is not part of the extension; run
+`copper edit-mechanical BOARD.copper` for the browser editor.
 
 Each workspace folder uses its configured compiler process. Open Copper buffers
 are synchronized to the processes so unsaved local replacements/imports work
@@ -111,7 +108,7 @@ Code. Close discards that buffer and restores disk-backed import analysis.
   valid semantics for malformed declarations. An unterminated string can consume
   subsequent source. Syntax errors suppress board ERC until the source parses.
 - Library files get syntax diagnostics independently; complete semantic/ERC
-  checks run through their consuming board. Built-in Python library pins have
+  checks run through their consuming board. Built-in library pins have
   completions but no `.copper` definition locations.
 - Completion offers a useful subset of properties and keywords, not every
   mechanical/constraint property or mode-dependent legal peripheral choice.
@@ -148,10 +145,13 @@ Code. Close discards that buffer and restores disk-backed import analysis.
 ## Verification
 
 ```sh
-python -m pytest tests/test_lsp.py tests/test_compiler.py tests/test_packages.py
-COPPER_TEST_PYTHON=/path/to/python node --test tests/lsp-client.cjs
+cargo test -p copper-lsp
+cargo build --release -p copper
+COPPER_TEST_BIN=target/release/copper node --test tests/compiler-client.cjs tests/lsp-client.cjs
+npm ci --prefix integrations/vscode/tools --ignore-scripts --no-audit --no-fund
 node integrations/vscode/build.cjs
-python integrations/vscode/package.py -o build/copperscript-language.vsix
+cd build/vscode-extension/extension
+../../../integrations/vscode/tools/node_modules/.bin/vsce package --no-dependencies --out ../../copperscript-0.4.0.vsix
 ```
 
 The Node tests exercise the actual stdio server and the VS Code provider adapter

@@ -13,18 +13,12 @@ Contacts in the cut-away area block cleanup; obstacle-constrained corners are
 retained. It neither independently alters paired USB geometry nor edits a saved
 KiCad board by hand.
 
-Run the audit with KiCad's bundled Python after a routing run (PowerShell):
-
-```powershell
-& 'C:\Program Files\KiCad\10.0\bin\python.exe' scripts/review_routing_layers.py `
-  build/full-vertical/<run>/board.kicad_pcb `
-  --output-dir build/full-vertical/<run>/layers `
-  --kicad-cli 'C:\Program Files\KiCad\10.0\bin\kicad-cli.exe'
-```
-
-Outputs include one saved-copper SVG per enabled copper layer and
-`layer-review.json`: exact native via/pad collision locations, track lengths,
-degree-two sharp turns (90 degrees or greater), branches, non-octilinear segments
-and coarse 10mm local track-area estimates. Plane fill is not recomputed by the
-audit. Refill/DRC separately before interpreting plane connectivity. These style
+The per-layer audit script (`scripts/review_routing_layers`, run with KiCad's
+bundled Python) was removed with the Python implementation. For per-layer
+views of a routing run, use `copper view RUN --window ... --filled` (or
+`--net`, `--component`, `--issue`); it renders one window per copper layer.
+The removed audit also reported via/pad collision locations, track lengths,
+sharp turns, branches, non-octilinear segments and local track-area estimates;
+`DRC-VIA-PAD-OVERLAP` still reports the collisions. Refill/DRC separately
+before interpreting plane connectivity. These style
 and density metrics are not electrical, impedance or manufacturing signoff.

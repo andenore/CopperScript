@@ -23,11 +23,12 @@ secondary action is to inspect a complete, documented board.
 
 ## Preview and check
 
-From the CopperScript repository, using Python 3.11 or newer:
+From the CopperScript repository, using Node 22 or newer and any static file
+server (for example Python's, if installed):
 
 ```console
-python scripts/check_site.py
-python -m http.server 8000 --bind 127.0.0.1 --directory site
+node scripts/check_site.cjs
+python3 -m http.server 8000 --bind 127.0.0.1 --directory site
 ```
 
 Open `http://127.0.0.1:8000/`. Check both a wide and a narrow viewport and the
@@ -52,8 +53,7 @@ details elements. Stop the server with Ctrl+C.
 
 The workflow follows [GitHub's custom Pages workflow](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
 Its deploy job has Pages/OIDC permissions and uses the `github-pages`
-environment. Board compilation, existing release workflow and dependency pins
-are separate and unchanged. Only public site files are uploaded.
+environment. Board compilation and dependency pins are separate and unchanged. Only public site files are uploaded.
 
 ## Repository descriptions and topics
 
@@ -69,10 +69,9 @@ Suggested About metadata, to apply in GitHub's repository settings:
 social preview. Metadata settings are account configuration, not Git-tracked
 files, and are not applied by this workflow.
 
-The share image is committed so deployment needs no image tools. To regenerate
-it, use `python scripts/render_site_social.py` in an environment with Pillow and
-the script's Windows or DejaVu system fonts. This optional documentation tool
-is not part of the compiler dependencies or the deployment build.
+The share image is committed so deployment needs no image tools. Its renderer
+script was removed with the Python implementation; update the PNG by hand if
+the design changes.
 
 ## Discovery and launch
 
@@ -127,8 +126,8 @@ the exact retained-candidate workflow; historical source status is preserved.
 Refresh from a regenerated, source-matched tracker showcase:
 
 ```console
-python scripts/update_site_showcase.py --tracker-root ../CopperAssetTracker
-python scripts/check_site.py
+scripts/update_site_showcase.sh --tracker-root ../CopperAssetTracker
+node scripts/check_site.cjs
 ```
 
 Review date, dimensions, counts, candidate scope, image descriptions and

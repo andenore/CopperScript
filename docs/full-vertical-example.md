@@ -188,12 +188,14 @@ From the repository root after dependency bootstrap:
 
 ```console
 make EXAMPLE=full-vertical check
-make EXAMPLE=full-vertical route PROFILE=none
+make EXAMPLE=full-vertical route
 ```
 
 The shared six-layer preset supplies macros and candidate settings. Use
 [Make builds](make-builds.md) for native paths, new run directories and exports.
-For a diagnostic early gate, use `python -m pcbir.critical_preflight` with the
-same locked inputs/layers/macros and `--package-access`; success covers only
-preflight, not ordinary routing, fill or release. Inspect the complete route
+For a diagnostic of the critical stage, use `copper replay-critical STATE` on a
+placement checkpoint or saved inputs from a run with the same locked
+inputs/layers/macros; success covers only that stage, not ordinary routing, fill
+or release. (The former `critical_preflight` early gate with package access was
+removed with the Python implementation.) Inspect the complete route
 report and independent native result before using an output PCB.

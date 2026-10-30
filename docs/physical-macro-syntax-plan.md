@@ -269,7 +269,10 @@ contracts.
 
 ## Validation record
 
-The new `tests/test_macro_source.py` suite has 38 passing cases. Together with
+This record is from the removed Python implementation. Its suites are gone; the
+Rust crates carry their own tests (`cargo test --workspace`).
+
+The new macro-source suite had 38 passing cases. Together with
 the language-server suite, the final feature/editor run passed 71 tests. It
 includes source-only `route-board`, `plan-layout` and PCB export, a partial net
 with external routing, two asset providers, scoped/nested/repeated bindings,
@@ -284,13 +287,6 @@ passed when rerun with loopback access. One installed-KiCad boundary regression
 initially hit the sandbox temporary-directory restriction; it passed with its
 temporary files placed inside the workspace. These environment failures were
 resolved without changing tests or weakening checks.
-
-Use the repository's Python environment and a fresh workspace `--basetemp` when
-reproducing these checks. The compact final feature command is:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_macro_source.py tests/test_lsp.py -o addopts= -q --basetemp build/macro-feature-checks
-```
 
 The nRF RF/coin-cell, full-vertical and TPS62130A examples now select macros in
 source. The Make settings and CI provenance no longer load their former binding

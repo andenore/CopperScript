@@ -1,7 +1,7 @@
 //! `pcbir.editor.session`: revision-bound placement previews and reviewed
 //! source transactions.
 //!
-//! The rewrite covers a freshly opened session's scene (`--scene-output`);
+//! This implementation covers a freshly opened session's scene (`--scene-output`);
 //! previews, jobs and source transactions come with the HTTP transport.
 
 use std::collections::BTreeSet;

@@ -11,6 +11,12 @@ on 2026-10-26 with the `--router legacy` path; the unified router is the only
 ordinary router. The shove operations in CS-054 were removed at the same time.
 The text is kept as rationale history.
 
+The Python implementation was removed after `b16122a`; the Rust `copper`
+binary is the only implementation. Decisions about features it does not carry
+(the signed manufacturing release API and independent CAM qualification,
+CS-051, CS-059, CS-065, CS-070 and CS-071; the board-routing release
+workflow, CS-138) remain as rationale for any future implementation.
+
 | ID | Status | Decision |
 |---|---|---|
 | CS-001 | Accepted | CopperScript describes semantic intent, not drawing primitives. |
@@ -287,11 +293,11 @@ Circle/rectangle zone insets and zero-inset polygons use actual material geometr
 reject unsupported general offsets or intersecting inset/void contours instead
 of inventing a bounding-box fill. Native refill remains an independent proof.
 
-`pcbir` contains generic engine code only: no board-specific builder modules,
-component fixtures, example imports, example paths or special-case reference
-names. Repository-only builders are in `examples/`; concrete bundled fixture
-libraries are outside the engine and resolved through a generic library registry
-or installed `copperscript.libraries` entry points. Examples are not wheel packages.
+The compiler crates contain generic engine code only: no board-specific builder
+modules, component fixtures, example imports, example paths or special-case
+reference names. Repository-only sources are in `examples/`; concrete bundled
+fixture libraries are outside the engine and resolved through the generic
+package manifests. Examples are not compiler packages.
 The LED-ring source declares its circle, rules, ground zone and all placements.
 See [mechanical language specification](mechanical-language.md). Curved slots,
 datums and nonrectangular production CAM qualification remain explicitly deferred.
@@ -435,10 +441,10 @@ the current socket-corridor representation still needs assembled 3D inspection.
 
 Board projects and repository examples share Make targets and the generic
 route/fill/verification runner. Per-example configuration is data (source,
-layer/fabrication profile and explicit scenes/options), not Python orchestration
+layer/fabrication profile and explicit scenes/options), not per-board scripts
 or compiler conditionals. The runner must not assume a particular library URL,
 part, board geometry or sibling checkout. CI uses the same configurations as
-local builds. Profiling and input/output provenance accompany each routing run;
+local builds. Input/output provenance accompanies each routing run;
 failure remains nonzero and stale artifacts cannot masquerade as a new run.
 Saved filled copper and native DRC on the exact output board are required for
 connectivity acceptance, not merely a successful route search or disposable

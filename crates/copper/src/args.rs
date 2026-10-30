@@ -2,7 +2,7 @@
 //!
 //! Long options may be abbreviated to any unambiguous prefix, `--` ends the
 //! options, and errors exit with status 2. Usage and help text are not
-//! argparse's; matching them is a decision for M1 (docs/rust-port-plan.md).
+//! argparse's.
 
 /// Split `args` into recognised long options and positionals.
 pub struct Parsed {

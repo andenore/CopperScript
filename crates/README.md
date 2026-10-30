@@ -1,8 +1,7 @@
 # Rust workspace
 
-The Rust rewrite of CopperScript ([plan](../docs/rust-port-plan.md)). The
-Python CLI stays the reference implementation until cutover; nothing here
-changes its behaviour.
+The CopperScript implementation: the `copper` binary and the crates behind it.
+Install the binary with `cargo install --locked --path crates/copper`.
 
 | Crate | Contents |
 |---|---|
@@ -11,69 +10,50 @@ changes its behaviour.
 | `copper-state` | The frozen `copperscript.state/v1` format: read, verify, write |
 | `copper-physical` | Exact board geometry (outlines, cutouts, holes, slots, line/arc paths), footprints and the `.kicad_mod` importer |
 | `copper-lang` | Lexer, parser, package resolution, lowering (electrical, mechanical, silkscreen), ERC, the compiled JSON and the KiCad schematic backend |
-| `copper-pcb` | Physical board IR, physicalization (proxy and resolved footprints), placement templates, hard-macro scenes and the KiCad PCB/project backend (M2, in progress) |
-| `copper-drc` | Physical DRC findings and coverage, exact copper connectivity, breakout spacing, placement legality and hard-macro materialization (M2 subset of M3's DRC); signal-integrity screening (`si-check`) |
-| `copper-lsp` | The language server (`copper lsp`): Content-Length framing, JSON-RPC dispatch with Python's error codes and messages, the debounced diagnostics worker, recovering parse, symbols, hover, definition, completion, compiler-backed diagnostics and quick fixes (M6) |
-| `copper-report` | Run diagnostics and reports: diagnostic explanations, a run's issues grouped by cause, board window views (scene reader, legend and SVG) and engineering summaries (M5) |
-| `copper-assembly` | Assembly locks and checks, BOM/CPL and hand-assembly/ordering CSVs, and native KiCad manufacturing files (`zipfile`-exact archives with a zlib-exact DEFLATE) (M3) |
-| `copper-place` | The placement planner behind `plan-layout`: seeds, legalization, rigid clusters, refinement, escape spacing, candidate selection, requirement verification and the engineering summary (M3) |
-| `copper-route` | Routing (M4, in progress): exact clearance index, search lattices, the negotiated-congestion global router, layer assignment, the placement/routing feedback controller behind `route-global`, escape planning, the decoupler router (`route_decouplers`, cross-layer bypass witnesses, the planner's registered decoupling-access pass); the unified detailed router, fine-region planning, power islands, the typed `--unified-save-inputs` state codec; the `route-board` command line and the full routing pipeline (escape and bypass reservations, fanout, plane stitch, congestion-driven placement feedback, kicad-cli plane verification), the `bench` ladder runner, `benchmark-routing` acceptance cases and report helpers |
-| `copper-editor` | The physical editor: the routed editor overlay (`editor-overlay`), and `edit-mechanical`'s board and definition (macro, board_profile) sessions, derived scene, pad-island ratsnest (exact Boruvka MST), artwork and physical feature inventory, reviewed source transactions (token patches, `difflib`-exact diffs, locked atomic saves) and the loopback HTTP editor (M3/M6) |
-| `copper` | The `copper` binary; implemented commands: `agent-guide`, `state` (M0); `check`, `compile`, `query`, `power-check`, `audit-footprints`, `lock`, `compile-macro`, `library` (M1); `check-footprint`, `export-kicad`, `export-kicad-pcb` (M2); `plan-layout`, `assembly`, `si-check`, `export-manufacturing`, `edit-mechanical` (M3); `route-global`, `replay-unified`, `replay-critical`, `route-board`, `bench`, `benchmark-routing` (M4); `explain`, `issues`, `view`, `summarize` (M5); `lsp`, `editor-overlay` (M6) |
+| `copper-pcb` | Physical board IR, physicalization (proxy and resolved footprints), placement templates, hard-macro scenes and the KiCad PCB/project backend |
+| `copper-drc` | Physical DRC findings and coverage, exact copper connectivity, breakout spacing, placement legality and hard-macro materialization; signal-integrity screening (`si-check`) |
+| `copper-lsp` | The language server (`copper lsp`): Content-Length framing, JSON-RPC dispatch with Python's error codes and messages, the debounced diagnostics worker, recovering parse, symbols, hover, definition, completion, compiler-backed diagnostics and quick fixes |
+| `copper-report` | Run diagnostics and reports: diagnostic explanations, a run's issues grouped by cause, board window views (scene reader, legend and SVG) and engineering summaries |
+| `copper-assembly` | Assembly locks and checks, BOM/CPL and hand-assembly/ordering CSVs, and native KiCad manufacturing files (`zipfile`-exact archives with a zlib-exact DEFLATE) |
+| `copper-place` | The placement planner behind `plan-layout`: seeds, legalization, rigid clusters, refinement, escape spacing, candidate selection, requirement verification and the engineering summary |
+| `copper-route` | Routing: exact clearance index, search lattices, the negotiated-congestion global router, layer assignment, the placement/routing feedback controller behind `route-global`, escape planning, the decoupler router (`route_decouplers`, cross-layer bypass witnesses, the planner's registered decoupling-access pass); the unified detailed router, fine-region planning, power islands, the typed `--unified-save-inputs` state codec; the `route-board` command line and the full routing pipeline (escape and bypass reservations, fanout, plane stitch, congestion-driven placement feedback, kicad-cli plane verification), the `bench` ladder runner, `benchmark-routing` acceptance cases and report helpers |
+| `copper-editor` | The physical editor: the routed editor overlay (`editor-overlay`), and `edit-mechanical`'s board and definition (macro, board_profile) sessions, derived scene, pad-island ratsnest (exact Boruvka MST), artwork and physical feature inventory, reviewed source transactions (token patches, `difflib`-exact diffs, locked atomic saves) and the loopback HTTP editor |
+| `copper` | The `copper` binary: command dispatch and option parsing for every command (`copper --help` lists them) |
 
 ## Build and test
 
 ```sh
-cargo build --release          # target/release/copper
-cargo test --workspace
+cargo build --release -p copper     # target/release/copper
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --release -- -D warnings
+# Fill the package caches once, so the tests run offline:
+for board in examples/*/board.copper; do
+  target/release/copper check "$board" --locked
+  target/release/copper audit-footprints "$board" --locked
+done
+cargo test --workspace --release
 ```
 
-## Compare with the Python CLI
+## Golden fixtures
 
-The harness runs every corpus case on both implementations and compares exit
-status, stdout, stderr and output files byte for byte. It needs the Python
-package installed (`uv sync --locked` or `pip install -e .`).
+Some tests compare the crates against fixtures recorded from the former Python
+implementation (last Python commit `b16122a`): decimal arithmetic, quantity
+formatting, float `repr`, JSON escaping, real state files, parse outcomes (tree
+digest or exact diagnostic) for in-repo sources and seeded mutations of each,
+search lattices, escape plans, critical bundles and pair tuning. They live in
+`crates/*/tests/fixtures/` and `tests/rust-port/critical/`, with the sources
+they parse under `tests/rust-port/` and `examples/`.
 
-```sh
-python scripts/compare_implementations.py                 # the gated suites; exit 1 on any difference
-python scripts/compare_implementations.py --list --suite all
-python scripts/compare_implementations.py --suite check --keep build/compare/keep
-python scripts/compare_implementations.py --jobs 4                      # parallel; timings only comparable with --jobs 1
-python scripts/compare_implementations.py --suite ladder --oracle-when-pending --report build/compare/ladder.json
-```
-
-- The corpus is `scripts/compare_corpus.json`. Suites up to its
-  `accepted_milestone` are gated. Raise it when a milestone is accepted.
-- An unimplemented Rust command exits 3 with "not implemented in the Rust
-  rewrite" on stderr; the harness reports it as `pending`.
-- A difference that is accepted on review goes in
-  [the differences log](../docs/rust-port-differences.md) with both result digests.
-- The `ladder` suite expands `bench/ladder.json`; its report records the run
-  time of both implementations per board.
-
-## Oracle fixtures
-
-Unit tests check the crates against fixtures recorded from the Python oracle:
-decimal arithmetic, quantity formatting, float `repr`, JSON escaping, real
-state files, and parse outcomes (tree digest or exact diagnostic) for every
-in-repo source and seeded mutations of each. `src/agent_guide_topics.json` in the binary is the guide text,
-copied the same way.
-
-```sh
-python scripts/generate_rust_fixtures.py          # after a deliberate oracle change
-python scripts/generate_rust_fixtures.py --check  # CI
-python scripts/generate_rust_fixtures.py --dump-parse examples/valid_board/board.copper
-python scripts/generate_rust_fixtures.py --parse-corpus ../CopperLib --output build/copperlib-parse.json
-COPPER_PARSE_FIXTURE=build/copperlib-parse.json cargo test -p copper-lang --test python_oracle
-```
+These fixtures are frozen: their generators were removed with the Python code.
+A deliberate behaviour change updates the affected expectation by hand, with
+the reason in the commit message. `src/agent_guide_topics.json` in the binary
+is the guide text; edit it in place.
 
 ## Rules
 
 - Output must not depend on hash order: `HashMap` and `HashSet` are
   disallowed by clippy. Use `IndexMap` or `BTreeMap`.
-- Text output goes through `copper_json::text` and uses LF on every platform;
-  the harness reads Python's Windows CRLF as LF.
+- Text output goes through `copper_json::text` and uses LF on every platform.
 - Lengths are `Nm` (`i64`); exact values use `Decimal` or `Fraction`, never
-  `f64`, unless the Python code uses a float.
+  `f64`, unless the former Python behaviour used a float (outputs keep
+  Python-compatible numerics such as `pyfloat` and `json.dumps` formatting).

@@ -1,6 +1,6 @@
 # Escape planning
 
-The implemented contract of `pcbir/escape_plan.py`. The steps, research and
+The implemented contract of `crates/copper-route/src/escape_plan.rs`. The steps, research and
 open questions are in the [escape planning plan](escape-planning-plan.md);
 this page describes only what exists.
 
@@ -267,10 +267,8 @@ ordinary or unified router the plan; detailed-feedback trials re-plan their
 moved board. `copper route-board --escape-plan` turns it on and adds the plan
 to the report as `escape_plan`. The global router does not read the plan:
 global routing runs inside placement, before the placed board exists to plan
-from. `python -m pcbir.bench route --escape-plan` routes a board
-with the plan and records it under `escape_plan`, with `moved_on_layer`: for
-each moved net, whether its routed copper used the planned layer inside the
-corridor.
+from. The PCBWorld benchmark runner that recorded the plan per board
+(`escape_plan`, `moved_on_layer`) was removed with the Python implementation.
 
 ## Where diagnostics appear
 
@@ -278,13 +276,16 @@ corridor.
 |---|---|
 | `copper route-board` report | `escape`: clusters with inner signal pins, every cluster pair, `overflow_clusters`, total `crossing_pairs` |
 | `copper issues RUN` | Advisory `X` ids: `ESCAPE-CROSSING` per crossing pair (names the nets to move and the unrouted ones among them), `ESCAPE-CHANNEL-OVERFLOW` per overflowing cluster |
-| `python -m pcbir.bench route` record | `escape` (crossing pairs and overflowing clusters only), `escape_causes` and `unrouted_causes` for unrouted nets |
-| `python -m pcbir.bench causes RESULTS` | Unrouted nets per primary cause class, per unclean board |
 
 ## Cause classes of unrouted nets
 
-`pcbir.bench.unrouted_causes` gives each unrouted net its classes, primary
-first. Escape classes come first: a failed search is usually their symptom.
+The removed PCBWorld benchmark runner gave each unrouted net its classes,
+primary first, with escape classes first (a failed search is usually their
+symptom). The Rust binary keeps the two escape classes:
+`EscapeDiagnostics::net_causes` in `escape_plan.rs` tags each net of a
+crossing bundle `two_end_crossing` and each net of an overflowing cluster
+`channel_overflow`. The full classifier, listed below as history, was removed
+with the Python implementation.
 
 | Class | Source |
 |---|---|
@@ -294,6 +295,3 @@ first. Escape classes come first: a failed search is usually their symptom.
 | `no_path` | The detailed search found no path |
 | `other` | A router diagnostic that fits none of the above |
 | `unlocated` | No router diagnostic |
-
-A scored board that fails KiCad's check with no unrouted net is listed as
-"KiCad only"; a completely routed board that is not scored yet is left out.

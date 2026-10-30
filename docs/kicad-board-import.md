@@ -1,6 +1,11 @@
 # KiCad board import
 
-`pcbir.importers.kicad_pcb.load_kicad_pcb(path)` reads a placed KiCad board
+Status: removed. The importer was part of the Python implementation (it fed the
+removed PCBWorld routing benchmark) and was removed with it; the `copper` binary
+has no KiCad board importer. This page records its contract for a future port.
+(`copper view --reference` still reads a KiCad board for display only.)
+
+The importer `load_kicad_pcb(path)` read a placed KiCad board
 (`.kicad_pcb`, KiCad 5 to 10) and its adjacent `.kicad_pro` into physical IR:
 board outline and cutouts, copper stackup, footprints and their poses, pad
 nets, copper zones, rule-area keepouts and design rules. Tracks, vias, zone

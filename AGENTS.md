@@ -12,6 +12,11 @@ Escape-planning work (joint escape side, layer and order per package) follows
 [the escape planning plan](docs/escape-planning-plan.md): one PR per step, with
 the verification and status updates it describes.
 
+CopperScript is the Rust `copper` binary (`crates/`). Install it with
+`cargo install --locked --path crates/copper`; build and test with `cargo build
+--release -p copper` and `cargo test --workspace --release` (see
+[crates/README.md](crates/README.md)). The Python implementation was removed.
+
 Start with `copper agent-guide` in the active CLI environment. Request individual
 topics and selected library contracts as needed. For contributor work, use the
 [task index](docs/README.md) to choose the relevant reference; consult
@@ -25,8 +30,9 @@ Accepted architectural rationale is opt-in; follow current task references.
   `copper issues RUN` (grouped, located causes), then `copper view RUN --issue ID`
   (add `--reference REF.kicad_pcb --align OURS:THEIRS` for package exits). Do not
   write one-off render, inspect or state-codec scripts; if a script is unavoidable,
-  build it on `pcbir.workbench`. Add needed solver diagnostics to CopperScript
-  rather than monkeypatching private functions.
+  build it on the `copper` CLI (`copper issues`, `copper view`, `copper state
+  show`, `route-board --checkpoint-dir`). Add needed solver diagnostics to
+  CopperScript rather than patching around them.
 - Use the standard bounded `route-board` pipeline. Preserve fixed/rigid intent,
   immutable macros, required via-array multiplicity and verified package exits
   while a net is partial. Mutable dependency trials need exact ownership,

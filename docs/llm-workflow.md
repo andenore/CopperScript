@@ -78,14 +78,13 @@ board, the placement/global/feedback options and the build identity of the
 checkpoint from a different `copper` build is allowed (that is the point of
 holding placement fixed), and the report records it as `placement_reuse.code_changed`. Rerun placement
 before signoff whenever placement code or inputs changed. A checkpoint
-written by the retired Python CLI always counts as a different build.
+written by the removed Python implementation always counts as a different build.
 
 The same directory also receives `critical-inputs.state.json` (and
 `critical-retry-inputs.state.json` when the critical stage retries) with the
 board and global route the critical stage starts from, and
 `final-board.state.json` with the exported board. These diagnostic states serve
-`copper state show`, `copper view`, `copper replay-critical` and
-`pcbir.workbench` experiments. They are not accepted by `--reuse-placement`,
+`copper state show`, `copper view` and `copper replay-critical`. They are not accepted by `--reuse-placement`,
 do not resume the routing pipeline and do not establish acceptance or signoff.
 A failed save remains visible in the report's `checkpoints` field.
 
@@ -102,12 +101,11 @@ the primary error and state remain available, with the preview failure in
 `diagnostic_errors`. Issues and views use the exact rejected state without
 discarding immutable macro intent to make a preview.
 
-For scripts, `pcbir.workbench` provides `load_run`, `run_issues`, `view`,
-`scene_from_physical`, `save_state` and `load_state`. State files round-trip
-`pcbir` dataclasses, enums, tuples, mappings, Decimals and Fractions exactly
-(not plain classes or `init=False` fields), carry a content digest, and only
-construct dataclasses and enums defined in `pcbir` modules. Views, issue groups and state files are reading aids and working
-artifacts; they do not replace report gates, native verification or evidence.
+The Python scripting API for runs and state files (`load_run`, `save_state`,
+`load_state` and friends) was removed with the Python implementation; use
+`copper issues`, `copper view` and `copper state show`. Views, issue groups and
+state files are reading aids and working artifacts; they do not replace report
+gates, native verification or evidence.
 
 ## Report inspection
 

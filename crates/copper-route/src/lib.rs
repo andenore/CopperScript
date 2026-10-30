@@ -1,4 +1,4 @@
-//! Routing (M4 of docs/rust-port-plan.md): the routing foundation
+//! Routing: the routing foundation
 //! (`pcbir.routing_clearance`, `routing_lattice`, `routing`,
 //! `layer_assignment`, `routeflow`, `escape_plan` and the small modules they
 //! build on), and pin access, planes, the routing pipeline and the benchmark
@@ -10,7 +10,7 @@
 //! Global routes are capacity reservations and guides, not exact copper.
 //! Every module keeps Python's iteration order, tie-breaking and float
 //! operations, so the routing guides, fingerprints and reports agree byte for
-//! byte with the Python CLI.
+//! byte with the former Python implementation.
 
 // Rank tuples spell out Python's sort keys field by field.
 #![allow(clippy::type_complexity)]
@@ -129,10 +129,9 @@ pub(crate) fn layer_index(layers: &[copper_physical::CopperLayer], layer: copper
     layers.iter().position(|l| *l == layer).expect("layer in stackup")
 }
 
-/// `sys.version` of the acceptance report: this implementation is not Python,
-/// so the report names the rewrite instead.
+/// `sys.version` of the acceptance report: the `copper` version.
 pub fn not_python_version() -> String {
-    format!("copper {} (Rust rewrite)", env!("CARGO_PKG_VERSION"))
+    format!("copper {}", env!("CARGO_PKG_VERSION"))
 }
 
 /// `platform.platform()` of the acceptance report, as far as a Rust binary knows it.

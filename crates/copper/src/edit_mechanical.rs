@@ -1,7 +1,7 @@
 //! `copper edit-mechanical BOARD` (alias `edit`): the physical editor.
 //!
 //! `--scene-output` writes the opened session's derived scene and exits; the
-//! loopback HTTP editor is not rewritten yet and reports so.
+//! loopback HTTP editor is not implemented yet and reports so.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -210,7 +210,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     }
 }
 
-/// A request reached behaviour the rewrite lacks: exit 3 with the marker.
+/// A request reached behaviour this implementation lacks: exit 3 with the marker.
 fn exit_not_implemented(what: &str) {
     let _ = std::io::stdout().flush();
     eprintln!("copper: {NOT_IMPLEMENTED_MARKER}: edit-mechanical ({what})");

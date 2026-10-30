@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- Run the language server as `copper lsp` from the Rust `copper` binary; Python is no longer required.
+- `copperscript.lsp.compilerCommand` is now the `copper` binary's argv and defaults to `["copper"]` on PATH. The `.venv`/`uv` discovery and Python version checks are removed; Python interpreter settings must be replaced.
+- Remove the VS Code mechanical custom editor (`copperscript.mechanical`), the Open Mechanical Editor command and the `copperscript.mechanical.*` settings. Use the browser editor instead: `copper edit-mechanical BOARD.copper`.
+- Package only with `vsce`; the Python offline packager is removed.
+
 ## 0.3.2
 
 - Quick fixes: apply suggested replacements for misspelled pins, components, keywords and constraint targets, and declare `no_connect` for unconnected pins.

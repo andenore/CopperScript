@@ -1,5 +1,5 @@
 //! State files written by Python's `save_state` must read, verify and
-//! re-serialize to the same bytes (fixtures from `scripts/generate_rust_fixtures.py`).
+//! re-serialize to the same bytes (frozen fixtures, not regenerated).
 
 use copper_json::Value;
 use copper_state::{StateDocument, StateError, StateValue, describe, is_state_text};

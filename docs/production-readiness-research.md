@@ -89,9 +89,10 @@ functions/polarity/extents, exact drill multisets and IPC-D-356 net partitions.
 Pin executable hashes and qualify each toolchain tuple against positive,
 negative, metamorphic and resource-limit corpora.
 
-The current implementation hashes a small committed positive/negative corpus
-and runs it for every required adapter immediately before a CAM-required
-release. PyGerber is exercised locally. A task-local official libgerbv v2.11.0
+The Python implementation (removed after `b16122a`, with its CAM adapters) hashed
+a small committed positive/negative corpus and ran it for every required
+adapter immediately before a CAM-required release. The `copper` binary has no
+CAM adapters. PyGerber was exercised locally. A task-local official libgerbv v2.11.0
 Windows build was tested on 12 October 2026, but is not qualified. Its
 subprocess adapter re-exports RS-274X, then uses the
 same PyGerber rendering normalizer as the original file so byte-identical PNG

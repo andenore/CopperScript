@@ -3,7 +3,7 @@
 //! `pcbir.hard_macros`, `pcbir.backends.kicad_pcb`).
 //!
 //! Errors carry the Python `ValueError` message. Physical behaviour this
-//! rewrite does not yet cover (via-in-pad arrays, macro edge openings)
+//! implementation does not yet cover (via-in-pad arrays, macro edge openings)
 //! reports [`Error::NotImplemented`] instead of guessing. Hard-macro
 //! materialization, which needs physical DRC, is in `copper-drc`.
 
@@ -39,7 +39,7 @@ pub mod zones;
 
 use copper_units::{Decimal, Rounding};
 
-/// A `ValueError` (by its message), or behaviour not yet rewritten.
+/// A `ValueError` (by its message), or behaviour not yet implemented.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
     Value(String),

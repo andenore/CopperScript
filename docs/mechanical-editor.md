@@ -7,7 +7,8 @@ This is a physical-intent editor, not a schematic editor or another PCB router.
 ## Ownership and user workflow
 
 The tool, reusable UI assets, CLI, scene protocol and tests belong in the
-CopperScript repository. Generic algorithms belong in `pcbir`; no example part,
+CopperScript repository. Generic algorithms belong in the `crates/` workspace (the editor is
+`crates/copper-editor`); no example part,
 reference, path or board geometry may be encoded there. Libraries own reusable
 footprints and hard macros; board projects own their source and constraints.
 
@@ -33,8 +34,7 @@ templates and externally supplied hard-macro scenes remain board-only options.
 
 Omitting `--layers` selects the declared source stackup, or the smallest supported
 2/4/6-layer stack containing the source's copper layers and macro requirements.
-An explicit `--layers` remains strict. VS Code's layer setting defaults to `0`
-(automatic). Fabrication profiles remain explicit; layer inference does not select
+An explicit `--layers` remains strict. Fabrication profiles remain explicit; layer inference does not select
 a vendor or certify its processes. Use a board's configured Make `edit` target
 when its fabrication profile or other physical settings are supplied by the build.
 
@@ -60,9 +60,6 @@ the editor does not choose versions or create manifest requirements.
 Use `--offline` for cached/local inputs only, or `--locked` to require all pins
 already exist. After preparation, opening geometry, previewing, reviewing and
 saving use locked/offline inputs. Reopen after a dependency failure to retry.
-In VS Code, `copperscript.mechanical.offline` provides the same cache-only option;
-initial preparation has a cancellable notification. Native buffer updates do not
-trigger downloads or upgrades.
 
 ## Physical feature authoring
 
@@ -87,7 +84,7 @@ show source intent, not verified fill or signal-integrity qualification.
 
 Select an imported macro/profile feature and choose **Open definition** to open
 its owning file. Cached dependency definitions remain read-only. Standalone
-opens a separate authenticated local view; VS Code uses its native document host.
+opens a separate authenticated local view.
 
 Macro authoring exposes member poses, tracks, vias, polygons and contract geometry
 through the same source-review workflow. Profiles expose their mechanical items
@@ -206,10 +203,9 @@ new airwires. Filter state changes only presentation, never compilation/ERC.
 
 ## Architecture and local security
 
-Start with a dependency-free Python local service and bundled HTML/CSS/JavaScript
-SVG UI. Keep transport, scene, session operations and source editing separate.
-The UI can later be hosted by a VS Code webview/custom text editor using the same
-scene/operation contract and the editor's document/undo services.
+The `copper edit-mechanical` binary serves a loopback HTTP service and a bundled
+HTML/CSS/JavaScript SVG UI. Keep transport, scene, session operations and source
+editing separate.
 
 Bind only `127.0.0.1`, default to an ephemeral port, check Host and Origin, require
 a random per-session capability header for every API request and reject cross-
@@ -281,8 +277,7 @@ board gestures.
 
 The top bar contains board identity, source status and reviewed Save. **More**
 contains source reload/history and a view refresh; temporary placement Undo/Redo
-stays above the board. In VS Code, **Open board…** uses the native file picker.
-Standalone board selection stays with the CLI launch command. Pending placement
+stays above the board. Board selection stays with the CLI launch command. Pending placement
 Apply/Discard appears beside the board, while pending source diffs and their
 Discard action appear under the file bar. These are separate transactions.
 
@@ -292,11 +287,10 @@ where they do not apply, and shows absolute/relative and pad/mating-face anchor
 fields only for the selected mode. Hidden incompatible fields are excluded from
 review requests; exact source literals and existing validation remain authoritative.
 
-Contributor browser verification uses disposable copies and fresh sessions:
-
-```console
-python tests/browser/run-editor-smokes.py ui save placement keyboard curves anchors references artwork --footprint-root <installed-KiCad-footprints>
-```
+Contributor browser verification uses disposable copies and fresh sessions. The
+Python browser smoke runner (`tests/browser/run-editor-smokes`) was removed
+with the Python implementation; `cargo test -p copper-editor` covers the
+sessions and transactions.
 
 Install Playwright/Chromium in the test environment first, or set
 `COPPER_PLAYWRIGHT_MODULE` and `COPPER_BROWSER_EXECUTABLE` to existing local tools.
@@ -368,21 +362,12 @@ Layer/side/net/component/signal-supply filters and optional airwire labels/costs
 help inspect the result. Costs are straight-line MST estimates, not detailed route
 predictions.
 
-## VS Code host
+## VS Code
 
-The optional [extension](../integrations/vscode/README.md) stages this same web
-core as a custom text editor. A bounded local stdio compiler reads unsaved source
-buffers in memory; it cannot write source files. Reviews produce minimal UTF-16
-WorkspaceEdit spans. VS Code owns versions, Undo/Redo, encoding, dirty documents
-and Save; a stale review cannot commit over a newer buffer. Invalid unsaved text
-does not silently fall back to the disk file, and recovers on a valid later version.
-
-Only trusted local workspaces are supported. Configure an explicit locked compiler
-command and its exact content fingerprint, along with the physical build settings.
-Initial opening prepares declared dependencies; subsequent editing remains offline.
-The editor executes no source-provided code and opens no server port in this host.
-Component source links navigate to the root declaration
-or hierarchical instance. Follow the extension README to stage and open it.
+The VS Code mechanical custom editor was removed in extension 0.4.0 with the
+Python document backend. Use the browser editor
+(`copper edit-mechanical BOARD.copper`); the extension keeps the language
+server and syntax highlighting.
 Advanced mechanical intent is specified in
 [advanced mechanical intent](advanced-mechanical-intent.md) and its supported
 source forms in [mechanical language](mechanical-language.md).
@@ -399,10 +384,8 @@ legality are also reused for unchanged job-status polls.
 Footprints expose accessible button names/selection and a roving keyboard focus.
 Use arrows (Shift: ten snaps), R for the next explicitly allowed rotation, +/− for
 zoom, F for fit, and Escape to cancel/reset gestures/measurement. Each partial
-source lock restricts only its own dimensions. Source edits require review as
-before. SVG is assembled off-document before one DOM replacement. Standalone
-and VS Code share these behaviors. Offline VSIX packaging and CI artifact details
-are in the extension README.
+source lock restricts only its own dimensions. source edits require review as
+before. SVG is assembled off-document before one DOM replacement.
 
 ## Advanced mechanical authoring
 

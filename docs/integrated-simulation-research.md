@@ -1,5 +1,9 @@
 # Integrated simulation options for CopperScript
 
+> The `copper sim` command and its ngspice backend were removed with the Python
+> implementation (last Python commit `b16122a`). This note is kept as research
+> for a future simulator; "current implementation" below means that removed one.
+
 Research date: 13 October 2026. This is a proposal, not an implemented backend.
 
 Current project direction: use the off-the-shelf ngspice engine and TI model in
@@ -24,12 +28,11 @@ SPICE model files are inputs to a solver, not external programs being called.
 An internal engine still needs component equations and parameters. Moving the
 engine into CopperScript cannot recover missing manufacturer behavior.
 
-The current implementation already integrates ngspice as a DLL through
-`pcbir/simulation/shared_worker.py`. It invokes `ngSpice_Init` and
-`ngSpice_Command` in a disposable Python child, retaining raw files and logs.
-Batch executables use the same evidence pipeline. There is no native circuit
-solver in `pcbir/simulation/` today; Python measurement and plotting functions
-operate on results produced by ngspice.
+The removed implementation integrated ngspice as a DLL through a shared worker.
+It invoked `ngSpice_Init` and `ngSpice_Command` in a disposable Python child,
+retaining raw files and logs. Batch executables used the same evidence
+pipeline. There was no native circuit solver; Python measurement and plotting
+functions operated on results produced by ngspice.
 
 ## Options
 

@@ -36,11 +36,10 @@ Ordinary area routing emits `detailed_pass` and `detailed_net` start/finish
 events. Within-pair maze progress and reusable serialized stage geometry are
 not exposed by this telemetry.
 
-The full-run wrapper also enables function profiling and derives inclusive
-phase/trial intervals from the persisted log. See
-[routing performance](routing-performance.md) for artifacts, profiling overhead,
-unprofiled comparisons and the optimization assessment. Direct CLI routing is not
-automatically function-profiled.
+The full-run wrapper (`make/route-build.sh`) saves these events in
+`routing.log`; it does not function-profile. See
+[routing performance](routing-performance.md) for profiling the binary,
+ladder comparisons and the optimization assessment.
 
 Local repair dependency searches emit `zone_subset_search` start/finish events:
 `kind` distinguishes actual transactions from noncommitting probes; `affected_nets`,

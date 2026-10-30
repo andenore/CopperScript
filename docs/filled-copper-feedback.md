@@ -17,7 +17,7 @@ board projects retain electrical/mechanical intent and qualification evidence.
 ## Run it
 
 ```console
-python -m copperscript route-board board.copper --locked --offline --routing-profile balanced --verify-plane-fill /path/to/kicad-cli --report new-review/route.json -o new-review/candidate.kicad_pcb
+copper route-board board.copper --locked --offline --routing-profile balanced --verify-plane-fill /path/to/kicad-cli --report new-review/route.json -o new-review/candidate.kicad_pcb
 ```
 
 Supply the normal footprint roots, fabrication profile, layers and explicitly
@@ -286,12 +286,13 @@ actual output is hashed independently rather than promised byte-identical.
 
 ## Regression inputs
 
-`tests/test_filled_feedback_cli.py` builds a synthetic source board and explicit
-synthetic footprint keepout, then executes the real standard CLI/native adapter.
-`tests/test_filled_feedback.py` covers bounded failure, exact mappings/artifacts,
-real displaced-signal rerouting, immutable critical routes/macros/required arrays,
-native-rejected candidates, repeated states and tool/schema limitations.
-These are algorithm fixtures, not reusable production component definitions.
+The Python regression suites for filled-copper feedback (a synthetic source
+board and footprint keepout through the real CLI/native adapter; bounded
+failure, exact mappings, displaced-signal rerouting, immutable critical
+routes/macros/required arrays, native-rejected candidates and repeated states)
+were removed with the Python implementation. The Rust crates have no equivalent
+fixture yet. Such fixtures are algorithm tests, not reusable production
+component definitions.
 
 For unresolved work, use the [current backlog](../TODO.md). Dated board closure
 and test evidence are recoverable from Git; use current contracts and input-bound reports.

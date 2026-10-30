@@ -47,7 +47,7 @@ There are five structural causes.
    - Critical routes, bypass identities, accepted power ledgers and boundary
      reservations are all locked before ordinary routing starts.
    - Inside `route_detailed`, each routed net is added to `RoutingClearanceIndex`
-     as a hard obstacle (`detailed.py` around line 599). The present and history
+     as a hard obstacle (`detailed` module). The present and history
      costs therefore barely act: this is sequential routing with reordering, not
      PathFinder.
    - The index has no `remove`, so every rip-up rebuilds it.
@@ -97,15 +97,14 @@ compile ─► place ─► fixed copper ─► planes ─► global guides ─�
 - **Exact geometry stays the source of truth for legality.** The grid and
   rasters are only an acceleration structure. Every commit is checked exactly.
 
-### Unified router (new module `pcbir/unified_router.py`)
+### Unified router (`crates/copper-route/src/unified_router/`)
 
 **Grid.** One integer-id grid per board, built once.
 - Default pitch 0.25 mm.
 - Sparse extra nodes for pins, macro ports and via sites, as `_build_grid` does
   today.
 - Per node: locked-obstacle mask per width/clearance class, `usage`, `history`
-  and an owner set. Use numpy if accepted (decision D1), with a pure-Python
-  fallback.
+  and an owner set, in flat arrays (decision D1).
 
 **Occupancy.** A committed path claims every node within its inflated envelope
 (half width + clearance + the half width of the class being searched). Other
@@ -149,74 +148,80 @@ tree. **Keep** means use it as is. **Lift** means move the named functions into
 the new structure and drop the rest. **Retire** means delete it once nothing on
 the default path imports it (phase P7).
 
+The module names are those of the Python implementation reviewed then. The
+Rust port kept the names: most routing modules are
+`crates/copper-route/src/<name>.rs`; the board model, geometry, language and
+DRC moved to `copper-pcb`, `copper-physical`, `copper-lang` and `copper-drc`
+(see the crate table in `crates/README.md`).
+
 ### Keep (core primitives)
 
 | Module | Role in new design |
 | --- | --- |
-| `physical.py`, `physicalize.py`, `compiler.py`, `parser.py`, ERC, backends | Unchanged: model, language and export |
-| `geometry.py`, `routing_clearance.py` | Exact legality. Add `remove(owner)`, binned holes and per-net counters |
-| `routing.py` (`route_global`), `layer_assignment.py`, `global_terminals.py` | Global guides as soft costs. Feed macro ports to `register_terminal_capacity` |
-| `routing_costs.py`, `routing_guides.py`, `routing_layers.py`, `routing_vias.py` | Cost and layer helpers. `dedicated_plane_layers` gives a fallback plane inference |
-| `pin_escape.py` (`RoutingAccess`, `checked_access_paths`), `pin_access.py` (`local_access_path`), `terminal_preferences.py`, `breakout.py`, `access_sites.py` | Terminal access, lead-ins, via-site proposals, neck-down |
-| `hard_macros.py`, `macro_bindings.py`, `macro_definitions.py`, `pad_via_arrays.py`, `pad_stitch.py` | Fixed copper, including library fanout macros (extended in P4) |
-| `zone_geometry.py` (`lower_zone_outline`, `deferred_zone_nets`, `ZoneRoutingReservations`) | Plane and split-plane regions from source. Reserved zones become obstacles or costs |
-| `route_cleanup.py`, `route_style.py`, `route_smoothing.py`, `route_closure.py` (`close_detailed_lands`) | Post-processing |
-| `drc.py`, `process_drc.py`, `copper_connectivity.py` | Final sign-off and opens report (not inside loops) |
-| `plane_verify.py` (`verify_filled_planes`, `native_object_map`), `filled_connectivity.py`, `decoupling_fill.py` | The single native refill/DRC, islands, and capacitor supply/return checks |
-| `power_network.py`, `power_extract.py`, `power_integrity.py`, `power_planning.py`, `power.py` | DC/IR screening and lowering. Advisory reports only |
-| `routing_benchmark.py` (`summarize_run`, `compare_runs`), `routing_acceptance.py`, `routing_metrics.py`, `access_diagnostics.py` | Benchmark ladder (P1) |
-| `placement*.py`, `clusters.py`, `incremental_placement.py`, `routeflow.py` (`optimize_placement_for_routing`, `detailed_failure_trials`) | Placement, plus the optional outer loop driven by opens. `detailed_failure_trials` serves the legacy path only once `congestion_feedback.py` drives the unified path |
-| `critical_review.py`, `pair_geometry.py`, `route_path_geometry.py`, `return_paths.py` | Read-only reports |
+| `physical`, `physicalize`, `compiler`, `parser`, ERC, backends | Unchanged: model, language and export |
+| `geometry`, `routing_clearance` | Exact legality. Add `remove(owner)`, binned holes and per-net counters |
+| `routing` (`route_global`), `layer_assignment`, `global_terminals` | Global guides as soft costs. Feed macro ports to `register_terminal_capacity` |
+| `routing_costs`, `routing_guides`, `routing_layers`, `routing_vias` | Cost and layer helpers. `dedicated_plane_layers` gives a fallback plane inference |
+| `pin_escape` (`RoutingAccess`, `checked_access_paths`), `pin_access` (`local_access_path`), `terminal_preferences`, `breakout`, `access_sites` | Terminal access, lead-ins, via-site proposals, neck-down |
+| `hard_macros`, `macro_bindings`, `macro_definitions`, `pad_via_arrays`, `pad_stitch` | Fixed copper, including library fanout macros (extended in P4) |
+| `zone_geometry` (`lower_zone_outline`, `deferred_zone_nets`, `ZoneRoutingReservations`) | Plane and split-plane regions from source. Reserved zones become obstacles or costs |
+| `route_cleanup`, `route_style`, `route_smoothing`, `route_closure` (`close_detailed_lands`) | Post-processing |
+| `drc`, `process_drc`, `copper_connectivity` | Final sign-off and opens report (not inside loops) |
+| `plane_verify` (`verify_filled_planes`, `native_object_map`), `filled_connectivity`, `decoupling_fill` | The single native refill/DRC, islands, and capacitor supply/return checks |
+| `power_network`, `power_extract`, `power_integrity`, `power_planning`, `power` | DC/IR screening and lowering. Advisory reports only |
+| `routing_benchmark` (`summarize_run`, `compare_runs`), `routing_acceptance`, `routing_metrics`, `access_diagnostics` | Benchmark ladder (P1) |
+| `placement*`, `clusters`, `incremental_placement`, `routeflow` (`optimize_placement_for_routing`, `detailed_failure_trials`) | Placement, plus the optional outer loop driven by opens. `detailed_failure_trials` serves the legacy path only once `congestion_feedback` drives the unified path |
+| `critical_review`, `pair_geometry`, `route_path_geometry`, `return_paths` | Read-only reports |
 
 ### New (added by the refactor)
 
 | Module | Role |
 | --- | --- |
-| `unified_router.py` | Negotiated-congestion (PathFinder) router on a numpy legality raster; exact commit through `routing_clearance` (P5) |
-| `native/astar.c` + prebuilt `.so`/`.dll`, `tools/build_kernel.py` | Optional C A* kernel with identical results; pure Python fallback (`COPPER_NO_NATIVE=1`) (P6) |
-| `bga_fanout.py` | Deterministic quadrant dogbones for full-grid ball arrays (P4) |
-| `power_islands.py` | Automatic split-plane islands for decoupled rails on a spare plane layer (P3, opt-in `--power-islands`) |
-| `route_summary.py`, `plane_estimate.py`, `bench.py`, `bench/ladder.json` | Pipeline-independent completion summary, raster plane estimate, benchmark ladder (P1) |
-| `congestion_feedback.py` | Routability-driven placement feedback: per-tile congestion map from the unified router's contention (history, overflow, rejection points) combined with a RUDY-style demand estimate; parts on failed nets and hot tiles move down the demand gradient, candidates are screened by the estimate plus `route_global`, and only the best rerun the pipeline tail. Replaces `critical_feedback.py` and `routeflow.detailed_failure_trials` on the unified path (2026-10-24) |
-| `routing_lattice.py`, `fine_regions.py` | Multi-resolution search lattice (option 2 of the 2026-10-25 router review): `routing_lattice.py` puts every node-id, offset and point/node computation of the unified router behind one `Lattice` object (`UniformLattice` today, `NestedLattice` with fine patches at base pitch ÷ k next); `fine_regions.py` plans the patches from footprints whose pad or ball pitch needs them, with the `choose_pitch` alignment rule applied per package instead of to the whole board. Base pitch stays 0.25 mm; its auto-calculation is a later change |
-| `global_keepouts.py` | Polygon-aware coarse keepout geometry for the global router (`routing.route_global`): keepouts are tested as their real polygons rather than bounding boxes when capacity is assigned. Coarse only; exact copper gates are unchanged (added on main, 2026-10-25) |
-| `global_reserved_access.py` | Feeds freshly verified, retained package ports and immutable prefix copper into the global router's capacity graph (`admit_fixed_prefix`, `reserved_pin_access_candidates`), so global guides start from the same exits the detailed router must use. Admission refuses any change to source contracts, immutable copper or required arrays (added on main, 2026-10-25) |
-| `native_stub_cleanup.py` | Proposes trimming track dead ends that the native KiCad refill identifies exactly, for `plane_verify`: removes only copper outside declared same-net zone boundaries, never immutable copper or critical nets, and only a fresh native refill can accept the proposal. Part of the single native verification step, not a recovery loop (added on main, 2026-10-25) |
+| `unified_router` | Negotiated-congestion (PathFinder) router on a legality raster; exact commit through `routing_clearance` (P5) |
+| `native/astar.c` (removed) | Optional C A* kernel for the former Python router (P6). The Rust search in `unified_router/astar.rs` replaces it |
+| `bga_fanout` | Deterministic quadrant dogbones for full-grid ball arrays (P4) |
+| `power_islands` | Automatic split-plane islands for decoupled rails on a spare plane layer (P3, opt-in `--power-islands`) |
+| `route_summary`, `plane_estimate`, `bench`, `bench/ladder.json` | Pipeline-independent completion summary, raster plane estimate, benchmark ladder (P1) |
+| `congestion_feedback` | Routability-driven placement feedback: per-tile congestion map from the unified router's contention (history, overflow, rejection points) combined with a RUDY-style demand estimate; parts on failed nets and hot tiles move down the demand gradient, candidates are screened by the estimate plus `route_global`, and only the best rerun the pipeline tail. Replaces `critical_feedback` and `routeflow.detailed_failure_trials` on the unified path (2026-10-24) |
+| `routing_lattice`, `fine_regions` | Multi-resolution search lattice (option 2 of the 2026-10-25 router review): `routing_lattice` puts every node-id, offset and point/node computation of the unified router behind one `Lattice` object (`UniformLattice` today, `NestedLattice` with fine patches at base pitch ÷ k next); `fine_regions` plans the patches from footprints whose pad or ball pitch needs them, with the `choose_pitch` alignment rule applied per package instead of to the whole board. Base pitch stays 0.25 mm; its auto-calculation is a later change |
+| `global_keepouts` | Polygon-aware coarse keepout geometry for the global router (`routing.route_global`): keepouts are tested as their real polygons rather than bounding boxes when capacity is assigned. Coarse only; exact copper gates are unchanged (added on main, 2026-10-25) |
+| `global_reserved_access` | Feeds freshly verified, retained package ports and immutable prefix copper into the global router's capacity graph (`admit_fixed_prefix`, `reserved_pin_access_candidates`), so global guides start from the same exits the detailed router must use. Admission refuses any change to source contracts, immutable copper or required arrays (added on main, 2026-10-25) |
+| `native_stub_cleanup` | Proposes trimming track dead ends that the native KiCad refill identifies exactly, for `plane_verify`: removes only copper outside declared same-net zone boundaries, never immutable copper or critical nets, and only a fresh native refill can accept the proposal. Part of the single native verification step, not a recovery loop (added on main, 2026-10-25) |
 
 ### Lift (useful parts inside large modules)
 
 | From | Lift | Drop |
 | --- | --- | --- |
-| `detailed.py` | `_access_candidates`, `_surface_accesses`, `_escape_terminals`, `_access_path`, tree growth in `_route_net`, the `_search_once` cost formula and `_neighbors`, `_erase_path_loops`, `_compact_path`, `_merge_collinear_tracks`, `_prune_fanout_copper` | Pass loop, `_repair_from_passes`, `_SearchReuse`, `_BranchCheckpoint`, neutral-fallback rerun |
-| `pair_search.py`, `pair_vias.py`, `pair_terminals.py`, `pair_refine.py` | `_search_steps` spine A*, `_lane_paths`, `_miter`, `_ports`, `_legal`, `_goal_paths`; `transition_spacing`, paired via and return-via construction; `prepare_pair_terminals`; `paired_shortcuts` | Search drivers and budget slicing |
-| `critical.py`, `critical_bundles.py` | `_route_pair` copper assembly, `_pair_pin_stubs`, `_paired_via_transitions`, `CriticalNetResult` reporting; `plan_bundles` as ordering and layer hints | `route_critical_nets` sequential freeze, `_bundle_repair`, `_validate_candidate` (two full DRC runs per candidate) |
-| `critical_tuning.py`, `critical_group_tuning.py` | `UnitTuner`, `GroupTuner`, `serpentine_path`, `bump_path`, as post-convergence tuning | Coupling to frozen critical stage |
-| `package_patterns.py` | `circular_array`, `_direction`, `FAMILIES`, near/centre offset math, `PackagePattern`/`PatternContact`. Generate them in the **footprint-local frame** | Board-scene evaluation (via `fanout._legal_choices`), frontier sweep, budgets |
-| `fanout.py` | `_candidates` rays, `_two_leg_candidates`, `_OutlineSites`, `_surface_layer`, as a deterministic QFN/perimeter stub generator | Coarse→maze→surface cascade, `improve_escape_assignment`, bypass coupling |
-| `escape_assignment.py` | `EscapeConflicts`, to self-validate generated macros | `_finite_assignment` CSP |
-| `boundary_access.py` | `package_collar`, as a congestion region | `analyze_boundary_access`, `reserve_boundary_access` gate |
-| `plane.py` | `stitch_zone_pads`/`_stitch_land_choices` core: pad → short stub → via inside the plane region, reusing nearby same-net vias. This becomes the plane-tap seed generator | `CopperUse` ownership records (from `copper_ownership`), hard-coded `"GND"` default, `propose_plane_contacts` pool |
-| `decoupling.py`, `decoupling_paths.py` | `improve_decoupling_placement`, `_surface_candidates`; `verify_crosslayer_decoupling` as a post-route check | Admission ledger in `route_decouplers`, `propose_crosslayer_*` search |
-| `power_geometry.py` | `power_obligations`, `_layer_zones` (routed width → solid pour polygon), `_AreaClearance`, `_zone_geometry` | `plan_power_areas`, tree growth, `apply/reselect_power_area_plan`, reservation refresh (about 1,000 lines) |
-| `power_config.py` | Electrical-model JSON and `protected_corridors` parsing (`ExternalPowerBoundary` lives in `power_geometry`; move it out) | Area-search knobs |
-| `filled_feedback.py` | `_open_nets`, `_finding_proposals`: native opens → new router connections | Own bridge search, strict-monotone accept, `package_access_blocked` exit |
-| `package_support.py`, `support_patterns.py` | `package_contact_intents`, `support_pattern_candidates` (bypass-bank placement) | `plan_package_support`, embedded fanout and power-proof loops |
-| `flow.py` | Stage wiring, `_detailed_score` | Gate cascade (rewritten in P2) |
+| `detailed` | `_access_candidates`, `_surface_accesses`, `_escape_terminals`, `_access_path`, tree growth in `_route_net`, the `_search_once` cost formula and `_neighbors`, `_erase_path_loops`, `_compact_path`, `_merge_collinear_tracks`, `_prune_fanout_copper` | Pass loop, `_repair_from_passes`, `_SearchReuse`, `_BranchCheckpoint`, neutral-fallback rerun |
+| `pair_search`, `pair_vias`, `pair_terminals`, `pair_refine` | `_search_steps` spine A*, `_lane_paths`, `_miter`, `_ports`, `_legal`, `_goal_paths`; `transition_spacing`, paired via and return-via construction; `prepare_pair_terminals`; `paired_shortcuts` | Search drivers and budget slicing |
+| `critical`, `critical_bundles` | `_route_pair` copper assembly, `_pair_pin_stubs`, `_paired_via_transitions`, `CriticalNetResult` reporting; `plan_bundles` as ordering and layer hints | `route_critical_nets` sequential freeze, `_bundle_repair`, `_validate_candidate` (two full DRC runs per candidate) |
+| `critical_tuning`, `critical_group_tuning` | `UnitTuner`, `GroupTuner`, `serpentine_path`, `bump_path`, as post-convergence tuning | Coupling to frozen critical stage |
+| `package_patterns` | `circular_array`, `_direction`, `FAMILIES`, near/centre offset math, `PackagePattern`/`PatternContact`. Generate them in the **footprint-local frame** | Board-scene evaluation (via `fanout._legal_choices`), frontier sweep, budgets |
+| `fanout` | `_candidates` rays, `_two_leg_candidates`, `_OutlineSites`, `_surface_layer`, as a deterministic QFN/perimeter stub generator | Coarse→maze→surface cascade, `improve_escape_assignment`, bypass coupling |
+| `escape_assignment` | `EscapeConflicts`, to self-validate generated macros | `_finite_assignment` CSP |
+| `boundary_access` | `package_collar`, as a congestion region | `analyze_boundary_access`, `reserve_boundary_access` gate |
+| `plane` | `stitch_zone_pads`/`_stitch_land_choices` core: pad → short stub → via inside the plane region, reusing nearby same-net vias. This becomes the plane-tap seed generator | `CopperUse` ownership records (from `copper_ownership`), hard-coded `"GND"` default, `propose_plane_contacts` pool |
+| `decoupling`, `decoupling_paths` | `improve_decoupling_placement`, `_surface_candidates`; `verify_crosslayer_decoupling` as a post-route check | Admission ledger in `route_decouplers`, `propose_crosslayer_*` search |
+| `power_geometry` | `power_obligations`, `_layer_zones` (routed width → solid pour polygon), `_AreaClearance`, `_zone_geometry` | `plan_power_areas`, tree growth, `apply/reselect_power_area_plan`, reservation refresh (about 1,000 lines) |
+| `power_config` | Electrical-model JSON and `protected_corridors` parsing (`ExternalPowerBoundary` lives in `power_geometry`; move it out) | Area-search knobs |
+| `filled_feedback` | `_open_nets`, `_finding_proposals`: native opens → new router connections | Own bridge search, strict-monotone accept, `package_access_blocked` exit |
+| `package_support`, `support_patterns` | `package_contact_intents`, `support_pattern_candidates` (bypass-bank placement) | `plan_package_support`, embedded fanout and power-proof loops |
+| `flow` | Stage wiring, `_detailed_score` | Gate cascade (rewritten in P2) |
 
 ### Retire (about 7,400 lines, plus their tests)
 
-`package_access.py`, `package_placement_repair.py`, `package_preparation.py`,
-`escape_feedback.py`, `released_exit_retry.py`, `power_preparation.py`,
-`power_areas.py`, `power_contact_feedback.py`, `power_contacts.py`,
-`power_contact_normalization.py`, `power_transition_repair.py`, `power_feed.py`,
-`plane_bypass_transfer.py`, `bypass_reservations.py`, `priority_bypass.py`,
-`surface_bypass_coexistence.py`, `fanout_bypass_completion.py`,
-`joint_preparation.py`, `joint_access.py`, `contact_owner_regeneration.py`,
-`critical_feedback.py`, `critical_preflight.py`, `critical_reuse.py`,
-`local_critical.py`, `pair_search_resume.py`, `pair_tuning_spans.py`,
-`shove.py`, `any_angle.py`.
+`package_access`, `package_placement_repair`, `package_preparation`,
+`escape_feedback`, `released_exit_retry`, `power_preparation`,
+`power_areas`, `power_contact_feedback`, `power_contacts`,
+`power_contact_normalization`, `power_transition_repair`, `power_feed`,
+`plane_bypass_transfer`, `bypass_reservations`, `priority_bypass`,
+`surface_bypass_coexistence`, `fanout_bypass_completion`,
+`joint_preparation`, `joint_access`, `contact_owner_regeneration`,
+`critical_feedback`, `critical_preflight`, `critical_reuse`,
+`local_critical`, `pair_search_resume`, `pair_tuning_spans`,
+`shove`, `any_angle`.
 
-`copper_ownership.py`, `copper_branches.py` and `copper_reservations.py` serve
+`copper_ownership`, `copper_branches` and `copper_reservations` serve
 power preparation only. Keep them until P7, then retire whatever is unused.
 `_verified_bypass_links` from `package_access` moves into a post-route check
 before that file is deleted.
@@ -246,7 +251,7 @@ evidence bundle.
 
 ### P1 · Benchmark ladder (2–3 days)
 
-- Add `copper bench <ladder.json>`, or `scripts/bench.py`.
+- Add `copper bench <ladder.json>` (done).
   - It runs `route-board` on each ladder board under a fixed time cap.
   - It reads results with `routing_benchmark.summarize_run`.
   - It writes one JSON plus a Markdown table.
@@ -262,8 +267,9 @@ evidence bundle.
   The consumer boards use their own Makefile route options as the baseline.
 - Record baselines from the current pipeline under `bench/baselines/`, and use
   `compare_runs` for regressions.
-- Optional oracle: `backends/specctra.py`, which exports DSN and imports SES, so
-  Freerouting can route any ladder board.
+- Optional comparison: a Specctra backend that exports DSN and imports SES, so
+  Freerouting can route any ladder board. The Rust binary has no Specctra
+  backend; the Python one was removed with the Python implementation.
   - This separates "the placement is unroutable" from "our router is weak".
   - It never becomes a dependency (decision D2).
 - **Accept when:** one command reproduces the ladder table, and the small boards
@@ -327,7 +333,7 @@ evidence bundle.
 
 - Add `copper macro fanout <part> --fab-profile ...`.
   - It runs the `package_patterns` kernel in the footprint-local frame against
-    footprint-only obstacles, plus the `fanout.py` stub generator for
+    footprint-only obstacles, plus the `fanout` stub generator for
     perimeter/QFN packages.
   - It self-checks with `EscapeConflicts` and emits a v0.5 macro asset: tracks,
     vias, one port per ball on its via, with the protected region on F.Cu only.
@@ -369,6 +375,7 @@ evidence bundle.
   - binned holes;
   - a bbox sweep instead of O(n²) pairs in `drc._check_copper_spacing`.
 - Optional: a small compiled A* kernel with a pure-Python fallback (decision D1).
+  Done in the Python router; superseded by the Rust port.
 
 ### P7 · Retire and simplify (≈1 week)
 
@@ -376,13 +383,13 @@ Status 2026-10-26: the legacy router (`--router legacy`, `route_detailed`) and
 every stage reachable only through it are deleted with their tests and docs:
 the package-access, power-preparation/area-planning, zone-escape,
 critical-placement-feedback, joint-preparation, incremental-placement and
-contact-regeneration modules, `shove.py`, `any_angle.py`, `copper_branches.py`
-and most of `copper_ownership.py`. Modules on the retire list that the unified
-pipeline still calls (`bypass_reservations.py`,
-`fanout_bypass_completion.py`, `critical_preflight.py`, `critical_reuse.py`,
-`local_critical.py`, `pair_search_resume.py`, `pair_tuning_spans.py`) remain,
+contact-regeneration modules, `shove`, `any_angle`, `copper_branches`
+and most of `copper_ownership`. Modules on the retire list that the unified
+pipeline still calls (`bypass_reservations`,
+`fanout_bypass_completion`, `critical_preflight`, `critical_reuse`,
+`local_critical`, `pair_search_resume`, `pair_tuning_spans`) remain,
 with unreachable definitions removed; `verified_bypass_links` moved to
-`bypass_links.py`. The removed `route-board` flags were accepted and ignored
+`bypass_links`. The removed `route-board` flags were accepted and ignored
 until the consumers dropped them (2026-10-27); they are now refused. The single-ended critical
 fallback for RF-feed, power and general critical kinds, which still called
 `route_detailed` on the default path, now uses the unified router (see the
@@ -398,6 +405,12 @@ pitch to `--local-demand-pitch-mm`; physical routing retains
 with migration instructions; current consumer wrappers migrate with the CLI.
 This reduces the option count by twelve; folding the remaining live controls
 into profiles is still open. See the [migration table](cli-workflow.md).
+
+Example build entry points use the installed `copper` binary.
+`make/route-build.sh` runs the route, the native refill and DRC, and records
+the input and output hashes (see [Make builds](make-builds.md)). The Python
+implementation was removed after `b16122a`; the Rust binary is the only
+implementation.
 
 - Delete the retire list and its tests, and `--legacy-pipeline`.
 - Cut `route-board` options to a short profile set: `quick`, `balanced`,
@@ -419,8 +432,8 @@ router through reservations; it is a planning stage, not a recovery gate.
 
 ## 5a. Progress (branch `refactor/routing`)
 
-Handoff, open items and the plan for merging to `main`:
-[routing-refactor-handoff.md](routing-refactor-handoff.md) (2026-10-21).
+The 2026-10-21 handoff note was removed; the table below and the git history
+keep the record.
 
 | Date | Phase | Ladder (completion, unified router) |
 | --- | --- | --- |
@@ -438,7 +451,7 @@ Handoff, open items and the plan for merging to `main`:
 | 2026-10-22 | Unified lost boards: per-land terminals (plan 3.4); grid obstacles keep their own net's rule clearance; claims assume a neighbour at least as wide as the net | PCBWorld D3-A locally (KiCad 10): unified 80 -> 95 clean, none lost (legacy 93); completion 0.953 -> 0.988; vias, length and bends unchanged. Open: 0049 (header gaps on the exact midline, escape plan E1) |
 | 2026-10-22 | `UnifiedRouterOptions.route_smoothing` on by default; `route-board --no-route-smoothing` turns it off for either router | D3-A 99 boards locally: bends 7025 -> 4382, 90-degree-or-sharper 550 -> 117, length -0.8%; clean (95), completion, DRC, vias unchanged; no board worse. Ladder (unified): completion, opens, DRC, vias identical, length shorter on all six |
 | 2026-10-24 | Review fixes (`review/unified-router-plan`): failed-net retry schedule and tunables as options; `RoutingClearanceIndex.remove(owner)` with one shared exact index across commit, repair and pour re-check; `physical_via_span` vias; `bend_cost` and `guide_cost` search terms in Python and the C kernel (both default 0: bend 0.25 cut bends 27–40 % on cm4, nrf52, full-vertical but cost round-led-ring 3–14 vias; guide cost was worse on every board); `route-board` reports legacy flags that `--router unified` ignores | Ladder (unified, no KiCad) identical to `6f7f652`: round-led-ring 51/51, 40 vias, 582.844 mm; nrf52 35/35, 44, 350.563; full-vertical 86/86, 193, 1602.883; cm4 21/21, 61, 587.68; 0 DRC on all. Legacy on the same tree: round-led-ring 30/51, cm4 21/21 |
-| 2026-10-24 | Default router is unified: `route-board`, `pcbir.bench` and the D3 CI pin default to `--router unified`; `--router legacy` keeps the pre-refactor pipeline | Ladder (default, no `--router`, no KiCad): round-led-ring 51/51, 40 vias, 582.844 mm; nrf52 35/35, 44, 350.563; full-vertical 86/86, 193, 1602.883; cm4 21/21, 61, 587.68; 0 DRC on all. `--router legacy`: cm4 21/21, 84 vias, 646.078 mm, 0 DRC |
+| 2026-10-24 | Default router is unified: `route-board`, the PCBWorld benchmark runner and the D3 CI pin default to `--router unified`; `--router legacy` keeps the pre-refactor pipeline | Ladder (default, no `--router`, no KiCad): round-led-ring 51/51, 40 vias, 582.844 mm; nrf52 35/35, 44, 350.563; full-vertical 86/86, 193, 1602.883; cm4 21/21, 61, 587.68; 0 DRC on all. `--router legacy`: cm4 21/21, 84 vias, 646.078 mm, 0 DRC |
 | 2026-10-24 | Owner decisions: `bend_cost` default 0.25 (adopted); legacy-only stages stay behind `--router legacy` for now; direct-mode pair verification deferred | Ladder (unified, bend 0.25, no KiCad): round-led-ring 51/51, 48 vias, 604.833 mm; nrf52 35/35, 42, 345.115; full-vertical 86/86, 189, 1597.398; cm4 21/21, 62, 588.979; 0 DRC on all |
 | 2026-10-24 | Congestion-driven placement feedback (B): one loop on the unified path (`--congestion-feedback-trials N`; `--detailed/--critical-feedback-trials` map onto it, `improve_critical_placement` no longer runs there); router map plus RUDY estimate, each normalised to its 95th percentile; screen to 2, rerun the shared pipeline tail, accept on the whole-board tuple | Ladder (default, no KiCad), with and without `--congestion-feedback-trials 4` (loop idle, no failures): round-led-ring 51/51, 48 vias, 604.833 mm; nrf52 35/35, 42, 345.115; full-vertical 86/86, 189, 1597.398; cm4 21/21, 62, 588.979; 0 DRC; boards byte-identical to `3770a2a`; total 352 s / 333 s (base 372 s). Fixture: one boxed-in net connected by one accepted move |
 | 2026-10-25 | Multi-resolution lattice S4: `--fine-regions arrays` default (fine patches over full ball arrays only); `dense` (also dense non-array packages) for measurement; `off` uniform; `choose_pitch` judges every placed ball | Ladder (default, no KiCad): round-led-ring 51/51, 48 vias, 604.833 mm; nrf52 35/35, 42, 345.115; full-vertical 86/86, 189, 1597.398; cm4 21/21, 62, 588.979; 0 DRC; no patches, boards byte-identical to `--fine-regions off` and to `53c5f6c`. `dense`: round-led-ring 51/51, 50 vias, 616.451 mm, 73.7 s (U1 k=5); nrf52 35/35, 43, 333.132, 21.6 s (U_NRF k=5); full-vertical 86/86, 187, 1596.424, 186.7 s (5 patches); cm4 21/21, 61, 583.967, 14.8 s (2 connectors k=2); 0 DRC. BGA fixture (100 x 80 mm, 6 layers, 5 x 5 at 0.75 mm): `arrays` 0.79 M nodes, 148 MB, 4.1 s; `off` (0.125 mm uniform) 3.09 M, 348 MB, 4.9 s; 25/25, 0 DRC both |
@@ -485,7 +498,8 @@ Open items:
   swapped 12 mm away for 10 um of escape width; fixed, now about 3.3 mm.)
 - **Freerouting comparison (D2)** is blocked here: the sandbox can't download
   the jar.
-- **Windows DLL** verified 2026-10-20: it loads, matches the Python search, and the
+- **Windows DLL** (C kernel of the former Python router) verified 2026-10-20: it
+  loaded, matched the pure search, and the
   small/medium ladder reproduces the Linux numbers (round-led-ring 0.98, nrf52 1.0,
   full-vertical 0.99, cm4 1.0; 0 DRC).
 
@@ -493,7 +507,7 @@ Open items:
 
 - **D1 Dependencies.** numpy is allowed as a runtime dependency. A compiled A*
   core is allowed later if profiling justifies it; keep a pure-Python/numpy
-  fallback.
+  fallback. (Superseded: the router is now Rust, with no numpy or C kernel.)
 - **D2 Freerouting.** Use it as an optional comparison in the benchmark ladder
   only where it finishes in reasonable time. It is never required.
 - **D3 Power.** Automatic power design is the goal. P3 therefore includes an
