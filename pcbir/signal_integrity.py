@@ -393,17 +393,23 @@ def copper_layer_depths_nm(stackup) -> dict:
 
 def via_length_nm(board: PhysicalBoard, net: str) -> int:
     """Signal path the vias of ``net`` add: for each via, the depth between the
-    outermost copper layers whose tracks end on it (none for a via its tracks
-    meet on one layer only)."""
+    outermost copper layers of its span whose tracks end on it (none for a via
+    its tracks meet on one layer only). A blind, buried or stacked via counts
+    only the layers it plates, not tracks of other layers ending above or below
+    it."""
     depths = copper_layer_depths_nm(board.stackup)
+    copper_layers = board.stackup.copper_layers
     tracks = [track for track in board.tracks if track.net == net]
     total = 0
     for via in board.vias:
         if via.net != net:
             continue
+        low, high = sorted((copper_layers.index(via.from_layer), copper_layers.index(via.to_layer)))
+        span = set(copper_layers[low:high + 1])
         reach = via.size_nm // 2
         layers = {track.layer for track in tracks for end in (track.start, track.end)
-                  if hypot(end.x_nm - via.position.x_nm, end.y_nm - via.position.y_nm) <= reach}
+                  if track.layer in span
+                  and hypot(end.x_nm - via.position.x_nm, end.y_nm - via.position.y_nm) <= reach}
         if len(layers) > 1:
             total += max(depths[layer] for layer in layers) - min(depths[layer] for layer in layers)
     return total

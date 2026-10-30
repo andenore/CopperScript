@@ -635,7 +635,8 @@ pub fn copper_layer_depths_nm(stackup: &Stackup) -> IndexMap<CopperLayer, i64> {
 }
 
 /// `via_length_nm`: for each via of `net`, the depth between the outermost
-/// copper layers whose tracks end on it (none when they meet on one layer).
+/// copper layers of its span whose tracks end on it (none when they meet on
+/// one layer); a blind, buried or stacked via counts only the layers it plates.
 pub fn via_length_nm(board: &PhysicalBoard, net: &str) -> Result<i64> {
     let tracks: Vec<&TrackSegment> = board.tracks.iter().collect();
     let vias: Vec<&Via> = board.vias.iter().collect();
@@ -648,9 +649,15 @@ pub fn via_path_length_nm(stackup: &Stackup, tracks: &[&TrackSegment], vias: &[&
     let tracks: Vec<&&TrackSegment> = tracks.iter().filter(|track| track.net == net).collect();
     let mut total = 0;
     for via in vias.iter().filter(|via| via.net == net) {
+        let index = |layer: &CopperLayer| stackup.copper_layers.iter().position(|item| item == layer);
+        let (Some(from), Some(to)) = (index(&via.from_layer), index(&via.to_layer)) else {
+            // Python's copper_layers.index raises ValueError (a crash).
+            return Err(copper_pcb::Error::NotImplemented("a via ending outside the stack-up".to_owned()));
+        };
+        let span = &stackup.copper_layers[from.min(to)..=from.max(to)];
         let reach = via.size_nm.div_euclid(2) as f64;
         let mut layers = IndexSet::new();
-        for track in &tracks {
+        for track in tracks.iter().filter(|track| span.contains(&track.layer)) {
             for end in [&track.start, &track.end] {
                 if hypot((end.x_nm - via.position.x_nm) as f64, (end.y_nm - via.position.y_nm) as f64) <= reach {
                     layers.insert(track.layer);
@@ -951,5 +958,36 @@ mod tests {
             .collect();
         let (tracks, vias): (Vec<&TrackSegment>, Vec<&Via>) = (tracks.iter().collect(), vias.iter().collect());
         assert_eq!(via_path_length_nm(&stackup, &tracks, &vias, "LANE_A_P").unwrap(), 3_200_000);
+    }
+
+    #[test]
+    fn blind_and_stacked_vias_count_only_the_layers_they_plate() {
+        use copper_physical::geometry::Point;
+        // test_blind_and_stacked_vias_count_only_the_layers_they_plate: an
+        // F.Cu -> In1.Cu blind via stacked on an In1.Cu -> B.Cu buried via is
+        // the full 1.6 mm, not each via's reach over every layer ending there.
+        let (front, in1, in2, back) = (CopperLayer::Front, CopperLayer::In1, CopperLayer::In2, CopperLayer::Back);
+        let stackup = Stackup::new(vec![front, in1, in2, back]);
+        let at = |x: i64, y: i64| Point { x_nm: x, y_nm: y };
+        let track =
+            |a, b, layer| TrackSegment { net: "LANE_A_P".to_owned(), start: a, end: b, width_nm: 200_000, layer };
+        let tracks = [
+            track(at(5_000_000, 6_000_000), at(10_000_000, 6_000_000), front),
+            track(at(10_000_000, 6_000_000), at(10_000_000, 6_300_000), in1),
+            track(at(10_000_000, 6_300_000), at(20_000_000, 6_300_000), back),
+        ];
+        let via = |y, from_layer, to_layer| Via {
+            net: "LANE_A_P".to_owned(),
+            position: at(10_000_000, y),
+            size_nm: 600_000,
+            drill_nm: 300_000,
+            from_layer,
+            to_layer,
+            technology: None,
+            finish: String::new(),
+        };
+        let vias = [via(6_000_000, front, in1), via(6_300_000, in1, back)];
+        let (tracks, vias): (Vec<&TrackSegment>, Vec<&Via>) = (tracks.iter().collect(), vias.iter().collect());
+        assert_eq!(via_path_length_nm(&stackup, &tracks, &vias, "LANE_A_P").unwrap(), 1_600_000);
     }
 }
