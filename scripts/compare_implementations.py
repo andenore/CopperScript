@@ -395,6 +395,14 @@ def _close(python: "Run", rust: "Run", case: "Case", names: list[str]) -> bool:
         elif name.startswith("files:"):
             file_name = name.split(":", 1)[1]
             left, right = python.files.get(file_name), rust.files.get(file_name)
+            if file_name in case.files_without:
+                # Compared as JSON without the excluded paths, as its digest is.
+                spec = {"without": case.files_without[file_name]}
+                values = [_json_selected(data, spec) for data in (left, right)]
+                if None not in values:
+                    if not _values_close(*values):
+                        return False
+                    continue
         elif name.startswith("json:"):
             file_name = name[5:].split("#", 1)[0]
             spec = case.json_keys[file_name]
