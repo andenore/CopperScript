@@ -17,6 +17,7 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | routing | 19 | 18 | 1 | 0 | `tests/routing.rs` (17), `src/routing.rs` `tests` (1) |
 | routing_clearance_pad_cache | 18 | 14 | 4 | 0 | `tests/routing_clearance_pad_cache.rs` (14) |
 | congestion_feedback | 17 | 15 | 2 | 0 | `tests/congestion_feedback.rs` (15) |
+| escape_assignment | 14 | 8 | 6 | 0 | `tests/escape_assignment.rs` (4), `src/escape_assignment.rs` `tests` (4) |
 | routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
 ## Notes per file
@@ -116,9 +117,20 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 - The prototype board is `compile_design_source` + `physicalize(Proxy)` at
   Python's `PrototypePhysicalOptions` defaults.
 
+### escape_assignment
+- Skipped (they replaced `fanout._candidates`, `_two_leg_candidates` or
+  `run_physical_drc` with monkeypatched fakes to build a trap; Rust has no
+  injection seam): `test_joint_assignment_repairs_equal_slack_trap_without_losing_incumbent`,
+  `test_competing_pin_with_legal_radial_choice_gets_off_ray_alternative`,
+  `test_budget_exhaustion_preserves_greedy_geometry`,
+  `test_locked_subset_copper_is_not_a_replaceable_escape`,
+  `test_joint_domain_can_mix_surface_and_via_without_misclassifying_ownership`,
+  `test_exact_whole_board_gate_rolls_failed_assignment_back_to_greedy`.
+- `EscapeConflicts::compatible` is private: unit tests. Trials are compared by
+  their `Debug` text (no `PartialEq`).
+
 ## Remaining files (in order)
 
-escape_assignment,
 unified_nested_routing, route_path_geometry, corridor_reservation,
 unified_commit_index, placement_global_progress, routing_lattice,
 congestion_feedback_flow, unified_router_options, unified_congestion_export,

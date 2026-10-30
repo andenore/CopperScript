@@ -481,4 +481,103 @@ mod tests {
         assert!(!conflicts.compatible(&first, &second).ok().expect("in budget"));
         assert!(conflicts.compatible(&first, &joined).ok().expect("in budget"));
     }
+
+    fn candidate(
+        net: &str,
+        a: (f64, f64),
+        b: (f64, f64),
+        layer: copper_physical::CopperLayer,
+        with_via: bool,
+    ) -> EscapeCandidate {
+        use copper_physical::CopperLayer;
+        let path = vec![track(net, a, b, 0.25, layer)];
+        (path, with_via.then(|| via(net, b, 0.8, 0.4, CopperLayer::Front, CopperLayer::Back)))
+    }
+
+    /// `tests/test_escape_assignment.py::board`.
+    fn assignment_board() -> PhysicalBoard {
+        let two = footprint("two", vec![pad("1", 0.0, -1.0, 0.3, 0.3), pad("2", 0.0, 1.0, 0.3, 0.3)], 2.0, 3.0);
+        let one = footprint("one", vec![pad("1", 0.0, 0.0, 0.3, 0.3)], 1.0, 1.0);
+        board(
+            "assignment",
+            14.0,
+            14.0,
+            vec![two, one],
+            vec![placement("U", "two", 5.0, 7.0), placement("JA", "one", 11.0, 6.0), placement("JB", "one", 11.0, 8.0)],
+            vec![net("A", &[("U", "1"), ("JA", "1")]), net("B", &[("U", "2"), ("JB", "1")])],
+        )
+    }
+
+    fn ok(result: std::result::Result<bool, Stop>) -> bool {
+        match result {
+            Ok(answer) => answer,
+            Err(Stop::Budget(message)) => panic!("budget: {message}"),
+            Err(Stop::Error(error)) => panic!("{error}"),
+        }
+    }
+
+    const F: copper_physical::CopperLayer = copper_physical::CopperLayer::Front;
+    const B: copper_physical::CopperLayer = copper_physical::CopperLayer::Back;
+
+    /// `tests/test_escape_assignment.py::test_conflicts_respect_layers_through_vias_same_net_and_drill_spacing`.
+    #[test]
+    fn conflicts_respect_layers_through_vias_same_net_and_drill_spacing() {
+        let mut conflicts = EscapeConflicts::new(&assignment_board(), 100, 2_000_000);
+        let a = candidate("A", (2.0, 2.0), (4.0, 2.0), F, false);
+        let b = candidate("B", (3.0, 1.0), (3.0, 3.0), B, false);
+        assert!(ok(conflicts.compatible(&a, &b)));
+        assert!(!ok(conflicts.compatible(&a, &candidate("B", (3.0, 1.0), (3.0, 3.0), F, false))));
+        let a_via = candidate("A", (2.0, 2.0), (4.0, 2.0), F, true);
+        assert!(!ok(conflicts.compatible(&a_via, &candidate("B", (4.0, 1.0), (4.0, 3.0), B, false))));
+        assert!(ok(conflicts.compatible(&a_via, &a_via)), "one reused hole, not two drills");
+        assert!(!ok(conflicts.compatible(&a_via, &candidate("A", (2.0, 2.0), (4.6, 2.0), F, true))));
+        let previous = conflicts.checks;
+        assert!(ok(conflicts.compatible(&a, &b)));
+        assert_eq!(conflicts.checks, previous);
+    }
+
+    /// `tests/test_escape_assignment.py::test_remote_candidates_do_not_starve_exact_compatibility_budget`.
+    #[test]
+    fn remote_candidates_do_not_starve_exact_compatibility_budget() {
+        let mut conflicts = EscapeConflicts::new(&assignment_board(), 1, 100);
+        let local = candidate("A", (2.0, 2.0), (4.0, 2.0), F, false);
+        for i in 0..30 {
+            let y = 8.0 + i as f64 / 100.0;
+            assert!(ok(conflicts.compatible(&local, &candidate("B", (8.0, y), (9.0, y), F, false))));
+        }
+        assert!(conflicts.queries == 30 && conflicts.broad_phase_accepts == 30);
+        assert!(conflicts.checks == 0 && conflicts.cache.is_empty());
+        let blocker = candidate("B", (3.0, 1.0), (3.0, 3.0), F, false);
+        assert!(!ok(conflicts.compatible(&local, &blocker)));
+        assert_eq!(conflicts.checks, 1);
+        // Cached exact answers also count toward the total query bound.
+        assert!(!ok(conflicts.compatible(&local, &blocker)));
+        assert!(conflicts.checks == 1 && conflicts.queries == 32);
+    }
+
+    /// `tests/test_escape_assignment.py::test_broad_phase_has_its_own_query_limit`.
+    #[test]
+    fn broad_phase_has_its_own_query_limit() {
+        let mut conflicts = EscapeConflicts::new(&assignment_board(), 1, 1);
+        let (first, remote) =
+            (candidate("A", (2.0, 2.0), (4.0, 2.0), F, false), candidate("B", (8.0, 8.0), (9.0, 8.0), F, false));
+        assert!(ok(conflicts.compatible(&first, &remote)));
+        match conflicts.compatible(&first, &remote) {
+            Err(Stop::Budget(message)) => assert!(message.contains("query budget"), "{message}"),
+            _ => panic!("the query budget is exhausted"),
+        }
+        assert!(conflicts.checks == 0 && conflicts.queries == 1);
+    }
+
+    /// `tests/test_escape_assignment.py::test_foreign_clearance_overrides_enter_candidate_conflicts`.
+    #[test]
+    fn foreign_clearance_overrides_enter_candidate_conflicts() {
+        let mut ruled = assignment_board();
+        ruled.net_routing_rules = vec![copper_pcb::board::NetRoutingRule { clearance_nm: Some(mm(1.0)), ..rule("B") }];
+        let (a, b) =
+            (candidate("A", (2.0, 2.0), (4.0, 2.0), F, false), candidate("B", (2.0, 2.8), (4.0, 2.8), F, false));
+        assert!(ok(EscapeConflicts::new(&assignment_board(), 100, 2_000_000).compatible(&a, &b)));
+        assert!(!ok(EscapeConflicts::new(&ruled, 100, 2_000_000).compatible(&a, &b)));
+        assert!(!ok(EscapeConflicts::new(&ruled, 100, 2_000_000).compatible(&b, &a)));
+    }
 }
