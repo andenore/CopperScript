@@ -22,6 +22,7 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_pair_terminal_fallback.py | 8 | 8 | 0 | 0 | `src/critical_tests/pair_terminal_fallback.rs`; the CLI case in `crates/copper/tests/critical_cli.rs` |
 | test_pair_geometry.py | 8 | 0 | 8 | 0 | none: `pcbir.pair_geometry` was not ported |
 | test_critical_bundles.py | 8 | 6 | 2 | 0 | `src/critical_tests/critical_bundles.rs` (the frozen-fixture comparison stays in `tests/critical_bundles.rs`) |
+| test_single_ended_return_vias.py | 7 | 4 | 3 | 0 | `src/critical_tests/single_ended_return_vias.rs` |
 
 ## Notes
 
@@ -181,3 +182,18 @@ Skipped:
   seam, and no natural board rejects a connected leg.
 - `preflight_reports_the_bundle_order_and_repairs`: the `critical_preflight`
   CLI is not ported.
+
+### test_single_ended_return_vias.py
+
+`negotiation_uses_existing_nearby_returns_without_adding_or_dropping_them`
+was parametrized over the Python and native A*; Rust has one search.
+
+Skipped:
+- `exact_commit_cannot_be_bypassed_by_a_permissive_raster`: patches the
+  unified router's private `_via_owners` raster; no Rust seam.
+- `native_refill_confirms_existing_returns_join_both_reference_faces`: needs
+  `kicad-cli` (skipped in Python when absent) and filled-plane verification,
+  which the planes group owns.
+- `early_escape_candidates_and_reservations_obey_existing_return_requirement`:
+  exercises fanout internals (`_legal_choices`, `_reserve`, `_maze_choices`),
+  owned by the fanout group.
