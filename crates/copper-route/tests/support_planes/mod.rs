@@ -322,3 +322,35 @@ pub fn net_length(tracks: &[TrackSegment], net: &str) -> i64 {
     let mine: Vec<&TrackSegment> = tracks.iter().filter(|track| track.net == net).collect();
     copper_route::critical::track_length(&mine)
 }
+
+/// A stand-in `kicad-cli` (KiCad 10.0.6) whose `pcb drc` writes `report`
+/// to its `--output` and exits with `status`, as the Python tests' fake
+/// runner did. Created under `directory`, which must be private to the test.
+#[cfg(unix)]
+pub fn fake_kicad_cli(directory: &std::path::Path, report: &str, status: i32) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(directory).expect("fake kicad directory");
+    let report_path = directory.join("report.json");
+    std::fs::write(&report_path, report).expect("fake report");
+    let script = directory.join("kicad-cli");
+    let body = format!(
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 10.0.6; exit 0; fi\n\
+         if [ \"$1\" = pcb ] && [ \"$2\" = drc ]; then\n\
+         while [ $# -gt 0 ]; do if [ \"$1\" = --output ]; then cp '{}' \"$2\"; fi; shift; done\n\
+         [ {status} -ne 0 ] && echo failed >&2\nexit {status}\nfi\necho unexpected \"$@\" >&2\nexit 9\n",
+        report_path.display()
+    );
+    std::fs::write(&script, body).expect("fake kicad-cli");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    script
+}
+
+/// A fresh, empty directory for one test under Cargo's test scratch area.
+pub fn scratch(name: &str) -> std::path::PathBuf {
+    // Unit tests (which include this module by path) have no CARGO_TARGET_TMPDIR.
+    let root = option_env!("CARGO_TARGET_TMPDIR").map_or_else(std::env::temp_dir, std::path::PathBuf::from);
+    let directory = root.join("support_planes").join(name);
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).expect("scratch directory");
+    directory
+}

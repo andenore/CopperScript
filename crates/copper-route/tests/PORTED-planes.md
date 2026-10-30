@@ -9,8 +9,14 @@ test that loops over its cases.
 |---|---|---|---|---|
 | test_plane_stitch.py | 24 | 0 | 0 | `tests/plane_stitch.rs` |
 | test_length_match_tuning.py | 19 | 0 | 0 | `tests/length_match_tuning.rs`; `src/test_support_planes.rs` (`validate_candidate`) |
+| test_route_cleanup.py | 1 (+3 already in `src/route_cleanup.rs`) | 10: 9 `prune_track_stubs` cases (not ported to Rust: its settler never owns mutable copper, see the `route_cleanup` module doc); 1 installed-KiCad case (`kicad-cli` not installed) | 0 | `tests/route_cleanup.rs` |
+| test_fanout_and_plane_verify.py | 11 | 3: `run_physical_drc` monkeypatch (Python internals); 2 installed-KiCad cases (`kicad-cli` not installed) | 0 | `tests/fanout_and_plane_verify.rs` |
 
 ## Notes
+
+- The fake KiCad runner of the Python native-verification tests is a
+  stand-in `kicad-cli` shell script (`support_planes::fake_kicad_cli`,
+  Unix only) that writes the scripted DRC report.
 
 - Crate-private items are tested in `src/test_support_planes.rs`, which
   includes `tests/support_planes` by path (`extern crate self as copper_route`
