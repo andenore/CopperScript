@@ -19,6 +19,8 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | congestion_feedback | 17 | 15 | 2 | 0 | `tests/congestion_feedback.rs` (15) |
 | escape_assignment | 14 | 8 | 6 | 0 | `tests/escape_assignment.rs` (4), `src/escape_assignment.rs` `tests` (4) |
 | unified_nested_routing | 13 | 13 | 0 | 0 | `tests/unified_nested_routing.rs` (12), `src/unified_router/tests.rs` (1) |
+| route_path_geometry | 13 | 0 | 13 | 0 | none |
+| corridor_reservation | 13 | 13 | 0 | 0 | `crates/copper-place/tests/corridor_reservation.rs` (12), `crates/copper/tests/corridor_cli.rs` (1) |
 | routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
 ## Notes per file
@@ -140,9 +142,16 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
   release, so it is not ignored (Python skipped it without the native kernel).
 - The state rewrite of the replay test uses `copper_state::content_digest`.
 
+### route_path_geometry
+- Skipped (all 13): `routed_path_inventory` was the routed-path screening of
+  `pcbir.engineering_qualification`, which has no Rust implementation.
+
+### corridor_reservation
+- Owned by `copper-place`/`copper-drc`. Python's `reserved_corridors(...).skipped`
+  is `copper_drc::legality::corridor_reservation`'s second value.
+
 ## Remaining files (in order)
 
-route_path_geometry, corridor_reservation,
 unified_commit_index, placement_global_progress, routing_lattice,
 congestion_feedback_flow, unified_router_options, unified_congestion_export,
 unified_search_costs, unified_review_constraints, routing_clearance_remove,
