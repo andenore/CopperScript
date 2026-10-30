@@ -1,0 +1,38 @@
+// Rust-port corpus input: a ball grid whose bypass copper is held while a
+// differential pair routes past ordinary escape reservations; not a circuit.
+board BypassRelease {
+    import parts "./bga/parts";
+    component U1: parts.Bga49;
+    component C1: parts.Cap { value = 100nF; role = decoupling; decouples = "U1.G4"; }
+    component J1: parts.Pair;
+    component J2: parts.Pair;
+    component R1: parts.Pair;
+    component R2: parts.Pair;
+    component R3: parts.Pair;
+    component R4: parts.Pair;
+    net VCC { U1.G4; C1.A; }
+    net GND { U1.D3; U1.D5; U1.G5; U1.G7; C1.B; }
+    net DP { U1.E4; J1.A; }
+    net DN { U1.E5; J1.B; }
+    net A { U1.C3; R1.A; }
+    net B { U1.C4; R1.B; }
+    net C { U1.C5; R2.A; }
+    net D { U1.B4; R2.B; }
+    net E { U1.E3; R3.A; }
+    net F { U1.F4; R3.B; }
+    net G { U1.F3; R4.A; }
+    net H { U1.F5; R4.B; }
+    supply VCC { voltage = 3.3V; external = true; }
+    supply GND { voltage = 0V; external = true; }
+    constraint fixed_placement(U1) { x = 15 mm; y = 12 mm; rotation = 0; }
+    constraint fixed_placement(C1) { x = 15 mm; y = 16.8 mm; rotation = 0; side = back; }
+    constraint copper_zone(GND) { layers = "In1.Cu"; pad_connection = solid; }
+    constraint routing(DP) {
+        kind = differential; priority = 100; partner = DN;
+        width = 0.15mm; pair_gap = 0.15mm; max_vias = 0; allowed_layers = "F.Cu";
+    }
+    constraint routing(DN) {
+        kind = differential; priority = 100; partner = DP;
+        width = 0.15mm; pair_gap = 0.15mm; max_vias = 0; allowed_layers = "F.Cu";
+    }
+}

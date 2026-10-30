@@ -27456,6 +27456,44 @@
       "--report",
       "{out}/route.json"
      ]
+    },
+    {
+     "id": "route-board-bga/bypass_release",
+     "args": [
+      "route-board",
+      "tests/rust-port/route-board/bypass_release.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
+    },
+    {
+     "id": "route-board-bga/bypass_release-no-feedback",
+     "args": [
+      "route-board",
+      "tests/rust-port/route-board/bypass_release.copper",
+      "--locked",
+      "--offline",
+      "--layers",
+      "6",
+      "--fab-profile",
+      "jlcpcb-six-layer",
+      "--no-check",
+      "--congestion-feedback-trials",
+      "0",
+      "-o",
+      "{out}/routed.kicad_pcb",
+      "--report",
+      "{out}/route.json"
+     ]
     }
    ]
   },
