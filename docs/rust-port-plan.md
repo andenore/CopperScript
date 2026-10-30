@@ -1260,8 +1260,19 @@ regenerated for the new sources); `pytest tests -k example` and
 `github.com/copperscript/examples` checksum, so the root and nrf52 locks
 were relocked (that module entry only).
 
-The ladder suite gates `fx10-bridge` at M5 (`board_milestones` in
-`scripts/compare_corpus.json`): CI's ladder job still routes it on both
-implementations and reports it, but its pending via lattice does not fail the
-M4 gate. Move it back to M4 once the via lattice and the other guards it
-reaches are ported.
+The ladder suite gated `fx10-bridge` at M5 (`board_milestones` in
+`scripts/compare_corpus.json`) until the router-guards stream ported the via
+lattice. After that merge `ladder/fx10-bridge` is byte-identical (Python
+791 s, Rust 105 s, without native DRC), so the override is gone and the board
+is gated at M4 like the others; `board_milestones` stays available for a
+future board.
+
+Other fx10-bridge cases after the merge: 177 equal. `route-board-nofanout-boards`
+differed only in `critical.nets[*].local_preparation.elapsed_seconds` (wall
+time, absent on the older boards) and the `report_sha256` of `route.json` in
+`route.summary.json`; the board suites now compare those files without them
+(the new `files_without` suite option). `route-board/fx10-bridge` and
+`route-board-fanout-boards/fx10-bridge` still exit 3 at "rebinding bypass
+copper after a keepout release (`rebind_bypass_keepout_removal`)". A routing
+error the rewrite does not name (e.g. a package-cache miss, PKG011, before
+routing) also exits 3 where Python writes its error record.

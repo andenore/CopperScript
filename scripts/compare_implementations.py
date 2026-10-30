@@ -42,7 +42,9 @@ A suite's ``json`` option compares parts of a JSON output file instead of
 (``["summary"]``), several key paths (``[["status"], ["drc"]]``), or
 ``{"without": [paths]}``: the whole document with those paths removed, for
 documents carrying wall time. A ``"*"`` step in a path stands for every item
-of a list (or value of an object).
+of a list (or value of an object). A suite's ``files_without`` option keeps
+comparing all files but compares the named JSON files with those key paths
+removed (``{"route.json": [paths]}``), e.g. a timing only some boards report.
 
 A case may name a client transcript as its ``stdin`` (the ``lsp`` suites):
 JSON lines, each a message to ``send`` (framed here with Content-Length),
@@ -115,6 +117,8 @@ class Case:
     compare: tuple[str, ...]
     files: tuple[str, ...] | None = None
     json_keys: dict[str, list] = field(default_factory=dict)
+    # File name -> JSON key paths left out when the file's bytes are compared.
+    files_without: dict[str, list] = field(default_factory=dict)
     skip_reason: str | None = None
     # (repository-relative source, seed): run on a seeded mutation of the source.
     mutation: tuple[str, int] | None = None
@@ -228,6 +232,7 @@ def load_corpus(path: Path, kicad_cli: str | None = None) -> tuple[dict, list[Ca
         milestone_number(milestone)
         base = {"suite": name, "milestone": milestone, "compare": tuple(suite.get("compare", CHANNELS)),
                 "files": tuple(suite["files"]) if "files" in suite else None, "json_keys": suite.get("json", {}),
+                "files_without": suite.get("files_without", {}),
                 "stage": dict(suite.get("stage", {}))}
         timeout = float(suite.get("timeout_s", DEFAULT_TIMEOUT_S))
         if "ladder" in suite:
@@ -823,10 +828,25 @@ def observed(run: Run, case: Case) -> dict:
         parts["stderr"] = _sha256(run.stderr) if crash is None else crash.decode("utf-8", "replace")
     if "files" in case.compare:
         names = sorted(run.files) if case.files is None else list(case.files)
-        parts["files"] = {name: _sha256(run.files[name]) if name in run.files else None for name in names}
+        parts["files"] = {name: _file_digest(name, run.files[name], case) if name in run.files else None
+                          for name in names}
     for name, spec in case.json_keys.items():
         parts.update(_json_parts(name, run.files.get(name), spec))
     return parts
+
+
+def _file_digest(name: str, data: bytes, case: Case) -> str:
+    """A compared file's digest; a ``files_without`` file is compared as JSON
+    without those key paths (wall time and digests of it)."""
+    if name not in case.files_without:
+        return _sha256(data)
+    try:
+        value = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return _sha256(data)
+    for keys in case.files_without[name]:
+        value = _json_without(value, keys)
+    return _sha256(json.dumps(value, sort_keys=True).encode())
 
 
 def result_digest(parts: dict) -> str:

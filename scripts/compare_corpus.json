@@ -16436,9 +16436,6 @@
     "route-report.json": [
      "summary"
     ]
-   },
-   "board_milestones": {
-    "fx10-bridge": "M5"
    }
   },
   {
@@ -17378,7 +17375,23 @@
     "{out}/routed.kicad_pcb",
     "--report",
     "{out}/route.json"
-   ]
+   ],
+   "files_without": {
+    "route.json": [
+     [
+      "critical",
+      "nets",
+      "*",
+      "local_preparation",
+      "elapsed_seconds"
+     ]
+    ],
+    "route.summary.json": [
+     [
+      "report_sha256"
+     ]
+    ]
+   }
   },
   {
    "name": "route-board-direct",
@@ -17849,7 +17862,23 @@
     "{out}/route.json",
     "--congestion-feedback-trials",
     "0"
-   ]
+   ],
+   "files_without": {
+    "route.json": [
+     [
+      "critical",
+      "nets",
+      "*",
+      "local_preparation",
+      "elapsed_seconds"
+     ]
+    ],
+    "route.summary.json": [
+     [
+      "report_sha256"
+     ]
+    ]
+   }
   },
   {
    "name": "route-board-nofanout-boards",
@@ -17870,7 +17899,23 @@
     "{out}/route.json",
     "--congestion-feedback-trials",
     "0"
-   ]
+   ],
+   "files_without": {
+    "route.json": [
+     [
+      "critical",
+      "nets",
+      "*",
+      "local_preparation",
+      "elapsed_seconds"
+     ]
+    ],
+    "route.summary.json": [
+     [
+      "report_sha256"
+     ]
+    ]
+   }
   },
   {
    "name": "route-board-save-inputs-boards",
@@ -17920,7 +17965,23 @@
     "{out}/route.json",
     "--congestion-feedback-trials",
     "0"
-   ]
+   ],
+   "files_without": {
+    "route.json": [
+     [
+      "critical",
+      "nets",
+      "*",
+      "local_preparation",
+      "elapsed_seconds"
+     ]
+    ],
+    "route.summary.json": [
+     [
+      "report_sha256"
+     ]
+    ]
+   }
   },
   {
    "name": "route-board-native",
