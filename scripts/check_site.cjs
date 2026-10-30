@@ -134,10 +134,12 @@ function checkSite(site = SITE) {
     errors.push(error.message);
   }
   if (root === path.resolve(SITE)) {
-    // The site's Cu mark copies the one the editor ships.
+    // The site's Cu mark copies the one the editor ships; SVG text compares
+    // without line endings, which a checkout may convert.
+    const bytes = file => (file.endsWith(".svg") ? Buffer.from(fs.readFileSync(file, "utf8").replace(/\r\n/g, "\n")) : fs.readFileSync(file));
     for (const [copy, source] of [["copper-logo.svg", "copper-logo.svg"], ["favicon.svg", "copper-logo.svg"], ["copper-logo.png", "copper-logo.png"]]) {
       const target = path.join(SITE, "assets", copy);
-      if (!fs.existsSync(target) || !fs.readFileSync(target).equals(fs.readFileSync(path.join(LOGOS, source))))
+      if (!fs.existsSync(target) || !bytes(target).equals(bytes(path.join(LOGOS, source))))
         errors.push(`Logo copy differs: ${target}`);
     }
   }

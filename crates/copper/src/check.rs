@@ -1,4 +1,8 @@
-//! `copper check BOARD [--locked] [--offline] [--json] [--pins {warn,error,off}]`.
+//! `copper check BOARD [--locked] [--offline] [--json] [--pins {warn,error,off}] [--macro-inputs FILE]`.
+//!
+//! `--macro-inputs` also prepares the board's physical macro assets (fetching
+//! pinned dependencies unless offline) and writes every macro input path, one
+//! per line, so a build runner can route offline and record their digests.
 
 use std::io::Write;
 use std::path::Path;
@@ -8,13 +12,15 @@ use copper_lang::compiler::{LoadError, load_design, read_source};
 use copper_lang::diagnostics::{check_document, compile_error_document, diagnostic_document, locate};
 use copper_lang::elaborate::elaborate;
 use copper_lang::erc::{Severity, check, severity_counts};
+use copper_lang::macros::prepare_board_macros;
 use copper_lang::mechanical::NOT_IMPLEMENTED;
 use copper_lang::paths;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::{args, pypath};
 
-const USAGE: &str = "usage: copper check [-h] [--locked] [--offline] [--json] [--pins {warn,error,off}] board";
+const USAGE: &str =
+    "usage: copper check [-h] [--locked] [--offline] [--json] [--pins {warn,error,off}] [--macro-inputs FILE] board";
 
 fn print(out: &mut dyn Write, line: &str) {
     let _ = text::print(out, line);
@@ -27,6 +33,7 @@ fn plural(count: usize, word: &str) -> String {
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let mut rest = Vec::new();
     let mut pins = "warn".to_owned();
+    let mut macro_inputs: Option<String> = None;
     let mut index = 0;
     while index < arguments.len() {
         let arg = &arguments[index];
@@ -39,7 +46,18 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             index += 2;
             continue;
         }
-        if let Some(value) = arg.strip_prefix("--pins=") {
+        if arg == "--macro-inputs" {
+            let Some(value) = arguments.get(index + 1) else {
+                let _ = writeln!(err, "{USAGE}\ncopper check: error: argument --macro-inputs: expected one argument");
+                return 2;
+            };
+            macro_inputs = Some(value.clone());
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--macro-inputs=") {
+            macro_inputs = Some(value.to_owned());
+        } else if let Some(value) = arg.strip_prefix("--pins=") {
             pins = value.to_owned();
         } else {
             rest.push(arg.clone());
@@ -117,6 +135,30 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             if diagnostic.code == "UNMARKED_PIN" {
                 diagnostic.severity = Severity::Error;
             }
+        }
+    }
+    if let Some(target) = &macro_inputs {
+        let prepared = match prepare_board_macros(
+            board,
+            parsed.flags.contains(&"--locked"),
+            parsed.flags.contains(&"--offline"),
+        ) {
+            Ok(prepared) => prepared,
+            Err(message) => {
+                print(out, &format!("COMPILE ERROR: {message}"));
+                return 2;
+            }
+        };
+        let mut listed = String::new();
+        for item in &prepared {
+            match item.provenance.get("inputs") {
+                Some(Value::Object(inputs)) => inputs.keys().for_each(|input| listed.push_str(&format!("{input}\n"))),
+                _ => listed.push_str(&format!("{}\n", paths::display(&item.path))),
+            }
+        }
+        if let Err(error) = std::fs::write(target, listed) {
+            let _ = writeln!(err, "copper check: error: cannot write {target}: {error}");
+            return 2;
         }
     }
     let source = read_source(path).unwrap_or_default();
