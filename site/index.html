@@ -20,7 +20,7 @@
   <link rel="stylesheet" href="assets/style.css">
   <script src="assets/site.js?v=20261015-pads" defer></script>
   <script type="application/ld+json">
-  {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"CopperScript","description":"A strongly typed PCB language and compiler for circuit intent, native .copper hard macros, mechanical constraints and KiCad export.","url":"https://andenore.github.io/CopperScript/","codeRepository":"https://github.com/andenore/CopperScript","programmingLanguage":"Python"}
+  {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"CopperScript","description":"A strongly typed PCB language and compiler for circuit intent, native .copper hard macros, mechanical constraints and KiCad export.","url":"https://andenore.github.io/CopperScript/","codeRepository":"https://github.com/andenore/CopperScript","programmingLanguage":"Rust"}
   </script>
 </head>
 <body>
@@ -119,13 +119,13 @@
     </section>
 
     <section class="start section" id="start" aria-labelledby="start-title"><div class="wrap start-grid">
-      <div><p class="eyebrow">06 / GET STARTED</p><h2 id="start-title">Start with a small circuit.</h2><p>Check and compile the included sensor-board example before trying a full physical workflow.</p><p class="small">Requires Git, Python 3.11+ and <a href="https://docs.astral.sh/uv/getting-started/installation/">uv</a>. KiCad 10 is needed for the native refill and DRC workflow, not for this first compile.</p></div>
+      <div><p class="eyebrow">06 / GET STARTED</p><h2 id="start-title">Start with a small circuit.</h2><p>Check and compile the included sensor-board example before trying a full physical workflow.</p><p class="small">Requires Git and the <a href="https://rustup.rs/">Rust toolchain</a> (rustup installs the pinned version). KiCad 10 is needed for the native refill and DRC workflow, not for this first compile.</p></div>
       <div class="quickstart"><div class="code-heading"><span>Terminal / PowerShell or shell</span><button type="button" class="copy-button" data-copy="start-code" hidden>Copy commands</button></div><pre><code id="start-code">git clone https://github.com/andenore/CopperScript.git
 cd CopperScript
-uv sync
-uv run copper agent-guide
-uv run copper check examples/valid_board/board.copper
-uv run copper compile examples/valid_board/board.copper -o build/board.json</code></pre><p class="small">Produces electrical IR in <code>build/board.json</code>. This first example is a compiler fixture; it does not produce a fabrication-ready PCB.</p></div>
+cargo install --locked --path crates/copper
+copper agent-guide
+copper check examples/valid_board/board.copper
+copper compile examples/valid_board/board.copper -o build/board.json</code></pre><p class="small">Produces electrical IR in <code>build/board.json</code>. This first example is a compiler fixture; it does not produce a fabrication-ready PCB.</p></div>
       <div class="start-next"><a href="https://github.com/andenore/CopperScript/tree/main/examples">Browse complete examples ↗</a><a href="https://github.com/andenore/CopperScript/blob/main/docs/README.md">Find the right documentation ↗</a><a href="https://github.com/andenore/CopperScript/blob/main/docs/llm-workflow.md">Work with an LLM agent ↗</a></div>
     </div></section>
 

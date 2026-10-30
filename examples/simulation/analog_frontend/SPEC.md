@@ -1,8 +1,10 @@
 # Analog sensor front end board specification
 
-Status: electrical source and plans implemented, 13 October 2026. Biased-step
-checks pass; bias/AC and cold-start convergence are unresolved. See
-[current evidence and commands](README.md). This is not a fabrication release.
+Status: electrical source implemented, 13 October 2026. The simulation plans
+and the `copper sim` command were removed with the Python implementation; the
+last recorded results (biased-step checks passed; bias/AC and cold-start
+convergence unresolved) are in the [README](README.md). This is not a
+fabrication release.
 
 ## Purpose and architecture
 
@@ -53,6 +55,9 @@ Follow the [OPA2197 datasheet](https://www.ti.com/lit/ds/symlink/opa2197.pdf) an
 the standard bounded routing workflow; do not add board-specific routing repairs.
 
 ## Simulation and delivery
+
+This section is the original delivery specification. Only the board source is
+deliverable now; there is no simulator in the `copper` binary.
 
 Deliver board source, separate bias/AC, biased-step and cold-start plans, a
 bounded corner matrix, and fresh offline reports. Corners include supply endpoints,

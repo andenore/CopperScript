@@ -1,7 +1,0 @@
-* CopperScript dual-package wiring wrapper, MIT.
-* Unmodified TI OPAx197 core supplied separately; terminal mapping SBOS737C p3.
-.include "vendor/OPAx197.LIB"
-.subckt COPPER_OPA2197 OUTA INA_N INA_P VN INB_P INB_N OUTB VP
-XA INA_P INA_N VP VN OUTA OPAx197
-XB INB_P INB_N VP VN OUTB OPAx197
-.ends COPPER_OPA2197

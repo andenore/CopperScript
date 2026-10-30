@@ -77,12 +77,12 @@ The browser-based mechanical editor shows actual pads, courtyards, board materia
 and ratsnest guides. Preview automatic placement, drag or enter exact poses,
 measure geometry and deliberately lock placement intent. Review the source diff
 and explicitly save geometry or constraint changes back to `.copper`, with
-undo/redo. The VS Code custom editor uses the same shared UI and source workflow.
+undo/redo.
 Temporary placement previews stay temporary until you save explicit intent;
 imported profile definitions retain their library ownership.
 
 ```console
-uv run copper edit-mechanical examples/mechanical_editor_demo/board.copper
+copper edit-mechanical examples/mechanical_editor_demo/board.copper
 ```
 
 Resolve the example's real KiCad footprints before opening the editor. See
@@ -122,27 +122,30 @@ CopperLib is one library provider; independent libraries use the same interfaces
 
 ## Quick start
 
-Python 3.11 or newer is required. Install with uv from this repository:
+CopperScript is the `copper` command-line program, written in Rust. Install it
+from this repository with the pinned toolchain in `rust-toolchain.toml`, or use a
+release binary (the `copper-Linux` and `copper-Windows` artifacts of the
+[Rust workflow](.github/workflows/rust.yml)) on your `PATH`:
 
 ```console
-uv sync
-uv run copper agent-guide
-uv run copper check examples/valid_board/board.copper
-uv run copper compile examples/valid_board/board.copper -o build/board.json
+cargo install --locked --path crates/copper
+copper agent-guide
+copper check examples/valid_board/board.copper
+copper compile examples/valid_board/board.copper -o build/board.json
 ```
 
-For a development installation with pip:
+For development, build and test the workspace; see the [Rust workspace](crates/README.md):
 
 ```console
-python -m pip install -e ".[test]"
-python -m pytest
+cargo build --release -p copper      # target/release/copper
+cargo test --workspace --release
 ```
 
 Populate pinned dependencies once, then use their verified cache offline:
 
 ```console
-uv run copper check examples/full_vertical/board.copper --locked
-uv run copper check examples/full_vertical/board.copper --locked --offline
+copper check examples/full_vertical/board.copper --locked
+copper check examples/full_vertical/board.copper --locked --offline
 ```
 
 Dependency versions and development replacements belong in `copper.mod`;
@@ -158,9 +161,9 @@ Use the [language reference](docs/language-reference.md) for syntax and
 [CLI workflow](docs/cli-workflow.md) covers compilation, placement and export.
 
 ```console
-uv run copper library search "query" --project path/to/project
-uv run copper library inspect "package/path::Symbol" --project path/to/project
-uv run copper summarize build/route-report.json
+copper library search "query" --project path/to/project
+copper library inspect "package/path::Symbol" --project path/to/project
+copper summarize build/route-report.json
 ```
 
 Search declared dependencies first, then inspect selected interfaces,
@@ -195,22 +198,29 @@ library. Keep the generated directory together when sharing it; see
 [KiCad project export](docs/kicad-project-export.md). Placement-only exports have
 no routing copper and must not be sent for fabrication.
 
-The [GitHub board-build workflow](docs/github-board-builds.md) publishes
-inspection artifacts with reports and checksums; their presence is not approval.
+The CI [benchmark ladder](.github/workflows/rust.yml) routes the example and
+consumer boards and publishes their results; a routed result is not approval.
 Contributor internals and ERC coverage are in [compiler architecture](docs/compiler-architecture.md).
 
 ## Editor language support
 
 The [CopperScript language server](docs/language-server.md) provides live source
 checks, completion, hover, definition navigation and document outlines for
-`.copper` files. Start it through an LSP client with `copper lsp` or
-`python -m pcbir.lsp.server`. The [VS Code extension](integrations/vscode/README.md)
-includes the client alongside the mechanical editor and builds offline without
-npm dependencies. It discovers the project's Python environment and accepts
-Python 3.11 or newer, without an upper bound. The separate
-[extension release plan](docs/extension-release-plan.md) covers Marketplace
-packaging and automated releases. Analysis uses unsaved source and the project's locked/offline
-imports; older compiler pins need an explicitly selected LSP-capable environment.
+`.copper` files. Start it through an LSP client with `copper lsp`. The
+[VS Code extension](integrations/vscode/README.md) includes the client, runs
+`copper` from `PATH` (or a configured command) and builds offline without npm
+dependencies. The separate [extension release plan](docs/extension-release-plan.md)
+covers Marketplace packaging and automated releases. Analysis uses unsaved
+source and the project's locked/offline imports.
+
+## Python implementation removed
+
+CopperScript was first implemented in Python (the `pcbir` and `copperscript`
+packages). The Rust `copper` binary replaced it, and the Python code, its tests
+and the porting harness were removed. The last commit with the Python
+implementation is `b16122a` on `main`; consumer repositories that still pin a
+Python commit use `eb92637`. The Python-only commands `audit-cam`,
+`assess-engineering`, `qualification-gate` and `sim` were dropped.
 
 ## Project website
 
