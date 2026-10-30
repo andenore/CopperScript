@@ -17,6 +17,7 @@ test that loops over its cases.
 | test_nested_lattice.py | 12 | 0 | 0 | `tests/nested_lattice.rs` (each case runs on both fixtures; Python's seeded `random` is a fixed LCG) |
 | test_group_tuning.py | 11 | 0 (parts of 2 tests: see notes) | 0 | `tests/group_tuning.rs` (10); `src/test_support_planes.rs` (`drop_group_steps`) |
 | test_breakout_regions.py | 11 | 0 | 0 | `tests/breakout_regions.rs` (9); `src/test_support_planes.rs` (2: `route_single`, `route_pair` + `validate_candidate`) |
+| test_interstitial_fanout.py | 10 | 0 (installed-KiCad half of the native-project test and the `MAX_TERMINAL_CAPACITY_PROPOSALS` monkeypatch dropped: see notes) | 0 | `tests/interstitial_fanout.rs` (7); `src/test_support_planes.rs` (3: `legal_choices`, `maze_choices`) |
 
 ## Notes
 
@@ -68,8 +69,18 @@ test that loops over its cases.
 - `test_breakout_regions.py`: `route_single` and `route_pair` are
   `pub(crate)` for the two crate-private cases (`route_pair` gets the board
   itself as its tuning board and no access-track preference, the Python
-  defaults). `_test_point_spacing` used shapely-free exact distances in
-  Python too; Rust takes the square root of the exact squared distance in
-  `f64`. The JSON checks read `copper_route::drc_report::run_physical_drc`'s
+  defaults). `_test_point_spacing` takes the square root of the exact
+  squared distance in `f64`, as Python did. The JSON checks read `copper_route::drc_report::run_physical_drc`'s
   document. `a_pair_escapes_the_pin_field_only_with_breakout_values` takes
   about 9 s in release (three unroutable searches at a 20 000-state limit).
+
+- `test_interstitial_fanout.py`: `maze_choices` is `pub(crate)`. Rust's
+  `legal_choices` takes the outline sites and no pad. The plane-launch case
+  called `_stitch_land` directly; Rust's land search is private, so the test
+  runs `stitch_zone_pads` limited to U.5 with `include_surface_zones` (a
+  two-layer board's B.Cu pour is a surface zone) and checks the same via and
+  path. The native-project test keeps the exported rule values; its
+  installed-KiCad half is not ported (`kicad-cli` not installed). The
+  terminal-budget part that set `MAX_TERMINAL_CAPACITY_PROPOSALS` to 0 is
+  dropped (a Rust constant). Rust's `can_via` always checks hole copper
+  (Python's `check_hole_copper=True`).

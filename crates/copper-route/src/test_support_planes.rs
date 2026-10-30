@@ -473,3 +473,82 @@ mod breakout_regions {
         assert!(rejected.diagnostics.iter().any(|message| message.contains("TP1.1")), "{:?}", rejected.diagnostics);
     }
 }
+
+/// `tests/test_interstitial_fanout.py`: ordinary dogbones use exact copper shapes.
+mod interstitial_fanout {
+    use super::support_planes::*;
+    use crate::RoutingClearanceIndex;
+    use crate::fanout::{FanoutOptions, OutlineSites, legal_choices, maze_choices};
+    use copper_pcb::board::PadReference;
+    use copper_physical::{CopperLayer, Point};
+
+    fn launches(
+        board: &copper_pcb::board::PhysicalBoard,
+        endpoint: Point,
+    ) -> Vec<crate::escape_assignment::EscapeCandidate> {
+        let index = RoutingClearanceIndex::new(board).unwrap();
+        let outline = OutlineSites::new(&board.outline.vertices);
+        legal_choices(board, &index, "N5", mm(5.0, 5.0), &board.placements[0], &[endpoint], false, &outline).unwrap()
+    }
+
+    #[test]
+    fn round_pad_interstitial_launch_is_legal_and_does_not_overlap_any_land() {
+        let board = interstitial_board();
+        let endpoint = mm(5.375, 5.375);
+        let index = RoutingClearanceIndex::new(&board).unwrap();
+        assert!(
+            index
+                .can_via("N5", endpoint, 450_000, CopperLayer::Front, CopperLayer::Back, Some(200_000), false, None)
+                .unwrap()
+        );
+        let choices = launches(&board, endpoint);
+        assert!(!choices.is_empty());
+        let (tracks, via) = choices[0].clone();
+        let via = via.expect("a new via");
+        assert_eq!(via.position, endpoint);
+        let mut placed = board.clone();
+        placed.tracks = tracks;
+        placed.vias = vec![via];
+        let policy = copper_drc::Policy { require_completed_detailed_route: false, ..copper_drc::Policy::default() };
+        let errors: Vec<String> = copper_drc::run_physical_drc(&placed, policy)
+            .unwrap()
+            .findings
+            .into_iter()
+            .filter(|f| f.severity == copper_drc::Severity::Error && f.code != "DRC-OPEN-NET")
+            .map(|f| format!("{}: {}", f.code, f.message))
+            .collect();
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn ordinary_launch_still_rejects_actual_same_or_foreign_pad_overlap() {
+        let board = interstitial_board();
+        for endpoint in [mm(5.0, 5.0), mm(5.1, 5.1), mm(5.75, 5.75)] {
+            assert!(launches(&board, endpoint).is_empty(), "{endpoint:?}");
+        }
+    }
+
+    #[test]
+    fn maze_can_use_round_pad_interstitial_site() {
+        let board = interstitial_board();
+        let pose = &board.placements[0];
+        let pad = &board.footprints["array"].pads[4];
+        let pins = [(0, PadReference::new("U", "5"), mm(5.0, 5.0), pose, pad)];
+        let options = FanoutOptions {
+            refinement_step_nm: 125_000,
+            maximum_radius_nm: 600_000,
+            maze_state_budget: 2000,
+            ..FanoutOptions::default()
+        };
+        let index = RoutingClearanceIndex::new(&board).unwrap();
+        let choices = maze_choices(&board, &index, "N5", &pins, &options).unwrap();
+        assert!(!choices.is_empty());
+        let via = choices[0].1.clone().expect("a via");
+        let fresh = RoutingClearanceIndex::new(&board).unwrap();
+        assert!(
+            fresh
+                .can_via("N5", via.position, via.size_nm, via.from_layer, via.to_layer, Some(via.drill_nm), false, None)
+                .unwrap()
+        );
+    }
+}

@@ -476,3 +476,33 @@ pub fn tuning_result(document: &copper_json::Value) -> copper_route::critical_tu
             .collect(),
     }
 }
+
+/// `fixture` of `tests/test_interstitial_fanout.py`: a 3 x 3 array of
+/// 0.4 mm round lands at a 0.75 mm pitch, one single-pad net per land
+/// (`N1`..`N9`), with 0.45/0.2 mm default vias. The centre land U.5 is at
+/// (5, 5) mm.
+pub fn interstitial_board() -> PhysicalBoard {
+    let mut board = board("interstitial", 12.0, 12.0);
+    let mut pads = Vec::new();
+    for y in 0..3 {
+        for x in 0..3 {
+            let mut land =
+                pad(&(y * 3 + x + 1).to_string(), mm((x - 1) as f64 * 0.75, (y - 1) as f64 * 0.75), size(0.4, 0.4));
+            land.shape = PadShape::Circle;
+            pads.push(land);
+        }
+    }
+    board.nets = pads.iter().map(|land| net(&format!("N{}", land.number), &[("U", &land.number)])).collect();
+    add_footprint(&mut board, footprint("array", pads, size(3.0, 3.0)));
+    board.placements = vec![place("U", "array", mm(5.0, 5.0))];
+    board.rules = DesignRules {
+        minimum_clearance_nm: 100_000,
+        minimum_hole_clearance_nm: 200_000,
+        minimum_track_width_nm: 100_000,
+        default_track_width_nm: 150_000,
+        default_via_size_nm: 450_000,
+        default_via_drill_nm: 200_000,
+        ..DesignRules::default()
+    };
+    board
+}
