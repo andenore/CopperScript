@@ -1,4 +1,4 @@
-//! Command dispatch and the rewrite status of every Python CLI command.
+//! Command dispatch and the list of commands.
 
 use std::io::Write;
 
@@ -9,62 +9,45 @@ use crate::{
     state, summarize, view,
 };
 
-/// Exit status of a command the Rust rewrite does not implement yet.
+/// Exit status of behaviour a command does not implement.
 pub const NOT_IMPLEMENTED_EXIT: u8 = 3;
-/// The stderr marker the comparison harness looks for.
-pub const NOT_IMPLEMENTED_MARKER: &str = "not implemented in the Rust rewrite";
+/// The stderr marker of behaviour a command does not implement.
+pub const NOT_IMPLEMENTED_MARKER: &str = "not implemented";
 
-/// Where each command of the Python CLI (`python -m copperscript`) is rewritten.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Plan {
-    /// Implemented in this binary.
-    Done,
-    /// An independent check that stays on the Python CLI in the first iteration.
-    Python,
-}
-
-/// Every subcommand of `pcbir.cli`, in its parser order, plus `bench`.
-pub const COMMANDS: &[(&str, Plan)] = &[
-    ("compile-macro", Plan::Done),
-    ("lsp", Plan::Done),
-    ("agent-guide", Plan::Done),
-    ("library", Plan::Done),
-    ("summarize", Plan::Done),
-    ("benchmark-routing", Plan::Done),
-    ("editor-overlay", Plan::Done),
-    ("edit-mechanical", Plan::Done),
-    ("edit", Plan::Done),
-    ("export-manufacturing", Plan::Done),
-    ("audit-cam", Plan::Python),
-    ("assess-engineering", Plan::Python),
-    ("qualification-gate", Plan::Python),
-    ("assembly", Plan::Done),
-    ("sim", Plan::Python),
-    ("check", Plan::Done),
-    ("explain", Plan::Done),
-    ("issues", Plan::Done),
-    ("view", Plan::Done),
-    ("state", Plan::Done),
-    ("replay-unified", Plan::Done),
-    ("replay-critical", Plan::Done),
-    ("query", Plan::Done),
-    ("si-check", Plan::Done),
-    ("lock", Plan::Done),
-    ("power-check", Plan::Done),
-    ("compile", Plan::Done),
-    ("export-kicad", Plan::Done),
-    ("export-kicad-pcb", Plan::Done),
-    ("plan-layout", Plan::Done),
-    ("route-global", Plan::Done),
-    ("route-board", Plan::Done),
-    ("check-footprint", Plan::Done),
-    ("audit-footprints", Plan::Done),
-    ("bench", Plan::Done),
+/// Every command, in the order the help lists them.
+pub const COMMANDS: &[&str] = &[
+    "compile-macro",
+    "lsp",
+    "agent-guide",
+    "library",
+    "summarize",
+    "benchmark-routing",
+    "editor-overlay",
+    "edit-mechanical",
+    "edit",
+    "export-manufacturing",
+    "assembly",
+    "check",
+    "explain",
+    "issues",
+    "view",
+    "state",
+    "replay-unified",
+    "replay-critical",
+    "query",
+    "si-check",
+    "lock",
+    "power-check",
+    "compile",
+    "export-kicad",
+    "export-kicad-pcb",
+    "plan-layout",
+    "route-global",
+    "route-board",
+    "check-footprint",
+    "audit-footprints",
+    "bench",
 ];
-
-pub fn plan(command: &str) -> Option<Plan> {
-    COMMANDS.iter().find(|(name, _)| *name == command).map(|(_, plan)| *plan)
-}
 
 const USAGE: &str = "usage: copper COMMAND [ARGS]";
 
@@ -82,13 +65,9 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let rest = &args[1..];
     match command.as_str() {
         "-h" | "--help" => {
-            let _ = writeln!(out, "{USAGE}\n\nCopperScript command line (Rust rewrite). Commands:");
-            for (name, plan) in COMMANDS {
-                let status = match plan {
-                    Plan::Done => "rewritten".to_owned(),
-                    Plan::Python => "stays on the Python CLI".to_owned(),
-                };
-                let _ = writeln!(out, "  {name:<22} {status}");
+            let _ = writeln!(out, "{USAGE}\n\nCopperScript command line. Commands:");
+            for name in COMMANDS {
+                let _ = writeln!(out, "  {name}");
             }
             0
         }
@@ -122,26 +101,14 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "replay-unified" => replay_unified::run(rest, out, err),
         "editor-overlay" => editor_overlay::run(rest, out, err),
         "edit-mechanical" | "edit" => edit_mechanical::run(rest, out, err),
-        _ => match plan(command) {
-            Some(Plan::Python) => {
-                let _ = writeln!(
-                    err,
-                    "copper: {NOT_IMPLEMENTED_MARKER}: {command} stays on the Python CLI in the first iteration; \
-                     run python -m copperscript {command}"
-                );
-                NOT_IMPLEMENTED_EXIT
-            }
-            Some(Plan::Done) => unreachable!("implemented commands are dispatched above"),
-            None => {
-                let choices: Vec<&str> = COMMANDS.iter().map(|(name, _)| *name).collect();
-                let _ = writeln!(
-                    err,
-                    "{USAGE}\ncopper: error: invalid command '{command}' (choose from {})",
-                    choices.join(", ")
-                );
-                2
-            }
-        },
+        _ => {
+            let _ = writeln!(
+                err,
+                "{USAGE}\ncopper: error: invalid command '{command}' (choose from {})",
+                COMMANDS.join(", ")
+            );
+            2
+        }
     }
 }
 
@@ -157,15 +124,17 @@ mod tests {
     }
 
     #[test]
-    fn python_only_commands_point_at_the_python_cli() {
-        let (code, out, err) = call(&["audit-cam"]);
-        assert_eq!((code, out.as_str()), (NOT_IMPLEMENTED_EXIT, ""));
-        assert!(err.contains(NOT_IMPLEMENTED_MARKER) && err.contains("python -m copperscript audit-cam"), "{err}");
+    fn help_lists_every_command() {
+        let (code, out, _) = call(&["--help"]);
+        assert_eq!(code, 0);
+        assert!(COMMANDS.iter().all(|name| out.contains(&format!("  {name}\n"))), "{out}");
+        assert!(!out.contains("Python"), "{out}");
     }
 
     #[test]
-    fn unknown_and_missing_commands_are_usage_errors() {
+    fn unknown_missing_and_dropped_commands_are_usage_errors() {
         assert_eq!(call(&["frobnicate"]).0, 2);
+        assert_eq!(call(&["audit-cam"]).0, 2);
         assert_eq!(call(&[]).0, 2);
     }
 }

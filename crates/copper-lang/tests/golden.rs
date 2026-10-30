@@ -1,12 +1,12 @@
-//! The parser against outcomes recorded from Python's `pcbir.parser` by
-//! `scripts/generate_rust_fixtures.py`: every in-repo source, seeded
-//! truncations, deletions and insertions of each, and targeted snippets.
+//! The parser against frozen golden outcomes recorded from the former Python
+//! implementation's `pcbir.parser` (`fixtures/parse.json`, not regenerated):
+//! in-repo sources, seeded truncations, deletions and insertions of each, and
+//! targeted snippets.
 //!
 //! A parse is compared through Python's state encoding of the tree (field and
 //! class names included); errors by code, message, location, hint and
 //! replacement. On a mismatch the Rust encoding is written to
-//! `target/parse-oracle/` for a diff against
-//! `python scripts/generate_rust_fixtures.py --dump-parse SOURCE`.
+//! `target/parse-golden/` for a diff against the recorded case.
 
 use std::path::{Path, PathBuf};
 
@@ -55,19 +55,10 @@ fn parser_matches_python_on_every_recorded_case() {
     check_fixture(include_str!("fixtures/parse.json"));
 }
 
-/// An extra fixture from `generate_rust_fixtures.py --parse-corpus DIR`, for
-/// sources outside this repository (CopperLib, consumer boards).
-#[test]
-fn parser_matches_python_on_an_external_corpus() {
-    if let Ok(path) = std::env::var("COPPER_PARSE_FIXTURE") {
-        check_fixture(&std::fs::read_to_string(path).unwrap());
-    }
-}
-
 fn check_fixture(fixture: &str) {
     let fixture = copper_json::parse(fixture).unwrap();
     let cases = field(&fixture, "cases").as_array().unwrap();
-    let mismatch_directory = repository().join("target/parse-oracle");
+    let mismatch_directory = repository().join("target/parse-golden");
     let mut failures = Vec::new();
     for (index, case) in cases.iter().enumerate() {
         let (source, filename) = match case.get("source").and_then(Json::as_str) {

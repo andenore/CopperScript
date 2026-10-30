@@ -3,7 +3,7 @@
 //!
 //! Coordinates are integer nanometres. Predicates are exact: products widen
 //! to `i128`, and the few that can exceed it fall back to big integers, so a
-//! query never answers differently from the Python oracle's unbounded ints.
+//! query never answers differently from unbounded integer arithmetic.
 //! Constructors validate like the Python dataclasses and return the
 //! `ValueError` message on failure.
 //!

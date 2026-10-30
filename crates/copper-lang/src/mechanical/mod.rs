@@ -33,10 +33,10 @@ pub use profiles::{MechanicalFeatureSource, MechanicalProfileInstance, expand_me
 pub use references::{MechanicalReference, ReferenceEntity, reference_scene, verify_reference_assets};
 pub use stackup::{MechanicalStackup, lower_stackup};
 
-/// The code of the placeholder error for rewrite gaps.
+/// The code of the placeholder error for unimplemented behaviour.
 pub const NOT_IMPLEMENTED: &str = "RUST_NOT_IMPLEMENTED";
 
-/// A lowering failure: Python's `ValueError` text, or a rewrite limit.
+/// A lowering failure: Python's `ValueError` text, or an implementation limit.
 #[derive(Debug)]
 pub(crate) enum Fail {
     Value(String),

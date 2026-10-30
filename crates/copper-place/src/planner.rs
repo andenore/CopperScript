@@ -29,7 +29,7 @@ pub struct SeedFailure {
     pub reason: String,
 }
 
-/// `PlacementStatistics` (support and package patterns are not rewritten).
+/// `PlacementStatistics` (support and package patterns are not implemented).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Statistics {
     pub analytical_iterations: i64,

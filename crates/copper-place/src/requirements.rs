@@ -21,7 +21,7 @@ use copper_physical::RoundedConvexShape;
 use crate::scene::Scene;
 
 /// Why one declaration could not be verified: a `ValueError` or a `KeyError`,
-/// or behaviour this rewrite does not cover.
+/// or behaviour this implementation does not cover.
 enum Unresolved {
     Value(String),
     Key(String),

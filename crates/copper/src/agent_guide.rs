@@ -1,7 +1,7 @@
 //! `copper agent-guide [TOPIC] [--json]`: a port of `pcbir.agent_guide`.
 //!
-//! The topic text is embedded from `agent_guide_topics.json`, copied from the
-//! Python oracle by `scripts/generate_rust_fixtures.py` until cutover.
+//! The topic text is embedded from `agent_guide_topics.json`, which is now
+//! edited in place.
 
 use std::io::Write;
 

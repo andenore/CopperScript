@@ -1,9 +1,7 @@
 //! The `copper` command line.
 //!
-//! Commands are rewritten from the Python CLI one milestone at a time
-//! (docs/rust-port-plan.md). A command that is not rewritten yet exits with
-//! [`commands::NOT_IMPLEMENTED_EXIT`] and says so on stderr, which the
-//! comparison harness (`scripts/compare_implementations.py`) reports as pending.
+//! Behaviour a command does not implement exits with
+//! [`commands::NOT_IMPLEMENTED_EXIT`] and says "not implemented" on stderr.
 
 mod agent_guide;
 mod args;

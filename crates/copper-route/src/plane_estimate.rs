@@ -1,6 +1,6 @@
 //! Raster pour connectivity (`pcbir.plane_estimate`): the component
 //! labelling the unified router and supply islands share. The estimate
-//! itself (`estimate_plane_connectivity`) is not rewritten yet.
+//! itself (`estimate_plane_connectivity`) is not implemented yet.
 
 /// `_label`: 4-connected component labels of a row-major `(ny, nx)` mask via
 /// row runs and union-find. Labels are root run ids (0 outside the mask);

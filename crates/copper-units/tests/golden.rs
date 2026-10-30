@@ -1,5 +1,5 @@
-//! Decimal, nanometre and quantity behaviour against fixtures recorded from
-//! the Python oracle by `scripts/generate_rust_fixtures.py`.
+//! Decimal, nanometre and quantity behaviour against frozen golden fixtures recorded from the former Python implementation
+//! (`fixtures/`, not regenerated).
 
 use copper_json::Value;
 use copper_units::{Decimal, DecimalError, Dimension, Nm, Quantity, Rounding};

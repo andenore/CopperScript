@@ -1,6 +1,6 @@
 [package]
 name = "copper"
-description = "The CopperScript command line (Rust rewrite)"
+description = "The CopperScript command line"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

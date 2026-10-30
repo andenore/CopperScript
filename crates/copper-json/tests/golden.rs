@@ -1,5 +1,5 @@
-//! Parsing and `json.dumps` output against fixtures recorded from Python by
-//! `scripts/generate_rust_fixtures.py`.
+//! Parsing and `json.dumps` output against frozen golden fixtures recorded from the former Python implementation
+//! (`fixtures/`, not regenerated).
 
 use copper_json::{Dumps, Value, encode_str, python_float_repr};
 

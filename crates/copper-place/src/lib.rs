@@ -6,7 +6,7 @@
 //! creates copper. Search order, tie-breaking and float arithmetic follow
 //! the Python planner exactly, so each phase picks the same poses.
 //!
-//! The decoupling-access phase is rewritten up to its source checks and
+//! The decoupling-access phase is implemented up to its source checks and
 //! early exits: a board with a movable pin-associated decoupler needs the
 //! disposable decoupler router (M4) and reports [`copper_pcb::Error::NotImplemented`],
 //! as do the support- and package-pattern trials.

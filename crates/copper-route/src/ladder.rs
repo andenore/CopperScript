@@ -8,12 +8,8 @@
 //! `board.kicad_pcb` and `route.log`; the aggregate goes to `<out>/results.json`
 //! and `<out>/results.md`. Numbers come from the report's `summary` block.
 //!
-//! The Python runner starts `python -m copperscript route-board`; this one
-//! starts the binary it is part of (`copper route-board`) unless `--python`
-//! names an interpreter, which then runs the Python implementation as Python's
-//! runner does. The record's `command` drops the program as Python's drops
-//! the interpreter: it starts at `route-board` on the native path and at
-//! `copperscript` with `--python`.
+//! Each board runs the binary the ladder is part of (`copper route-board`).
+//! The record's `command` drops the program: it starts at `route-board`.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -182,30 +178,18 @@ pub fn placement_args(board: &Board, placements: Option<&Path>) -> Vec<String> {
     }
 }
 
-/// How `run_board` starts `route-board`.
+/// How `run_board` starts `route-board`: this binary, `copper route-board ...`.
 #[derive(Clone, Debug)]
 pub enum Runner {
-    /// This binary: `copper route-board ...`.
     Native(PathBuf),
-    /// `PYTHON -m copperscript route-board ...`, as the Python runner does.
-    Python(String),
 }
 
 impl Runner {
     fn command(&self, args: &[String]) -> (Vec<String>, usize) {
-        match self {
-            Runner::Native(exe) => {
-                let mut command = vec![paths::display(exe), "route-board".to_owned()];
-                command.extend(args.iter().cloned());
-                (command, 1)
-            }
-            Runner::Python(python) => {
-                let mut command =
-                    vec![python.clone(), "-m".to_owned(), "copperscript".to_owned(), "route-board".to_owned()];
-                command.extend(args.iter().cloned());
-                (command, 2)
-            }
-        }
+        let Runner::Native(exe) = self;
+        let mut command = vec![paths::display(exe), "route-board".to_owned()];
+        command.extend(args.iter().cloned());
+        (command, 1)
     }
 }
 
@@ -587,23 +571,13 @@ pub fn utc_now_iso() -> String {
 }
 
 const USAGE: &str = "usage: copper bench [-h] --out OUT [--only ONLY] [--tags TAGS] [--label LABEL] \
-[--baseline BASELINE] [--kicad-cli KICAD_CLI] [--python PYTHON] [--extra-arg EXTRA_ARGS] \
+[--baseline BASELINE] [--kicad-cli KICAD_CLI] [--extra-arg EXTRA_ARGS] \
 [--placements PLACEMENTS] [--jobs JOBS] ladder";
 
 const DESCRIPTION: &str = "Benchmark ladder: route a fixed set of boards and compare completion and time.";
 
-const VALUED: [&str; 10] = [
-    "--out",
-    "--only",
-    "--tags",
-    "--label",
-    "--baseline",
-    "--kicad-cli",
-    "--python",
-    "--extra-arg",
-    "--placements",
-    "--jobs",
-];
+const VALUED: [&str; 9] =
+    ["--out", "--only", "--tags", "--label", "--baseline", "--kicad-cli", "--extra-arg", "--placements", "--jobs"];
 
 /// Parsed `copper bench` arguments.
 #[derive(Default)]
@@ -760,15 +734,12 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     if jobs < 1 {
         return usage_error(err, "--jobs must be at least 1");
     }
-    let runner = match parsed.last("--python") {
-        Some(python) => Runner::Python(python.clone()),
-        None => match std::env::current_exe() {
-            Ok(exe) => Runner::Native(exe),
-            Err(error) => {
-                let _ = writeln!(err, "{}", paths::python_os_error(&error, None));
-                return 1;
-            }
-        },
+    let runner = match std::env::current_exe() {
+        Ok(exe) => Runner::Native(exe),
+        Err(error) => {
+            let _ = writeln!(err, "{}", paths::python_os_error(&error, None));
+            return 1;
+        }
     };
     let extra_args: Vec<String> =
         parsed.values.iter().filter(|(k, _)| *k == "--extra-arg").map(|(_, v)| v.clone()).collect();

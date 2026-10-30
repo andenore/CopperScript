@@ -135,7 +135,7 @@ impl DecouplingPathResult {
 }
 
 /// `pad_via_arrays.array_rules` is non-empty: required via-in-pad arrays,
-/// whose geometry is not rewritten.
+/// whose geometry is not implemented.
 fn has_array_rules(board: &PhysicalBoard) -> bool {
     board.via_in_pad_rules.iter().any(|r| r.rows.is_some())
 }

@@ -4,7 +4,7 @@
 //! [--power-islands auto|LAYER]`: route a `--unified-save-inputs` state again
 //! with option overrides and summarise it.
 //!
-//! Option parsing, the state decode and the net selection are rewritten;
+//! Option parsing, the state decode and the net selection are implemented;
 //! the stages that route report not implemented (exit 3) until the unified
 //! router is ported.
 
@@ -41,7 +41,7 @@ fn replay_error(out: &mut dyn Write, message: &str) -> u8 {
 
 /// An uncaught Python exception: the final traceback line, exit status 1.
 fn crash(err: &mut dyn Write, line: &str) -> u8 {
-    let _ = writeln!(err, "Traceback (most recent call last):\n  (no Python frames: Rust rewrite)\n{line}");
+    let _ = writeln!(err, "Traceback (most recent call last):\n  (no Python frames)\n{line}");
     1
 }
 

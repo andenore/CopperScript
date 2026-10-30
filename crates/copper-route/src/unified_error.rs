@@ -1,10 +1,10 @@
 //! Errors of the unified-router stream (`replay-unified`): a caught
 //! `ValueError`/`StateError` (`REPLAY ERROR`), an uncaught Python exception
-//! (traceback, exit 1), or behaviour not rewritten yet (exit 3).
+//! (traceback, exit 1), or behaviour not implemented yet (exit 3).
 
 /// How a Python call ends: a caught `ValueError`/`StateError`/`OSError`
 /// (`REPLAY ERROR: message`), an uncaught exception (a traceback, exit 1),
-/// or behaviour the rewrite does not implement (exit 3, never a wrong answer).
+/// or behaviour this implementation does not implement (exit 3, never a wrong answer).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
     /// A `ValueError` (or `StateError`, `OSError`) by its message.

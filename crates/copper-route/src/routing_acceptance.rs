@@ -404,7 +404,7 @@ impl From<copper_pcb::Error> for AcceptanceError {
 /// `run_acceptance(output, kicad_cli=...)`: the report, written to `OUTPUT/acceptance.json`.
 ///
 /// `route` runs the shared routing pipeline on one case (`route_case`); while
-/// the routers it needs are not rewritten it reports not implemented and the
+/// the routers it needs are not implemented it reports not implemented and the
 /// command exits 3 after creating the output directory, as the harness expects
 /// of pending work.
 pub fn run_acceptance(

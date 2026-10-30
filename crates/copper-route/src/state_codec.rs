@@ -1685,7 +1685,7 @@ fn hard_macro(value: &StateValue) -> Result<PhysicalHardMacro> {
 }
 
 /// `PhysicalBoard(**fields)`: the dataclass and the checks of its
-/// `__post_init__` and `_validate_references` the rewrite covers.
+/// `__post_init__` and `_validate_references` this implementation covers.
 pub fn physical_board(value: &StateValue) -> Result<PhysicalBoard> {
     dataclass!(reader, value, "pcbir.physical:PhysicalBoard", {
         "name" => name = text;
@@ -1794,7 +1794,7 @@ pub fn physical_board(value: &StateValue) -> Result<PhysicalBoard> {
 /// The checks of `PhysicalBoard.__post_init__` and `_validate_references`
 /// that a saved board can fail; a board whose remaining checks Python would
 /// run (datum chains, overhang geometry, via-in-pad arrays) is handled by
-/// the rewrite only in its common cases.
+/// this implementation only in its common cases.
 fn validate_board(board: &PhysicalBoard) -> Result<()> {
     let capacitors: IndexSet<&str> = board.decoupling_links.iter().map(|l| l.capacitor.component.as_str()).collect();
     if capacitors.len() != board.decoupling_links.len() {
@@ -4128,7 +4128,7 @@ pub fn encode_feedback_options(o: &crate::routeflow::PlacementRoutingFeedbackOpt
 }
 
 /// `encode(result)`: the `PlacementRoutingResult` a placement checkpoint holds
-/// (no package patterns: support-pattern trials are not rewritten).
+/// (no package patterns: support-pattern trials are not implemented).
 pub fn encode_placement_result(result: &crate::routeflow::PlacementRoutingResult) -> StateValue {
     dc(
         "pcbir.routeflow:PlacementRoutingResult",

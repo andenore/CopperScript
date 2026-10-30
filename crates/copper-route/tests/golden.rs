@@ -1,5 +1,5 @@
-//! Search-lattice queries against fixtures recorded from Python by
-//! `scripts/generate_rust_fixtures.py` (`lattice_fixture`).
+//! Search-lattice queries and escape plans against frozen golden fixtures recorded from the former Python implementation
+//! (`fixtures/lattice.json`, `fixtures/escape.json`, not regenerated).
 
 use std::path::Path;
 

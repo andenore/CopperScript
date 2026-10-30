@@ -1,5 +1,6 @@
 //! `plan_bundles`, `bundle_job_order` and `crossing_outcome` against
-//! fixtures recorded from Python by `fixtures/critical_bundles/generate.py`.
+//! frozen fixtures recorded from the former Python implementation
+//! (`fixtures/critical_bundles/`, not regenerated).
 
 use std::path::Path;
 

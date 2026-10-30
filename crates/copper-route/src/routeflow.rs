@@ -95,7 +95,7 @@ pub struct FeedbackIteration {
     pub routing_fingerprint: String,
 }
 
-/// `PlacementRoutingResult` (`package_patterns` is not rewritten: the
+/// `PlacementRoutingResult` (`package_patterns` is not implemented: the
 /// placement statistics carry no package patterns yet).
 #[derive(Clone, Debug)]
 pub struct PlacementRoutingResult {
