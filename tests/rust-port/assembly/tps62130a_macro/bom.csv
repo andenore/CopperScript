@@ -1,7 +1,0 @@
-Comment,Designator,Footprint,LCSC Part #,Manufacturer,MPN
-10 uF,B_C_PVIN,Capacitor_SMD:C_0805_2012Metric,C641524,Generic Passives,CAPACITOR-10uF-C_0805_2012Metric
-100 nF,B_C_AVIN,Capacitor_SMD:C_0402_1005Metric,C659099,Generic Passives,CAPACITOR-100nF-C_0402_1005Metric
-22 uF,"B_C_OUT1,B_C_OUT2",Capacitor_SMD:C_0805_2012Metric,C584122,Generic Passives,CAPACITOR-22uF-C_0805_2012Metric
-49.9 kohm,R_TOP,Resistor_SMD:R_0402_1005Metric,C854332,Generic Passives,RESISTOR-49.9kohm-R_0402_1005Metric
-TPS62130ARGTR-VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm,B_U,Package_DFN_QFN:VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm,C698635,Texas Instruments,TPS62130ARGTR-VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm
-XFL4020_222MEC-L_Coilcraft_XAL4020-XXX.kicad_mod,B_L,github.com/andenore/CopperLib/packages/parts/coilcraft/xal4020/footprints/Inductor_SMD.pretty/L_Coilcraft_XAL4020-XXX.kicad_mod,C660852,Coilcraft,XFL4020_222MEC-L_Coilcraft_XAL4020-XXX.kicad_mod

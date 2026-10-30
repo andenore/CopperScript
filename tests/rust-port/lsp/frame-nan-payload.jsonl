@@ -1,2 +1,0 @@
-# Transport: nan payload.
-{"raw": "Content-Length: 46\r\n\r\n{\"jsonrpc\":\"2.0\",\"id\":NaN,\"method\":\"shutdown\"}Content-Length: 48\r\n\r\n{\"jsonrpc\":\"2.0\",\"id\":1e999,\"method\":\"shutdown\"}"}
