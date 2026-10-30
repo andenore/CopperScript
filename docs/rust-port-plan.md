@@ -288,6 +288,11 @@ do not shrink as much.
   porting numeric algorithms for. Differences only in float rounding pass as
   `close`; routing that diverges because of them is judged on quality
   (section 4, numerics).
+- **D7 The Python CLI on `main` is not kept up to date (recorded
+  2026-10-30).** Fixes found during the port are not carried back to `main`.
+  Where the oracle needs one to keep parity (the via-span fix of
+  `via_length_nm`, branch `fix-blind-via-length`), it is made in `pcbir/` on
+  `rust-m2` together with the Rust change.
 
 ## 9. Next steps
 
