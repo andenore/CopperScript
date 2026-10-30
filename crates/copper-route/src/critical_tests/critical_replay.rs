@@ -1,6 +1,6 @@
 //! `tests/test_critical_replay.py`: selected critical jobs, the exact
 //! single-net and cohort fallbacks, and routing identity (the
-//! `replay-critical` CLI case is `crates/copper/tests/critical_replay_cli.rs`).
+//! `replay-critical` CLI case is `crates/copper/tests/critical_cli.rs`).
 
 use copper_pcb::board::{NetMatchGroup, NetRoutingRule, PhysicalBoard, RouteKind};
 use copper_physical::CopperLayer;

@@ -14,11 +14,12 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_planned_crossings.py | 17 | 17 | 0 | 0 | `src/critical_tests/planned_crossings.rs` |
 | test_dphy_routing_intent.py | 14 | 14 | 0 | 0 | `crates/copper-drc/tests/dphy_routing_intent.rs` |
 | test_pair_vias.py | 12 | 12 | 0 | 0 | `src/critical_tests/pair_vias.rs` |
-| test_critical_replay.py | 12 | 8 | 4 | 0 | `src/critical_tests/critical_replay.rs`; the CLI case in `crates/copper/tests/critical_replay_cli.rs` |
+| test_critical_replay.py | 12 | 8 | 4 | 0 | `src/critical_tests/critical_replay.rs`; the CLI case in `crates/copper/tests/critical_cli.rs` |
 | test_critical_diagnostics.py | 12 | 9 | 3 | 0 | `src/critical_tests/critical_diagnostics.rs` |
 | test_critical_reuse.py | 11 | 0 | 11 | 0 | none: `pcbir.critical_reuse` was not ported |
 | test_pair_tuning_spans.py | 10 | 10 | 0 | 0 | `src/critical_tests/pair_tuning_spans.rs` |
 | test_pair_return_boundaries.py | 9 | 9 | 0 | 0 | `src/critical_tests/pair_return_boundaries.rs` |
+| test_pair_terminal_fallback.py | 8 | 8 | 0 | 0 | `src/critical_tests/pair_terminal_fallback.rs`; the CLI case in `crates/copper/tests/critical_cli.rs` |
 
 ## Notes
 
@@ -151,3 +152,10 @@ Rust bug found and fixed: `pair_vias::return_via` did not refuse a clearance
 index bound to another source (different non-copper fields, or missing source
 track/via occurrences), so `old_geometry_index_cannot_authorize_current_source`
 failed. The Python binding check is restored.
+
+### test_pair_terminal_fallback.py
+
+Rust divergence fixed: `route-board` refused a non-positive length option with
+"expected a finite length in mm", dropping Python's "positive"/"nonnegative"
+bound, so `cli_exposes_positive_computational_pin_access_step` failed. The
+Python messages are restored.

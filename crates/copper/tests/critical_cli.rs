@@ -1,5 +1,7 @@
-//! `tests/test_critical_replay.py::test_critical_replay_cli_is_explicitly_diagnostic_and_writes_locatable_report`
-//! (d39067a): `copper replay-critical` on saved source-only inputs.
+//! Critical-routing CLI cases of the former Python suite (d39067a):
+//! `copper replay-critical` on saved source-only inputs
+//! (`test_critical_replay.py`) and `route-board` computational bounds
+//! (`test_pair_terminal_fallback.py`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -92,8 +94,13 @@ fn pair_board() -> copper_pcb::board::PhysicalBoard {
 }
 
 fn run(args: &[&str]) -> i32 {
+    run_output(args).0
+}
+
+/// The exit status and standard error of `copper ARGS`.
+fn run_output(args: &[&str]) -> (i32, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_copper")).args(args).output().expect("the copper binary runs");
-    output.status.code().unwrap_or(-1)
+    (output.status.code().unwrap_or(-1), String::from_utf8_lossy(&output.stderr).into_owned())
 }
 
 #[test]
@@ -131,4 +138,11 @@ fn critical_replay_cli_is_explicitly_diagnostic_and_writes_locatable_report() {
     assert_eq!(run(&["replay-critical", &path(&state), "--only", "missing"]), 2);
     // argparse rejects a negative bound (Python's SystemExit, status 2).
     assert_eq!(run(&["replay-critical", &path(&state), "--pair-states", "-1"]), 2);
+}
+
+#[test]
+fn cli_exposes_positive_computational_pin_access_step() {
+    let (status, stderr) = run_output(&["route-board", "missing.copper", "--pin-access-step-mm", "0"]);
+    assert_eq!(status, 2);
+    assert!(stderr.contains("positive"), "{stderr}");
 }

@@ -8,6 +8,7 @@ mod critical_replay;
 mod critical_routing;
 mod local_critical;
 mod pair_return_boundaries;
+mod pair_terminal_fallback;
 mod pair_tuning_spans;
 mod pair_vias;
 mod planned_crossings;

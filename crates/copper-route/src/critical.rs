@@ -1809,7 +1809,7 @@ pub(crate) fn reject_reserved_plane_tracks(
     (result, Vec::new(), Vec::new())
 }
 
-type Lane = Vec<(CopperLayer, Point, Point)>;
+pub(crate) type Lane = Vec<(CopperLayer, Point, Point)>;
 
 /// `_coarse_transition_conflict`: why the coarse candidate may not place
 /// its guide transitions: a profile with no via budget or one common signal
@@ -3559,7 +3559,7 @@ fn join_offset_junctions(
 /// the outside of the lanes; with `retain_access_tracks`, the access's
 /// checked lead-in and a checked tail where one exists.
 #[allow(clippy::too_many_arguments)]
-fn pair_pin_stubs(
+pub(crate) fn pair_pin_stubs(
     board: &PhysicalBoard,
     net: &str,
     guide: &GlobalNetRoute,
