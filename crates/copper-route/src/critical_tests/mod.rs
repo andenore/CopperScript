@@ -4,3 +4,5 @@
 
 mod local_critical;
 mod critical_routing;
+mod critical_bundles;
+mod planned_crossings;

@@ -11,6 +11,7 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 |---|---|---|---|---|---|
 | test_local_critical.py | 26 | 26 | 0 | 0 | `src/critical_tests/local_critical.rs` |
 | test_critical_routing.py | 21 | 21 | 0 | 0 | `src/critical_tests/critical_routing.rs`; the three `_tune_pair` cases in `tests/pair_tuning.rs` |
+| test_planned_crossings.py | 17 | 17 | 0 | 0 | `src/critical_tests/planned_crossings.rs` |
 
 ## Notes
 
@@ -45,3 +46,15 @@ Adapted (monkeypatch-only observations dropped, outcome kept):
 - `joint_search_does_not_invent_copper_behind_a_tapered_port`: Python's
   `_search` generator is driven through a `Continuation` over the escaped board.
 - The SHA-256 evidence digest is a fixed 64-hex string rather than a hash.
+
+### test_planned_crossings.py
+
+Rust `route_critical_nets` has no `plan_crossings` switch (it always plans
+crossings and nested exits); `plan_bundles` keeps the switch.
+- `crossing_pair_routes_with_one_planned_paired_swap_and_return_vias`: the
+  unplanned (`plan_crossings=False`) surface-first route is not reachable; the
+  planned route and its transition evidence are checked.
+- `bundles_without_crossings_route_byte_identically`: `plan_bundles` with and
+  without crossing planning must agree, and no bundle document has `crossings`.
+- `preflight_prints_each_planned_crossing`: the preflight CLI ran on a patched
+  router; the printed line is `crossing_line`, checked on the routed crossing.

@@ -2975,7 +2975,7 @@ fn route_nested_exit(
 /// A transition with a signal or return via inside any breakout region comes
 /// last; otherwise, with a reserved corridor for the pair (R4), transitions
 /// with every via inside it come first.
-fn crossing_site_rank(board: &PhysicalBoard, group: &[String]) -> Result<impl Fn(&[Via]) -> Option<i64>> {
+pub(crate) fn crossing_site_rank(board: &PhysicalBoard, group: &[String]) -> Result<impl Fn(&[Via]) -> Option<i64>> {
     let breakout = copper_drc::breakout::BreakoutRegions::new(board);
     let corridor: Option<Vec<Point>> = copper_drc::legality::reserved_corridors(board)?
         .into_iter()
@@ -3234,7 +3234,7 @@ fn unrouted_lanes(
 /// all other committed copper. Nothing is changed here: the caller commits
 /// both results only when both are accepted.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn bundle_repair(
+pub(crate) fn bundle_repair(
     board: &PhysicalBoard,
     routes: &IndexMap<String, GlobalNetRoute>,
     rules: &IndexMap<&str, &NetRoutingRule>,

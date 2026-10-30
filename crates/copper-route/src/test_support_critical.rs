@@ -255,3 +255,76 @@ pub(crate) fn via_proposal(net: &str, position: Point, from: CopperLayer, to: Co
         resource_id: "test-via".to_owned(),
     }
 }
+
+/// Fixed-point millimetres (`"1.4"`) in nanometres.
+pub(crate) fn nm(text: &str) -> i64 {
+    copper_pcb::nm_from_mm_text(text).expect("millimetres")
+}
+
+/// `_rows(centres, pitch)`: `(P, N)` land offsets around each pair centre.
+pub(crate) fn rows(centres: &[&str], pitch: &str) -> Vec<(i64, i64)> {
+    let half = nm(pitch) / 2;
+    centres.iter().map(|centre| (nm(centre) - half, nm(centre) + half)).collect()
+}
+
+/// `CopperZone(id, net, layers, outline)` with the dataclass defaults.
+pub(crate) fn zone(id: &str, net: &str, layers: &[CopperLayer], outer: Vec<Point>) -> copper_pcb::board::CopperZone {
+    copper_pcb::board::CopperZone {
+        id: id.to_owned(),
+        net: net.to_owned(),
+        layers: layers.to_vec(),
+        outer,
+        holes: Vec::new(),
+        priority: 0,
+        clearance_nm: None,
+        minimum_width_nm: 250_000,
+        pad_connection: copper_physical::footprint::ZoneConnection::Thermal,
+        thermal_gap_nm: 300_000,
+        thermal_spoke_width_nm: 300_000,
+        island_policy: copper_pcb::board::IslandPolicy::RemoveBelowArea,
+        minimum_island_area_nm2: Some(10_000_000_000_000),
+        reserve_routing: false,
+        allow_same_net_hard_macro_overlap: false,
+    }
+}
+
+/// `_bundle_board` / `_crossing_board`: a package row (U1 at (8, 10), lands
+/// facing right at x = 9.4 mm) and a connector row (J1 at (22, 10), lands
+/// facing left at x = 20.6 mm) joined by one pair `NAME_P`/`NAME_N` per lane
+/// on a 30 x 20 mm board with 0.1 mm rules. `profile(net, partner)` gives
+/// each member's rule.
+pub(crate) fn row_pair_board(
+    name: &str,
+    package_rows: &[(i64, i64)],
+    connector_rows: &[(i64, i64)],
+    names: &[&str],
+    profile: impl Fn(&str, &str, &str) -> NetRoutingRule,
+) -> PhysicalBoard {
+    let (mut package_pads, mut connector_pads, mut nets, mut rules) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let land = |number: &str, x: i64, y: i64, height: i64| FootprintPad {
+        size: Size { width_nm: 600_000, height_nm: height },
+        ..smd_pad(number, at(x, y), 600_000)
+    };
+    for (index, ((up, un), ((jp, jn), lane))) in
+        package_rows.iter().zip(connector_rows.iter().zip(names)).enumerate()
+    {
+        let (p, n) = ((2 * index + 1).to_string(), (2 * index + 2).to_string());
+        package_pads.extend([land(&p, 1_400_000, *up, 250_000), land(&n, 1_400_000, *un, 250_000)]);
+        connector_pads.extend([land(&p, -1_400_000, *jp, 200_000), land(&n, -1_400_000, *jn, 200_000)]);
+        let (positive, negative) = (format!("{lane}_P"), format!("{lane}_N"));
+        nets.push(net(&positive, &[("U1", &p), ("J1", &p)]));
+        nets.push(net(&negative, &[("U1", &n), ("J1", &n)]));
+        rules.push(profile(lane, &positive, &negative));
+        rules.push(profile(lane, &negative, &positive));
+    }
+    let body = Size { width_nm: 3 * MM, height_nm: 8 * MM };
+    let package = footprint("test/package-row", package_pads, body);
+    let connector = footprint("test/connector-row", connector_pads, body);
+    let poses = vec![pose("U1", &package.name, mm(8, 10)), pose("J1", &connector.name, mm(22, 10))];
+    let mut board = board(name, 30, 20, vec![package, connector], poses, nets);
+    board.rules.minimum_clearance_nm = 100_000;
+    board.rules.minimum_track_width_nm = 100_000;
+    board.rules.default_track_width_nm = 200_000;
+    board.net_routing_rules = rules;
+    board
+}
