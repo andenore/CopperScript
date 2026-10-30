@@ -74,7 +74,26 @@ pub struct RoutingPipelineOptions {
     pub stop_after: Option<String>,
     pub escape_plan_options: Option<EscapePlanOptions>,
     pub placement_feedback_trials: i64,
+    /// A saved placement that replaces placement and global routing.
+    pub initial_placement: Option<PlacementRoutingResult>,
 }
+
+/// A completed stage, as `on_stage(name, value)` observes it (for checkpoints).
+pub enum Stage<'a> {
+    /// `placement`: the placement and global route the run continues from.
+    Placement(&'a PlacementRoutingResult),
+    /// `critical-inputs` or `critical-retry-inputs`: what the critical
+    /// router of the kept run starts from.
+    CriticalInputs {
+        name: &'static str,
+        board: &'a PhysicalBoard,
+        global_route: &'a GlobalRoutingResult,
+        reserved_accesses: Option<&'a crate::bypass_reservations::BypassReservation>,
+        plane_stitch_options: Option<&'a PlaneStitchOptions>,
+    },
+}
+
+pub type StageCallback<'a> = &'a mut dyn FnMut(Stage<'_>);
 
 impl Default for RoutingPipelineOptions {
     fn default() -> Self {
@@ -93,6 +112,7 @@ impl Default for RoutingPipelineOptions {
             stop_after: None,
             escape_plan_options: None,
             placement_feedback_trials: 0,
+            initial_placement: None,
         }
     }
 }
@@ -475,6 +495,7 @@ pub fn critical_return_plane_options(
 
 /// `_route_critical_stage` without escape or bypass reservations: planar
 /// promotion, then critical routing on the placed board.
+#[allow(clippy::too_many_arguments)]
 fn route_critical_stage(
     placement: &PlacementRoutingResult,
     unified_options: &UnifiedRouterOptions,
@@ -483,6 +504,7 @@ fn route_critical_stage(
     plane_stitch_options: Option<&PlaneStitchOptions>,
     lattice: Option<&Lattice>,
     on_progress: &mut Option<ProgressCallback<'_>>,
+    on_stage: &mut Option<StageCallback<'_>>,
 ) -> Result<(CriticalRoutingResult, Option<Reserved>, Option<Held>, bool)> {
     let board = &placement.board;
     let prefix: (&[TrackSegment], &[Via]) = lattice.map_or((&[], &[]), |(tracks, vias, _)| (tracks, vias));
@@ -571,6 +593,15 @@ fn route_critical_stage(
         critical_inputs(reserved.as_ref().map_or(&[][..], |r| &r.2[..]), None, on_progress)?;
     let mut held_as_copper = bypass_accesses.is_some();
     let return_options = critical_return_plane_options(&source, plane_stitch_options, &halos);
+    if let Some(callback) = on_stage.as_mut() {
+        callback(Stage::CriticalInputs {
+            name: "critical-inputs",
+            board: &source,
+            global_route: &placement.global_route,
+            reserved_accesses: bypass_accesses.as_ref(),
+            plane_stitch_options: return_options.as_ref(),
+        });
+    }
     let options = crate::critical::CriticalOptions {
         pair_state_limit,
         plane_stitch_options: return_options.as_ref(),
@@ -609,6 +640,15 @@ fn route_critical_stage(
                 );
                 let (retry_source, retry_accesses) =
                     critical_inputs(&kept, retry_base.as_ref().zip(bypass_accesses.as_ref()), on_progress)?;
+                if let Some(callback) = on_stage.as_mut() {
+                    callback(Stage::CriticalInputs {
+                        name: "critical-retry-inputs",
+                        board: &retry_source,
+                        global_route: &placement.global_route,
+                        reserved_accesses: retry_accesses.as_ref(),
+                        plane_stitch_options: return_options.as_ref(),
+                    });
+                }
                 let retry_options =
                     crate::critical::CriticalOptions { reserved_accesses: retry_accesses.as_ref(), ..options };
                 let retry = crate::critical::route_critical_nets(
@@ -881,7 +921,18 @@ fn unified_profile_review(
 pub fn run_routing_pipeline(
     board: PhysicalBoard,
     options: RoutingPipelineOptions,
+    on_progress: Option<ProgressCallback<'_>>,
+) -> Result<RoutingPipelineResult> {
+    run_routing_pipeline_staged(board, options, on_progress, None)
+}
+
+/// [`run_routing_pipeline`] with `on_stage(name, value)`, which observes
+/// completed stages (e.g. for checkpoints).
+pub fn run_routing_pipeline_staged(
+    board: PhysicalBoard,
+    mut options: RoutingPipelineOptions,
     mut on_progress: Option<ProgressCallback<'_>>,
+    mut on_stage: Option<StageCallback<'_>>,
 ) -> Result<RoutingPipelineResult> {
     let mut unified_options = options.unified_options.clone().unwrap_or_default();
     let mut unified_fanout = options.fanout_options.clone();
@@ -917,23 +968,48 @@ pub fn run_routing_pipeline(
     {
         return Err(Error::Value(format!("stop_after must be one of {}", STOP_STAGES.join(", "))));
     }
-    emit(&mut on_progress, "placement_global", "started", Vec::new());
-    let placement = {
-        let progress: Option<ProgressCallback<'_>> = match &mut on_progress {
-            Some(callback) => Some(&mut **callback),
-            None => None,
+    let placement = if let Some(placement) = options.initial_placement.take() {
+        let names = |board: &PhysicalBoard| board.nets.iter().map(|net| net.name.clone()).collect::<IndexSet<_>>();
+        let (saved, current) = (names(&placement.board), names(&board));
+        if placement.board.name != board.name
+            || saved.len() != current.len()
+            || !saved.iter().all(|n| current.contains(n))
+        {
+            return Err(Error::Value("the supplied placement belongs to a different board".to_owned()));
+        }
+        emit(
+            &mut on_progress,
+            "placement_global",
+            "reused",
+            vec![
+                ("candidate", text(&placement.placement_candidate)),
+                ("global_status", text(placement.global_route.status.value())),
+            ],
+        );
+        placement
+    } else {
+        emit(&mut on_progress, "placement_global", "started", Vec::new());
+        let placement = {
+            let progress: Option<ProgressCallback<'_>> = match &mut on_progress {
+                Some(callback) => Some(&mut **callback),
+                None => None,
+            };
+            optimize_placement_for_routing(&board, &placement_options, &global_options, &feedback_options, progress)?
         };
-        optimize_placement_for_routing(&board, &placement_options, &global_options, &feedback_options, progress)?
+        emit(
+            &mut on_progress,
+            "placement_global",
+            "finished",
+            vec![
+                ("candidate", text(&placement.placement_candidate)),
+                ("global_status", text(placement.global_route.status.value())),
+            ],
+        );
+        placement
     };
-    emit(
-        &mut on_progress,
-        "placement_global",
-        "finished",
-        vec![
-            ("candidate", text(&placement.placement_candidate)),
-            ("global_status", text(placement.global_route.status.value())),
-        ],
-    );
+    if let Some(callback) = on_stage.as_mut() {
+        callback(Stage::Placement(&placement));
+    }
     if options.stop_after.as_deref() == Some("placement") {
         emit(&mut on_progress, "ordinary_area", "stopped", vec![("reason", text("stop_after_placement"))]);
         let (critical, detailed, drc) = stopped_after_placement(&placement, options.drc_policy)?;
@@ -996,7 +1072,8 @@ pub fn run_routing_pipeline(
             vec![("reason", text("all mutable nets negotiate together; only source-fixed copper is retained"))],
         );
     }
-    let routed = route_tail(&placement, array_plans.as_ref(), lattice.as_ref(), &tail, &mut on_progress)?;
+    let routed =
+        route_tail(&placement, array_plans.as_ref(), lattice.as_ref(), &tail, &mut on_progress, &mut on_stage)?;
     let feedback_budget =
         options.placement_feedback_trials.max(options.detailed_feedback_trials + options.critical_feedback_trials);
     let mut placement = placement;
@@ -1038,7 +1115,8 @@ pub fn run_routing_pipeline(
             // The escape frame (array plans, via lattice) of the trial placement.
             let (trial_plans, trial_surface) = plan_array_frames(trial_board, escape_plan_options, progress)?;
             let trial_lattice = plan_lattice(trial_board, escape_plan_options, trial_surface.as_ref(), progress)?;
-            let routed = route_tail(&trial, trial_plans.as_ref(), trial_lattice.as_ref(), &trial_tail, progress)?;
+            let routed =
+                route_tail(&trial, trial_plans.as_ref(), trial_lattice.as_ref(), &trial_tail, progress, &mut None)?;
             Ok(FeedbackState {
                 board: trial_board.clone(),
                 global_route: trial_global.clone(),
@@ -1149,6 +1227,7 @@ fn route_tail(
     lattice: Option<&Lattice>,
     tail: &TailInputs<'_>,
     on_progress: &mut Option<ProgressCallback<'_>>,
+    on_stage: &mut Option<StageCallback<'_>>,
 ) -> Result<TailResult> {
     let (critical, reserved, held, held_as_copper) = if tail.unified_options.direct {
         (direct_critical(placement)?, None, None, false)
@@ -1161,6 +1240,7 @@ fn route_tail(
             tail.critical_plane_options,
             lattice,
             on_progress,
+            on_stage,
         )?
     };
     let (mut critical, mut plane_stitch) = complete_critical_stage(

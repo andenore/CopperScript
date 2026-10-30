@@ -7,8 +7,13 @@
 //! pipeline itself runs as far as its stages have landed and reports not
 //! implemented (exit 3) at the first one that has not; so do the few paths
 //! whose Python behaviour this rewrite cannot reproduce yet (a crash, a
-//! `--debug` traceback, placement checkpoints, typed `--unified-set` values).
+//! `--debug` traceback, typed `--unified-set` values).
+//!
+//! `--checkpoint-dir` and `--reuse-placement` are this binary's own: the
+//! placement checkpoint records [`BUILD_IDENTITY`] instead of Python's
+//! digest of `pcbir/*.py`, and a different build only sets `code_changed`.
 
+use std::cell::RefCell;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -25,8 +30,11 @@ use copper_place::PlannerOptions;
 use copper_route::bench::unified_overrides;
 use copper_route::escape_plan::EscapePlanOptions;
 use copper_route::fanout::FanoutOptions;
-use copper_route::flow::{RoutingPipelineOptions, STOP_STAGES, run_routing_pipeline};
-use copper_route::iteration_checkpoints::{StageState, StageTracker, write_error_record};
+use copper_route::flow::{RoutingPipelineOptions, STOP_STAGES, Stage, run_routing_pipeline_staged};
+use copper_route::iteration_checkpoints::{
+    PLACEMENT_CHECKPOINT, PlacementReuse, StageState, StageTracker, created_utc_now, load_placement_checkpoint,
+    placement_checkpoint_text, placement_key, write_error_record,
+};
 use copper_route::plane::PlaneStitchOptions;
 use copper_route::progress::{ConsoleProgress, Progress, emit, text as text_value};
 use copper_route::routeflow::PlacementRoutingFeedbackOptions;
@@ -37,6 +45,10 @@ use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::option_parser::{self, Parsed, Spec, flag, short_value, value};
 use crate::pypath;
 use crate::report_args::{python_float, python_int};
+
+/// The build identity a placement checkpoint records: the crate version and
+/// the digest of the workspace's Rust sources (`build.rs`).
+pub const BUILD_IDENTITY: &str = concat!("copper ", env!("CARGO_PKG_VERSION"), " ", env!("COPPER_SOURCE_DIGEST"));
 
 const USAGE: &str = "usage: copper route-board [-h] [--locked] [--offline] [-o OUTPUT] [--report REPORT] \
 [--routing-profile {quick,balanced,thorough}] [--no-check] [options] board";
@@ -776,7 +788,10 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
             let mut summary = Object::new();
             let optional = |value: Option<&str>| value.map_or(Value::Null, Value::from);
             summary.insert("stop_after".to_owned(), optional(arguments.text("--stop-after")));
-            summary.insert("reuse_placement".to_owned(), Value::Null);
+            summary.insert(
+                "reuse_placement".to_owned(),
+                optional(arguments.text("--reuse-placement").map(pypath::display).as_deref()),
+            );
             summary.insert("routing_profile".to_owned(), optional(arguments.text("--routing-profile")));
             let report = PathBuf::from(report);
             if let Ok(record) = write_error_record(
@@ -980,16 +995,76 @@ fn route(
     } else {
         None
     };
-    let mut console = arguments.flag("--progress").then(|| ConsoleProgress::new(&mut *out));
+    // Progress lines and checkpoint messages share stdout, in order.
+    let out = RefCell::new(out);
+    let say = |line: &str| {
+        let mut out = out.borrow_mut();
+        let _ = text::print(&mut *out, line);
+        let _ = out.flush();
+    };
+    let mut console = arguments.flag("--progress").then(|| ConsoleProgress::new(SharedOut(&out)));
     let mut tracker = console.as_mut().map(|console| StageTracker::new(Some(console as &mut dyn Progress)));
+    let checkpoint_dir = arguments.text("--checkpoint-dir").map(pypath::display);
+    let reuse_path = arguments.text("--reuse-placement").map(pypath::display);
+    let mut checkpoints = Object::new();
     let result = (|| -> Result<Finished, Stop> {
         let mut progress: Option<&mut dyn Progress> = tracker.as_mut().map(|tracker| tracker as &mut dyn Progress);
-        if arguments.text("--reuse-placement").is_some() {
-            return Err(Stop::Pending("--reuse-placement (placement checkpoints)".to_owned()));
+        let key = (checkpoint_dir.is_some() || reuse_path.is_some())
+            .then(|| placement_key(&board, &placement_options, &router_options, &feedback_options, BUILD_IDENTITY));
+        let mut initial_placement = None;
+        let mut placement_reuse: Option<PlacementReuse> = None;
+        if let (Some(path), Some(key)) = (&reuse_path, &key) {
+            let (placement, reuse) = match load_placement_checkpoint(Path::new(path), path, key)? {
+                Ok(loaded) => loaded,
+                Err(refusal) => {
+                    return Err(Stop::Value { error_type: Some(refusal.error_type), message: refusal.message });
+                }
+            };
+            say(&format!(
+                "Reusing placement {} from {path}{}",
+                reuse.candidate,
+                if reuse.code_changed { " (a different copper build saved it)" } else { "" }
+            ));
+            initial_placement = Some(placement);
+            placement_reuse = Some(reuse);
         }
-        if arguments.text("--checkpoint-dir").is_some() {
-            return Err(Stop::Pending("--checkpoint-dir (placement checkpoints)".to_owned()));
-        }
+        let reusing = initial_placement.is_some();
+        let mut on_stage = |stage: Stage<'_>| {
+            let Some(directory) = &checkpoint_dir else { return };
+            let (name, text, label, failure) = match stage {
+                Stage::Placement(_) if reusing => return,
+                Stage::Placement(placement) => (
+                    "placement",
+                    placement_checkpoint_text(placement, key.as_ref().expect("a checkpoint key"), &created_utc_now()),
+                    "Placement checkpoint",
+                    "Placement checkpoint not saved",
+                ),
+                Stage::CriticalInputs { name, board, global_route, reserved_accesses, plane_stitch_options } => (
+                    name,
+                    copper_route::state_codec::critical_inputs_state_text(
+                        board,
+                        global_route,
+                        reserved_accesses,
+                        plane_stitch_options,
+                    ),
+                    "Critical inputs checkpoint",
+                    "Critical checkpoint not saved",
+                ),
+            };
+            let file = if name == "placement" { PLACEMENT_CHECKPOINT.to_owned() } else { format!("{name}.state.json") };
+            let path = pypath::display(&format!("{directory}/{file}"));
+            match save_state_file(Path::new(&path), &text) {
+                Ok(()) => {
+                    checkpoints.insert(name.to_owned(), Value::from(path.as_str()));
+                    say(&format!("{label} -> {path}"));
+                }
+                Err((class, message)) => {
+                    let recorded: String = format!("{class}: {message}").chars().take(500).collect();
+                    checkpoints.insert(format!("{name}_error"), Value::from(recorded));
+                    say(&format!("{failure}: {message}"));
+                }
+            }
+        };
         let escape_plan = arguments.boolean("--escape-plan", false);
         let bus_layers = arguments.boolean("--bus-layers", false);
         let array_flow = arguments.boolean("--array-flow", false);
@@ -1012,13 +1087,15 @@ fn route(
             unified_options: Some(unified),
             stop_after: arguments.text("--stop-after").map(str::to_owned),
             escape_plan_options,
+            initial_placement,
             ..RoutingPipelineOptions::default()
         };
         let reborrow: Option<&mut dyn Progress> = match &mut progress {
             Some(callback) => Some(&mut **callback),
             None => None,
         };
-        let result = run_routing_pipeline(board, pipeline, reborrow).map_err(|error| match error {
+        let staged = run_routing_pipeline_staged(board, pipeline, reborrow, Some(&mut on_stage));
+        let result = staged.map_err(|error| match error {
             // A rejected array site is a `ViaArrayPlacementError` carrying its
             // diagnostic board, which this rewrite's error record does not write.
             Error::Value(message) if copper_route::pad_via_arrays::is_site_rejection(&message) => {
@@ -1037,6 +1114,9 @@ fn route(
             early_options: early_options.as_ref(),
             stitch_enabled,
             direct_unified,
+            placement_reuse: placement_reuse.as_ref(),
+            checkpoints: &checkpoints,
+            checkpoint_dir: checkpoint_dir.as_deref(),
         };
         finish(&context, result, &mut progress).map_err(|error| match error {
             Error::Value(message) => Stop::Pending(format!("an uncaught error in the report tail: {message}")),
@@ -1089,6 +1169,43 @@ struct TailContext<'a> {
     early_options: Option<&'a PlaneStitchOptions>,
     stitch_enabled: bool,
     direct_unified: bool,
+    placement_reuse: Option<&'a PlacementReuse>,
+    /// The report's `checkpoints`: saved paths and save failures.
+    checkpoints: &'a Object,
+    checkpoint_dir: Option<&'a str>,
+}
+
+/// One `stdout` shared by the progress stream and the checkpoint messages.
+struct SharedOut<'a, 'w>(&'a RefCell<&'w mut dyn Write>);
+
+impl Write for SharedOut<'_, '_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.borrow_mut().flush()
+    }
+}
+
+/// `save_state(path, ...)`: create the parent directories and write the
+/// text; on failure, Python's exception class and message.
+fn save_state_file(path: &Path, text: &str) -> std::result::Result<(), (&'static str, String)> {
+    let class = |error: &std::io::Error| match error.kind() {
+        std::io::ErrorKind::NotFound => "FileNotFoundError",
+        std::io::ErrorKind::PermissionDenied => "PermissionError",
+        std::io::ErrorKind::AlreadyExists => "FileExistsError",
+        std::io::ErrorKind::IsADirectory => "IsADirectoryError",
+        std::io::ErrorKind::NotADirectory => "NotADirectoryError",
+        _ => "OSError",
+    };
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty())
+        && let Err(error) = std::fs::create_dir_all(parent)
+    {
+        return Err((class(&error), paths::python_os_call_error(&error, Some(&paths::display(parent)))));
+    }
+    text::write_text(path, text)
+        .map_err(|error| (class(&error), paths::python_os_error(&error, Some(&paths::display(path)))))
 }
 
 fn pads_value(pads: &[PadReference]) -> Value {
@@ -1468,6 +1585,18 @@ fn finish(
         put("native_verification", Value::from("skipped_for_stopped_run"));
         put("final_copper_processing", Value::from("skipped_for_stopped_run"));
     }
+    if let Some(reuse) = context.placement_reuse {
+        // Later stages (congestion feedback) may still move parts.
+        let mut document = reuse.document();
+        document.insert(
+            "final_candidate".to_owned(),
+            Value::from(result.placement_and_global.placement_candidate.as_str()),
+        );
+        put("placement_reuse", Value::Object(document));
+    }
+    if !context.checkpoints.is_empty() {
+        put("checkpoints", Value::Object(context.checkpoints.clone()));
+    }
     put("fabrication_ready", Value::Bool(false));
     put("routing_complete", Value::Bool(closure_status == PhysicalFlowStatus::Pass));
     put("placement_candidate", Value::from(result.placement_and_global.placement_candidate.as_str()));
@@ -1742,6 +1871,21 @@ fn finish(
     let lines = Vec::new();
     emit(progress, "export", "started", Vec::new());
     let exported = (|| -> Result<(PathBuf, Vec<String>), String> {
+        if let Some(directory) = context.checkpoint_dir {
+            let metadata = Object::from([(
+                "note".to_owned(),
+                Value::from(
+                    "Final route-board geometry; consult the source-bound report for closure and qualification",
+                ),
+            )]);
+            let state = copper_state::StateDocument::new(
+                "pcbir.physical:PhysicalBoard",
+                metadata,
+                copper_route::state_codec::encode_board(&output_board),
+            );
+            let path = pypath::display(&format!("{directory}/final-board.state.json"));
+            save_state_file(Path::new(&path), &state.to_text()).map_err(|(_, message)| message)?;
+        }
         if let Some(parent) = report_path.parent().filter(|p| !p.as_os_str().is_empty()) {
             copper_pcb::project::create_directories(parent)?;
         }

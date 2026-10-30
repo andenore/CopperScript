@@ -181,3 +181,37 @@ Reference coverage measures each envelope against the union of the fills
 (slab integration, `union_convex_overlap`), as shapely's
 `unary_union(...).covers` does; its areas agree with shapely to float
 rounding on 3,000 random overlapping fills.
+
+## Placement checkpoints (D7, Rust only, not compared)
+
+`route-board --checkpoint-dir` and `--reuse-placement` are designed for the
+Rust binary rather than to match Python's files (decision D7). No corpus case
+compares them with Python; `crates/copper/tests/route_board_checkpoints.rs`
+runs them through the binary. What differs from Python's design:
+
+- **Build identity.** The checkpoint key's `code` field is
+  `copper VERSION sha256:HEX`: the `copper` crate version and the SHA-256,
+  made by `crates/copper/build.rs`, of every `crates/**/*.rs` file (path,
+  NUL, LF-normalised bytes, NUL, in path order). Python's `code` is
+  `code_digest()` of `pcbir/*.py`. As in Python, a different build never
+  blocks reuse. It only sets `placement_reuse.code_changed`, and the
+  `Reusing placement` line ends in `(a different copper build saved it)`
+  instead of `(compiler code changed since it was saved)`. A checkpoint
+  Python wrote therefore always reads as made by a different build.
+- **Unchanged definitions.** The `board` (`physical_board_digest`) and
+  `options` (`_options_digest` of the placement, global and feedback
+  options, then `None, None`) fields keep Python's definitions. The state
+  payload is the `copperscript.state/v1` encoding of the same
+  `PlacementRoutingResult` dataclass. `created_utc` is a timestamp in both.
+- **Refusal messages.** These keep Python's text and exit status 2: an
+  unreadable path (`cannot read placement checkpoint PATH: STRERROR`), not a
+  placement checkpoint, a different board and different options. A file
+  that is not a state file keeps the classes of Python's state reader
+  (`JSONDecodeError`, and `StateError` for a wrong schema or digest). There
+  are two differences. Rust does not decode an arbitrary `pcbir` value
+  before it checks the kind: any other dataclass, a non-UTF-8 file or a JSON
+  document that is not an object is "not a placement checkpoint", where
+  Python may raise from its generic decoder or crash. And Rust's `strerror`
+  text on Windows is the operating system's.
+- **Not ported.** A checkpoint with package patterns (support-pattern trials)
+  is not implemented (exit 3).

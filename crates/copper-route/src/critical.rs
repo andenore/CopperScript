@@ -1533,49 +1533,8 @@ fn plane_stitch_options(value: &StateValue) -> Result<PlaneStitchOptions> {
 /// `routeflow.PlacementRoutingResult` (a placement checkpoint): its board
 /// and global route, after decoding every field as Python constructs it.
 fn placement_checkpoint(value: &StateValue) -> Result<(PhysicalBoard, GlobalRoutingResult)> {
-    use copper_pcb::state_codec::{Fields, boolean, enumeration, integer, items, text};
-    let fields = Fields::of(value, "pcbir.routeflow:PlacementRoutingResult")?;
-    fields.allow(&[
-        "status",
-        "board",
-        "global_route",
-        "placement_candidate",
-        "iterations",
-        "accepted_moves",
-        "full_route_certified",
-        "package_patterns",
-    ])?;
-    enumeration(fields.required("status")?, "FeedbackStatus", |member| {
-        ["pass", "warning"].contains(&member).then_some(())
-    })?;
-    let board = copper_pcb::state_codec::board(fields.required("board")?)?;
-    let global_route = crate::routing_state::global_routing_result(fields.required("global_route")?)?;
-    text(fields.required("placement_candidate")?)?;
-    for iteration in items(fields.required("iterations")?)? {
-        let iteration = Fields::of(iteration, "pcbir.routeflow:FeedbackIteration")?;
-        let names = [
-            "iteration",
-            "accepted",
-            "movement_nm",
-            "trials",
-            "unrouted_net_count",
-            "total_overflow",
-            "maximum_overflow",
-            "routing_fingerprint",
-        ];
-        iteration.allow(&names)?;
-        boolean(iteration.required("accepted")?)?;
-        text(iteration.required("routing_fingerprint")?)?;
-        for name in names.iter().filter(|name| !["accepted", "routing_fingerprint"].contains(name)) {
-            integer(iteration.required(name)?)?;
-        }
-    }
-    integer(fields.required("accepted_moves")?)?;
-    boolean(fields.required("full_route_certified")?)?;
-    if fields.get("package_patterns").is_some_and(|patterns| !items(patterns).is_ok_and(<[StateValue]>::is_empty)) {
-        return copper_pcb::not_implemented("a placement checkpoint with package patterns");
-    }
-    Ok((board, global_route))
+    let placement = crate::iteration_checkpoints::placement_result(value)?;
+    Ok((placement.board, placement.global_route))
 }
 
 const NEEDS_INPUTS: &str = "critical replay requires a board and global route from saved pipeline inputs";
