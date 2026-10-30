@@ -234,7 +234,7 @@ impl Shared<'_> {
 }
 
 /// `_rejection_text`: where the exact commit check rejected a net.
-fn rejection_text(router: &Router<'_, '_>, name: &str) -> String {
+pub(crate) fn rejection_text(router: &Router<'_, '_>, name: &str) -> String {
     let Some(details) = router.rejections.get(name).filter(|d| !d.is_empty()) else {
         return "unified: rejected by exact commit check".to_owned();
     };
@@ -1284,7 +1284,7 @@ fn recheck_pours<'b>(
 /// past its own `max_length`. Only a net that declares
 /// `tuning_amplitude_limit` is tuned; every member left over the limit is
 /// reported with its reason.
-fn tune_bus_skew(
+pub(crate) fn tune_bus_skew(
     board: &PhysicalBoard,
     accepted: &Accepted,
     rules: &IndexMap<&str, &copper_pcb::board::NetRoutingRule>,

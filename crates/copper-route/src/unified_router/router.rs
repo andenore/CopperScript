@@ -735,7 +735,7 @@ impl<'p, 'b> Router<'p, 'b> {
 
     /// `_ball_field_via_mask`: inside a full ball array, new vias only at
     /// cell centres (dogbone sites).
-    fn ball_field_via_mask(&self) -> Result<Option<Vec<bool>>> {
+    pub(crate) fn ball_field_via_mask(&self) -> Result<Option<Vec<bool>>> {
         let board = self.board;
         let g = &self.lattice;
         let mut masks: Option<Vec<Vec<bool>>> = None;
@@ -1334,7 +1334,7 @@ impl<'p, 'b> Router<'p, 'b> {
     }
 
     /// `_zone_regions`: plane target nodes of a zone net, its separate pours and fragments.
-    fn zone_regions(&mut self, name: &str, spec: &NetSpec) -> (IndexSet<i64>, Vec<Vec<i64>>, Vec<Vec<i64>>) {
+    pub(crate) fn zone_regions(&mut self, name: &str, spec: &NetSpec) -> (IndexSet<i64>, Vec<Vec<i64>>, Vec<Vec<i64>>) {
         let (fill_width, fill_clearance) = if self.options.plane_fill_width {
             (self.board.rules.minimum_track_width_nm, self.board.rules.minimum_clearance_nm)
         } else {
@@ -1510,7 +1510,7 @@ impl<'p, 'b> Router<'p, 'b> {
     }
 
     /// `_plane_via_taps`: nodes at existing plane vias that already land in the plane.
-    fn plane_via_taps(&self, name: &str, spec: &NetSpec, planes: &IndexSet<i64>) -> Result<IndexSet<i64>> {
+    pub(crate) fn plane_via_taps(&self, name: &str, spec: &NetSpec, planes: &IndexSet<i64>) -> Result<IndexSet<i64>> {
         let g = &self.lattice;
         let layers_all = &g.layers;
         let mut taps = IndexSet::new();
