@@ -3375,7 +3375,7 @@ fn pin_stubs(net: &str, guide: &GlobalNetRoute, width: i64) -> Vec<TrackSegment>
 }
 
 /// `_route_single`: the global guide's segments, pin stubs and vias.
-fn route_single(
+pub(crate) fn route_single(
     board: &PhysicalBoard,
     rule: &NetRoutingRule,
     guide: Option<&GlobalNetRoute>,
@@ -3436,7 +3436,7 @@ fn route_single(
 /// `_improve_single_surface`: a shorter fully checked via-free surface tree
 /// replaces the guide's copper (or an open result).
 #[allow(clippy::too_many_arguments)]
-fn improve_single_surface(
+pub(crate) fn improve_single_surface(
     board: &PhysicalBoard,
     rule: &NetRoutingRule,
     guide: Option<&GlobalNetRoute>,
@@ -3707,7 +3707,7 @@ fn unified_error(error: crate::unified_error::Error) -> Error {
 }
 
 /// One owner's proposal: its result and new copper.
-type Proposal = (CriticalNetResult, Vec<TrackSegment>, Vec<Via>);
+pub(crate) type Proposal = (CriticalNetResult, Vec<TrackSegment>, Vec<Via>);
 
 /// The unified router's bounded critical options (`replace(unified_options,
 /// direct=True, ...)`), with `budget` seconds unless the caller's is smaller.
@@ -3815,7 +3815,7 @@ fn route_critical_cohort(
 
 /// `_route_single_exact`: bounded single-net repair against immutable earlier
 /// critical copper, the net routing alone in the unified router.
-fn route_single_exact(
+pub(crate) fn route_single_exact(
     board: &PhysicalBoard,
     rule: &NetRoutingRule,
     global_route: &GlobalRoutingResult,

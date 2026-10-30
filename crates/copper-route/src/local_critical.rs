@@ -194,7 +194,7 @@ pub fn local_surface_candidates_bounded(
 /// `_bounded_surface_maze`: either terminal's grid phase within one shared
 /// local allowance.
 #[allow(clippy::too_many_arguments)]
-fn bounded_surface_maze(
+pub(crate) fn bounded_surface_maze(
     board: &PhysicalBoard,
     clearance: &RoutingClearanceIndex<'_>,
     net: &str,
