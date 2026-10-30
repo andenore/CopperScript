@@ -15,6 +15,7 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_dphy_routing_intent.py | 14 | 14 | 0 | 0 | `crates/copper-drc/tests/dphy_routing_intent.rs` |
 | test_pair_vias.py | 12 | 12 | 0 | 0 | `src/critical_tests/pair_vias.rs` |
 | test_critical_replay.py | 12 | 8 | 4 | 0 | `src/critical_tests/critical_replay.rs`; the CLI case in `crates/copper/tests/critical_replay_cli.rs` |
+| test_critical_diagnostics.py | 12 | 9 | 3 | 0 | `src/critical_tests/critical_diagnostics.rs` |
 
 ## Notes
 
@@ -111,3 +112,16 @@ Adapted:
 - `port_inventory_is_bounded_and_outside_routing_identity`: Python's
   `compare=False` equality becomes the routing fingerprint; the report
   document does carry the inventory.
+
+### test_critical_diagnostics.py
+
+Skipped:
+- `preflight_debug_prints_the_full_traceback` and
+  `route_board_debug_prints_the_full_traceback`: Python traceback printing
+  under `--debug` through a patched exploding stage; no Rust equivalent.
+- `preflight_reports_lanes_and_rejections_from_the_critical_stage`: drove the
+  preflight CLI with a patched router; the lane table and rejection report it
+  printed are covered by the lane-table and rejection tests here.
+
+`lane_table_estimates_screening_delay_from_the_declared_stackup` computes
+Python's `propagation_delay` inline (length x sqrt(er) / c).

@@ -3,6 +3,7 @@
 //! `tests/PORTED-critical.md` for the file-by-file tracking table.
 
 mod critical_bundles;
+mod critical_diagnostics;
 mod critical_replay;
 mod critical_routing;
 mod local_critical;

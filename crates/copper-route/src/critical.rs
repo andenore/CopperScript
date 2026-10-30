@@ -1782,7 +1782,7 @@ pub(crate) fn validate_candidate(
 }
 
 /// `_reject_reserved_plane_tracks`: a candidate on another net's dedicated plane layer.
-fn reject_reserved_plane_tracks(
+pub(crate) fn reject_reserved_plane_tracks(
     board: &PhysicalBoard,
     mut result: CriticalNetResult,
     tracks: Vec<TrackSegment>,
@@ -3948,7 +3948,7 @@ fn within_or_shorter(candidate: &CriticalNetResult, incumbent: &CriticalNetResul
 
 /// `_rejection_summary`: counted first-failing gates (most frequent first)
 /// and three examples, distinct gates first.
-fn rejection_summary(rejected: &[(String, String)]) -> (Vec<(String, i64)>, Vec<String>) {
+pub(crate) fn rejection_summary(rejected: &[(String, String)]) -> (Vec<(String, i64)>, Vec<String>) {
     let mut counts: IndexMap<String, i64> = IndexMap::new();
     for (gate, _) in rejected {
         *counts.entry(gate.clone()).or_default() += 1;
