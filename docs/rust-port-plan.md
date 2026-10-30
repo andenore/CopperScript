@@ -293,6 +293,13 @@ do not shrink as much.
   Where the oracle needs one to keep parity (the via-span fix of
   `via_length_nm`, branch `fix-blind-via-length`), it is made in `pcbir/` on
   `rust-m2` together with the Rust change.
+- **D8 New work is verified with Rust only (recorded 2026-10-30).** To save
+  time, streams no longer run the Python oracle, the comparison harness or the
+  default gate locally, and new features get no Python-comparison corpus
+  cases. They are checked with cargo fmt, clippy (Linux and Windows), `cargo
+  test --workspace` and Rust integration tests that run the `copper` binary.
+  The existing comparison corpus and CI's comparison and ladder jobs are left
+  as they are.
 
 ## 9. Next steps
 
