@@ -73,14 +73,11 @@ fn trial_and_invalid_option_budgets_are_explicit() {
     assert_eq!(report.trials.len(), 1);
 }
 
+/// A board, its ordered pads, their domains, the incumbent and the expansions.
+type Traps = (PhysicalBoard, Vec<PadReference>, Domains, IndexMap<PadReference, usize>, Domains);
+
 /// Ten separated two-pin conflicts, each requiring its incumbent to move.
-fn independent_assignment_traps() -> (
-    PhysicalBoard,
-    Vec<PadReference>,
-    Domains,
-    IndexMap<PadReference, usize>,
-    IndexMap<PadReference, Vec<EscapeCandidate>>,
-) {
+fn independent_assignment_traps() -> Traps {
     let nets = (0..10)
         .flat_map(|i| ["A", "B"].map(|role| PhysicalNet { name: format!("{role}{i}"), pads: Vec::new() }))
         .collect();
