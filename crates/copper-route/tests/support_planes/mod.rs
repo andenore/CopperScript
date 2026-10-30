@@ -376,3 +376,41 @@ pub fn physicalize_source(name: &str, source: &str, layers: i64, profile: &str) 
     let options = PhysicalOptions::new(100.0, 80.0, layers, profile).map_err(|error| error.to_string())?;
     physicalize(&design, Footprints::Proxy, &options, false, false).map_err(|error| error.to_string())
 }
+
+/// `_ball_array` of `tests/test_fine_regions.py`: a full `n` x `n` grid of
+/// 0.35 mm circular SMD balls centred on the origin.
+pub fn ball_array(n: i64, pitch_mm: f64) -> PhysicalFootprint {
+    let step = nm(pitch_mm);
+    let half = (n - 1) * step / 2;
+    let mut pads = Vec::new();
+    for row in 0..n {
+        for col in 0..n {
+            let mut ball =
+                pad(&format!("R{row}C{col}"), Point::new(col * step - half, row * step - half), size(0.35, 0.35));
+            ball.shape = PadShape::Circle;
+            pads.push(ball);
+        }
+    }
+    let width = MM + 2 * half;
+    footprint(&format!("test/bga{}_{pitch_mm}", n * n), pads, Size { width_nm: width, height_nm: width })
+}
+
+/// `_board` of `tests/test_fine_regions.py`: parts `(reference, footprint,
+/// x mm, y mm)` without nets on an `F.Cu`, inner..., `B.Cu` stackup.
+pub fn fine_board(
+    parts: Vec<(&str, PhysicalFootprint, f64, f64)>,
+    width: f64,
+    height: f64,
+    layers: usize,
+) -> PhysicalBoard {
+    let mut board = board("FineRegions", width, height);
+    for (reference, definition, x, y) in parts {
+        board.placements.push(place(reference, &definition.name, mm(x, y)));
+        add_footprint(&mut board, definition);
+    }
+    let mut copper = vec![CopperLayer::Front];
+    copper.extend((1..layers - 1).map(|i| CopperLayer::parse(&format!("In{i}.Cu")).expect("inner layer")));
+    copper.push(CopperLayer::Back);
+    board.stackup = Stackup::new(copper);
+    board
+}

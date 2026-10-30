@@ -14,6 +14,7 @@ test that loops over its cases.
 | test_pad_via_arrays.py | 13 | 0 (the critical-preflight half of the report test: the command is gone) | 0 | `tests/pad_via_arrays.rs`; `crates/copper/tests/via_in_pad_reports.rs` |
 | test_pad_stitch.py | 11 | 2: installed-KiCad cases (`kicad-cli` not installed) | 0 | `tests/pad_stitch.rs` |
 | test_serpentine_tuning.py | 12 | 0 | 0 | `src/test_support_planes.rs` (7 `UnitTuner` cases); `tests/serpentine_tuning.rs` (5) |
+| test_nested_lattice.py | 12 | 0 | 0 | `tests/nested_lattice.rs` (each case runs on both fixtures; Python's seeded `random` is a fixed LCG) |
 
 ## Notes
 
