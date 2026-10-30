@@ -1529,3 +1529,47 @@ fn layer_rank(layer: CopperLayer) -> i64 {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support_routers::*;
+
+    /// `tests/test_escape_plan.py::test_closed_tile_diagonals_stop_inner_balls_even_through_open_side_gaps`:
+    /// a 4x4 0.8 mm grid of 0.45 mm balls on 0.1 mm rules.
+    #[test]
+    fn closed_tile_diagonals_stop_inner_balls_even_through_open_side_gaps() {
+        let bga = footprint(
+            "bga",
+            (0..16).map(|i| ball(&(i + 1).to_string(), 0.8 * (i % 4) as f64, 0.8 * (i / 4) as f64, 0.45)).collect(),
+            8.0,
+            8.0,
+        );
+        let nets = (1..=16).map(|n| net(&format!("N{n}"), &[("U", &n.to_string())])).collect();
+        let mut board = board("bga", 60.0, 40.0, vec![bga], vec![placement("U", "bga", 10.0, 10.0)], nets);
+        board.rules.minimum_clearance_nm = 100_000;
+        board.rules.minimum_track_width_nm = 100_000;
+        board.rules.default_track_width_nm = 100_000;
+        board.rules.default_via_size_nm = 450_000;
+        board.rules.default_via_drill_nm = 200_000;
+        let fields = pad_fields(&board, "U", &EscapePlanOptions::default()).expect("fields");
+        assert_eq!(fields.len(), 1);
+        let field = &fields[0];
+        let closed = Gap {
+            first: PadReference::new("U", "1"),
+            second: PadReference::new("U", "6"),
+            kind: "diagonal".to_owned(),
+            gap_nm: 0,
+            layers: vec![CopperLayer::Front],
+        };
+        let mut blocked = field.clone();
+        for tile in &mut blocked.tiles {
+            tile.diagonals = [Some(closed.clone()), Some(closed.clone())];
+        }
+        let signal = field.pads.clone();
+        let flow =
+            |field: &PadField| array_flow("U", field, CopperLayer::Front, &signal, 100_000, 100_000).surface.len();
+        assert_eq!(flow(field), 16);
+        assert_eq!(flow(&blocked), 12);
+    }
+}

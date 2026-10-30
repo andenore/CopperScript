@@ -256,6 +256,117 @@ pub fn choose_pitch(board: &PhysicalBoard, default_nm: i64) -> Result<i64> {
     Ok(pitch)
 }
 
+/// `_same_but_copper`: two boards differ at most in their tracks and vias.
+fn same_but_copper(board: &PhysicalBoard, other: &PhysicalBoard) -> bool {
+    if std::ptr::eq(board, other) {
+        return true;
+    }
+    // Destructured so that a new board field cannot be left out.
+    let PhysicalBoard {
+        name,
+        outline,
+        footprints,
+        placements,
+        nets,
+        stackup,
+        rules,
+        tracks: _,
+        vias: _,
+        metadata,
+        regions,
+        keepouts,
+        placement_rules,
+        relative_rules,
+        placement_groups,
+        power_domains,
+        net_routing_rules,
+        zones,
+        polygons,
+        copper_keepouts,
+        rigid_clusters,
+        hard_macros,
+        materialized_macros,
+        via_in_pad_rules,
+        mechanical_holes,
+        mechanical_slots,
+        datums,
+        boundary_edges,
+        attachments,
+        component_heights,
+        body_overhangs,
+        assembly_envelopes,
+        assembly_access,
+        match_groups,
+        component_hole_clearances,
+        decoupling_links,
+        silkscreen,
+        power_feeds,
+        mechanical_references,
+    } = board;
+    *name == other.name
+        && *outline == other.outline
+        && *footprints == other.footprints
+        && *placements == other.placements
+        && *nets == other.nets
+        && *stackup == other.stackup
+        && *rules == other.rules
+        && *metadata == other.metadata
+        && *regions == other.regions
+        && *keepouts == other.keepouts
+        && *placement_rules == other.placement_rules
+        && *relative_rules == other.relative_rules
+        && *placement_groups == other.placement_groups
+        && *power_domains == other.power_domains
+        && *net_routing_rules == other.net_routing_rules
+        && *zones == other.zones
+        && *polygons == other.polygons
+        && *copper_keepouts == other.copper_keepouts
+        && *rigid_clusters == other.rigid_clusters
+        && *hard_macros == other.hard_macros
+        && *materialized_macros == other.materialized_macros
+        && *via_in_pad_rules == other.via_in_pad_rules
+        && *mechanical_holes == other.mechanical_holes
+        && *mechanical_slots == other.mechanical_slots
+        && *datums == other.datums
+        && *boundary_edges == other.boundary_edges
+        && *attachments == other.attachments
+        && *component_heights == other.component_heights
+        && *body_overhangs == other.body_overhangs
+        && *assembly_envelopes == other.assembly_envelopes
+        && *assembly_access == other.assembly_access
+        && *match_groups == other.match_groups
+        && *component_hole_clearances == other.component_hole_clearances
+        && *decoupling_links == other.decoupling_links
+        && *silkscreen == other.silkscreen
+        && *power_feeds == other.power_feeds
+        && *mechanical_references == other.mechanical_references
+}
+
+/// `_index_holds`: whether `index` answers legality queries as a fresh index
+/// of `board`: its own board differs from `board` only in copper, and its
+/// additions are `board`'s copper as multisets.
+pub(crate) fn index_holds(index: &RoutingClearanceIndex<'_>, board: &PhysicalBoard) -> bool {
+    use crate::routing_clearance::Copper;
+    if !same_but_copper(index.board, board) {
+        return false;
+    }
+    let mut tracks: IndexMap<&TrackSegment, i64> = IndexMap::new();
+    let mut vias: IndexMap<&copper_pcb::board::Via, i64> = IndexMap::new();
+    for (item, _) in index.additions() {
+        match item {
+            Copper::Track(track) => *tracks.entry(track).or_insert(0) += 1,
+            Copper::Via(via) => *vias.entry(via).or_insert(0) += 1,
+        }
+    }
+    for track in &board.tracks {
+        *tracks.entry(track).or_insert(0) -= 1;
+    }
+    for via in &board.vias {
+        *vias.entry(via).or_insert(0) -= 1;
+    }
+    tracks.values().all(|count| *count == 0) && vias.values().all(|count| *count == 0)
+}
+
 /// `_Router`.
 pub struct Router<'p, 'b> {
     pub board: &'p PhysicalBoard,
@@ -495,6 +606,11 @@ impl<'p, 'b> Router<'p, 'b> {
         let rules: IndexMap<String, NetRoutingRule> =
             board.net_routing_rules.iter().map(|r| (r.net.clone(), r.clone())).collect();
         let zone_nets: IndexSet<String> = board.zones.iter().map(|z| z.net.clone()).collect();
+        // `clearance` may be a shared index (route_unified) that holds
+        // exactly this board's copper; commit adds accepted copper to it.
+        if !index_holds(&clearance, board) {
+            return fail("shared clearance index does not hold this router's board copper");
+        }
         let mut net_ids = IndexMap::new();
         for net in &board.nets {
             let next = net_ids.len() as i32;
@@ -735,7 +851,7 @@ impl<'p, 'b> Router<'p, 'b> {
 
     /// `_ball_field_via_mask`: inside a full ball array, new vias only at
     /// cell centres (dogbone sites).
-    fn ball_field_via_mask(&self) -> Result<Option<Vec<bool>>> {
+    pub(crate) fn ball_field_via_mask(&self) -> Result<Option<Vec<bool>>> {
         let board = self.board;
         let g = &self.lattice;
         let mut masks: Option<Vec<Vec<bool>>> = None;
@@ -1334,7 +1450,7 @@ impl<'p, 'b> Router<'p, 'b> {
     }
 
     /// `_zone_regions`: plane target nodes of a zone net, its separate pours and fragments.
-    fn zone_regions(&mut self, name: &str, spec: &NetSpec) -> (IndexSet<i64>, Vec<Vec<i64>>, Vec<Vec<i64>>) {
+    pub(crate) fn zone_regions(&mut self, name: &str, spec: &NetSpec) -> (IndexSet<i64>, Vec<Vec<i64>>, Vec<Vec<i64>>) {
         let (fill_width, fill_clearance) = if self.options.plane_fill_width {
             (self.board.rules.minimum_track_width_nm, self.board.rules.minimum_clearance_nm)
         } else {
@@ -1510,7 +1626,7 @@ impl<'p, 'b> Router<'p, 'b> {
     }
 
     /// `_plane_via_taps`: nodes at existing plane vias that already land in the plane.
-    fn plane_via_taps(&self, name: &str, spec: &NetSpec, planes: &IndexSet<i64>) -> Result<IndexSet<i64>> {
+    pub(crate) fn plane_via_taps(&self, name: &str, spec: &NetSpec, planes: &IndexSet<i64>) -> Result<IndexSet<i64>> {
         let g = &self.lattice;
         let layers_all = &g.layers;
         let mut taps = IndexSet::new();

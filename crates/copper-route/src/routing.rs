@@ -2519,3 +2519,57 @@ pub fn routing_fingerprint(
     ));
     sha256_hex(&Dumps::new().sort_keys(true).dumps(&j_object(document)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support_routers::*;
+
+    /// `tests/test_routing.py::test_global_router_can_choose_later_access_candidate`.
+    #[test]
+    fn global_router_can_choose_later_access_candidate() {
+        let board = board(
+            "GlobalRoute",
+            40.0,
+            30.0,
+            vec![one_pad()],
+            vec![placement("J1", "test/one-pad", 5.0, 15.0), placement("J2", "test/one-pad", 35.0, 15.0)],
+            vec![net("SIGNAL", &[("J1", "1"), ("J2", "1")])],
+        );
+        let options =
+            GlobalRouterOptions { tile_size_nm: mm(5.0), maximum_iterations: 1, ..GlobalRouterOptions::default() };
+        let graph = build_graph(&board, &options, false).expect("graph");
+        let (first, second) = (PadReference::new("J1", "1"), PadReference::new("J2", "1"));
+        let (start, farther, nearer) = (GridNode::new(0, 1, 2), GridNode::new(0, 6, 2), GridNode::new(0, 4, 2));
+        let access = |pad: &PadReference, at: Point, node: GridNode| {
+            PinAccess::new(pad.clone(), at, node, graph.point(node), CopperLayer::Front)
+        };
+        let accesses: AccessOptions = IndexMap::from([
+            (("SIGNAL".to_owned(), first.clone()), vec![access(&first, pt(5.0, 15.0), start)]),
+            (
+                ("SIGNAL".to_owned(), second.clone()),
+                vec![access(&second, pt(35.0, 15.0), farther), access(&second, pt(35.0, 15.0), nearer)],
+            ),
+        ]);
+        let usage: IndexMap<String, i64> = graph.resources.values().map(|r| (r.identifier.clone(), 0)).collect();
+        let rules = IndexMap::new();
+        let demands = NetDemands::new(&board, &rules, &options).expect("demands");
+        let route = route_net(
+            &board,
+            &graph,
+            "SIGNAL",
+            &[first, second],
+            None,
+            &accesses,
+            1,
+            &usage,
+            &usage,
+            40,
+            &options,
+            &demands,
+        )
+        .expect("route");
+        assert!(route.connected);
+        assert_eq!(route.accesses[1].node, nearer);
+    }
+}

@@ -1565,3 +1565,97 @@ pub fn legalize(
     }
     Ok(Legalized::Placed(placed, repair_count))
 }
+
+#[cfg(test)]
+#[path = "../../copper-route/tests/support_routers/boards.rs"]
+mod test_boards;
+
+#[cfg(test)]
+mod tests {
+    use super::test_boards::*;
+    use super::*;
+    use copper_pcb::board::{ComponentPlacementRule, PlacementRegion, PlacementTarget, RelativePlacementKind};
+    use copper_physical::BoardOutline;
+
+    fn max_distance(a: (&str, &str), b: (&str, &str), distance: f64) -> RelativePlacementRule {
+        let target = |(reference, pad): (&str, &str)| PlacementTarget {
+            reference: reference.to_owned(),
+            pad: Some(pad.to_owned()),
+        };
+        RelativePlacementRule {
+            kind: RelativePlacementKind::MaxDistance,
+            targets: vec![target(a), target(b)],
+            distance_nm: Some(mm(distance)),
+            axis: None,
+            tolerance_nm: 0,
+            weight: 1,
+        }
+    }
+
+    fn fixed(reference: &str, x: f64, y: f64) -> ComponentPlacementRule {
+        ComponentPlacementRule {
+            fixed_position: Some(pt(x, y)),
+            fixed_rotation_degrees: Some(Decimal::from_i64(0)),
+            ..ComponentPlacementRule::new(reference)
+        }
+    }
+
+    /// `tests/test_escape_placement.py::test_local_repair_moves_actual_blocker_instead_of_unrelated_recent_component`.
+    #[test]
+    fn local_repair_moves_actual_blocker_instead_of_unrelated_recent_component() {
+        for unrelated_failure in [false, true] {
+            let chip = footprint("chip", vec![pad("1", 1.0, -0.6, 0.3, 0.3), pad("2", 1.0, 0.6, 0.3, 0.3)], 2.0, 2.0);
+            let cap =
+                footprint("capacitor", vec![pad("1", -0.3, 0.0, 0.3, 0.3), pad("2", 0.3, 0.0, 0.3, 0.3)], 1.0, 0.5);
+            let mut placements = vec![
+                placement("U", "chip", 10.0, 10.0),
+                placement("C1", "capacitor", 20.0, 20.0),
+                placement("X", "capacitor", 12.0, 9.4),
+                placement("Y", "capacitor", 20.0, 20.0),
+            ];
+            let mut rules = vec![
+                fixed("U", 10.0, 10.0),
+                ComponentPlacementRule { region: Some("slot".to_owned()), ..ComponentPlacementRule::new("C1") },
+            ];
+            let mut relative = vec![max_distance(("C1", "1"), ("U", "1"), 1.5)];
+            if unrelated_failure {
+                placements.push(placement("Z", "chip", 22.0, 10.0));
+                rules.push(fixed("Z", 22.0, 10.0));
+                relative.push(max_distance(("Y", "1"), ("Z", "1"), 3.0));
+            }
+            let mut board = board("local", 30.0, 30.0, vec![chip, cap], placements, Vec::new());
+            board.placement_rules = rules;
+            board.relative_rules = relative;
+            board.regions = vec![PlacementRegion {
+                name: "slot".to_owned(),
+                outline: BoardOutline::new(
+                    [(11.4, 8.9), (12.6, 8.9), (12.6, 9.9), (11.4, 9.9)].iter().map(|(x, y)| pt(*x, *y)).collect(),
+                    Vec::new(),
+                    None,
+                    None,
+                )
+                .expect("outline"),
+                side: None,
+            }];
+            let options = PlannerOptions {
+                candidate_count: 1,
+                analytical_iterations: 0,
+                refinement_passes: 0,
+                exact_repair_limit: 2,
+                ..PlannerOptions::default()
+            }
+            .validated()
+            .expect("options");
+            let scene = Scene::new(&board, options.policy());
+            let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+            let placed: Poses =
+                targets.iter().filter(|(r, _)| *r != "C1").map(|(r, p)| (r.clone(), p.clone())).collect();
+            let order = vec!["X".to_owned(), "Y".to_owned()];
+            let result =
+                exact_repair(&scene, "C1", &placed, &order, &targets, &options).expect("repair").expect("a repair");
+            assert!(result["U"] == targets["U"] && result["Y"] == targets["Y"]);
+            assert_ne!(result["X"], targets["X"]);
+            assert_eq!(scene.checker.placement_solution_is_legal(&result).expect("legal"), !unrelated_failure);
+        }
+    }
+}

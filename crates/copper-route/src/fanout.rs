@@ -988,3 +988,36 @@ pub fn route_fanout(
     };
     crate::fanout_bypass_completion::complete_late_bypasses(result, &bypass.pending, &options, only_nets)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support_routers::*;
+
+    fn wire(a: (f64, f64), b: (f64, f64)) -> TrackSegment {
+        track("P", a, b, 0.2, CopperLayer::Front)
+    }
+
+    /// `tests/test_routing_quality.py::test_greedy_and_joint_assignment_reject_the_same_net_x` (greedy half).
+    #[test]
+    fn greedy_reservation_rejects_the_same_net_x() {
+        let board = board("quality", 10.0, 10.0, Vec::new(), Vec::new(), vec![net("P", &[])]);
+        let mut index = RoutingClearanceIndex::new(&board).expect("index");
+        let (mut tracks, mut vias) = (Vec::new(), Vec::new());
+        let first = (vec![wire((2.0, 2.0), (4.0, 4.0))], None);
+        let second = (vec![wire((4.0, 2.0), (2.0, 4.0))], None);
+        assert!(reserve(&board, &mut index, &mut tracks, &mut vias, &first).expect("reserve"));
+        assert!(!reserve(&board, &mut index, &mut tracks, &mut vias, &second).expect("reserve"));
+    }
+
+    /// `tests/test_routing_quality.py::test_straight_outward_precedes_diagonal_even_at_farther_radius`.
+    #[test]
+    fn straight_outward_precedes_diagonal_even_at_farther_radius() {
+        let options = FanoutOptions { maximum_radius_nm: mm(1.0), ..FanoutOptions::default() };
+        let points = ray_candidates(pt(6.0, 5.1), pt(5.0, 5.0), &options, false);
+        let at = |p: Point| points.iter().position(|q| *q == p).expect("candidate");
+        assert!(at(pt(7.0, 5.1)) < at(pt(6.5, 5.6)));
+        let rotated = ray_candidates(pt(6.0, 6.0), pt(5.0, 5.0), &options, true);
+        assert_eq!(rotated[0], pt(6.5, 6.5));
+    }
+}
