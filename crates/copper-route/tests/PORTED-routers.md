@@ -23,6 +23,7 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | corridor_reservation | 13 | 13 | 0 | 0 | `crates/copper-place/tests/corridor_reservation.rs` (12), `crates/copper/tests/corridor_cli.rs` (1) |
 | unified_commit_index | 12 | 10 | 2 | 0 | `tests/unified_commit_index.rs` (10) |
 | placement_global_progress | 11 | 3 | 8 | 0 | `tests/placement_global_progress.rs` (3) |
+| routing_lattice | 9 | 9 | 0 | 0 | `tests/routing_lattice.rs` (9) |
 | routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
 ## Notes per file
@@ -178,9 +179,12 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 - Adapted: the call-order half of
   `test_global_real_result_and_work_order_are_identical_with_callback` is dropped.
 
+### routing_lattice
+- The random node round-trip uses a fixed LCG instead of `random.Random(7)`;
+  the cached-offsets identity check is dropped (no cache in Rust).
+
 ## Remaining files (in order)
 
-routing_lattice,
 congestion_feedback_flow, unified_router_options, unified_congestion_export,
 unified_search_costs, unified_review_constraints, routing_clearance_remove,
 global_target_via_cost, global_search_static_cache, routing_acceptance,
