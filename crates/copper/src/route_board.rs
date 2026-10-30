@@ -96,6 +96,15 @@ mod option_tests {
     use super::*;
 
     #[test]
+    fn compile_codes_with_non_ascii_text_are_not_codes() {
+        assert_eq!(compile_code("board.copper:3:5: MAC005: missing binding"), Some("MAC005"));
+        // Six bytes with a multibyte character across byte three: no code, no panic.
+        assert_eq!(compile_code("board.copper:3:5: AéCDE: missing binding"), None);
+        assert_eq!(compile_code("board.copper:3:5: AB\u{e9}12: x"), None);
+        assert_eq!(compile_code("board.copper:3:5: MAC0\u{e9}: x"), None);
+    }
+
+    #[test]
     fn retired_switches_fail_before_loading_source() {
         for (flag, replacement) in RETIRED_OPTIONS {
             for spelling in [flag.to_string(), format!("{flag}=1")] {
@@ -303,9 +312,10 @@ fn compile_code(message: &str) -> Option<&str> {
     let code = rest.split_once(": ")?.0;
     let mut parts = location.rsplitn(3, ':');
     let numeric = |part: Option<&str>| part.is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
-    let shaped = code.len() == 6
-        && code[..3].bytes().all(|b| b.is_ascii_uppercase())
-        && code[3..].bytes().all(|b| b.is_ascii_digit());
+    // Bytes, not string slices: a non-ASCII code would split a character.
+    let bytes = code.as_bytes();
+    let shaped =
+        bytes.len() == 6 && bytes[..3].iter().all(u8::is_ascii_uppercase) && bytes[3..].iter().all(u8::is_ascii_digit);
     (numeric(parts.next()) && numeric(parts.next()) && shaped).then_some(code)
 }
 

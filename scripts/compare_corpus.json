@@ -27321,6 +27321,22 @@
   {
    "name": "route-board-bga",
    "milestone": "M4",
+   "files_without": {
+    "route.json": [
+     [
+      "critical",
+      "nets",
+      "*",
+      "local_preparation",
+      "elapsed_seconds"
+     ]
+    ],
+    "route.summary.json": [
+     [
+      "report_sha256"
+     ]
+    ]
+   },
    "cases": [
     {
      "id": "route-board-bga/bga",

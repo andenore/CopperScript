@@ -293,6 +293,19 @@ do not shrink as much.
   Where the oracle needs one to keep parity (the via-span fix of
   `via_length_nm`, branch `fix-blind-via-length`), it is made in `pcbir/` on
   `rust-m2` together with the Rust change.
+- **D8 New work is verified with Rust only (recorded 2026-10-30).** To save
+  time, streams no longer run the Python oracle, the comparison harness or the
+  default gate locally, and new features get no Python-comparison corpus
+  cases. They are checked with cargo fmt, clippy (Linux and Windows), `cargo
+  test --workspace` and Rust integration tests that run the `copper` binary.
+  CI is Rust-only too: `build-and-test` (Linux, Windows) runs fmt, clippy,
+  the release build, a package-cache fill with the Rust binary and `cargo
+  test`; the `ladder` job routes every ladder board with `copper bench`
+  (KiCad native DRC where a board asks for it) and fails on a board that
+  errors (exit 3 included) or times out, and on regressions against
+  `bench/ladder-baseline.json` once one is committed. The comparison
+  harness, corpus and oracle fixtures stay in the repository but no longer
+  run in CI.
 
 ## 9. Next steps
 
