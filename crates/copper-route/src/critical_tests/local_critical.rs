@@ -18,7 +18,7 @@ use crate::unified_router::UnifiedRouterOptions;
 /// The Python `fixture(tree)`: one-pad terminals A (5, 5) and B (10, 5),
 /// plus C (10, 10) for a tree, with a legal but long synthetic front guide
 /// up to y = 18 mm and back.
-fn fixture(tree: bool) -> (PhysicalBoard, GlobalRoutingResult) {
+pub(super) fn fixture(tree: bool) -> (PhysicalBoard, GlobalRoutingResult) {
     let terminal = footprint("terminal", vec![smd_pad("1", mm(0, 0), 400_000)], Size { width_nm: MM, height_nm: MM });
     let mut poses = vec![pose("A", "terminal", mm(5, 5)), pose("B", "terminal", mm(10, 5))];
     if tree {

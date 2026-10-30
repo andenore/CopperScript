@@ -14,6 +14,7 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_planned_crossings.py | 17 | 17 | 0 | 0 | `src/critical_tests/planned_crossings.rs` |
 | test_dphy_routing_intent.py | 14 | 14 | 0 | 0 | `crates/copper-drc/tests/dphy_routing_intent.rs` |
 | test_pair_vias.py | 12 | 12 | 0 | 0 | `src/critical_tests/pair_vias.rs` |
+| test_critical_replay.py | 12 | 8 | 4 | 0 | `src/critical_tests/critical_replay.rs`; the CLI case in `crates/copper/tests/critical_replay_cli.rs` |
 
 ## Notes
 
@@ -84,3 +85,29 @@ Adapted (monkeypatched engines):
 - `critical_limited_tier_samples_both_families_and_all_pitches`: the stubbed
   per-pitch slices are internal; the aggregate (60 states spent, exhausted,
   nothing committed) is checked.
+
+### test_critical_replay.py
+
+Skipped:
+- `failed_cohort_owner_retries_without_reopening_accepted_peer`,
+  `critical_cohort_rejects_changed_prefix_or_foreign_owner` and
+  `corrupt_cohort_is_not_hidden_by_a_single_net_retry`: each injects a fault
+  into `route_unified`'s result (a dropped member, a changed prefix, foreign
+  copper); the Rust router has no injection seam and no natural board yields
+  those results.
+- `failed_critical_replay_is_located_for_issues_and_view`: built on
+  `test_local_pair_branches.support_fixture` and the workbench issue index
+  (`copper issues`); outside this group's routing scope.
+
+Adapted:
+- `unified_single_fallback_keeps_the_real_source_profile`: Python patched the
+  local surface candidates away; an F.Cu wall (y = 7..25 mm) now defeats the
+  bounded local maze, so the generous limit is 60 mm instead of 40 mm.
+- `critical_cohort_uses_shared_engine_and_preserves_profile`,
+  `clock_and_data_priorities_negotiate_together`: the recorded single
+  `route_unified` call is shown by the `unified_critical_cohort` strategy.
+- `shared_clock_cohort_still_tunes_declared_matching_group`: only the
+  `retry=False` case (the `retry=True` case injected a cohort miss).
+- `port_inventory_is_bounded_and_outside_routing_identity`: Python's
+  `compare=False` equality becomes the routing fingerprint; the report
+  document does carry the inventory.
