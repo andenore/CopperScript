@@ -1,4 +1,5 @@
 export const scenarios = {
+  weave: {description: "Eight crossed signals, a central keepout and two copper layers. Compare Before / After, then isolate a layer or signal to inspect the solution.", source: (_text, weave) => weave},
   detour: {description: "Both signals stay on the front layer and find a path around the keepout.", source: text => text},
   layers: {description: "The keepout blocks front copper. Both layers are allowed, so the router can use vias and back copper.", source: text => text
     .replaceAll('allowed_layers = "F.Cu"; max_vias = 0;', 'allowed_layers = "F.Cu,B.Cu"; max_vias = 2;')

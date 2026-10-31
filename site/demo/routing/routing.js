@@ -1,7 +1,7 @@
 import {scenarios} from "./routing-cases.js";
 const $ = id => document.getElementById(id);
 const NS = "http://www.w3.org/2000/svg";
-let original = "", worker = null, ready = false, revision = 0, sequence = 0, active = null, timer = null;
+let original = "", weave = "", worker = null, ready = false, revision = 0, sequence = 0, active = null, timer = null;
 let result = null, stage = "after";
 
 function node(tag, attributes = {}, text = "") {
@@ -137,7 +137,7 @@ document.querySelectorAll("[data-stage]").forEach(button=>button.addEventListene
 document.querySelectorAll("[data-case]").forEach(button=>button.addEventListener("click",()=>{
   if (!original) return;
   if (active) stop("Scenario changed. Route again.");
-  $("source").value = scenarios[button.dataset.case].source(original); revision++; clear();
+  $("source").value = scenarios[button.dataset.case].source(original, weave); revision++; clear();
   $("scenario-description").textContent = scenarios[button.dataset.case].description;
   document.querySelectorAll("[data-case]").forEach(b=>b.setAttribute("aria-pressed",String(b===button)));
   run();
@@ -146,7 +146,11 @@ $("source").addEventListener("input",()=>{revision++;clear();document.querySelec
 $("source").addEventListener("keydown",event=>{if((event.ctrlKey||event.metaKey)&&event.key==="Enter"){event.preventDefault();run();}});
 new ResizeObserver(draw).observe($("board"));
 try {
-  const response=await fetch(new URL("./board.copper",import.meta.url));
-  if(!response.ok)throw new Error(`Example request failed (${response.status})`);
-  original=(await response.text()).replace(/\r\n?/g,"\n"); $("source").value=original; $("source").disabled=false; start();
+  const sources = await Promise.all(["board.copper", "weave.copper"].map(async name => {
+    const response = await fetch(new URL(name, import.meta.url));
+    if (!response.ok) throw new Error(`Example request failed (${response.status})`);
+    return (await response.text()).replace(/\r\n?/g, "\n");
+  }));
+  [original, weave] = sources;
+  $("source").value = scenarios.weave.source(original, weave); $("source").disabled=false; start();
 } catch(error){status(`Could not prepare the example: ${error.message}`,"fail");runtime("Example unavailable","failed");}

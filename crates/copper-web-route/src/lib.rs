@@ -121,16 +121,16 @@ fn run(source: &str) -> Result<Value, String> {
     if erc::has_errors(&diagnostics) {
         return Err("Correct the circuit's electrical errors before routing.".into());
     }
-    if design.electrical.components.len() > 4 || design.electrical.nets.len() > 4 {
-        return Err("The routing lab supports at most four components and four nets.".into());
+    if design.electrical.components.len() > 8 || design.electrical.nets.len() > 8 {
+        return Err("The routing lab supports at most eight components and eight nets.".into());
     }
     let mut physical_options = PhysicalOptions::new(40.0, 30.0, 2, "generic").map_err(|e| e.to_string())?;
     physical_options.margin_mm = 2.0;
     let board = physicalize(&design, Footprints::Proxy, &physical_options, true, true).map_err(|e| e.to_string())?;
     if board.outline.vertices.iter().any(|p| p.x_nm < 0 || p.y_nm < 0 || p.x_nm > 40_000_000 || p.y_nm > 30_000_000)
         || board.placements.len() != design.electrical.components.len()
-        || board.placements.len() > 4
-        || board.nets.len() > 4
+        || board.placements.len() > 8
+        || board.nets.len() > 8
         || board.placements.iter().map(|p| board.footprints[&p.footprint].pads.len()).sum::<usize>() > 16
         || board.outline.vertices.len() > 16
         || board.copper_keepouts.len() > 8

@@ -6,6 +6,10 @@ No routes or outcome geometry are precomputed in JavaScript.
 
 ## User interaction
 
+- **Weave eight signals** (default): eight fixed synthetic resistor footprints
+  supply 16 pads. Eight crossed nets must detour around a central both-layer
+  keepout and share two copper layers, using actual vias where needed. The
+  self-contained `weave.copper` source is editable and downloadable.
 - **Route around it:** two fixed, front-side synthetic resistor footprints;
   two ordinary signals route around a both-layer rectangular keepout.
 - **Allow a layer change:** the keepout spans the board on F.Cu only; both
@@ -32,7 +36,7 @@ and internal final DRC as the native implementation. No solver algorithm or
 recovery policy was changed. `copper-report::scene_from_physical` supplies the
 drawn pad polygons, tracks, vias and footprint poses.
 
-The adapter accepts at most 8 KiB, four fixed components, four ordinary nets,
+The adapter accepts at most 8 KiB, eight fixed components, eight ordinary nets,
 16 pads, eight keepouts with at most 16 vertices each, a 16-vertex outline within
 0..40 by 0..30 mm, and no holes, slots, zones, fixed copper polygons, via arrays or macros. Unsupported
 requests fail explicitly. Native package resolution and filesystem operations
@@ -68,7 +72,7 @@ node scripts/check_site.cjs
 node scripts/serve_demo.cjs
 ```
 
-The WASM check exercises all three cases, fixed-pose preservation, no initial
+The WASM check exercises all four cases, fixed-pose preservation, no initial
 tracks, actual B.Cu tracks and vias, incomplete routing, internal DRC, input
 limits, and recovery. It also loads the actual worker with Node message/fetch
 adapters to verify revision IDs and recovery from malformed source. This does
@@ -79,8 +83,8 @@ in a test-only DOM emulator. It checks SVG visibility, before/after switching,
 layer and net filters, blocked outcomes, stale-result rejection, and Stop/restart.
 It does not measure browser layout. The DOM tool is never shipped to visitors.
 
-The existing benchmark ladder now includes a bounded `browser-routing-demo`
-case. It intentionally uses the CLI's proxy-footprint option and establishes
+The existing benchmark ladder includes bounded `browser-routing-demo` and
+`browser-routing-weave` cases. They intentionally use the CLI's proxy-footprint option and establish
 only the same synthetic routing scope. Compare ordinary ignored build outputs:
 
 ```console
@@ -88,8 +92,9 @@ copper bench bench/ladder.json --only browser-routing-demo --out build/bench/bro
 copper bench bench/ladder.json --only browser-routing-demo --out build/bench/browser-routing-after --baseline build/bench/browser-routing-before/results.json
 ```
 
-When the first report is present, `check_routing_demo.cjs` also compares the
-native CLI's detailed metrics with the WASM detour case. Production consumer
+Use `--only browser-routing-weave` to measure the larger example. When the first
+reports are present, `check_routing_demo.cjs` also compares the native CLI's
+detailed metrics with the WASM detour and weave cases. Production consumer
 cases in the ladder are unchanged. Timings shown in the lab include pipeline
 execution, scene conversion and JSON transfer preparation, not module download,
 rendering or a claim about large-board performance.

@@ -1,0 +1,43 @@
+// Routing challenge: synthetic footprints, not a functional or qualified circuit.
+board SignalWeave {
+    use library "tiny";
+    component R1: RESISTOR { value = 1 kohm; footprint = "0603"; }
+    component R2: RESISTOR { value = 1 kohm; footprint = "0603"; }
+    component R3: RESISTOR { value = 1 kohm; footprint = "0603"; }
+    component R4: RESISTOR { value = 1 kohm; footprint = "0603"; }
+    component R5: RESISTOR { value = 1 kohm; footprint = "0603"; }
+    component R6: RESISTOR { value = 1 kohm; footprint = "0603"; }
+    component R7: RESISTOR { value = 1 kohm; footprint = "0603"; }
+    component R8: RESISTOR { value = 1 kohm; footprint = "0603"; }
+    net SIGNAL_1 { R1.1; R8.2; }
+    net SIGNAL_2 { R1.2; R8.1; }
+    net SIGNAL_3 { R2.1; R7.2; }
+    net SIGNAL_4 { R2.2; R7.1; }
+    net SIGNAL_5 { R3.1; R6.2; }
+    net SIGNAL_6 { R3.2; R6.1; }
+    net SIGNAL_7 { R4.1; R5.2; }
+    net SIGNAL_8 { R4.2; R5.1; }
+    constraint fixed_placement(R1) { x = 4 mm; y = 4 mm; rotation = 90; side = front; }
+    constraint fixed_placement(R2) { x = 4 mm; y = 11 mm; rotation = 90; side = front; }
+    constraint fixed_placement(R3) { x = 4 mm; y = 19 mm; rotation = 90; side = front; }
+    constraint fixed_placement(R4) { x = 4 mm; y = 26 mm; rotation = 90; side = front; }
+    constraint fixed_placement(R5) { x = 36 mm; y = 4 mm; rotation = 90; side = front; }
+    constraint fixed_placement(R6) { x = 36 mm; y = 11 mm; rotation = 90; side = front; }
+    constraint fixed_placement(R7) { x = 36 mm; y = 19 mm; rotation = 90; side = front; }
+    constraint fixed_placement(R8) { x = 36 mm; y = 26 mm; rotation = 90; side = front; }
+    constraint routing(SIGNAL_1) { width = 0.25 mm; clearance = 0.2 mm; allowed_layers = "F.Cu,B.Cu"; max_vias = 6; }
+    constraint routing(SIGNAL_2) { width = 0.25 mm; clearance = 0.2 mm; allowed_layers = "F.Cu,B.Cu"; max_vias = 6; }
+    constraint routing(SIGNAL_3) { width = 0.25 mm; clearance = 0.2 mm; allowed_layers = "F.Cu,B.Cu"; max_vias = 6; }
+    constraint routing(SIGNAL_4) { width = 0.25 mm; clearance = 0.2 mm; allowed_layers = "F.Cu,B.Cu"; max_vias = 6; }
+    constraint routing(SIGNAL_5) { width = 0.25 mm; clearance = 0.2 mm; allowed_layers = "F.Cu,B.Cu"; max_vias = 6; }
+    constraint routing(SIGNAL_6) { width = 0.25 mm; clearance = 0.2 mm; allowed_layers = "F.Cu,B.Cu"; max_vias = 6; }
+    constraint routing(SIGNAL_7) { width = 0.25 mm; clearance = 0.2 mm; allowed_layers = "F.Cu,B.Cu"; max_vias = 6; }
+    constraint routing(SIGNAL_8) { width = 0.25 mm; clearance = 0.2 mm; allowed_layers = "F.Cu,B.Cu"; max_vias = 6; }
+    mechanical {
+        outline rectangle { width = 40 mm; height = 30 mm; }
+        copper_keepout center rectangle {
+            origin = (16 mm, 10 mm); width = 8 mm; height = 10 mm;
+            layers = "F.Cu,B.Cu";
+        }
+    }
+}
