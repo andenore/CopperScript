@@ -1,8 +1,12 @@
 import {scenarios} from "./routing-cases.js";
+import {sourceChecks} from "./source-checks.js";
 const $ = id => document.getElementById(id);
 const NS = "http://www.w3.org/2000/svg";
 let original = "", weave = "", worker = null, ready = false, revision = 0, sequence = 0, active = null, timer = null;
 let result = null, stage = "after";
+const checks = sourceChecks($("source"), $("source-check-status"), $("source-findings"), (errors, message) => {
+  if (!result && (!active || active.revision !== revision)) status(message, errors ? "fail" : "stale");
+});
 
 function node(tag, attributes = {}, text = "") {
   const el = document.createElementNS(NS, tag);
@@ -30,27 +34,28 @@ function clear(message = "Source changed · route again to update the geometry."
   $("net").replaceChildren(Object.assign(document.createElement("option"), {value:"all",textContent:"All signals"})); $("net").disabled = true;
   $("board-state").textContent = "Result is stale"; status(message);
 }
-function stop(message) {
+function stop(message, state = "stale") {
   if (worker) worker.terminate(); worker = null; ready = false; finish(); clear(message);
+  status(message, state); if (state === "fail") checks.routeError(message);
   runtime("Router paused", "failed"); $("route").disabled = !original;
 }
 function start() {
   if (worker) worker.terminate(); ready = false; finish();
   runtime("Loading router…");
   const own = new Worker(new URL("./route-worker.js", import.meta.url), {type: "module"}); worker = own;
-  const loading = setTimeout(() => {if (worker === own && !ready) stop("Router loading timed out. Press Route board to retry.");}, 30000);
-  own.onerror = event => {event.preventDefault(); clearTimeout(loading); if (worker === own) stop("Could not load the router. Check your connection, then press Route board to retry.");};
+  const loading = setTimeout(() => {if (worker === own && !ready) stop("Router loading timed out. Press Route board to retry.", "fail");}, 30000);
+  own.onerror = event => {event.preventDefault(); clearTimeout(loading); if (worker === own) stop("Could not load the router. Check your connection, then press Route board to retry.", "fail");};
   own.onmessage = event => {
     if (worker !== own) return;
     const message = event.data;
     if (message.type === "ready") {
       clearTimeout(loading); ready = true; runtime("Router ready", "ready"); finish(); run();
     } else if (message.type === "fatal") {
-      clearTimeout(loading); stop(message.error);
+      clearTimeout(loading); stop(message.error, "fail");
     } else if (message.type === "result" && active?.id === message.id) {
       finish();
-      if (revision !== message.revision) {status("Source changed during the run. Route again to update it."); return;}
-      if (message.result.error) {clear(message.result.error); return;}
+      if (revision !== message.revision) return;
+      if (message.result.error) {clear(message.result.error); status(message.result.error,"fail"); checks.routeError(message.result.error); return;}
       display(message.result, message.milliseconds);
     }
   };
@@ -59,11 +64,12 @@ function run() {
   if (!original) return;
   if (!worker) {start(); return;}
   if (!ready || active) return;
-  if (new TextEncoder().encode($("source").value).length > 8192) {clear("The routing lab accepts at most 8 KiB of source."); return;}
+  checks.schedule(0);
+  if (new TextEncoder().encode($("source").value).length > 8192) {clear(); status("The routing lab accepts at most 8 KiB of source.","fail"); checks.schedule(0); return;}
   clear("Routing with bounded search…"); active = {id: ++sequence, revision};
   $("route").disabled = true; $("stop").hidden = false;
   worker.postMessage({...active, source: $("source").value});
-  timer = setTimeout(() => stop("The 12-second browser limit was reached. Source is preserved; simplify it and retry."), 12000);
+  timer = setTimeout(() => stop("The 12-second browser limit was reached. Source is preserved; simplify it and retry.", "fail"), 12000);
 }
 function display(value, milliseconds) {
   result = value; $("board-state").textContent = "Computed from current source";
@@ -138,11 +144,12 @@ document.querySelectorAll("[data-case]").forEach(button=>button.addEventListener
   if (!original) return;
   if (active) stop("Scenario changed. Route again.");
   $("source").value = scenarios[button.dataset.case].source(original, weave); revision++; clear();
+  checks.schedule(0);
   $("scenario-description").textContent = scenarios[button.dataset.case].description;
   document.querySelectorAll("[data-case]").forEach(b=>b.setAttribute("aria-pressed",String(b===button)));
   run();
 }));
-$("source").addEventListener("input",()=>{revision++;clear();document.querySelectorAll("[data-case]").forEach(b=>b.setAttribute("aria-pressed","false"));});
+$("source").addEventListener("input",()=>{revision++;clear();checks.schedule();document.querySelectorAll("[data-case]").forEach(b=>b.setAttribute("aria-pressed","false"));});
 $("source").addEventListener("keydown",event=>{if((event.ctrlKey||event.metaKey)&&event.key==="Enter"){event.preventDefault();run();}});
 new ResizeObserver(draw).observe($("board"));
 try {
@@ -152,5 +159,5 @@ try {
     return (await response.text()).replace(/\r\n?/g, "\n");
   }));
   [original, weave] = sources;
-  $("source").value = scenarios.weave.source(original, weave); $("source").disabled=false; start();
+  $("source").value = scenarios.weave.source(original, weave); $("source").disabled=false; checks.schedule(0); start();
 } catch(error){status(`Could not prepare the example: ${error.message}`,"fail");runtime("Example unavailable","failed");}

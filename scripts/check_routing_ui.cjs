@@ -10,18 +10,22 @@ const tools = createRequire(path.join(root, "tests/browser-demo/package.json"));
   const window = new Window({url:"https://example.test/CopperScript/demo/routing/", settings:{enableJavaScriptEvaluation:false,disableJavaScriptFileLoading:true,disableCSSFileLoading:true}});
   const {default:init,route} = await import(pathToFileURL(path.join(root,"site/demo/routing/pkg/copper_web_route.js")));
   await init({module_or_path:fs.readFileSync(path.join(root,"site/demo/routing/pkg/copper_web_route_bg.wasm"))});
+  const {default:initCompiler,analyze}=await import(pathToFileURL(path.join(root,"site/demo/pkg/copper_web.js")));
+  await initCompiler({module_or_path:fs.readFileSync(path.join(root,"site/demo/pkg/copper_web_bg.wasm"))});
   window.document.write(fs.readFileSync(path.join(root,"site/demo/routing/index.html"),"utf8"));
   globalThis.document = window.document;
   globalThis.ResizeObserver = class {observe() {}};
+  let routeRequests=0, compilerRequests=0, compilerDelay=20;
   globalThis.Worker = class {
-    constructor(){queueMicrotask(()=>{if(!this.stopped)this.onmessage?.({data:{type:"ready"}});});}
-    postMessage({id,revision,source}){setTimeout(()=>{if(!this.stopped)this.onmessage?.({data:{type:"result",id,revision,result:JSON.parse(route(source)),milliseconds:0}});},20);}
+    constructor(url){this.compiler=url.pathname.endsWith('/demo/worker.js');queueMicrotask(()=>{if(!this.stopped)this.onmessage?.({data:{type:"ready"}});});}
+    postMessage({id,revision,source}){if(this.compiler)compilerRequests++;else routeRequests++;setTimeout(()=>{if(!this.stopped)this.onmessage?.({data:{type:"result",id,revision,result:JSON.parse(this.compiler?analyze(source):route(source)),milliseconds:0}});},this.compiler?compilerDelay:20);}
     terminate(){this.stopped=true;}
   };
   globalThis.fetch = async url => new Response(fs.readFileSync(new URL(url)));
   const $ = id => window.document.getElementById(id);
   const click = selector => {const button=window.document.querySelector(selector);assert.ok(button,selector);button.click();};
   const change = id => $(id).dispatchEvent(new window.Event("change",{bubbles:true}));
+  const edit = text => {$("source").value=text;$("source").dispatchEvent(new window.Event("input",{bubbles:true}));};
   const waitFor = async predicate => {const end=Date.now()+15000;while(!predicate()){if(Date.now()>end)throw new Error("UI state timed out");await new Promise(resolve=>setTimeout(resolve,5));}};
   await import(pathToFileURL(path.join(root,"site/demo/routing/routing.js")));
   await waitFor(() => $("route-status").textContent.includes("8 of 8"));
@@ -54,9 +58,40 @@ const tools = createRequire(path.join(root, "tests/browser-demo/package.json"));
   assert.equal($("board").hasAttribute("hidden"),true,"Old revisions must never restore their geometry");
   assert.equal($("route-metrics").children.length,0);
   click('#route');await waitFor(()=>$("route-status").textContent.includes("2 of 2"));
+  await waitFor(()=>$("source-check-status").classList.contains("pass"));
+  const routesBeforeEdit=routeRequests;
+  edit('board {');
+  await waitFor(()=>$("source-check-status").classList.contains("fail"));
+  assert.equal(routeRequests,routesBeforeEdit,"Typing should check source without automatically routing");
+  assert.equal($("source").getAttribute("aria-invalid"),"true");
+  assert.match($("source-findings").textContent,/line \d+, column \d+/);
+  assert.equal($("board").hasAttribute("hidden"),true);
+  click('#route');await waitFor(()=>$("stop").hidden);
+  assert.ok($("route-status").classList.contains("fail"),"Route errors must be failures, not neutral stale messages");
+  edit(edited.replace('R1.1','R1.99'));
+  await waitFor(()=>$("source-findings").textContent.includes("UNKNOWN_PIN"));
+  assert.match($("source-findings").textContent,/R1/);
+  edit(edited);
+  await waitFor(()=>$("source-check-status").classList.contains("pass"));
+  assert.equal($("source-findings").children.length,0);
+  assert.equal($("source").getAttribute("aria-invalid"),"false");
+  assert.equal($("board").hasAttribute("hidden"),true,"Valid source checks must not restore old routing geometry");
+  compilerDelay=150;
+  const checksBeforeEdit=compilerRequests;
+  edit('board {');await waitFor(()=>compilerRequests>checksBeforeEdit);
+  edit(edited);
+  await new Promise(resolve=>setTimeout(resolve,200));
+  assert.equal($("source-findings").children.length,0,"An error for an older source revision must be discarded");
+  compilerDelay=20;
+  await waitFor(()=>$("source-check-status").classList.contains("pass"));
+  edit(edited.replace('width = 32 mm;','width = 100 mm;'));click('#route');
+  await waitFor(()=>$("source-check-status").textContent.startsWith("Routing error:"));
+  assert.ok($("route-status").classList.contains("fail"),"A later successful compiler check must not erase a geometry failure");
+  edit(edited);await waitFor(()=>$("source-check-status").classList.contains("pass"));
+  click('#route');await waitFor(()=>$("route-status").textContent.includes("2 of 2"));
   click('#route');click('#stop');
   assert.equal($("source").value,edited);assert.equal($("board").hasAttribute("hidden"),true);
   click('#route');await waitFor(()=>$("route-status").textContent.includes("2 of 2"));
   await window.happyDOM.abort();
-  console.log("Routing DOM/state checks passed: default eight-signal weave, visible SVG, before/after, layer/net filters, blocked outcome, stale revisions, stop/restart.");
+  console.log("Routing DOM/state checks passed: weave, SVG controls, blocked outcome, live syntax/ERC errors, route error styling, recovery, stale revisions, stop/restart.");
 })().catch(error=>{console.error(error);process.exitCode=1;});

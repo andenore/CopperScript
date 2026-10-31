@@ -23,7 +23,12 @@ No routes or outcome geometry are precomputed in JavaScript.
   Both sides are viewed from above, without mirroring.
 - Expand the source, change geometry or constraints, and press **Route board**
   (or Ctrl/Cmd+Enter). Every edit immediately clears the previous geometry and
-  findings. A result from an older revision is discarded. Stop or timeout
+  findings. Syntax and electrical diagnostics refresh automatically after a
+  450 ms pause, using the existing compiler worker independently of routing.
+  Located diagnostics appear beside the editor and jump to their source;
+  routing/geometry failures also appear there and in the result panel. Compiler
+  success alone does not restore old geometry or claim routing completion.
+  A result from an older revision is discarded. Stop or timeout
   terminates the worker; rerunning starts a fresh instance with source preserved.
 
 ## Implementation and scope
@@ -80,7 +85,8 @@ not replace browser visual/interaction QA.
 
 `check_routing_ui.cjs` runs the actual page logic against the real WASM router
 in a test-only DOM emulator. It checks SVG visibility, before/after switching,
-layer and net filters, blocked outcomes, stale-result rejection, and Stop/restart.
+layer and net filters, blocked outcomes, live syntax/ERC errors and recovery,
+visible routing failures, stale-result rejection, and Stop/restart.
 It does not measure browser layout. The DOM tool is never shipped to visitors.
 
 The existing benchmark ladder includes bounded `browser-routing-demo` and
