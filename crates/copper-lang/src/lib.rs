@@ -29,6 +29,7 @@ pub mod pyvalue;
 pub mod query;
 pub mod serializer;
 pub mod silkscreen;
+pub mod snapshot;
 mod suggest;
 pub mod syntax;
 pub mod syntax_state;
