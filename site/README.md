@@ -23,6 +23,12 @@ secondary action is to inspect a complete, documented board.
 
 ## Preview and check
 
+The live prototype at `demo/` runs the real Rust compiler in a browser worker.
+Build its generated assets before previewing it; see [demo setup and scope](demo/README.md).
+The landing page itself still needs only static files. The Pages workflow builds
+and tests the pinned WASM module before uploading the site. Generated WASM and
+bindings under `demo/pkg/` are ignored by Git.
+
 From the CopperScript repository, using Node 22 or newer and any static file
 server (for example Python's, if installed):
 

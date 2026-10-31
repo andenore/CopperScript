@@ -14,3 +14,6 @@ dist/
 
 # Cargo build output.
 /target/
+
+# Generated from copper-web by scripts/build_demo.cjs.
+/site/demo/pkg/

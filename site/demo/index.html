@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Try CopperScript's real Rust compiler in your browser. Edit a sensor circuit, run electrical checks and explore its connections.">
+  <meta name="theme-color" content="#f6f4ee">
+  <title>CopperScript playground — live Rust compiler</title>
+  <link rel="canonical" href="https://andenore.github.io/CopperScript/demo/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="demo.css">
+  <script type="module" src="demo.js"></script>
+</head>
+<body>
+  <a class="skip" href="#source">Skip to source editor</a>
+  <header class="masthead">
+    <a class="brand" href="../"><img src="../assets/copper-logo.svg" width="35" height="35" alt="Cu, atomic number 29">CopperScript</a>
+    <span class="prototype">LIVE PLAYGROUND / PROTOTYPE</span>
+    <a class="repo" href="https://github.com/andenore/CopperScript">Source on GitHub ↗</a>
+  </header>
+  <main>
+    <section class="intro" aria-labelledby="title">
+      <div><p class="eyebrow">FROM SOURCE TO UNDERSTANDING</p><h1>A circuit you can <em>question.</em></h1><p>Edit the sensor circuit. Check its electrical intent. Follow a finding back to the connection.</p></div>
+      <div class="runtime"><span class="status-light" aria-hidden="true"></span><strong id="runtime-status" role="status">Loading compiler…</strong><span id="runtime-detail">Rust + WebAssembly · runs on your device</span></div>
+    </section>
+    <section class="scenarios" aria-label="Guided changes">
+      <span>TRY A CHANGE</span>
+      <button type="button" data-example="healthy" aria-pressed="true">Working circuit</button>
+      <button type="button" data-example="pullup" aria-pressed="false">Remove a pull-up</button>
+      <button type="button" data-example="voltage" aria-pressed="false">Supply 5 V</button>
+      <button type="button" data-example="typo" aria-pressed="false">Misspell a pin</button>
+    </section>
+    <p class="scenario-description" id="scenario-description">The starting circuit includes both I²C pull-ups and a 3.3 V supply.</p>
+    <div class="workspace">
+      <section class="source-panel" aria-labelledby="source-title">
+        <div class="panel-heading"><h2 id="source-title">sensor.copper</h2><span id="source-state">Editable source</span></div>
+        <label class="sr-only" for="source">CopperScript source</label>
+        <textarea id="source" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="editor-help" disabled></textarea>
+        <div class="source-actions"><button type="button" id="check" class="primary" disabled>Check circuit <span aria-hidden="true">→</span></button><button type="button" id="cancel" hidden>Stop</button><button type="button" id="download" disabled>Download source</button><span id="editor-help">Ctrl / ⌘ + Enter to check</span></div>
+      </section>
+      <div class="results-column">
+        <section class="checks-panel" aria-labelledby="checks-title">
+          <div class="panel-heading"><h2 id="checks-title">Electrical checks</h2><span id="check-timing"></span></div>
+          <div class="check-summary" id="check-summary" role="status" aria-live="polite">Preparing the example…</div>
+          <ul class="diagnostics" id="diagnostics"></ul>
+        </section>
+        <section class="connections-panel" aria-labelledby="connections-title">
+          <div class="panel-heading"><h2 id="connections-title">Explore connections</h2><span>Declared connectivity</span></div>
+          <div class="net-picker"><label for="net">Net</label><select id="net" disabled><option>Waiting for analysis</option></select><button type="button" id="locate-net" disabled>Locate in source</button></div>
+          <div id="connections" class="connections"><p>Connections appear after the source compiles.</p></div>
+          <div id="pin-detail" class="pin-detail" aria-live="polite">Select a pin to inspect its declared type and source.</div>
+        </section>
+      </div>
+    </div>
+    <footer class="scope"><p><strong>Real compiler. Small example.</strong> Uses the same Rust frontend, electrical checks and query APIs as <code>copper</code>. Source is processed locally and is never uploaded by this page.</p><p>Educational demonstration parts. This prototype supports self-contained boards and the bundled <code>tiny</code> library. It checks electrical intent; it does not run placement, routing, KiCad verification or hardware qualification.</p><a href="sensor.copper" download>Get the original example ↓</a></footer>
+    <noscript><p class="load-error">The live compiler needs JavaScript and WebAssembly. You can download the example above and run <code>copper check sensor.copper --json</code> locally.</p></noscript>
+  </main>
+</body>
+</html>
