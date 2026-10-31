@@ -13,11 +13,13 @@ try {
   const bindgen = process.env.WASM_BINDGEN || "wasm-bindgen";
   const expected = "wasm-bindgen 0.2.130";
   if (run(bindgen, ["--version"], true).trim() !== expected) throw new Error(`Install ${expected}; it must match copper-web's pinned dependency.`);
-  run("cargo", ["build", "--locked", "--release", "--target", "wasm32-unknown-unknown", "-p", "copper-web"]);
+  run("cargo", ["build", "--locked", "--release", "--target", "wasm32-unknown-unknown", "-p", "copper-web", "-p", "copper-web-route"]);
   const metadata = JSON.parse(run("cargo", ["metadata", "--no-deps", "--format-version", "1"], true));
-  const input = path.join(metadata.target_directory, "wasm32-unknown-unknown/release/copper_web.wasm");
-  const output = path.join(root, "site/demo/pkg");
-  fs.mkdirSync(output, {recursive: true});
-  run(bindgen, [input, "--target", "web", "--out-dir", output, "--out-name", "copper_web", "--no-typescript"]);
-  console.log(`Browser compiler: ${fs.statSync(path.join(output, "copper_web_bg.wasm")).size.toLocaleString()} bytes (uncompressed).`);
+  for (const [name, directory] of [["copper_web", "site/demo/pkg"], ["copper_web_route", "site/demo/routing/pkg"]]) {
+    const input = path.join(metadata.target_directory, `wasm32-unknown-unknown/release/${name}.wasm`);
+    const output = path.join(root, directory);
+    fs.mkdirSync(output, {recursive: true});
+    run(bindgen, [input, "--target", "web", "--out-dir", output, "--out-name", name, "--no-typescript"]);
+    console.log(`${name}: ${fs.statSync(path.join(output, `${name}_bg.wasm`)).size.toLocaleString()} bytes (uncompressed).`);
+  }
 } catch (error) {console.error(error.message); process.exitCode = 1;}

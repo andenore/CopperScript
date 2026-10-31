@@ -1,6 +1,22 @@
 {
  "boards": [
   {
+   "name": "browser-routing-demo",
+   "project": "../site/demo/routing",
+   "tags": ["small", "browser", "synthetic"],
+   "timeout_s": 30,
+   "args": [
+    "--locked", "--offline", "--allow-proxy-footprints",
+    "--width-mm", "40", "--height-mm", "30", "--layers", "2",
+    "--candidates", "1", "--feedback-iterations", "1", "--router-iterations", "3",
+    "--congestion-feedback-trials", "0",
+    "--unified-set", "direct=true", "--unified-set", "pre_route_decouplers=false",
+    "--unified-set", "maximum_iterations=5", "--unified-set", "maximum_expansions=15000",
+    "--unified-set", "commit_rounds=2", "--unified-set", "fine_regions=off",
+    "--unified-set", "via_cost_mm=0.5"
+   ]
+  },
+  {
    "name": "round-led-ring",
    "project": "../examples/round_led_ring",
    "tags": [

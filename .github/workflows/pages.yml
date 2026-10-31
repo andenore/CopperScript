@@ -8,10 +8,20 @@ on:
       - 'scripts/check_site.cjs'
       - 'scripts/build_demo.cjs'
       - 'scripts/check_demo.cjs'
+      - 'scripts/check_routing_demo.cjs'
+      - 'scripts/check_routing_ui.cjs'
+      - 'tests/browser-demo/package*.json'
+      - 'bench/ladder.json'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'crates/copper-web/**'
+      - 'crates/copper-web-route/**'
+      - 'crates/copper-route/**'
+      - 'crates/copper-place/**'
+      - 'crates/copper-pcb/**'
+      - 'crates/copper-drc/**'
+      - 'crates/copper-report/**'
       - 'crates/copper-lang/**'
       - 'crates/copper-json/**'
       - 'crates/copper-units/**'
@@ -25,10 +35,20 @@ on:
       - 'scripts/check_site.cjs'
       - 'scripts/build_demo.cjs'
       - 'scripts/check_demo.cjs'
+      - 'scripts/check_routing_demo.cjs'
+      - 'scripts/check_routing_ui.cjs'
+      - 'tests/browser-demo/package*.json'
+      - 'bench/ladder.json'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - 'crates/copper-web/**'
+      - 'crates/copper-web-route/**'
+      - 'crates/copper-route/**'
+      - 'crates/copper-place/**'
+      - 'crates/copper-pcb/**'
+      - 'crates/copper-drc/**'
+      - 'crates/copper-report/**'
       - 'crates/copper-lang/**'
       - 'crates/copper-json/**'
       - 'crates/copper-units/**'
@@ -48,20 +68,27 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+      - name: Install test-only DOM tools
+        run: npm ci --prefix tests/browser-demo --ignore-scripts --no-audit --no-fund
       - name: Prepare the pinned WASM toolchain
         run: |
           rustup target add wasm32-unknown-unknown
           cargo install --locked wasm-bindgen-cli --version 0.2.130
       - name: Test and build the live compiler
         run: |
-          cargo test --locked --release -p copper-web
+          cargo test --locked --release -p copper-web -p copper-web-route
           node scripts/build_demo.cjs
           node scripts/check_demo.cjs
+          node scripts/check_routing_demo.cjs
+          node scripts/check_routing_ui.cjs
       - name: Check static site and snapshot assets
         run: node scripts/check_site.cjs
       - name: Upload the checked site including generated WASM

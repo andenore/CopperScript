@@ -5,6 +5,10 @@ raise the supply voltage or misspell a pin. The same `copper-lang` compiler,
 ERC, located diagnostics and net queries used by the CLI run in WebAssembly
 inside a dedicated browser worker. No server executes user source.
 
+The [routing lab](routing/) is a separate, lazily loaded WASM module. It runs
+the standard routing pipeline on a small synthetic board and renders the actual
+returned tracks, vias and open connections. See [routing scope and checks](routing/README.md).
+
 ## Build and preview
 
 From the repository root, with its pinned Rust toolchain and Node 22 or newer:
@@ -14,6 +18,7 @@ rustup target add wasm32-unknown-unknown
 cargo install --locked wasm-bindgen-cli --version 0.2.130
 node scripts/build_demo.cjs
 node scripts/check_demo.cjs
+node scripts/check_routing_demo.cjs
 node scripts/check_site.cjs
 node scripts/serve_demo.cjs
 ```
@@ -49,7 +54,7 @@ Use `target/release/copper.exe` on Windows. Rust adapter tests are included in
   manufacturer-backed component or hardware-function claim.
 - Package imports are rejected with a located `WEB_IMPORT` finding before
   package resolution. GitHub project loading and browser dependency resolution
-  are future work. No footprint fetching, physicalization, placement, routing,
+  are future work. This compiler page does not run footprint fetching, physicalization, placement, routing,
   native verification, manufacturing export or qualification runs here.
 - The connection view is derived from the compiled electrical design. Its
   layout is a connectivity diagram, not physical board geometry or routed copper.

@@ -17,3 +17,5 @@ dist/
 
 # Generated from copper-web by scripts/build_demo.cjs.
 /site/demo/pkg/
+/site/demo/routing/pkg/
+/tests/browser-demo/node_modules/

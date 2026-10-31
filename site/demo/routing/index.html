@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Run CopperScript's Rust router in your browser. Explore real tracks, vias, layers and blocked routes on a small teaching board.">
+  <meta name="theme-color" content="#f6f4ee"><title>CopperScript routing lab — live Rust router</title>
+  <link rel="canonical" href="https://andenore.github.io/CopperScript/demo/routing/">
+  <link rel="icon" href="../../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../demo.css"><link rel="stylesheet" href="routing.css">
+  <script type="module" src="routing.js"></script>
+</head>
+<body>
+  <a class="skip" href="#route">Skip to routing controls</a>
+  <header class="masthead"><a class="brand" href="../../"><img src="../../assets/copper-logo.svg" width="35" height="35" alt="Cu, atomic number 29">CopperScript</a><span class="prototype">LIVE ROUTING LAB / PROTOTYPE</span><a class="repo" href="../">Compiler playground ↗</a></header>
+  <main>
+    <section class="intro"><div><p class="eyebrow">CONSTRAINTS BECOME COPPER</p><h1>Give the route <em>a problem.</em></h1><p>Run the real Rust routing pipeline. Inspect its tracks, layer changes and any connections it cannot finish.</p></div><div class="runtime"><span class="status-light" aria-hidden="true"></span><strong id="runtime-status" role="status">Loading router…</strong><span id="runtime-detail">Runs in a browser worker</span></div></section>
+    <section class="scenarios" aria-label="Routing scenarios"><span>TRY A CONSTRAINT</span><button type="button" data-case="detour" aria-pressed="true">Route around it</button><button type="button" data-case="layers" aria-pressed="false">Allow a layer change</button><button type="button" data-case="blocked" aria-pressed="false">Block the corridor</button></section>
+    <p id="scenario-description" class="scenario-description">Both signals stay on the front layer and find a path around the keepout.</p>
+    <div class="routing-workspace">
+      <section class="route-board" aria-labelledby="board-title">
+        <div class="panel-heading"><h2 id="board-title">Teaching board</h2><span id="board-state">Route to load geometry</span></div>
+        <div class="view-controls"><div role="group" aria-label="Routing stage"><button type="button" data-stage="before" aria-pressed="false">Before</button><button type="button" data-stage="after" aria-pressed="true">After</button></div><label>Layer <select id="layer"><option value="all">All copper</option><option value="F.Cu">Front · F.Cu</option><option value="B.Cu">Back · B.Cu</option></select></label><label>Net <select id="net"><option value="all">All signals</option></select></label></div>
+        <div id="board-empty" class="empty-board">The routed geometry will appear here.</div>
+        <svg id="board" role="img" aria-label="Physical routing result" hidden></svg>
+        <div class="route-legend"><span><i class="front-swatch"></i>Front copper</span><span><i class="back-swatch"></i>Back copper</span><span><i class="keepout-swatch"></i>Keepout on selected layers</span><span>Dashed = connection still needed</span></div>
+      </section>
+      <aside class="route-results">
+        <section class="checks-panel"><div class="panel-heading"><h2>Routing result</h2><span id="route-timing"></span></div><div id="route-status" class="check-summary" role="status" aria-live="polite">Preparing the example…</div><dl id="route-metrics"></dl><ul id="route-findings" class="diagnostics"></ul><div class="route-actions"><button id="route" type="button" class="primary" disabled>Route board →</button><button id="stop" type="button" hidden>Stop</button></div></section>
+        <p class="route-scope">Synthetic footprints · fixed placements<br>Bounded search · actual computed geometry<br>Native KiCad verification not run</p>
+      </aside>
+    </div>
+    <details class="route-source"><summary>Inspect or edit the .copper source</summary><label class="sr-only" for="source">Routing example source</label><textarea id="source" spellcheck="false" autocapitalize="off" disabled></textarea><p>Edits clear the previous result. Press Route board or Ctrl / ⌘ + Enter to rerun.</p></details>
+    <footer class="scope"><p><strong>The actual routing engine, in a small space.</strong> The standard bounded pipeline uses fixed source placements, global guides, unified routing and internal physical DRC. The browser displays its returned geometry; no paths are drawn in advance.</p><p>This educational board uses synthetic footprints. Routing completion and internal checks do not establish native verification or hardware qualification. This lab supports up to four fixed components, four ordinary nets, 16 pads, a 40 × 30 mm board and 8 KiB of self-contained source.</p><a href="board.copper" download>Download the original routing example ↓</a></footer>
+    <noscript><p class="load-error">JavaScript and WebAssembly are required for live routing. Download the source to use CopperScript locally.</p></noscript>
+  </main>
+</body>
+</html>
