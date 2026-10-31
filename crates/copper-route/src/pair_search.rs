@@ -1344,12 +1344,11 @@ impl Continuation {
                 }
                 let initial_step = state == search.initial;
                 let expanded = self.expanded_states;
-                let start = self.start.clone();
                 if !search.legal_step(
                     &self.board,
                     index,
                     self.layer,
-                    &start,
+                    &self.start,
                     stats,
                     expanded,
                     point,

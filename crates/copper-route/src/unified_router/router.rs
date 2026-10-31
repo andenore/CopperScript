@@ -10,7 +10,7 @@ use copper_drc::connectivity::{Candidate, explicit_copper_connectivity};
 use copper_pcb::board::{NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, TrackSegment, Via};
 use copper_pcb::hard_macros::{macro_port_layers, macro_routing_pads, macro_routing_ports, resolved_macro_geometry};
 use copper_pcb::keepouts::placement_map;
-use copper_pcb::transform::{placed_pad_shape, transformed_local_point};
+use copper_pcb::transform::{PlacementTransform, placed_pad_shape, transformed_local_point};
 use copper_pcb::zones::routing_layers;
 use copper_physical::footprint::PadKind;
 use copper_physical::geometry::point_segment_distance_squared;
@@ -163,11 +163,12 @@ pub fn ball_grids(board: &PhysicalBoard) -> Result<Vec<(usize, crate::package_pa
     let mut result = Vec::new();
     for (index, pose) in board.placements.iter().enumerate() {
         let Ok(Some(grid)) = ball_grid(board, &pose.reference) else { continue };
+        let transform = PlacementTransform::new(pose);
         let points = board.footprints[&pose.footprint]
             .pads
             .iter()
             .filter(|p| grid.balls.contains(&p.number))
-            .map(|p| transformed_local_point(pose, p.position))
+            .map(|p| transform.apply(p.position))
             .collect();
         result.push((index, grid, points));
     }
@@ -631,11 +632,9 @@ impl<'p, 'b> Router<'p, 'b> {
         let board = self.board;
         for pose in &board.placements {
             let Ok(Some(_)) = circular_array(board, &pose.reference) else { continue };
-            let corners: Vec<Point> = board.footprints[&pose.footprint]
-                .pads
-                .iter()
-                .map(|p| transformed_local_point(pose, p.position))
-                .collect();
+            let transform = PlacementTransform::new(pose);
+            let corners: Vec<Point> =
+                board.footprints[&pose.footprint].pads.iter().map(|p| transform.apply(p.position)).collect();
             let bounds = (
                 corners.iter().map(|p| p.x_nm).min().expect("pads") as f64,
                 corners.iter().map(|p| p.y_nm).min().expect("pads") as f64,
@@ -675,6 +674,7 @@ impl<'p, 'b> Router<'p, 'b> {
         let mut corridors: IndexMap<String, IndexSet<i64>> = IndexMap::new();
         for (index, array, _) in ball_grids(board)? {
             let pose = &board.placements[index];
+            let transform = PlacementTransform::new(pose);
             let side = if pose.side.value() == "front" { CopperLayer::Front } else { CopperLayer::Back };
             let Some(layer) = g.layers.iter().position(|l| *l == side) else { continue };
             let (nx, ny, pitch) = (array.xs_nm.len() as i64, array.ys_nm.len() as i64, array.pitch_nm);
@@ -710,8 +710,8 @@ impl<'p, 'b> Router<'p, 'b> {
                 points.push((x + (ox * pitch * 3).div_euclid(2), y + (oy * pitch * 3).div_euclid(2)));
                 let nodes = corridors.entry(net.to_owned()).or_default();
                 for pair in points.windows(2) {
-                    let a = transformed_local_point(pose, Point::new(pair[0].0, pair[0].1));
-                    let b = transformed_local_point(pose, Point::new(pair[1].0, pair[1].1));
+                    let a = transform.apply(Point::new(pair[0].0, pair[0].1));
+                    let b = transform.apply(Point::new(pair[1].0, pair[1].1));
                     let length = hypot((b.x_nm - a.x_nm) as f64, (b.y_nm - a.y_nm) as f64);
                     let steps = 1.max((2.0 * length / g.pitch_nm as f64).floor() as i64);
                     for k in 0..=steps {
@@ -741,14 +741,12 @@ impl<'p, 'b> Router<'p, 'b> {
         let mut masks: Option<Vec<Vec<bool>>> = None;
         for pose in &board.placements {
             let Ok(Some(array)) = circular_array(board, &pose.reference) else { continue };
+            let transform = PlacementTransform::new(pose);
             let masks = masks.get_or_insert_with(|| {
                 g.blocks().iter().map(|block| vec![true; (block.nx * block.ny) as usize]).collect()
             });
-            let points: Vec<Point> = board.footprints[&pose.footprint]
-                .pads
-                .iter()
-                .map(|p| transformed_local_point(pose, p.position))
-                .collect();
+            let points: Vec<Point> =
+                board.footprints[&pose.footprint].pads.iter().map(|p| transform.apply(p.position)).collect();
             let x0 = points.iter().map(|p| p.x_nm).min().expect("pads");
             let x1 = points.iter().map(|p| p.x_nm).max().expect("pads");
             let y0 = points.iter().map(|p| p.y_nm).min().expect("pads");

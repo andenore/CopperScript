@@ -23,7 +23,7 @@ use copper_physical::{
 use copper_units::{Decimal, Dimension};
 
 use crate::board::*;
-use crate::transform::{placed_pad_shape, transformed_local_point};
+use crate::transform::{PlacementTransform, placed_pad_shape, transformed_local_point};
 use crate::zones::{length_nm, lower_zone_outline, polygon_boundary, validate_routing_reservations};
 use crate::{Error, Result, fail};
 
@@ -966,11 +966,12 @@ fn fixed_pad_shapes(
         if fixed.get(pose.reference.as_str()).is_none_or(|rule| rule.fixed_position.is_none()) {
             continue;
         }
+        let transform = PlacementTransform::new(pose);
         for pad in &footprints[&pose.footprint].pads {
             if matches!(pad.kind, PadKind::Aperture | PadKind::NonPlatedThroughHole) {
                 continue;
             }
-            shapes.push(placed_pad_shape(transformed_local_point(pose, pad.position), pad, pose));
+            shapes.push(placed_pad_shape(transform.apply(pad.position), pad, pose));
         }
     }
     shapes

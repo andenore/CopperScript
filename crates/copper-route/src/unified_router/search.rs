@@ -684,10 +684,10 @@ impl Router<'_, '_> {
         if self.expired() {
             return Ok(None);
         }
-        let spec = self.specs[index].clone();
-        let (width, clearance) = (spec.width, spec.clearance);
-        let owner = self.rasters.track(width, clearance).0.to_vec();
-        let mid_owner = self.rasters.track(width, clearance).1.to_vec();
+        let (width, clearance, nid, via_factor) = {
+            let spec = &self.specs[index];
+            (spec.width, spec.clearance, spec.nid, spec.via_factor)
+        };
         let via_owner = self.via_owner(index, None)?;
         let transitions =
             if self.board.stackup.via_technologies.is_empty() { None } else { Some(self.via_transitions(index)?) };
@@ -700,12 +700,18 @@ impl Router<'_, '_> {
             }
             table
         });
+        let spec = &self.specs[index];
         let layers: Vec<i32> =
             spec.layers.iter().map(|&l| l as i32 | if spec.target_only.contains(&l) { 0x100 } else { 0 }).collect();
         let move_base = self.move_base();
         let turn = if self.options.bend_cost != 0.0 { Some(self.turn_table()) } else { None };
         // Per node, guide_cost outside the searched net's corridor (`_n_guide`).
-        let corridor = if self.guides.is_empty() { None } else { self.guide_corridor(&spec.name)? };
+        let corridor = if self.guides.is_empty() {
+            None
+        } else {
+            let name = self.specs[index].name.clone();
+            self.guide_corridor(&name)?
+        };
         if let Some(corridor) = &corridor {
             let size = self.lattice.size as usize;
             let cost = self.options.guide_cost;
@@ -714,6 +720,7 @@ impl Router<'_, '_> {
                 guide[node as usize] = 0.0;
             }
         }
+        let spec = &self.specs[index];
         let marks: Vec<(Vec<i64>, u8)> = vec![
             (spec.neck.iter().copied().collect(), FLAG_NECK),
             (spec.neck_mid.iter().copied().collect(), FLAG_NECK_MID),
@@ -744,23 +751,26 @@ impl Router<'_, '_> {
         } else {
             (&self.occupancy.history, &self.occupancy.via_history)
         };
+        // Finish preparation before borrowing the cached, immutable masks. The
+        // kernel reads them directly; every search used to copy both full grids.
+        let (owner, mid_owner) = self.rasters.track(width, clearance);
         let mut input = SearchInput {
             nx: self.lattice.nx,
             ny: self.lattice.ny,
             nl: self.lattice.nl as usize,
-            owner: &owner,
-            mid_owner: &mid_owner,
+            owner,
+            mid_owner,
             via_owner: &via_owner,
             hist: history,
             occ: &self.occupancy.occ,
             via_hist: via_history,
             via_occ: &self.occupancy.via_occ,
             flags: &self.flags,
-            nid: spec.nid,
+            nid,
             layers: &layers,
             move_base: &move_base,
             present,
-            via_cost: self.via_cost * spec.via_factor,
+            via_cost: self.via_cost * via_factor,
             bbox,
             tbox,
             sources,

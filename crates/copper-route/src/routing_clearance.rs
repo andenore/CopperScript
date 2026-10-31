@@ -15,7 +15,7 @@ use copper_json::{Dumps, Value as Json};
 use copper_pcb::board::{NetRoutingRule, PadReference, PhysicalBoard, TrackSegment, Via};
 use copper_pcb::hard_macros::macro_reservations;
 use copper_pcb::keepouts::resolved_copper_keepouts;
-use copper_pcb::transform::{placed_pad_shape, transformed_local_point};
+use copper_pcb::transform::{PlacementTransform, placed_pad_shape};
 use copper_pcb::zones::ZoneRoutingReservations;
 use copper_pcb::{Error, Result};
 
@@ -483,11 +483,12 @@ impl<'b> RoutingClearanceIndex<'b> {
         let (mut objects, mut holes) = (Vec::new(), Vec::new());
         for pose in placements {
             let footprint = &board.footprints[&pose.footprint];
+            let transform = PlacementTransform::new(pose);
             for (pad_index, pad) in footprint.pads.iter().enumerate() {
                 if matches!(pad.kind, PadKind::NonPlatedThroughHole | PadKind::Aperture) {
                     continue;
                 }
-                let position = transformed_local_point(pose, pad.position);
+                let position = transform.apply(pad.position);
                 let pad_shape = placed_pad_shape(position, pad, pose);
                 let reference = PadReference::new(&pose.reference, &pad.number);
                 let net = match assigned.get(&reference) {

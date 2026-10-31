@@ -11,7 +11,7 @@ use indexmap::{IndexMap, IndexSet};
 
 use copper_pcb::board::{CopperPolygon, PadReference, PhysicalBoard, PhysicalNet, TrackSegment, Via};
 use copper_pcb::hard_macros::layer_index;
-use copper_pcb::transform::transformed_local_point;
+use copper_pcb::transform::PlacementTransform;
 use copper_pcb::{Error, Result};
 use copper_physical::footprint::PadKind;
 use copper_physical::geometry::{
@@ -233,6 +233,7 @@ pub fn explicit_copper_contacts(
     placements.sort_by(|a, b| a.reference.cmp(&b.reference));
     for placement in placements {
         let footprint = &board.footprints[&placement.footprint];
+        let transform = PlacementTransform::new(placement);
         let mut assigned: IndexMap<&str, &str> = IndexMap::new();
         for net in board.nets.iter().filter(|n| selected(&n.name)) {
             for pad in net.pads.iter().filter(|p| p.component == placement.reference) {
@@ -244,7 +245,7 @@ pub fn explicit_copper_contacts(
             if matches!(pad.kind, PadKind::Aperture | PadKind::NonPlatedThroughHole) {
                 continue;
             }
-            let position = transformed_local_point(placement, pad.position);
+            let position = transform.apply(pad.position);
             let layers = if pad.kind == PadKind::Smd {
                 vec![if placement.side == BoardSide::Front { CopperLayer::Front } else { CopperLayer::Back }]
             } else {
