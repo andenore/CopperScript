@@ -27,6 +27,9 @@ test that loops over its cases.
 | test_native_routing_clearance.py | 5 | 1: native refill with an installed KiCad CLI/Python (`kicad-cli` not installed) | 0 | `tests/native_routing_clearance.rs` |
 | test_local_pair_branches.py | 6 | 0 | 0 | `tests/local_pair_branches.rs` (parametrized cases loop) |
 | test_breakout_region_cache.py | 5 (the storage-bound case adapted: see notes) | 1: the shared source-epoch LRU (`cache_info`: Python internals; Rust has no cache) | 0 | `tests/breakout_region_cache.rs` |
+| test_via_lattice.py | 5 | 0 | 0 | `tests/via_lattice.rs` |
+| test_via_hole_clearance.py | 5 | 0 | 0 | `tests/via_hole_clearance.rs` (4, parametrized cases loop); `src/test_support_planes.rs` (1: `legal_via_sites`) |
+| test_ordinary_neck_down.py | 4 | 1: stub pruning joins neck-down cuts (`prune_track_stubs` has no Rust port, see `route_cleanup`) | 0 | `tests/ordinary_neck_down.rs` |
 
 ## Notes
 
@@ -158,3 +161,14 @@ test that loops over its cases.
   leave no region; tiny lands, a clearance change and six layers keep U.1's)
   instead of comparing against `_nearest_region`. `bypass_board` (of
   `test_routing_quality.py`) is in `support_planes`.
+
+- `test_via_lattice.py`: `ball_grid` (of `test_escape_plan.py`) is in
+  `support_planes`; `plan_via_lattices` takes the Python keyword defaults
+  (`surface_rings=2`, `band_rings=1`) explicitly.
+
+- `test_via_hole_clearance.py`: `routing::legal_via_sites` is `pub(crate)`
+  for the crate-private global via-site case.
+
+- `test_ordinary_neck_down.py`: `checked_access_path` is called with the
+  Python defaults (`allow_movable_conflicts=False`, `allow_orthogonal=True`);
+  `Counter(result) != Counter(owned)` compares sorted track lists.

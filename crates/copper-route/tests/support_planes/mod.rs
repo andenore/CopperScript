@@ -557,3 +557,49 @@ pub fn bypass_board() -> PhysicalBoard {
     }];
     board
 }
+
+/// `ball_grid` of `tests/test_escape_plan.py`: a `size` x `size` 0.8 mm BGA
+/// "bga" of round `ball_mm` SMD balls (ball 1 at U = (10, 10) mm), each net
+/// `N<n>` reaching pad n of a far connector J; balls in `plane` are on GND
+/// instead, with a B.Cu GND zone. The `FINE` rules (0.1 mm copper, 0.45 /
+/// 0.2 mm vias).
+pub fn ball_grid(size_n: i64, ball_mm: f64, plane: &[i64]) -> PhysicalBoard {
+    let count = size_n * size_n;
+    let mut balls = Vec::new();
+    for y in 0..size_n {
+        for x in 0..size_n {
+            let mut ball =
+                pad(&(y * size_n + x + 1).to_string(), Point::new(x * 800_000, y * 800_000), size(ball_mm, ball_mm));
+            ball.shape = PadShape::Circle;
+            balls.push(ball);
+        }
+    }
+    let far = (0..count).map(|n| pad(&(n + 1).to_string(), Point::new(n * 500_000, 0), size(0.3, 0.3))).collect();
+    let mut board = board("bga", 60.0, 40.0);
+    add_footprint(&mut board, footprint("bga", balls, size(8.0, 8.0)));
+    add_footprint(&mut board, footprint("far", far, size(40.0, 1.0)));
+    board.placements = vec![place("U", "bga", mm(10.0, 10.0)), place("J", "far", mm(10.0, 30.0))];
+    board.nets = (1..=count)
+        .filter(|n| !plane.contains(n))
+        .map(|n| net(&format!("N{n}"), &[("U", &n.to_string()), ("J", &n.to_string())]))
+        .collect();
+    if !plane.is_empty() {
+        let mut sorted = plane.to_vec();
+        sorted.sort_unstable();
+        board.nets.push(PhysicalNet {
+            name: "GND".to_owned(),
+            pads: sorted.iter().map(|n| pad_ref("U", &n.to_string())).collect(),
+        });
+        board.zones = vec![zone("gnd", "GND", &[CopperLayer::Back], rect(0.0, 0.0, 60.0, 40.0))];
+    }
+    board.rules = DesignRules {
+        minimum_clearance_nm: 100_000,
+        minimum_hole_clearance_nm: 100_000,
+        minimum_track_width_nm: 100_000,
+        default_track_width_nm: 100_000,
+        default_via_size_nm: 450_000,
+        default_via_drill_nm: 200_000,
+        ..DesignRules::default()
+    };
+    board
+}
