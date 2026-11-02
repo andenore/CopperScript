@@ -2524,6 +2524,7 @@ pub fn routing_fingerprint(
 mod tests {
     use super::*;
     use crate::test_support_routers::*;
+    use copper_pcb::board::PhysicalNet;
 
     /// `tests/test_routing.py::test_global_router_can_choose_later_access_candidate`.
     #[test]
@@ -2571,5 +2572,1574 @@ mod tests {
         .expect("route");
         assert!(route.connected);
         assert_eq!(route.accesses[1].node, nearer);
+    }
+
+    // ------------------------------------------------------------------
+    // `tests/test_global_target_via_cost.py`: target transitions pay the
+    // same real resource penalties as graph steps.
+
+    const F: CopperLayer = CopperLayer::Front;
+    const B: CopperLayer = CopperLayer::Back;
+    const FIRST_SITE: &str = "via:0:1:1:0";
+    const SECOND_SITE: &str = "via:0:1:2:0";
+
+    struct Scene {
+        board: PhysicalBoard,
+        graph: Graph,
+        choices: AccessOptions,
+        root: PinAccess,
+        first: PinAccess,
+        second: PinAccess,
+        options: GlobalRouterOptions,
+    }
+
+    fn land_via(net: &str, x: f64) -> Via {
+        Via {
+            net: net.to_owned(),
+            position: pt(x, 2.0),
+            size_nm: 450_000,
+            drill_nm: 200_000,
+            from_layer: F,
+            to_layer: B,
+            technology: None,
+            finish: "standard".to_owned(),
+        }
+    }
+
+    fn scene(renamed: bool) -> Scene {
+        let (net, root_ref, target_ref) =
+            if renamed { ("OTHER_NAME", "A_RENAMED", "Z_RENAMED") } else { ("CONTROL", "A_SOURCE", "Z_LOAD") };
+        let land = footprint("test/land", vec![pad("1", 0.0, 0.0, 0.3, 0.3)], 0.5, 0.5);
+        let (root_pad, target_pad) = (PadReference::new(root_ref, "1"), PadReference::new(target_ref, "1"));
+        let mut source = placement(root_ref, "test/land", 1.0, 2.0);
+        source.side = copper_physical::BoardSide::Back;
+        let mut board = board(
+            "target-via-cost",
+            6.0,
+            4.0,
+            vec![land],
+            vec![source, placement(target_ref, "test/land", 2.0, 2.0)],
+            vec![PhysicalNet { name: net.to_owned(), pads: vec![root_pad.clone(), target_pad.clone()] }],
+        );
+        board.net_routing_rules = vec![NetRoutingRule { allowed_layers: vec![F, B], ..rule(net) }];
+        let n = |layer: i64, x: i64| GridNode::new(layer, x, 0);
+        let mut resources = IndexMap::new();
+        for x in 0..2 {
+            let (a, b) = (n(1, x), n(1, x + 1));
+            let resource =
+                Resource { identifier: format!("edge-{x}"), first: a, second: b, capacity: 10, layer: Some(B) };
+            resources.insert(edge_key(a, b), resource);
+        }
+        let mut sites = IndexMap::new();
+        for x in 1..3 {
+            let (a, b) = (n(0, x), n(1, x));
+            let identifier = format!("via:0:1:{x}:0");
+            let resource = Resource { identifier: identifier.clone(), first: a, second: b, capacity: 1, layer: None };
+            resources.insert(edge_key(a, b), resource);
+            sites.insert(identifier, vec![pt(x as f64 + 1.0, 2.0)]);
+        }
+        let graph = Graph {
+            layers: vec![F, B],
+            xs: vec![1_000_000, 2_000_000, 3_000_000],
+            ys: vec![2_000_000],
+            legal_nodes: (0..2).flat_map(|l| (0..3).map(move |x| n(l, x))).collect(),
+            resources,
+            via_sites: sites,
+            layer_ranks: IndexMap::from([(F, 0), (B, 1)]),
+            preferred_headings: IndexMap::from([(F, "horizontal"), (B, "horizontal")]),
+            demand_lanes: 0,
+            step_cache: RefCell::new(IndexMap::new()),
+        };
+        let root = PinAccess::new(root_pad.clone(), pt(1.0, 2.0), n(1, 0), pt(1.0, 2.0), B);
+        let first = PinAccess {
+            via: Some(land_via(net, 2.0)),
+            ..PinAccess::new(target_pad.clone(), pt(2.0, 2.0), n(1, 1), pt(2.0, 2.0), B)
+        };
+        let second = PinAccess {
+            tracks: vec![track(net, (2.0, 2.0), (3.0, 2.0), 0.2, F)],
+            via: Some(land_via(net, 3.0)),
+            ..PinAccess::new(target_pad.clone(), pt(2.0, 2.0), n(1, 2), pt(3.0, 2.0), B)
+        };
+        let choices: AccessOptions = IndexMap::from([
+            ((net.to_owned(), root_pad), vec![root.clone()]),
+            ((net.to_owned(), target_pad), vec![first.clone(), second.clone()]),
+        ]);
+        let options = GlobalRouterOptions { maximum_iterations: 20, ..GlobalRouterOptions::default() };
+        Scene { board, graph, choices, root, first, second, options }
+    }
+
+    fn counts(graph: &Graph, given: &[(&str, i64)]) -> IndexMap<String, i64> {
+        let mut map: IndexMap<String, i64> = graph.resources.values().map(|r| (r.identifier.clone(), 0)).collect();
+        for (key, value) in given {
+            map.insert((*key).to_owned(), *value);
+        }
+        map
+    }
+
+    fn run_scene(
+        s: &Scene,
+        graph: &Graph,
+        choices: &AccessOptions,
+        usage: &[(&str, i64)],
+        history: &[(&str, i64)],
+    ) -> GlobalNetRoute {
+        let net = &s.board.nets[0];
+        let rules: IndexMap<String, NetRoutingRule> =
+            s.board.net_routing_rules.iter().map(|r| (r.net.clone(), r.clone())).collect();
+        let demands = NetDemands::new(&s.board, &rules, &s.options).expect("demands");
+        route_net(
+            &s.board,
+            graph,
+            &net.name,
+            &net.pads,
+            s.board.net_routing_rules.first(),
+            choices,
+            1,
+            &counts(graph, usage),
+            &counts(graph, history),
+            s.options.present_penalty,
+            &s.options,
+            &demands,
+        )
+        .expect("route")
+    }
+
+    /// Dropped: Python's monkeypatched `_build_graph`/`RoutingClearanceIndex`
+    /// tripwires and the `repr(board)` check (the board is borrowed immutably).
+    #[test]
+    fn actual_target_choice_avoids_congested_registered_terminal_via() {
+        for renamed in [false, true] {
+            for penalty in ["present", "history"] {
+                let s = scene(renamed);
+                let (resources, sites) = (s.graph.resources.clone(), s.graph.via_sites.clone());
+                let uncongested = run_scene(&s, &s.graph, &s.choices, &[], &[]);
+                assert!(uncongested.connected && uncongested.accesses[0] == s.root);
+                assert_eq!(uncongested.accesses.last(), Some(&s.first));
+                let used: &[(&str, i64)] = if penalty == "present" { &[(FIRST_SITE, 1)] } else { &[] };
+                let history: &[(&str, i64)] = if penalty == "history" { &[(FIRST_SITE, 2)] } else { &[] };
+                let changed = run_scene(&s, &s.graph, &s.choices, used, history);
+                assert!(changed.connected && changed.accesses[0] == s.root, "{renamed} {penalty}");
+                assert_eq!(changed.accesses.last(), Some(&s.second), "{renamed} {penalty}");
+                let positions: IndexSet<Point> = changed.vias.iter().map(|v| v.position).collect();
+                assert_eq!(positions, IndexSet::from([s.second.via.as_ref().expect("via").position]));
+                assert_eq!(route_resource_demands(&changed, 1, None)[SECOND_SITE], 1);
+                assert_eq!(s.options.maximum_iterations, 20);
+                assert!(s.graph.resources == resources && s.graph.via_sites == sites);
+            }
+        }
+    }
+
+    #[test]
+    fn no_alternate_keeps_actual_overflow_visible() {
+        let s = scene(false);
+        let mut only = s.choices.clone();
+        let key = (s.board.nets[0].name.clone(), s.first.pad.clone());
+        only.insert(key, vec![s.first.clone()]);
+        let answer = run_scene(&s, &s.graph, &only, &[(FIRST_SITE, 1)], &[]);
+        assert!(answer.connected && answer.accesses.last() == Some(&s.first));
+        let via = s.first.via.as_ref().expect("via");
+        let prior = GlobalNetRoute {
+            net: "PRIOR".to_owned(),
+            connected: true,
+            accesses: Vec::new(),
+            segments: Vec::new(),
+            vias: vec![GlobalViaProposal {
+                net: "PRIOR".to_owned(),
+                position: via.position,
+                from_layer: F,
+                to_layer: B,
+                resource_id: FIRST_SITE.to_owned(),
+            }],
+            length_nm: 0,
+            diagnostics: Vec::new(),
+            deferred_to_zone: false,
+        };
+        let rules = IndexMap::new();
+        let demands = NetDemands::new(&s.board, &rules, &s.options).expect("demands");
+        let measured = measure_attempt(&s.graph, vec![prior, answer], 20, &demands);
+        assert_eq!(measured.usage[FIRST_SITE], 2);
+        assert_eq!(measured.metrics.total_overflow, 1);
+        assert_eq!(s.graph.resources.values().find(|r| r.identifier == FIRST_SITE).expect("site").capacity, 1);
+    }
+
+    #[test]
+    fn unregistered_target_is_rejected_without_invented_capacity() {
+        for missing in ["resource", "position"] {
+            let s = scene(false);
+            let graph = if missing == "resource" {
+                let resources = s.graph.resources.iter().filter(|(_, r)| r.identifier != FIRST_SITE);
+                s.graph.with(resources.map(|(k, r)| (*k, r.clone())).collect(), s.graph.via_sites.clone())
+            } else {
+                let sites = s.graph.via_sites.iter().filter(|(k, _)| k.as_str() != FIRST_SITE);
+                s.graph.with(s.graph.resources.clone(), sites.map(|(k, v)| (k.clone(), v.clone())).collect())
+            };
+            let answer = run_scene(&s, &graph, &s.choices, &[], &[]);
+            assert!(answer.connected && answer.accesses.last() == Some(&s.second), "{missing}");
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn via_cost(
+        graph: &Graph,
+        options: &GlobalRouterOptions,
+        candidate: &PinAccess,
+        accesses: &[PinAccess],
+        resources: &IndexMap<String, Resource>,
+        path: &[(GridNode, GridNode)],
+        usage: &[(&str, i64)],
+        history: &[(&str, i64)],
+    ) -> Option<i64> {
+        let (usage, history) = (counts(graph, usage), counts(graph, history));
+        terminal_via_cost(
+            graph,
+            candidate,
+            accesses,
+            resources,
+            path,
+            &usage,
+            &history,
+            options.present_penalty,
+            options,
+        )
+    }
+
+    fn via_proposal(net: &str, position: Point) -> GlobalViaProposal {
+        GlobalViaProposal {
+            net: net.to_owned(),
+            position,
+            from_layer: F,
+            to_layer: B,
+            resource_id: FIRST_SITE.to_owned(),
+        }
+    }
+
+    fn via_route(net: &str, vias: Vec<GlobalViaProposal>) -> GlobalNetRoute {
+        GlobalNetRoute {
+            net: net.to_owned(),
+            connected: true,
+            accesses: Vec::new(),
+            segments: Vec::new(),
+            vias,
+            length_nm: 0,
+            diagnostics: Vec::new(),
+            deferred_to_zone: false,
+        }
+    }
+
+    #[test]
+    fn same_net_reused_exact_terminal_site_has_no_second_demand_or_penalty() {
+        let s = scene(false);
+        let first = &s.first;
+        let none = IndexMap::new();
+        let cost = via_cost(
+            &s.graph,
+            &s.options,
+            first,
+            std::slice::from_ref(first),
+            &none,
+            &[],
+            &[(FIRST_SITE, 10)],
+            &[(FIRST_SITE, 5)],
+        );
+        assert_eq!(cost, Some(0));
+        let via = first.via.as_ref().expect("via");
+        let v = via_proposal(&via.net, via.position);
+        let route = via_route(&via.net, vec![v.clone(), v]);
+        assert_eq!(route_resource_demands(&route, 1, None), IndexMap::from([(FIRST_SITE.to_owned(), 1)]));
+    }
+
+    #[test]
+    fn candidate_path_or_tree_same_hole_is_not_charged_twice() {
+        let s = scene(false);
+        let resource = s.graph.resources.values().find(|r| r.identifier == FIRST_SITE).expect("site").clone();
+        let (usage, history) = ([(FIRST_SITE, 1)], [(FIRST_SITE, 3)]);
+        let path = [(resource.first, resource.second)];
+        let as_path = via_cost(&s.graph, &s.options, &s.first, &[], &IndexMap::new(), &path, &usage, &history);
+        let tree = IndexMap::from([(resource.identifier.clone(), resource)]);
+        let as_tree = via_cost(&s.graph, &s.options, &s.first, &[], &tree, &[], &usage, &history);
+        assert_eq!((as_path, as_tree), (Some(0), Some(0)));
+    }
+
+    #[test]
+    fn distinct_same_net_sites_in_one_resource_use_exact_multiplicity() {
+        let s = scene(false);
+        let (before, after) = (pt(1.625, 2.0), pt(2.375, 2.0));
+        let resources = s
+            .graph
+            .resources
+            .iter()
+            .map(|(k, r)| {
+                (*k, if r.identifier == FIRST_SITE { Resource { capacity: 2, ..r.clone() } } else { r.clone() })
+            })
+            .collect();
+        let mut sites = s.graph.via_sites.clone();
+        sites.insert(FIRST_SITE.to_owned(), vec![before, after]);
+        let graph = s.graph.with(resources, sites);
+        let moved = |position: Point| {
+            let mut access = s.first.clone();
+            access.via.as_mut().expect("via").position = position;
+            access
+        };
+        let (held, proposed) = (moved(before), moved(after));
+        // Cap 2 matches its two registered sites; a prior owner plus our two holes overflows once.
+        let cost = via_cost(&graph, &s.options, &proposed, &[held], &IndexMap::new(), &[], &[(FIRST_SITE, 1)], &[]);
+        assert_eq!(cost, Some(COST_UNIT * s.options.present_penalty));
+        let net = &s.board.nets[0].name;
+        let route = via_route(net, vec![via_proposal(net, before), via_proposal(net, after)]);
+        assert_eq!(route_resource_demands(&route, 1, None), IndexMap::from([(FIRST_SITE.to_owned(), 2)]));
+    }
+
+    #[test]
+    fn shared_penalty_uses_existing_search_units_and_history() {
+        let s = scene(false);
+        let cost = via_cost(
+            &s.graph,
+            &s.options,
+            &s.first,
+            &[],
+            &IndexMap::new(),
+            &[],
+            &[(FIRST_SITE, 2)],
+            &[(FIRST_SITE, 3)],
+        );
+        let o = &s.options;
+        assert_eq!(cost, Some(COST_UNIT * (o.present_penalty * 2 + o.history_penalty * 3)));
+    }
+
+    // ------------------------------------------------------------------
+    // `tests/test_global_search_static_cache.py`: the cached-step search
+    // against the original A* (kept here as the reference oracle).
+
+    /// The original search: every static cost recomputed per step.
+    #[allow(clippy::too_many_arguments)]
+    fn reference_search(
+        graph: &Graph,
+        starts: &IndexSet<GridNode>,
+        target: GridNode,
+        allowed_layers: &[CopperLayer],
+        demand: i64,
+        usage: &IndexMap<String, i64>,
+        history: &IndexMap<String, i64>,
+        present: i64,
+        options: &GlobalRouterOptions,
+        remaining_vias: Option<i64>,
+        blocked: &IndexSet<String>,
+    ) -> Option<Vec<(GridNode, GridNode)>> {
+        let allowed: IndexSet<i64> = allowed_layers.iter().filter_map(|l| graph.layer_position(*l)).collect();
+        let mut queue: BinaryHeap<Reverse<(i64, i64, i64, GridNode, Direction, i64, u64)>> = BinaryHeap::new();
+        let mut previous: IndexMap<State, Option<State>> = IndexMap::new();
+        let mut best: IndexMap<State, i64> = IndexMap::new();
+        let mut serial = 0;
+        if remaining_vias.is_some_and(|r| r < 0) {
+            return None;
+        }
+        let mut sorted: Vec<GridNode> = starts.iter().copied().collect();
+        sorted.sort();
+        for start in sorted {
+            if !allowed.contains(&start.layer_index) {
+                continue;
+            }
+            let state = (start, Direction::Start, 0);
+            best.insert(state, 0);
+            previous.insert(state, None);
+            let h = heuristic(graph, start, target);
+            queue.push(Reverse((h, 0, h, start, Direction::Start, 0, serial)));
+            serial += 1;
+        }
+        let mut found = None;
+        while let Some(Reverse((_, cost, _, node, direction, vias_used, _))) = queue.pop() {
+            let state = (node, direction, vias_used);
+            if best.get(&state) != Some(&cost) {
+                continue;
+            }
+            if node == target {
+                found = Some(state);
+                break;
+            }
+            for next in neighbors(graph, node, &allowed) {
+                let resource = &graph.resources[&edge_key(node, next)];
+                if blocked.contains(&resource.identifier) {
+                    continue;
+                }
+                let next_direction = super::direction(node, next);
+                let next_vias =
+                    if remaining_vias.is_some() { vias_used + (next_direction == Direction::V) as i64 } else { 0 };
+                if remaining_vias.is_some_and(|r| next_vias > r) {
+                    continue;
+                }
+                let base = if next_direction == Direction::V {
+                    options.via_cost * COST_UNIT
+                } else {
+                    length_cost(graph.point(node), graph.point(next), 10)
+                };
+                let bend = if direction != Direction::Start
+                    && direction != next_direction
+                    && direction != Direction::V
+                    && next_direction != Direction::V
+                {
+                    options.bend_cost
+                } else {
+                    0
+                };
+                let resource_demand = if resource.layer.is_some() { demand } else { 1 };
+                let overflow = (usage[&resource.identifier] + resource_demand - resource.capacity).max(0);
+                let preference = graph_preference_cost(graph, node, next, options);
+                let step = base
+                    + preference
+                    + COST_UNIT * (bend + present * overflow + options.history_penalty * history[&resource.identifier]);
+                let candidate_cost = cost + step;
+                let candidate = (next, next_direction, next_vias);
+                if candidate_cost >= best.get(&candidate).copied().unwrap_or(1 << 60) {
+                    continue;
+                }
+                best.insert(candidate, candidate_cost);
+                previous.insert(candidate, Some(state));
+                let h = heuristic(graph, next, target);
+                queue.push(Reverse((candidate_cost + h, candidate_cost, h, next, next_direction, next_vias, serial)));
+                serial += 1;
+            }
+        }
+        let mut current = found?;
+        let mut edges = Vec::new();
+        while let Some(parent) = previous[&current] {
+            edges.push((parent.0, current.0));
+            current = parent;
+        }
+        edges.reverse();
+        Some(edges)
+    }
+
+    fn static_graph(layer_count: usize) -> Graph {
+        let layers = crate::test_support_routers::layers(layer_count);
+        // Nonuniform axes ensure integer costs are not replaced by tile constants.
+        let (xs, ys) = (vec![110_001, 900_017, 2_200_033, 3_850_111], vec![71_003, 1_130_007, 2_740_123]);
+        let mut nodes: Vec<GridNode> = (0..layers.len() as i64)
+            .flat_map(|l| (0..xs.len() as i64).flat_map(move |x| (0..3).map(move |y| GridNode::new(l, x, y))))
+            .collect();
+        nodes.sort();
+        let legal: IndexSet<GridNode> = nodes.iter().copied().collect();
+        let mut resources = IndexMap::new();
+        let mut sites = IndexMap::new();
+        for node in &nodes {
+            for (dx, dy) in [(1, 0), (0, 1)] {
+                let other = GridNode::new(node.layer_index, node.x_index + dx, node.y_index + dy);
+                if legal.contains(&other) {
+                    let capacity = 1 + (node.x_index + node.y_index) % 3;
+                    add_resource(&mut resources, *node, other, capacity, Some(layers[node.layer_index as usize]), None);
+                }
+            }
+            for layer in node.layer_index + 1..layers.len() as i64 {
+                let other = GridNode::new(layer, node.x_index, node.y_index);
+                // Aliases represent one full physical through span, not one
+                // hole for each logical layer pair.
+                let identifier = format!("via:0:{}:{}:{}", layers.len() - 1, node.x_index, node.y_index);
+                add_resource(&mut resources, *node, other, 2, None, Some(identifier.clone()));
+                sites.insert(identifier, vec![Point::new(xs[node.x_index as usize], ys[node.y_index as usize])]);
+            }
+        }
+        let ranks = layers.iter().enumerate().map(|(i, l)| (*l, (i % 3) as i64)).collect();
+        let headings = layers.iter().enumerate().map(|(i, l)| (*l, if i % 2 == 1 { "h" } else { "n" })).collect();
+        Graph {
+            layers,
+            xs,
+            ys,
+            legal_nodes: legal,
+            resources,
+            via_sites: sites,
+            layer_ranks: ranks,
+            preferred_headings: headings,
+            demand_lanes: 0,
+            step_cache: RefCell::new(IndexMap::new()),
+        }
+    }
+
+    fn identifiers(graph: &Graph) -> Vec<String> {
+        let mut ids: Vec<String> =
+            graph.resources.values().map(|r| r.identifier.clone()).collect::<IndexSet<_>>().into_iter().collect();
+        ids.sort();
+        ids
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_both(
+        graph: &Graph,
+        starts: &[GridNode],
+        target: GridNode,
+        allowed: &[CopperLayer],
+        options: &GlobalRouterOptions,
+        usage: &IndexMap<String, i64>,
+        history: &IndexMap<String, i64>,
+        demand: i64,
+        present: i64,
+        remaining_vias: Option<i64>,
+        blocked: &IndexSet<String>,
+    ) -> Option<Vec<(GridNode, GridNode)>> {
+        let starts: IndexSet<GridNode> = starts.iter().copied().collect();
+        let expected = reference_search(
+            graph,
+            &starts,
+            target,
+            allowed,
+            demand,
+            usage,
+            history,
+            present,
+            options,
+            remaining_vias,
+            blocked,
+        );
+        let actual = search(
+            graph,
+            &starts,
+            target,
+            allowed,
+            demand,
+            usage,
+            history,
+            present,
+            options,
+            remaining_vias,
+            blocked,
+            None,
+        );
+        assert_eq!(actual, expected);
+        assert!(graph.step_cache.borrow().len() <= graph.legal_nodes.len());
+        actual
+    }
+
+    #[test]
+    fn original_search_exact_under_changing_costs_congestion_and_via_limits() {
+        for layer_count in [2, 4] {
+            let graph = static_graph(layer_count);
+            let mut rng = Lcg(721);
+            let ids = identifiers(&graph);
+            let (mut usage, mut history): (IndexMap<String, i64>, IndexMap<String, i64>) =
+                (ids.iter().map(|k| (k.clone(), 0)).collect(), ids.iter().map(|k| (k.clone(), 0)).collect());
+            let mut answers = Vec::new();
+            for iteration in 0..36i64 {
+                // The same maps change: no congestion or history answer may be
+                // reused from an earlier call.
+                for key in &ids {
+                    usage[key] = rng.below(7);
+                    history[key] = rng.below(5);
+                }
+                let starts = [GridNode::new(0, 0, iteration % 3), GridNode::new(0, 1, 1)];
+                let target = GridNode::new(if iteration % 2 == 1 { layer_count as i64 - 1 } else { 0 }, 3, 2);
+                let mut allowed: Vec<CopperLayer> = if iteration % 3 != 0 {
+                    graph.layers.clone()
+                } else {
+                    vec![graph.layers[0], *graph.layers.last().expect("layer")]
+                };
+                if iteration % 7 == 0 {
+                    allowed = vec![graph.layers[0]];
+                }
+                let options = GlobalRouterOptions {
+                    via_cost: [17, 80, 3][(iteration % 3) as usize],
+                    bend_cost: iteration % 5,
+                    layer_preference_cost: iteration % 4,
+                    direction_preference_cost: iteration % 3,
+                    history_penalty: iteration % 6,
+                    ..GlobalRouterOptions::default()
+                };
+                let mut pool = ids.clone();
+                let blocked: IndexSet<String> =
+                    (0..iteration % 6).map(|_| pool.remove(rng.below(pool.len() as i64) as usize)).collect();
+                let remaining = [None, Some(-1), Some(0), Some(1), Some(2), Some(3)][(iteration % 6) as usize];
+                answers.push(run_both(
+                    &graph,
+                    &starts,
+                    target,
+                    &allowed,
+                    &options,
+                    &usage,
+                    &history,
+                    1 + iteration % 4,
+                    iteration % 9,
+                    remaining,
+                    &blocked,
+                ));
+            }
+            assert!(answers.iter().any(Option::is_none));
+            assert!(answers.iter().any(|a| a.as_ref().is_some_and(|edges| !edges.is_empty())));
+        }
+    }
+
+    /// Adapted: the heap push/pop event comparison patched `heapq`; the pop
+    /// order is the shared `(estimate, cost, heuristic, node, direction, vias,
+    /// serial)` key, and the path is compared with the reference.
+    #[test]
+    fn neighbor_order_matches_the_original() {
+        let graph = static_graph(4);
+        let options = GlobalRouterOptions { via_cost: 8, bend_cost: 3, ..GlobalRouterOptions::default() };
+        let mut nodes: Vec<GridNode> = graph.legal_nodes.iter().copied().collect();
+        nodes.sort();
+        for node in nodes {
+            let steps = graph.search_steps(node, &options);
+            for allowed in [vec![0], vec![0, 3], vec![0, 1, 2, 3], vec![1, 2]] {
+                let allowed: IndexSet<i64> = allowed.into_iter().collect();
+                let filtered: Vec<GridNode> =
+                    steps.iter().map(|s| s.0).filter(|n| allowed.contains(&n.layer_index)).collect();
+                assert_eq!(filtered, neighbors(&graph, node, &allowed));
+            }
+        }
+        let ids = identifiers(&graph);
+        let usage = ids.iter().map(|k| (k.clone(), 1)).collect();
+        let history = ids.iter().map(|k| (k.clone(), 2)).collect();
+        let starts = [GridNode::new(0, 0, 0), GridNode::new(0, 0, 2)];
+        let layers = graph.layers.clone();
+        let path = run_both(
+            &graph,
+            &starts,
+            GridNode::new(3, 3, 2),
+            &layers,
+            &options,
+            &usage,
+            &history,
+            2,
+            11,
+            Some(2),
+            &IndexSet::new(),
+        );
+        assert!(path.is_some());
+    }
+
+    #[test]
+    fn point_indices_and_cost_cache_are_graph_bounded() {
+        let graph = static_graph(4);
+        let node = GridNode::new(3, 1, 2);
+        assert_eq!(graph.point(node), Point::new(graph.xs[1], graph.ys[2]));
+        let mut nodes: Vec<GridNode> = graph.legal_nodes.iter().copied().collect();
+        nodes.sort();
+        for variant in 0..6 {
+            let options = GlobalRouterOptions {
+                via_cost: variant,
+                layer_preference_cost: variant,
+                ..GlobalRouterOptions::default()
+            };
+            for node in &nodes {
+                graph.search_steps(*node, &options);
+            }
+        }
+        assert_eq!(graph.step_cache.borrow().len(), graph.legal_nodes.len());
+        let fresh = graph.with(graph.resources.clone(), graph.via_sites.clone());
+        assert!(fresh.step_cache.borrow().is_empty());
+        assert_eq!((&fresh.xs, &fresh.ys, &fresh.resources), (&graph.xs, &graph.ys, &graph.resources));
+    }
+
+    #[test]
+    fn fresh_terminal_alias_and_refined_capacity_replace_derived_steps() {
+        let graph = static_graph(4);
+        let options = GlobalRouterOptions {
+            via_cost: 1,
+            layer_preference_cost: 0,
+            direction_preference_cost: 0,
+            ..GlobalRouterOptions::default()
+        };
+        let (start, target) = (GridNode::new(0, 0, 0), GridNode::new(3, 3, 2));
+        let ids = identifiers(&graph);
+        let mut usage: IndexMap<String, i64> = ids.iter().map(|k| (k.clone(), 0)).collect();
+        let history: IndexMap<String, i64> = ids.iter().map(|k| (k.clone(), 0)).collect();
+        let none = IndexSet::new();
+        let layers = graph.layers.clone();
+        let both = |graph: &Graph, usage: &IndexMap<String, i64>| {
+            run_both(graph, &[start], target, &layers, &options, usage, &history, 1, 7, Some(1), &none)
+        };
+        both(&graph, &usage);
+        let alias_key = edge_key(GridNode::new(0, 0, 0), GridNode::new(3, 0, 0));
+        let alias = graph.resources[&alias_key].clone();
+        // Replace all aliases of the same physical hole as the real refiner does.
+        let resources = graph
+            .resources
+            .iter()
+            .map(|(k, r)| {
+                (*k, if r.identifier == alias.identifier { Resource { capacity: 7, ..r.clone() } } else { r.clone() })
+            })
+            .collect();
+        let mut sites = graph.via_sites.clone();
+        sites[&alias.identifier].push(Point::new(888, 999));
+        let refined = graph.with(resources, sites);
+        assert!(refined.step_cache.borrow().is_empty());
+        assert_eq!((refined.resources[&alias_key].capacity, graph.resources[&alias_key].capacity), (7, 2));
+        usage[&alias.identifier] = 5;
+        both(&refined, &usage);
+        // A terminal registration may add a previously absent logical layer edge.
+        let planar: IndexMap<_, _> = graph
+            .resources
+            .iter()
+            .filter(|(_, r)| r.first.layer_index == r.second.layer_index)
+            .map(|(k, r)| (*k, r.clone()))
+            .collect();
+        let cut = graph.with(planar.clone(), graph.via_sites.clone());
+        assert!(both(&cut, &usage).is_none());
+        let mut joined_resources = planar;
+        joined_resources.insert(alias_key, refined.resources[&alias_key].clone());
+        let joined = cut.with(joined_resources, cut.via_sites.clone());
+        assert!(both(&joined, &usage).is_some_and(|edges| !edges.is_empty()));
+    }
+
+    /// Adapted: Python patched `length_cost`/`_preference_cost` to prove warm
+    /// steps are not recomputed; here a warm cache must still answer as the
+    /// reference under changed dynamic costs.
+    #[test]
+    fn warm_graph_reuses_static_work_without_reusing_dynamic_costs() {
+        let graph = static_graph(4);
+        let options = GlobalRouterOptions::default();
+        for node in graph.legal_nodes.clone() {
+            graph.search_steps(node, &options);
+        }
+        let changed = GlobalRouterOptions { bend_cost: 31, history_penalty: 9, ..options };
+        let ids = identifiers(&graph);
+        let usage = ids.iter().enumerate().map(|(i, k)| (k.clone(), i as i64 % 5)).collect();
+        let history = ids.iter().enumerate().map(|(i, k)| (k.clone(), i as i64 % 3)).collect();
+        let layers = graph.layers.clone();
+        let path = run_both(
+            &graph,
+            &[GridNode::new(0, 0, 0)],
+            GridNode::new(3, 3, 2),
+            &layers,
+            &changed,
+            &usage,
+            &history,
+            3,
+            17,
+            Some(2),
+            &IndexSet::new(),
+        );
+        assert!(path.is_some());
+    }
+
+    // ------------------------------------------------------------------
+    // `tests/test_global_access_launch_diversity.py`: finite terminal
+    // domains must expose already checked alternative holes.
+
+    const NEAR_SITE: &str = "via:0:3:1:0";
+
+    struct Launches {
+        board: PhysicalBoard,
+        graph: Graph,
+        root: PinAccess,
+        pool: Vec<PinAccess>,
+    }
+
+    fn launches(renamed: bool) -> Launches {
+        let net = if renamed { "ANOTHER" } else { "SIGNAL" };
+        let (root_pad, target) = (PadReference::new("A_IN", "1"), PadReference::new("Z_OUT", "1"));
+        let land = footprint("land", vec![pad("1", 0.0, 0.0, 0.3, 0.3)], 0.5, 0.5);
+        let layers = crate::test_support_routers::layers(4);
+        let mut source = placement("A_IN", "land", 1.0, 2.0);
+        source.side = copper_physical::BoardSide::Back;
+        let mut board = board(
+            "diverse-launches",
+            6.0,
+            4.0,
+            vec![land],
+            vec![source, placement("Z_OUT", "land", 2.0, 2.0)],
+            vec![PhysicalNet { name: net.to_owned(), pads: vec![root_pad.clone(), target.clone()] }],
+        );
+        board.stackup = copper_pcb::board::Stackup::new(layers.clone());
+        board.net_routing_rules = vec![NetRoutingRule { allowed_layers: layers.clone(), ..rule(net) }];
+        let n = |layer: i64, x: i64| GridNode::new(layer, x, 0);
+        let mut resources = IndexMap::new();
+        let mut sites = IndexMap::new();
+        for l in 1..4 {
+            for x in 0..2 {
+                let (a, b) = (n(l, x), n(l, x + 1));
+                let resource = Resource {
+                    identifier: format!("run-{l}-{x}"),
+                    first: a,
+                    second: b,
+                    capacity: 10,
+                    layer: Some(layers[l as usize]),
+                };
+                resources.insert(edge_key(a, b), resource);
+            }
+        }
+        for x in 1..3 {
+            let identifier = format!("via:0:3:{x}:0");
+            sites.insert(identifier.clone(), vec![pt(x as f64 + 1.0, 2.0)]);
+            for l in 0..4 {
+                for k in l + 1..4 {
+                    let (a, b) = (n(l, x), n(k, x));
+                    let resource =
+                        Resource { identifier: identifier.clone(), first: a, second: b, capacity: 1, layer: None };
+                    resources.insert(edge_key(a, b), resource);
+                }
+            }
+        }
+        let graph = Graph {
+            layers: layers.clone(),
+            xs: vec![1_000_000, 2_000_000, 3_000_000],
+            ys: vec![2_000_000],
+            legal_nodes: (0..4).flat_map(|l| (0..3).map(move |x| n(l, x))).collect(),
+            resources,
+            via_sites: sites,
+            layer_ranks: layers.iter().map(|l| (*l, 0)).collect(),
+            preferred_headings: layers.iter().map(|l| (*l, "horizontal")).collect(),
+            demand_lanes: 0,
+            step_cache: RefCell::new(IndexMap::new()),
+        };
+        let root = PinAccess::new(root_pad, pt(1.0, 2.0), n(3, 0), pt(1.0, 2.0), CopperLayer::Back);
+        let mut pool = Vec::new();
+        for x in 1..3 {
+            let hole = land_via(net, x as f64 + 1.0);
+            for l in 1..4 {
+                let tracks =
+                    if x == 1 { Vec::new() } else { vec![track(net, (2.0, 2.0), (3.0, 2.0), 0.2, CopperLayer::Front)] };
+                pool.push(PinAccess {
+                    tracks,
+                    via: Some(hole.clone()),
+                    ..PinAccess::new(target.clone(), pt(2.0, 2.0), n(l, x), pt(x as f64 + 1.0, 2.0), layers[l as usize])
+                });
+            }
+        }
+        Launches { board, graph, root, pool }
+    }
+
+    fn route_launches(s: &Launches, choices: &[PinAccess], max_vias: Option<i64>) -> GlobalNetRoute {
+        let rule = NetRoutingRule { max_vias, ..s.board.net_routing_rules[0].clone() };
+        let options = GlobalRouterOptions { pin_access_candidates: 4, ..GlobalRouterOptions::default() };
+        let net = &s.board.nets[0];
+        let access: AccessOptions = IndexMap::from([
+            ((rule.net.clone(), s.root.pad.clone()), vec![s.root.clone()]),
+            ((rule.net.clone(), choices[0].pad.clone()), choices.to_vec()),
+        ]);
+        let rules = IndexMap::from([(rule.net.clone(), rule.clone())]);
+        let demands = NetDemands::new(&s.board, &rules, &options).expect("demands");
+        route_net(
+            &s.board,
+            &s.graph,
+            &net.name,
+            &net.pads,
+            Some(&rule),
+            &access,
+            1,
+            &counts(&s.graph, &[(NEAR_SITE, 1)]),
+            &counts(&s.graph, &[(NEAR_SITE, 100)]),
+            options.present_penalty,
+            &options,
+            &demands,
+        )
+        .expect("route")
+    }
+
+    fn last_via(route: &GlobalNetRoute) -> Point {
+        route.accesses.last().and_then(|a| a.via.as_ref()).expect("terminal via").position
+    }
+
+    /// Dropped: the monkeypatched `RoutingClearanceIndex` tripwire and `repr(board)`.
+    #[test]
+    fn retained_alternative_changes_actual_congested_route_without_capacity_change() {
+        for renamed in [false, true] {
+            let s = launches(renamed);
+            let before = (s.graph.resources.clone(), s.graph.via_sites.clone());
+            let old = route_launches(&s, &s.pool[..3], None);
+            assert!(old.connected && last_via(&old) == pt(2.0, 2.0));
+            let retained = bounded_access_choices(s.pool.clone(), 4);
+            let new = route_launches(&s, &retained, None);
+            assert!(new.connected && last_via(&new) == pt(3.0, 2.0), "{renamed}");
+            assert_eq!(retained.len(), 4);
+            assert!(retained.iter().all(|a| s.pool.contains(a)));
+            assert!((s.graph.resources.clone(), s.graph.via_sites.clone()) == before);
+        }
+    }
+
+    #[test]
+    fn alias_reduction_preserves_available_layer_for_single_via_budget() {
+        let s = launches(false);
+        let retained = bounded_access_choices(s.pool.clone(), 4);
+        let layers: IndexSet<CopperLayer> = retained.iter().map(|a| a.layer).collect();
+        assert_eq!(layers, s.graph.layers[1..].iter().copied().collect::<IndexSet<_>>());
+        let answer = route_launches(&s, &retained, Some(1));
+        assert!(answer.connected && answer.accesses.last().expect("access").layer == CopperLayer::Back);
+        assert_eq!(answer.vias.len(), 1);
+    }
+
+    #[test]
+    fn all_selected_launches_are_original_exact_objects_and_bound_is_shared() {
+        let pool = launches(false).pool;
+        for limit in [1, 2, 3, 4, 6, 8] {
+            let selected = bounded_access_choices(pool.clone(), limit);
+            assert_eq!(selected.len(), (limit as usize).min(pool.len()));
+            assert!(selected.iter().all(|a| pool.contains(a)));
+            if limit >= 2 {
+                let holes: IndexSet<Point> = selected.iter().map(|a| a.via.as_ref().expect("via").position).collect();
+                assert_eq!(holes.len(), 2, "{limit}");
+            }
+        }
+    }
+
+    #[test]
+    fn only_one_physical_launch_keeps_layer_aliases_and_actual_overflow() {
+        let s = launches(false);
+        let selected = bounded_access_choices(s.pool[..3].to_vec(), 4);
+        let answer = route_launches(&s, &selected, None);
+        assert!(answer.connected && selected.len() == 3);
+        let prior = via_route(
+            "PRIOR",
+            vec![GlobalViaProposal { resource_id: NEAR_SITE.to_owned(), ..via_proposal("PRIOR", pt(2.0, 2.0)) }],
+        );
+        let rules = IndexMap::new();
+        let options = GlobalRouterOptions::default();
+        let demands = NetDemands::new(&s.board, &rules, &options).expect("demands");
+        let measured = measure_attempt(&s.graph, vec![prior, answer], 20, &demands);
+        assert_eq!(measured.metrics.total_overflow, 1);
+    }
+
+    #[test]
+    fn surface_entrances_keep_their_distinct_graph_nodes() {
+        let surface: Vec<PinAccess> =
+            launches(false).pool[..3].iter().map(|a| PinAccess { via: None, ..a.clone() }).collect();
+        assert_eq!(bounded_access_choices(surface.clone(), 4), surface);
+    }
+
+    #[test]
+    fn no_generated_choice_has_no_invented_escape() {
+        assert!(bounded_access_choices(Vec::new(), 4).is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // `tests/test_global_via_refinement.py`: refine sampled via capacity
+    // only when real guide demand exceeds it.
+
+    fn narrow_channel_board() -> PhysicalBoard {
+        // The original grid finds x=5.775; a separate narrow channel at
+        // x=7.7875 is halfway between its columns. Both hold real through-vias.
+        let rectangles =
+            [(0.0, 0.0, 5.4, 10.0), (6.15, 0.0, 7.5, 10.0), (8.075, 0.0, 10.0, 10.0), (0.0, 0.0, 10.0, 5.0)];
+        let fp = footprint("pad", vec![pad("1", 0.0, 0.0, 0.1, 0.1)], 0.2, 0.2);
+        let mut placements = Vec::new();
+        let mut nets = Vec::new();
+        for i in 0..8 {
+            for (label, side) in [("F", copper_physical::BoardSide::Front), ("B", copper_physical::BoardSide::Back)] {
+                let mut pose = placement(&format!("{label}{i}"), "pad", 8.7, 5.5 + 0.5 * i as f64);
+                pose.side = side;
+                placements.push(pose);
+            }
+            let (f, b) = (format!("F{i}"), format!("B{i}"));
+            nets.push(net(&format!("N{i}"), &[(f.as_str(), "1"), (b.as_str(), "1")]));
+        }
+        let mut result = board("narrow-channel", 10.0, 10.0, vec![fp], placements, nets);
+        result.copper_keepouts = rectangles
+            .iter()
+            .enumerate()
+            .map(|(i, (x0, y0, x1, y1))| copper_physical::CopperKeepout {
+                block_tracks: false,
+                ..copper_keepout(&i.to_string(), &[CopperLayer::Front, CopperLayer::Back], rect(*x0, *y0, *x1, *y1))
+            })
+            .collect();
+        result.rules = copper_physical::DesignRules {
+            minimum_clearance_nm: 100_000,
+            default_via_size_nm: 450_000,
+            default_via_drill_nm: 200_000,
+            ..copper_physical::DesignRules::default()
+        };
+        result
+    }
+
+    fn six_layers(mut board: PhysicalBoard) -> PhysicalBoard {
+        board.stackup = copper_pcb::board::Stackup::new(crate::test_support_routers::layers(6));
+        board
+    }
+
+    /// Dropped: the sampler call counts (Python patched `_legal_via_sites`);
+    /// "returns the same graph" is `None`.
+    #[test]
+    fn refined_sites_preserve_originals_coexist_and_only_sample_overflow_once() {
+        for count in [2usize, 6] {
+            let mut board = narrow_channel_board();
+            board.stackup = copper_pcb::board::Stackup::new(crate::test_support_routers::layers(count));
+            let graph = build_graph(&board, &GlobalRouterOptions::default(), false).expect("graph");
+            let index = RoutingClearanceIndex::new(&board).expect("index");
+            let identifier = format!("via:0:{}:1:1", count - 1);
+            let original = graph.via_sites[&identifier].clone();
+            assert_eq!(original.len(), 7);
+            let mut processed = IndexSet::new();
+            let planar = graph.resources.values().find(|r| r.layer.is_some()).expect("planar").identifier.clone();
+            let usage = counts(&graph, &[(identifier.as_str(), 7), (planar.as_str(), 100)]);
+            let same = refine_overflowed_via_sites(&board, &graph, &usage, &index, 5_000_000, &mut processed);
+            assert!(same.expect("refine").is_none() && processed.is_empty());
+            let usage = counts(&graph, &[(identifier.as_str(), 8)]);
+            let refined = refine_overflowed_via_sites(&board, &graph, &usage, &index, 5_000_000, &mut processed)
+                .expect("refine")
+                .expect("refined graph");
+            let sites = refined.via_sites[&identifier].clone();
+            assert!(sites[..original.len()] == original[..] && sites.len() > original.len());
+            assert_eq!(processed, IndexSet::from([identifier.clone()]));
+            assert!(
+                sites
+                    .iter()
+                    .all(|p| (p.x_nm - 7_500_000).abs() <= 2_175_000 && (p.y_nm - 7_500_000).abs() <= 2_175_000)
+            );
+            let vias: Vec<Via> = sites
+                .iter()
+                .enumerate()
+                .map(|(i, p)| Via {
+                    net: format!("capacity-{i}"),
+                    position: *p,
+                    size_nm: 450_000,
+                    drill_nm: 200_000,
+                    from_layer: CopperLayer::Front,
+                    to_layer: CopperLayer::Back,
+                    technology: None,
+                    finish: "standard".to_owned(),
+                })
+                .collect();
+            assert!(index.candidate_vias_clear(&vias).expect("clear"));
+            for (key, resource) in &graph.resources {
+                if resource.identifier == identifier {
+                    assert_eq!(refined.resources[key].capacity, sites.len() as i64);
+                } else {
+                    assert_eq!(&refined.resources[key], resource);
+                }
+            }
+            let usage = counts(&refined, &[(identifier.as_str(), 100)]);
+            let again = refine_overflowed_via_sites(&board, &refined, &usage, &index, 5_000_000, &mut processed);
+            assert!(again.expect("refine").is_none());
+        }
+    }
+
+    /// Adapted: Python patched the refiner out to obtain the coarse result;
+    /// the refined result is checked to pass deterministically, without
+    /// overflow or hotspots, with the eighth net through the refined channel.
+    #[test]
+    fn global_refinement_fixes_sampling_overflow_and_preserves_passing_routes() {
+        for net_count in [7, 8] {
+            let mut board = narrow_channel_board();
+            board.nets.truncate(net_count);
+            let options = GlobalRouterOptions {
+                maximum_iterations: 1,
+                pin_access_candidates: 1,
+                ..GlobalRouterOptions::default()
+            };
+            let result = route_global(&board, &options, None, None, None).expect("global");
+            assert_eq!(result.status, GlobalRoutingStatus::Success, "{net_count}");
+            assert_eq!(result, route_global(&board, &options, None, None, None).expect("global"));
+            assert!(result.metrics.total_overflow == 0 && result.hotspots.is_empty());
+        }
+    }
+
+    #[test]
+    fn wider_trace_consumes_two_planar_lanes_but_one_physical_via_site() {
+        let fp = footprint("pad", vec![pad("1", 0.0, 0.0, 0.1, 0.1)], 0.2, 0.2);
+        let mut far = placement("B", "pad", 2.75, 0.5);
+        far.side = copper_physical::BoardSide::Back;
+        let mut board = board(
+            "one-via",
+            3.0,
+            1.0,
+            vec![fp],
+            vec![placement("F", "pad", 0.25, 0.5), far],
+            vec![net("POWER", &[("F", "1"), ("B", "1")])],
+        );
+        board.rules = copper_physical::DesignRules {
+            minimum_clearance_nm: 100_000,
+            minimum_track_width_nm: 150_000,
+            default_track_width_nm: 150_000,
+            default_via_size_nm: 450_000,
+            default_via_drill_nm: 200_000,
+            ..copper_physical::DesignRules::default()
+        };
+        board.net_routing_rules =
+            vec![NetRoutingRule { kind: RouteKind::Power, width_nm: Some(250_000), ..rule("POWER") }];
+        let options = GlobalRouterOptions {
+            tile_size_nm: 1_000_000,
+            maximum_iterations: 1,
+            pin_access_candidates: 1,
+            ..GlobalRouterOptions::default()
+        };
+        let graph = build_graph(&board, &options, false).expect("graph");
+        let result = route_global(&board, &options, None, None, None).expect("global");
+        assert_eq!(result.status, GlobalRoutingStatus::Success);
+        assert_eq!(result.routes.len(), 1);
+        let route = &result.routes[0];
+        assert_eq!(route.vias.len(), 1);
+        let site = &route.vias[0].resource_id;
+        assert_eq!(graph.via_sites[site].len(), 1);
+        let rules: IndexMap<String, NetRoutingRule> =
+            board.net_routing_rules.iter().map(|r| (r.net.clone(), r.clone())).collect();
+        let demands = NetDemands::new(&board, &rules, &options).expect("demands");
+        let measured = measure_attempt(&graph, result.routes.clone(), 1, &demands);
+        assert_eq!(measured.usage[site], 1);
+        assert!(!route.segments.is_empty() && route.segments.iter().all(|s| measured.usage[&s.resource_id] == 2));
+    }
+
+    #[test]
+    fn distinct_same_net_via_positions_count_separately_but_logical_layers_share_one_hole() {
+        let identifier = "via:0:5:1:1";
+        let first = GlobalViaProposal {
+            net: "A".to_owned(),
+            position: pt(7.0, 7.0),
+            from_layer: CopperLayer::Front,
+            to_layer: CopperLayer::In1,
+            resource_id: identifier.to_owned(),
+        };
+        let other_layers =
+            GlobalViaProposal { from_layer: CopperLayer::In2, to_layer: CopperLayer::Back, ..first.clone() };
+        let second_position = GlobalViaProposal { position: pt(8.0, 7.0), ..first.clone() };
+        let route = via_route("A", vec![first.clone(), other_layers.clone(), second_position]);
+        assert_eq!(route_resource_demands(&route, 4, None), IndexMap::from([(identifier.to_owned(), 2)]));
+        let shared = via_route("A", vec![first, other_layers]);
+        assert_eq!(route_resource_demands(&shared, 4, None), IndexMap::from([(identifier.to_owned(), 1)]));
+    }
+
+    #[test]
+    fn different_nets_on_different_logical_layers_share_through_via_capacity() {
+        let board = six_layers(narrow_channel_board());
+        let options = GlobalRouterOptions::default();
+        let graph = build_graph(&board, &options, false).expect("graph");
+        let identifier = "via:0:5:1:1";
+        let first = GlobalViaProposal {
+            net: "N0".to_owned(),
+            position: pt(7.5, 7.5),
+            from_layer: CopperLayer::Front,
+            to_layer: CopperLayer::In1,
+            resource_id: identifier.to_owned(),
+        };
+        let second = GlobalViaProposal {
+            net: "N1".to_owned(),
+            from_layer: CopperLayer::In2,
+            to_layer: CopperLayer::Back,
+            ..first.clone()
+        };
+        let routes = vec![via_route("N0", vec![first]), via_route("N1", vec![second])];
+        let rules = IndexMap::new();
+        let demands = NetDemands::new(&board, &rules, &options).expect("demands");
+        let measured = measure_attempt(&graph, routes, 1, &demands);
+        assert_eq!(measured.usage[identifier], 2);
+        assert_eq!(measured.contributors[identifier], ["N0", "N1"]);
+    }
+
+    // ------------------------------------------------------------------
+    // `tests/test_global_breakout_demand.py`: declared ordinary neck-downs
+    // consume local lanes, not whole-net width.
+
+    struct Breakout {
+        board: PhysicalBoard,
+        graph: Graph,
+        rule: NetRoutingRule,
+        accesses: AccessOptions,
+        options: GlobalRouterOptions,
+    }
+
+    fn breakout_scene(renamed: bool, detour: bool, breakout: i64, kind: RouteKind) -> Breakout {
+        let (name, aa, zz) = if renamed { ("RAIL_RENAMED", "P_FIRST", "Q_LAST") } else { ("POWER_FEED", "J1", "J2") };
+        let land = footprint("test/land", vec![pad("1", 0.0, 0.0, 0.2, 0.2)], 0.4, 0.4);
+        let pads = [PadReference::new(aa, "1"), PadReference::new(zz, "1")];
+        let rule = NetRoutingRule {
+            kind,
+            width_nm: Some(400_000),
+            breakout_width_nm: Some(100_000),
+            breakout_length_nm: Some(breakout),
+            allowed_layers: vec![CopperLayer::Front],
+            ..crate::test_support_routers::rule(name)
+        };
+        let mut board = board(
+            "breakout-capacity",
+            10.0,
+            9.0,
+            vec![land],
+            vec![placement(aa, "test/land", 1.0, 2.0), placement(zz, "test/land", 3.0, 2.0)],
+            vec![PhysicalNet { name: name.to_owned(), pads: pads.to_vec() }],
+        );
+        board.outline =
+            copper_physical::BoardOutline::rectangle(mm(10.0), mm(9.0), Some(pt(-2.0, -2.0))).expect("outline");
+        board.net_routing_rules = vec![rule.clone()];
+        board.rules = copper_physical::DesignRules {
+            minimum_track_width_nm: 100_000,
+            default_track_width_nm: 200_000,
+            minimum_clearance_nm: 100_000,
+            ..copper_physical::DesignRules::default()
+        };
+        let n = |x: i64, y: i64| GridNode::new(0, x, y);
+        let mut edges = vec![((0, 0), (1, 0), 1)];
+        if detour {
+            edges.extend([((0, 0), (0, 1), 2), ((0, 1), (1, 1), 2), ((1, 1), (1, 0), 2)]);
+        }
+        let mut resources = IndexMap::new();
+        for (index, (a, z, capacity)) in edges.into_iter().enumerate() {
+            let (a, z) = (n(a.0, a.1), n(z.0, z.1));
+            let (first, second) = edge_key(a, z);
+            let resource = Resource {
+                identifier: format!("edge-{index}"),
+                first,
+                second,
+                capacity,
+                layer: Some(CopperLayer::Front),
+            };
+            resources.insert((first, second), resource);
+        }
+        let graph = Graph {
+            layers: vec![CopperLayer::Front],
+            xs: vec![1_000_000, 3_000_000],
+            ys: vec![2_000_000, 3_000_000],
+            legal_nodes: (0..2).flat_map(|x| (0..2).map(move |y| n(x, y))).collect(),
+            resources,
+            via_sites: IndexMap::new(),
+            layer_ranks: IndexMap::from([(CopperLayer::Front, 0)]),
+            preferred_headings: IndexMap::from([(CopperLayer::Front, "horizontal")]),
+            demand_lanes: 0,
+            step_cache: RefCell::new(IndexMap::new()),
+        };
+        let accesses: AccessOptions = (0..2)
+            .map(|i| {
+                let at = pt(1.0 + 2.0 * i as f64, 2.0);
+                let access = PinAccess::new(pads[i].clone(), at, n(i as i64, 0), at, CopperLayer::Front);
+                ((name.to_owned(), pads[i].clone()), vec![access])
+            })
+            .collect();
+        let options = GlobalRouterOptions { present_penalty: 100, ..GlobalRouterOptions::default() };
+        Breakout { board, graph, rule, accesses, options }
+    }
+
+    fn run_breakout(s: &Breakout) -> (GlobalNetRoute, Attempt) {
+        let demand = net_demand(&s.board, Some(&s.rule), &s.options);
+        let rules = IndexMap::from([(s.rule.net.clone(), s.rule.clone())]);
+        let demands = NetDemands::new(&s.board, &rules, &s.options).expect("demands");
+        let zero = counts(&s.graph, &[]);
+        let route = route_net(
+            &s.board,
+            &s.graph,
+            &s.rule.net,
+            &s.board.nets[0].pads,
+            Some(&s.rule),
+            &s.accesses,
+            demand,
+            &zero,
+            &zero,
+            s.options.present_penalty,
+            &s.options,
+            &demands,
+        )
+        .expect("route");
+        let attempt = measure_attempt(&s.graph, vec![route.clone()], 1, &demands);
+        (route, attempt)
+    }
+
+    #[test]
+    fn declared_local_neckdown_removes_false_capacity_overflow() {
+        for renamed in [false, true] {
+            let s = breakout_scene(renamed, false, 2_000_000, RouteKind::General);
+            let (route, attempt) = run_breakout(&s);
+            assert!(route.connected && attempt.metrics.total_overflow == 0, "{renamed}");
+            // The permitted physical width is checked independently by ordinary DRC.
+            let mut routed = s.board.clone();
+            routed.tracks = vec![TrackSegment {
+                net: s.rule.net.clone(),
+                start: pt(1.0, 2.0),
+                end: pt(3.0, 2.0),
+                width_nm: 100_000,
+                layer: CopperLayer::Front,
+            }];
+            let report = copper_drc::run_physical_drc(&routed, copper_drc::Policy::default()).expect("drc");
+            let hard: Vec<_> = report
+                .findings
+                .iter()
+                .filter(|f| f.severity == copper_drc::Severity::Error && f.code != "DRC-ROUTE-INCOMPLETE")
+                .map(|f| f.code.clone())
+                .collect();
+            assert!(hard.is_empty(), "{hard:?}");
+            assert!(s.board.tracks.is_empty() && s.rule.width_nm == Some(400_000));
+        }
+    }
+
+    #[test]
+    fn search_and_terminal_choice_use_the_same_local_capacity() {
+        for renamed in [false, true] {
+            let (route, attempt) = run_breakout(&breakout_scene(renamed, true, 2_000_000, RouteKind::General));
+            let used: Vec<&str> = route.segments.iter().map(|s| s.resource_id.as_str()).collect();
+            assert_eq!(used, ["edge-0"]);
+            assert_eq!(attempt.metrics.total_overflow, 0);
+        }
+    }
+
+    #[test]
+    fn boundary_crossing_and_nonordinary_edges_keep_full_width() {
+        for (kind, breakout) in [(RouteKind::General, 300_000), (RouteKind::Power, 2_000_000)] {
+            let (route, attempt) = run_breakout(&breakout_scene(false, false, breakout, kind));
+            assert!(route.connected && attempt.metrics.total_overflow == 1, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn ordinary_neckdown_keeps_declared_clearance() {
+        let mut s = breakout_scene(false, false, 2_000_000, RouteKind::General);
+        s.rule.clearance_nm = Some(400_000);
+        s.board.net_routing_rules = vec![s.rule.clone()];
+        let (route, attempt) = run_breakout(&s);
+        assert!(route.connected && attempt.metrics.total_overflow == 1);
+    }
+
+    // ------------------------------------------------------------------
+    // `tests/test_global_terminal_fallback_degree.py`: actual copper geometry
+    // and the bounded local access fallback. Python counted
+    // `local_access_path` calls through a patch; the call counts are dropped
+    // and the choices are checked.
+
+    fn degree_scene(
+        renamed: bool,
+        wall: bool,
+        obstacle: bool,
+        connected: bool,
+    ) -> (PhysicalBoard, Graph, PadReference, String, NetRoutingRule, GlobalRouterOptions, [GridNode; 3]) {
+        let (net, src, dst) = if renamed { ("RENAMED", "P_SOURCE", "P_LOAD") } else { ("SIGNAL", "SOURCE", "LOAD") };
+        let land = footprint("test/land", vec![pad("1", 0.0, 0.0, 0.3, 0.3)], 0.6, 0.6);
+        let tall = if wall { 6.0 } else { 0.5 };
+        let block = footprint("test/block", vec![pad("1", 0.0, 0.0, 0.5, tall)], 0.6, if wall { 6.0 } else { 0.6 });
+        let mut placements = vec![placement(src, "test/land", 2.0, 2.0), placement(dst, "test/land", 8.0, 2.0)];
+        let mut nets = vec![PhysicalNet {
+            name: net.to_owned(),
+            pads: vec![PadReference::new(src, "1"), PadReference::new(dst, "1")],
+        }];
+        if obstacle {
+            placements.push(placement("OBSTACLE", "test/block", 3.0, if wall { 3.0 } else { 2.0 }));
+            nets.push(PhysicalNet { name: "BLOCK".to_owned(), pads: vec![PadReference::new("OBSTACLE", "1")] });
+        }
+        let rule = NetRoutingRule {
+            width_nm: Some(200_000),
+            clearance_nm: Some(100_000),
+            allowed_layers: vec![CopperLayer::Front],
+            max_vias: Some(0),
+            breakout_length_nm: Some(2_000_000),
+            breakout_width_nm: Some(100_000),
+            ..crate::test_support_routers::rule(net)
+        };
+        let mut board = board("degree-regression", 10.0, 6.0, vec![land, block], placements, nets);
+        board.rules = copper_physical::DesignRules {
+            minimum_clearance_nm: 100_000,
+            minimum_track_width_nm: 100_000,
+            default_track_width_nm: 200_000,
+            ..copper_physical::DesignRules::default()
+        };
+        board.net_routing_rules = vec![rule.clone()];
+        let nodes = [GridNode::new(0, 0, 0), GridNode::new(0, 1, 0), GridNode::new(0, 2, 0)];
+        let mut edges = vec![(nodes[1], nodes[2])];
+        if connected {
+            edges.push((nodes[0], nodes[1]));
+        }
+        let resources = edges
+            .iter()
+            .enumerate()
+            .map(|(i, (a, b))| {
+                let (first, second) = edge_key(*a, *b);
+                (
+                    (first, second),
+                    Resource {
+                        identifier: format!("edge-{i}"),
+                        first,
+                        second,
+                        capacity: 1,
+                        layer: Some(CopperLayer::Front),
+                    },
+                )
+            })
+            .collect();
+        let graph = Graph {
+            layers: vec![CopperLayer::Front],
+            xs: vec![2_000_000, 4_000_000, 5_000_000],
+            ys: vec![2_000_000],
+            legal_nodes: nodes.iter().copied().collect(),
+            resources,
+            via_sites: IndexMap::new(),
+            layer_ranks: IndexMap::from([(CopperLayer::Front, 0)]),
+            preferred_headings: IndexMap::from([(CopperLayer::Front, "horizontal")]),
+            demand_lanes: 0,
+            step_cache: RefCell::new(IndexMap::new()),
+        };
+        let options = GlobalRouterOptions {
+            tile_size_nm: 1_000_000,
+            pin_access_candidates: 4,
+            escape_step_nm: 125_000,
+            escape_radius_nm: 3_000_000,
+            ..GlobalRouterOptions::default()
+        };
+        (board, graph, PadReference::new(src, "1"), net.to_owned(), rule, options, nodes)
+    }
+
+    fn front_only() -> IndexSet<i64> {
+        IndexSet::from([0])
+    }
+
+    #[test]
+    fn isolated_legal_stem_does_not_suppress_bounded_real_detour() {
+        for renamed in [false, true] {
+            let (board, graph, pad, net, rule, options, nodes) = degree_scene(renamed, false, true, false);
+            let index = RoutingClearanceIndex::new(&board).expect("index");
+            assert!(neighbors(&graph, nodes[0], &front_only()).is_empty());
+            // The old direct candidate is real and legal, a straight useful bridge is not.
+            let (here, next) = (graph.point(nodes[0]), graph.point(nodes[1]));
+            let width = rule.width_nm.expect("width");
+            assert!(index.can_track(&net, here, here, width, CopperLayer::Front).expect("track"));
+            assert!(!index.can_route(&net, here, next, width, CopperLayer::Front).expect("route"));
+            let resources = graph.resources.clone();
+            let choices =
+                pin_access_candidates(&board, &graph, &pad, &net, &[CopperLayer::Front], Some(&rule), &index, &options)
+                    .expect("choices");
+            assert!(
+                !choices.is_empty() && choices.iter().all(|c| !neighbors(&graph, c.node, &front_only()).is_empty())
+            );
+            assert!(choices.len() as i64 <= options.pin_access_candidates);
+            assert!(graph.resources == resources);
+            assert!(choices.iter().any(|c| !c.tracks.is_empty()));
+            for choice in &choices {
+                for t in &choice.tracks {
+                    assert!(index.can_route(&net, t.start, t.end, t.width_nm, t.layer).expect("route"));
+                    if t.width_nm < width {
+                        assert!(index.breakout.region(&net, &[t.start, t.end]).is_some());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn failed_bounded_detour_keeps_original_choice_for_later_alias_registration() {
+        let (board, graph, pad, net, rule, options, nodes) = degree_scene(false, true, true, false);
+        let index = RoutingClearanceIndex::new(&board).expect("index");
+        let choices =
+            pin_access_candidates(&board, &graph, &pad, &net, &[CopperLayer::Front], Some(&rule), &index, &options)
+                .expect("choices");
+        assert_eq!(choices.iter().map(|c| c.node).collect::<Vec<_>>(), [nodes[0]]);
+        assert!(choices[0].tracks.is_empty());
+    }
+
+    /// Dropped: Python's tripwire on `local_access_path`.
+    #[test]
+    fn existing_connected_direct_choice_keeps_its_direct_access() {
+        let (board, graph, pad, net, rule, options, nodes) = degree_scene(false, false, false, true);
+        let index = RoutingClearanceIndex::new(&board).expect("index");
+        let choices =
+            pin_access_candidates(&board, &graph, &pad, &net, &[CopperLayer::Front], Some(&rule), &index, &options)
+                .expect("choices");
+        assert!(!choices.is_empty() && choices[0].node == nodes[0]);
+    }
+
+    // ------------------------------------------------------------------
+    // `tests/test_global_terminal_capacity_priority.py`: uncommitted sampled
+    // sites cannot monopolize real terminal launch capacity.
+
+    fn one_site_graph(sites: Vec<Point>) -> Graph {
+        let (a, b) = (GridNode::new(0, 0, 0), GridNode::new(1, 0, 0));
+        let identifier = "via:0:1:0:0".to_owned();
+        Graph {
+            layers: vec![CopperLayer::Front, CopperLayer::Back],
+            xs: vec![4_000_000],
+            ys: vec![6_000_000],
+            legal_nodes: IndexSet::from([a, b]),
+            resources: IndexMap::from([(
+                edge_key(a, b),
+                Resource {
+                    identifier: identifier.clone(),
+                    first: a,
+                    second: b,
+                    capacity: sites.len() as i64,
+                    layer: None,
+                },
+            )]),
+            via_sites: IndexMap::from([(identifier, sites)]),
+            layer_ranks: IndexMap::new(),
+            preferred_headings: IndexMap::new(),
+            demand_lanes: 0,
+            step_cache: RefCell::new(IndexMap::new()),
+        }
+    }
+
+    fn detailed_board() -> PhysicalBoard {
+        board(
+            "DetailedRoute",
+            20.0,
+            12.0,
+            vec![one_pad()],
+            vec![placement("J1", "test/one-pad", 3.0, 6.0), placement("J2", "test/one-pad", 17.0, 6.0)],
+            vec![net("SIGNAL", &[("J1", "1"), ("J2", "1")])],
+        )
+    }
+
+    fn launch_choice(via: Via) -> PinAccess {
+        PinAccess {
+            via: Some(via),
+            ..PinAccess::new(
+                PadReference::new("J1", "1"),
+                pt(3.0, 6.0),
+                GridNode::new(1, 0, 0),
+                pt(4.0, 6.0),
+                CopperLayer::Back,
+            )
+        }
+    }
+
+    #[test]
+    fn terminal_launch_replaces_conflicting_sample_without_adding_free_capacity() {
+        let board = detailed_board();
+        let (sample, remote, launch) = (pt(4.0, 6.0), pt(6.0, 6.0), pt(4.25, 6.0));
+        let graph = one_site_graph(vec![sample, remote]);
+        let via = Via {
+            net: "SIGNAL".to_owned(),
+            position: launch,
+            size_nm: board.rules.default_via_size_nm,
+            drill_nm: board.rules.default_via_drill_nm,
+            from_layer: CopperLayer::Front,
+            to_layer: CopperLayer::Back,
+            technology: None,
+            finish: "standard".to_owned(),
+        };
+        let choice = launch_choice(via.clone());
+        let key = ("SIGNAL".to_owned(), choice.pad.clone());
+        let (result, accepted) = crate::global_terminals::register_terminal_capacity(
+            &board,
+            &graph,
+            IndexMap::from([(key.clone(), vec![choice.clone()])]),
+            None,
+        )
+        .expect("register");
+        assert_eq!(accepted[&key], [choice]);
+        let sites: IndexSet<Point> = result.via_sites["via:0:1:0:0"].iter().copied().collect();
+        assert_eq!(sites, IndexSet::from([launch, remote]));
+        assert!(result.resources.values().all(|r| r.capacity == 2));
+        let witnesses: Vec<Via> = result.via_sites["via:0:1:0:0"]
+            .iter()
+            .enumerate()
+            .map(|(i, p)| Via { net: format!("witness-{i}"), position: *p, ..via.clone() })
+            .collect();
+        let clear = RoutingClearanceIndex::new(&board).expect("index");
+        assert!(clear.candidate_vias_clear(&witnesses).expect("clear"));
+        for v in &witnesses {
+            assert!(
+                clear
+                    .can_via(&v.net, v.position, v.size_nm, v.from_layer, v.to_layer, Some(v.drill_nm), false, None)
+                    .expect("via")
+            );
+        }
+        assert_eq!(graph.via_sites["via:0:1:0:0"], [sample, remote]);
+        assert!(board.tracks.is_empty() && board.vias.is_empty());
+    }
+
+    #[test]
+    fn actual_input_via_can_never_be_replaced_by_a_capacity_proposal() {
+        let mut board = detailed_board();
+        let fixed = Via {
+            net: "FIXED".to_owned(),
+            position: pt(4.0, 6.0),
+            size_nm: board.rules.default_via_size_nm,
+            drill_nm: board.rules.default_via_drill_nm,
+            from_layer: CopperLayer::Front,
+            to_layer: CopperLayer::Back,
+            technology: None,
+            finish: "standard".to_owned(),
+        };
+        board.nets.push(PhysicalNet { name: "FIXED".to_owned(), pads: Vec::new() });
+        board.vias = vec![fixed.clone()];
+        let graph = one_site_graph(Vec::new());
+        let choice = launch_choice(Via { net: "SIGNAL".to_owned(), position: pt(4.25, 6.0), ..fixed.clone() });
+        let key = ("SIGNAL".to_owned(), choice.pad.clone());
+        let (result, accepted) = crate::global_terminals::register_terminal_capacity(
+            &board,
+            &graph,
+            IndexMap::from([(key.clone(), vec![choice])]),
+            None,
+        )
+        .expect("register");
+        assert!(accepted[&key].is_empty());
+        assert!(result.resources == graph.resources && result.via_sites == graph.via_sites);
+        assert_eq!(board.vias, [fixed]);
     }
 }

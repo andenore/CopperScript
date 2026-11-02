@@ -294,3 +294,28 @@ fn invalid_decoupling_associations_do_not_silently_fall_back() {
         assert!(prototype(&source).is_err(), "{source}");
     }
 }
+
+/// `tests/test_reference_escape_geometry.py::test_decoupler_end_faces_pin_on_each_package_edge`.
+#[test]
+fn decoupler_end_faces_pin_on_each_package_edge() {
+    for rotation in [0, 90, 180, 270] {
+        let mut board = bypass_board();
+        board.placements[0].rotation_degrees = Decimal::from_i64(rotation);
+        let options = PlannerOptions { component_clearance_nm: mm(0.2), ..PlannerOptions::default() };
+        let (result, moved) = improve(&board, &options);
+        assert_eq!(moved, 1, "{rotation}");
+        let pin = pad_at(&board, &result["U"], "1");
+        let feed = pad_at(&board, &result["C"], "1");
+        let ret = pad_at(&board, &result["C"], "2");
+        let (dx, dy) = (feed.x_nm - pin.x_nm, feed.y_nm - pin.y_nm);
+        let (ax, ay) = (ret.x_nm - feed.x_nm, ret.y_nm - feed.y_nm);
+        assert_eq!(i128::from(ax) * i128::from(dy), i128::from(ay) * i128::from(dx), "{rotation}");
+        assert!(i128::from(ax) * i128::from(dx) + i128::from(ay) * i128::from(dy) > 0, "{rotation}");
+        let mut placed = board.clone();
+        placed.placements = result.values().cloned().collect();
+        assert!(
+            route_decouplers(&placed, None, None, None, None).expect("decouplers").pending.is_empty(),
+            "{rotation}"
+        );
+    }
+}

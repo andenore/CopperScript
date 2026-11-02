@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 mod boards;
+pub mod clearance_remove;
 
 pub use boards::*;
 
@@ -153,5 +154,16 @@ pub mod routes {
         events: &mut Events,
     ) -> DetailedRoutingResult {
         route_unified(board, global_route, options, None, None, None, None, Some(events)).expect("unified route")
+    }
+}
+
+/// A fixed linear congruential generator for the ported random trials
+/// (Python used `random.Random(seed)`).
+pub struct Lcg(pub u64);
+
+impl Lcg {
+    pub fn below(&mut self, bound: i64) -> i64 {
+        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        ((self.0 >> 33) % bound as u64) as i64
     }
 }
