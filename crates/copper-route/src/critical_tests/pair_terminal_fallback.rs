@@ -14,7 +14,7 @@ use crate::test_support_critical::*;
 
 /// `fixture(duplicates)`: pair A/B from U (5, 10) to two one-pad terminals,
 /// or to a connector with a duplicated contact per member.
-fn fixture(duplicates: bool) -> PhysicalBoard {
+pub(super) fn fixture(duplicates: bool) -> PhysicalBoard {
     let land = |number: &str, x: i64, y: i64| smd_pad(number, at(x, y), 300_000);
     let source = footprint(
         "pair",

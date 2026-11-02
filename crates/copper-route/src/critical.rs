@@ -800,7 +800,7 @@ fn admit_reserved_accesses(
 
 /// `on_progress(event, nets, result)` of `route_critical_nets`, forwarded as
 /// `critical_group` progress events (`progress.critical_progress`).
-fn critical_progress(
+pub(crate) fn critical_progress(
     on_progress: &mut Option<ProgressCallback<'_>>,
     event: &str,
     nets: &[String],
@@ -1900,7 +1900,7 @@ fn guide_via(
 
 /// `_aligned_pair_paths`: a straight coupled channel with symmetric 45-degree
 /// pin tapers, for unambiguous same-layer aligned terminals.
-fn aligned_pair_paths(first: &GlobalNetRoute, second: &GlobalNetRoute, offset: i64) -> Option<(Lane, Lane)> {
+pub(crate) fn aligned_pair_paths(first: &GlobalNetRoute, second: &GlobalNetRoute, offset: i64) -> Option<(Lane, Lane)> {
     if !first.vias.is_empty() || !second.vias.is_empty() {
         return None;
     }
@@ -3315,7 +3315,11 @@ pub(crate) fn bundle_repair(
 /// `_pair_prefers_via_escape`: matched via portals first for an internally
 /// located SMD terminal pair (every same-number land at one endpoint of both
 /// members inside the package's pad-centre bounds by a via and two clearances).
-fn pair_prefers_via_escape(board: &PhysicalBoard, first: &GlobalNetRoute, second: &GlobalNetRoute) -> Result<bool> {
+pub(crate) fn pair_prefers_via_escape(
+    board: &PhysicalBoard,
+    first: &GlobalNetRoute,
+    second: &GlobalNetRoute,
+) -> Result<bool> {
     use copper_physical::footprint::PadKind;
     let margin = board.rules.default_via_size_nm + 2 * board.rules.minimum_clearance_nm;
     for access in &first.accesses {
@@ -3649,7 +3653,7 @@ fn paired_via_transitions(first: &[&Via], second: &[&Via], center_spacing: i64) 
 /// `_improve_pair_spine`: a rejected shortcut retains the complete accepted
 /// pair and its metrics.
 #[allow(clippy::too_many_arguments)]
-fn improve_pair_spine(
+pub(crate) fn improve_pair_spine(
     board: &PhysicalBoard,
     search_board: &PhysicalBoard,
     (first, second): (&NetRoutingRule, &NetRoutingRule),

@@ -18,7 +18,7 @@ use crate::test_support_critical::*;
 
 /// `_bent_pair_board`: J2 rotated a quarter turn at (20, 20) mm, so the
 /// joint lanes bend and differ in length.
-fn bent_pair_board(change: impl Fn(NetRoutingRule) -> NetRoutingRule) -> PhysicalBoard {
+pub(super) fn bent_pair_board(change: impl Fn(NetRoutingRule) -> NetRoutingRule) -> PhysicalBoard {
     let mut board = usb_pair_board();
     let quarter = Decimal::from_i64(90);
     board.placements[1].position = mm(20, 20);

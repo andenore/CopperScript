@@ -29,8 +29,19 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_pair_opposite_faces.py | 6 | 6 | 0 | 0 | `src/critical_tests/pair_opposite_faces.rs` |
 | test_pair_converging_ports.py | 6 | 6 | 0 | 0 | `src/critical_tests/pair_converging_ports.rs` |
 | test_critical_lane_review.py | 6 | 5 | 1 | 0 | `src/critical_tests/critical_lane_review.rs`; the route-board case in `crates/copper/tests/critical_cli.rs` |
+| test_pair_taper.py | 5 | 5 | 0 | 0 | `src/critical_tests/pair_taper.rs` |
+| test_pair_recessed_via_ports.py | 5 | 4 | 1 | 0 | `src/critical_tests/pair_recessed_via_ports.rs` |
+| test_pair_refine.py | 4 | 4 | 0 | 0 | `src/critical_tests/pair_refine.rs` |
+| test_pair_budget_escalation.py | 4 | 4 | 0 | 0 | `src/critical_tests/pair_budget_escalation.rs` |
+| test_critical_search_order.py | 4 | 4 | 0 | 0 | `src/critical_tests/critical_search_order.rs` |
+| test_recessed_pair_ports.py | 3 | 3 | 0 | 0 | `src/critical_tests/recessed_pair_ports.rs` |
+| test_planned_escape_copper.py | 3 | 3 | 0 | 0 | `src/critical_tests/planned_escape_copper.rs` |
+| test_pair_through_hole_contacts.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_through_hole_contacts.rs` |
+| test_pair_hybrid_contact_anchor.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_hybrid_contact_anchor.rs` |
+| test_pair_collinear_fork.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_collinear_fork.rs` |
+| test_pair_outer_transitions.py | 2 | 2 | 0 | 0 | `src/critical_tests/pair_outer_transitions.rs` |
 
-**Totals so far:** 20 of 46 files, 217 Python tests: 174 ported, 43
+**Totals so far:** 31 of 46 files, 256 Python tests: 212 ported, 44
 skipped, 0 ignored.
 
 Rust bugs found and fixed by the ports:
@@ -41,12 +52,9 @@ Rust bugs found and fixed by the ports:
 - `route-board` length-option errors lost Python's positive/nonnegative wording
   (`test_pair_terminal_fallback.py`).
 
-Remaining files, in the assigned order: pair_taper, pair_recessed_via_ports, pair_refine, pair_budget_escalation,
-critical_search_order, recessed_pair_ports, planned_escape_copper,
-pair_tuning_span_copper_contacts, pair_through_hole_contacts,
-pair_hybrid_contact_anchor, pair_collinear_fork, critical_stage_planning,
-critical_return_preparation, bundle_tuning, partial_pair_macro_ports,
-pair_transition_diagnostics, pair_outer_transitions, pair_offset_ports,
+Remaining files, in the assigned order: pair_tuning_span_copper_contacts,
+critical_stage_planning, critical_return_preparation, bundle_tuning,
+partial_pair_macro_ports, pair_transition_diagnostics, pair_offset_ports,
 pair_obstacle_tuning_fallback, pair_approach_ranking, loose_pair_repair,
 collinear_pair_ports, pair_transition_families, pair_staggered_contacts,
 pair_lateral_ports, pair_departure.
@@ -262,3 +270,35 @@ Rust counterpart.
 Skipped:
 - `preflight_reports_the_review_of_the_critical_stage`: the
   `critical-preflight` CLI is not ported (the route-board report case is).
+
+### test_pair_recessed_via_ports.py
+
+`test_pair_outer_transitions.py`'s fixture is shared from its port.
+
+Skipped:
+- `local_collar_calls_have_a_finite_shared_allowance`: counted the
+  `maximum_states` of each `local_access_path` call through a monkeypatch;
+  Rust `local_via_ports` has the same 32-call / 16-site bound but no seam to
+  observe the calls.
+
+### test_pair_refine.py
+
+- `owner_preserves_complete_accepted_incumbent_on_bad_shortcut`: Python
+  injected each defective shortcut into `_improve_pair_spine`. Here the gap
+  and native-open defects fail the owner's exact gates
+  (`route_pair_exact` + `validate_candidate`), the profile defect is a
+  skew-warned fallback, and `improve_pair_spine` over the real shortcuts
+  keeps a complete connected pair no longer than the incumbent. The width
+  and layer defects are dropped by the owner's private faithfulness filter,
+  which has no seam.
+
+### test_critical_search_order.py
+
+Python's `SimpleNamespace` guides are `GlobalNetRoute`s with one access.
+`critical_progress` is the crate-private `critical_group` emitter.
+
+### test_planned_escape_copper.py
+
+`test_unified_router._board` is rebuilt here; `_release_escape_masks`,
+`_copper_keepouts` and `_plane_pin_halos` are the crate-private `flow`
+functions.

@@ -41,7 +41,7 @@ pub struct ViaRestriction<'a> {
 }
 
 /// `_Transition`: a collar, its signal vias, return vias and site rank.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Transition {
     pub port: Port,
     pub vias: Vec<Via>,
@@ -434,7 +434,7 @@ pub(crate) fn return_via(
 /// `_local_via_ports`: the finite recessed-land fallback choosing legal vias
 /// before searching collars.
 #[allow(clippy::too_many_arguments)]
-fn local_via_ports(
+pub(crate) fn local_via_ports(
     board: &PhysicalBoard,
     first: &NetRoutingRule,
     second: &NetRoutingRule,
@@ -658,7 +658,7 @@ fn select_domains(ordered: Vec<Transition>) -> Vec<Transition> {
 /// `_transitions`: the exact paired transitions from `surface` to `layer`
 /// at one terminal pair.
 #[allow(clippy::too_many_arguments)]
-fn transitions(
+pub(crate) fn transitions(
     board: &PhysicalBoard,
     first: &NetRoutingRule,
     second: &NetRoutingRule,
