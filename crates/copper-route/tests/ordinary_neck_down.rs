@@ -215,3 +215,72 @@ fn neck_down_routing_is_deterministic() {
     assert_eq!(first.routing_fingerprint, second.routing_fingerprint);
     assert_eq!(first.to_json(), second.to_json());
 }
+
+/// Two tall connector lands side by side (VDD and VIN, 1.75 mm apart) and a VDD
+/// land below VIN: the shortest exit cuts past the VIN corner,
+/// legal only at the breakout width.
+fn connector_board() -> PhysicalBoard {
+    let mut board = board("NeckCost", 20.0, 20.0);
+    add_footprint(&mut board, footprint("test/tall", vec![pad("1", Point::new(0, 0), size(1.0, 3.5))], size(1.2, 4.0)));
+    add_footprint(&mut board, footprint("test/land", vec![pad("1", Point::new(0, 0), size(1.2, 1.2))], size(2.0, 2.0)));
+    board.placements = vec![
+        place("P1", "test/tall", mm(8.0, 6.0)),
+        place("P2", "test/tall", mm(9.75, 6.0)),
+        place("J1", "test/land", mm(9.75, 14.0)),
+    ];
+    board.nets = vec![net("VDD", &[("P1", "1"), ("J1", "1")]), net("VIN", &[("P2", "1")])];
+    board.rules.minimum_clearance_nm = 200_000;
+    board.rules.minimum_track_width_nm = 100_000;
+    board.rules.default_track_width_nm = 200_000;
+    board.net_routing_rules = vec![NetRoutingRule {
+        width_nm: Some(800_000),
+        breakout_length_nm: Some(1_500_000),
+        breakout_width_nm: Some(300_000),
+        ..rule("VDD")
+    }];
+    board
+}
+
+#[test]
+fn a_wide_net_routes_around_a_neighbouring_land_instead_of_necking_past_it() {
+    let board = connector_board();
+    let narrow = |options: &UnifiedRouterOptions| -> usize {
+        let routed = route(&board, options);
+        assert!(routed.nets.iter().find(|n| n.net == "VDD").expect("VDD").connected);
+        let errors = hard_errors(&routed.board);
+        assert!(errors.is_empty(), "{errors:?}");
+        routed.board.tracks.iter().filter(|t| t.net == "VDD" && t.width_nm < 800_000).count()
+    };
+    // Without a cost for necking, the shortest path squeezes past P2 at the
+    // breakout width; with it, the route keeps its full width.
+    assert!(narrow(&UnifiedRouterOptions { neck_cost: 0.0, ..UnifiedRouterOptions::default() }) > 0);
+    assert_eq!(narrow(&UnifiedRouterOptions::default()), 0);
+}
+
+#[test]
+fn smoothing_keeps_a_branch_on_the_centre_line_it_joins() {
+    let mut board = board("Junction", 20.0, 20.0);
+    add_footprint(&mut board, footprint("test/land", vec![pad("1", Point::new(0, 0), size(1.2, 1.2))], size(2.0, 2.0)));
+    board.placements = vec![
+        place("A", "test/land", mm(2.0, 2.0)),
+        place("B", "test/land", mm(8.0, 8.0)),
+        place("C", "test/land", mm(5.0, 10.0)),
+    ];
+    board.nets = vec![net("VDD", &[("A", "1"), ("B", "1"), ("C", "1")])];
+    // An L-shaped trunk A-B whose corner smoothing would cut, and a branch to
+    // C that ends partway along the trunk's first leg.
+    let owned = vec![
+        track("VDD", mm(2.0, 2.0), mm(8.0, 2.0), WIDE, FRONT),
+        track("VDD", mm(8.0, 2.0), mm(8.0, 8.0), WIDE, FRONT),
+        track("VDD", mm(5.0, 2.0), mm(5.0, 10.0), WIDE, FRONT),
+    ];
+    let owned_board = with_tracks(&board, &owned);
+    assert!(connected(&owned_board));
+    let mut index = RoutingClearanceIndex::new(&owned_board).unwrap();
+    let result = smooth_owned_tracks(&board, &owned, &mut index, 2).unwrap();
+    assert_ne!(result, owned, "the corner is smoothed");
+    let junction = mm(5.0, 2.0);
+    let meeting = result.iter().filter(|t| t.start == junction || t.end == junction).count();
+    assert_eq!(meeting, 3, "the branch still meets the trunk at a shared vertex: {result:?}");
+    assert!(connected(&with_tracks(&board, &result)));
+}

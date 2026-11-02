@@ -777,6 +777,7 @@ impl Router<'_, '_> {
             target_extra: targets.extra.map(|_| &self.extra[..]),
             turn: turn.as_deref(),
             guide: corridor.as_ref().and(self.guide_nodes.as_deref()),
+            neck_cost: self.options.neck_cost,
             via_transitions: transition_table.as_deref(),
             max_expansions: self.options.maximum_expansions,
             nested: None,

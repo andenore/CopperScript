@@ -99,7 +99,64 @@ fn smooth_net(
     Ok(result)
 }
 
+/// Smooth one layer of a net. Tracks are first split where another track of
+/// the net ends on them, so that T-junction becomes an anchor: straightening
+/// must never move copper out from under a branch and leave it joined by
+/// overlap alone. Unchanged layers come back exactly as given.
 fn smooth_layer(
+    board: &PhysicalBoard,
+    owned: &[TrackSegment],
+    layer: CopperLayer,
+    clearance: &RoutingClearanceIndex<'_>,
+) -> Result<Vec<TrackSegment>> {
+    let split = split_at_junctions(board, owned, layer);
+    let smoothed = smooth_split_layer(board, &split, layer, clearance)?;
+    Ok(if same_tracks(&smoothed, &split) { owned.to_vec() } else { smoothed })
+}
+
+fn same_tracks(a: &[TrackSegment], b: &[TrackSegment]) -> bool {
+    fn count(tracks: &[TrackSegment]) -> IndexMap<&TrackSegment, usize> {
+        let mut counts: IndexMap<&TrackSegment, usize> = IndexMap::new();
+        for track in tracks {
+            *counts.entry(track).or_default() += 1;
+        }
+        counts
+    }
+    a.len() == b.len() && count(a) == count(b)
+}
+
+/// `owned` with each track cut where the end of another track of the net on
+/// this layer (owned or fixed) lies inside it.
+fn split_at_junctions(board: &PhysicalBoard, owned: &[TrackSegment], layer: CopperLayer) -> Vec<TrackSegment> {
+    let net = &owned[0].net;
+    let ends: IndexSet<Point> = owned
+        .iter()
+        .chain(board.tracks.iter().filter(|t| t.net == *net && t.layer == layer))
+        .flat_map(|t| [t.start, t.end])
+        .collect();
+    let mut result = Vec::with_capacity(owned.len());
+    for track in owned {
+        let along = |p: &Point| {
+            i128::from(p.x_nm - track.start.x_nm) * i128::from(track.end.x_nm - track.start.x_nm)
+                + i128::from(p.y_nm - track.start.y_nm) * i128::from(track.end.y_nm - track.start.y_nm)
+        };
+        let mut cuts: Vec<Point> = ends
+            .iter()
+            .copied()
+            .filter(|p| *p != track.start && *p != track.end && point_on_segment(*p, track.start, track.end))
+            .collect();
+        cuts.sort_by_key(along);
+        let mut from = track.start;
+        for cut in cuts {
+            result.push(TrackSegment { start: from, end: cut, ..track.clone() });
+            from = cut;
+        }
+        result.push(TrackSegment { start: from, ..track.clone() });
+    }
+    result
+}
+
+fn smooth_split_layer(
     board: &PhysicalBoard,
     owned: &[TrackSegment],
     layer: CopperLayer,

@@ -169,6 +169,8 @@ pub struct SearchInput<'a> {
     pub target_extra: Option<&'a [f64]>,
     pub turn: Option<&'a [f64]>,
     pub guide: Option<&'a [f64]>,
+    /// Extra cost, times the step cost, of a step legal only at the neck width.
+    pub neck_cost: f64,
     /// `nl * nl` span masks (`None`: no technology for that transition);
     /// `None` altogether: through vias only.
     pub via_transitions: Option<&'a [Option<&'a [i32]>]>,
@@ -289,20 +291,25 @@ fn run(input: &SearchInput<'_>, scratch: &mut Scratch) -> Option<Vec<i64>> {
                 continue;
             }
             let o = input.owner[n2];
-            if o != -1 && o != input.nid && !(here_in_region && input.flags[n2] & FLAG_NECK != 0) {
+            let mut necked = o != -1 && o != input.nid;
+            if necked && !(here_in_region && input.flags[n2] & FLAG_NECK != 0) {
                 continue;
             }
             if DX[m] != 0 && DY[m] != 0 {
                 let cell = (node + (if DY[m] > 0 { 0 } else { -1 }) * nx + if DX[m] > 0 { 0 } else { -1 }) as usize;
                 let o = input.mid_owner[cell];
-                if o != -1
-                    && o != input.nid
-                    && !(here_in_region && input.flags[n2] & FLAG_REGION != 0 && input.flags[cell] & FLAG_NECK_MID != 0)
-                {
-                    continue;
+                if o != -1 && o != input.nid {
+                    if !(here_in_region && input.flags[n2] & FLAG_REGION != 0 && input.flags[cell] & FLAG_NECK_MID != 0)
+                    {
+                        continue;
+                    }
+                    necked = true;
                 }
             }
             let mut c = cost + base[m] * (1.0 + input.hist[n2]) * (1.0 + input.present * input.occ[n2] as f64);
+            if necked {
+                c += base[m] * input.neck_cost;
+            }
             if let Some(row) = turn_row {
                 c += row[m];
             }
@@ -473,20 +480,25 @@ fn run_nested(input: &SearchInput<'_>, tables: &NestedTables<'_>, scratch: &mut 
                 continue;
             }
             let o = input.owner[n2];
-            if o != -1 && o != input.nid && !(here_in_region && input.flags[n2] & FLAG_NECK != 0) {
+            let mut necked = o != -1 && o != input.nid;
+            if necked && !(here_in_region && input.flags[n2] & FLAG_NECK != 0) {
                 continue;
             }
             if DX[m] != 0 && DY[m] != 0 {
                 let cell = (node + (if DY[m] > 0 { 0 } else { -1 }) * nxb + if DX[m] > 0 { 0 } else { -1 }) as usize;
                 let o = input.mid_owner[cell];
-                if o != -1
-                    && o != input.nid
-                    && !(here_in_region && input.flags[n2] & FLAG_REGION != 0 && input.flags[cell] & FLAG_NECK_MID != 0)
-                {
-                    continue;
+                if o != -1 && o != input.nid {
+                    if !(here_in_region && input.flags[n2] & FLAG_REGION != 0 && input.flags[cell] & FLAG_NECK_MID != 0)
+                    {
+                        continue;
+                    }
+                    necked = true;
                 }
             }
             let mut c = cost + base[m] * (1.0 + input.hist[n2]) * (1.0 + input.present * input.occ[n2] as f64);
+            if necked {
+                c += base[m] * input.neck_cost;
+            }
             if let Some(row) = turn_row {
                 c += row[m];
             }
