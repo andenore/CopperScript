@@ -1,4 +1,4 @@
-//! `copper assembly {snapshot,check,bom,candidate-bom} BOARD [--locked] [--offline] ...`:
+//! `copper assembly {snapshot,update,check,bom,candidate-bom} BOARD [--locked] [--offline] ...`:
 //! pin and check explicit assembly selections offline.
 
 use std::io::Write;
@@ -15,12 +15,13 @@ use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::option_parser::{self, Spec, flag, short_value, value};
 use crate::pypath;
 
-const USAGE: &str = "usage: copper assembly [-h] {snapshot,check,bom,candidate-bom} ...";
+const USAGE: &str = "usage: copper assembly [-h] {snapshot,update,check,bom,candidate-bom} ...";
 
 fn specs(action: &str) -> Vec<Spec> {
     let mut specs = vec![flag("--locked"), flag("--offline")];
     match action {
         "snapshot" => specs.push(short_value("--output", "-o")),
+        "update" => specs.push(value("--lock")),
         "check" => specs.extend([value("--lock"), value("--report")]),
         "bom" => specs.extend([
             value("--lock"),
@@ -58,11 +59,12 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(out, "{USAGE}\n\npin and check explicit assembly selections offline");
         return 0;
     }
-    if !["snapshot", "check", "bom", "candidate-bom"].contains(&action.as_str()) {
+    if !["snapshot", "update", "check", "bom", "candidate-bom"].contains(&action.as_str()) {
         return usage_error(
             err,
             &format!(
-                "argument assembly_command: invalid choice: '{action}' (choose from snapshot, check, bom, candidate-bom)"
+                "argument assembly_command: invalid choice: '{action}' \
+                 (choose from snapshot, update, check, bom, candidate-bom)"
             ),
         );
     }
@@ -76,7 +78,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     }
     let required: &[&str] = match action.as_str() {
         "snapshot" => &["--output"],
-        "check" => &["--lock"],
+        "update" | "check" => &["--lock"],
         _ => &["--lock", "--output"],
     };
     let missing: Vec<&str> = required.iter().copied().filter(|name| parsed.value(name).is_none()).collect();
@@ -141,6 +143,43 @@ fn execute(
     }
     let lock_path = argument("--lock").expect("required option");
     let lock: Lock = assembly::load_lock(&lock_path.path, &lock_path.shown)?;
+    if action == "update" {
+        let (updated, changes) = assembly::update(board, &lock)?;
+        // Replace the lock only once the new one is fully written.
+        let staged = lock_path.path.with_extension("lock.update");
+        let failed =
+            |failure: std::io::Error| AssemblyError(copper_assembly::files::open_error(&failure, &lock_path.shown));
+        std::fs::write(&staged, assembly::lock_to_json(&updated)).map_err(failed)?;
+        std::fs::rename(&staged, &lock_path.path).map_err(failed)?;
+        let reset = changes.changed.iter().filter(|(_, _, reviewed)| *reviewed).count();
+        let _ = text::print(
+            out,
+            &format!(
+                "Updated assembly lock -> {}: {} unchanged, {} changed ({reset} review(s) reset), {} added, {} removed",
+                lock_path.shown,
+                changes.unchanged,
+                changes.changed.len(),
+                changes.added.len(),
+                changes.removed.len()
+            ),
+        );
+        let mut lines: Vec<String> = changes
+            .changed
+            .iter()
+            .map(|(reference, what, reviewed)| {
+                format!("CHANGED: {reference}: {what}{}", if *reviewed { " (review reset)" } else { "" })
+            })
+            .collect();
+        lines.extend(changes.added.iter().map(|reference| format!("ADDED: {reference}: unreviewed, identity to fill")));
+        lines.extend(changes.removed.iter().map(|reference| format!("REMOVED: {reference}: no longer assembled")));
+        for line in lines.iter().take(40) {
+            let _ = text::print(out, line);
+        }
+        if lines.len() > 40 {
+            let _ = text::print(out, &format!("... and {} more", lines.len() - 40));
+        }
+        return Ok(0);
+    }
     let report = assembly::check_assembly(board, &lock)?;
     if action == "candidate-bom" {
         let output = argument("--output").expect("required option");

@@ -101,7 +101,7 @@ fn source_value(source: &Option<SourceReference>) -> Value {
     ])
 }
 
-fn part_value(part: &PartDefinition) -> Value {
+pub fn part_value(part: &PartDefinition) -> Value {
     let pins = part
         .pins
         .values()
@@ -146,7 +146,7 @@ fn part_value(part: &PartDefinition) -> Value {
     ])
 }
 
-fn device_value(device: &DeviceDefinition) -> Value {
+pub fn device_value(device: &DeviceDefinition) -> Value {
     let pads = device
         .pads
         .values()
@@ -309,6 +309,24 @@ fn parameter_value(value: &ParameterValue) -> Value {
     }
 }
 
+pub fn component_value(component: &ComponentInstance) -> Value {
+    object(vec![
+        ("ref", text(&component.reference)),
+        ("part", text(&component.part)),
+        (
+            "value",
+            match &component.value {
+                None => Value::Null,
+                Some(ComponentValue::Quantity(quantity)) => quantity_value(quantity),
+                Some(ComponentValue::Text(value)) => text(value),
+            },
+        ),
+        ("footprint", optional(&component.footprint)),
+        ("properties", string_map(&component.properties)),
+        ("modes", string_map(&component.modes)),
+    ])
+}
+
 /// `_unit_fields`: the body shared by boards and modules.
 #[allow(clippy::too_many_arguments)]
 fn unit_fields(
@@ -330,31 +348,7 @@ fn unit_fields(
     vec![
         ("devices", Value::Array(sorted_devices.into_iter().map(device_value).collect())),
         ("parts", Value::Array(sorted_parts.into_iter().map(part_value).collect())),
-        (
-            "components",
-            Value::Array(
-                components
-                    .iter()
-                    .map(|component| {
-                        object(vec![
-                            ("ref", text(&component.reference)),
-                            ("part", text(&component.part)),
-                            (
-                                "value",
-                                match &component.value {
-                                    None => Value::Null,
-                                    Some(ComponentValue::Quantity(quantity)) => quantity_value(quantity),
-                                    Some(ComponentValue::Text(value)) => text(value),
-                                },
-                            ),
-                            ("footprint", optional(&component.footprint)),
-                            ("properties", string_map(&component.properties)),
-                            ("modes", string_map(&component.modes)),
-                        ])
-                    })
-                    .collect(),
-            ),
-        ),
+        ("components", Value::Array(components.iter().map(component_value).collect())),
         (
             "module_instances",
             Value::Array(

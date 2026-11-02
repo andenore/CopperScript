@@ -1,8 +1,9 @@
 # Exact assembly selections (prototype)
 
 Electrical library revisions and procurement identities are separate pins.
-`assembly.lock` binds a board's compiled electrical IR to explicit manufacturer
-MPNs and supplier ordering codes. It never resolves substitutes from stock.
+`assembly.lock` binds each assembled component, as compiled, to an explicit
+manufacturer MPN and supplier ordering code. It never resolves substitutes from
+stock.
 Every assembled component must be covered; non-assembled library parts are
 excluded. Hierarchical references retain their qualified paths.
 
@@ -10,6 +11,8 @@ excluded. Hierarchical references retain their qualified paths.
 copper assembly snapshot board.copper --locked --offline -o assembly.lock
 # Fill manufacturer, mpn, supplier, supplier_part and optional catalogue URL.
 # Review exact package, ratings, pin mapping and footprint before reviewed=true.
+# After source changes, rebind; only changed components lose their review:
+copper assembly update board.copper --locked --offline --lock assembly.lock
 copper assembly check board.copper --locked --offline --lock assembly.lock --report build/assembly.json
 copper assembly bom board.copper --locked --offline --lock assembly.lock -o build/bom.csv \
     --hand-assembly build/hand-assembly.csv --ordering build/ordering.csv
@@ -48,8 +51,7 @@ listed twice for one component, and JLCPCB codes must be `C` numbers), and they
 need the manufacturer and MPN they sell. The ordering list gains a part and URL
 column for each alternate distributor, also filled where that distributor is
 the primary supplier (matched without regard to case), so a single-distributor
-order reads down one column. A lock with alternates is written as
-`copperscript-assembly-lock/v0.3`; locks without them stay v0.2.
+order reads down one column.
 
 ## Partially assembled boards
 
@@ -79,17 +81,36 @@ excluded components leave both files together, which preserves the mandatory
 BOM/CPL reference equality and keeps the assembler from being asked to place a
 part nobody supplied.
 
-Locks written before `populate` (`copperscript-assembly-lock/v0.1`) still load;
-every selection in them means `supplier`. New locks are written as `v0.2`.
+## Keeping the lock current
 
-Snapshot creation refuses to overwrite an existing lock. Circuit/library changes
-invalidate the electrical digest; review differences and deliberately create a
-new snapshot rather than silently accepting new parts. Missing fields, unknown
-or duplicate references, mismatched parts/footprints, and unreviewed selections
-fail the check. BOM export requires both ERC and assembly checks to pass.
-Constraint diagnostic source locations are excluded from this digest, so the
-same locked design works across checkout paths and operating systems. Actual
-constraints, hierarchy, document evidence and library revisions remain bound.
+Each selection records `electrical_sha256`, the digest of what it was reviewed
+against: the component (value, footprint, properties), its library part and
+device, and for every pin the net it is on, that net's supplies and voltages,
+and any no-connect. A change to any of these marks that selection
+`STALE_SELECTION`; changes elsewhere on the board (placement, routing intent,
+silkscreen, other components) leave it current.
+
+`copper assembly update` rebinds the lock in place. A selection whose component
+is unchanged keeps its identity and review. A changed one keeps its identity
+for reference, takes the new part and footprint, and is no longer reviewed; the
+command prints what changed. New components get unreviewed snapshot entries;
+selections for components that are gone are dropped and listed. It never marks
+anything reviewed.
+
+Locks are written as `copperscript-assembly-lock/v0.4`. Earlier locks bind the
+whole compiled board with one top-level `electrical_sha256` (constraint
+diagnostic source locations excluded) and still load and check: v0.3 added
+`alternates`, v0.2 `populate` (every v0.1 selection means `supplier`). Updating
+one rewrites it as v0.4. If its whole-board digest still matches, every review
+is kept; otherwise nothing records which components changed, so every review is
+reset. To keep the reviews of a stale legacy lock, update it at the revision it
+was made for (where `check` reports no `STALE_LOCK`), then update the result
+against the current source: only components that changed in between are reset.
+
+Snapshot creation refuses to overwrite an existing lock. Missing fields, unknown
+or duplicate references, mismatched parts/footprints, stale and unreviewed
+selections fail the check. BOM export requires both ERC and assembly checks to
+pass.
 The CSV contains JLCPCB's component-selection columns plus manufacturer/MPN,
 for the supplier-assembled components only.
 No stock lookup, order submission or manufacturing signoff is implied.
