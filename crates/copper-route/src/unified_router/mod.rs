@@ -33,3 +33,6 @@ pub fn fine_region_plan(
     let pitch = options.pitch_nm.filter(|p| *p != 0).unwrap_or(DEFAULT_PITCH_NM);
     crate::fine_regions::plan_fine_regions(board, pitch, Some(&planner)).map(Some)
 }
+
+#[cfg(test)]
+mod tests;
