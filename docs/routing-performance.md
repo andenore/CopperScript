@@ -1575,3 +1575,79 @@ Ladder281 retains35/35 signals, zero geometry errors,44 vias and350.563mm, with 
 55.9s timing warning against an old20.7s baseline. Unchanged control283 takes35.9s;
 final candidate285 takes30.7s with identical copper and no new warning. Concurrent
 board verification makes these timings unsuitable as a whole-board speed claim.
+
+## Rust allocation and transform preparation (2026-10-31)
+
+Implementation: `dbee97f`, based on `main` `c14c73a`. The A* wrapper borrows
+the two cached track-owner grids after preparation instead of copying them for
+every search, and reads the net specification without cloning its components
+and masks. Pair-search expansions borrow the starting port instead of cloning
+its track vectors. The search kernel, costs, tie-breaking and exact predicates
+are unchanged.
+
+`PlacementTransform` prepares an immutable pose's decimal conversion and
+separate sine/cosine values once for its pad/vertex loops. Clearance templates,
+explicit-copper connectivity, fixed-pad geometry and BGA routing setup reuse it.
+Pad-shape construction also prepares each rotation once for all its vertices.
+Mirroring, operation order and integer rounding remain unchanged. Transforms
+are local values recreated for each pose, not a global cache or a cache of
+clearance/acceptance results.
+
+On Windows, Rust 1.97.0 release/thin-LTO, a 64-point transform microbenchmark
+including preparation takes 12.508 us with the frozen original expression and
+0.743 us with the prepared public API (16.83x). The figures are medians of seven
+alternating samples after warm-up; all points match exactly. They describe the
+transform operation, not complete footprint processing or whole-board routing.
+
+Validation: workspace/all-target checks, formatting and strict Clippy pass;
+58 focused Rust tests pass, including mirrored/fractional/large-coordinate
+transform parity, pad copper vertices, frozen lattice/escape/pair fixtures,
+macro inputs and checkpoint reuse/refusal. The checkpoint harness initially
+retained a mixed-separator Windows temporary path; regenerating that test
+executable with a native Windows target path makes all five unchanged
+checkpoint tests pass. All six client targets retain byte-identical compiled
+JSON and pass ERC; their six public-CLI regression tests also pass.
+
+The ladder selection is `round-led-ring,nrf52,full-vertical,cm4,led-ring`, with
+one worker and unchanged arguments. The standalone LedRing consumer is included
+separately from the deprecated example. Native checks use KiCad 10.0.6. The
+baseline executable was built from the `c14c73a` archive: all 265 Rust sources
+and its embedded source digest were verified. Its ladder Git label displays
+`9c0b61b` from the archive's containing checkout; that label is not the binary's
+source revision. The embedded baseline digest is
+`sha256:12c72b8549270987f38caf57f6d2003a0a19b817f039103d705918ead460db91`.
+
+| Board | Base seconds | Candidate seconds | PCB bytes |
+| --- | ---: | ---: | --- |
+| Deprecated round-led-ring example | 92.5 | 12.3 | Identical |
+| nrf52 | 82.6 | 83.5 | Identical |
+| full-vertical | 85.4 | 219.1 | Identical |
+| cm4 | 82.8 | 71.9 | Identical |
+| CopperLedRing (`306c73a`) | 33.9 | 29.5 | Identical |
+
+Completion, opens, exact DRC, vias and lengths are unchanged. The deprecated
+example retains one signal open; standalone LedRing retains its one native
+unconnected item. No routing or native acceptance is waived.
+
+The initial full-vertical run triggers the ladder's wall-time warning. Its
+recorded routing/export interval ends at 41.040 s on base and 34.528 s on the
+candidate; that interval does not explain the total-time increase. Two repeated
+control pairs use the same arguments and inputs, with order reversed on the
+second pair:
+
+| Order | Base seconds | Candidate seconds |
+| --- | ---: | ---: |
+| Base, then candidate | 39.8 | 26.3 |
+| Candidate, then base | 27.0 | 29.5 |
+
+All control PCBs also match the original bytes. The first repeated pair has no
+ladder regressions; the reverse-order candidate is within the ladder's slowdown
+threshold. These variable wall times do **not** establish a whole-board speedup.
+The isolated transform improvement and removal of two `i32` grid copies per A*
+invocation are the supported performance claims. At one million grid entries,
+those two copies accounted for 8 MB of temporary payload per search.
+
+Full AssetTracker and CopperProbe routing were not rerun in this batch; both
+retain their compile/ERC/public-CLI checks. Larger immutable-board/index
+sharing, spatial-index replacement and numeric entity IDs remain subsequent
+work, not changes included in these measurements.
