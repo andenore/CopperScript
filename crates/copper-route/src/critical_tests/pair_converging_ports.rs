@@ -129,7 +129,8 @@ fn round_row_converges_inward_then_leaves_together() {
                         let end = path.last().expect("a lane").end;
                         row.0 * (end.y_nm - f.a.y_nm) - row.1 * (end.x_nm - f.a.x_nm)
                     };
-                    assert!(displacement(&p.first) * displacement(&p.second) > 0, "{case}");
+                    // Compare signs: the product of two nm cross products overflows i64.
+                    assert!(displacement(&p.first).signum() * displacement(&p.second).signum() > 0, "{case}");
                     let (e1, e2) = (p.first.last().unwrap().end, p.second.last().unwrap().end);
                     assert_eq!((e1.x_nm - e2.x_nm).pow(2) + (e1.y_nm - e2.y_nm).pow(2), 295_000i64.pow(2));
                 }
