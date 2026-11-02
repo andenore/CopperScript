@@ -40,6 +40,7 @@ test that loops over its cases.
 | test_plane_estimate.py | 3 (none already present: `src/plane_estimate.rs` only tests `label`) | 0 | 0 | `tests/plane_estimate.rs` |
 | test_native_fill_crossings.py | 1 | 2: the `_EdgeYIndex` parity-accelerator cases (Python internals: Rust's `native_fill_polygon` has no edge index) | 0 | `tests/native_fill_crossings.rs` |
 | test_stackup_vias.py | 2 | 0 | 0 | `tests/stackup_vias.rs` |
+| test_autonomous_plane_access.py | 2 | 0 | 0 | `tests/autonomous_plane_access.rs` (1); `crates/copper/src/route_board.rs` `option_tests` (1, the CLI defaults) |
 
 ## Notes
 
@@ -224,3 +225,12 @@ test that loops over its cases.
   round-trips through `state_codec`. The KiCad backend wrote every via as a
   through via; it now writes `(via micro` / `(via blind` for a via whose
   declared technology is a microvia or a blind/buried via, as Python did.
+
+- `test_autonomous_plane_access.py`: the CLI default case read argparse's
+  namespace; `route_board.rs` now names the two defaults (`Arguments::fanout`,
+  `Arguments::early_plane_stitch`) and the in-crate option test checks them
+  after the real option parser. `CriticalNetResult` has no `PartialEq`, so
+  `result.nets == ordinary.nets` compares the `nets` of the result
+  documents, and `result == rerun` compares the documents, boards and
+  locked copper. `board.zone_fills` becomes "no copper polygon invented".
+  The `with_test_owners` helper was unused by the remaining tests.
