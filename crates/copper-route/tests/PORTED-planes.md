@@ -41,6 +41,7 @@ test that loops over its cases.
 | test_native_fill_crossings.py | 1 | 2: the `_EdgeYIndex` parity-accelerator cases (Python internals: Rust's `native_fill_polygon` has no edge index) | 0 | `tests/native_fill_crossings.rs` |
 | test_stackup_vias.py | 2 | 0 | 0 | `tests/stackup_vias.rs` |
 | test_autonomous_plane_access.py | 2 | 0 | 0 | `tests/autonomous_plane_access.rs` (1); `crates/copper/src/route_board.rs` `option_tests` (1, the CLI defaults) |
+| test_released_plane_bypass.py | 0 | 1: the unknown-retry-trigger rejection (Rust's `complete_late_bypasses` has no `trigger` parameter, so there is no unknown trigger to reject) | 0 | none |
 
 ## Notes
 
