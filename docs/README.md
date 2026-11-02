@@ -22,6 +22,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Add components or reusable circuits | [Integration guidelines](component-integration-guidelines.md) |
 | Author or bind physical macros | [Physical hard macros](physical-hard-macros.md); [definition syntax](macro-definitions.md); [binding syntax](physical-macro-syntax-plan.md); [definition requirements](macro-definition-plan.md) |
 | Edit mechanics or floorplan | [Mechanical editor](mechanical-editor.md) |
+| Run the physical editor in the browser (WebAssembly) | [Editor WebAssembly plan](editor-wasm-plan.md) |
 | Author mechanical geometry or profiles | [Mechanical language](mechanical-language.md), [profiles](mechanical-profiles.md) |
 | Assess engineering or release evidence | [Engineering qualification](engineering-qualification.md) |
 | Generate manufacturing or assembly files | [Manufacturing files](manufacturing-files.md), [assembly pinning](assembly-pinning.md) |
