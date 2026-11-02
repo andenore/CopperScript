@@ -39,6 +39,7 @@ test that loops over its cases.
 | test_via_pad_policy.py | 3 | 0 | 0 | `tests/via_pad_policy.rs` (parametrized cases loop) |
 | test_plane_estimate.py | 3 (none already present: `src/plane_estimate.rs` only tests `label`) | 0 | 0 | `tests/plane_estimate.rs` |
 | test_native_fill_crossings.py | 1 | 2: the `_EdgeYIndex` parity-accelerator cases (Python internals: Rust's `native_fill_polygon` has no edge index) | 0 | `tests/native_fill_crossings.rs` |
+| test_stackup_vias.py | 2 | 0 | 0 | `tests/stackup_vias.rs` |
 
 ## Notes
 
@@ -217,3 +218,9 @@ test that loops over its cases.
 - `test_native_fill_crossings.py`: shapely's `area` and `covers(point)`
   become the shoelace area of the decoded rings and a positive
   `convex_overlap` with a 0.5-unit square around the point.
+
+- `test_stackup_vias.py`: Python validated a board's vias at construction;
+  Rust validates them when a board state is decoded, so the ring case
+  round-trips through `state_codec`. The KiCad backend wrote every via as a
+  through via; it now writes `(via micro` / `(via blind` for a via whose
+  declared technology is a microvia or a blind/buried via, as Python did.
