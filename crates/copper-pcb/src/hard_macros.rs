@@ -1524,3 +1524,109 @@ pub fn macro_source(board: PhysicalBoard) -> Result<PhysicalBoard> {
     source.materialized_macros.clear();
     Ok(source)
 }
+
+#[cfg(test)]
+#[path = "../../copper-route/tests/support_routers/boards.rs"]
+mod test_boards;
+
+/// `tests/test_routing_hotspot_caches.py`'s via-permission cases. Python
+/// cached the private SMD lands; Rust rebuilds them per call, so only the
+/// fresh answers after each change are checked.
+#[cfg(test)]
+mod tests {
+    use copper_physical::footprint::Size;
+    use copper_physical::{CopperLayer, Point};
+    use indexmap::IndexMap;
+
+    use super::validate_macro_via_permissions;
+    use crate::board::*;
+
+    use super::test_boards::*;
+
+    fn fixture() -> (PhysicalBoard, PhysicalHardMacro, Via) {
+        let mut land = pad("1", 0.0, 0.0, 1.0, 1.2);
+        land.size = Size { width_nm: 1_000_001, height_nm: 1_200_001 };
+        let fp = footprint("pad", vec![land], 2.0, 2.0);
+        let mut board = board(
+            "cache",
+            30.0,
+            30.0,
+            vec![fp],
+            vec![placement("U", "pad", 10.0, 10.0), placement("R", "pad", 20.0, 20.0)],
+            vec![net("GND", &[("U", "1")]), net("X", &[("R", "1")])],
+        );
+        board.stackup = Stackup::new(layers(6));
+        board.metadata.insert("fabrication_profile".to_owned(), "jlcpcb-six-layer".to_owned());
+        board.via_in_pad_rules =
+            vec![PadViaInPadRule { pad: PadReference::new("U", "1"), rows: None, columns: None, pitch_nm: None }];
+        let hard = PhysicalHardMacro {
+            cluster: "macro".to_owned(),
+            asset_sha256: "0".repeat(64),
+            tracks: Vec::new(),
+            vias: Vec::new(),
+            ports: Vec::new(),
+            protected_regions: Vec::new(),
+            required_layers: Vec::new(),
+            pad_bindings: vec![(PadReference::new("U", "1"), "GND".to_owned())],
+            isolated_pads: Vec::new(),
+            zones: Vec::new(),
+            plane_returns: Vec::new(),
+            polygons: Vec::new(),
+            width_contracts: Vec::new(),
+        };
+        let via = Via {
+            net: "GND".to_owned(),
+            position: Point::new(mm(10.0), mm(10.0)),
+            size_nm: 300_001,
+            drill_nm: 200_000,
+            from_layer: CopperLayer::Front,
+            to_layer: CopperLayer::Back,
+            technology: None,
+            finish: "filled-capped".to_owned(),
+        };
+        (board, hard, via)
+    }
+
+    fn message(result: crate::Result<()>) -> String {
+        match result {
+            Err(crate::Error::Value(message)) => message,
+            other => panic!("expected a ValueError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn permission_and_process_are_rechecked_after_geometry_reuse() {
+        let (board, hard, via) = fixture();
+        validate_macro_via_permissions(&board, &hard, std::slice::from_ref(&via)).expect("permitted");
+        let renamed = PhysicalBoard { name: "same-geometry".to_owned(), ..board.clone() };
+        validate_macro_via_permissions(&renamed, &hard, std::slice::from_ref(&via)).expect("permitted");
+        let unpermitted = PhysicalBoard { via_in_pad_rules: Vec::new(), ..board.clone() };
+        let one = std::slice::from_ref(&via);
+        assert!(message(validate_macro_via_permissions(&unpermitted, &hard, one)).contains("explicit permission"));
+        let unbound = PhysicalHardMacro { pad_bindings: Vec::new(), ..hard.clone() };
+        assert!(message(validate_macro_via_permissions(&board, &unbound, one)).contains("explicit permission"));
+        let no_profile = PhysicalBoard { metadata: IndexMap::new(), ..board.clone() };
+        assert!(message(validate_macro_via_permissions(&no_profile, &hard, one)).contains("six-layer"));
+        let other = Via { net: "X".to_owned(), ..via.clone() };
+        assert!(message(validate_macro_via_permissions(&board, &hard, &[other])).contains("six-layer"));
+        let off = Via { position: Point::new(mm(10.45), mm(10.0)), ..via.clone() };
+        assert!(message(validate_macro_via_permissions(&board, &hard, &[off])).contains("contained"));
+    }
+
+    #[test]
+    fn land_snapshot_changes_with_placement_and_footprint_geometry() {
+        let (board, hard, via) = fixture();
+        let one = std::slice::from_ref(&via);
+        validate_macro_via_permissions(&board, &hard, one).expect("permitted");
+        let mut moved = board.clone();
+        moved.placements[1].position = via.position;
+        assert!(message(validate_macro_via_permissions(&moved, &hard, one)).contains("explicit permission"));
+        let mut tiny = board.clone();
+        tiny.footprints["pad"].pads[0].size = Size { width_nm: 200_001, height_nm: 200_001 };
+        assert!(message(validate_macro_via_permissions(&tiny, &hard, one)).contains("contained"));
+        let mut duplicate = board.clone();
+        let land = duplicate.footprints["pad"].pads[0].clone();
+        duplicate.footprints["pad"].pads.push(land);
+        assert!(message(validate_macro_via_permissions(&duplicate, &hard, one)).contains("multiple pad lands"));
+    }
+}

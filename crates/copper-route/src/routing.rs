@@ -3496,4 +3496,376 @@ mod tests {
     fn no_generated_choice_has_no_invented_escape() {
         assert!(bounded_access_choices(Vec::new(), 4).is_empty());
     }
+
+    // ------------------------------------------------------------------
+    // `tests/test_global_via_refinement.py`: refine sampled via capacity
+    // only when real guide demand exceeds it.
+
+    fn narrow_channel_board() -> PhysicalBoard {
+        // The original grid finds x=5.775; a separate narrow channel at
+        // x=7.7875 is halfway between its columns. Both hold real through-vias.
+        let rectangles =
+            [(0.0, 0.0, 5.4, 10.0), (6.15, 0.0, 7.5, 10.0), (8.075, 0.0, 10.0, 10.0), (0.0, 0.0, 10.0, 5.0)];
+        let fp = footprint("pad", vec![pad("1", 0.0, 0.0, 0.1, 0.1)], 0.2, 0.2);
+        let mut placements = Vec::new();
+        let mut nets = Vec::new();
+        for i in 0..8 {
+            for (label, side) in [("F", copper_physical::BoardSide::Front), ("B", copper_physical::BoardSide::Back)] {
+                let mut pose = placement(&format!("{label}{i}"), "pad", 8.7, 5.5 + 0.5 * i as f64);
+                pose.side = side;
+                placements.push(pose);
+            }
+            let (f, b) = (format!("F{i}"), format!("B{i}"));
+            nets.push(net(&format!("N{i}"), &[(f.as_str(), "1"), (b.as_str(), "1")]));
+        }
+        let mut result = board("narrow-channel", 10.0, 10.0, vec![fp], placements, nets);
+        result.copper_keepouts = rectangles
+            .iter()
+            .enumerate()
+            .map(|(i, (x0, y0, x1, y1))| copper_physical::CopperKeepout {
+                block_tracks: false,
+                ..copper_keepout(&i.to_string(), &[CopperLayer::Front, CopperLayer::Back], rect(*x0, *y0, *x1, *y1))
+            })
+            .collect();
+        result.rules = copper_physical::DesignRules {
+            minimum_clearance_nm: 100_000,
+            default_via_size_nm: 450_000,
+            default_via_drill_nm: 200_000,
+            ..copper_physical::DesignRules::default()
+        };
+        result
+    }
+
+    fn six_layers(mut board: PhysicalBoard) -> PhysicalBoard {
+        board.stackup = copper_pcb::board::Stackup::new(crate::test_support_routers::layers(6));
+        board
+    }
+
+    /// Dropped: the sampler call counts (Python patched `_legal_via_sites`);
+    /// "returns the same graph" is `None`.
+    #[test]
+    fn refined_sites_preserve_originals_coexist_and_only_sample_overflow_once() {
+        for count in [2usize, 6] {
+            let mut board = narrow_channel_board();
+            board.stackup = copper_pcb::board::Stackup::new(crate::test_support_routers::layers(count));
+            let graph = build_graph(&board, &GlobalRouterOptions::default(), false).expect("graph");
+            let index = RoutingClearanceIndex::new(&board).expect("index");
+            let identifier = format!("via:0:{}:1:1", count - 1);
+            let original = graph.via_sites[&identifier].clone();
+            assert_eq!(original.len(), 7);
+            let mut processed = IndexSet::new();
+            let planar = graph.resources.values().find(|r| r.layer.is_some()).expect("planar").identifier.clone();
+            let usage = counts(&graph, &[(identifier.as_str(), 7), (planar.as_str(), 100)]);
+            let same = refine_overflowed_via_sites(&board, &graph, &usage, &index, 5_000_000, &mut processed);
+            assert!(same.expect("refine").is_none() && processed.is_empty());
+            let usage = counts(&graph, &[(identifier.as_str(), 8)]);
+            let refined = refine_overflowed_via_sites(&board, &graph, &usage, &index, 5_000_000, &mut processed)
+                .expect("refine")
+                .expect("refined graph");
+            let sites = refined.via_sites[&identifier].clone();
+            assert!(sites[..original.len()] == original[..] && sites.len() > original.len());
+            assert_eq!(processed, IndexSet::from([identifier.clone()]));
+            assert!(
+                sites
+                    .iter()
+                    .all(|p| (p.x_nm - 7_500_000).abs() <= 2_175_000 && (p.y_nm - 7_500_000).abs() <= 2_175_000)
+            );
+            let vias: Vec<Via> = sites
+                .iter()
+                .enumerate()
+                .map(|(i, p)| Via {
+                    net: format!("capacity-{i}"),
+                    position: *p,
+                    size_nm: 450_000,
+                    drill_nm: 200_000,
+                    from_layer: CopperLayer::Front,
+                    to_layer: CopperLayer::Back,
+                    technology: None,
+                    finish: "standard".to_owned(),
+                })
+                .collect();
+            assert!(index.candidate_vias_clear(&vias).expect("clear"));
+            for (key, resource) in &graph.resources {
+                if resource.identifier == identifier {
+                    assert_eq!(refined.resources[key].capacity, sites.len() as i64);
+                } else {
+                    assert_eq!(&refined.resources[key], resource);
+                }
+            }
+            let usage = counts(&refined, &[(identifier.as_str(), 100)]);
+            let again = refine_overflowed_via_sites(&board, &refined, &usage, &index, 5_000_000, &mut processed);
+            assert!(again.expect("refine").is_none());
+        }
+    }
+
+    /// Adapted: Python patched the refiner out to obtain the coarse result;
+    /// the refined result is checked to pass deterministically, without
+    /// overflow or hotspots, with the eighth net through the refined channel.
+    #[test]
+    fn global_refinement_fixes_sampling_overflow_and_preserves_passing_routes() {
+        for net_count in [7, 8] {
+            let mut board = narrow_channel_board();
+            board.nets.truncate(net_count);
+            let options = GlobalRouterOptions {
+                maximum_iterations: 1,
+                pin_access_candidates: 1,
+                ..GlobalRouterOptions::default()
+            };
+            let result = route_global(&board, &options, None, None, None).expect("global");
+            assert_eq!(result.status, GlobalRoutingStatus::Success, "{net_count}");
+            assert_eq!(result, route_global(&board, &options, None, None, None).expect("global"));
+            assert!(result.metrics.total_overflow == 0 && result.hotspots.is_empty());
+        }
+    }
+
+    #[test]
+    fn wider_trace_consumes_two_planar_lanes_but_one_physical_via_site() {
+        let fp = footprint("pad", vec![pad("1", 0.0, 0.0, 0.1, 0.1)], 0.2, 0.2);
+        let mut far = placement("B", "pad", 2.75, 0.5);
+        far.side = copper_physical::BoardSide::Back;
+        let mut board = board(
+            "one-via",
+            3.0,
+            1.0,
+            vec![fp],
+            vec![placement("F", "pad", 0.25, 0.5), far],
+            vec![net("POWER", &[("F", "1"), ("B", "1")])],
+        );
+        board.rules = copper_physical::DesignRules {
+            minimum_clearance_nm: 100_000,
+            minimum_track_width_nm: 150_000,
+            default_track_width_nm: 150_000,
+            default_via_size_nm: 450_000,
+            default_via_drill_nm: 200_000,
+            ..copper_physical::DesignRules::default()
+        };
+        board.net_routing_rules =
+            vec![NetRoutingRule { kind: RouteKind::Power, width_nm: Some(250_000), ..rule("POWER") }];
+        let options = GlobalRouterOptions {
+            tile_size_nm: 1_000_000,
+            maximum_iterations: 1,
+            pin_access_candidates: 1,
+            ..GlobalRouterOptions::default()
+        };
+        let graph = build_graph(&board, &options, false).expect("graph");
+        let result = route_global(&board, &options, None, None, None).expect("global");
+        assert_eq!(result.status, GlobalRoutingStatus::Success);
+        assert_eq!(result.routes.len(), 1);
+        let route = &result.routes[0];
+        assert_eq!(route.vias.len(), 1);
+        let site = &route.vias[0].resource_id;
+        assert_eq!(graph.via_sites[site].len(), 1);
+        let rules: IndexMap<String, NetRoutingRule> =
+            board.net_routing_rules.iter().map(|r| (r.net.clone(), r.clone())).collect();
+        let demands = NetDemands::new(&board, &rules, &options).expect("demands");
+        let measured = measure_attempt(&graph, result.routes.clone(), 1, &demands);
+        assert_eq!(measured.usage[site], 1);
+        assert!(!route.segments.is_empty() && route.segments.iter().all(|s| measured.usage[&s.resource_id] == 2));
+    }
+
+    #[test]
+    fn distinct_same_net_via_positions_count_separately_but_logical_layers_share_one_hole() {
+        let identifier = "via:0:5:1:1";
+        let first = GlobalViaProposal {
+            net: "A".to_owned(),
+            position: pt(7.0, 7.0),
+            from_layer: CopperLayer::Front,
+            to_layer: CopperLayer::In1,
+            resource_id: identifier.to_owned(),
+        };
+        let other_layers =
+            GlobalViaProposal { from_layer: CopperLayer::In2, to_layer: CopperLayer::Back, ..first.clone() };
+        let second_position = GlobalViaProposal { position: pt(8.0, 7.0), ..first.clone() };
+        let route = via_route("A", vec![first.clone(), other_layers.clone(), second_position]);
+        assert_eq!(route_resource_demands(&route, 4, None), IndexMap::from([(identifier.to_owned(), 2)]));
+        let shared = via_route("A", vec![first, other_layers]);
+        assert_eq!(route_resource_demands(&shared, 4, None), IndexMap::from([(identifier.to_owned(), 1)]));
+    }
+
+    #[test]
+    fn different_nets_on_different_logical_layers_share_through_via_capacity() {
+        let board = six_layers(narrow_channel_board());
+        let options = GlobalRouterOptions::default();
+        let graph = build_graph(&board, &options, false).expect("graph");
+        let identifier = "via:0:5:1:1";
+        let first = GlobalViaProposal {
+            net: "N0".to_owned(),
+            position: pt(7.5, 7.5),
+            from_layer: CopperLayer::Front,
+            to_layer: CopperLayer::In1,
+            resource_id: identifier.to_owned(),
+        };
+        let second = GlobalViaProposal {
+            net: "N1".to_owned(),
+            from_layer: CopperLayer::In2,
+            to_layer: CopperLayer::Back,
+            ..first.clone()
+        };
+        let routes = vec![via_route("N0", vec![first]), via_route("N1", vec![second])];
+        let rules = IndexMap::new();
+        let demands = NetDemands::new(&board, &rules, &options).expect("demands");
+        let measured = measure_attempt(&graph, routes, 1, &demands);
+        assert_eq!(measured.usage[identifier], 2);
+        assert_eq!(measured.contributors[identifier], ["N0", "N1"]);
+    }
+
+    // ------------------------------------------------------------------
+    // `tests/test_global_breakout_demand.py`: declared ordinary neck-downs
+    // consume local lanes, not whole-net width.
+
+    struct Breakout {
+        board: PhysicalBoard,
+        graph: Graph,
+        rule: NetRoutingRule,
+        accesses: AccessOptions,
+        options: GlobalRouterOptions,
+    }
+
+    fn breakout_scene(renamed: bool, detour: bool, breakout: i64, kind: RouteKind) -> Breakout {
+        let (name, aa, zz) = if renamed { ("RAIL_RENAMED", "P_FIRST", "Q_LAST") } else { ("POWER_FEED", "J1", "J2") };
+        let land = footprint("test/land", vec![pad("1", 0.0, 0.0, 0.2, 0.2)], 0.4, 0.4);
+        let pads = [PadReference::new(aa, "1"), PadReference::new(zz, "1")];
+        let rule = NetRoutingRule {
+            kind,
+            width_nm: Some(400_000),
+            breakout_width_nm: Some(100_000),
+            breakout_length_nm: Some(breakout),
+            allowed_layers: vec![CopperLayer::Front],
+            ..crate::test_support_routers::rule(name)
+        };
+        let mut board = board(
+            "breakout-capacity",
+            10.0,
+            9.0,
+            vec![land],
+            vec![placement(aa, "test/land", 1.0, 2.0), placement(zz, "test/land", 3.0, 2.0)],
+            vec![PhysicalNet { name: name.to_owned(), pads: pads.to_vec() }],
+        );
+        board.outline =
+            copper_physical::BoardOutline::rectangle(mm(10.0), mm(9.0), Some(pt(-2.0, -2.0))).expect("outline");
+        board.net_routing_rules = vec![rule.clone()];
+        board.rules = copper_physical::DesignRules {
+            minimum_track_width_nm: 100_000,
+            default_track_width_nm: 200_000,
+            minimum_clearance_nm: 100_000,
+            ..copper_physical::DesignRules::default()
+        };
+        let n = |x: i64, y: i64| GridNode::new(0, x, y);
+        let mut edges = vec![((0, 0), (1, 0), 1)];
+        if detour {
+            edges.extend([((0, 0), (0, 1), 2), ((0, 1), (1, 1), 2), ((1, 1), (1, 0), 2)]);
+        }
+        let mut resources = IndexMap::new();
+        for (index, (a, z, capacity)) in edges.into_iter().enumerate() {
+            let (a, z) = (n(a.0, a.1), n(z.0, z.1));
+            let (first, second) = edge_key(a, z);
+            let resource = Resource {
+                identifier: format!("edge-{index}"),
+                first,
+                second,
+                capacity,
+                layer: Some(CopperLayer::Front),
+            };
+            resources.insert((first, second), resource);
+        }
+        let graph = Graph {
+            layers: vec![CopperLayer::Front],
+            xs: vec![1_000_000, 3_000_000],
+            ys: vec![2_000_000, 3_000_000],
+            legal_nodes: (0..2).flat_map(|x| (0..2).map(move |y| n(x, y))).collect(),
+            resources,
+            via_sites: IndexMap::new(),
+            layer_ranks: IndexMap::from([(CopperLayer::Front, 0)]),
+            preferred_headings: IndexMap::from([(CopperLayer::Front, "horizontal")]),
+            demand_lanes: 0,
+            step_cache: RefCell::new(IndexMap::new()),
+        };
+        let accesses: AccessOptions = (0..2)
+            .map(|i| {
+                let at = pt(1.0 + 2.0 * i as f64, 2.0);
+                let access = PinAccess::new(pads[i].clone(), at, n(i as i64, 0), at, CopperLayer::Front);
+                ((name.to_owned(), pads[i].clone()), vec![access])
+            })
+            .collect();
+        let options = GlobalRouterOptions { present_penalty: 100, ..GlobalRouterOptions::default() };
+        Breakout { board, graph, rule, accesses, options }
+    }
+
+    fn run_breakout(s: &Breakout) -> (GlobalNetRoute, Attempt) {
+        let demand = net_demand(&s.board, Some(&s.rule), &s.options);
+        let rules = IndexMap::from([(s.rule.net.clone(), s.rule.clone())]);
+        let demands = NetDemands::new(&s.board, &rules, &s.options).expect("demands");
+        let zero = counts(&s.graph, &[]);
+        let route = route_net(
+            &s.board,
+            &s.graph,
+            &s.rule.net,
+            &s.board.nets[0].pads,
+            Some(&s.rule),
+            &s.accesses,
+            demand,
+            &zero,
+            &zero,
+            s.options.present_penalty,
+            &s.options,
+            &demands,
+        )
+        .expect("route");
+        let attempt = measure_attempt(&s.graph, vec![route.clone()], 1, &demands);
+        (route, attempt)
+    }
+
+    #[test]
+    fn declared_local_neckdown_removes_false_capacity_overflow() {
+        for renamed in [false, true] {
+            let s = breakout_scene(renamed, false, 2_000_000, RouteKind::General);
+            let (route, attempt) = run_breakout(&s);
+            assert!(route.connected && attempt.metrics.total_overflow == 0, "{renamed}");
+            // The permitted physical width is checked independently by ordinary DRC.
+            let mut routed = s.board.clone();
+            routed.tracks = vec![TrackSegment {
+                net: s.rule.net.clone(),
+                start: pt(1.0, 2.0),
+                end: pt(3.0, 2.0),
+                width_nm: 100_000,
+                layer: CopperLayer::Front,
+            }];
+            let report = copper_drc::run_physical_drc(&routed, copper_drc::Policy::default()).expect("drc");
+            let hard: Vec<_> = report
+                .findings
+                .iter()
+                .filter(|f| f.severity == copper_drc::Severity::Error && f.code != "DRC-ROUTE-INCOMPLETE")
+                .map(|f| f.code.clone())
+                .collect();
+            assert!(hard.is_empty(), "{hard:?}");
+            assert!(s.board.tracks.is_empty() && s.rule.width_nm == Some(400_000));
+        }
+    }
+
+    #[test]
+    fn search_and_terminal_choice_use_the_same_local_capacity() {
+        for renamed in [false, true] {
+            let (route, attempt) = run_breakout(&breakout_scene(renamed, true, 2_000_000, RouteKind::General));
+            let used: Vec<&str> = route.segments.iter().map(|s| s.resource_id.as_str()).collect();
+            assert_eq!(used, ["edge-0"]);
+            assert_eq!(attempt.metrics.total_overflow, 0);
+        }
+    }
+
+    #[test]
+    fn boundary_crossing_and_nonordinary_edges_keep_full_width() {
+        for (kind, breakout) in [(RouteKind::General, 300_000), (RouteKind::Power, 2_000_000)] {
+            let (route, attempt) = run_breakout(&breakout_scene(false, false, breakout, kind));
+            assert!(route.connected && attempt.metrics.total_overflow == 1, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn ordinary_neckdown_keeps_declared_clearance() {
+        let mut s = breakout_scene(false, false, 2_000_000, RouteKind::General);
+        s.rule.clearance_nm = Some(400_000);
+        s.board.net_routing_rules = vec![s.rule.clone()];
+        let (route, attempt) = run_breakout(&s);
+        assert!(route.connected && attempt.metrics.total_overflow == 1);
+    }
 }

@@ -36,17 +36,24 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | global_reserved_access | 6 | 6 | 0 | 0 | `tests/global_reserved_access.rs` (6) |
 | global_access_launch_diversity | 6 | 6 | 0 | 0 | `src/routing.rs` `tests` (6) |
 | unified_span_guides | 5 | 4 | 1 | 0 | `tests/unified_span_guides.rs` (4) |
+| routing_hotspot_caches | 5 | 4 | 1 | 0 | `tests/routing_hotspot_caches.rs` (2), copper-pcb `src/hard_macros.rs` `tests` (2) |
+| region_blocker_repair | 5 | 4 | 1 | 0 | copper-place `src/legalize.rs` `tests` (4) |
+| global_via_refinement | 5 | 5 | 0 | 0 | `src/routing.rs` `tests` (5) |
+| global_edge_strip | 5 | 5 | 0 | 0 | `tests/global_edge_strip.rs` (5) |
+| released_escape_revalidation | 4 | 0 | 4 | 0 | none |
+| global_breakout_demand | 4 | 4 | 0 | 0 | `src/routing.rs` `tests` (4) |
+| escape_capacity | 4 | 0 | 4 | 0 | none |
 | routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
-**Status:** 26 of 51 files done: 367 Python tests, 311 ported (1 of them
-`#[ignore]`d), 56 skipped. The next file is `routing_hotspot_caches`; about
-74 tests in 25 files remain (list below).
+**Status:** 33 of 51 files done: 399 Python tests, 333 ported (1 of them
+`#[ignore]`d), 66 skipped. The next file is `reference_escape_geometry`; about
+42 tests in 18 files remain (list below).
 
 Rust changes made for the ports: `router::index_holds` guard in
 `Router::new` (bug fix, see unified_commit_index); `pub(crate)` on
 `rejection_text`, `tune_bus_skew`, `congestion_map`, `open_count`, `turn_table`,
 `Router::{escape_bias, ball_field_via_mask, zone_regions, plane_via_taps}`;
-`#[cfg(test)]` modules in `routing.rs`, `routing_clearance.rs`, `fanout.rs`, `escape_plan.rs`,
+`#[cfg(test)]` modules in `routing.rs`, `routing_clearance.rs`, `fanout.rs`, copper-pcb `hard_macros.rs`, `escape_plan.rs`,
 `escape_assignment.rs`, `unified_router/tests.rs` and copper-place
 `legalize.rs`.
 
@@ -293,11 +300,43 @@ Rust changes made for the ports: `router::index_holds` guard in
 - Skipped: `test_guides_survive_every_repair_router` (subclassed `_Router` to
   observe every repair router).
 
+### routing_hotspot_caches
+- Rust keeps no SMD-land, courtyard or local-shape caches, so the tests check
+  fresh answers after each change. The via-permission cases call the private
+  `validate_macro_via_permissions`: unit tests in copper-pcb `hard_macros.rs`
+  (which includes `support_routers/boards.rs`; copper-pcb gained a test-only
+  `extern crate self as copper_pcb`).
+- Skipped: `test_local_shape_translation_matches_direct_geometry_at_arbitrary_angles`
+  (`_local_land_shapes` has no Rust counterpart).
+
+### region_blocker_repair
+- `exact_repair` is private: unit tests in copper-place `legalize.rs`.
+- Skipped: `test_supplemental_raw_blocker_probes_respect_existing_limit`
+  (counted calls of a monkeypatched `_legal`).
+- Adapted: `test_spread_same_probe_count_detects_right_boundary_blocker_missed_by_prefix`
+  captured the references passed to a patched `_pack_local_components`; the
+  domain facts are checked and the repair must succeed with the tail kept.
+
+### global_via_refinement
+- Unit tests in `routing.rs`. Dropped: the sampler call counts. Adapted:
+  `test_global_refinement_fixes_sampling_overflow_and_preserves_passing_routes`
+  patched the refiner out to get the coarse result; the refined result is
+  checked to pass deterministically without overflow or hotspots.
+
+### released_escape_revalidation
+- Skipped (all 4): `flow._revalidate_released_escapes` is not ported (the
+  Rust pipeline reports it not implemented).
+
+### global_breakout_demand
+- Unit tests in `routing.rs` on the hand-built graph.
+
+### escape_capacity
+- Skipped (all 4): `pcbir.escape_capacity` (the escape certificate) has no
+  Rust implementation.
+
 ## Remaining files (in order)
 
-routing_hotspot_caches, region_blocker_repair, global_via_refinement,
-global_edge_strip, released_escape_revalidation, reference_escape_geometry,
-global_breakout_demand, escape_capacity, unified_via_budget_pressure,
+reference_escape_geometry, unified_via_budget_pressure,
 unified_pair_budget, unified_lead_conflicts, global_terminal_fallback_degree,
 global_polygon_keepouts, global_access_diagnostics, unified_existing_access,
 unified_direct_cli, surface_package_escape, repair_search_reuse,
