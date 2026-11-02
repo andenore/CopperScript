@@ -524,3 +524,36 @@ pub fn plane_board() -> PhysicalBoard {
     board.zones = vec![zone("ground-plane", "GND", &[CopperLayer::In1], rect(1.0, 1.0, 19.0, 11.0))];
     board
 }
+
+/// `bypass_board` of `tests/test_routing_quality.py`: chip U at (8, 8) and
+/// capacitor C at (15, 15) with a source decoupling link (C.1 feeds U.1 on
+/// P, C.2 returns on G).
+pub fn bypass_board() -> PhysicalBoard {
+    let mut board = board("bypass", 25.0, 25.0);
+    add_footprint(
+        &mut board,
+        footprint(
+            "chip",
+            vec![pad("1", mm(1.0, 0.0), size(0.4, 0.6)), pad("2", mm(-1.0, 0.0), size(0.4, 0.6))],
+            size(2.0, 2.0),
+        ),
+    );
+    add_footprint(
+        &mut board,
+        footprint(
+            "cap",
+            vec![pad("1", mm(-0.5, 0.0), size(0.5, 0.5)), pad("2", mm(0.5, 0.0), size(0.5, 0.5))],
+            size(1.5, 0.8),
+        ),
+    );
+    board.placements = vec![place("U", "chip", mm(8.0, 8.0)), place("C", "cap", mm(15.0, 15.0))];
+    board.nets = vec![net("P", &[("U", "1"), ("C", "1")]), net("G", &[("C", "2")])];
+    board.decoupling_links = vec![copper_pcb::board::DecouplingLink {
+        capacitor: pad_ref("C", "1"),
+        target: pad_ref("U", "1"),
+        return_pad: pad_ref("C", "2"),
+        net: "P".to_owned(),
+        return_net: "G".to_owned(),
+    }];
+    board
+}

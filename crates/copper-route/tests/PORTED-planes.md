@@ -26,6 +26,7 @@ test that loops over its cases.
 | test_pad_via_in_pad.py | 7 | 0 (the `PadViaInPadRule(..., "open")` constructor check is a source-lowering check: see notes) | 0 | `tests/pad_via_in_pad.rs` |
 | test_native_routing_clearance.py | 5 | 1: native refill with an installed KiCad CLI/Python (`kicad-cli` not installed) | 0 | `tests/native_routing_clearance.rs` |
 | test_local_pair_branches.py | 6 | 0 | 0 | `tests/local_pair_branches.rs` (parametrized cases loop) |
+| test_breakout_region_cache.py | 5 (the storage-bound case adapted: see notes) | 1: the shared source-epoch LRU (`cache_info`: Python internals; Rust has no cache) | 0 | `tests/breakout_region_cache.rs` |
 
 ## Notes
 
@@ -148,3 +149,12 @@ test that loops over its cases.
   (`crossed_contacts`, and `pair_board`, the `_pair_board` of
   `test_critical_routing.py`). The fixture's float land rows are built on an
   exact quarter-millimetre grid.
+
+- `test_breakout_region_cache.py`: `copper_drc::breakout::BreakoutRegions`
+  keeps no membership cache, so the `_nearest_region` call counts and cache
+  sizes have no Rust counterpart. The storage-bound case checks that 8300
+  distinct queries leave the answers exact; the changed-source case asserts
+  each variant's own physical answer (moved U, 1 nm breakout and swapped nets
+  leave no region; tiny lands, a clearance change and six layers keep U.1's)
+  instead of comparing against `_nearest_region`. `bypass_board` (of
+  `test_routing_quality.py`) is in `support_planes`.
