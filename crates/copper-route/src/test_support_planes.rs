@@ -3,7 +3,7 @@
 //! builders are shared with the integration tests in `tests/`.
 
 #[path = "../tests/support_planes/mod.rs"]
-mod support_planes;
+pub(crate) mod support_planes;
 
 /// `tests/test_length_match_tuning.py`.
 mod length_match_tuning {

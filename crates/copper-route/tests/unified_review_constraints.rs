@@ -139,14 +139,12 @@ impl copper_route::Progress for Expire {
     }
 }
 
-/// Adapted: only the `unified_setup` case. The router forwards negotiation
-/// events after `negotiate` returns, so an observer cannot expire the budget
-/// at `unified_iteration` start; `expired_negotiation_keeps_its_previous_incumbent`
-/// covers a deadline that has passed when negotiation starts.
+/// Both expiry points: after setup (no iteration starts) and at the first
+/// `unified_iteration` start (negotiation events reach the observer live, so
+/// it stops before routing any net).
 #[test]
 fn expired_deadline_stops_before_starting_nets() {
-    {
-        let (phase, event) = ("unified_setup", "finished");
+    for (phase, event) in [("unified_setup", "finished"), ("unified_iteration", "started")] {
         let fixed = track("FIXED", (5.0, 11.0), (11.0, 11.0), 0.2, F);
         let board =
             pad_board(&[("N", &[(2.0, 3.0), (8.0, 3.0)]), ("FIXED", &[(2.0, 8.0), (8.0, 8.0)])], 2, vec![fixed]);
@@ -160,7 +158,9 @@ fn expired_deadline_stops_before_starting_nets() {
         let net = |name: &str| result.nets.iter().find(|n| n.net == name).expect("net");
         assert!(net("FIXED").connected && !net("N").connected, "{phase}");
         assert!(net("N").diagnostics.join(" ").contains("time budget exhausted"), "{:?}", net("N").diagnostics);
-        assert_eq!(observer.events.count("unified_iteration", "started"), 0);
+        if phase == "unified_setup" {
+            assert_eq!(observer.events.count("unified_iteration", "started"), 0);
+        }
     }
 }
 
