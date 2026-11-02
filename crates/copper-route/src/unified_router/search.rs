@@ -382,7 +382,7 @@ impl Router<'_, '_> {
     }
 
     /// `_escape_bias`: (nodes, extra history) of the net's escape-plan biases.
-    fn escape_bias(&mut self, net: &str) -> Option<(Vec<i64>, Vec<f64>)> {
+    pub(crate) fn escape_bias(&mut self, net: &str) -> Option<(Vec<i64>, Vec<f64>)> {
         if let Some(cached) = self.escape_bias_cache.get(net) {
             return cached.clone();
         }
