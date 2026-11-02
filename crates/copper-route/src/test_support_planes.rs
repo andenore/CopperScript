@@ -642,3 +642,111 @@ mod via_hole_clearance {
         assert!(index.candidate_vias_clear(&proposals).unwrap());
     }
 }
+
+/// `tests/test_decoupling_track_containment.py`: narrow exact containment
+/// avoids redundant producer edges and never waives proof.
+mod decoupling_track_containment {
+    use super::support_planes::decoupling::crosslayer;
+    use super::support_planes::*;
+    use crate::decoupling_paths::{
+        ConnectionWork, ProposalBounds, connections, propose_crosslayer_decoupling, verify_crosslayer_decoupling,
+    };
+    use crate::fanout::FanoutOptions;
+    use crate::flow::track_is_contained;
+    use copper_pcb::board::TrackSegment;
+    use copper_physical::{CopperLayer, Point};
+    use std::ops::ControlFlow;
+
+    fn segment(a: (i64, i64), b: (i64, i64)) -> TrackSegment {
+        track("P", Point::new(a.0, a.1), Point::new(b.0, b.1), 150_000, CopperLayer::Back)
+    }
+
+    #[test]
+    fn true_subsegment_and_reversed_edges_use_exact_existing_geometry() {
+        let cases = [
+            ((0, 0), (10, 0), (2, 0), (8, 0)),
+            ((10, 0), (0, 0), (8, 0), (2, 0)),
+            ((0, 10), (0, 0), (0, 2), (0, 8)),
+            ((0, 0), (10, 10), (8, 8), (2, 2)),
+            ((-10, 10), (10, -10), (-4, 4), (8, -8)),
+            ((0, 0), (10, 0), (0, 0), (10, 0)),
+        ];
+        for (held_a, held_b, first, last) in cases {
+            let held = segment(held_a, held_b);
+            let candidate = segment(first, last);
+            let unrelated = segment((20, 20), (30, 30));
+            assert!(track_is_contained(&candidate, &[held.clone(), unrelated.clone()]), "{candidate:?}");
+            assert!(track_is_contained(&candidate, &[unrelated, held.clone()]), "{candidate:?}");
+            assert_eq!((held.start, held.end), (Point::new(held_a.0, held_a.1), Point::new(held_b.0, held_b.1)));
+        }
+    }
+
+    #[test]
+    fn partial_overlap_other_net_layer_or_either_width_difference_stays_new() {
+        let base = segment((2, 0), (8, 0));
+        let candidates = [
+            segment((-1, 0), (8, 0)), // Partial overlap is still new copper.
+            segment((-1, 0), (11, 0)),
+            segment((2, 1), (8, 1)), // Parallel within physical widths is not this proof.
+            segment((2, 0), (8, 1)),
+            TrackSegment { net: "OTHER".to_owned(), ..base.clone() },
+            TrackSegment { layer: CopperLayer::Front, ..base.clone() },
+            TrackSegment { width_nm: 100_000, ..base.clone() },
+            TrackSegment { width_nm: 200_000, ..base },
+        ];
+        for candidate in candidates {
+            assert!(!track_is_contained(&candidate, &[segment((0, 0), (10, 0))]), "{candidate:?}");
+        }
+    }
+
+    #[test]
+    fn multiple_segments_do_not_masquerade_as_one_containing_source_edge() {
+        let pieces = [segment((0, 0), (5, 0)), segment((5, 0), (10, 0))];
+        assert!(!track_is_contained(&segment((1, 0), (9, 0)), &pieces));
+    }
+
+    #[test]
+    fn large_fixed_point_coordinates_keep_one_nanometre_noncollinearity() {
+        let n = 1i64 << 60;
+        let held = segment((n, n), (n + 100, n + 100));
+        assert!(track_is_contained(&segment((n + 1, n + 1), (n + 99, n + 99)), std::slice::from_ref(&held)));
+        assert!(!track_is_contained(&segment((n + 1, n + 2), (n + 99, n + 99)), &[held]));
+    }
+
+    #[test]
+    fn real_connections_preserve_containing_source_edge_and_add_no_redundant_tail() {
+        for renamed in [false, true] {
+            let (mut source, link) = crosslayer(renamed, true);
+            let held = track(&link.net, mm(9.5, 8.0), mm(9.5, 10.0), 150_000, CopperLayer::Back);
+            source.tracks = vec![held.clone()];
+            let mut candidates = Vec::new();
+            let work = ConnectionWork::default();
+            let options = FanoutOptions::default();
+            let _ =
+                connections(&source, &link.target, &link.capacitor, &link.net, &options, 8, 64, &work, &mut |board| {
+                    candidates.push(board);
+                    Ok(if candidates.len() >= 16 { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })
+                })
+                .unwrap();
+            assert!(!candidates.is_empty());
+            let mut seen_supply = false;
+            for candidate in &candidates {
+                assert_eq!(candidate.tracks[0], held);
+                let additions = &candidate.tracks[source.tracks.len()..];
+                assert!(!additions.iter().any(|t| track_is_contained(t, &source.tracks)), "{additions:?}");
+                seen_supply |=
+                    verify_crosslayer_decoupling(candidate, &link, None, 10_000, None).unwrap().supply_path.is_some();
+            }
+            assert!(seen_supply);
+            let proposed =
+                propose_crosslayer_decoupling(&source, &link, None, &ProposalBounds::default(), &[], None).unwrap();
+            let witness = proposed.witness.as_ref().unwrap_or_else(|| panic!("{}", proposed.reason));
+            assert_eq!(proposed.board.tracks[0], held);
+            for path in [&witness.supply_path, &witness.return_path] {
+                assert!(path.tracks().iter().all(|t| proposed.board.tracks.contains(t)));
+            }
+            assert_eq!(source.tracks, [held]);
+            assert!(source.vias.is_empty());
+        }
+    }
+}

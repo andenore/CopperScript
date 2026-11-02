@@ -30,6 +30,9 @@ test that loops over its cases.
 | test_via_lattice.py | 5 | 0 | 0 | `tests/via_lattice.rs` |
 | test_via_hole_clearance.py | 5 | 0 | 0 | `tests/via_hole_clearance.rs` (4, parametrized cases loop); `src/test_support_planes.rs` (1: `legal_via_sites`) |
 | test_ordinary_neck_down.py | 4 | 1: stub pruning joins neck-down cuts (`prune_track_stubs` has no Rust port, see `route_cleanup`) | 0 | `tests/ordinary_neck_down.rs` |
+| test_decoupling_track_containment.py | 5 | 0 | 0 | `src/test_support_planes.rs` (parametrized cases loop) |
+| test_decoupling_cell_maze.py | 4 | 1: the shared-budget case (counted `local_access_path` calls and their `maximum_states` through a monkeypatch: Python internals) | 0 | `tests/decoupling_cell_maze.rs` (2); `src/test_support_planes.rs` (2: `cell_maze_launches`) |
+| test_cli_router_flags.py | 7 | 0 | 0 | `crates/copper/tests/cli_router_flags.rs` (see notes) |
 
 ## Notes
 
@@ -172,3 +175,25 @@ test that loops over its cases.
 - `test_ordinary_neck_down.py`: `checked_access_path` is called with the
   Python defaults (`allow_movable_conflicts=False`, `allow_orthogonal=True`);
   `Counter(result) != Counter(owned)` compares sorted track lists.
+
+- `test_decoupling_track_containment.py`: `flow::track_is_contained` was
+  already `pub(crate)`; `decoupling_paths::connections`, `ConnectionWork`
+  (with `local_paths`), `Emit` and `Land` are now `pub(crate)`. Python's
+  object identity (`is held`) is equality.
+
+- `test_decoupling_cell_maze.py`: `cell_grid` is in
+  `support_planes/decoupling.rs`; `cell_maze_launches` is `pub(crate)`. The
+  recovery case stubbed `_cell_maze_launches` away for its failing baseline;
+  Rust has no seam and the maze only runs with `maze_escapes`, so the
+  baseline disables it. The no-work cases forbade `local_access_path` through
+  a monkeypatch; Rust checks that nothing is emitted and the shared
+  `local_paths` allowance is unchanged.
+
+- `test_cli_router_flags.py`: runs the `copper` binary. Every retired switch
+  is already checked in-crate (`route_board::option_tests`), so the binary
+  test checks three spellings end to end. The parser-level
+  `_congestion_feedback_budget`, `_unified_options` and
+  `_apply_routing_profile` checks are observed in the report's `work_limits`
+  (congestion budget 4/2/0; `fine_regions` off/arrays/dense); the
+  direct-mode overrides are covered by the in-crate
+  `expert_overrides_govern_direct_mode_and_reports`.
