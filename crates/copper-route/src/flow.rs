@@ -289,7 +289,7 @@ fn plan_array_frames(
 
 /// `_macro_port_halos`: keepouts beyond macro ports whose nets may change
 /// layer, for the escape and bypass planners only.
-fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::CopperKeepout>> {
+pub(crate) fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::CopperKeepout>> {
     let frame = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
     let rules: IndexMap<&str, _> = board.net_routing_rules.iter().map(|rule| (rule.net.as_str(), rule)).collect();
     let poses: IndexMap<&str, _> = board.placements.iter().map(|pose| (pose.reference.as_str(), pose)).collect();
@@ -349,7 +349,7 @@ fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::Copper
 /// routing; the halo keeps one via site free from one clearance past the
 /// land's outer end, along the land's long axis away from the package
 /// centre, where the neighbouring pins' straight escapes still pass beside it.
-fn plane_pin_halos(board: &PhysicalBoard) -> Vec<copper_physical::CopperKeepout> {
+pub(crate) fn plane_pin_halos(board: &PhysicalBoard) -> Vec<copper_physical::CopperKeepout> {
     use copper_physical::footprint::PadKind;
     use copper_physical::{BoardSide, CopperLayer, Point};
     let zone_nets = copper_pcb::zones::distribution_zone_nets(board);
@@ -1328,7 +1328,7 @@ fn feedback_score(
 // Ordinary escape reservations
 
 /// Planned escape copper and the keepouts that reserve it.
-type Reserved = (Vec<TrackSegment>, Vec<Via>, Vec<copper_physical::CopperKeepout>);
+pub(crate) type Reserved = (Vec<TrackSegment>, Vec<Via>, Vec<copper_physical::CopperKeepout>);
 
 /// `Counter(after) - Counter(before)`, `.elements()` order.
 fn added_elements<T: Clone + Eq + std::hash::Hash>(after: &[T], before: &[T]) -> Vec<T> {
@@ -1395,7 +1395,7 @@ fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
 }
 
 /// `_copper_keepouts`: keepouts covering planned copper plus clearance.
-fn copper_keepouts(
+pub(crate) fn copper_keepouts(
     board: &PhysicalBoard,
     tracks: &[TrackSegment],
     vias: &[Via],
@@ -1652,7 +1652,7 @@ fn join_reserved_copper(
 /// `_release_escape_masks`: drop the temporary escape keepouts before
 /// ordinary routing; with `planned_escapes_as_copper` the promised exits join
 /// the ordinary stage's board as copper.
-fn release_escape_masks(
+pub(crate) fn release_escape_masks(
     reserved: Option<&Reserved>,
     critical: &mut CriticalRoutingResult,
     plane_stitch: &mut Option<PlaneStitchResult>,

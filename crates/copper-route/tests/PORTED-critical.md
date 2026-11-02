@@ -23,9 +23,41 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_pair_geometry.py | 8 | 0 | 8 | 0 | none: `pcbir.pair_geometry` was not ported |
 | test_critical_bundles.py | 8 | 6 | 2 | 0 | `src/critical_tests/critical_bundles.rs` (the frozen-fixture comparison stays in `tests/critical_bundles.rs`) |
 | test_single_ended_return_vias.py | 7 | 4 | 3 | 0 | `src/critical_tests/single_ended_return_vias.rs` |
+| test_pair_search_resume.py | 7 | 6 | 1 | 0 | `src/critical_tests/pair_search_resume.rs` |
+| test_pair_joint_supports.py | 7 | 7 | 0 | 0 | `src/critical_tests/pair_joint_supports.rs` |
+| test_critical_preflight.py | 7 | 0 | 7 | 0 | none: the `critical-preflight` command was not ported |
+| test_pair_opposite_faces.py | 6 | 6 | 0 | 0 | `src/critical_tests/pair_opposite_faces.rs` |
+| test_pair_converging_ports.py | 6 | 6 | 0 | 0 | `src/critical_tests/pair_converging_ports.rs` |
+| test_critical_lane_review.py | 6 | 5 | 1 | 0 | `src/critical_tests/critical_lane_review.rs`; the route-board case in `crates/copper/tests/critical_cli.rs` |
+| test_pair_taper.py | 5 | 5 | 0 | 0 | `src/critical_tests/pair_taper.rs` |
+| test_pair_recessed_via_ports.py | 5 | 4 | 1 | 0 | `src/critical_tests/pair_recessed_via_ports.rs` |
+| test_pair_refine.py | 4 | 4 | 0 | 0 | `src/critical_tests/pair_refine.rs` |
+| test_pair_budget_escalation.py | 4 | 4 | 0 | 0 | `src/critical_tests/pair_budget_escalation.rs` |
+| test_critical_search_order.py | 4 | 4 | 0 | 0 | `src/critical_tests/critical_search_order.rs` |
+| test_recessed_pair_ports.py | 3 | 3 | 0 | 0 | `src/critical_tests/recessed_pair_ports.rs` |
+| test_planned_escape_copper.py | 3 | 3 | 0 | 0 | `src/critical_tests/planned_escape_copper.rs` |
+| test_pair_through_hole_contacts.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_through_hole_contacts.rs` |
+| test_pair_hybrid_contact_anchor.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_hybrid_contact_anchor.rs` |
+| test_pair_collinear_fork.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_collinear_fork.rs` |
+| test_pair_outer_transitions.py | 2 | 2 | 0 | 0 | `src/critical_tests/pair_outer_transitions.rs` |
+| test_pair_tuning_span_copper_contacts.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_tuning_span_copper_contacts.rs` |
+| test_bundle_tuning.py | 3 | 3 | 0 | 0 | `src/critical_tests/bundle_tuning.rs` |
+| test_partial_pair_macro_ports.py | 2 | 2 | 0 | 0 | `src/critical_tests/partial_pair_macro_ports.rs` |
+| test_pair_transition_diagnostics.py | 2 | 2 | 0 | 0 | `src/critical_tests/pair_transition_diagnostics.rs` |
+| test_pair_offset_ports.py | 2 | 2 | 0 | 0 | `src/critical_tests/pair_offset_ports.rs` |
+| test_pair_obstacle_tuning_fallback.py | 2 | 2 | 0 | 0 | `src/critical_tests/pair_obstacle_tuning_fallback.rs` |
+| test_pair_approach_ranking.py | 2 | 1 | 1 | 0 | `src/critical_tests/pair_approach_ranking.rs` |
+| test_collinear_pair_ports.py | 2 | 2 | 0 | 0 | `src/critical_tests/collinear_pair_ports.rs` |
+| test_pair_transition_families.py | 1 | 1 | 0 | 0 | `src/critical_tests/pair_transition_families.rs` |
+| test_pair_staggered_contacts.py | 1 | 1 | 0 | 0 | `src/critical_tests/pair_staggered_contacts.rs` |
+| test_pair_lateral_ports.py | 1 | 1 | 0 | 0 | `src/critical_tests/pair_lateral_ports.rs` |
+| test_pair_departure.py | 1 | 1 | 0 | 0 | `src/critical_tests/pair_departure.rs` |
+| test_critical_stage_planning.py | 3 | 3 | 0 | 0 | `src/critical_tests/critical_stage_planning.rs` |
+| test_critical_return_preparation.py | 3 | 3 | 0 | 0 | `src/critical_tests/critical_return_preparation.rs` |
+| test_loose_pair_repair.py | 2 | 2 | 0 | 0 | `src/critical_tests/loose_pair_repair.rs`; the issue-list title in `crates/copper/tests/critical_cli.rs` |
 
-**Totals so far:** 14 of 46 files, 178 Python tests: 144 ported, 34
-skipped, 0 ignored.
+**Totals:** 46 of 46 files, 283 Python tests: 241 ported, 42 skipped, 0
+ignored (the earlier running total over-counted three tests).
 
 Rust bugs found and fixed by the ports:
 - `pair_vias::return_via` accepted a clearance index bound to another source
@@ -34,19 +66,11 @@ Rust bugs found and fixed by the ports:
   (`test_critical_bundles.py`).
 - `route-board` length-option errors lost Python's positive/nonnegative wording
   (`test_pair_terminal_fallback.py`).
+- `critical_progress` (the `critical_group` progress events) dropped the
+  `repairs` detail Python emitted for a failed group's rip-up attempts
+  (`test_loose_pair_repair.py`); telemetry only, routing is unchanged.
 
-Remaining files, in the assigned order: pair_search_resume,
-pair_joint_supports, critical_preflight (no `critical-preflight` command in
-Rust), pair_opposite_faces, pair_converging_ports, critical_lane_review,
-pair_taper, pair_recessed_via_ports, pair_refine, pair_budget_escalation,
-critical_search_order, recessed_pair_ports, planned_escape_copper,
-pair_tuning_span_copper_contacts, pair_through_hole_contacts,
-pair_hybrid_contact_anchor, pair_collinear_fork, critical_stage_planning,
-critical_return_preparation, bundle_tuning, partial_pair_macro_ports,
-pair_transition_diagnostics, pair_outer_transitions, pair_offset_ports,
-pair_obstacle_tuning_fallback, pair_approach_ranking, loose_pair_repair,
-collinear_pair_ports, pair_transition_families, pair_staggered_contacts,
-pair_lateral_ports, pair_departure.
+Remaining files: none.
 
 ## Notes
 
@@ -221,3 +245,128 @@ Skipped:
 - `early_escape_candidates_and_reservations_obey_existing_return_requirement`:
   exercises fanout internals (`_legal_choices`, `_reserve`, `_maze_choices`),
   owned by the fanout group.
+
+### test_pair_search_resume.py
+
+Python's `_search` + `register_pair_search` is a `Continuation` built over
+`SpineSearch` and pushed onto `stats.continuations`.
+
+Skipped:
+- `stale_source_prefix_and_escaped_geometry_are_rejected`: Rust
+  `resume_pair_candidates` takes no source board and keeps no ownership
+  fingerprints; each frontier owns its immutable escaped board and the
+  critical owner resumes only its own per-board stats, so a stale source or
+  replaced escaped board cannot reach it.
+
+### test_pair_joint_supports.py
+
+`support_fixture` (from `test_local_pair_branches.py`) is rebuilt here; the
+return-boundary and pair-via fixtures are shared with their ports.
+`len(complete.completed)` reads a test-only `completed_len()`.
+
+### test_critical_preflight.py
+
+All skipped: the `critical-preflight` command (and its checkpoint/partial
+artifact interruption hooks, all driven through monkeypatched stages) has no
+Rust counterpart.
+
+### test_pair_opposite_faces.py
+
+- `critical_owner_accepts_opposite_face_transition`: Python patched the
+  surface search away; terminals on opposite faces leave the single matched
+  transition as the owner's only route.
+
+### test_critical_lane_review.py
+
+`match_tuning` is the stage's tuning documents (`id`, `status`) in Rust.
+
+Skipped:
+- `preflight_reports_the_review_of_the_critical_stage`: the
+  `critical-preflight` CLI is not ported (the route-board report case is).
+
+### test_pair_recessed_via_ports.py
+
+`test_pair_outer_transitions.py`'s fixture is shared from its port.
+
+Skipped:
+- `local_collar_calls_have_a_finite_shared_allowance`: counted the
+  `maximum_states` of each `local_access_path` call through a monkeypatch;
+  Rust `local_via_ports` has the same 32-call / 16-site bound but no seam to
+  observe the calls.
+
+### test_pair_refine.py
+
+- `owner_preserves_complete_accepted_incumbent_on_bad_shortcut`: Python
+  injected each defective shortcut into `_improve_pair_spine`. Here the gap
+  and native-open defects fail the owner's exact gates
+  (`route_pair_exact` + `validate_candidate`), the profile defect is a
+  skew-warned fallback, and `improve_pair_spine` over the real shortcuts
+  keeps a complete connected pair no longer than the incumbent. The width
+  and layer defects are dropped by the owner's private faithfulness filter,
+  which has no seam.
+
+### test_critical_search_order.py
+
+Python's `SimpleNamespace` guides are `GlobalNetRoute`s with one access.
+`critical_progress` is the crate-private `critical_group` emitter.
+
+### test_planned_escape_copper.py
+
+`test_unified_router._board` is rebuilt here; `_release_escape_masks`,
+`_copper_keepouts` and `_plane_pin_halos` are the crate-private `flow`
+functions.
+
+### test_bundle_tuning.py
+
+Adapted (`_tune_bundle_pairs` was monkeypatched):
+- `a_hemmed_pair_is_tuned_while_its_neighbour_is_unrouted`: the
+  final-pass-only half (tuning stage disabled) has no seam, and
+  `match_tuning_line` takes the tuning struct while the result holds its
+  documents; the routing-stage outcome is checked.
+- `tuning_that_blocks_a_later_pair_is_removed_before_any_rip_up`: the
+  recorded `_tune_bundle_pairs` returns and the final-pass-only comparison
+  are dropped; the removed tuning, empty repairs and connected pairs are
+  checked.
+- `bundles_without_an_over_skew_group_route_as_before`: the call recorder is
+  dropped; the copper and results equality with no group is checked.
+
+### test_pair_obstacle_tuning_fallback.py
+
+Python injected the candidate as the only search result of
+`_route_pair_group`; the test runs the owner's exact sequence (exact pair,
+validation, then the clearance-aware `matched_local_candidates` retry on a
+spacing rejection, or no retry for the disabled case) on the real terminal
+guides.
+
+### test_pair_approach_ranking.py, test_pair_departure.py, test_pair_transition_families.py
+
+Each Python test first patched a ranking (`_departure_preferences`), the
+departure check (`_can_depart`) or the transition family switch to show the
+historical failure; those halves have no seam and are dropped, the
+successful bounded search and its owner acceptance are ported.
+
+Skipped:
+- `pair_approach_ranking::negative_approach_hint_does_not_remove_ports`:
+  only observable through the patched `_departure_preferences`.
+
+### test_critical_stage_planning.py
+
+- `the_pair_no_longer_cuts_the_planar_net_and_the_board_keeps_its_rules`:
+  the first pipeline run with `promote_planar_nets` patched away has no
+  seam; the promoted run is checked. Python's `result.board` is the detailed
+  stage's board.
+- The hard-macro fixture of `test_hard_macros.py` is bound from an inline
+  asset document.
+
+### test_critical_return_preparation.py
+
+- `required_returns_are_prepared_before_critical_routing`: the
+  `critical-inputs` stage is saved with `critical_inputs_state_text`, read
+  back and replayed with `replay_critical` (which takes no unified options in
+  Rust).
+
+### test_loose_pair_repair.py
+
+Rust bug found and fixed: the `critical_group` progress events dropped the
+`repairs` detail of a failed group's rip-up attempts. The issue-list title
+is checked through `copper issues --json` on the real routed report.

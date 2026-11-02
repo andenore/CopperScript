@@ -537,6 +537,12 @@ impl PairSupportCompletion {
         }
     }
 
+    /// How many distinct proposals were completed (`len(completed)`).
+    #[cfg(test)]
+    pub(crate) fn completed_len(&self) -> usize {
+        self.completed.len()
+    }
+
     /// `__call__`: the support branches of a proposal at `component` (none
     /// for the other component), or `None` when it cannot be completed.
     pub fn complete(
