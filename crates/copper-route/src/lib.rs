@@ -113,10 +113,16 @@ pub mod unified_error;
 pub mod unified_router;
 pub mod via_lattice;
 
+// The crate-private half of the ported planes/stitching/tuning tests, which
+// share `tests/support_planes` (its `copper_route::` paths name this crate).
+#[cfg(test)]
+extern crate self as copper_route;
 #[cfg(test)]
 mod critical_tests;
 #[cfg(test)]
 pub(crate) mod test_support_critical;
+#[cfg(test)]
+mod test_support_planes;
 
 pub use copper_pcb::{Error, Result};
 pub use progress::{Progress, emit};
@@ -151,8 +157,7 @@ pub fn implementation_digest() -> String {
     Sha256::digest(not_python_version().as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-// The shared router test builders name the crate as integration tests do.
-#[cfg(test)]
-extern crate self as copper_route;
+// The shared router test builders name the crate as integration tests do
+// (`extern crate self as copper_route` is declared once above).
 #[cfg(test)]
 pub(crate) mod test_support_routers;

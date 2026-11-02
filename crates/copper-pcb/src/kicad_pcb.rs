@@ -1291,8 +1291,14 @@ fn render(board: &PhysicalBoard, library_names: &IndexMap<String, String>) -> Re
         ]);
     }
     for (index, via) in board.vias.iter().enumerate() {
-        // No source declares via technologies, so every via is a through via.
-        lines.push("  (via".to_owned());
+        // A board state may declare a via catalog: blind, buried and micro
+        // vias keep their KiCad kind (a plain via is a through via).
+        let technology = board.stackup.via_technologies.iter().find(|t| via.technology.as_deref() == Some(&t.id));
+        lines.push(match technology.map(|t| t.kind) {
+            Some(ViaKind::Blind | ViaKind::Buried) => "  (via blind".to_owned(),
+            Some(ViaKind::Microvia) => "  (via micro".to_owned(),
+            _ => "  (via".to_owned(),
+        });
         if macro_vias.contains(via) {
             lines.push("    (locked yes)".to_owned());
         }

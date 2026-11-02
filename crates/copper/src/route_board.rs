@@ -145,6 +145,22 @@ mod option_tests {
         assert_eq!(filled_feedback_options(&arguments, options.direct).maximum_trials, 0);
         assert_eq!(filled_feedback_options(&arguments, false).maximum_trials, 8);
     }
+
+    /// `tests/test_autonomous_plane_access.py::test_cli_reserves_package_access_by_default_with_explicit_opt_out`.
+    #[test]
+    fn package_access_is_reserved_by_default_with_explicit_opt_out() {
+        let parse = |extra: &[&str]| {
+            let argv: Vec<String> = ["board.copper"].iter().chain(extra).map(|text| (*text).to_owned()).collect();
+            let parsed = option_parser::parse_exact(&argv, &specs()).unwrap();
+            let Ok(arguments) = check_arguments(parsed) else { panic!("valid options rejected") };
+            arguments
+        };
+        let default = parse(&[]);
+        assert!(default.fanout() && default.early_plane_stitch());
+        assert!(parse(&["--fanout"]).fanout());
+        assert!(!parse(&["--no-fanout"]).fanout());
+        assert!(!parse(&["--no-early-plane-stitch"]).early_plane_stitch());
+    }
 }
 
 const FLAGS: [&str; 17] = [
@@ -389,6 +405,16 @@ impl Arguments {
             .rev()
             .find(|(option, _)| *option == name || *option == negative)
             .map_or(default, |(option, _)| *option == name)
+    }
+
+    /// Package access is reserved by default: `--no-fanout` opts out.
+    fn fanout(&self) -> bool {
+        self.boolean("--fanout", true)
+    }
+
+    /// Early return-plane contacts by default: `--no-early-plane-stitch` opts out.
+    fn early_plane_stitch(&self) -> bool {
+        self.boolean("--early-plane-stitch", true)
     }
 
     fn text(&self, name: &str) -> Option<&str> {
@@ -941,8 +967,7 @@ fn route(
     {
         return Err(fail("plane escape width is below this board's rule floor".to_owned()));
     }
-    let early_options = if (arguments.boolean("--early-plane-stitch", true) && stitch_enabled) || !early_pads.is_empty()
-    {
+    let early_options = if (arguments.early_plane_stitch() && stitch_enabled) || !early_pads.is_empty() {
         Some(
             PlaneStitchOptions {
                 only_pads: (!early_pads.is_empty()).then(|| early_pads.iter().cloned().collect()),
@@ -985,7 +1010,7 @@ fn route(
     }
     .validated()
     .map_err(value_error)?;
-    let fanout_options = if arguments.boolean("--fanout", true) {
+    let fanout_options = if arguments.fanout() {
         Some(
             FanoutOptions {
                 step_nm: length("--fanout-step-mm")?,

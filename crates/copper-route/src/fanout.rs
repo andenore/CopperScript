@@ -401,7 +401,7 @@ pub(crate) fn legal_choices(
 type Pin<'a> = (i64, PadReference, Point, &'a Placement, &'a FootprintPad);
 
 /// `_maze_choices`: bounded multi-bend launches when straight/elbow domains fail.
-fn maze_choices(
+pub(crate) fn maze_choices(
     board: &PhysicalBoard,
     clearance: &RoutingClearanceIndex<'_>,
     net: &str,

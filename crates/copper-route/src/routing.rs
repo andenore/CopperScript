@@ -1806,7 +1806,7 @@ fn refine_overflowed_via_sites(
 }
 
 /// `_legal_via_sites`: independent, legal drill sites inside one coarse routing cell.
-fn legal_via_sites(
+pub(crate) fn legal_via_sites(
     board: &PhysicalBoard,
     clearance: &RoutingClearanceIndex<'_>,
     center: Point,
