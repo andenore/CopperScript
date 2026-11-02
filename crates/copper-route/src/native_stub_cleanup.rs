@@ -13,7 +13,9 @@ use indexmap::{IndexMap, IndexSet};
 use copper_json::Value;
 use copper_pcb::board::{PadReference, PhysicalBoard, RouteKind, TrackSegment, Via};
 use copper_physical::footprint::PadKind;
-use copper_physical::geometry::{circle_inside_shape, point_on_segment, shapes_clear};
+use copper_physical::geometry::{
+    circle_inside_shape, point_on_segment, point_segment_distance_squared, rational, shapes_clear,
+};
 use copper_physical::{BoardSide, CopperLayer, Point, RoundedConvexShape};
 
 use crate::Result;
@@ -75,6 +77,64 @@ fn land_centres(board: &PhysicalBoard, net: &str, layer: CopperLayer) -> IndexMa
         }
     }
     centres
+}
+
+/// The centre-line point of `start`..`end` nearest `point`, rounded to the
+/// nanometre grid.
+fn nearest_centre_point(point: Point, start: Point, end: Point) -> Point {
+    let (dx, dy) = (i128::from(end.x_nm - start.x_nm), i128::from(end.y_nm - start.y_nm));
+    let length_squared = dx * dx + dy * dy;
+    let projection = i128::from(point.x_nm - start.x_nm) * dx + i128::from(point.y_nm - start.y_nm) * dy;
+    if length_squared == 0 || projection <= 0 {
+        return start;
+    }
+    if projection >= length_squared {
+        return end;
+    }
+    let along = |origin: i64, delta: i128| {
+        let scaled = delta * projection;
+        let half = length_squared / 2;
+        let rounded = if scaled >= 0 { (scaled + half) / length_squared } else { (scaled - half) / length_squared };
+        origin + rounded as i64
+    };
+    Point::new(along(start.x_nm, dx), along(start.y_nm, dy))
+}
+
+/// Move each unanchored end of a width-only junction segment onto the centre
+/// line of the same-net track its end disk touches, so native connectivity
+/// sees a real end contact instead of a dangling overlap. None when no end
+/// moves or the joined copper would not clear other nets.
+fn rejoined_segment(
+    track: &TrackSegment,
+    anchors: &BTreeSet<Point>,
+    partners: &[&TrackSegment],
+    clearance: &RoutingClearanceIndex,
+) -> Result<Option<TrackSegment>> {
+    let own_radius = (track.width_nm + 1).div_euclid(2);
+    let mut joined = track.clone();
+    for (end, other_end) in [(&mut joined.start, track.end), (&mut joined.end, track.start)] {
+        if anchors.contains(end) {
+            continue;
+        }
+        let touching = partners.iter().filter_map(|partner| {
+            let reach = i128::from(own_radius + (partner.width_nm + 1).div_euclid(2));
+            let distance = point_segment_distance_squared(*end, partner.start, partner.end);
+            (distance <= rational(reach * reach)).then_some((distance, *partner))
+        });
+        if let Some((_, partner)) = touching.min_by(|a, b| a.0.cmp(&b.0)) {
+            let target = nearest_centre_point(*end, partner.start, partner.end);
+            if target != other_end {
+                *end = target;
+            }
+        }
+    }
+    if joined == *track
+        || joined.start == joined.end
+        || !clearance.can_track(&joined.net, joined.start, joined.end, joined.width_nm, joined.layer)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(joined))
 }
 
 fn shape(spine: Vec<Point>, radius_nm: i64) -> Result<RoundedConvexShape> {
@@ -176,6 +236,7 @@ pub fn native_stub_candidate(
     let layers = &board.stackup.copper_layers;
     let position = |layer: CopperLayer| layers.iter().position(|l| *l == layer).unwrap_or(usize::MAX);
     let mut replacements: BTreeMap<usize, Option<TrackSegment>> = BTreeMap::new();
+    let mut rejoins: BTreeMap<usize, TrackSegment> = BTreeMap::new();
     for &index in &indices {
         let track = &board.tracks[index];
         if fixed.get(track).copied().unwrap_or(0) > 0 {
@@ -199,6 +260,7 @@ pub fn native_stub_candidate(
         }
         let mut anchors: BTreeSet<Point> = BTreeSet::new();
         let mut whole_only = false;
+        let mut width_partners: Vec<&TrackSegment> = Vec::new();
         for (other_index, other) in board.tracks.iter().enumerate() {
             if other_index == index || other.net != track.net || other.layer != track.layer {
                 continue;
@@ -208,7 +270,10 @@ pub fn native_stub_candidate(
                 continue;
             }
             match junctions(track.start, track.end, other.start, other.end) {
-                None => whole_only = true,
+                None => {
+                    whole_only = true;
+                    width_partners.push(other);
+                }
                 Some(points) => anchors.extend(points),
             }
         }
@@ -274,7 +339,11 @@ pub fn native_stub_candidate(
             anchors.extend(points);
         }
         if whole_only {
-            // Do not invent a cut point for a width-only junction.
+            // Do not invent a cut point for a width-only junction. If the
+            // segment carries the connection, the rejoin below is tried instead.
+            if let Some(joined) = rejoined_segment(track, &anchors, &width_partners, &clearance)? {
+                rejoins.insert(index, joined);
+            }
             replacements.insert(index, None);
             continue;
         }
@@ -295,18 +364,23 @@ pub fn native_stub_candidate(
         };
         replacements.insert(index, replacement);
     }
-    let mut candidate = board.clone();
-    candidate.tracks = board
-        .tracks
-        .iter()
-        .enumerate()
-        .filter_map(|(i, t)| match replacements.get(&i) {
-            Some(replacement) => replacement.clone(),
-            None => Some(t.clone()),
-        })
-        .collect();
-    candidate.vias =
-        board.vias.iter().enumerate().filter(|(i, _)| !via_indices.contains(i)).map(|(_, v)| v.clone()).collect();
+    let build = |rejoined: &BTreeMap<usize, TrackSegment>| {
+        let mut candidate = board.clone();
+        candidate.tracks = board
+            .tracks
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| match (rejoined.get(&i), replacements.get(&i)) {
+                (Some(joined), _) => Some(joined.clone()),
+                (None, Some(replacement)) => replacement.clone(),
+                (None, None) => Some(t.clone()),
+            })
+            .collect();
+        candidate.vias =
+            board.vias.iter().enumerate().filter(|(i, _)| !via_indices.contains(i)).map(|(_, v)| v.clone()).collect();
+        candidate
+    };
+    let candidate = build(&BTreeMap::new());
     if candidate.tracks == board.tracks && candidate.vias == board.vias {
         return reject("no_removable_overhang", Vec::new());
     }
@@ -324,23 +398,151 @@ pub fn native_stub_candidate(
         )
         .map_err(|error| copper_pcb::Error::Value(error.to_string()))
     };
-    let (before, after) = (connectivity(board)?, connectivity(&candidate)?);
-    for net in &board.nets {
-        if !names.contains(&net.name) {
-            continue;
-        }
-        let nodes: Vec<&String> =
-            net.pads.iter().flat_map(|pad| before.pad_nodes.get(pad).into_iter().flatten()).collect();
-        if net.pads.iter().any(|pad| before.pad_nodes.get(pad) != after.pad_nodes.get(pad)) {
-            return reject("changed_pad_inventory", vec![("net", Value::from(net.name.as_str()))]);
-        }
-        for a in &nodes {
-            for b in &nodes {
-                if (before.roots[*a] == before.roots[*b]) != (after.roots[*a] == after.roots[*b]) {
-                    return reject("changed_explicit_partition", vec![("net", Value::from(net.name.as_str()))]);
+    let before = connectivity(board)?;
+    // The first changed partition, as (reason, net); None keeps every one.
+    let changed = |current: &PhysicalBoard| -> Result<Option<(&'static str, String)>> {
+        let after = connectivity(current)?;
+        for net in &board.nets {
+            if !names.contains(&net.name) {
+                continue;
+            }
+            let nodes: Vec<&String> =
+                net.pads.iter().flat_map(|pad| before.pad_nodes.get(pad).into_iter().flatten()).collect();
+            if net.pads.iter().any(|pad| before.pad_nodes.get(pad) != after.pad_nodes.get(pad)) {
+                return Ok(Some(("changed_pad_inventory", net.name.clone())));
+            }
+            for a in &nodes {
+                for b in &nodes {
+                    if (before.roots[*a] == before.roots[*b]) != (after.roots[*a] == after.roots[*b]) {
+                        return Ok(Some(("changed_explicit_partition", net.name.clone())));
+                    }
                 }
             }
         }
+        Ok(None)
+    };
+    let Some((reason, net)) = changed(&candidate)? else { return Ok(Some(candidate)) };
+    // A width-only segment that carries the connection is rejoined, not removed.
+    if !rejoins.is_empty() {
+        let rejoined = build(&rejoins);
+        if changed(&rejoined)?.is_none() {
+            return Ok(Some(rejoined));
+        }
     }
-    Ok(Some(candidate))
+    reject(reason, vec![("net", Value::from(net.as_str()))])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use copper_pcb::board::{PhysicalNet, Stackup};
+    use copper_physical::{BoardOutline, DesignRules};
+
+    const MM: i64 = 1_000_000;
+
+    fn mm(x: f64, y: f64) -> Point {
+        Point { x_nm: (x * MM as f64).round() as i64, y_nm: (y * MM as f64).round() as i64 }
+    }
+
+    fn track(net: &str, a: (f64, f64), b: (f64, f64), width_mm: f64) -> TrackSegment {
+        TrackSegment {
+            net: net.to_owned(),
+            start: mm(a.0, a.1),
+            end: mm(b.0, b.1),
+            width_nm: (width_mm * MM as f64).round() as i64,
+            layer: CopperLayer::Front,
+        }
+    }
+
+    /// Bare two-layer board with nets S and T and the given copper.
+    fn board(tracks: Vec<TrackSegment>) -> PhysicalBoard {
+        let net = |name: &str| PhysicalNet { name: name.to_owned(), pads: Vec::new() };
+        PhysicalBoard {
+            name: "stub".to_owned(),
+            outline: BoardOutline::rectangle(20 * MM, 20 * MM, None).expect("outline"),
+            footprints: IndexMap::new(),
+            placements: Vec::new(),
+            nets: vec![net("S"), net("T")],
+            stackup: Stackup::new(vec![CopperLayer::Front, CopperLayer::Back]),
+            rules: DesignRules::default(),
+            tracks,
+            vias: Vec::new(),
+            metadata: IndexMap::new(),
+            regions: Vec::new(),
+            keepouts: Vec::new(),
+            placement_rules: Vec::new(),
+            relative_rules: Vec::new(),
+            placement_groups: Vec::new(),
+            power_domains: Vec::new(),
+            net_routing_rules: Vec::new(),
+            zones: Vec::new(),
+            polygons: Vec::new(),
+            copper_keepouts: Vec::new(),
+            rigid_clusters: Vec::new(),
+            hard_macros: Vec::new(),
+            materialized_macros: Vec::new(),
+            via_in_pad_rules: Vec::new(),
+            mechanical_holes: Vec::new(),
+            mechanical_slots: Vec::new(),
+            datums: Vec::new(),
+            boundary_edges: Vec::new(),
+            attachments: Vec::new(),
+            component_heights: Vec::new(),
+            body_overhangs: Vec::new(),
+            assembly_envelopes: Vec::new(),
+            assembly_access: Vec::new(),
+            match_groups: Vec::new(),
+            component_hole_clearances: Vec::new(),
+            decoupling_links: Vec::new(),
+            silkscreen: Vec::new(),
+            power_feeds: Vec::new(),
+            mechanical_references: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn nearest_centre_point_clamps_to_ends_and_rounds_projections() {
+        let (a, b) = (mm(1.0, 1.0), mm(3.0, 1.0));
+        assert_eq!(nearest_centre_point(mm(0.5, 2.0), a, b), a);
+        assert_eq!(nearest_centre_point(mm(4.0, 0.0), a, b), b);
+        assert_eq!(nearest_centre_point(mm(2.25, 1.05), a, b), mm(2.25, 1.0));
+        // A 45-degree centre line reached from just off it.
+        assert_eq!(nearest_centre_point(mm(8.0, 8.75), mm(8.475, 9.25), mm(6.0, 6.775)), mm(7.9875, 8.7625));
+    }
+
+    #[test]
+    fn width_only_end_moves_onto_the_partner_centre_line() {
+        // A wide stub anchored at its start whose free end only overlaps the
+        // next same-net track by width: native DRC calls that end dangling.
+        let stub = track("S", (10.2125, 9.75), (10.4625, 9.5), 0.8);
+        let partner = track("S", (10.5, 10.25), (11.0, 10.25), 0.8);
+        let copper = board(vec![stub.clone(), partner.clone()]);
+        let clearance = RoutingClearanceIndex::new(&copper).expect("index");
+        let anchors = BTreeSet::from([stub.start]);
+        let joined = rejoined_segment(&stub, &anchors, &[&partner], &clearance).expect("rejoin").expect("moved");
+        assert_eq!((joined.start, joined.end), (stub.start, partner.start));
+        // An anchored end and an end touching nothing stay where they are.
+        let lone = track("S", (2.0, 2.0), (3.0, 2.0), 0.2);
+        let anchored = BTreeSet::from([lone.start]);
+        assert!(rejoined_segment(&lone, &anchored, &[&partner], &clearance).expect("rejoin").is_none());
+    }
+
+    #[test]
+    fn rejoin_is_refused_when_it_would_not_clear_another_net() {
+        let stub = track("S", (10.2125, 9.75), (10.4625, 9.5), 0.8);
+        let partner = track("S", (10.5, 10.25), (11.0, 10.25), 0.8);
+        // T clears the stub and the partner but not the straight join between them.
+        let other = track("T", (9.792, 10.324), (9.5, 10.49), 0.2);
+        let copper = board(vec![stub.clone(), partner.clone(), other]);
+        let clearance = RoutingClearanceIndex::new(&copper).expect("index");
+        for existing in [&stub, &partner] {
+            assert!(
+                clearance
+                    .can_track("S", existing.start, existing.end, existing.width_nm, existing.layer)
+                    .expect("clearance")
+            );
+        }
+        let anchors = BTreeSet::from([stub.start]);
+        assert!(rejoined_segment(&stub, &anchors, &[&partner], &clearance).expect("rejoin").is_none());
+    }
 }
