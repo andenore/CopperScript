@@ -204,22 +204,35 @@ fn execute(
         return Ok(if assembly::passed(&report) { 0 } else { 1 });
     }
     let output = argument("--output").expect("required option");
-    assembly::write_jlcpcb_bom(board, &lock, &output.path)?;
-    let (consigned, not_fitted) = (count("consigned_count"), count("not_fitted_count"));
-    let left_out = names("consigned").len() + names("not_fitted").len() > 0;
-    let _ = text::print(
-        out,
-        &format!(
-            "Generated selection BOM -> {}; {} supplier-assembled{}; stock and manufacturing signoff not checked",
-            output.shown,
-            count("supplier_assembled_count"),
-            if left_out {
-                format!(", {consigned} consigned and {not_fitted} not fitted left out")
-            } else {
-                String::new()
-            }
-        ),
-    );
+    if count("supplier_assembled_count") == "0" && assembly::passed(&report) {
+        // A board fitted entirely by hand has no supplier BOM; remove a stale
+        // one so nothing downstream exports it, and still write the lists.
+        if output.path.is_file() {
+            std::fs::remove_file(&output.path)
+                .map_err(|failure| AssemblyError(copper_assembly::files::open_error(&failure, &output.shown)))?;
+        }
+        let _ = text::print(
+            out,
+            &format!("No supplier-assembled components; no selection BOM written to {}", output.shown),
+        );
+    } else {
+        assembly::write_jlcpcb_bom(board, &lock, &output.path)?;
+        let (consigned, not_fitted) = (count("consigned_count"), count("not_fitted_count"));
+        let left_out = names("consigned").len() + names("not_fitted").len() > 0;
+        let _ = text::print(
+            out,
+            &format!(
+                "Generated selection BOM -> {}; {} supplier-assembled{}; stock and manufacturing signoff not checked",
+                output.shown,
+                count("supplier_assembled_count"),
+                if left_out {
+                    format!(", {consigned} consigned and {not_fitted} not fitted left out")
+                } else {
+                    String::new()
+                }
+            ),
+        );
+    }
     if let Some(path) = argument("--hand-assembly") {
         let total = assembly::write_hand_assembly_list(board, &lock, &path.path)?;
         let _ = text::print(
