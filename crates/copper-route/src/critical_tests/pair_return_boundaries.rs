@@ -11,11 +11,11 @@ use crate::pair_vias::{TransitionTrace, return_positions, return_via, transition
 use crate::routing_clearance::RoutingClearanceIndex;
 use crate::test_support_critical::*;
 
-struct Fixture {
-    board: PhysicalBoard,
-    rules: (NetRoutingRule, NetRoutingRule),
-    pair: Vec<Via>,
-    port: Port,
+pub(super) struct Fixture {
+    pub(super) board: PhysicalBoard,
+    pub(super) rules: (NetRoutingRule, NetRoutingRule),
+    pub(super) pair: Vec<Via>,
+    pub(super) port: Port,
 }
 
 /// `fixture(angle, center, names)`: an unplaced six-layer board, a pair's
@@ -58,7 +58,7 @@ fn fixture(angle: f64, center: (&str, &str), names: [&str; 3]) -> Fixture {
     Fixture { board, rules, pair, port }
 }
 
-fn standard() -> Fixture {
+pub(super) fn standard() -> Fixture {
     fixture(0.0, ("12.3", "8.7"), ["first", "second", "reference"])
 }
 
@@ -67,7 +67,7 @@ fn can_via(index: &RoutingClearanceIndex<'_>, net: &str, position: Point) -> boo
 }
 
 /// `reserved`: the signal vias, legal and locked in a fresh index.
-fn reserved<'b>(board: &'b PhysicalBoard, pair: &[Via]) -> RoutingClearanceIndex<'b> {
+pub(super) fn reserved<'b>(board: &'b PhysicalBoard, pair: &[Via]) -> RoutingClearanceIndex<'b> {
     let mut index = RoutingClearanceIndex::new(board).expect("index");
     for via in pair {
         assert!(index.can_via(&via.net, via.position, via.size_nm, F, B, Some(via.drill_nm), false, None).unwrap());

@@ -4,10 +4,15 @@
 
 mod critical_bundles;
 mod critical_diagnostics;
+mod critical_lane_review;
 mod critical_replay;
 mod critical_routing;
 mod local_critical;
+mod pair_converging_ports;
+mod pair_joint_supports;
+mod pair_opposite_faces;
 mod pair_return_boundaries;
+mod pair_search_resume;
 mod pair_terminal_fallback;
 mod pair_tuning_spans;
 mod pair_vias;

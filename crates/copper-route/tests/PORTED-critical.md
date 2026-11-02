@@ -23,8 +23,14 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_pair_geometry.py | 8 | 0 | 8 | 0 | none: `pcbir.pair_geometry` was not ported |
 | test_critical_bundles.py | 8 | 6 | 2 | 0 | `src/critical_tests/critical_bundles.rs` (the frozen-fixture comparison stays in `tests/critical_bundles.rs`) |
 | test_single_ended_return_vias.py | 7 | 4 | 3 | 0 | `src/critical_tests/single_ended_return_vias.rs` |
+| test_pair_search_resume.py | 7 | 6 | 1 | 0 | `src/critical_tests/pair_search_resume.rs` |
+| test_pair_joint_supports.py | 7 | 7 | 0 | 0 | `src/critical_tests/pair_joint_supports.rs` |
+| test_critical_preflight.py | 7 | 0 | 7 | 0 | none: the `critical-preflight` command was not ported |
+| test_pair_opposite_faces.py | 6 | 6 | 0 | 0 | `src/critical_tests/pair_opposite_faces.rs` |
+| test_pair_converging_ports.py | 6 | 6 | 0 | 0 | `src/critical_tests/pair_converging_ports.rs` |
+| test_critical_lane_review.py | 6 | 5 | 1 | 0 | `src/critical_tests/critical_lane_review.rs`; the route-board case in `crates/copper/tests/critical_cli.rs` |
 
-**Totals so far:** 14 of 46 files, 178 Python tests: 144 ported, 34
+**Totals so far:** 20 of 46 files, 217 Python tests: 174 ported, 43
 skipped, 0 ignored.
 
 Rust bugs found and fixed by the ports:
@@ -35,10 +41,7 @@ Rust bugs found and fixed by the ports:
 - `route-board` length-option errors lost Python's positive/nonnegative wording
   (`test_pair_terminal_fallback.py`).
 
-Remaining files, in the assigned order: pair_search_resume,
-pair_joint_supports, critical_preflight (no `critical-preflight` command in
-Rust), pair_opposite_faces, pair_converging_ports, critical_lane_review,
-pair_taper, pair_recessed_via_ports, pair_refine, pair_budget_escalation,
+Remaining files, in the assigned order: pair_taper, pair_recessed_via_ports, pair_refine, pair_budget_escalation,
 critical_search_order, recessed_pair_ports, planned_escape_copper,
 pair_tuning_span_copper_contacts, pair_through_hole_contacts,
 pair_hybrid_contact_anchor, pair_collinear_fork, critical_stage_planning,
@@ -221,3 +224,41 @@ Skipped:
 - `early_escape_candidates_and_reservations_obey_existing_return_requirement`:
   exercises fanout internals (`_legal_choices`, `_reserve`, `_maze_choices`),
   owned by the fanout group.
+
+### test_pair_search_resume.py
+
+Python's `_search` + `register_pair_search` is a `Continuation` built over
+`SpineSearch` and pushed onto `stats.continuations`.
+
+Skipped:
+- `stale_source_prefix_and_escaped_geometry_are_rejected`: Rust
+  `resume_pair_candidates` takes no source board and keeps no ownership
+  fingerprints; each frontier owns its immutable escaped board and the
+  critical owner resumes only its own per-board stats, so a stale source or
+  replaced escaped board cannot reach it.
+
+### test_pair_joint_supports.py
+
+`support_fixture` (from `test_local_pair_branches.py`) is rebuilt here; the
+return-boundary and pair-via fixtures are shared with their ports.
+`len(complete.completed)` reads a test-only `completed_len()`.
+
+### test_critical_preflight.py
+
+All skipped: the `critical-preflight` command (and its checkpoint/partial
+artifact interruption hooks, all driven through monkeypatched stages) has no
+Rust counterpart.
+
+### test_pair_opposite_faces.py
+
+- `critical_owner_accepts_opposite_face_transition`: Python patched the
+  surface search away; terminals on opposite faces leave the single matched
+  transition as the owner's only route.
+
+### test_critical_lane_review.py
+
+`match_tuning` is the stage's tuning documents (`id`, `status`) in Rust.
+
+Skipped:
+- `preflight_reports_the_review_of_the_critical_stage`: the
+  `critical-preflight` CLI is not ported (the route-board report case is).

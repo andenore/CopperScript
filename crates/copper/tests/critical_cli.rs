@@ -1,7 +1,8 @@
 //! Critical-routing CLI cases of the former Python suite (d39067a):
 //! `copper replay-critical` on saved source-only inputs
 //! (`test_critical_replay.py`) and `route-board` computational bounds
-//! (`test_pair_terminal_fallback.py`).
+//! (`test_pair_terminal_fallback.py`) and critical-lane review
+//! (`test_critical_lane_review.py`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -145,4 +146,69 @@ fn cli_exposes_positive_computational_pin_access_step() {
     let (status, stderr) = run_output(&["route-board", "missing.copper", "--pin-access-step-mm", "0"]);
     assert_eq!(status, 2);
     assert!(stderr.contains("positive"), "{stderr}");
+}
+
+/// `test_critical_lane_review.py::test_route_board_reports_the_review_of_the_exported_copper`.
+#[test]
+fn route_board_reports_the_review_of_the_exported_copper() {
+    let directory = scratch("lane-review");
+    let source = directory.join("board.copper");
+    std::fs::write(
+        &source,
+        r#"board Lanes {
+        use library "tiny";
+        component R1: RESISTOR { footprint = "0402"; }
+        component R2: RESISTOR { footprint = "0402"; }
+        net DP { R1.1; R2.1; }
+        net DN { R1.2; R2.2; }
+        constraint routing(DP) {
+            kind = differential; partner = DN; width = 0.2mm; pair_gap = 0.2mm; max_skew = 1mm;
+        }
+        constraint routing(DN) {
+            kind = differential; partner = DP; width = 0.2mm; pair_gap = 0.2mm; max_skew = 1mm;
+        }
+    }
+    "#,
+    )
+    .expect("source");
+    let (report, output) = (directory.join("route-report.json"), directory.join("board.kicad_pcb"));
+    let path = |p: &Path| p.to_string_lossy().into_owned();
+    let run = Command::new(env!("CARGO_BIN_EXE_copper"))
+        .args([
+            "route-board",
+            &path(&source),
+            "--allow-proxy-footprints",
+            "--layers",
+            "2",
+            "--fab-profile",
+            "generic",
+            "--candidates",
+            "1",
+            "--report",
+            &path(&report),
+            "-o",
+            &path(&output),
+        ])
+        .output()
+        .expect("the copper binary runs");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(matches!(run.status.code(), Some(0 | 1)), "{stdout}{}", String::from_utf8_lossy(&run.stderr));
+    let Ok(Value::Object(document)) = copper_json::parse(&std::fs::read_to_string(&report).expect("report")) else {
+        panic!("a report object")
+    };
+    let Value::Object(review) = &document["critical_lane_review"] else { panic!("a lane review") };
+    let Value::Array(nets) = &review["nets"] else { panic!("nets") };
+    let field = |item: &Value, key: &str| match item {
+        Value::Object(object) => object[key].clone(),
+        _ => panic!("an object"),
+    };
+    assert_eq!(nets.iter().map(|item| field(item, "net")).collect::<Vec<_>>(), [Value::from("DN"), Value::from("DP")]);
+    let Value::Array(pairs) = &review["pairs"] else { panic!("pairs") };
+    assert_eq!(pairs.len(), 1);
+    assert_eq!(field(&pairs[0], "nets"), Value::Array(vec![Value::from("DN"), Value::from("DP")]));
+    assert_eq!(field(&pairs[0], "status"), Value::from("pass"));
+    let lengths: Vec<Value> = nets.iter().map(|item| field(item, "routed_length_nm")).collect();
+    assert_eq!(field(&pairs[0], "lengths_nm"), Value::Array(lengths));
+    let line = copper_route::critical_review::lane_review_line(review);
+    assert!(stdout.lines().any(|item| item == line), "{stdout}");
 }
