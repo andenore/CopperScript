@@ -36,6 +36,7 @@ test that loops over its cases.
 | test_via_layer_contacts.py | 3 | 1: native smoothing DRC with an installed KiCad CLI (`kicad-cli` not installed) | 0 | `src/test_support_planes.rs` (parametrized finishes loop) |
 | test_route_style.py | 4 | 0 (the `allow_movable_conflicts=True` half of the immutable-obstacle case: Rust has no such mode) | 0 | `tests/route_style.rs` |
 | test_plane_local_ground_regions.py | 4 | 0 | 0 | `tests/plane_local_ground_regions.rs` (parametrized cases loop) |
+| test_via_pad_policy.py | 3 | 0 | 0 | `tests/via_pad_policy.rs` (parametrized cases loop) |
 
 ## Notes
 
