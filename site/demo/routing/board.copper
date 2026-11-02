@@ -1,0 +1,19 @@
+// Routing teaching geometry: synthetic footprints, not a qualified circuit.
+board RoutingPlayground {
+    use library "tiny";
+    component R1: RESISTOR { value = 1 kohm; footprint = "0603"; }
+    component R2: RESISTOR { value = 1 kohm; footprint = "0603"; }
+    net SIGNAL_A { R1.1; R2.1; }
+    net SIGNAL_B { R1.2; R2.2; }
+    constraint fixed_placement(R1) { x = 5 mm; y = 8 mm; rotation = 90; side = front; }
+    constraint fixed_placement(R2) { x = 27 mm; y = 8 mm; rotation = 90; side = front; }
+    constraint routing(SIGNAL_A) { width = 0.3 mm; clearance = 0.2 mm; allowed_layers = "F.Cu"; max_vias = 0; }
+    constraint routing(SIGNAL_B) { width = 0.3 mm; clearance = 0.2 mm; allowed_layers = "F.Cu"; max_vias = 0; }
+    mechanical {
+        outline rectangle { width = 32 mm; height = 16 mm; }
+        copper_keepout obstacle rectangle {
+            origin = (12 mm, 5 mm); width = 8 mm; height = 6 mm;
+            layers = "F.Cu,B.Cu";
+        }
+    }
+}
