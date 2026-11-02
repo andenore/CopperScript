@@ -8,7 +8,7 @@ use indexmap::IndexMap;
 
 use super::UnifiedRouterOptions;
 use super::negotiate::Accepted;
-use super::route::{rejection_text, tune_bus_skew};
+use super::route::{open_count, rejection_text, tune_bus_skew};
 use crate::routing_costs::LayerBias;
 use crate::test_support_routers::*;
 
@@ -285,4 +285,33 @@ fn congestion_capacity_is_per_area_on_both_lattices() {
     let uniform_options = UnifiedRouterOptions { congestion_tile_nm: mm(1.0), ..opts() };
     let mut uniform = router(&board, &uniform_options, &[]);
     assert!(congestion_map(&mut uniform, &[], mm(1.0)).capacity.iter().flatten().all(|c| c.is_finite()));
+}
+
+/// `test_unified_router_options.py::test_complete_plane_net_without_new_copper_is_not_counted_open`
+/// (the routed half is `pads_already_stitched_into_their_plane_count_as_joined`).
+#[test]
+fn complete_plane_net_without_new_copper_is_not_counted_open() {
+    let board = stitched_pad_board();
+    let gnd: Vec<&PhysicalNet> = board.nets.iter().filter(|net| net.name == "GND").collect();
+    let plane: indexmap::IndexSet<String> = ["GND".to_owned()].into_iter().collect();
+    // GND's pads reach the plane through existing vias: complete, no copper.
+    assert_eq!(open_count(&board, &gnd, &Accepted::new(), &plane, &plane).expect("count"), (0, 0));
+    let incomplete = indexmap::IndexSet::new();
+    assert_eq!(open_count(&board, &gnd, &Accepted::new(), &plane, &incomplete).expect("count"), (0, 1));
+}
+
+/// `test_unified_search_costs.py::test_turn_table_charges_per_45_degrees`.
+#[test]
+fn turn_table_charges_per_45_degrees() {
+    let board = a_board();
+    let options = UnifiedRouterOptions { pitch_nm: Some(250_000), bend_cost: 0.5, ..opts() };
+    let mut router = router_all(&board, &options);
+    let table = router.turn_table();
+    let at = |a: usize, b: usize| table[a * 8 + b];
+    // Move order: E, W, S, N, SE, NE, SW, NW (`routing_lattice::MOVES`).
+    assert_eq!(at(0, 0), 0.0);
+    assert_eq!((at(0, 4), at(0, 5)), (0.5, 0.5)); // 45 degrees
+    assert_eq!((at(0, 2), at(0, 3)), (1.0, 1.0)); // 90 degrees
+    assert_eq!(at(0, 1), 2.0); // reversal
+    assert!((0..8).all(|a| (0..8).all(|b| at(a, b) == at(b, a))));
 }

@@ -24,17 +24,23 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | unified_commit_index | 12 | 10 | 2 | 0 | `tests/unified_commit_index.rs` (10) |
 | placement_global_progress | 11 | 3 | 8 | 0 | `tests/placement_global_progress.rs` (3) |
 | routing_lattice | 9 | 9 | 0 | 0 | `tests/routing_lattice.rs` (9) |
+| congestion_feedback_flow | 9 | 9 | 0 | 0 | `tests/congestion_feedback_flow.rs` (10) |
+| unified_router_options | 8 | 4 | 4 | 0 | `tests/unified_router_options.rs` (3), `src/unified_router/tests.rs` (1) |
+| unified_congestion_export | 8 | 8 | 0 | 0 | `tests/unified_congestion_export.rs` (8) |
+| unified_search_costs | 7 | 6 | 1 | 0 | `tests/unified_search_costs.rs` (5), `src/unified_router/tests.rs` (1) |
+| unified_review_constraints | 7 | 6 | 1 | 0 | `tests/unified_review_constraints.rs` (6) |
+| routing_clearance_remove | 7 | 7 | 0 | 0 | `tests/routing_clearance_remove.rs` (4), `src/routing_clearance.rs` `tests` (3) |
 | routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
-**Status (session a1 stopped here):** 14 of 51 files done: 284 Python tests,
-237 ported (1 of them `#[ignore]`d), 47 skipped. The next file is
-`congestion_feedback_flow`; about 157 tests in 37 files remain (list below).
+**Status:** 20 of 51 files done: 330 Python tests, 277 ported (1 of them
+`#[ignore]`d), 53 skipped. The next file is `global_target_via_cost`; about
+111 tests in 31 files remain (list below).
 
 Rust changes made for the ports: `router::index_holds` guard in
 `Router::new` (bug fix, see unified_commit_index); `pub(crate)` on
-`rejection_text`, `tune_bus_skew`, `congestion_map`,
+`rejection_text`, `tune_bus_skew`, `congestion_map`, `open_count`, `turn_table`,
 `Router::{escape_bias, ball_field_via_mask, zone_regions, plane_via_taps}`;
-`#[cfg(test)]` modules in `routing.rs`, `fanout.rs`, `escape_plan.rs`,
+`#[cfg(test)]` modules in `routing.rs`, `routing_clearance.rs`, `fanout.rs`, `escape_plan.rs`,
 `escape_assignment.rs`, `unified_router/tests.rs` and copper-place
 `legalize.rs`.
 
@@ -195,10 +201,58 @@ Rust changes made for the ports: `router::index_holds` guard in
 - The random node round-trip uses a fixed LCG instead of `random.Random(7)`;
   the cached-offsets identity check is dropped (no cache in Rust).
 
+### congestion_feedback_flow
+- Adapted: Python forced rejected trials by monkeypatching
+  `flow._feedback_score` (the `accept=False` case) and `run_placement_feedback`;
+  the Rust tests starve the detailed search (`maximum_expansions: 1`) so no
+  move of B lets SIG connect while global routing still succeeds.
+- Adapted: `test_feedback_results_round_trip_with_congestion`: Rust has no
+  decoder for saved results, so the encoded result is checked to carry the
+  congestion map and a replay of the saved inputs to export one. Python's
+  `initial_congestion` is recomputed with `feedback_map` (Rust keeps only the
+  final map).
+- `flow._feedback_score` is private; the step-halving test scores with the
+  router metrics (any deterministic score works when reruns never change).
+
+### unified_router_options
+- Skipped (scripted `_route_net`/`_conflicts`/`_route_net_once` fakes; no Rust
+  seam): `test_failed_nets_are_retried_every_n_iterations`,
+  `test_failed_net_gets_one_retry_before_a_conflict_free_exit`,
+  `test_unconnected_via_budget_retry_keeps_the_shortfall_diagnostic`,
+  `test_connected_via_budget_retry_within_budget_is_kept`.
+- Validation runs through `with_overrides` with JSON values (as `bench --set`);
+  the tuple/hash check has no counterpart. `open_count` is now `pub(crate)`
+  for its unit test; `stitched_pad_board` moved to `support_routers/boards.rs`.
+- `RoutingAccess` replaces Python's bare fanout point.
+
+### unified_congestion_export
+- `value_at` is not ported (lookups via `tile_of`); `off == on` is dropped
+  (no `PartialEq` on the result; copper and net outcomes are compared).
+
+### unified_search_costs
+- One search in Rust: the `native` parametrizations run once; skipped
+  `test_native_kernel_matches_python_search_with_cost_terms`; adapted
+  `test_native_and_python_routes_agree_with_both_cost_terms` to a clean,
+  deterministic route with both cost terms. `turn_table` is now `pub(crate)`
+  (unit test). Random history uses the shared `Lcg` (support module).
+
+### unified_review_constraints
+- Skipped: `test_native_fill_confirms_the_plane_lead_in_connection` (needs a
+  native `kicad-cli` refill).
+- Adapted: `test_expired_deadline_stops_before_starting_nets` keeps only the
+  `unified_setup` case: the Rust router buffers negotiation progress events
+  and forwards them after `negotiate` returns, so an observer cannot expire
+  the budget at `unified_iteration` start (a progress-timing difference, not
+  fixed). The patched clock is a 0.5 s budget the observer sleeps past.
+### routing_clearance_remove
+- The fixture (board, deterministic copper, every public answer) is
+  `support_routers/clearance_remove.rs`; answers are compared as `Debug`
+  text. The compaction (`_slots`, `_compact`), unchanged-bins and binned
+  drill (`_hole_clear`) tests read private state: unit tests in
+  `routing_clearance.rs` (no visibility change).
+
 ## Remaining files (in order)
 
-congestion_feedback_flow, unified_router_options, unified_congestion_export,
-unified_search_costs, unified_review_constraints, routing_clearance_remove,
 global_target_via_cost, global_search_static_cache, routing_acceptance,
 global_reserved_access, global_access_launch_diversity, unified_span_guides,
 routing_hotspot_caches, region_blocker_repair, global_via_refinement,

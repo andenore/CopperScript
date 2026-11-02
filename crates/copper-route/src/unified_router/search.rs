@@ -495,7 +495,7 @@ impl Router<'_, '_> {
     }
 
     /// `_turn_table`: bend_cost times the 45-degree turns from move a to move b.
-    fn turn_table(&mut self) -> Vec<f64> {
+    pub(crate) fn turn_table(&mut self) -> Vec<f64> {
         if let Some(cache) = &self.turn_cache {
             return cache.clone();
         }

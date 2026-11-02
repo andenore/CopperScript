@@ -1577,3 +1577,92 @@ fn sorted_records(records: Vec<RoutingBlocker>) -> Vec<RoutingBlocker> {
     });
     unique
 }
+
+/// The private-state cases of the former `tests/test_routing_clearance_remove.py`
+/// (the rest are in `tests/routing_clearance_remove.rs`).
+#[cfg(test)]
+mod tests {
+    use copper_physical::{CopperLayer, Point};
+
+    use super::Copper;
+    use crate::test_support_routers::Lcg;
+    use crate::test_support_routers::clearance_remove::*;
+
+    fn without(items: &[(Copper, bool)], owner: &str) -> Vec<(Copper, bool)> {
+        items.iter().filter(|(item, locked)| item.net() != owner || *locked).cloned().collect()
+    }
+
+    fn owned(items: &[(Copper, bool)], owner: &str) -> usize {
+        items.iter().filter(|(item, locked)| item.net() == owner && !locked).count()
+    }
+
+    #[test]
+    fn removing_several_owners_and_compaction_keep_fresh_answers() {
+        let board = remove_board();
+        let items = mixed_copper(7, 60);
+        let mut index = fresh_with(&board, &items);
+        let mut remaining = items.clone();
+        for owner in ["B", "D"] {
+            assert_eq!(index.remove(owner), owned(&remaining, owner));
+            remaining = without(&remaining, owner);
+            assert!(index.slots.iter().any(Option::is_none) && index.hole_slots.iter().any(Option::is_none));
+            index.compact(); // Normally amortized; exercise the renumbering.
+            assert!(index.slots.iter().all(Option::is_some) && index.hole_slots.iter().all(Option::is_some));
+        }
+        // Removal after compaction uses the renumbered slots.
+        let again: Vec<(Copper, bool)> =
+            items[..10].iter().filter(|(item, _)| item.net() == "B").map(|(item, _)| (item.clone(), false)).collect();
+        add(&mut index, &again);
+        remaining.extend(again);
+        assert_eq!(index.remove("C"), owned(&remaining, "C"));
+        assert_equivalent(&index, &without(&remaining, "C"));
+    }
+
+    #[test]
+    fn unknown_owner_removes_nothing() {
+        let board = remove_board();
+        let mut index = fresh_with(&board, &mixed_copper(11, 40));
+        let snapshot = |index: &super::RoutingClearanceIndex<'_>| {
+            (index.additions().to_vec(), index.slots.clone(), index.hole_slots.clone(), index.bins.clone())
+        };
+        let before = snapshot(&index);
+        assert_eq!(index.remove("NOPE"), 0);
+        assert_eq!(index.remove("<non-plated-hole>"), 0);
+        assert_eq!(index.owned_count("NOPE"), 0);
+        assert!(snapshot(&index) == before);
+    }
+
+    #[test]
+    fn binned_drills_match_a_linear_scan() {
+        let board = remove_board();
+        let mut index = fresh_with(&board, &mixed_copper(13, 80));
+        index.remove("A");
+        let clearance = board.rules.minimum_hole_clearance_nm;
+        let span = (CopperLayer::Front, CopperLayer::Back);
+        let linear = |net: &str, position: Point, radius: i64| {
+            index.holes().iter().all(|hole| {
+                let (dx, dy) =
+                    (i128::from(position.x_nm - hole.position.x_nm), i128::from(position.y_nm - hole.position.y_nm));
+                let distance = dx * dx + dy * dy;
+                if distance == 0 && hole.net == net && hole.reusable && hole.span == Some(span) {
+                    return true;
+                }
+                let required = i128::from(radius + hole.radius_nm + clearance);
+                distance >= required * required
+            })
+        };
+        let mut random = Lcg(3);
+        let holes: Vec<Point> = index.holes().iter().map(|hole| hole.position).collect();
+        let mut probes: Vec<Point> =
+            (0..1500).map(|_| Point::new(random.below(32_000_000), random.below(34_000_000))).collect();
+        probes.extend(holes.iter().map(|p| Point::new(p.x_nm + random.below(1_800_000) - 900_000, p.y_nm)));
+        probes.extend(holes);
+        for probe in probes {
+            for net in NETS {
+                for radius in [150_000, 300_000, 2_000_000] {
+                    assert_eq!(index.hole_clear(net, probe, radius, span), linear(net, probe, radius), "{probe:?}");
+                }
+            }
+        }
+    }
+}

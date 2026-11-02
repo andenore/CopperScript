@@ -71,7 +71,7 @@ fn net_track_length(board: &PhysicalBoard, name: &str, new_tracks: &[TrackSegmen
 }
 
 /// `_open_count`: (open signal connections, incomplete plane nets).
-fn open_count(
+pub(crate) fn open_count(
     board: &PhysicalBoard,
     nets: &[&PhysicalNet],
     accepted: &Accepted,
