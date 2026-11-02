@@ -12,7 +12,7 @@ use copper_lang::{paths, snapshot::ProjectSnapshot};
 use wasm_bindgen::prelude::*;
 
 const FILENAME: &str = "playground.copper";
-pub const MAX_SOURCE_BYTES: usize = 32 * 1024;
+pub const MAX_SOURCE_BYTES: usize = 512 * 1024;
 
 fn object<const N: usize>(entries: [(&str, Value); N]) -> Value {
     Value::Object(Object::from_iter(entries.map(|(key, value)| (key.to_owned(), value))))
@@ -52,7 +52,7 @@ pub fn analyze_source(source: &str) -> Value {
 
 fn analyze_document(source: &str, include_ir: bool) -> Value {
     if source.len() > MAX_SOURCE_BYTES {
-        return adapter_error("", "WEB_SIZE", "The playground accepts at most 32 KiB of source.");
+        return adapter_error("", "WEB_SIZE", "The playground accepts at most 512 KiB of source.");
     }
     // textarea input uses LF; normalize downloaded/otherwise supplied CRLF too.
     let source = source.replace("\r\n", "\n").replace('\r', "\n");

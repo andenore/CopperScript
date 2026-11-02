@@ -1,6 +1,6 @@
 # Browser compiler boundary
 
-`analyze` and `review` retain the standalone playground contract (32 KiB; no
+`analyze` and `review` retain the standalone playground contract (512 KiB; no
 imports). `review_project` accepts a JSON source snapshot, discovers imports with
 the ordinary parser/package resolver, and compiles a complete snapshot with the
 ordinary compiler, serializer, ERC and queries. It does not access network, Git,
