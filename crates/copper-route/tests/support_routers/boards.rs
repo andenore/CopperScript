@@ -356,3 +356,39 @@ pub fn stitched_pad_board() -> PhysicalBoard {
     board.nets.push(net("W", &[]));
     board
 }
+
+/// `tests/test_unified_commit_index.py::_technology`: a via technology with
+/// 0.1 mm drill and ring minimums.
+pub fn technology(
+    id: &str,
+    kind: copper_pcb::board::ViaKind,
+    first: CopperLayer,
+    second: CopperLayer,
+) -> copper_pcb::board::ViaTechnology {
+    copper_pcb::board::ViaTechnology {
+        id: id.to_owned(),
+        kind,
+        from_layer: first,
+        to_layer: second,
+        minimum_drill_nm: mm(0.1),
+        minimum_annular_ring_nm: mm(0.1),
+        maximum_aspect_ratio: Decimal::from_i64(12),
+    }
+}
+
+/// `tests/test_unified_commit_index.py::_four_layer`: net A across a
+/// four-layer board with `technologies`; with `allowed`, a wall across F.Cu
+/// makes A change layers within them.
+pub fn four_layer(
+    technologies: Vec<copper_pcb::board::ViaTechnology>,
+    allowed: Option<Vec<CopperLayer>>,
+) -> PhysicalBoard {
+    let mut board = pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)])], 4, vec![]);
+    board.stackup.via_technologies = technologies;
+    if let Some(layers) = allowed {
+        board.tracks = vec![track("W", (13.0, 1.5), (13.0, 24.5), 0.2, CopperLayer::Front)];
+        board.nets.push(net("W", &[]));
+        board.net_routing_rules = vec![NetRoutingRule { allowed_layers: layers, ..rule("A") }];
+    }
+    board
+}

@@ -30,11 +30,17 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | unified_search_costs | 7 | 6 | 1 | 0 | `tests/unified_search_costs.rs` (5), `src/unified_router/tests.rs` (1) |
 | unified_review_constraints | 7 | 6 | 1 | 0 | `tests/unified_review_constraints.rs` (6) |
 | routing_clearance_remove | 7 | 7 | 0 | 0 | `tests/routing_clearance_remove.rs` (4), `src/routing_clearance.rs` `tests` (3) |
+| global_target_via_cost | 7 | 7 | 0 | 0 | `src/routing.rs` `tests` (7) |
+| global_search_static_cache | 7 | 5 | 2 | 0 | `src/routing.rs` `tests` (5) |
+| routing_acceptance | 6 | 6 | 0 | 0 | `tests/routing_acceptance.rs` (6) |
+| global_reserved_access | 6 | 6 | 0 | 0 | `tests/global_reserved_access.rs` (6) |
+| global_access_launch_diversity | 6 | 6 | 0 | 0 | `src/routing.rs` `tests` (6) |
+| unified_span_guides | 5 | 4 | 1 | 0 | `tests/unified_span_guides.rs` (4) |
 | routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
-**Status:** 20 of 51 files done: 330 Python tests, 277 ported (1 of them
-`#[ignore]`d), 53 skipped. The next file is `global_target_via_cost`; about
-111 tests in 31 files remain (list below).
+**Status:** 26 of 51 files done: 367 Python tests, 311 ported (1 of them
+`#[ignore]`d), 56 skipped. The next file is `routing_hotspot_caches`; about
+74 tests in 25 files remain (list below).
 
 Rust changes made for the ports: `router::index_holds` guard in
 `Router::new` (bug fix, see unified_commit_index); `pub(crate)` on
@@ -251,10 +257,44 @@ Rust changes made for the ports: `router::index_holds` guard in
   drill (`_hole_clear`) tests read private state: unit tests in
   `routing_clearance.rs` (no visibility change).
 
+### global_target_via_cost, global_access_launch_diversity
+- They drive the private global router (`route_net`, `terminal_via_cost`,
+  `measure_attempt`, `bounded_access_choices`) on hand-built `Graph`s: unit
+  tests in `routing.rs`. Dropped: the monkeypatched `_build_graph` /
+  `RoutingClearanceIndex` tripwires and `repr(board)` checks (the board is
+  borrowed immutably); "same object" checks became equality.
+
+### global_search_static_cache
+- The original A* is kept as `reference_search` in the `routing.rs` tests and
+  compared with the cached-step `search` (the random trials use `Lcg`).
+- Adapted: the patched `heapq` push/pop event comparison (the path is
+  compared instead), the patched `length_cost`/`_preference_cost` warm-cache
+  check (a warm cache must still answer as the reference) and the point
+  identity/IndexError checks.
+- Skipped: `test_snapshot_defensively_copies_axes_resources_sites_and_layer_preferences`
+  (Rust `Graph` owns its data; `Graph::with` is checked for a fresh cache) and
+  `test_complete_route_artifact_and_fingerprints_match_frozen_search`
+  (monkeypatched `_search` inside `route_global`).
+
+### routing_acceptance
+- `route_case` is private to the `copper` binary; the test repeats its
+  pipeline options.
+
+### global_reserved_access
+- `FanoutResult.routing_accesses` is built in the test from `accesses` and
+  `surface_accesses`. The hard-macro asset of `test_hard_macros.py::fixture`
+  and `_array_board` of `test_pad_via_arrays.py` are rebuilt locally (the test
+  registers the via-in-pad array materializer as the binary does).
+- Adapted: the checked-corner test patched `local_access_path` and used a
+  hand-built two-node graph; it uses the real graph and checks the result.
+
+### unified_span_guides
+- `technology`/`four_layer` moved to `support_routers/boards.rs`.
+- Skipped: `test_guides_survive_every_repair_router` (subclassed `_Router` to
+  observe every repair router).
+
 ## Remaining files (in order)
 
-global_target_via_cost, global_search_static_cache, routing_acceptance,
-global_reserved_access, global_access_launch_diversity, unified_span_guides,
 routing_hotspot_caches, region_blocker_repair, global_via_refinement,
 global_edge_strip, released_escape_revalidation, reference_escape_geometry,
 global_breakout_demand, escape_capacity, unified_via_budget_pressure,
