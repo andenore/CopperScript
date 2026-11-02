@@ -38,6 +38,7 @@ test that loops over its cases.
 | test_plane_local_ground_regions.py | 4 | 0 | 0 | `tests/plane_local_ground_regions.rs` (parametrized cases loop) |
 | test_via_pad_policy.py | 3 | 0 | 0 | `tests/via_pad_policy.rs` (parametrized cases loop) |
 | test_plane_estimate.py | 3 (none already present: `src/plane_estimate.rs` only tests `label`) | 0 | 0 | `tests/plane_estimate.rs` |
+| test_native_fill_crossings.py | 1 | 2: the `_EdgeYIndex` parity-accelerator cases (Python internals: Rust's `native_fill_polygon` has no edge index) | 0 | `tests/native_fill_crossings.rs` |
 
 ## Notes
 
@@ -212,3 +213,7 @@ test that loops over its cases.
 - `test_plane_estimate.py`: Rust's `PlaneEstimate` has no `report()`; the
   tests read `open_pads` and take the open nets as the nets with more than
   one group, as `report()["open_nets"]` did.
+
+- `test_native_fill_crossings.py`: shapely's `area` and `covers(point)`
+  become the shoelace area of the decoded rings and a positive
+  `convex_overlap` with a 0.5-unit square around the point.
