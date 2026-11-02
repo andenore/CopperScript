@@ -615,3 +615,30 @@ mod two_leg_fanout {
         assert!(maze(&FanoutOptions { maze_state_budget: 1, ..settings }).is_empty());
     }
 }
+
+/// `tests/test_via_hole_clearance.py`: global via capacity sites.
+mod via_hole_clearance {
+    use super::support_planes::*;
+    use crate::RoutingClearanceIndex;
+    use crate::routing::legal_via_sites;
+    use copper_pcb::board::Via;
+    use copper_physical::CopperLayer;
+
+    #[test]
+    fn global_via_capacity_sites_can_coexist_on_distinct_nets() {
+        let mut base = board("hole-clearance", 20.0, 20.0);
+        base.nets = vec![net("A", &[]), net("B", &[])];
+        base.rules.minimum_clearance_nm = 100_000;
+        base.rules.default_via_size_nm = 450_000;
+        base.rules.default_via_drill_nm = 200_000;
+        let index = RoutingClearanceIndex::new(&base).unwrap();
+        let sites =
+            legal_via_sites(&base, &index, mm(10.0, 10.0), 3_000_000, CopperLayer::Front, CopperLayer::Back).unwrap();
+        assert!(sites.len() > 1, "{sites:?}");
+        // Annulus clearance alone permits 0.55 mm pitch; drill-to-annulus
+        // clearance requires 0.575 mm for this common 0.45/0.20 mm via.
+        let proposals: Vec<Via> =
+            sites.iter().enumerate().map(|(i, p)| via(&format!("net-{i}"), *p, 450_000, 200_000)).collect();
+        assert!(index.candidate_vias_clear(&proposals).unwrap());
+    }
+}
