@@ -34,6 +34,7 @@ test that loops over its cases.
 | test_decoupling_cell_maze.py | 4 | 1: the shared-budget case (counted `local_access_path` calls and their `maximum_states` through a monkeypatch: Python internals) | 0 | `tests/decoupling_cell_maze.rs` (2); `src/test_support_planes.rs` (2: `cell_maze_launches`) |
 | test_cli_router_flags.py | 7 | 0 | 0 | `crates/copper/tests/cli_router_flags.rs` (see notes) |
 | test_via_layer_contacts.py | 3 | 1: native smoothing DRC with an installed KiCad CLI (`kicad-cli` not installed) | 0 | `src/test_support_planes.rs` (parametrized finishes loop) |
+| test_route_style.py | 4 | 0 (the `allow_movable_conflicts=True` half of the immutable-obstacle case: Rust has no such mode) | 0 | `tests/route_style.rs` |
 
 ## Notes
 
