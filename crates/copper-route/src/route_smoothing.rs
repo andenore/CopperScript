@@ -504,7 +504,7 @@ fn touched_pads(
 }
 
 /// `_contacts_preserved`: no new explicit-copper islands, every via keeps each layer's track contact.
-fn contacts_preserved(
+pub(crate) fn contacts_preserved(
     board: &PhysicalBoard,
     net: &PhysicalNet,
     before: &[TrackSegment],

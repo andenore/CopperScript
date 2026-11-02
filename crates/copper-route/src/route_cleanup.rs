@@ -48,7 +48,7 @@ fn robust_via(via: &Via) -> RoundedConvexShape {
 }
 
 /// `_net_pad_shapes`: (layers, shape) of every physical land of `net`, with group members.
-fn net_pad_shapes(board: &PhysicalBoard, net: &str) -> Vec<(Vec<CopperLayer>, RoundedConvexShape)> {
+pub(crate) fn net_pad_shapes(board: &PhysicalBoard, net: &str) -> Vec<(Vec<CopperLayer>, RoundedConvexShape)> {
     let mut numbers: IndexMap<&str, IndexSet<&str>> = IndexMap::new();
     for item in board.nets.iter().filter(|item| item.name == net) {
         for pad in &item.pads {
@@ -80,12 +80,12 @@ fn net_pad_shapes(board: &PhysicalBoard, net: &str) -> Vec<(Vec<CopperLayer>, Ro
 }
 
 /// `_Settler`: the robust contact score for one net's copper.
-struct Settler<'a> {
-    board: &'a PhysicalBoard,
-    name: &'a str,
-    net: &'a PhysicalNet,
-    pads: Vec<(Vec<CopperLayer>, RoundedConvexShape)>,
-    order: Vec<CopperLayer>,
+pub(crate) struct Settler<'a> {
+    pub(crate) board: &'a PhysicalBoard,
+    pub(crate) name: &'a str,
+    pub(crate) net: &'a PhysicalNet,
+    pub(crate) pads: Vec<(Vec<CopperLayer>, RoundedConvexShape)>,
+    pub(crate) order: Vec<CopperLayer>,
 }
 
 impl Settler<'_> {
@@ -93,7 +93,7 @@ impl Settler<'_> {
         self.order.iter().position(|item| *item == layer).expect("a stackup layer")
     }
 
-    fn via_layers(&self, via: &Via, tracks: &[TrackSegment]) -> Result<IndexSet<CopperLayer>> {
+    pub(crate) fn via_layers(&self, via: &Via, tracks: &[TrackSegment]) -> Result<IndexSet<CopperLayer>> {
         let mut contact = via_copper_contact(self.board, via, "via".to_owned())?;
         let mut layers: IndexSet<CopperLayer> = IndexSet::new();
         for track in tracks {

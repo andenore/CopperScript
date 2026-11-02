@@ -804,3 +804,97 @@ mod decoupling_cell_maze {
         assert_eq!(launches(&board, &link.net, &link.target, true, 0), (0, 0));
     }
 }
+
+/// `tests/test_via_layer_contacts.py`: a redundant route must not hide a lost
+/// electrical contact on one via layer.
+mod via_layer_contacts {
+    use super::support_planes::*;
+    use crate::RoutingClearanceIndex;
+    use crate::route_cleanup::{Settler, net_pad_shapes};
+    use crate::route_smoothing::{contacts_preserved, smooth_owned_tracks};
+    use copper_drc::connectivity::{CopperContact, copper_contacts_overlap, via_copper_contact};
+    use copper_pcb::board::{Stackup, TrackSegment, Via};
+    use copper_physical::{CopperLayer, RoundedConvexShape};
+    use indexmap::IndexSet;
+
+    const F: CopperLayer = CopperLayer::Front;
+    const B: CopperLayer = CopperLayer::Back;
+
+    fn shape(spine: Vec<copper_physical::Point>, radius_nm: i64) -> RoundedConvexShape {
+        RoundedConvexShape::new(spine, radius_nm).unwrap()
+    }
+
+    fn contact(layer: CopperLayer, shape: RoundedConvexShape) -> CopperContact {
+        CopperContact {
+            identity: "track".to_owned(),
+            net: "N".to_owned(),
+            layers: vec![layer],
+            shape,
+            drill: None,
+            capped_layers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn smoothing_preserves_redundant_positive_via_layer_contact() {
+        let (board, before, tangent) = via_layer_board();
+        let net = &board.nets[0];
+        // The tangent keeps every pad connected through the second via, but
+        // the first via loses its F.Cu contact.
+        assert!(!contacts_preserved(&board, net, &before, &tangent).unwrap());
+        let mut complete = board.clone();
+        complete.tracks.extend(before.iter().cloned());
+        let mut index = RoutingClearanceIndex::new(&complete).unwrap();
+        let result = smooth_owned_tracks(&board, &before, &mut index, 2).unwrap();
+        assert!(contacts_preserved(&board, net, &before, &result).unwrap());
+        assert_ne!(result, tangent);
+    }
+
+    #[test]
+    fn via_contact_preserves_drill_cap_and_actual_span() {
+        let inner = CopperLayer::In1;
+        let layers = [F, inner, B];
+        let mut board = board("span", 10.0, 10.0);
+        board.stackup = Stackup::new(layers.to_vec());
+        for finish in ["standard", "filled-capped"] {
+            let mut through = via("N", mm(5.0, 5.0), nm(0.6), nm(0.3));
+            through.finish = finish.to_owned();
+            let via_contact = via_copper_contact(&board, &through, "via".to_owned()).unwrap();
+            // Copper wholly inside the drill touches only a capped exterior layer.
+            let inside = shape(vec![mm(5.0, 5.0), mm(5.1, 5.0)], nm(0.02));
+            for layer in layers {
+                let expected = finish == "filled-capped" && (layer == F || layer == B);
+                assert_eq!(
+                    copper_contacts_overlap(&via_contact, &contact(layer, inside.clone())),
+                    expected,
+                    "{finish} {layer:?}"
+                );
+            }
+            let blind = Via { to_layer: inner, ..through };
+            let blind = via_copper_contact(&board, &blind, "via".to_owned()).unwrap();
+            let annulus = shape(vec![mm(5.2, 5.0)], nm(0.02));
+            assert!(copper_contacts_overlap(&blind, &contact(inner, annulus.clone())), "{finish}");
+            assert!(!copper_contacts_overlap(&blind, &contact(B, annulus)), "{finish}");
+        }
+    }
+
+    #[test]
+    fn cleanup_layer_count_rejects_robust_boundary_tangency_and_open_drill() {
+        let (board, _, tangent) = via_layer_board();
+        let settle = Settler {
+            board: &board,
+            name: "N",
+            net: &board.nets[0],
+            pads: net_pad_shapes(&board, "N"),
+            order: board.stackup.copper_layers.clone(),
+        };
+        // Its annulus exactly touches the track after the cleanup contact margin.
+        let moved = Via { position: mm(5.0, 5.799), ..board.vias[0].clone() };
+        assert_eq!(settle.via_layers(&moved, &tangent).unwrap(), IndexSet::new());
+        let inside =
+            TrackSegment { start: moved.position, end: mm(5.1, 5.799), width_nm: nm(0.04), ..tangent[0].clone() };
+        assert_eq!(settle.via_layers(&moved, std::slice::from_ref(&inside)).unwrap(), IndexSet::new());
+        let capped = Via { finish: "filled-capped".to_owned(), ..moved };
+        assert_eq!(settle.via_layers(&capped, &[inside]).unwrap(), IndexSet::from([F]));
+    }
+}

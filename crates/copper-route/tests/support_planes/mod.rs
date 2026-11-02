@@ -603,3 +603,30 @@ pub fn ball_grid(size_n: i64, ball_mm: f64, plane: &[i64]) -> PhysicalBoard {
     };
     board
 }
+
+/// `via_layer_board` of `tests/test_via_layer_contacts.py`: pads A and B on
+/// the front, C on the back, all on net N. Fixed copper reaches C through two
+/// vias, so every pad stays connected even if the first via loses F.Cu.
+/// Returns the board, a three-segment front route from A to B passing the
+/// first via's annulus, and its straight tangent replacement.
+pub fn via_layer_board() -> (PhysicalBoard, Vec<TrackSegment>, Vec<TrackSegment>) {
+    let line =
+        |a: (f64, f64), b: (f64, f64), layer: CopperLayer| track("N", mm(a.0, a.1), mm(b.0, b.1), nm(0.2), layer);
+    let (front, back) = (CopperLayer::Front, CopperLayer::Back);
+    let mut board = board("ViaLayer", 14.0, 12.0);
+    add_footprint(&mut board, footprint("pad", vec![pad("1", Point::new(0, 0), size(0.6, 0.6))], size(1.0, 1.0)));
+    let mut c = place("C", "pad", mm(5.0, 8.0));
+    c.side = copper_physical::BoardSide::Back;
+    board.placements = vec![place("A", "pad", mm(3.0, 5.4)), place("B", "pad", mm(8.0, 5.4)), c];
+    board.nets = vec![net("N", &[("A", "1"), ("B", "1"), ("C", "1")])];
+    board.tracks = vec![
+        line((8.0, 5.4), (8.8, 5.4), front),
+        line((5.0, 5.8), (5.0, 8.0), back),
+        line((8.8, 5.4), (8.8, 8.0), back),
+        line((8.8, 8.0), (5.0, 8.0), back),
+    ];
+    board.vias = [(5.0, 5.8), (8.8, 5.4)].iter().map(|(x, y)| via("N", mm(*x, *y), nm(0.6), nm(0.3))).collect();
+    let points = [(3.0, 5.4), (3.25, 5.65), (7.75, 5.65), (8.0, 5.4)];
+    let before = points.windows(2).map(|pair| line(pair[0], pair[1], front)).collect();
+    (board, before, vec![line(points[0], points[3], front)])
+}

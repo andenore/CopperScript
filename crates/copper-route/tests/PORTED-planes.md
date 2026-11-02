@@ -33,6 +33,7 @@ test that loops over its cases.
 | test_decoupling_track_containment.py | 5 | 0 | 0 | `src/test_support_planes.rs` (parametrized cases loop) |
 | test_decoupling_cell_maze.py | 4 | 1: the shared-budget case (counted `local_access_path` calls and their `maximum_states` through a monkeypatch: Python internals) | 0 | `tests/decoupling_cell_maze.rs` (2); `src/test_support_planes.rs` (2: `cell_maze_launches`) |
 | test_cli_router_flags.py | 7 | 0 | 0 | `crates/copper/tests/cli_router_flags.rs` (see notes) |
+| test_via_layer_contacts.py | 3 | 1: native smoothing DRC with an installed KiCad CLI (`kicad-cli` not installed) | 0 | `src/test_support_planes.rs` (parametrized finishes loop) |
 
 ## Notes
 
@@ -197,3 +198,9 @@ test that loops over its cases.
   (congestion budget 4/2/0; `fine_regions` off/arrays/dense); the
   direct-mode overrides are covered by the in-crate
   `expert_overrides_govern_direct_mode_and_reports`.
+
+- `test_via_layer_contacts.py`: `route_smoothing::contacts_preserved`,
+  `route_cleanup::Settler` (its fields and `via_layers`) and
+  `route_cleanup::net_pad_shapes` are `pub(crate)`. Rust's
+  `via_copper_contact` takes the stackup from a board, so the span case
+  builds a three-layer board instead of passing the layers.
