@@ -125,6 +125,19 @@ pub(crate) mod test_support_critical;
 mod test_support_planes;
 
 pub use copper_pcb::{Error, Result};
+
+/// Install copper-route's implementations of the hooks the lower crates
+/// cannot call directly (they would form a crate cycle): placement's
+/// decoupling-access pass (the decoupler router) and the via-in-pad array
+/// materializer (the routing clearance index). Idempotent; the routing and
+/// placement-for-routing entry points call it, and so does every binary
+/// that plans placement through `copper-place` alone.
+pub fn install_hooks() {
+    copper_place::planner::register_decoupling_pass(|board, placements, options, progress| {
+        decoupling::improve_decoupling_placement(board, placements, options, progress)
+    });
+    copper_drc::macros::register_array_materializer(pad_via_arrays::materialize_via_in_pad_arrays);
+}
 pub use progress::{Progress, emit};
 pub use pypath::display as pypath_display;
 pub use routing::{GlobalRouterOptions, GlobalRoutingResult, GlobalRoutingStatus, route_global};

@@ -104,8 +104,9 @@ fn bypass_placement_moves_feed_land_near_actual_pin_without_constraint() {
 }
 
 #[test]
-#[ignore = "copper-place's decoupling-access phase reports NotImplemented for a movable pin-associated decoupler (it needs the decoupler router)"]
 fn default_planner_consumes_decoupling_role_without_distance_rules() {
+    // The planner's decoupling-access pass is the decoupler router.
+    copper_route::install_hooks();
     let mut board = bypass_board();
     board.placement_rules = vec![ComponentPlacementRule {
         fixed_position: Some(board.placements[0].position),

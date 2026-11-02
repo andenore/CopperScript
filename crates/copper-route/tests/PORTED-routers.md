@@ -40,7 +40,7 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | region_blocker_repair | 5 | 4 | 1 | 0 | copper-place `src/legalize.rs` `tests` (4) |
 | global_via_refinement | 5 | 5 | 0 | 0 | `src/routing.rs` `tests` (5) |
 | global_edge_strip | 5 | 5 | 0 | 0 | `tests/global_edge_strip.rs` (5) |
-| released_escape_revalidation | 4 | 0 | 4 | 0 | none |
+| released_escape_revalidation | 4 | 4 | 0 | 0 | `src/flow.rs` `released_escape_revalidation` (4) |
 | global_breakout_demand | 4 | 4 | 0 | 0 | `src/routing.rs` `tests` (4) |
 | escape_capacity | 4 | 0 | 4 | 0 | none |
 | reference_escape_geometry | 4 | 1 | 3 | 0 | `tests/routing_quality.rs` (1) |
@@ -61,7 +61,7 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | detailed_routing | 2 | 2 | 0 | 0 | `tests/detailed_routing.rs` (2) |
 | routing_review_regressions | 1 | 1 | 0 | 0 | `tests/routing_review_regressions.rs` (1) |
 | routing_hotpath_equivalence | 1 | 1 | 0 | 0 | `src/fanout.rs` `tests` (1) |
-| routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
+| routing_quality | 14 | 13 | 1 | 0 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
 **Status: complete.** All 51 files are done: 441 Python tests, 363 ported (1 of
 them `#[ignore]`d), 78 skipped.
@@ -164,9 +164,9 @@ Rust changes made for the ports: `router::index_holds` guard in
   (monkeypatched `route_global`).
 
 ### routing_quality
-- Ignored: `default_planner_consumes_decoupling_role_without_distance_rules`:
-  copper-place's decoupling-access phase reports NotImplemented for a
-  movable pin-associated decoupler (Rust gap, not a test problem).
+- `default_planner_consumes_decoupling_role_without_distance_rules` calls
+  `copper_route::install_hooks()` first: copper-place's decoupling-access
+  phase is the decoupler router, registered from copper-route.
 - Skipped: `test_nested_module_decoupling_endpoint_is_qualified` exercised the
   private elaboration helpers `_expand_one`/`_Template` of the language.
 - The prototype board is `compile_design_source` + `physicalize(Proxy)` at
@@ -270,11 +270,9 @@ Rust changes made for the ports: `router::index_holds` guard in
 ### unified_review_constraints
 - Skipped: `test_native_fill_confirms_the_plane_lead_in_connection` (needs a
   native `kicad-cli` refill).
-- Adapted: `test_expired_deadline_stops_before_starting_nets` keeps only the
-  `unified_setup` case: the Rust router buffers negotiation progress events
-  and forwards them after `negotiate` returns, so an observer cannot expire
-  the budget at `unified_iteration` start (a progress-timing difference, not
-  fixed). The patched clock is a 0.5 s budget the observer sleeps past.
+- `test_expired_deadline_stops_before_starting_nets`: both cases (negotiation
+  progress events reach the observer live). The patched clock is a 0.5 s
+  budget the observer sleeps past.
 ### routing_clearance_remove
 - The fixture (board, deterministic copper, every public answer) is
   `support_routers/clearance_remove.rs`; answers are compared as `Debug`
@@ -342,8 +340,15 @@ Rust changes made for the ports: `router::index_holds` guard in
   checked to pass deterministically without overflow or hotspots.
 
 ### released_escape_revalidation
-- Skipped (all 4): `flow._revalidate_released_escapes` is not ported (the
-  Rust pipeline reports it not implemented).
+- Ported as crate-private unit tests of `flow::revalidate_released_escapes`.
+  The monkeypatched `verify_crosslayer_decoupling` of the rollback test is
+  an injected witness check (`revalidate_released_escapes_with`).
+- Added: `src/flow.rs` `released_escape_planning`: `plan_decouplers` without
+  launch options releases a ring of reservations that walls in a supply pad,
+  and revalidation does not mistake the renumbered survivor for a released
+  keepout (released keepouts are matched whole, not by id). In the pipeline
+  this path is unreachable while `reserved` implies launch options (planning
+  swaps instead of releasing), as in Python.
 
 ### global_breakout_demand
 - Unit tests in `routing.rs` on the hand-built graph.
