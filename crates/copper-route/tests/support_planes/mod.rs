@@ -630,3 +630,45 @@ pub fn via_layer_board() -> (PhysicalBoard, Vec<TrackSegment>, Vec<TrackSegment>
     let before = points.windows(2).map(|pair| line(pair[0], pair[1], front)).collect();
     (board, before, vec![line(points[0], points[3], front)])
 }
+
+/// `scene` of `tests/test_plane_local_ground_regions.py`: a package `name`
+/// at (10, 10) mm rotated by `rotation` degrees, whose seven interleaved
+/// front lands alternate signals S1/S3/S5/S7 and GND (2, 4, 6) at local
+/// y = -3 mm; an In1.Cu GND plane, a reserved front/back GND region over the
+/// package (local -2..2 x -1.8..2 mm) and one held GND via at (17, 17).
+pub fn local_ground_scene(rotation: i64, name: &str) -> (PhysicalBoard, Placement) {
+    let mut board = board("LocalReturns", 20.0, 20.0);
+    let lands = [-1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5]
+        .iter()
+        .enumerate()
+        .map(|(i, x)| pad(&(i + 1).to_string(), mm(*x, -3.0), size(0.25, 1.9)))
+        .collect();
+    add_footprint(&mut board, footprint("interleaved", lands, size(8.0, 8.0)));
+    let pose = place_rotated(name, "interleaved", mm(10.0, 10.0), rotation);
+    let local: Vec<Point> = [(-2.0, -1.8), (2.0, -1.8), (2.0, 2.0), (-2.0, 2.0)]
+        .iter()
+        .map(|(x, y)| copper_pcb::transform::transformed_local_point(&pose, mm(*x, *y)))
+        .collect();
+    let plane = zone("plane", "GND", &[CopperLayer::In1], rect(1.0, 1.0, 19.0, 19.0));
+    let region = CopperZone {
+        reserve_routing: true,
+        ..zone("local-return", "GND", &[CopperLayer::Front, CopperLayer::Back], local)
+    };
+    let mut nets = vec![net("GND", &[(name, "2"), (name, "4"), (name, "6")])];
+    for i in [1, 3, 5, 7] {
+        nets.push(net(&format!("S{i}"), &[(name, &i.to_string())]));
+    }
+    board.placements = vec![pose.clone()];
+    board.nets = nets;
+    board.stackup = four_layers();
+    board.zones = vec![plane, region];
+    board.vias = vec![via("GND", mm(17.0, 17.0), 450_000, 200_000)];
+    board.rules = DesignRules {
+        default_track_width_nm: 200_000,
+        minimum_clearance_nm: 200_000,
+        default_via_size_nm: 450_000,
+        default_via_drill_nm: 200_000,
+        ..DesignRules::default()
+    };
+    (board, pose)
+}
