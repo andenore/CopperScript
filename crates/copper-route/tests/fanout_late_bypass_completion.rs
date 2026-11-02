@@ -9,7 +9,7 @@ mod support_planes;
 use copper_pcb::board::{DecouplingLink, PadReference, PhysicalBoard};
 use copper_physical::footprint::Size;
 use copper_physical::{CopperLayer, Point};
-use copper_route::bypass_reservations::{BypassReservation, verified_bypass_reservations};
+use copper_route::bypass_reservations::verified_bypass_reservations;
 use copper_route::decoupling_paths::{
     DecouplingCrossLayerWitness, ProposalBounds, propose_crosslayer_decoupling, validate_crosslayer_witness,
     verify_crosslayer_decoupling,
@@ -20,19 +20,6 @@ use copper_route::pin_escape::RoutingAccess;
 use indexmap::{IndexMap, IndexSet};
 use support_planes::decoupling::*;
 use support_planes::*;
-
-fn reservation(result: &FanoutResult) -> BypassReservation {
-    BypassReservation {
-        board: result.board.clone(),
-        created_tracks: result.created_tracks.clone(),
-        created_vias: result.created_vias.clone(),
-        added_track_count: result.added_track_count,
-        added_via_count: result.added_via_count,
-        decoupling_tracks: result.decoupling_tracks.clone(),
-        decoupling_vias: result.decoupling_vias.clone(),
-        decoupling_witnesses: result.decoupling_witnesses.clone(),
-    }
-}
 
 /// `verified_bypass_reservations(source, result)[2]`: why the final semantic
 /// ledger is not covered by actual paths, if it is not.

@@ -42,6 +42,7 @@ test that loops over its cases.
 | test_stackup_vias.py | 2 | 0 | 0 | `tests/stackup_vias.rs` |
 | test_autonomous_plane_access.py | 2 | 0 | 0 | `tests/autonomous_plane_access.rs` (1); `crates/copper/src/route_board.rs` `option_tests` (1, the CLI defaults) |
 | test_released_plane_bypass.py | 0 | 1: the unknown-retry-trigger rejection (Rust's `complete_late_bypasses` has no `trigger` parameter, so there is no unknown trigger to reject) | 0 | none |
+| test_crosslayer_fanout_budgets.py | 1 | 0 | 0 | `tests/crosslayer_fanout_budgets.rs` (parametrized cases loop) |
 
 ## Notes
 
@@ -235,3 +236,7 @@ test that loops over its cases.
   documents, and `result == rerun` compares the documents, boards and
   locked copper. `board.zone_fills` becomes "no copper polygon invented".
   The `with_test_owners` helper was unused by the remaining tests.
+
+- `test_crosslayer_fanout_budgets.py`: `support_planes::decoupling::reservation`
+  (moved from `tests/fanout_late_bypass_completion.rs`) gives
+  `verified_bypass_reservations` the fanout result's semantic ledger.

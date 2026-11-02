@@ -97,6 +97,20 @@ pub fn existing_launches(renamed: bool) -> (PhysicalBoard, DecouplingLink) {
     (board, link)
 }
 
+/// A fanout result as the `BypassReservation` its semantic ledger describes.
+pub fn reservation(result: &FanoutResult) -> copper_route::bypass_reservations::BypassReservation {
+    copper_route::bypass_reservations::BypassReservation {
+        board: result.board.clone(),
+        created_tracks: result.created_tracks.clone(),
+        created_vias: result.created_vias.clone(),
+        added_track_count: result.added_track_count,
+        added_via_count: result.added_via_count,
+        decoupling_tracks: result.decoupling_tracks.clone(),
+        decoupling_vias: result.decoupling_vias.clone(),
+        decoupling_witnesses: result.decoupling_witnesses.clone(),
+    }
+}
+
 pub const EARLY_UNAVAILABLE: &str = "early source launch unavailable";
 
 /// `incumbent_scene`: the source board without copper, the link, an
