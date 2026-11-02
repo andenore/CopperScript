@@ -95,7 +95,7 @@ fn repair_board(connector: &[&str], (upper, lower): (&str, &str), obstacle: [&st
 /// package row, an obstacle just above the middle lane. Outermost first, the
 /// middle pair (routed last) finds no path past the bottom pair's copper;
 /// middle first, then bottom, succeeds.
-fn repairable() -> PhysicalBoard {
+pub(super) fn repairable() -> PhysicalBoard {
     repair_board(&["-1.5", "-0.3", "0.9"], ("7.0", "13.0"), ["14", "8.6", "15.5", "10.0"])
 }
 

@@ -52,9 +52,12 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_pair_staggered_contacts.py | 1 | 1 | 0 | 0 | `src/critical_tests/pair_staggered_contacts.rs` |
 | test_pair_lateral_ports.py | 1 | 1 | 0 | 0 | `src/critical_tests/pair_lateral_ports.rs` |
 | test_pair_departure.py | 1 | 1 | 0 | 0 | `src/critical_tests/pair_departure.rs` |
+| test_critical_stage_planning.py | 3 | 3 | 0 | 0 | `src/critical_tests/critical_stage_planning.rs` |
+| test_critical_return_preparation.py | 3 | 3 | 0 | 0 | `src/critical_tests/critical_return_preparation.rs` |
+| test_loose_pair_repair.py | 2 | 2 | 0 | 0 | `src/critical_tests/loose_pair_repair.rs`; the issue-list title in `crates/copper/tests/critical_cli.rs` |
 
-**Totals so far:** 43 of 46 files, 278 Python tests: 233 ported, 45
-skipped, 0 ignored.
+**Totals:** 46 of 46 files, 283 Python tests: 241 ported, 42 skipped, 0
+ignored (the earlier running total over-counted three tests).
 
 Rust bugs found and fixed by the ports:
 - `pair_vias::return_via` accepted a clearance index bound to another source
@@ -63,9 +66,11 @@ Rust bugs found and fixed by the ports:
   (`test_critical_bundles.py`).
 - `route-board` length-option errors lost Python's positive/nonnegative wording
   (`test_pair_terminal_fallback.py`).
+- `critical_progress` (the `critical_group` progress events) dropped the
+  `repairs` detail Python emitted for a failed group's rip-up attempts
+  (`test_loose_pair_repair.py`); telemetry only, routing is unchanged.
 
-Remaining files, in the assigned order: critical_stage_planning,
-critical_return_preparation, loose_pair_repair.
+Remaining files: none.
 
 ## Notes
 
@@ -343,3 +348,25 @@ successful bounded search and its owner acceptance are ported.
 Skipped:
 - `pair_approach_ranking::negative_approach_hint_does_not_remove_ports`:
   only observable through the patched `_departure_preferences`.
+
+### test_critical_stage_planning.py
+
+- `the_pair_no_longer_cuts_the_planar_net_and_the_board_keeps_its_rules`:
+  the first pipeline run with `promote_planar_nets` patched away has no
+  seam; the promoted run is checked. Python's `result.board` is the detailed
+  stage's board.
+- The hard-macro fixture of `test_hard_macros.py` is bound from an inline
+  asset document.
+
+### test_critical_return_preparation.py
+
+- `required_returns_are_prepared_before_critical_routing`: the
+  `critical-inputs` stage is saved with `critical_inputs_state_text`, read
+  back and replayed with `replay_critical` (which takes no unified options in
+  Rust).
+
+### test_loose_pair_repair.py
+
+Rust bug found and fixed: the `critical_group` progress events dropped the
+`repairs` detail of a failed group's rip-up attempts. The issue-list title
+is checked through `copper issues --json` on the real routed report.

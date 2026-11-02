@@ -1,8 +1,9 @@
 //! Critical-routing CLI cases of the former Python suite (d39067a):
 //! `copper replay-critical` on saved source-only inputs
-//! (`test_critical_replay.py`) and `route-board` computational bounds
-//! (`test_pair_terminal_fallback.py`) and critical-lane review
-//! (`test_critical_lane_review.py`).
+//! (`test_critical_replay.py`), `route-board` computational bounds
+//! (`test_pair_terminal_fallback.py`), critical-lane review
+//! (`test_critical_lane_review.py`) and the loose-pair repair issue
+//! (`test_loose_pair_repair.py`).
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -211,4 +212,126 @@ fn route_board_reports_the_review_of_the_exported_copper() {
     assert_eq!(field(&pairs[0], "lengths_nm"), Value::Array(lengths));
     let line = copper_route::critical_review::lane_review_line(review);
     assert!(stdout.lines().any(|item| item == line), "{stdout}");
+}
+
+/// `test_loose_pair_repair.py::_loose_board`: U1 sends LANE_A to J1 and
+/// LANE_B to the sealed J2; no bundle joins them.
+fn loose_board() -> copper_pcb::board::PhysicalBoard {
+    let land = |number: &str, x: i64, y: i64, height: i64| FootprintPad {
+        number: number.to_owned(),
+        position: Point::new(x, y),
+        size: Size { width_nm: 600_000, height_nm: height },
+        ..pad(number, 0)
+    };
+    let footprint = |name: &str, pads: Vec<FootprintPad>, height: i64| PhysicalFootprint {
+        name: name.to_owned(),
+        pads,
+        body_size: Size { width_nm: 3 * MM, height_nm: height },
+        source_library_id: None,
+        graphics: Vec::new(),
+        keepouts: Vec::new(),
+        metadata: IndexMap::new(),
+        courtyard: Vec::new(),
+        height_nm: None,
+        clearance_nm: None,
+        exclude_from_bom: false,
+        exclude_from_pos_files: false,
+        internal_pad_groups: Vec::new(),
+    };
+    let package = footprint(
+        "test/package-two-pairs",
+        vec![
+            land("1", 1_400_000, -1_250_000, 250_000),
+            land("2", 1_400_000, -750_000, 250_000),
+            land("3", 1_400_000, 750_000, 250_000),
+            land("4", 1_400_000, 1_250_000, 250_000),
+        ],
+        8 * MM,
+    );
+    let connector = footprint(
+        "test/connector-pair",
+        vec![land("1", -1_400_000, -200_000, 200_000), land("2", -1_400_000, 200_000, 200_000)],
+        2 * MM,
+    );
+    let zero = Decimal::zero();
+    let poses = vec![
+        Placement::new("U1", &package.name, Point::new(8 * MM, 10 * MM), &zero).unwrap(),
+        Placement::new("J1", &connector.name, Point::new(22 * MM, 6 * MM), &zero).unwrap(),
+        Placement::new("J2", &connector.name, Point::new(22 * MM, 14 * MM), &zero).unwrap(),
+    ];
+    let net = |name: &str, pads: [(&str, &str); 2]| PhysicalNet {
+        name: name.to_owned(),
+        pads: pads.iter().map(|(component, pad)| PadReference::new(component, pad)).collect(),
+    };
+    let nets = vec![
+        net("LANE_A_P", [("U1", "1"), ("J1", "1")]),
+        net("LANE_A_N", [("U1", "2"), ("J1", "2")]),
+        net("LANE_B_P", [("U1", "3"), ("J2", "1")]),
+        net("LANE_B_N", [("U1", "4"), ("J2", "2")]),
+    ];
+    let mut board = board(
+        "LoosePairs",
+        BoardOutline::rectangle(30 * MM, 20 * MM, None).unwrap(),
+        IndexMap::from([(package.name.clone(), package), (connector.name.clone(), connector)]),
+        poses,
+        nets,
+    );
+    board.rules.minimum_clearance_nm = 100_000;
+    board.rules.minimum_track_width_nm = 100_000;
+    board.rules.default_track_width_nm = 200_000;
+    let sealed = [(18, 11), (26, 11), (26, 17), (18, 17)].map(|(x, y)| Point::new(x * MM, y * MM)).to_vec();
+    board.copper_keepouts = vec![copper_route::routing_acceptance::keepout(
+        "sealed-connector",
+        vec![copper_physical::CopperLayer::Front, copper_physical::CopperLayer::Back],
+        sealed,
+    )];
+    board.net_routing_rules = [("LANE_A", 110), ("LANE_B", 100)]
+        .into_iter()
+        .flat_map(|(name, priority)| {
+            let (p, n) = (format!("{name}_P"), format!("{name}_N"));
+            [(p.clone(), n.clone()), (n, p)].map(|(net, partner)| NetRoutingRule {
+                kind: RouteKind::Differential,
+                priority,
+                width_nm: Some(200_000),
+                differential_partner: Some(partner),
+                pair_gap_nm: Some(200_000),
+                ..general_rule(&net)
+            })
+        })
+        .collect();
+    board
+}
+
+/// `test_loose_pair_repair.py::test_a_failed_loose_pair_records_the_rip_up_it_tried`:
+/// the issue list names the rip-up the failed loose pair tried.
+#[test]
+fn issues_name_the_rip_up_a_failed_loose_pair_tried() {
+    let directory = scratch("loose-pair-repair");
+    let board = loose_board();
+    let global = copper_route::route_global(&board, &copper_route::GlobalRouterOptions::default(), None, None, None)
+        .expect("global route");
+    let options = copper_route::critical::CriticalOptions { pair_state_limit: Some(2000), ..Default::default() };
+    let result = copper_route::critical::route_critical_nets(board, &global, &options, None).expect("critical");
+    let lane_b = &result.nets[1];
+    assert!(!lane_b.connected && lane_b.repairs.len() == 1);
+    let states = lane_b.repairs[0].search_states;
+    let document = copper_json::parse(&result.to_json().expect("JSON")).expect("a document");
+    let report = Value::Object(copper_json::Object::from([("critical".to_owned(), document)]));
+    std::fs::write(directory.join("route-report.json"), copper_json::Dumps::new().dumps(&report)).expect("report");
+    let output = Command::new(env!("CARGO_BIN_EXE_copper"))
+        .args(["issues", &directory.to_string_lossy(), "--json"])
+        .output()
+        .expect("the copper binary runs");
+    assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+    let Ok(Value::Object(listing)) = copper_json::parse(&String::from_utf8_lossy(&output.stdout)) else {
+        panic!("an issue listing")
+    };
+    let Value::Array(issues) = &listing["issues"] else { panic!("issues") };
+    assert_eq!(issues.len(), 1);
+    let Value::Object(issue) = &issues[0] else { panic!("an issue") };
+    assert_eq!(issue["code"], Value::from("CRITICAL-UNROUTED"));
+    assert_eq!(issue["nets"], Value::Array(vec![Value::from("LANE_B_N"), Value::from("LANE_B_P")]));
+    let title = issue["title"].as_str().expect("a title");
+    let tail = format!("; ripping up LANE_A_N/LANE_A_P did not help ({states} states)");
+    assert!(title.ends_with(&tail), "{title}");
 }

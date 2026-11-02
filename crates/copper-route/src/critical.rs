@@ -830,6 +830,23 @@ pub(crate) fn critical_progress(
                 Value::Array(result.rejection_examples.iter().map(|item| Value::from(item.as_str())).collect()),
             ));
         }
+        if !result.repairs.is_empty() {
+            let texts = |items: &[String]| Value::Array(items.iter().map(|item| Value::from(item.as_str())).collect());
+            let repairs = result
+                .repairs
+                .iter()
+                .map(|item| {
+                    object(vec![
+                        ("ripped_up", texts(&item.ripped_up)),
+                        ("accepted", Value::Bool(item.accepted)),
+                        ("reason", Value::from(item.reason.as_str())),
+                        ("search_states", Value::from(item.search_states)),
+                        ("pair_budget_exhausted", Value::Bool(item.pair_budget_exhausted)),
+                    ])
+                })
+                .collect();
+            details.push(("repairs", Value::Array(repairs)));
+        }
     }
     emit(on_progress, "critical_group", event, details);
 }

@@ -289,7 +289,7 @@ fn plan_array_frames(
 
 /// `_macro_port_halos`: keepouts beyond macro ports whose nets may change
 /// layer, for the escape and bypass planners only.
-fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::CopperKeepout>> {
+pub(crate) fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::CopperKeepout>> {
     let frame = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
     let rules: IndexMap<&str, _> = board.net_routing_rules.iter().map(|rule| (rule.net.as_str(), rule)).collect();
     let poses: IndexMap<&str, _> = board.placements.iter().map(|pose| (pose.reference.as_str(), pose)).collect();
