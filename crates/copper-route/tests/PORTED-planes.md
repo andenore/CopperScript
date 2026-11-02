@@ -37,6 +37,7 @@ test that loops over its cases.
 | test_route_style.py | 4 | 0 (the `allow_movable_conflicts=True` half of the immutable-obstacle case: Rust has no such mode) | 0 | `tests/route_style.rs` |
 | test_plane_local_ground_regions.py | 4 | 0 | 0 | `tests/plane_local_ground_regions.rs` (parametrized cases loop) |
 | test_via_pad_policy.py | 3 | 0 | 0 | `tests/via_pad_policy.rs` (parametrized cases loop) |
+| test_plane_estimate.py | 3 (none already present: `src/plane_estimate.rs` only tests `label`) | 0 | 0 | `tests/plane_estimate.rs` |
 
 ## Notes
 
@@ -207,3 +208,7 @@ test that loops over its cases.
   `route_cleanup::net_pad_shapes` are `pub(crate)`. Rust's
   `via_copper_contact` takes the stackup from a board, so the span case
   builds a three-layer board instead of passing the layers.
+
+- `test_plane_estimate.py`: Rust's `PlaneEstimate` has no `report()`; the
+  tests read `open_pads` and take the open nets as the nets with more than
+  one group, as `report()["open_nets"]` did.
