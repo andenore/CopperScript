@@ -163,10 +163,10 @@ fn review_reports_lengths_skew_spacing_coupling_and_bends() {
 
     assert_eq!(
         review["pairs"],
-        json(&format!(
-            r#"[{{"nets": ["A_N", "A_P"], "lengths_nm": [26000000, 26000000], "skew_nm": 0, "max_skew_nm": 500000, "status": "pass"}},
-                {{"nets": ["B_N", "B_P"], "lengths_nm": [11200000, 12000000], "skew_nm": 800000, "max_skew_nm": 100000, "status": "fail"}}]"#
-        ))
+        json(
+            r#"[{"nets": ["A_N", "A_P"], "lengths_nm": [26000000, 26000000], "skew_nm": 0, "max_skew_nm": 500000, "status": "pass"},
+                {"nets": ["B_N", "B_P"], "lengths_nm": [11200000, 12000000], "skew_nm": 800000, "max_skew_nm": 100000, "status": "fail"}]"#
+        )
     );
     assert_eq!(
         review["match_groups"],
