@@ -43,15 +43,33 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | released_escape_revalidation | 4 | 0 | 4 | 0 | none |
 | global_breakout_demand | 4 | 4 | 0 | 0 | `src/routing.rs` `tests` (4) |
 | escape_capacity | 4 | 0 | 4 | 0 | none |
+| reference_escape_geometry | 4 | 1 | 3 | 0 | `tests/routing_quality.rs` (1) |
+| unified_via_budget_pressure | 3 | 3 | 0 | 0 | `src/unified_router/tests.rs` (3) |
+| unified_pair_budget | 3 | 2 | 1 | 0 | `tests/unified_pair_budget.rs` (2) |
+| unified_lead_conflicts | 3 | 3 | 0 | 0 | `src/unified_router/tests.rs` (3) |
+| global_terminal_fallback_degree | 3 | 3 | 0 | 0 | `src/routing.rs` `tests` (3) |
+| global_polygon_keepouts | 3 | 3 | 0 | 0 | `tests/global_polygon_keepouts.rs` (3) |
+| global_access_diagnostics | 3 | 1 | 2 | 0 | `tests/global_polygon_keepouts.rs` (1) |
+| unified_existing_access | 2 | 2 | 0 | 0 | `tests/unified_existing_access.rs` (2) |
+| unified_direct_cli | 2 | 2 | 0 | 0 | `crates/copper/tests/unified_direct_cli.rs` (2) |
+| surface_package_escape | 2 | 2 | 0 | 0 | `tests/surface_package_escape.rs` (2) |
+| repair_search_reuse | 2 | 1 | 1 | 0 | `tests/repair_search_reuse.rs` (1) |
+| multi_land_routing | 2 | 0 | 2 | 0 | none |
+| global_terminal_capacity_priority | 2 | 2 | 0 | 0 | `src/routing.rs` `tests` (2) |
+| exact_escape | 2 | 0 | 2 | 0 | none |
+| escape_reservation_lifetime | 2 | 1 | 1 | 0 | `tests/escape_reservation_lifetime.rs` (1) |
+| detailed_routing | 2 | 2 | 0 | 0 | `tests/detailed_routing.rs` (2) |
+| routing_review_regressions | 1 | 1 | 0 | 0 | `tests/routing_review_regressions.rs` (1) |
+| routing_hotpath_equivalence | 1 | 1 | 0 | 0 | `src/fanout.rs` `tests` (1) |
 | routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
-**Status:** 33 of 51 files done: 399 Python tests, 333 ported (1 of them
-`#[ignore]`d), 66 skipped. The next file is `reference_escape_geometry`; about
-42 tests in 18 files remain (list below).
+**Status: complete.** All 51 files are done: 441 Python tests, 363 ported (1 of
+them `#[ignore]`d), 78 skipped.
 
 Rust changes made for the ports: `router::index_holds` guard in
 `Router::new` (bug fix, see unified_commit_index); `pub(crate)` on
 `rejection_text`, `tune_bus_skew`, `congestion_map`, `open_count`, `turn_table`,
+`route_net_budgeted`, `penalise`,
 `Router::{escape_bias, ball_field_via_mask, zone_regions, plane_via_taps}`;
 `#[cfg(test)]` modules in `routing.rs`, `routing_clearance.rs`, `fanout.rs`, copper-pcb `hard_macros.rs`, `escape_plan.rs`,
 `escape_assignment.rs`, `unified_router/tests.rs` and copper-place
@@ -334,12 +352,50 @@ Rust changes made for the ports: `router::index_holds` guard in
 - Skipped (all 4): `pcbir.escape_capacity` (the escape certificate) has no
   Rust implementation.
 
-## Remaining files (in order)
+### reference_escape_geometry
+- Skipped: the three `_interstitial_sites` tests (Rust's fanout has no
+  interstitial launch sites). The decoupler end-face test lives in
+  `tests/routing_quality.rs` beside its `bypass_board`.
 
-reference_escape_geometry, unified_via_budget_pressure,
-unified_pair_budget, unified_lead_conflicts, global_terminal_fallback_degree,
-global_polygon_keepouts, global_access_diagnostics, unified_existing_access,
-unified_direct_cli, surface_package_escape, repair_search_reuse,
-multi_land_routing, global_terminal_capacity_priority, exact_escape,
-escape_reservation_lifetime, detailed_routing, routing_review_regressions,
-routing_hotpath_equivalence.
+### unified_via_budget_pressure, unified_lead_conflicts
+- Unit tests in `unified_router/tests.rs` (`route_net_budgeted` and
+  `penalise` are now `pub(crate)`); one search, so `native` runs once.
+
+### unified_pair_budget
+- Skipped: `test_pipeline_forwards_the_pair_cap` (spied on
+  `flow.route_critical_nets`). `True`/`2.5` caps are JSON overrides.
+
+### global_terminal_fallback_degree, global_terminal_capacity_priority
+- Unit tests in `routing.rs` on hand-built graphs. Dropped: the
+  `local_access_path` call counts and tripwire; `check_hole_copper` has no
+  Rust parameter (the default check is used).
+
+### global_access_diagnostics
+- Skipped (monkeypatched `register_terminal_capacity` /
+  `_global_pin_access_candidates`): the two failure-cause report tests.
+
+### unified_direct_cli
+- Runs the `copper` binary. Dropped: the spies proving the legacy routers
+  are not called; the report's work limits, the saved inputs and the final
+  board's summary are checked.
+
+### surface_package_escape
+- Dropped: the `pin_analysis` assertion (not modelled) and the patched
+  `_surface_layer` comparison (a determinism check instead).
+
+### repair_search_reuse
+- Skipped: `test_benchmark_counts_reused_attempts_and_treats_the_bound_as_an_intervention`
+  (`routing_benchmark.summarize_run` is not ported).
+
+### multi_land_routing, exact_escape
+- Skipped: `bench.route_board_file` with the KiCad board importer, and the
+  OR-Tools `solve_exact_escape`, have no Rust implementation.
+
+### escape_reservation_lifetime
+- Adapted: the `stitch_zone_pads` spy is dropped; the end-to-end result is
+  checked (no escape masks survive, no critical retry). Skipped:
+  `test_failed_critical_retry_converts_whole_endangered_escape_group` (forced
+  a critical miss by patching `route_critical_nets`).
+
+### routing_hotpath_equivalence
+- `OutlineSites` is crate-private: a unit test in `fanout.rs`.

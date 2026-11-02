@@ -1020,4 +1020,46 @@ mod tests {
         let rotated = ray_candidates(pt(6.0, 6.0), pt(5.0, 5.0), &options, true);
         assert_eq!(rotated[0], pt(6.5, 6.5));
     }
+
+    /// `tests/test_routing_hotpath_equivalence.py::test_outline_sites_match_exact_inside_and_margin_tests`.
+    #[test]
+    fn outline_sites_match_exact_inside_and_margin_tests() {
+        use copper_physical::BoardOutline;
+        use copper_physical::geometry::{point_in_polygon, point_segment_distance_squared};
+        use num_rational::BigRational;
+        let reference = |point: Point, vertices: &[Point], margin: i64| {
+            let squared = BigRational::from_integer((i128::from(margin) * i128::from(margin)).into());
+            point_in_polygon(point, vertices)
+                && (0..vertices.len()).all(|i| {
+                    point_segment_distance_squared(point, vertices[i], vertices[(i + 1) % vertices.len()]) >= squared
+                })
+        };
+        let margin = mm(0.315);
+        let outlines = [
+            BoardOutline::rectangle(mm(10.0), mm(8.0), None).expect("rectangle"),
+            BoardOutline::circle(mm(6.0), None, mm(0.01)).expect("circle"),
+        ];
+        for outline in outlines {
+            let sites = OutlineSites::new(&outline.vertices);
+            let (xs, ys): (Vec<i64>, Vec<i64>) = outline.vertices.iter().map(|p| (p.x_nm, p.y_nm)).unzip();
+            let step = mm(0.25);
+            let mut probes = Vec::new();
+            let (x0, x1) = (xs.iter().min().expect("x") - step, xs.iter().max().expect("x") + 2 * step);
+            let (y0, y1) = (ys.iter().min().expect("y") - step, ys.iter().max().expect("y") + 2 * step);
+            for x in (x0..x1).step_by(step as usize) {
+                for y in (y0..y1).step_by(step as usize) {
+                    probes.push(Point::new(x, y));
+                }
+            }
+            // Exactly one margin inside an edge (tangency) and one nanometre short of it.
+            probes.push(Point::new(margin, mm(4.0)));
+            probes.push(Point::new(margin - 1, mm(4.0)));
+            for point in probes {
+                let expected = reference(point, &outline.vertices, margin);
+                assert_eq!(sites.admits(point, margin), expected, "{point:?}");
+                assert_eq!(sites.admits(point, margin), expected, "{point:?} (cached)");
+            }
+            assert_eq!(sites.admits(Point::new(margin, mm(4.0)), margin), outline.circular_boundary.is_none());
+        }
+    }
 }

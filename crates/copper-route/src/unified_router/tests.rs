@@ -315,3 +315,265 @@ fn turn_table_charges_per_45_degrees() {
     assert_eq!(at(0, 1), 2.0); // reversal
     assert!((0..8).all(|a| (0..8).all(|b| at(a, b) == at(b, a))));
 }
+
+// ---------------------------------------------------------------------------
+// `tests/test_unified_via_budget_pressure.py`: a legal via-bounded route must
+// be able to contest old congestion costs. One search in Rust: the `native`
+// parametrization runs once.
+
+fn wall(name: &str, layer: CopperLayer, x: f64) -> copper_physical::CopperKeepout {
+    copper_keepout(name, &[layer], rect(x - 0.5, 0.0, x + 0.5, 26.0))
+}
+
+fn budget_rule(net: &str) -> NetRoutingRule {
+    NetRoutingRule {
+        width_nm: Some(mm(0.2)),
+        allowed_layers: vec![CopperLayer::Front, CopperLayer::Back],
+        max_vias: Some(2),
+        ..rule(net)
+    }
+}
+
+fn pressure_board(back_wall: bool) -> PhysicalBoard {
+    let mut board = pad_board(&[("S", &[(2.0, 10.0), (18.0, 10.0)])], 2, vec![]);
+    board.copper_keepouts = vec![wall("front-a", F, 10.0), wall("front-b", F, 16.0)];
+    if back_wall {
+        board.copper_keepouts.push(wall("real-back-wall", CopperLayer::Back, 13.0));
+    }
+    board.net_routing_rules = vec![budget_rule("S")];
+    board
+}
+
+fn pressure_options(iterations: i64) -> UnifiedRouterOptions {
+    UnifiedRouterOptions { maximum_iterations: iterations, commit_rounds: 1, ..opts() }
+}
+
+/// The B.Cu nodes whose x lies in 12.5..=13.5 mm.
+fn back_corridor(router: &crate::unified_router::router::Router<'_, '_>) -> Vec<usize> {
+    let g = &router.lattice;
+    let layer = g.layers.iter().position(|l| *l == CopperLayer::Back).expect("B.Cu") as i64;
+    let mut nodes = Vec::new();
+    for x in 0..g.nx {
+        let at = g.x0 + x * g.pitch;
+        if mm(12.5) <= at && at <= mm(13.5) {
+            nodes.extend((0..g.ny).map(|y| (layer * g.plane + y * g.nx + x) as usize));
+        }
+    }
+    nodes
+}
+
+fn clean_commit(board: &PhysicalBoard, accepted: &Accepted) {
+    let mut result = board.clone();
+    for (tracks, vias) in accepted.values() {
+        result.tracks.extend(tracks.iter().cloned());
+        result.vias.extend(vias.iter().cloned());
+    }
+    let report = copper_drc::run_physical_drc(&result, copper_drc::Policy::default()).expect("drc");
+    let summary = crate::route_summary::connection_summary(&result, Some(&report)).expect("summary");
+    assert_eq!(summary_int(&summary, "signal", "opens"), 0);
+    assert_eq!(summary_int(&summary, "drc", "errors"), 0, "{:?}", report.findings);
+}
+
+#[test]
+fn via_budget_can_reclaim_a_legal_corridor_from_soft_costs() {
+    let board = pressure_board(false);
+    for cost_field in ["history", "occ"] {
+        let mut control = router_all(&board, &pressure_options(3));
+        assert!(control.route_net_budgeted(0, 0.6).expect("route").connected);
+        let mut proposed = router_all(&board, &pressure_options(3));
+        let corridor = back_corridor(&proposed);
+        for &node in &corridor {
+            if cost_field == "history" {
+                proposed.occupancy.history[node] = 5000.0;
+            } else {
+                proposed.occupancy.occ[node] = 5000;
+            }
+        }
+        let (history, occ) = (proposed.occupancy.history.clone(), proposed.occupancy.occ.clone());
+        let route = proposed.route_net_budgeted(0, 0.6).expect("route");
+        assert!(route.connected, "{cost_field}: {}", route.reason);
+        assert!(route.via_xy.len() <= 2);
+        // The retry changes only this proposal's costs, never global history.
+        assert!(proposed.occupancy.history == history && proposed.occupancy.occ == occ);
+        assert!(corridor.iter().any(|n| route.claims.contains(&(*n as i64))));
+        assert!(!proposed.ignore_soft_costs);
+        assert_eq!(proposed.specs[0].via_factor, 4.0);
+        let routes = IndexMap::from([("S".to_owned(), route)]);
+        let (accepted, rejected, complete) = proposed.commit(&routes, &indexmap::IndexSet::new()).expect("commit");
+        assert!(complete.contains("S") && complete.len() == 1 && rejected.is_empty());
+        assert!(accepted["S"].1.len() <= 2);
+        clean_commit(&board, &accepted);
+    }
+}
+
+#[test]
+fn via_budget_retry_never_ignores_real_source_obstacles() {
+    let board = pressure_board(true);
+    let mut proposed = router_all(&board, &pressure_options(3));
+    let route = proposed.route_net_budgeted(0, 0.6).expect("route");
+    assert!(!route.connected);
+    let routes = IndexMap::from([("S".to_owned(), route)]);
+    let (accepted, _, complete) = proposed.commit(&routes, &indexmap::IndexSet::new()).expect("commit");
+    assert!(!complete.contains("S"));
+    assert!(accepted.values().map(|(_, vias)| vias.len()).sum::<usize>() <= 2);
+}
+
+#[test]
+fn via_bounded_nets_still_negotiate_with_each_other_under_history() {
+    let mut board = pad_board(&[("S", &[(2.0, 10.0), (18.0, 10.0)]), ("T", &[(2.0, 12.0), (18.0, 12.0)])], 2, vec![]);
+    board.copper_keepouts = pressure_board(false).copper_keepouts;
+    for (name, y0, y1) in [("back-upper", 0.0, 12.0), ("back-lower", 14.0, 26.0)] {
+        board.copper_keepouts.push(copper_keepout(name, &[CopperLayer::Back], rect(0.0, y0, 26.0, y1)));
+    }
+    board.net_routing_rules = vec![budget_rule("S"), budget_rule("T")];
+    let both: indexmap::IndexSet<String> = ["S".to_owned(), "T".to_owned()].into_iter().collect();
+    let mut control = router_all(&board, &pressure_options(16));
+    let (plain, plain_conflicts, _) = control.negotiate(None, None, &mut Vec::new()).expect("negotiate");
+    assert_eq!(control.commit(&plain, &plain_conflicts).expect("commit").2, both);
+    let mut proposed = router_all(&board, &pressure_options(16));
+    for node in back_corridor(&proposed) {
+        proposed.occupancy.history[node] = 5000.0;
+    }
+    let (routes, conflicts, _) = proposed.negotiate(None, None, &mut Vec::new()).expect("negotiate");
+    let (accepted, rejected, complete) = proposed.commit(&routes, &conflicts).expect("commit");
+    assert_eq!(complete, both, "{conflicts:?} {rejected:?}");
+    assert!(routes.values().all(|route| route.via_xy.len() <= 2));
+    clean_commit(&board, &accepted);
+}
+
+// ---------------------------------------------------------------------------
+// `tests/test_unified_lead_conflicts.py`: off-grid access copper must take
+// part in negotiated via clearance. One search: `native` runs once.
+
+/// The node of `(x, y)` mm on `layer`, rounded to the lattice.
+fn grid_node(router: &crate::unified_router::router::Router<'_, '_>, layer: CopperLayer, x: f64, y: f64) -> i64 {
+    let g = &router.lattice;
+    let l = g.layers.iter().position(|item| *item == layer).expect("layer") as i64;
+    let ix = ((mm(x) - g.x0) as f64 / g.pitch as f64).round() as i64;
+    let iy = ((mm(y) - g.y0) as f64 / g.pitch as f64).round() as i64;
+    l * g.plane + iy * g.nx + ix
+}
+
+fn scripted(paths: Vec<Vec<i64>>, leads: Vec<Vec<TrackSegment>>) -> super::router::NetRoute {
+    super::router::NetRoute { paths, leads, ..super::router::NetRoute::empty(true, "") }
+}
+
+fn two_pad_board() -> PhysicalBoard {
+    pad_board(&[("A", &[(2.0, 2.0), (3.0, 2.0)]), ("B", &[(18.0, 18.0), (19.0, 18.0)])], 2, vec![])
+}
+
+/// Finish and occupy `routes` in order (spec `i` for route `i`), then commit.
+fn settle(
+    router: &mut crate::unified_router::router::Router<'_, '_>,
+    mut routes: Vec<super::router::NetRoute>,
+) -> IndexMap<String, super::router::NetRoute> {
+    for (index, route) in routes.iter_mut().enumerate() {
+        router.finish_route(route, index);
+        router.occupancy.add(route, 1);
+    }
+    ["A", "B"].iter().map(|s| (*s).to_owned()).zip(routes).collect()
+}
+
+#[test]
+fn short_off_grid_lead_reports_a_real_via_clearance_conflict() {
+    let board = two_pad_board();
+    for sign in [-1.0, 1.0] {
+        for (offset, close) in [(0.375, true), (0.625, false), (0.875, false)] {
+            let mut router = router_all(&board, &opts());
+            let (f, b) = (CopperLayer::Front, CopperLayer::Back);
+            let a = scripted(
+                vec![vec![grid_node(&router, f, 13.0, 13.0), grid_node(&router, b, 13.0, 13.0)]],
+                vec![vec![]],
+            );
+            let lead = TrackSegment {
+                net: "B".to_owned(),
+                start: pt(13.0 + sign * offset, 13.125),
+                end: pt(13.0 + sign * (offset + 0.125), 13.25),
+                width_nm: mm(0.2),
+                layer: f,
+            };
+            let end = grid_node(&router, f, 13.0 + sign * (offset + 0.125), 13.25);
+            let other = scripted(vec![vec![end]], vec![vec![lead]]);
+            let routes = settle(&mut router, vec![a, other]);
+            // The exact geometry oracle already rejects this via/lead pair.
+            // Negotiation must also see it, before fixing one route and
+            // rejecting the other.
+            let (_, rejected, _) = router.commit(&routes, &indexmap::IndexSet::new()).expect("commit");
+            assert_eq!(!rejected.is_empty(), close, "{sign} {offset}");
+            let conflicts = router.conflicts(&routes).expect("conflicts");
+            let both: indexmap::IndexSet<String> = ["A".to_owned(), "B".to_owned()].into_iter().collect();
+            assert_eq!(conflicts, if close { both } else { indexmap::IndexSet::new() }, "{sign} {offset}");
+            router.penalise(&conflicts);
+            let xy = grid_node(&router, f, 13.0, 13.0) % router.lattice.plane;
+            assert_eq!(router.occupancy.via_history[xy as usize] > 0.0, close, "{sign} {offset}");
+        }
+    }
+}
+
+#[test]
+fn grid_diagonal_via_collision_is_not_hidden_between_raster_nodes() {
+    let board = two_pad_board();
+    let mut router = router_all(&board, &opts());
+    let (f, b) = (CopperLayer::Front, CopperLayer::Back);
+    let a = scripted(vec![vec![grid_node(&router, f, 13.0, 13.0), grid_node(&router, b, 13.0, 13.0)]], vec![vec![]]);
+    let track =
+        scripted(vec![vec![grid_node(&router, f, 13.5, 13.25), grid_node(&router, f, 13.25, 13.5)]], vec![vec![]]);
+    let routes = settle(&mut router, vec![a, track]);
+    // The exact copper oracle sees the real clash.
+    assert!(!router.commit(&routes, &indexmap::IndexSet::new()).expect("commit").1.is_empty());
+    let both: indexmap::IndexSet<String> = ["A".to_owned(), "B".to_owned()].into_iter().collect();
+    assert_eq!(router.conflicts(&routes).expect("conflicts"), both);
+    router.penalise(&both);
+    let xy = grid_node(&router, f, 13.0, 13.0) % router.lattice.plane;
+    assert!(router.occupancy.via_history[xy as usize] > 0.0);
+}
+
+#[test]
+fn via_proposals_avoid_mutable_tracks_on_unvisited_inner_layers() {
+    let mut board = pad_board(&[("A", &[(2.0, 10.0), (18.0, 10.0)]), ("B", &[(2.0, 2.0), (18.0, 2.0)])], 4, vec![]);
+    for pose in &mut board.placements {
+        if pose.reference == "A_1" {
+            pose.side = copper_physical::BoardSide::Back;
+        }
+    }
+    board.net_routing_rules = vec![NetRoutingRule {
+        width_nm: Some(200_000),
+        allowed_layers: vec![CopperLayer::Front, CopperLayer::Back],
+        max_vias: Some(1),
+        ..rule("A")
+    }];
+    let mut router = router_all(&board, &opts());
+    let (a, b) = (
+        router.specs.iter().position(|s| s.name == "A").expect("A"),
+        router.specs.iter().position(|s| s.name == "B").expect("B"),
+    );
+    let baseline = router.route_net_budgeted(a, 100.0).expect("route");
+    assert!(baseline.connected && baseline.via_xy.len() == 1);
+    let g = router.lattice.clone();
+    let xy = *baseline.via_xy.first().expect("via");
+    let (y, x) = (xy / g.nx, xy % g.nx);
+    let layer = g.layers.iter().position(|l| *l == CopperLayer::In1).expect("In1") as i64;
+    let at = |dy: i64| layer * g.plane + (y + dy) * g.nx + x;
+    let mut foreign = scripted(vec![vec![at(-3), at(3)]], vec![vec![]]);
+    router.finish_route(&mut foreign, b);
+    let (tracks, _) = router.copper(b, &foreign.paths[0], &Vec::new(), None).expect("copper");
+    let mut index = crate::routing_clearance::RoutingClearanceIndex::new(&board).expect("index");
+    for t in &tracks {
+        assert!(index.can_track(&t.net, t.start, t.end, t.width_nm, t.layer).expect("track"));
+    }
+    for t in &tracks {
+        index.add_track(t.clone(), false, None).expect("add");
+    }
+    router.occupancy.add(&foreign, 1);
+    let proposed = router.route_net_budgeted(a, 100.0).expect("route");
+    assert!(proposed.connected && proposed.via_xy.len() == 1);
+    for (path, leads) in proposed.paths.iter().zip(&proposed.leads) {
+        let (_, vias) = router.copper(a, path, leads, None).expect("copper");
+        for v in &vias {
+            let clear = index
+                .can_via(&v.net, v.position, v.size_nm, v.from_layer, v.to_layer, Some(v.drill_nm), false, None)
+                .expect("via");
+            assert!(clear, "via proposal ignored a mutable track on its internal barrel span");
+        }
+    }
+}

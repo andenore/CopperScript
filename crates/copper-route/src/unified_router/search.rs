@@ -145,7 +145,7 @@ impl Router<'_, '_> {
         Ok(route)
     }
 
-    fn route_net_budgeted(&mut self, index: usize, present: f64) -> Result<NetRoute> {
+    pub(crate) fn route_net_budgeted(&mut self, index: usize, present: f64) -> Result<NetRoute> {
         let mut route = self.route_net_once(index, present)?;
         let Some(budget) = self.specs[index].via_budget else { return Ok(route) };
         if route.via_xy.len() as i64 > budget {

@@ -124,7 +124,7 @@ impl Router<'_, '_> {
     }
 
     /// `_penalise`.
-    fn penalise(&mut self, names: &IndexSet<String>) {
+    pub(crate) fn penalise(&mut self, names: &IndexSet<String>) {
         let inc = self.options.history_increment;
         let g = &self.lattice;
         for name in names {
