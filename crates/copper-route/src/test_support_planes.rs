@@ -750,3 +750,57 @@ mod decoupling_track_containment {
         }
     }
 }
+
+/// `tests/test_decoupling_cell_maze.py`: unsupported, exhausted or
+/// incomplete cells add no maze work.
+mod decoupling_cell_maze {
+    use super::support_planes::decoupling::{cell_grid, crosslayer};
+    use crate::RoutingClearanceIndex;
+    use crate::decoupling_paths::{ConnectionWork, cell_maze_launches, land};
+    use crate::fanout::FanoutOptions;
+    use copper_pcb::board::PhysicalBoard;
+    use std::ops::ControlFlow;
+
+    /// The launches `_cell_maze_launches` emits for the link target, and the
+    /// local path work it used.
+    fn launches(
+        board: &PhysicalBoard,
+        net: &str,
+        target: &copper_pcb::board::PadReference,
+        maze: bool,
+        used: i64,
+    ) -> (usize, i64) {
+        let origin = land(board, target).expect("target land");
+        let options = FanoutOptions { maze_escapes: maze, ..FanoutOptions::default() };
+        let index = RoutingClearanceIndex::new(board).unwrap();
+        let work = ConnectionWork::default();
+        work.local_paths.set(used);
+        let mut emitted = 0;
+        let _ = cell_maze_launches(board, &origin, net, 150_000, &options, 64, &index, &work, &mut |_| {
+            emitted += 1;
+            Ok(ControlFlow::Continue(()))
+        })
+        .unwrap();
+        (emitted, work.local_paths.get())
+    }
+
+    #[test]
+    fn unsupported_or_exhausted_source_maze_adds_no_work() {
+        let (grid, link) = cell_grid(false);
+        assert_eq!(launches(&grid, &link.net, &link.target, false, 0), (0, 0), "disabled");
+        let (plain, plain_link) = crosslayer(false, true);
+        assert_eq!(launches(&plain, &plain_link.net, &plain_link.target, true, 0), (0, 0), "non_array");
+        assert_eq!(launches(&grid, &link.net, &link.target, true, 4), (0, 4), "exhausted");
+    }
+
+    #[test]
+    fn incomplete_circular_cell_does_not_invent_a_via_site() {
+        let (mut board, link) = cell_grid(false);
+        let keep = ["S", "G", "-1:0"];
+        board.footprints.get_mut("chip").unwrap().pads.retain(|p| keep.contains(&p.number.as_str()));
+        for net in &mut board.nets {
+            net.pads.retain(|p| p.component != link.target.component || keep.contains(&p.pad.as_str()));
+        }
+        assert_eq!(launches(&board, &link.net, &link.target, true, 0), (0, 0));
+    }
+}

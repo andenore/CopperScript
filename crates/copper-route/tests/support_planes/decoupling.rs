@@ -129,3 +129,44 @@ pub fn incumbent_scene() -> (PhysicalBoard, DecouplingLink, FanoutResult, Vec<(D
     };
     (source, link, incumbent, pending)
 }
+
+/// `grid` of `tests/test_decoupling_cell_maze.py`: the six-layer
+/// `crosslayer` fixture with the chip a 3 x 3 array of 0.25 mm circular lands
+/// at 1 mm pitch (S in the centre, G at (-1, -1), the others named `x:y` and
+/// on the return net) and F.Cu track keepouts over the four diagonal bends
+/// next to S, so its straight launches are blocked.
+pub fn cell_grid(renamed: bool) -> (PhysicalBoard, DecouplingLink) {
+    let (mut board, link) = crosslayer(renamed, true);
+    let mut lands = Vec::new();
+    for x in [-1, 0, 1] {
+        for y in [-1, 0, 1] {
+            let name = match (x, y) {
+                (0, 0) => "S".to_owned(),
+                (-1, -1) => "G".to_owned(),
+                _ => format!("{x}:{y}"),
+            };
+            let mut land = pad(&name, Point::new(x * MM, y * MM), size(0.25, 0.25));
+            land.shape = copper_physical::footprint::PadShape::Circle;
+            lands.push(land);
+        }
+    }
+    let extra: Vec<String> = lands.iter().map(|p| p.number.clone()).filter(|n| n != "S" && n != "G").collect();
+    add_footprint(&mut board, footprint("chip", lands, size(3.0, 3.0)));
+    board.placements[0].position = mm(8.0, 8.0);
+    for sx in [-1.0, 1.0] {
+        for sy in [-1.0, 1.0] {
+            let ring = [(0.15, 0.15), (0.3, 0.15), (0.3, 0.3), (0.15, 0.3)]
+                .iter()
+                .map(|(x, y)| mm(8.0 + sx * x, 8.0 + sy * y))
+                .collect();
+            let mut bend = keepout(&format!("bend-{sx}-{sy}"), &[CopperLayer::Front], ring);
+            bend.block_vias = false;
+            board.copper_keepouts.push(bend);
+        }
+    }
+    let target = link.target.component.clone();
+    for net in board.nets.iter_mut().filter(|n| n.name == link.return_net) {
+        net.pads.extend(extra.iter().map(|n| pad_ref(&target, n)));
+    }
+    (board, link)
+}
