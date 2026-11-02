@@ -1634,7 +1634,7 @@ pub fn replay_critical(
 // Coupled pairs
 
 /// `_SPACING_GATES`: first-failing gates that name another net's copper.
-const SPACING_GATES: [&str; 4] = ["DRC-CLEARANCE", "DRC-SHORT", "DRC-HOLE-CLEARANCE", "DRC-DRILL-SPACING"];
+pub(crate) const SPACING_GATES: [&str; 4] = ["DRC-CLEARANCE", "DRC-SHORT", "DRC-HOLE-CLEARANCE", "DRC-DRILL-SPACING"];
 
 /// `_GATE_PREFIXES`: candidate gates in evaluation order.
 const GATE_PREFIXES: [(&str, &str); 10] = [

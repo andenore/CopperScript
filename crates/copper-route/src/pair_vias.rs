@@ -63,7 +63,7 @@ impl TransitionTrace {
     }
 
     /// `record`: count a stage and keep at most two examples of it (16 in all).
-    fn record(
+    pub(crate) fn record(
         &mut self,
         stage: &str,
         positions: &[Point],

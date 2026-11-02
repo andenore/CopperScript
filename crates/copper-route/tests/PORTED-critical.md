@@ -40,8 +40,20 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_pair_hybrid_contact_anchor.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_hybrid_contact_anchor.rs` |
 | test_pair_collinear_fork.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_collinear_fork.rs` |
 | test_pair_outer_transitions.py | 2 | 2 | 0 | 0 | `src/critical_tests/pair_outer_transitions.rs` |
+| test_pair_tuning_span_copper_contacts.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_tuning_span_copper_contacts.rs` |
+| test_bundle_tuning.py | 3 | 3 | 0 | 0 | `src/critical_tests/bundle_tuning.rs` |
+| test_partial_pair_macro_ports.py | 2 | 2 | 0 | 0 | `src/critical_tests/partial_pair_macro_ports.rs` |
+| test_pair_transition_diagnostics.py | 2 | 2 | 0 | 0 | `src/critical_tests/pair_transition_diagnostics.rs` |
+| test_pair_offset_ports.py | 2 | 2 | 0 | 0 | `src/critical_tests/pair_offset_ports.rs` |
+| test_pair_obstacle_tuning_fallback.py | 2 | 2 | 0 | 0 | `src/critical_tests/pair_obstacle_tuning_fallback.rs` |
+| test_pair_approach_ranking.py | 2 | 1 | 1 | 0 | `src/critical_tests/pair_approach_ranking.rs` |
+| test_collinear_pair_ports.py | 2 | 2 | 0 | 0 | `src/critical_tests/collinear_pair_ports.rs` |
+| test_pair_transition_families.py | 1 | 1 | 0 | 0 | `src/critical_tests/pair_transition_families.rs` |
+| test_pair_staggered_contacts.py | 1 | 1 | 0 | 0 | `src/critical_tests/pair_staggered_contacts.rs` |
+| test_pair_lateral_ports.py | 1 | 1 | 0 | 0 | `src/critical_tests/pair_lateral_ports.rs` |
+| test_pair_departure.py | 1 | 1 | 0 | 0 | `src/critical_tests/pair_departure.rs` |
 
-**Totals so far:** 31 of 46 files, 256 Python tests: 212 ported, 44
+**Totals so far:** 43 of 46 files, 278 Python tests: 233 ported, 45
 skipped, 0 ignored.
 
 Rust bugs found and fixed by the ports:
@@ -52,12 +64,8 @@ Rust bugs found and fixed by the ports:
 - `route-board` length-option errors lost Python's positive/nonnegative wording
   (`test_pair_terminal_fallback.py`).
 
-Remaining files, in the assigned order: pair_tuning_span_copper_contacts,
-critical_stage_planning, critical_return_preparation, bundle_tuning,
-partial_pair_macro_ports, pair_transition_diagnostics, pair_offset_ports,
-pair_obstacle_tuning_fallback, pair_approach_ranking, loose_pair_repair,
-collinear_pair_ports, pair_transition_families, pair_staggered_contacts,
-pair_lateral_ports, pair_departure.
+Remaining files, in the assigned order: critical_stage_planning,
+critical_return_preparation, loose_pair_repair.
 
 ## Notes
 
@@ -302,3 +310,36 @@ Python's `SimpleNamespace` guides are `GlobalNetRoute`s with one access.
 `test_unified_router._board` is rebuilt here; `_release_escape_masks`,
 `_copper_keepouts` and `_plane_pin_halos` are the crate-private `flow`
 functions.
+
+### test_bundle_tuning.py
+
+Adapted (`_tune_bundle_pairs` was monkeypatched):
+- `a_hemmed_pair_is_tuned_while_its_neighbour_is_unrouted`: the
+  final-pass-only half (tuning stage disabled) has no seam, and
+  `match_tuning_line` takes the tuning struct while the result holds its
+  documents; the routing-stage outcome is checked.
+- `tuning_that_blocks_a_later_pair_is_removed_before_any_rip_up`: the
+  recorded `_tune_bundle_pairs` returns and the final-pass-only comparison
+  are dropped; the removed tuning, empty repairs and connected pairs are
+  checked.
+- `bundles_without_an_over_skew_group_route_as_before`: the call recorder is
+  dropped; the copper and results equality with no group is checked.
+
+### test_pair_obstacle_tuning_fallback.py
+
+Python injected the candidate as the only search result of
+`_route_pair_group`; the test runs the owner's exact sequence (exact pair,
+validation, then the clearance-aware `matched_local_candidates` retry on a
+spacing rejection, or no retry for the disabled case) on the real terminal
+guides.
+
+### test_pair_approach_ranking.py, test_pair_departure.py, test_pair_transition_families.py
+
+Each Python test first patched a ranking (`_departure_preferences`), the
+departure check (`_can_depart`) or the transition family switch to show the
+historical failure; those halves have no seam and are dropped, the
+successful bounded search and its owner acceptance are ported.
+
+Skipped:
+- `pair_approach_ranking::negative_approach_hint_does_not_remove_ports`:
+  only observable through the patched `_departure_preferences`.
