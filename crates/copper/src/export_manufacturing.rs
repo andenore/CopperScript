@@ -68,6 +68,13 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
                     paths::display(&published)
                 ),
             );
+            // The full package also holds reports, the PCB and a nested zip; fab
+            // upload parsers misread it (JLCPCB reported missing drill files).
+            let mut upload = format!("Upload to the fab: {}", paths::display(&published.join("gerbers-drill.zip")));
+            if request.bom.is_some() {
+                upload.push_str(" (board); bom.csv and cpl.csv (assembly)");
+            }
+            let _ = text::print(out, &format!("{upload}. manufacturing-package.zip is the archive, not an upload."));
             0
         }
         Err(failure) => {
