@@ -66,6 +66,7 @@ dependencies = [
  "copper-physical",
  "copper-units",
  "indexmap",
+ "num-traits",
  "sha2",
 ]
 

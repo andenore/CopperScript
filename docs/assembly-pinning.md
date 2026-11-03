@@ -138,6 +138,47 @@ This bounded prototype uses explicit board-side selections without changing
 the electrical language or claiming generic passives are qualified replacements.
 There are no board-specific rules or selections in the compiler.
 
+## Live distributor offers (Nexar)
+
+`copper assembly offers` is the one networked assembly action. It reads the
+lock (no compilation), looks up every fitted manufacturer+MPN through the
+[Nexar Supply API](https://nexar.com/api) (Octopart's official API,
+authorized sellers only) and writes a timestamped report:
+
+```sh
+export NEXAR_CLIENT_ID=... NEXAR_CLIENT_SECRET=...   # supply.domain scope
+copper assembly offers board.copper --quantity 5 --distributors DigiKey,Mouser,Farnell \
+    --min-stock 100 --within-weeks 8 --currency EUR --country NO
+```
+
+- The lock defaults to `assembly.lock` beside the board and the report to
+  `build/assembly-offers/offers-YYYYMMDDTHHMMSSZ.json` there (`--lock`, `-o`).
+  Schema `copperscript-assembly-offers/v0.1`, marked `"deterministic": false`.
+- Per part: references, quantity needed (`--quantity` boards, default 1), the
+  exact Nexar match (MPN equal without case, manufacturer prefix-equal without
+  case or punctuation, so `Murata` matches `Murata Electronics`) or the
+  near-miss candidates, and for each requested distributor every offer: SKU,
+  stock, factory lead days, MOQ, packaging, URL and price breaks (native and,
+  when Nexar converts them, in `--currency`; default `USD`, `--country US`).
+- `--distributors` defaults to the suppliers already named in the lock and
+  compares names without case or punctuation (`DigiKey` is `Digi-Key`).
+- An offer is adequate when stock covers the build and `--min-stock`, or, with
+  `--within-weeks`, when the factory lead time fits. Parts with no adequate
+  offer are listed as `SHORT` and under `shortfall`; with `--min-stock` or
+  `--within-weeks` the command then exits 1.
+- `--write-alternates` adds, per fitted selection, one offer for the same
+  manufacturer part from each requested distributor not yet listed on it
+  (preferring an adequate offer, then the smallest MOQ). It writes only
+  `supplier`, `supplier_part` and a non-tracking `source_url`, skips codes the
+  lock gives another part, and never changes MPNs, primary offers, `populate`
+  or `reviewed`. It needs a canonical v0.4 lock (as `assembly update` writes).
+
+Credentials come only from `NEXAR_CLIENT_ID`/`NEXAR_CLIENT_SECRET`; they and
+the access token travel to `curl` on standard input, never on a command line,
+and are never printed or written. `--offline` is refused. Check, compile, lock
+and BOM export never touch the network, and the report is never an input to
+them. Live stock is not a reservation.
+
 ## Unapproved review candidates
 
 `copper assembly candidate-bom board.copper --locked --offline --lock assembly.lock
