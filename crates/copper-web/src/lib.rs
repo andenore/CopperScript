@@ -3,6 +3,8 @@
 //! projects use a bounded source snapshot and the ordinary package resolver.
 //! The host fetches requested files; this crate never uses network or disk.
 
+pub mod body;
+
 use copper_json::{Dumps, Object, Value};
 use copper_lang::compiler::{Design, compile_design_source, compile_design_source_with};
 use copper_lang::diagnostics::{check_document, compile_error_document, diagnostic_document, locate};
@@ -183,6 +185,12 @@ pub fn review_source(source: &str) -> Value {
 #[wasm_bindgen]
 pub fn review(source: &str) -> String {
     Dumps::compact().dumps(&review_source(source))
+}
+
+/// The generated fallback 3D body of one footprint description; see [`body`].
+#[wasm_bindgen]
+pub fn generate_body(input: &str) -> String {
+    Dumps::compact().dumps(&body::body_document(input))
 }
 
 /// JSON boundary preserves the CLI's exact quantity representations and schemas.
