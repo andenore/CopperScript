@@ -423,6 +423,11 @@ fn generated_model(item: &str) -> FootprintModel {
     model
 }
 
+/// Footprint property naming the generated approximate body of a footprint,
+/// written even when the footprint also has a source model, so viewers that
+/// cannot read STEP still have a body to draw.
+pub const BODY_PROPERTY: &str = "CopperScriptBody";
+
 /// Converts a millimetre VRML file to KiCad's 2.54 mm VRML unit.
 pub const KICAD_WRL_SCALE: f64 = 1.0 / 2.54;
 
@@ -1089,6 +1094,17 @@ fn footprint_lines(
     {
         lines.extend(property_lines(board_name, &placement.reference, "CopperScriptPath", path, 0, 0, fab, true));
     }
+    let item = export_name.rsplit(':').next().unwrap_or(export_name);
+    lines.extend(property_lines(
+        board_name,
+        &placement.reference,
+        BODY_PROPERTY,
+        &generated_model(item).path,
+        0,
+        0,
+        fab,
+        true,
+    ));
     let attribute = if footprint
         .pads
         .iter()
