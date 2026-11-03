@@ -3,6 +3,8 @@
 //! self-contained boards and the bundled demonstration library; imports are
 //! rejected before package resolution can touch the filesystem or network.
 
+pub mod body;
+
 use copper_json::{Dumps, Object, Value};
 use copper_lang::compiler::compile_design_source;
 use copper_lang::diagnostics::{check_document, compile_error_document, diagnostic_document, locate};
@@ -101,6 +103,12 @@ pub fn analyze_source(source: &str) -> Value {
         }
     }
     response(checked, components, nets, pins)
+}
+
+/// The generated fallback 3D body of one footprint description; see [`body`].
+#[wasm_bindgen]
+pub fn generate_body(input: &str) -> String {
+    Dumps::compact().dumps(&body::body_document(input))
 }
 
 /// JSON boundary preserves the CLI's exact quantity representations and schemas.
