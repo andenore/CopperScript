@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use copper_json::python_str_repr as repr;
 use copper_lang::compiler::Design;
 use copper_lang::footprints::{FootprintResolver, selected_footprint};
+use copper_lang::lower::{PART_HEIGHT_KEY, PART_MODEL_KEY, PART_MODEL_SOURCE_KEY};
 use copper_lang::mechanical::MechanicalDesign;
 use copper_lang::model::{
     ComponentInstance, ComponentValue, ConstraintKind, ConstraintMode, DeviceDefinition, FlatElectricalView, Net,
@@ -17,6 +18,7 @@ use copper_lang::pyvalue;
 use copper_physical::footprint::{
     FootprintPad, InternalPadGroup, PadKind, PadShape, PhysicalFootprint, Size, merge_internal_pad_groups,
 };
+use copper_physical::model3d::{FootprintModel, MODELS_KEY, encode_models};
 use copper_physical::{
     BoardOutline, BoardSide, CopperKeepout, CopperLayer, DesignRules, PlacementKeepout, Point, RoundedConvexShape,
 };
@@ -571,6 +573,44 @@ fn apply_rule_overrides(mut rules: DesignRules, overrides: &IndexMap<String, i64
 ///
 /// `locked` and `offline` are the design's own resolution flags, which source
 /// physical macros use.
+/// A part's `height` and `model` override its footprint's. The footprint is
+/// renamed so parts sharing one source footprint can differ in 3D.
+fn with_part_3d(
+    part: &PartDefinition,
+    mut footprint: PhysicalFootprint,
+    warnings: &mut Vec<String>,
+) -> Result<PhysicalFootprint> {
+    let height = part.metadata.get(PART_HEIGHT_KEY).and_then(|text| text.parse::<i64>().ok());
+    let model = part.metadata.get(PART_MODEL_KEY).and_then(|path| {
+        let base = part.metadata.get(PART_MODEL_SOURCE_KEY).map(String::as_str).unwrap_or_default();
+        let resolved = match std::path::Path::new(base).parent() {
+            Some(directory) => directory.join(path).to_string_lossy().into_owned(),
+            None => path.clone(),
+        };
+        if std::path::Path::new(&resolved).is_file() {
+            Some(resolved)
+        } else {
+            let warning = format!("{}: 3D model {} not found; using a generated body", part.name, repr(&resolved));
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+            None
+        }
+    });
+    if height.is_none() && model.is_none() {
+        return Ok(footprint);
+    }
+    if let Some(height) = height {
+        footprint.height_nm = Some(height);
+    }
+    if let Some(path) = &model {
+        footprint.metadata.insert(MODELS_KEY.to_owned(), encode_models(&[FootprintModel::new(path.clone())]));
+    }
+    let suffix = &hex_digest(format!("{height:?}|{model:?}").as_bytes())[..12];
+    footprint.name = format!("{}__3d_{suffix}", footprint.name);
+    Ok(footprint.validated()?)
+}
+
 pub fn physicalize(
     design: &Design,
     mut source: Footprints<'_>,
@@ -695,6 +735,16 @@ pub fn physicalize(
                 result.footprint.clone()
             }
         };
+        footprint = with_part_3d(item.part, footprint, &mut import_warnings)?;
+        if !import_warnings.is_empty() {
+            metadata.insert(
+                "footprint_import_warnings".to_owned(),
+                import_warnings.join(
+                    "
+",
+                ),
+            );
+        }
         if !item.part.assembled {
             footprint.name = format!("{}__unassembled", footprint.name);
             footprint.internal_pad_groups = Vec::new();

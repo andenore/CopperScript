@@ -11,7 +11,7 @@ use copper_physical::footprint::{
     FootprintGraphic, FootprintLayer, FootprintPad, PadKind, PadShape, PhysicalFootprint, Size, ZoneConnection,
     footprint_geometry_digest,
 };
-use copper_physical::model3d::{FootprintModel, footprint_models};
+use copper_physical::model3d::{FootprintModel, MODELS_KEY, encode_models, footprint_models};
 use copper_physical::{BoardSide, BoundarySegment, CopperKeepout, CopperLayer, Point};
 use copper_units::Decimal;
 
@@ -412,6 +412,45 @@ fn model_lines(footprint: &PhysicalFootprint, item: &str) -> Vec<String> {
     lines
 }
 
+/// Copies each model that is a local file into [`GENERATED_MODEL_DIRECTORY`]
+/// under a content-addressed name and points the footprint at the copy.
+/// Environment-variable paths (`${KICAD10_3DMODEL_DIR}/...`) and files that
+/// cannot be read as text pass through or are dropped with a warning.
+fn copy_local_models(footprint: &mut PhysicalFootprint, files: &mut Vec<Artifact>, warnings: &mut Vec<String>) {
+    let models = footprint_models(footprint);
+    if models.is_empty() {
+        return;
+    }
+    let mut kept = Vec::new();
+    for mut model in models {
+        let path = std::path::Path::new(&model.path);
+        if model.path.starts_with("${") || !path.is_file() {
+            kept.push(model);
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            warnings.push(format!("3D model {} is not readable text; using a generated body", model.path));
+            continue;
+        };
+        let leaf = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let digest = Sha256::digest(text.as_bytes());
+        let hash: String = digest.iter().take(6).map(|byte| format!("{byte:02x}")).collect();
+        let stem = leaf.rsplit_once('.').map_or(leaf.as_str(), |(stem, _)| stem);
+        let extension = leaf.rsplit_once('.').map_or("", |(_, extension)| extension).to_ascii_lowercase();
+        let name = format!("{hash}_{}.{extension}", safe_name(stem));
+        if !files.iter().any(|file| file.name == format!("{GENERATED_MODEL_DIRECTORY}/{name}")) {
+            files.push(artifact(format!("{GENERATED_MODEL_DIRECTORY}/{name}"), text));
+        }
+        model.path = format!("${{KIPRJMOD}}/{GENERATED_MODEL_DIRECTORY}/{name}");
+        kept.push(model);
+    }
+    if kept.is_empty() {
+        footprint.metadata.shift_remove(MODELS_KEY);
+    } else {
+        footprint.metadata.insert(MODELS_KEY.to_owned(), encode_models(&kept));
+    }
+}
+
 /// The reference to the generated body of library item `item`.
 ///
 /// The files are in millimetres, but KiCad reads one VRML unit as 0.1 inch
@@ -560,7 +599,7 @@ fn mechanical_export_board(board: &PhysicalBoard) -> Result<PhysicalBoard> {
 /// `KiCadPcbBackend.generate`.
 pub fn generate(board: &PhysicalBoard) -> Result<Manifest> {
     let has_head_clearance = board.mechanical_holes.iter().any(|h| h.head_clearance_radius_nm != 0);
-    let board = mechanical_export_board(board)?;
+    let mut board = mechanical_export_board(board)?;
     if board.stackup.copper_layers.first() != Some(&CopperLayer::Front)
         || board.stackup.copper_layers.last() != Some(&CopperLayer::Back)
     {
@@ -575,8 +614,12 @@ pub fn generate(board: &PhysicalBoard) -> Result<Manifest> {
     if crate::has_duplicates(&folded) {
         return fail("generated footprint names collide");
     }
-    let content = render(&board, &names)?;
     let mut warnings: Vec<String> = Vec::new();
+    let mut model_files: Vec<Artifact> = Vec::new();
+    for footprint in board.footprints.values_mut() {
+        copy_local_models(footprint, &mut model_files, &mut warnings);
+    }
+    let content = render(&board, &names)?;
     if has_head_clearance {
         warnings.push("Screw-head clearance is enforced by CopperScript placement, not exported as a native KiCad placement constraint; recheck after manual placement changes.".to_owned());
     }
@@ -663,6 +706,7 @@ pub fn generate(board: &PhysicalBoard) -> Result<Manifest> {
             render_library_footprint(&board, &board.footprints[reference], name)?,
         ));
     }
+    artifacts.extend(model_files);
     let mut generated_bodies: Vec<&str> = Vec::new();
     for (reference, name) in &names {
         let footprint = &board.footprints[reference];

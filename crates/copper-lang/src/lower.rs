@@ -1125,6 +1125,7 @@ pub fn compile_part(
         None => {}
         Some(Scalar::Str(path)) if copper_physical::model3d::FootprintModel::storable(path) => {
             part.metadata.insert(PART_MODEL_KEY.to_owned(), path.clone());
+            part.metadata.insert(PART_MODEL_SOURCE_KEY.to_owned(), location.filename.to_string());
         }
         Some(_) => return Err(error("CMP208", "part model must be a one-line file path string", location)),
     }
@@ -1137,6 +1138,8 @@ pub fn compile_part(
 
 /// `PartDefinition.metadata` key holding the part's `model` path.
 pub const PART_MODEL_KEY: &str = "model_3d";
+/// `PartDefinition.metadata` key holding the file that declared the part, which `model` is relative to.
+pub const PART_MODEL_SOURCE_KEY: &str = "model_3d_source";
 /// `PartDefinition.metadata` key holding the part's `height` in nanometres.
 pub const PART_HEIGHT_KEY: &str = "height_nm";
 

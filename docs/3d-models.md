@@ -1,8 +1,8 @@
 # 3D models
 
-Status: model references, the fallback body and KiCad export exist in the
-compiler. The browser 3D view and lock-resolved model files are not built yet
-(see *Not yet*).
+Status: model references, part `model`/`height`, the fallback body and KiCad
+export exist in the compiler, and CopperReview draws the exported bodies. A
+remote 3D module and STEP output are not built (see *Not yet*).
 
 ## Model references
 
@@ -28,9 +28,17 @@ part Widget {
 ```
 
 Both are optional. They are stored on `PartDefinition.metadata` as `model_3d`
-(the path) and `height_nm` (exact nanometres). A bad `height` is `CMP209` and a
-non-string `model` is `CMP208`. Resolving `model` through the package lock is
-not wired yet.
+(the path as written), `model_3d_source` (the declaring file) and `height_nm`
+(exact nanometres). A bad `height` is `CMP209` and a non-string `model` is
+`CMP208`.
+
+When a board is physicalized the part's values override its footprint's: the
+footprint gets that `height_nm` (which also feeds the generated body and the
+`CopperScriptHeightMM` property) and that model. The footprint is renamed with a
+`__3d_<digest>` suffix, so two parts can share one source footprint and differ
+in 3D. A `model` that is not a file relative to the part file is reported as an
+import warning (`... 3D model ... not found; using a generated body`) and
+ignored.
 
 ## Fallback body
 
@@ -62,13 +70,18 @@ to the inputs or the generator changes it.
 `export-kicad-pcb` writes a `(model ...)` into every exported footprint, in the
 board and in `CopperScript.pretty`:
 
-1. A footprint whose source carries `(model ...)` keeps those references
+1. A model that is a local file (a part's `model`) is copied to
+   `CopperScript.3dshapes/<digest>_<name>.<ext>` and referenced through
+   `${KIPRJMOD}`. Files are copied as text, which STEP and VRML are.
+2. A footprint whose source carries `(model ...)` keeps those references
    unchanged (`${KICAD10_3DMODEL_DIR}/...` resolves in a stock KiCad install).
-2. Any other footprint gets its generated body, written to
-   `CopperScript.3dshapes/<item>.wrl` and referenced as
+3. Any other footprint gets its generated body, referenced as
    `${KIPRJMOD}/CopperScript.3dshapes/<item>.wrl`.
 
-The export lists the footprints using generated bodies as a warning. The VRML
+The generated body is written for every footprint, and a hidden
+`CopperScriptBody` property names it, so viewers that cannot read STEP still
+have a body. The export lists the footprints that rely on a generated body in
+KiCad as a warning. The VRML
 files are in **millimetres**. KiCad reads one VRML unit as 0.1 inch (2.54 mm), so
 generated references carry `(scale (xyz 0.3937... ))` (`KICAD_WRL_SCALE`). This
 was checked by rendering generated 0805 and 0402 bodies with KiCad 10's
@@ -77,8 +90,17 @@ the scale they sit inside their pads.
 
 ## Not yet
 
-- Resolving `model` and `(model ...)` paths through the package lock and a
-  remote 3D module (`kicad-packages3D`, which needs a sparse fetch).
-- Applying a part's `height` to the footprint it selects.
-- `copper-web` mesh export and the CopperReview 3D view.
-- STEP output for generated bodies.
+- A remote 3D module (`kicad-packages3D`, which is several GB and needs a
+  sparse fetch). Until then `${KICAD10_3DMODEL_DIR}` references only resolve on
+  a machine with KiCad installed.
+- Locking part model files. A local model is read at export time; it is not part
+  of `copper.lock` unless it sits in a locked module.
+- STEP output for generated bodies (VRML only).
+- Non-zero model rotation, model offsets and back-side parts in the CopperReview
+  view are placed best-effort and have not been compared with KiCad.
+
+## Viewing
+
+CopperReview draws the exported `.wrl` files (`copper-review BOARD.kicad_pcb`,
+then the **3D** button); see its README. The viewer reads the compiler's own
+bodies rather than regenerating them, so KiCad and the viewer agree.
