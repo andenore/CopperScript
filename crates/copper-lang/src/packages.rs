@@ -817,9 +817,6 @@ impl PackageResolver {
         if relative.is_empty() || !MODEL_SUFFIXES.contains(&extension.as_str()) {
             return Err(error("PKG004", format!("not a 3D model file: {identity}"), location));
         }
-        if self.snapshot.is_some() {
-            return Err(error("WEB_PACKAGE", "3D model libraries are not available in this source snapshot", location));
-        }
         let version = self.manifest.requirements[&module].clone();
         let replacement = self.manifest.replacements.get(&module).cloned();
         let remote = self.manifest.remote_replacements.get(&module).cloned();
