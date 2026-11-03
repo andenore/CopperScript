@@ -58,7 +58,7 @@ const COMPOSITION: [&str; 9] = [
     "MechanicalItemDecl",
     "MechanicalDecl",
 ];
-const CORE_PROPERTIES: [&str; 14] = [
+const CORE_PROPERTIES: [&str; 16] = [
     "category",
     "manufacturer",
     "assembled",
@@ -73,6 +73,8 @@ const CORE_PROPERTIES: [&str; 14] = [
     "source_location",
     "source_url",
     "source_checksum",
+    "model",
+    "height",
 ];
 const PROPERTY_DECLS: [&str; 3] = ["PartPropertyDecl", "DevicePropertyDecl", "MacroPropertyDecl"];
 

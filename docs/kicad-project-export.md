@@ -81,8 +81,9 @@ The full-vertical six-layer **unrouted placement** was checked with KiCad
 204 unconnected items remain expected until routing is completed.
 
 This does not certify source footprints or RF/manufacturing performance.
-Existing importer warnings about omitted user text, 3D models and unsupported
-presentation items remain visible. A generated library that matches the board
+Existing importer warnings about omitted user text and unsupported
+presentation items remain visible. 3D model references are
+imported ([3D models](3d-models.md)) but not yet written by the export. A generated library that matches the board
 is not proof of equivalence to every feature of the upstream original.
 
 ## Schematic review exports
