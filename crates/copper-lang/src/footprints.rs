@@ -112,11 +112,14 @@ impl FootprintResolver {
         self.package_resolver().ok()?.manifest.requirements.keys().find(|module| is_sparse_module(module)).cloned()
     }
 
-    /// Points each `${KICADn_3DMODEL_DIR}/...` model of an imported footprint at
-    /// the locked file of the required model library. Without such a
-    /// requirement the reference is left alone. A model the library does not
-    /// have, or that cannot be fetched, is dropped with a warning so the
-    /// generated body stands in; a lock mismatch is an error.
+    /// Points each `${KICADn_3DMODEL_DIR}/...` (or legacy `${KISYS3DMOD}/...`) model of
+    /// an imported footprint at the locked file of the required model library;
+    /// a `.wrl` reference falls back to the library's `.step` of the same name.
+    /// Without such a requirement `KICADn` references are left alone (a KiCad
+    /// install defines them) and legacy ones are dropped, since nothing defines
+    /// that variable any more. A model the library does not have, or that cannot
+    /// be fetched, is dropped with a warning so the generated body stands in; a
+    /// lock mismatch is an error.
     fn resolve_footprint_models(
         &mut self,
         metadata: &mut IndexMap<String, String>,
@@ -127,20 +130,40 @@ impl FootprintResolver {
         if !models.iter().any(|model| kicad_model_rest(&model.path).is_some()) {
             return Ok(());
         }
-        let Some(library) = self.model_library() else { return Ok(()) };
+        let library = self.model_library();
         let mut kept = Vec::new();
         for mut model in models {
-            let Some(rest) = kicad_model_rest(&model.path) else {
+            let Some(rest) = kicad_model_rest(&model.path).map(str::to_owned) else {
                 kept.push(model);
                 continue;
             };
-            match self.resolve_model(&format!("{library}/{rest}")) {
-                Ok(asset) => {
-                    model.path = paths::display(&asset.path);
+            let Some(library) = &library else {
+                if !model.path.starts_with(LEGACY_MODEL_VARIABLE) {
                     kept.push(model);
                 }
-                Err(error) if matches!(error.code.as_str(), "PKG008" | "PKG010") => return Err(compile_error(error)),
-                Err(error) => warnings
+                continue;
+            };
+            let mut names = vec![rest.clone()];
+            if let Some(stem) = rest.strip_suffix(".wrl") {
+                names.push(format!("{stem}.step"));
+            }
+            let mut failure = None;
+            for name in names {
+                match self.resolve_model(&format!("{library}/{name}")) {
+                    Ok(asset) => {
+                        model.path = paths::display(&asset.path);
+                        failure = None;
+                        break;
+                    }
+                    Err(error) if matches!(error.code.as_str(), "PKG008" | "PKG010") => {
+                        return Err(compile_error(error));
+                    }
+                    Err(error) => failure = Some(error),
+                }
+            }
+            match failure {
+                None => kept.push(model),
+                Some(error) => warnings
                     .push(format!("3D model {} unavailable ({}); using a generated body", model.path, error.message)),
             }
         }
@@ -363,8 +386,14 @@ impl FootprintResolver {
     }
 }
 
-/// `${KICADn_3DMODEL_DIR}/rest` to `rest`.
+/// The model-directory variable of footprint libraries before KiCad 6.
+const LEGACY_MODEL_VARIABLE: &str = "${KISYS3DMOD}/";
+
+/// `${KICADn_3DMODEL_DIR}/rest` or `${KISYS3DMOD}/rest` to `rest`.
 fn kicad_model_rest(path: &str) -> Option<&str> {
+    if let Some(rest) = path.strip_prefix(LEGACY_MODEL_VARIABLE) {
+        return (!rest.is_empty()).then_some(rest);
+    }
     let (digits, rest) = path.strip_prefix("${KICAD")?.split_once("_3DMODEL_DIR}/")?;
     (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty()).then_some(rest)
 }
