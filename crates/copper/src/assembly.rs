@@ -1,6 +1,6 @@
 //! `copper assembly {snapshot,update,check,bom,candidate-bom} BOARD [--locked] [--offline] ...`:
 //! pin and check explicit assembly selections offline. `copper assembly offers`
-//! is the one networked action: a timestamped Nexar availability report.
+//! is the one networked action: a timestamped live availability report.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -20,12 +20,15 @@ use crate::pypath;
 const USAGE: &str = "usage: copper assembly [-h] {snapshot,update,check,bom,candidate-bom,offers} ...";
 const ACTIONS: [&str; 6] = ["snapshot", "update", "check", "bom", "candidate-bom", "offers"];
 const OFFERS_USAGE: &str = "usage: copper assembly offers [-h] [--lock LOCK] [-o OUTPUT] [--distributors NAMES] \
-[--quantity BOARDS] [--min-stock N] [--within-weeks W] [--country CC] [--currency CUR] [--write-alternates] board
+[--provider NAMES] [--quantity BOARDS] [--min-stock N] [--within-weeks W] [--country CC] [--currency CUR] \
+[--write-alternates] board
 
 Look up live distributor offers for every fitted manufacturer part in the lock
-through the Nexar Supply API (Octopart). Needs NEXAR_CLIENT_ID and
-NEXAR_CLIENT_SECRET. Writes a timestamped report, by default under the board's
-build/assembly-offers/. --write-alternates adds offers for the same
+from each configured provider: digikey (DIGIKEY_CLIENT_ID, DIGIKEY_CLIENT_SECRET),
+mouser (MOUSER_API_KEY), farnell (FARNELL_API_KEY, optional FARNELL_STORE) and
+nexar/Octopart (NEXAR_CLIENT_ID, NEXAR_CLIENT_SECRET). --provider limits the
+lookup to the named ones. Writes a timestamped report, by default under the
+board's build/assembly-offers/. --write-alternates adds offers for the same
 manufacturer part from distributors not yet listed on a selection; nothing
 else in the lock changes.";
 
@@ -45,6 +48,7 @@ fn specs(action: &str) -> Vec<Spec> {
             value("--lock"),
             short_value("--output", "-o"),
             value("--distributors"),
+            value("--provider"),
             value("--quantity"),
             value("--min-stock"),
             value("--within-weeks"),
@@ -361,8 +365,15 @@ fn run_offers(parsed: &option_parser::Parsed, board: &str, out: &mut dyn Write) 
         min_stock: count_option(parsed, "--min-stock")?,
         within_weeks: count_option(parsed, "--within-weeks")?,
     };
-    let country = parsed.value("--country").unwrap_or("US");
-    let currency = parsed.value("--currency").unwrap_or("USD");
+    let locale = offers::Locale {
+        country: parsed.value("--country").unwrap_or("US").to_owned(),
+        currency: parsed.value("--currency").unwrap_or("USD").to_owned(),
+    };
+    let list = |name: &str| -> Option<Vec<String>> {
+        parsed
+            .value(name)
+            .map(|names| names.split(',').map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect())
+    };
     let lock = assembly::load_lock(&lock_path.path, &lock_path.shown)?;
     let write_alternates = parsed.flag("--write-alternates");
     if write_alternates {
@@ -378,10 +389,7 @@ fn run_offers(parsed: &option_parser::Parsed, board: &str, out: &mut dyn Write) 
             )));
         }
     }
-    let distributors: Vec<String> = match parsed.value("--distributors") {
-        Some(names) => names.split(',').map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect(),
-        None => offers::lock_distributors(&lock),
-    };
+    let distributors: Vec<String> = list("--distributors").unwrap_or_else(|| offers::lock_distributors(&lock));
     if distributors.is_empty() {
         return Err(AssemblyError("no distributors to look up; pass --distributors".into()));
     }
@@ -393,18 +401,17 @@ fn run_offers(parsed: &option_parser::Parsed, board: &str, out: &mut dyn Write) 
         in_directory(&format!("build/assembly-offers/offers-{stamp}.json"))
     });
 
-    let credentials = offers::Credentials::from_env()?;
-    let transport = offers::Curl;
-    let token = offers::access_token(&transport, &credentials)?;
-    let results = offers::fetch(&transport, &token, &lines, &distributors, country, currency)?;
+    let providers = offers::enabled_providers(list("--provider").as_deref(), &locale)?;
+    let (results, used, provider_errors) = offers::fetch_all(&offers::Curl, &providers, &lines, &distributors)?;
 
     let request = offers::Request {
         board: &lock.board,
         lock: &lock_path.shown,
         generated_at: &generated_at,
         distributors: &distributors,
-        country,
-        currency,
+        providers: &used,
+        provider_errors: &provider_errors,
+        locale: &locale,
         criteria,
     };
     copper_assembly::files::mkdir_parents(&copper_assembly::files::parent(&output.path), true, true)
@@ -415,14 +422,18 @@ fn run_offers(parsed: &option_parser::Parsed, board: &str, out: &mut dyn Write) 
     let _ = text::print(
         out,
         &format!(
-            "Offers for {} part(s) from {} at {generated_at} -> {}; {} without an adequate offer for {quantity} \
-             board(s); live data, not a reservation",
+            "Offers for {} part(s) from {} via {} at {generated_at} -> {}; {} without an adequate offer for \
+             {quantity} board(s); live data, not a reservation",
             results.len(),
             distributors.join(", "),
+            used.join(", "),
             output.shown,
             short.len()
         ),
     );
+    for (provider, message) in &provider_errors {
+        let _ = text::print(out, &format!("PROVIDER ERROR: {provider}: {message}; its offers are missing"));
+    }
     for result in short.iter().take(40) {
         let _ = text::print(
             out,

@@ -138,28 +138,53 @@ This bounded prototype uses explicit board-side selections without changing
 the electrical language or claiming generic passives are qualified replacements.
 There are no board-specific rules or selections in the compiler.
 
-## Live distributor offers (Nexar)
+## Live distributor offers
 
 `copper assembly offers` is the one networked assembly action. It reads the
-lock (no compilation), looks up every fitted manufacturer+MPN through the
-[Nexar Supply API](https://nexar.com/api) (Octopart's official API,
-authorized sellers only) and writes a timestamped report:
+lock (no compilation), looks up every fitted manufacturer+MPN with each
+configured provider and writes a timestamped report:
 
 ```sh
-export NEXAR_CLIENT_ID=... NEXAR_CLIENT_SECRET=...   # supply.domain scope
+export MOUSER_API_KEY=...                            # any provider(s), see below
 copper assembly offers board.copper --quantity 5 --distributors DigiKey,Mouser,Farnell \
     --min-stock 100 --within-weeks 8 --currency EUR --country NO
 ```
 
+### Providers
+
+A provider is enabled when its environment variables are set; `--provider
+digikey,mouser` limits the lookup to those (naming an unconfigured one is an
+error). Each is queried only when it sells for a requested distributor, and
+results are merged per part: one offer per distributor and SKU, a direct API's
+offer winning over Nexar's.
+
+| `--provider` | Distributors | Register | Environment | Limits (paced) |
+| --- | --- | --- | --- | --- |
+| `digikey` | DigiKey | [developer.digikey.com](https://developer.digikey.com): production app with the Product Information API (v4) | `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET` | 120/min, 1000/day |
+| `mouser` | Mouser | [mouser.com/api-hub](https://www.mouser.com/api-hub/): Search API key | `MOUSER_API_KEY` | 30/min, 1000/day |
+| `farnell` | Farnell, Newark or element14, by store | [partner.element14.com](https://partner.element14.com): Product Search API key | `FARNELL_API_KEY`, optional `FARNELL_STORE` (default `uk.farnell.com`; e.g. `no.farnell.com`, `www.newark.com`) | 2/s, 1000/day |
+| `nexar` | every authorized seller Octopart lists | [portal.nexar.com](https://portal.nexar.com): application with the Supply scope (needs a plan with a part quota) | `NEXAR_CLIENT_ID`, `NEXAR_CLIENT_SECRET` | per plan |
+
+DigiKey and Nexar take `--country`/`--currency` (default `US`/`USD`);
+Mouser prices come in the API account's currency and Farnell's in the store's.
+Requests are spaced under each per-minute limit, one per part (Nexar batches
+20). An HTTP 429 stops that provider with a rate-limit error. A provider that
+fails is reported (`PROVIDER ERROR`, `provider_errors`) and its offers are left
+out; the command fails only when every queried provider fails. Daily limits
+bound how many parts one run can look up. TME, LCSC, Arrow and other
+distributor APIs can be added as further providers.
+
+### Report
+
 - The lock defaults to `assembly.lock` beside the board and the report to
   `build/assembly-offers/offers-YYYYMMDDTHHMMSSZ.json` there (`--lock`, `-o`).
-  Schema `copperscript-assembly-offers/v0.1`, marked `"deterministic": false`.
+  Schema `copperscript-assembly-offers/v0.1`, marked `"deterministic": false`,
+  with the providers used.
 - Per part: references, quantity needed (`--quantity` boards, default 1), the
-  exact Nexar match (MPN equal without case, manufacturer prefix-equal without
-  case or punctuation, so `Murata` matches `Murata Electronics`) or the
-  near-miss candidates, and for each requested distributor every offer: SKU,
-  stock, factory lead days, MOQ, packaging, URL and price breaks (native and,
-  when Nexar converts them, in `--currency`; default `USD`, `--country US`).
+  exact match (MPN equal without case, manufacturer prefix-equal without case
+  or punctuation, so `Murata` matches `Murata Electronics`) or the near-miss
+  candidates, and for each requested distributor every offer: source
+  provider, SKU, stock, factory lead days, MOQ, packaging, URL and price breaks.
 - `--distributors` defaults to the suppliers already named in the lock and
   compares names without case or punctuation (`DigiKey` is `Digi-Key`).
 - An offer is adequate when stock covers the build and `--min-stock`, or, with
@@ -173,11 +198,12 @@ copper assembly offers board.copper --quantity 5 --distributors DigiKey,Mouser,F
   lock gives another part, and never changes MPNs, primary offers, `populate`
   or `reviewed`. It needs a canonical v0.4 lock (as `assembly update` writes).
 
-Credentials come only from `NEXAR_CLIENT_ID`/`NEXAR_CLIENT_SECRET`; they and
-the access token travel to `curl` on standard input, never on a command line,
-and are never printed or written. `--offline` is refused. Check, compile, lock
-and BOM export never touch the network, and the report is never an input to
-them. Live stock is not a reservation.
+Credentials come only from the environment variables above. They, access
+tokens and API keys in query strings travel to `curl` on standard input, never
+on a command line, and are never printed or written; errors show URLs without
+their query string. `--offline` is refused. Check, compile, lock and BOM
+export never touch the network, and the report is never an input to them.
+Live stock is not a reservation.
 
 ## Unapproved review candidates
 

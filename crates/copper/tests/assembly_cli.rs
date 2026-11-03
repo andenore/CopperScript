@@ -231,10 +231,10 @@ fn a_layout_only_change_leaves_every_selection_current() {
     assert!(reviewed(&lock).iter().all(|(_, reviewed)| *reviewed));
 }
 
-/// `assembly offers` without Nexar credentials: refused before any request,
+/// `assembly offers` without provider credentials: refused before any request,
 /// no report written and the lock untouched.
 #[test]
-fn offers_need_nexar_credentials_and_refuse_offline_runs() {
+fn offers_need_provider_credentials_and_refuse_offline_runs() {
     let directory = scratch("assembly-offers-credentials");
     let board = directory.join("board.copper");
     std::fs::copy(workspace().join("examples/valid_board/board.copper"), &board).expect("the example board");
@@ -248,6 +248,10 @@ fn offers_need_nexar_credentials_and_refuse_offline_runs() {
             .args(extra)
             .env_remove("NEXAR_CLIENT_ID")
             .env_remove("NEXAR_CLIENT_SECRET")
+            .env_remove("DIGIKEY_CLIENT_ID")
+            .env_remove("DIGIKEY_CLIENT_SECRET")
+            .env_remove("MOUSER_API_KEY")
+            .env_remove("FARNELL_API_KEY")
             .output()
             .expect("the copper binary runs");
         (
@@ -257,7 +261,14 @@ fn offers_need_nexar_credentials_and_refuse_offline_runs() {
     };
     let (status, stdout) = offers(&["--write-alternates", "--quantity", "3", "--distributors", "DigiKey"]);
     assert_eq!(status, 2, "{stdout}");
-    assert!(stdout.contains("ASSEMBLY ERROR: set NEXAR_CLIENT_ID and NEXAR_CLIENT_SECRET"), "{stdout}");
+    assert!(stdout.contains("ASSEMBLY ERROR: no offer provider is configured; set any of:"), "{stdout}");
+    assert!(stdout.contains("MOUSER_API_KEY (mouser)") && stdout.contains("NEXAR_CLIENT_ID"), "{stdout}");
+    let (status, stdout) = offers(&["--provider", "mouser", "--distributors", "Mouser"]);
+    assert_eq!(status, 2, "{stdout}");
+    assert!(stdout.contains("offer provider not configured; set MOUSER_API_KEY (mouser)"), "{stdout}");
+    let (status, stdout) = offers(&["--provider", "tme", "--distributors", "TME"]);
+    assert_eq!(status, 2, "{stdout}");
+    assert!(stdout.contains("unknown offer provider 'tme'"), "{stdout}");
     let (status, stdout) = offers(&["--offline"]);
     assert_eq!(status, 2, "{stdout}");
     assert!(stdout.contains("cannot run --offline"), "{stdout}");
