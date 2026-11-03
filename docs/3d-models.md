@@ -1,8 +1,9 @@
 # 3D models
 
 Status: model references, part `model`/`height`, the fallback body and KiCad
-export exist in the compiler, and CopperReview draws the exported bodies. A
-remote 3D module and STEP output are not built (see *Not yet*).
+export exist in the compiler, and CopperReview draws the exported bodies. KiCad's
+3D library resolves per file through the lock. STEP output for generated bodies
+is not built (see *Not yet*).
 
 ## Model references
 
@@ -65,6 +66,39 @@ board surface), so it needs no transform. `GeneratedBody::to_wrl()` writes VRML
 2.0; `hash` is the SHA-256 of the generator version and that text, so any change
 to the inputs or the generator changes it.
 
+## KiCad's 3D library
+
+`kicad-packages3D` is several GB, so it is never cloned or inventoried whole. A
+project requires it like any module:
+
+```text
+require github.com/KiCad/kicad-packages3D 10.0.8
+replace github.com/KiCad/kicad-packages3D => gitlab.com/kicad/libraries/kicad-packages3D 10.0.8
+```
+
+The compiler treats a module named `.../kicad-packages3D` as *sparse*. A model
+is read with `git show REV:PATH` from a blobless shallow clone kept in
+`.copper-cache` (about 300 KB of tree objects; git fetches only the blobs asked
+for), and `copper.lock` gains one entry per model used: its path, size and
+SHA-256, under the module's `sparse-git:` source. `copper lock` skips the module,
+a locked build refuses a model that is not recorded (`PKG008`, run `copper lock`)
+or whose bytes changed, and `--offline` uses the cache.
+
+Two things name a model from the library:
+
+- A footprint's own `(model "${KICADn_3DMODEL_DIR}/Lib.3dshapes/X.step")`, which
+  is what footprints from `kicad-footprints` carry. With the module required it
+  resolves to the locked file; without it the reference is left as written.
+- A part's `model = "github.com/KiCad/kicad-packages3D/Lib.3dshapes/X.step";`,
+  which overrides the footprint's.
+
+A model the library does not have at that revision, or that cannot be fetched
+(for example offline with a cold cache), is dropped with a warning and the
+generated body stands in. A lock mismatch is always an error. The export copies
+resolved files into `CopperScript.3dshapes`, so the project opens in KiCad
+without a KiCad install. Part `model` URLs need resolved footprints; with
+`--allow-proxy-footprints` they warn and fall back to the generated body.
+
 ## KiCad export
 
 `export-kicad-pcb` writes a `(model ...)` into every exported footprint, in the
@@ -90,11 +124,10 @@ the scale they sit inside their pads.
 
 ## Not yet
 
-- A remote 3D module (`kicad-packages3D`, which is several GB and needs a
-  sparse fetch). Until then `${KICAD10_3DMODEL_DIR}` references only resolve on
-  a machine with KiCad installed.
-- Locking part model files. A local model is read at export time; it is not part
+- Locking a part's *local* model file. It is read at export time and is not part
   of `copper.lock` unless it sits in a locked module.
+- Drawing KiCad's STEP models outside KiCad. CopperReview reads VRML only, and the
+  KiCad library ships STEP only, so it shows the generated body for those parts.
 - STEP output for generated bodies (VRML only).
 - Non-zero model rotation, model offsets and back-side parts in the CopperReview
   view are placed best-effort and have not been compared with KiCad.

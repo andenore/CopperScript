@@ -579,24 +579,56 @@ fn with_part_3d(
     part: &PartDefinition,
     mut footprint: PhysicalFootprint,
     warnings: &mut Vec<String>,
+    source: &mut Footprints<'_>,
 ) -> Result<PhysicalFootprint> {
     let height = part.metadata.get(PART_HEIGHT_KEY).and_then(|text| text.parse::<i64>().ok());
-    let model = part.metadata.get(PART_MODEL_KEY).and_then(|path| {
-        let base = part.metadata.get(PART_MODEL_SOURCE_KEY).map(String::as_str).unwrap_or_default();
-        let resolved = match std::path::Path::new(base).parent() {
-            Some(directory) => directory.join(path).to_string_lossy().into_owned(),
-            None => path.clone(),
-        };
-        if std::path::Path::new(&resolved).is_file() {
-            Some(resolved)
-        } else {
-            let warning = format!("{}: 3D model {} not found; using a generated body", part.name, repr(&resolved));
-            if !warnings.contains(&warning) {
-                warnings.push(warning);
-            }
-            None
+    let mut note = |text: String| {
+        if !warnings.contains(&text) {
+            warnings.push(text);
         }
-    });
+    };
+    let model = match part.metadata.get(PART_MODEL_KEY) {
+        // A module URL (for example KiCad's 3D library) resolves through the lock.
+        Some(path) if path.starts_with("github.com/") || path.starts_with("gitlab.com/") => match source {
+            Footprints::Resolved(resolver) => match resolver.resolve_model(path) {
+                Ok(asset) => Some(copper_lang::paths::display(&asset.path)),
+                Err(error) if matches!(error.code.as_str(), "PKG008" | "PKG010") => {
+                    return Err(Error::Value(error.to_string()));
+                }
+                Err(error) => {
+                    note(format!(
+                        "{}: 3D model {} unavailable ({}); using a generated body",
+                        part.name,
+                        repr(path),
+                        error.message
+                    ));
+                    None
+                }
+            },
+            Footprints::Proxy => {
+                note(format!(
+                    "{}: 3D model {} needs resolved footprints; using a generated body",
+                    part.name,
+                    repr(path)
+                ));
+                None
+            }
+        },
+        Some(path) => {
+            let base = part.metadata.get(PART_MODEL_SOURCE_KEY).map(String::as_str).unwrap_or_default();
+            let resolved = match std::path::Path::new(base).parent() {
+                Some(directory) => directory.join(path).to_string_lossy().into_owned(),
+                None => path.clone(),
+            };
+            if std::path::Path::new(&resolved).is_file() {
+                Some(resolved)
+            } else {
+                note(format!("{}: 3D model {} not found; using a generated body", part.name, repr(&resolved)));
+                None
+            }
+        }
+        None => None,
+    };
     if height.is_none() && model.is_none() {
         return Ok(footprint);
     }
@@ -735,7 +767,7 @@ pub fn physicalize(
                 result.footprint.clone()
             }
         };
-        footprint = with_part_3d(item.part, footprint, &mut import_warnings)?;
+        footprint = with_part_3d(item.part, footprint, &mut import_warnings, &mut source)?;
         if !import_warnings.is_empty() {
             metadata.insert(
                 "footprint_import_warnings".to_owned(),
