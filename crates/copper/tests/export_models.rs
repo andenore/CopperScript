@@ -49,5 +49,6 @@ fn generated_bodies_are_written_and_referenced() {
         }
     }
     let board = std::fs::read_to_string(&pcb).expect("the board");
+    assert!(board.contains("(property \"CopperScriptBody\" \"${KIPRJMOD}/CopperScript.3dshapes/"));
     assert!(board.contains("(scale (xyz 0.39370078740157477"), "millimetre VRML needs KiCad's 1/2.54 scale");
 }
