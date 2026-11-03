@@ -21,6 +21,7 @@ use crate::footprint::{
     ZoneConnection, merge_internal_pad_groups,
 };
 use crate::geometry::Point;
+use crate::model3d::{FootprintModel, MODELS_KEY, encode_models};
 use crate::pyfloat::round_int;
 
 /// A failed import: `KiCadModImportError`, or a dataclass `ValueError` that
@@ -356,6 +357,7 @@ pub fn parse_kicad_mod(text: &str, source: &str, strict: bool) -> Result<Footpri
     let mut attributes: IndexSet<String> = IndexSet::new();
     let mut duplicate_jumpers = false;
     let mut internal_groups: Vec<InternalPadGroup> = Vec::new();
+    let mut models: Vec<FootprintModel> = Vec::new();
     for child in lists(root.get(2..).unwrap_or_default()) {
         let Some(child_tag) = tag(child) else { continue };
         match child_tag {
@@ -372,7 +374,10 @@ pub fn parse_kicad_mod(text: &str, source: &str, strict: bool) -> Result<Footpri
                     warnings.push(format!("ignored footprint text ({kind})"));
                 }
             }
-            "model" => warnings.push("ignored 3D model reference".to_owned()),
+            "model" => match parse_model(child) {
+                Some(model) => models.push(model),
+                None => warnings.push("ignored 3D model reference".to_owned()),
+            },
             "duplicate_pad_numbers_are_jumpers" => {
                 let setting = required_atom(child, 1, source, "duplicate pad jumper setting")?;
                 if setting != "yes" && setting != "no" {
@@ -463,6 +468,9 @@ pub fn parse_kicad_mod(text: &str, source: &str, strict: bool) -> Result<Footpri
     if !warnings.is_empty() {
         metadata.insert("import_warnings".to_owned(), warnings.join(" | "));
     }
+    if !models.is_empty() {
+        metadata.insert(MODELS_KEY.to_owned(), encode_models(&models));
+    }
     if duplicate_jumpers {
         let mut counts: IndexMap<&str, usize> = IndexMap::new();
         for pad in pads.iter().filter(|pad| !pad.number.is_empty() && pad.kind.is_electrical()) {
@@ -493,6 +501,34 @@ pub fn parse_kicad_mod(text: &str, source: &str, strict: bool) -> Result<Footpri
     .validated()
     .map_err(wrap)?;
     Ok(FootprintImportResult { footprint, warnings, source_version: version })
+}
+
+/// `(model "path" (offset|at (xyz ..)) (scale (xyz ..)) (rotate (xyz ..)))`.
+/// Legacy `at` offsets are in inches. `None` when the reference is unusable.
+fn parse_model(node: &List) -> Option<FootprintModel> {
+    let path = atom(node, 1).filter(|path| FootprintModel::storable(path))?;
+    let xyz = |name: &str| -> Option<Option<[f64; 3]>> {
+        let Some(group) = first(node, name) else { return Some(None) };
+        let coordinates = first(group, "xyz")?;
+        let mut value = [0.0; 3];
+        for (index, slot) in value.iter_mut().enumerate() {
+            *slot = atom(coordinates, index + 1)?.parse::<f64>().ok().filter(|v| v.is_finite())?;
+        }
+        Some(Some(value))
+    };
+    let mut model = FootprintModel::new(path);
+    if let Some(offset) = xyz("offset")? {
+        model.offset_mm = offset;
+    } else if let Some(at) = xyz("at")? {
+        model.offset_mm = at.map(|inches| inches * 25.4);
+    }
+    if let Some(scale) = xyz("scale")? {
+        model.scale = scale;
+    }
+    if let Some(rotate) = xyz("rotate")? {
+        model.rotate_degrees = rotate;
+    }
+    Some(model)
 }
 
 fn parse_keepout(node: &List, source: &str, index: usize) -> Result<CopperKeepout> {

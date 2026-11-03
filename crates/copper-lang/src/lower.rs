@@ -1011,6 +1011,8 @@ pub fn compile_part(
             "source_checksum",
             "internal_pad_groups",
             "dc_power_path",
+            "model",
+            "height",
         ],
         location,
     )?;
@@ -1119,7 +1121,39 @@ pub fn compile_part(
     part.assembled = assembled;
     part.source = source_reference(&properties, location)?;
     part.internal_pad_groups = groups;
+    match properties.get("model") {
+        None => {}
+        Some(Scalar::Str(path)) if copper_physical::model3d::FootprintModel::storable(path) => {
+            part.metadata.insert(PART_MODEL_KEY.to_owned(), path.clone());
+            part.metadata.insert(PART_MODEL_SOURCE_KEY.to_owned(), location.filename.to_string());
+        }
+        Some(_) => return Err(error("CMP208", "part model must be a one-line file path string", location)),
+    }
+    if let Some(height) = properties.get("height") {
+        let nm = height_nm(height).map_err(|reason| error("CMP209", format!("part height {reason}"), location))?;
+        part.metadata.insert(PART_HEIGHT_KEY.to_owned(), nm.to_string());
+    }
     Ok(part)
+}
+
+/// `PartDefinition.metadata` key holding the part's `model` path.
+pub const PART_MODEL_KEY: &str = "model_3d";
+/// `PartDefinition.metadata` key holding the file that declared the part, which `model` is relative to.
+pub const PART_MODEL_SOURCE_KEY: &str = "model_3d_source";
+/// `PartDefinition.metadata` key holding the part's `height` in nanometres.
+pub const PART_HEIGHT_KEY: &str = "height_nm";
+
+/// A positive exact body height, as nanometres.
+fn height_nm(value: &Scalar) -> std::result::Result<i64, String> {
+    let Scalar::Quantity { value, unit } = value else { return Err("must be a typed length".to_owned()) };
+    let number = Decimal::parse(value).map_err(|failure| failure.to_string())?;
+    let quantity =
+        Quantity::of(Dimension::Length, &number, unit).map_err(|failure| format!("must be a length ({failure})"))?;
+    let nm = quantity.base_value().mul(&Decimal::from_i64(1_000_000_000)).map_err(|failure| failure.to_string())?;
+    if !nm.is_integral() || nm <= Decimal::zero() {
+        return Err("must be a positive whole number of nanometres".to_owned());
+    }
+    nm.to_i64().filter(|nm| *nm <= copper_physical::MAX_COORDINATE).ok_or_else(|| "is out of range".to_owned())
 }
 
 /// `_component`.

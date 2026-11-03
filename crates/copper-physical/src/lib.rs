@@ -11,11 +11,13 @@
 //! values as not implemented rather than risk an overflow.
 
 pub mod board;
+pub mod body;
 pub mod curves;
 pub mod footprint;
 pub mod geometry;
 pub mod kicad_mod;
 pub mod mechanical;
+pub mod model3d;
 pub mod pyfloat;
 
 pub use board::*;

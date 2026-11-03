@@ -15,9 +15,12 @@ use copper_physical::kicad_mod::{FootprintImportResult, load_kicad_mod, suffix};
 use crate::elaborate::elaborate;
 use crate::error::CopperScriptError;
 use crate::model::{Board, ComponentInstance, PartDefinition};
-use crate::packages::{PackageResolver, ResolvedAsset, ResolvedPackage, find_manifest, read_manifest};
+use crate::packages::{
+    PackageResolver, ResolvedAsset, ResolvedPackage, find_manifest, is_sparse_module, read_manifest,
+};
 use crate::paths;
 use crate::syntax::Location;
+use copper_physical::model3d::{MODELS_KEY, decode_models, encode_models};
 
 /// `FootprintResolutionError` (and the `ValueError`s that reach the same callers).
 pub type Result<T> = std::result::Result<T, String>;
@@ -95,6 +98,81 @@ impl FootprintResolver {
             .and_then(|packages| packages.resolve_asset_with(reference, &location, Some(&mut verified)));
         self.verified = verified;
         result
+    }
+
+    /// A 3D model file of a required module (see `PackageResolver::resolve_model_asset`).
+    pub fn resolve_model(&mut self, identity: &str) -> std::result::Result<ResolvedAsset, CopperScriptError> {
+        let location = self.location();
+        self.package_resolver().and_then(|packages| packages.resolve_model_asset(identity, &location))
+    }
+
+    /// The required module that provides KiCad's 3D models, if the project has one.
+    fn model_library(&mut self) -> Option<String> {
+        find_manifest(&self.base_directory)?;
+        self.package_resolver().ok()?.manifest.requirements.keys().find(|module| is_sparse_module(module)).cloned()
+    }
+
+    /// Points each `${KICADn_3DMODEL_DIR}/...` (or legacy `${KISYS3DMOD}/...`) model of
+    /// an imported footprint at the locked file of the required model library;
+    /// a `.wrl` reference falls back to the library's `.step` of the same name.
+    /// Without such a requirement `KICADn` references are left alone (a KiCad
+    /// install defines them) and legacy ones are dropped, since nothing defines
+    /// that variable any more. A model the library does not have, or that cannot
+    /// be fetched, is dropped with a warning so the generated body stands in; a
+    /// lock mismatch is an error.
+    fn resolve_footprint_models(
+        &mut self,
+        metadata: &mut IndexMap<String, String>,
+        warnings: &mut Vec<String>,
+    ) -> Result<()> {
+        let Some(text) = metadata.get(MODELS_KEY).cloned() else { return Ok(()) };
+        let models = decode_models(&text);
+        if !models.iter().any(|model| kicad_model_rest(&model.path).is_some()) {
+            return Ok(());
+        }
+        let library = self.model_library();
+        let mut kept = Vec::new();
+        for mut model in models {
+            let Some(rest) = kicad_model_rest(&model.path).map(str::to_owned) else {
+                kept.push(model);
+                continue;
+            };
+            let Some(library) = &library else {
+                if !model.path.starts_with(LEGACY_MODEL_VARIABLE) {
+                    kept.push(model);
+                }
+                continue;
+            };
+            let mut names = vec![rest.clone()];
+            if let Some(stem) = rest.strip_suffix(".wrl") {
+                names.push(format!("{stem}.step"));
+            }
+            let mut failure = None;
+            for name in names {
+                match self.resolve_model(&format!("{library}/{name}")) {
+                    Ok(asset) => {
+                        model.path = paths::display(&asset.path);
+                        failure = None;
+                        break;
+                    }
+                    Err(error) if matches!(error.code.as_str(), "PKG008" | "PKG010") => {
+                        return Err(compile_error(error));
+                    }
+                    Err(error) => failure = Some(error),
+                }
+            }
+            match failure {
+                None => kept.push(model),
+                Some(error) => warnings
+                    .push(format!("3D model {} unavailable ({}); using a generated body", model.path, error.message)),
+            }
+        }
+        if kept.is_empty() {
+            metadata.shift_remove(MODELS_KEY);
+        } else {
+            metadata.insert(MODELS_KEY.to_owned(), encode_models(&kept));
+        }
+        Ok(())
     }
 
     /// `managed_reference`: a managed asset identity, without fetching.
@@ -223,8 +301,15 @@ impl FootprintResolver {
             let candidates = self.candidate_paths(reference, None)?;
             let mut matches: Vec<PathBuf> = candidates.iter().filter(|path| path.is_file()).cloned().collect();
             if matches.is_empty() && find_manifest(&self.base_directory).is_some() {
-                let modules: Vec<String> =
-                    self.package_resolver().map_err(compile_error)?.manifest.requirements.keys().cloned().collect();
+                let modules: Vec<String> = self
+                    .package_resolver()
+                    .map_err(compile_error)?
+                    .manifest
+                    .requirements
+                    .keys()
+                    .filter(|module| !crate::packages::is_sparse_module(module))
+                    .cloned()
+                    .collect();
                 for module in modules {
                     let package = self.module(&module).map_err(compile_error)?;
                     let root = vec![package.directory.join("footprints")];
@@ -277,6 +362,8 @@ impl FootprintResolver {
             ));
         }
         let mut metadata = imported.footprint.metadata.clone();
+        let mut warnings = imported.warnings.clone();
+        self.resolve_footprint_models(&mut metadata, &mut warnings)?;
         metadata.insert("resolved_reference".to_owned(), reference.to_owned());
         metadata.insert("source_footprint_name".to_owned(), imported.footprint.name.clone());
         metadata.insert("resolution".to_owned(), resolution.to_owned());
@@ -295,8 +382,20 @@ impl FootprintResolver {
             metadata,
             ..imported.footprint
         };
-        Ok(FootprintImportResult { footprint, warnings: imported.warnings, source_version: imported.source_version })
+        Ok(FootprintImportResult { footprint, warnings, source_version: imported.source_version })
     }
+}
+
+/// The model-directory variable of footprint libraries before KiCad 6.
+const LEGACY_MODEL_VARIABLE: &str = "${KISYS3DMOD}/";
+
+/// `${KICADn_3DMODEL_DIR}/rest` or `${KISYS3DMOD}/rest` to `rest`.
+fn kicad_model_rest(path: &str) -> Option<&str> {
+    if let Some(rest) = path.strip_prefix(LEGACY_MODEL_VARIABLE) {
+        return (!rest.is_empty()).then_some(rest);
+    }
+    let (digits, rest) = path.strip_prefix("${KICAD")?.split_once("_3DMODEL_DIR}/")?;
+    (!digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) && !rest.is_empty()).then_some(rest)
 }
 
 /// `_reference_name`: the footprint name a reference must declare.
@@ -485,6 +584,19 @@ pub fn prepare_footprint_dependencies(board: &Board, resolver: &mut FootprintRes
         }
     }
     references.sort();
+    // Models that parts take from a module (for example KiCad's 3D library) belong in the lock too.
+    let mut models: Vec<String> = flat
+        .library
+        .values()
+        .filter_map(|part| part.metadata.get(crate::lower::PART_MODEL_KEY))
+        .filter(|path| path.starts_with("github.com/") || path.starts_with("gitlab.com/"))
+        .cloned()
+        .collect();
+    models.sort();
+    models.dedup();
+    for model in &models {
+        resolver.resolve_model(model).map_err(compile_error)?;
+    }
     let mut managed = Vec::new();
     for reference in references {
         if resolver.managed_reference(&reference)?.is_some() {

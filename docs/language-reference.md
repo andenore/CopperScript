@@ -207,8 +207,10 @@ part BME280 {
 ```
 
 Supported part properties are open `category` and `traits` strings,
-`manufacturer`, `assembled` (boolean, default `true`), one `footprint`, and an
-optional package-independent `device`. Every pin requires a quoted `number`;
+`manufacturer`, `assembled` (boolean, default `true`), one `footprint`, an
+optional package-independent `device`, and the optional 3D fields `model` (a
+file path string) and `height` (a positive typed length); see
+[3D models](3d-models.md). Every pin requires a quoted `number`;
 `voltage_min` and `voltage_max` are optional typed voltage quantities (the
 operating range), and `absolute_min` and `absolute_max` are optional
 absolute-maximum ratings (see [Voltage limits](#voltage-limits)).
