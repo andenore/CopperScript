@@ -90,7 +90,7 @@ fn corner_radius(pad: &Pad) -> f64 {
 }
 
 /// Whether the pad has copper on `layer` (an NPTH pad no larger than its hole has none).
-fn flashes(pad: &Pad, layer: usize) -> bool {
+pub(crate) fn flashes(pad: &Pad, layer: usize) -> bool {
     pad.layers.has(Layer::Copper(layer))
         && !(pad.kind == PadKind::NonPlated
             && matches!(pad.shape, PadShape::Circle | PadShape::Oval)
@@ -268,7 +268,13 @@ impl<'a> Filler<'a> {
         let no_net = Item::default();
         let graphic_gap = (self.rules.clearance(&zone_item, &no_net) + EXTRA_MARGIN) as f64;
         for drawing in board.drawings.iter().filter(|drawing| drawing.layer == Layer::Copper(layer)) {
-            holes.extend(self.drawing_shape(&drawing.shape, drawing.width as f64, drawing.filled, graphic_gap));
+            // A graphic of the zone's net merges with the fill.
+            if same_net(&drawing.net) {
+                continue;
+            }
+            let item = Item { net: drawing.net.as_deref(), ..Item::default() };
+            let gap = (self.rules.clearance(&zone_item, &item) + EXTRA_MARGIN) as f64;
+            holes.extend(self.drawing_shape(&drawing.shape, drawing.width as f64, drawing.filled, gap));
         }
         for text in board.texts.iter().filter(|text| text.layer == Layer::Copper(layer)) {
             if let Ok((strokes, pen)) = font::strokes(text) {
@@ -491,7 +497,7 @@ impl<'a> Filler<'a> {
 }
 
 /// The board interior from its Edge.Cuts outline (even-odd, so cutouts are holes).
-fn board_area(board: &Board, max_error: f64) -> Result<Shapes> {
+pub(crate) fn board_area(board: &Board, max_error: f64) -> Result<Shapes> {
     let mut contours: Vec<poly::Contour> = Vec::new();
     let mut open: Vec<Vec<(f64, f64)>> = Vec::new();
     for drawing in board.drawings.iter().filter(|drawing| drawing.layer == Layer::EdgeCuts) {
@@ -541,10 +547,10 @@ fn board_area(board: &Board, max_error: f64) -> Result<Shapes> {
 // islands
 
 /// Union-find over node indices.
-struct Sets(Vec<usize>);
+pub(crate) struct Sets(pub(crate) Vec<usize>);
 
 impl Sets {
-    fn find(&mut self, mut a: usize) -> usize {
+    pub(crate) fn find(&mut self, mut a: usize) -> usize {
         while self.0[a] != a {
             self.0[a] = self.0[self.0[a]];
             a = self.0[a];
@@ -552,7 +558,7 @@ impl Sets {
         a
     }
 
-    fn join(&mut self, a: usize, b: usize) {
+    pub(crate) fn join(&mut self, a: usize, b: usize) {
         let (ra, rb) = (self.find(a), self.find(b));
         if ra != rb {
             self.0[ra.max(rb)] = ra.min(rb);

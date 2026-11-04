@@ -112,7 +112,7 @@ fn load(root: &Path) -> Result<FileSet, String> {
     Ok(set)
 }
 
-fn rasterise(image: &Image, frame: Frame) -> Raster {
+pub(crate) fn rasterise(image: &Image, frame: Frame) -> Raster {
     let mut raster = Raster::new(frame);
     for op in &image.ops {
         match op {

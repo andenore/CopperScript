@@ -11,9 +11,9 @@ copper plot build/board.filled.kicad_pcb -o build/native-plot
 ```
 
 Together with [native plotting](native-plotting.md), this gives fabrication
-files without KiCad installed. It is not a release gate: `fill` runs no DRC
-and no CAM check. `export-manufacturing` still refills and checks the board
-with KiCad.
+files without KiCad installed. `fill` itself runs no DRC and no CAM check;
+[`copper drc`](native-drc.md) does. `export-manufacturing --drc native` fills
+with it and gates on the native DRC; KiCad's refill remains the default.
 
 ## Algorithm
 

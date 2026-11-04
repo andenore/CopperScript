@@ -131,6 +131,9 @@ pub struct Zone {
     pub outline: Vec<Contour>,
     /// A rule area: `Some(true)` when it forbids copper pours.
     pub keepout: Option<bool>,
+    /// For a keepout: the item kinds it forbids (`tracks`, `vias`, `pads`,
+    /// `copperpour`, `footprints`).
+    pub not_allowed: Vec<String>,
     pub connection: ZoneConnection,
     pub clearance: Option<i64>,
     pub min_thickness: i64,
@@ -159,6 +162,9 @@ pub struct Footprint {
     pub paste_ratio: Option<f64>,
     pub zones: PadZoneSettings,
     pub pads: Vec<Pad>,
+    /// Pad numbers the part joins internally (KiCad 10 `jumper_pad_groups`,
+    /// or each repeated number with `duplicate_pad_numbers_are_jumpers`).
+    pub jumper_groups: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -200,6 +206,8 @@ pub struct Drawing {
     pub width: i64,
     pub filled: bool,
     pub shape: Shape,
+    /// The net of a copper graphic (KiCad 9 and newer).
+    pub net: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -239,6 +247,8 @@ pub struct Fill {
     pub layer: Layer,
     pub net: Option<String>,
     pub contour: Contour,
+    /// Index into `Board::zones` of the zone it fills.
+    pub zone: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -572,7 +582,29 @@ fn drawing(node: &List, layer: Layer, place: &dyn Fn(Point) -> Point, what: &str
         "poly" => Shape::Polygon(contour(child(node, "pts", what)?, what)?.transformed(place)),
         _ => return Err(format!("{what}: unsupported graphic {kind}")),
     };
-    Ok(Drawing { layer, width, filled, shape })
+    Ok(Drawing { layer, width, filled, shape, net: None })
+}
+
+/// The pad-number groups a footprint joins internally.
+fn jumper_groups(node: &List, pads: &[Pad]) -> Vec<Vec<String>> {
+    let mut groups: Vec<Vec<String>> = kicad_mod::first(node, "jumper_pad_groups")
+        .map(|list| {
+            lists(list).map(|group| (0..group.len()).filter_map(|index| string(group, index)).collect()).collect()
+        })
+        .unwrap_or_default();
+    if kicad_mod::first(node, "duplicate_pad_numbers_are_jumpers").and_then(|item| kicad_mod::atom(item, 1))
+        == Some("yes")
+    {
+        let mut seen: Vec<&str> = Vec::new();
+        for pad in pads {
+            let repeated = pads.iter().filter(|other| other.number == pad.number).count() > 1;
+            if repeated && !pad.number.is_empty() && !seen.contains(&pad.number.as_str()) {
+                seen.push(&pad.number);
+                groups.push(vec![pad.number.clone()]);
+            }
+        }
+    }
+    groups
 }
 
 fn text_item(node: &List, text: String, layer: Layer, what: &str) -> Result<Text> {
@@ -769,7 +801,9 @@ fn footprint(node: &List, stack: &Stack, board: &mut Board) -> Result<()> {
             "pad" => pads.push(pad(item, stack, position, angle, &what)?),
             "fp_line" | "fp_arc" | "fp_circle" | "fp_rect" | "fp_poly" => {
                 if let Some(layer) = stack.graphic_layer(item, &what)? {
-                    board.drawings.push(drawing(item, layer, &place, &what)?);
+                    let mut graphic = drawing(item, layer, &place, &what)?;
+                    graphic.net = net(item, stack);
+                    board.drawings.push(graphic);
                 }
             }
             "property" | "fp_text" => {
@@ -813,6 +847,7 @@ fn footprint(node: &List, stack: &Stack, board: &mut Board) -> Result<()> {
             None => optional_real(node, "solder_paste_ratio")?,
         },
         zones: zone_settings(node, &what)?,
+        jumper_groups: jumper_groups(node, &pads),
         pads,
     });
     Ok(())
@@ -921,6 +956,17 @@ fn zone_definition(node: &List, stack: &Stack, in_footprint: bool, index: usize)
     let keepout = kicad_mod::first(node, "keepout").map(|keepout| {
         kicad_mod::first(keepout, "copperpour").and_then(|pour| kicad_mod::atom(pour, 1)) == Some("not_allowed")
     });
+    let not_allowed: Vec<String> = kicad_mod::first(node, "keepout")
+        .map(|keepout| {
+            ["tracks", "vias", "pads", "copperpour", "footprints"]
+                .into_iter()
+                .filter(|kind| {
+                    kicad_mod::first(keepout, kind).and_then(|item| kicad_mod::atom(item, 1)) == Some("not_allowed")
+                })
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
     let fill = kicad_mod::first(node, "fill");
     if keepout.is_none() {
         if fill_value(fill, "mode") == Some("hatch") {
@@ -970,6 +1016,7 @@ fn zone_definition(node: &List, stack: &Stack, in_footprint: bool, index: usize)
         priority: priority.unwrap_or(0),
         outline,
         keepout,
+        not_allowed,
         connection,
         clearance: connect.map(|connect| optional_nm(connect, "clearance")).transpose()?.flatten(),
         min_thickness: optional_nm(node, "min_thickness")?.unwrap_or(250_000),
@@ -983,8 +1030,10 @@ fn zone_definition(node: &List, stack: &Stack, in_footprint: bool, index: usize)
 }
 
 fn zone(node: &List, stack: &Stack, board: &mut Board, index: usize, version: i64) -> Result<()> {
+    let mut zone_index = None;
     if let Some(definition) = zone_definition(node, stack, false, index)? {
         board.zones.push(definition);
+        zone_index = Some(board.zones.len() - 1);
     }
     // KiCad strokes the fills of older files by the minimum width unless the
     // zone says otherwise; such fills are not plotted natively.
@@ -1020,6 +1069,7 @@ fn zone(node: &List, stack: &Stack, board: &mut Board, index: usize, version: i6
             layer,
             net: net.clone(),
             contour: contour(child(fill, "pts", "zone fill")?, "zone fill")?,
+            zone: zone_index,
         });
     }
     Ok(())
@@ -1110,7 +1160,9 @@ pub fn parse_board(text: &str, source: &str) -> Result<Board> {
                 }
                 "gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly" => {
                     if let Some(layer) = stack.graphic_layer(item, item_tag)? {
-                        board.drawings.push(drawing(item, layer, &identity, item_tag)?);
+                        let mut graphic = drawing(item, layer, &identity, item_tag)?;
+                        graphic.net = net(item, &stack);
+                        board.drawings.push(graphic);
                     }
                 }
                 "gr_text" => {

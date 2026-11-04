@@ -62,6 +62,17 @@ pub struct Rules {
     pub hole_clearance: i64,
     /// Arc approximation error, nanometres.
     pub max_error: i64,
+    /// Board minimums the design-rule check enforces (0 when unset).
+    pub min_track_width: i64,
+    pub min_via_diameter: i64,
+    pub min_via_annular_width: i64,
+    pub min_through_hole_diameter: i64,
+    pub min_hole_to_hole: i64,
+    /// Violation types the project sets to `ignore`.
+    pub ignored: Vec<String>,
+    /// Custom-rule constraints neither the filler nor the check models:
+    /// rule name and constraint type.
+    pub other_constraints: Vec<(String, String)>,
     class_clearance: IndexMap<String, i64>,
     assignments: IndexMap<String, String>,
     patterns: Vec<(String, String)>,
@@ -243,18 +254,34 @@ impl Rules {
                 patterns.push((glob.to_owned(), class.to_owned()));
             }
         }
+        let mut ignored: Vec<String> = Vec::new();
+        if let Some(Value::Object(map)) = settings.and_then(|s| s.get("rule_severities")) {
+            for (kind, severity) in map {
+                if severity.as_str() == Some("ignore") {
+                    ignored.push(kind.clone());
+                }
+            }
+        }
+        let (custom, other_constraints) = match custom {
+            Some(text) => parse_custom(text)?,
+            None => (Vec::new(), Vec::new()),
+        };
         Ok(Rules {
             min_clearance: rule("min_clearance")?.unwrap_or(0),
             edge_clearance: required("min_copper_edge_clearance")?,
             hole_clearance: required("min_hole_clearance")?,
             max_error: mm(settings.and_then(|s| s.get("max_error")), "max_error")?.unwrap_or(5_000),
+            min_track_width: rule("min_track_width")?.unwrap_or(0),
+            min_via_diameter: rule("min_via_diameter")?.unwrap_or(0),
+            min_via_annular_width: rule("min_via_annular_width")?.unwrap_or(0),
+            min_through_hole_diameter: rule("min_through_hole_diameter")?.unwrap_or(0),
+            min_hole_to_hole: rule("min_hole_to_hole")?.unwrap_or(0),
+            ignored,
+            other_constraints,
             class_clearance,
             assignments,
             patterns,
-            custom: match custom {
-                Some(text) => parse_custom(text)?,
-                None => Vec::new(),
-            },
+            custom,
         })
     }
 
@@ -338,10 +365,15 @@ const REFUSED: &[&str] = &[
     "disallow",
 ];
 
-fn parse_custom(text: &str) -> Result<Vec<Rule>> {
+/// Rule name and constraint type of a constraint that is not modelled.
+type Other = (String, String);
+
+/// The modelled clearance rules, and every other constraint by rule name.
+fn parse_custom(text: &str) -> Result<(Vec<Rule>, Vec<Other>)> {
     let wrapped = format!("(rules\n{}\n)", strip_comments(text));
     let root = kicad_mod::parse_sexpr(&wrapped, ".kicad_dru").map_err(|failure| failure.to_string())?;
     let mut rules = Vec::new();
+    let mut others = Vec::new();
     for item in root.iter().skip(1) {
         let Node::List(rule) = item else { continue };
         if kicad_mod::atom(rule, 0) != Some("rule") {
@@ -366,6 +398,11 @@ fn parse_custom(text: &str) -> Result<Vec<Rule>> {
         {
             return Err(format!("custom rule {name:?}: {refused} constraints are not modelled by the native filler"));
         }
+        for kind in constraints.iter().filter_map(|c| kicad_mod::atom(c, 1)) {
+            if !matches!(kind, "clearance" | "hole_clearance" | "edge_clearance") {
+                others.push((name.clone(), kind.to_owned()));
+            }
+        }
         if relevant.is_empty() {
             continue;
         }
@@ -387,7 +424,7 @@ fn parse_custom(text: &str) -> Result<Vec<Rule>> {
             rules.push(Rule { kind, min, condition: condition.clone() });
         }
     }
-    Ok(rules)
+    Ok((rules, others))
 }
 
 #[cfg(test)]
@@ -410,6 +447,7 @@ mod tests {
     fn clearances_take_classes_rules_and_local_overrides() {
         let rules = Rules::load(PROJECT, Some(DRU)).unwrap();
         assert_eq!((rules.edge_clearance, rules.hole_clearance, rules.max_error), (300_000, 250_000, 5_000));
+        assert_eq!(rules.other_constraints, vec![("Courtyard".to_owned(), "courtyard_clearance".to_owned())]);
         assert_eq!(rules.clearance(&item("GND"), &item("SIG")), 150_000);
         assert_eq!(rules.clearance(&item("GND"), &item("MAINS")), 500_000);
         assert_eq!(rules.clearance(&item("GND"), &item("PWR_24V")), 500_000);

@@ -4,7 +4,7 @@ use std::io::Write;
 
 use crate::{
     agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compare_cam, compile,
-    compile_macro, edit_mechanical, editor_overlay, explain, export_kicad, export_kicad_pcb, export_manufacturing,
+    compile_macro, drc, edit_mechanical, editor_overlay, explain, export_kicad, export_kicad_pcb, export_manufacturing,
     fill, issues, library, lock, lsp, plan_layout, plot, power_check, query, replay_critical, replay_unified,
     route_board, route_global, si_check, state, summarize, view,
 };
@@ -28,6 +28,7 @@ pub const COMMANDS: &[&str] = &[
     "export-manufacturing",
     "plot",
     "fill",
+    "drc",
     "compare-cam",
     "assembly",
     "check",
@@ -98,6 +99,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "export-manufacturing" => export_manufacturing::run(rest, out, err),
         "plot" => plot::run(rest, out, err),
         "fill" => fill::run(rest, out, err),
+        "drc" => drc::run(rest, out, err),
         "compare-cam" => compare_cam::run(rest, out, err),
         "plan-layout" => plan_layout::run(rest, out, err),
         "bench" => copper_route::ladder::run(rest, out, err),

@@ -18,8 +18,8 @@ a board that was never filled, every zone plots empty, and the summary line
 reports the number of fill areas read.
 
 `copper export-manufacturing --plotter native` uses this plotter in the release
-path: KiCad still refills and checks the board in the staging directory, then
-the refilled board is plotted natively.
+path: the board is refilled and checked in the staging directory (by KiCad, or
+natively with `--drc native`), then plotted natively.
 
 ## What is plotted
 

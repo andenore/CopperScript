@@ -10,6 +10,7 @@
 
 pub mod board;
 pub mod compare;
+pub mod drc;
 pub mod fill;
 pub mod font;
 pub mod geometry;
@@ -17,4 +18,5 @@ pub mod gerber;
 pub mod pcb_write;
 pub mod plot;
 pub mod poly;
+pub mod readback;
 pub mod rules;
