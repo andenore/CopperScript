@@ -14,6 +14,9 @@ publish = false
 
 [workspace.dependencies]
 base64 = "0.22"
+# Pure-Rust FDTD solver behind antenna synthesis. Pinned exactly: its API is
+# still unstable (0.0.x); the solver identity is recorded in every report.
+ems = { version = "=0.0.5", default-features = false }
 indexmap = "2"
 num-bigint = "0.4"
 num-integer = "0.1"
@@ -23,6 +26,7 @@ sha2 = "0.10"
 unicode-general-category = "1"
 copper-json = { path = "crates/copper-json" }
 copper-lang = { path = "crates/copper-lang" }
+copper-antenna = { path = "crates/copper-antenna" }
 copper-assembly = { path = "crates/copper-assembly" }
 copper-lsp = { path = "crates/copper-lsp" }
 copper-drc = { path = "crates/copper-drc" }

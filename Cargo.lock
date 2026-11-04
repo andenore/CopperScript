@@ -39,6 +39,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 name = "copper"
 version = "0.1.0"
 dependencies = [
+ "copper-antenna",
  "copper-assembly",
  "copper-drc",
  "copper-editor",
@@ -54,6 +55,18 @@ dependencies = [
  "copper-units",
  "indexmap",
  "sha2",
+]
+
+[[package]]
+name = "copper-antenna"
+version = "0.1.0"
+dependencies = [
+ "copper-json",
+ "copper-lang",
+ "copper-pcb",
+ "copper-physical",
+ "ems",
+ "indexmap",
 ]
 
 [[package]]
@@ -289,6 +302,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "csx"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d0dffc04cc80f24e77e13b730febb44a4aafb29d8eaedd165081c8e77550f61"
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -296,6 +315,15 @@ checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
  "block-buffer",
  "crypto-common",
+]
+
+[[package]]
+name = "ems"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "467bcef2409f9fd04e965bc6f2916b4b1cfbbd6802561d41512d3f48eb0a2183"
+dependencies = [
+ "csx",
 ]
 
 [[package]]

@@ -1,6 +1,10 @@
 //! `constraint antenna(COMPONENT.PIN) { ... }`: a synthesized trace antenna.
 //!
-//! The declaration is lowered to a generated one-member hard macro in the
+//! The declaration resolves to an [`AntennaSite`]: the board-edge region, its
+//! local frame, the feed pad and its pose, the track rules, the stack-up and
+//! the bands. A [`Geometry`] (from the source's `geometry`, or the first-order
+//! template when absent) realizes a [`Layout`] in the site's local frame,
+//! which is lowered to a generated one-member hard macro in the
 //! `copperlib-physical-hard-macro/v0.5` contract and bound through the same
 //! immutable binder as a library macro: the feed component is the anchor, the
 //! radiator is locked owner copper, the antenna region is a private region on
@@ -8,12 +12,14 @@
 //! perimeter, and the feed pad is the macro's one external port. Other
 //! components are kept out of the region by a placement keepout.
 //!
-//! Only the template tier is implemented: a first-order quarter-wave monopole
-//! scaled by the declared stack-up's effective permittivity (Hammerstad-Jensen
-//! microstrip estimate, as the critical router's impedance screen). There is no
-//! field solution. Resonance, matching, radiation, enclosure effects and
-//! regulatory compliance remain unqualified; the generated macro says so in
-//! `unresolved`. See `docs/pcb-antenna-synthesis-research.md`.
+//! Geometry tuned by `copper synthesize-antenna` (the full-wave solver in the
+//! `copper-antenna` crate) carries `tuned_for`, the [`site_digest`] of every
+//! input that model used; a changed input fails closed. Only feed-net copper is
+//! generated: DC-shorted radiators (inverted-F, loops) need component-owned
+//! copper with a net tie, which CopperScript does not have yet. Nothing here
+//! establishes resonance, matching, radiation or regulatory compliance; the
+//! generated macro says so in `unresolved`. See
+//! `docs/pcb-antenna-synthesis-research.md`.
 
 use std::path::Path;
 
@@ -23,31 +29,32 @@ use sha2::{Digest, Sha256};
 use copper_json::{Dumps, Object, Value as Json, python_str_repr as repr};
 use copper_lang::antenna::{Band, parse_bands};
 use copper_lang::model::{Constraint, ConstraintKind, FlatElectricalView, ParameterValue};
-use copper_physical::footprint::footprint_geometry_digest;
+use copper_physical::footprint::{FootprintPad, footprint_geometry_digest};
 use copper_physical::geometry::{Bounds, bounds, segment_in_polygon};
 use copper_physical::{BoardOutline, BoardSide, CopperLayer, PlacementKeepout, Point};
 use copper_units::Decimal;
 
 use crate::board::*;
 use crate::hard_macros::{bind_hard_macro, ring_covers_segment};
-use crate::physicalize::{Selected, physical_pin_number};
+use crate::physicalize::physical_pin_number;
 use crate::zones::{length_nm, polygon_boundary};
 use crate::{Error, Result, fail};
 
-/// The generator identity recorded in every synthesized macro's `source`.
-pub const GENERATOR: &str = "copper antenna/v0.1";
+/// The generator identity recorded in every synthesized macro's `source` and
+/// in every [`site_digest`]: a generator change invalidates tuned geometry.
+pub const GENERATOR: &str = "copper antenna/v0.2";
 /// The `members[].reference` and `net` role names inside the generated asset.
 const MEMBER: &str = "ANT";
 const FEED_ROLE: &str = "feed";
-const SPEED_OF_LIGHT_M_PER_S: f64 = 299_792_458.0;
+pub const SPEED_OF_LIGHT_M_PER_S: f64 = 299_792_458.0;
 /// Synthesized lengths are rounded to this grid (10 µm).
-const LENGTH_GRID_NM: i64 = 10_000;
+pub const LENGTH_GRID_NM: i64 = 10_000;
 /// The macro member's edge margin, as `macro` definitions default it.
 const MEMBER_EDGE_CLEARANCE_NM: i64 = 250_000;
 
 /// Which board axis the radiator runs along.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Axis {
+pub enum Axis {
     X,
     Y,
 }
@@ -55,15 +62,19 @@ enum Axis {
 /// The region's frame: the radiator runs along `axis` from the region's low
 /// coordinate; `inner` is the across-axis coordinate of the ground-side edge
 /// and `outward` the across-axis direction toward the board perimeter.
-#[derive(Clone, Copy, Debug)]
-struct Frame {
-    axis: Axis,
-    along_min: i64,
-    along_max: i64,
-    inner: i64,
-    outward: i64,
-    across_min: i64,
-    across_max: i64,
+///
+/// Layouts use local coordinates `(u, v)`: `u` along the board edge from
+/// `along_min`, `v` across from the ground edge toward the perimeter, so the
+/// region is `0 <= u <= length()`, `0 <= v <= depth()`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Frame {
+    pub axis: Axis,
+    pub along_min: i64,
+    pub along_max: i64,
+    pub inner: i64,
+    pub outward: i64,
+    pub across_min: i64,
+    pub across_max: i64,
 }
 
 impl Frame {
@@ -87,6 +98,236 @@ impl Frame {
             Axis::Y => point.x_nm,
         }
     }
+
+    /// The board point of local `(u, v)`.
+    pub fn to_board(&self, u: i64, v: i64) -> Point {
+        self.point(self.along_min + u, self.inner + self.outward * v)
+    }
+
+    /// The region's extent along the board edge.
+    pub fn length(&self) -> i64 {
+        self.along_max - self.along_min
+    }
+
+    /// The region's extent from the ground edge to the perimeter.
+    pub fn depth(&self) -> i64 {
+        self.across_max - self.across_min
+    }
+}
+
+/// The radiator family a declaration asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Topology {
+    Auto,
+    Monopole,
+    Meander,
+    Pixel,
+}
+
+impl Topology {
+    pub fn value(self) -> &'static str {
+        match self {
+            Topology::Auto => "auto",
+            Topology::Monopole => "monopole",
+            Topology::Meander => "meander",
+            Topology::Pixel => "pixel",
+        }
+    }
+}
+
+/// A concrete radiator in the site's local frame. Lengths in nanometres.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Geometry {
+    /// A stub from the feed to `height`, then a run along the board edge;
+    /// `length` is the conductor length from the ground edge.
+    Monopole { height: i64, length: i64 },
+    /// A stub to `height`, `turns` U-shaped meanders hanging `depth` below
+    /// it with `pitch` between adjacent legs (centre to centre), then a
+    /// straight `tail` along the board edge.
+    Meander { height: i64, depth: i64, pitch: i64, turns: u32, tail: i64 },
+    /// A `columns` x `rows` grid of square `cell` tiles over the region,
+    /// row-major from the ground edge, with one column centred on the feed;
+    /// only tiles 4-connected to the feed tile are realized.
+    Pixel { cell: i64, columns: u32, rows: u32, bits: Vec<bool> },
+}
+
+fn mm_text(nm: i64) -> String {
+    let value = Decimal::from_i64(nm).div(&Decimal::from_i64(1_000_000)).expect("finite nanometres");
+    format!("{}mm", value.to_fixed_string())
+}
+
+fn mm(nm: i64) -> String {
+    let value = Decimal::from_i64(nm).div(&Decimal::from_i64(1_000_000)).expect("finite nanometres");
+    format!("{} mm", value.to_fixed_string())
+}
+
+fn parse_length(text: &str) -> std::result::Result<i64, String> {
+    let number = text.strip_suffix("mm").ok_or_else(|| format!("{} must be a length in mm", repr(text)))?;
+    let value = Decimal::parse(number).map_err(|_| format!("{} is not a length", repr(text)))?;
+    let nm = value.mul(&Decimal::from_i64(1_000_000)).map_err(|e| e.to_string())?;
+    let integral = nm.to_integral_value(copper_units::Rounding::Down);
+    if integral != nm {
+        return Err(format!("{} is finer than a nanometre", repr(text)));
+    }
+    integral.to_i64().filter(|nm| *nm >= 0).ok_or_else(|| format!("{} is out of range", repr(text)))
+}
+
+impl Geometry {
+    pub fn topology(&self) -> Topology {
+        match self {
+            Geometry::Monopole { .. } => Topology::Monopole,
+            Geometry::Meander { .. } => Topology::Meander,
+            Geometry::Pixel { .. } => Topology::Pixel,
+        }
+    }
+
+    /// The source form: `"monopole height=3mm length=17.46mm"`.
+    pub fn to_source(&self) -> String {
+        match self {
+            Geometry::Monopole { height, length } => {
+                format!("monopole height={} length={}", mm_text(*height), mm_text(*length))
+            }
+            Geometry::Meander { height, depth, pitch, turns, tail } => format!(
+                "meander height={} depth={} pitch={} turns={turns} tail={}",
+                mm_text(*height),
+                mm_text(*depth),
+                mm_text(*pitch),
+                mm_text(*tail)
+            ),
+            Geometry::Pixel { cell, columns, rows, bits } => {
+                let mut hex = String::new();
+                for chunk in bits.chunks(4) {
+                    let nibble = chunk.iter().enumerate().fold(0u8, |acc, (i, bit)| acc | (u8::from(*bit) << (3 - i)));
+                    hex.push(char::from_digit(u32::from(nibble), 16).expect("a nibble"));
+                }
+                format!("pixel cell={} columns={columns} rows={rows} bits={hex}", mm_text(*cell))
+            }
+        }
+    }
+
+    /// Parse [`to_source`](Self::to_source)'s form.
+    pub fn parse(text: &str) -> std::result::Result<Geometry, String> {
+        let mut words = text.split_whitespace();
+        let kind = words.next().ok_or("an empty antenna geometry")?;
+        let mut fields: IndexMap<&str, &str> = IndexMap::new();
+        for word in words {
+            let Some((key, value)) = word.split_once('=') else {
+                return Err(format!("antenna geometry field {} must be key=value", repr(word)));
+            };
+            if fields.insert(key, value).is_some() {
+                return Err(format!("duplicate antenna geometry field {}", repr(key)));
+            }
+        }
+        let expected: &[&str] = match kind {
+            "monopole" => &["height", "length"],
+            "meander" => &["height", "depth", "pitch", "turns", "tail"],
+            "pixel" => &["cell", "columns", "rows", "bits"],
+            "inverted_f" | "loop" => {
+                return Err(format!(
+                    "{kind} geometry is DC-shorted to ground and needs component-owned copper with a net tie, \
+                     which CopperScript does not support yet"
+                ));
+            }
+            other => return Err(format!("unknown antenna geometry {}", repr(other))),
+        };
+        let mut keys: Vec<&str> = fields.keys().copied().collect();
+        keys.sort_unstable();
+        let mut wanted = expected.to_vec();
+        wanted.sort_unstable();
+        if keys != wanted {
+            return Err(format!("{kind} geometry requires exactly {}", expected.join(", ")));
+        }
+        let length = |key: &str| parse_length(fields[key]);
+        let count = |key: &str| -> std::result::Result<u32, String> {
+            fields[key].parse::<u32>().map_err(|_| format!("{key} must be a nonnegative integer"))
+        };
+        Ok(match kind {
+            "monopole" => Geometry::Monopole { height: length("height")?, length: length("length")? },
+            "meander" => Geometry::Meander {
+                height: length("height")?,
+                depth: length("depth")?,
+                pitch: length("pitch")?,
+                turns: count("turns")?,
+                tail: length("tail")?,
+            },
+            _ => {
+                let (columns, rows) = (count("columns")?, count("rows")?);
+                let total = columns as usize * rows as usize;
+                let hex = fields["bits"];
+                if hex.len() != total.div_ceil(4) {
+                    return Err(format!("pixel bits need {} hex digits for {columns} x {rows}", total.div_ceil(4)));
+                }
+                let mut bits = Vec::with_capacity(total);
+                for c in hex.chars() {
+                    let nibble =
+                        c.to_digit(16).ok_or_else(|| format!("{} is not a hex digit", repr(&c.to_string())))?;
+                    bits.extend((0..4).rev().map(|i| nibble >> i & 1 == 1));
+                }
+                if bits[total..].iter().any(|bit| *bit) {
+                    return Err("pixel bits set past the last tile".to_owned());
+                }
+                bits.truncate(total);
+                Geometry::Pixel { cell: length("cell")?, columns, rows, bits }
+            }
+        })
+    }
+}
+
+/// Realized copper in the site's local frame: the feed track's centreline
+/// from the feed pad centre, and any filled tiles `[u0, v0, u1, v1]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Layout {
+    pub path: Vec<(i64, i64)>,
+    pub tiles: Vec<[i64; 4]>,
+    /// Centreline length of the track from the ground edge (v = 0) on.
+    pub length_nm: i64,
+}
+
+/// Everything a declaration fixes about one antenna, resolved on the board.
+#[derive(Clone, Debug)]
+pub struct AntennaSite {
+    pub name: String,
+    /// The declaration's source location.
+    pub declaration: String,
+    pub feed: PadReference,
+    pub feed_net: String,
+    pub feed_land: FootprintPad,
+    /// The feed component's footprint key in `PhysicalBoard.footprints`.
+    pub footprint: String,
+    pub isolated: Vec<String>,
+    pub ground: String,
+    pub bands: Vec<Band>,
+    pub topology: Topology,
+    pub max_return_loss_db: f64,
+    pub area: Bounds,
+    pub frame: Frame,
+    pub perimeter: Vec<usize>,
+    pub width: i64,
+    pub clearance: i64,
+    pub keepout_margin: i64,
+    /// The feed component's fixed pose (rotation 0, front side).
+    pub pose: Point,
+    /// The feed pad centre in local coordinates (`feed_v < 0`).
+    pub feed_u: i64,
+    pub feed_v: i64,
+    pub eps_eff: f64,
+    pub dielectric: String,
+    pub geometry: Option<Geometry>,
+    pub tuned_for: Option<String>,
+}
+
+impl AntennaSite {
+    /// The copper margin to the region edges: clearance plus half a track.
+    pub fn margin(&self) -> i64 {
+        self.clearance + self.width / 2
+    }
+
+    /// The arithmetic centre of every band, in hertz.
+    pub fn centre_hz(&self) -> f64 {
+        let low = self.bands.iter().map(|b| decimal_f64(&b.low_hz)).fold(f64::INFINITY, f64::min);
+        let high = self.bands.iter().map(|b| decimal_f64(&b.high_hz)).fold(f64::NEG_INFINITY, f64::max);
+        (low + high) / 2.0
+    }
 }
 
 fn object(entries: Vec<(&str, Json)>) -> Json {
@@ -101,12 +342,7 @@ fn texts(items: &[&str]) -> Json {
     Json::Array(items.iter().map(|item| Json::from(*item)).collect())
 }
 
-fn mm(nm: i64) -> String {
-    let value = Decimal::from_i64(nm).div(&Decimal::from_i64(1_000_000)).expect("finite nanometres");
-    format!("{} mm", value.to_fixed_string())
-}
-
-fn decimal_f64(value: &Decimal) -> f64 {
+pub fn decimal_f64(value: &Decimal) -> f64 {
     value.to_sci_string().parse().expect("a decimal string")
 }
 
@@ -241,54 +477,84 @@ fn effective_permittivity(board: &PhysicalBoard, width_nm: i64) -> Result<(f64, 
 }
 
 /// A free-space quarter wave at `hertz`, shortened by `sqrt(eps_eff)`, on the length grid.
-fn quarter_wave_nm(hertz: f64, eps_eff: f64) -> i64 {
+pub fn quarter_wave_nm(hertz: f64, eps_eff: f64) -> i64 {
     let metres = SPEED_OF_LIGHT_M_PER_S / (4.0 * hertz * eps_eff.sqrt());
-    let nm = (metres * 1e9 / LENGTH_GRID_NM as f64).round() * LENGTH_GRID_NM as f64;
-    nm as i64
+    snap((metres * 1e9) as i64)
 }
 
-/// One synthesized antenna, ready to bind.
-struct Synthesis {
-    name: String,
-    reference: String,
-    net: String,
-    pose: Point,
-    asset: Json,
-    keepout: PlacementKeepout,
-    record: Json,
+/// Round to the 10 µm synthesis grid.
+pub fn snap(nm: i64) -> i64 {
+    ((nm as f64 / LENGTH_GRID_NM as f64).round() as i64) * LENGTH_GRID_NM
 }
 
-fn synthesize(
+fn format_hz(hertz: f64) -> String {
+    if hertz >= 1e9 { format!("{:.4} GHz", hertz / 1e9) } else { format!("{:.3} MHz", hertz / 1e6) }
+}
+
+/// Resolve every `constraint antenna` of `flat` on `board`, in source order.
+/// The board must not yet carry the antennas' macros.
+pub fn resolve_sites(board: &PhysicalBoard, flat: &FlatElectricalView) -> Result<Vec<AntennaSite>> {
+    flat.constraints
+        .iter()
+        .enumerate()
+        .filter(|(_, constraint)| constraint.kind == ConstraintKind::Antenna)
+        .map(|(index, constraint)| resolve_site(board, flat, index, constraint))
+        .collect()
+}
+
+fn resolve_site(
     board: &PhysicalBoard,
     flat: &FlatElectricalView,
-    components: &IndexMap<&str, &Selected>,
     index: usize,
     constraint: &Constraint,
-) -> Result<Synthesis> {
+) -> Result<AntennaSite> {
     let parameters = &constraint.parameters;
     let name = text(parameters, "name").map_or_else(|| format!("antenna:{index}"), str::to_owned);
     let problem = |message: String| Error::Value(format!("antenna {}: {message}", repr(&name)));
+    let wrap = |error: Error| match error {
+        Error::Value(message) => problem(message),
+        other => other,
+    };
     if board.rigid_clusters.iter().any(|cluster| cluster.name == name) {
         return Err(problem("its name is already a rigid cluster; give the antenna a unique name".to_owned()));
     }
-    for (parameter, implemented) in [("topology", &["auto", "monopole"][..]), ("solver", &["template"][..])] {
-        if let Some(value) = text(parameters, parameter)
-            && !implemented.contains(&value)
-        {
-            return crate::not_implemented(&format!("antenna {parameter} {value}"));
+    let topology = match text(parameters, "topology").unwrap_or("auto") {
+        "auto" => Topology::Auto,
+        "monopole" => Topology::Monopole,
+        "meander" => Topology::Meander,
+        "pixel" => Topology::Pixel,
+        other => {
+            return crate::not_implemented(&format!(
+                "antenna topology {other}: DC-shorted radiators need component-owned copper with a net tie"
+            ));
         }
-    }
+    };
     if text(parameters, "side") == Some("back") {
         return crate::not_implemented("a back-side synthesized antenna");
     }
     let bands = parse_bands(text(parameters, "bands").unwrap_or_default()).map_err(problem)?;
-    let band: &Band = match bands.as_slice() {
-        [band] => band,
-        _ => return crate::not_implemented("multi-band antenna synthesis"),
+    let max_return_loss_db = match parameters.get("max_return_loss_db") {
+        Some(ParameterValue::Int(value)) => value.to_string().parse().unwrap_or(-10.0),
+        Some(ParameterValue::Float(value)) => *value,
+        _ => -10.0,
     };
-    let ground = text(parameters, "ground").unwrap_or_default();
+    let ground = text(parameters, "ground").unwrap_or_default().to_owned();
     if !board.nets.iter().any(|net| net.name == ground) {
-        return Err(problem(format!("ground net {} is unknown", repr(ground))));
+        return Err(problem(format!("ground net {} is unknown", repr(&ground))));
+    }
+    let geometry = text(parameters, "geometry").map(Geometry::parse).transpose().map_err(problem)?;
+    if let (Some(geometry), true) = (&geometry, topology != Topology::Auto)
+        && geometry.topology() != topology
+    {
+        return Err(problem(format!(
+            "geometry {} contradicts topology {}",
+            geometry.topology().value(),
+            topology.value()
+        )));
+    }
+    let tuned_for = text(parameters, "tuned_for").map(str::to_owned);
+    if tuned_for.is_some() && geometry.is_none() {
+        return Err(problem("tuned_for requires the geometry it was tuned for".to_owned()));
     }
 
     // The feed: one component pin, physicalized to one land on one net.
@@ -296,22 +562,23 @@ fn synthesize(
     let Some((reference, pin)) = target.split_once('.') else {
         return Err(problem("the feed target must be COMPONENT.PIN".to_owned()));
     };
-    let Some(item) = components.get(reference) else {
-        return Err(problem(format!("feed component {} has no selected footprint", repr(reference))));
+    let Some(component) = flat.components.iter().find(|c| c.reference == reference) else {
+        return Err(problem(format!("feed component {} is unknown", repr(reference))));
     };
-    let Some(pad) = physical_pin_number(item.component, item.part, &flat.devices, pin) else {
+    let part = &flat.library[&component.part];
+    let Some(pad) = physical_pin_number(component, part, &flat.devices, pin) else {
         return Err(problem(format!("feed pin {} has no physical pad", repr(target))));
     };
     let Some(placement) = board.placements.iter().find(|p| p.reference == reference) else {
-        return Err(problem(format!("feed component {} is not placed", repr(reference))));
+        return Err(problem(format!("feed component {} has no selected footprint", repr(reference))));
     };
     let footprint = &board.footprints[&placement.footprint];
     let lands: Vec<_> = footprint.pads.iter().filter(|p| p.number == pad).collect();
     let [land] = lands.as_slice() else {
         return Err(problem(format!("feed pad {} must be exactly one physical land", repr(target))));
     };
-    let feed_pad = PadReference::new(reference, &pad);
-    let Some(net) = board.nets.iter().find(|net| net.pads.contains(&feed_pad)) else {
+    let feed = PadReference::new(reference, &pad);
+    let Some(net) = board.nets.iter().find(|net| net.pads.contains(&feed)) else {
         return Err(problem(format!("feed pad {} is not connected to a net", repr(target))));
     };
     let mut isolated = Vec::new();
@@ -332,20 +599,14 @@ fn synthesize(
     if board.outline.circular_boundary.is_some() || board.outline.boundary_path.is_some() {
         return crate::not_implemented("antenna synthesis on a curved board outline");
     }
-    let area = region_bounds(board, parameters).map_err(|error| match error {
-        Error::Value(message) => problem(message),
-        other => other,
-    })?;
+    let area = region_bounds(board, parameters).map_err(wrap)?;
     let host = &board.outline.vertices;
     let ring = corners(area);
     if !(0..4).all(|i| segment_in_polygon(ring[i], ring[(i + 1) % 4], host)) {
         return Err(problem("the region extends outside the board outline".to_owned()));
     }
     let perimeter = perimeter_edges(host, area);
-    let frame = frame(area, &perimeter).map_err(|error| match error {
-        Error::Value(message) => problem(message),
-        other => other,
-    })?;
+    let frame = frame(area, &perimeter).map_err(wrap)?;
     let rules = &board.rules;
     let clearance = rules.minimum_clearance_nm;
     let width = length(parameters, "track_width")?.unwrap_or(rules.default_track_width_nm);
@@ -358,21 +619,14 @@ fn synthesize(
     }
     let margin = clearance + width / 2;
     let keepout_margin = length(parameters, "keepout_margin")?.unwrap_or(0);
-    let across_extent = frame.across_max - frame.across_min;
-    let along_extent = frame.along_max - frame.along_min;
-    if across_extent < 2 * margin + width || along_extent < 2 * margin + width {
+    if frame.depth() < 2 * margin + width || frame.length() < 2 * margin + width {
         return Err(problem(format!(
             "the region is narrower than one {} track with {} clearance on both sides",
             mm(width),
             mm(clearance)
         )));
     }
-    let (eps_eff, dielectric) = effective_permittivity(board, width).map_err(|error| match error {
-        Error::Value(message) => problem(message),
-        other => other,
-    })?;
-    let centre_hz = band.centre_hz();
-    let target_length = quarter_wave_nm(decimal_f64(&centre_hz), eps_eff);
+    let (eps_eff, dielectric) = effective_permittivity(board, width).map_err(wrap)?;
 
     // The feed pad sits just outside the region on the ground side; the
     // component body must also clear the placement keepout and the board edge.
@@ -398,44 +652,381 @@ fn synthesize(
         .max(pad_across_half);
     let body_along_half =
         body.iter().map(|v| (frame.along(*v) - frame.along(land.position)).abs()).max().unwrap_or(pad_along_half);
-    let feed_along = frame.along_min + margin.max(body_along_half + MEMBER_EDGE_CLEARANCE_NM);
-    if feed_along + margin > frame.along_max {
+    let feed_u = margin.max(body_along_half + MEMBER_EDGE_CLEARANCE_NM);
+    if feed_u + margin > frame.length() {
         return Err(problem("the region is too short for the feed component body".to_owned()));
     }
     let pad_gap = (clearance + pad_across_half).max(body_toward_region + keepout_margin + clearance);
-    let feed_centre = frame.point(feed_along, frame.inner - frame.outward * pad_gap);
+    let feed_centre = frame.to_board(feed_u, -pad_gap);
     let pose = Point::new(feed_centre.x_nm - land.position.x_nm, feed_centre.y_nm - land.position.y_nm);
+    Ok(AntennaSite {
+        name,
+        declaration: constraint.origins.first().cloned().unwrap_or_default(),
+        feed,
+        feed_net: net.name.clone(),
+        feed_land: (*land).clone(),
+        footprint: placement.footprint.clone(),
+        isolated,
+        ground,
+        bands,
+        topology,
+        max_return_loss_db,
+        area,
+        frame,
+        perimeter,
+        width,
+        clearance,
+        keepout_margin,
+        pose,
+        feed_u,
+        feed_v: -pad_gap,
+        eps_eff,
+        dielectric,
+        geometry,
+        tuned_for,
+    })
+}
 
-    // The radiator: a stub from the ground edge to the region centreline, then
-    // a run along the board edge, totalling one scaled quarter wave.
-    let stub = across_extent / 2;
-    let centreline = frame.inner + frame.outward * stub;
-    let run_limit = frame.along_max - margin;
-    let available = stub + (run_limit - feed_along);
-    if target_length > available {
-        return Err(problem(format!(
-            "the region is too short for a quarter-wave monopole at {} (effective permittivity {eps_eff:.3}): the \
-             template needs {} of path but the region offers {}; enlarge the region along the board edge",
-            format_hz(&centre_hz),
-            mm(target_length),
-            mm(available)
+/// The first-order template: a quarter-wave monopole at the band centre,
+/// scaled by the Hammerstad-Jensen effective permittivity, with its run on
+/// the region's centreline.
+pub fn template_geometry(site: &AntennaSite) -> Geometry {
+    Geometry::Monopole { height: site.frame.depth() / 2, length: quarter_wave_nm(site.centre_hz(), site.eps_eff) }
+}
+
+/// The feed track's path and the tiles of `geometry`, checked to fit the
+/// region with the board clearance and to keep its own legs apart.
+pub fn layout(site: &AntennaSite, geometry: &Geometry) -> Result<Layout> {
+    let problem = |message: String| Error::Value(format!("antenna {}: {message}", repr(&site.name)));
+    let (w, clearance, margin) = (site.width, site.clearance, site.margin());
+    let (span, depth) = (site.frame.length(), site.frame.depth());
+    let (u0, pad_v) = (site.feed_u, site.feed_v);
+    let fits_height = |height: i64| -> Result<()> {
+        if height < margin || height > depth - margin {
+            return Err(problem(format!(
+                "height {} must stay between {} and {} (clearance plus half a track from the region edges)",
+                mm(height),
+                mm(margin),
+                mm(depth - margin)
+            )));
+        }
+        Ok(())
+    };
+    let fits_end = |u: i64, needed: i64| -> Result<()> {
+        if u > span - margin {
+            return Err(problem(format!(
+                "the region is too short: the geometry needs {} of path but ends {} past the usable region; \
+                 enlarge the region along the board edge or shorten the geometry",
+                mm(needed),
+                mm(u - (span - margin))
+            )));
+        }
+        Ok(())
+    };
+    match geometry {
+        Geometry::Monopole { height, length } => {
+            let (height, length) = (*height, *length);
+            if length <= 0 {
+                return Err(problem("monopole length must be positive".to_owned()));
+            }
+            let mut path = vec![(u0, pad_v)];
+            if length <= height {
+                fits_height(length)?;
+                path.push((u0, length));
+            } else {
+                fits_height(height)?;
+                fits_end(u0 + (length - height), length)?;
+                path.push((u0, height));
+                path.push((u0 + (length - height), height));
+            }
+            Ok(Layout { path, tiles: Vec::new(), length_nm: length })
+        }
+        Geometry::Meander { height, depth: drop, pitch, turns, tail } => {
+            let (height, drop, pitch) = (*height, *drop, *pitch);
+            fits_height(height)?;
+            if pitch < w + clearance {
+                return Err(problem(format!(
+                    "meander pitch {} leaves less than the {} clearance between legs",
+                    mm(pitch),
+                    mm(clearance)
+                )));
+            }
+            if drop <= 0 || height - drop < margin {
+                return Err(problem(format!(
+                    "meander depth {} must be positive and keep the legs {} above the ground edge",
+                    mm(drop),
+                    mm(margin)
+                )));
+            }
+            let mut path = vec![(u0, pad_v), (u0, height)];
+            let mut u = u0 + pitch;
+            path.push((u, height));
+            for _ in 0..*turns {
+                path.push((u, height - drop));
+                u += pitch;
+                path.push((u, height - drop));
+                path.push((u, height));
+                u += pitch;
+                path.push((u, height));
+            }
+            if *tail > 0 {
+                u += tail;
+                path.push((u, height));
+            }
+            let length = height + pitch + i64::from(*turns) * (2 * drop + 2 * pitch) + tail;
+            fits_end(u, length)?;
+            // The meander's feed stub and its first down leg are `pitch` apart, as are all legs.
+            Ok(Layout { path, tiles: Vec::new(), length_nm: length })
+        }
+        Geometry::Pixel { cell, columns, rows, bits } => {
+            let (cell, columns, rows) = (*cell, *columns as i64, *rows as i64);
+            if cell < w {
+                return Err(problem(format!("pixel cell {} is narrower than the track width {}", mm(cell), mm(w))));
+            }
+            if bits.len() as i64 != columns * rows {
+                return Err(problem("pixel bits do not match the grid".to_owned()));
+            }
+            // Columns: one centred on the feed, extending both ways inside the margins.
+            let left = (u0 - cell / 2 - clearance) / cell;
+            let first_u = u0 - cell / 2 - left * cell;
+            let bottom = clearance.max(margin - w / 2);
+            if first_u < clearance
+                || first_u + columns * cell > span - clearance
+                || bottom + rows * cell > depth - clearance
+            {
+                return Err(problem(format!(
+                    "a {columns} x {rows} grid of {} cells does not fit the region",
+                    mm(cell)
+                )));
+            }
+            let feed_column = left;
+            let on = |c: i64, r: i64| bits[(r * columns + c) as usize];
+            if feed_column >= columns || !on(feed_column, 0) {
+                return Err(problem("the pixel tile above the feed must be copper".to_owned()));
+            }
+            // Keep the 4-connected component of the feed tile.
+            let mut keep = vec![false; bits.len()];
+            let mut stack = vec![(feed_column, 0)];
+            while let Some((c, r)) = stack.pop() {
+                let index = (r * columns + c) as usize;
+                if keep[index] || !on(c, r) {
+                    continue;
+                }
+                keep[index] = true;
+                for (dc, dr) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let (nc, nr) = (c + dc, r + dr);
+                    if (0..columns).contains(&nc) && (0..rows).contains(&nr) {
+                        stack.push((nc, nr));
+                    }
+                }
+            }
+            let tiles: Vec<[i64; 4]> = (0..rows)
+                .flat_map(|r| (0..columns).map(move |c| (c, r)))
+                .filter(|(c, r)| keep[(r * columns + c) as usize])
+                .map(|(c, r)| {
+                    let (ua, va) = (first_u + c * cell, bottom + r * cell);
+                    [ua, va, ua + cell, va + cell]
+                })
+                .collect();
+            let path = vec![(u0, pad_v), (u0, bottom + cell / 2)];
+            Ok(Layout { path, tiles, length_nm: bottom + cell / 2 })
+        }
+    }
+}
+
+/// The digest of every input the full-wave model of `site` reads: outline,
+/// stack-up, the ground net's zones, region, frame, track rules, feed land
+/// and pose, bands, target and generator. `tuned_for` must equal it.
+pub fn site_digest(board: &PhysicalBoard, site: &AntennaSite) -> String {
+    let points = |ring: &[Point]| Json::Array(ring.iter().map(|p| point_json(*p)).collect());
+    let decimal = |value: &Option<Decimal>| value.as_ref().map_or(Json::Null, |d| Json::from(d.to_sci_string()));
+    let stackup: Vec<Json> = board
+        .stackup
+        .physical_layers
+        .iter()
+        .map(|layer| {
+            object(vec![
+                ("id", Json::from(layer.id.as_str())),
+                ("copper", layer.copper_layer.map_or(Json::Null, |l| Json::from(l.value()))),
+                ("thickness_nm", Json::from(layer.thickness_nm)),
+                ("er", decimal(&layer.relative_permittivity)),
+                ("loss_tangent", decimal(&layer.loss_tangent)),
+            ])
+        })
+        .collect();
+    let zones: Vec<Json> = board
+        .zones
+        .iter()
+        .filter(|zone| zone.net == site.ground)
+        .map(|zone| {
+            object(vec![
+                ("layers", Json::Array(zone.layers.iter().map(|l| Json::from(l.value())).collect())),
+                ("outer", points(&zone.outer)),
+                ("holes", Json::Array(zone.holes.iter().map(|h| points(h)).collect())),
+            ])
+        })
+        .collect();
+    let land = &site.feed_land;
+    let document = object(vec![
+        ("generator", Json::from(GENERATOR)),
+        ("outline", points(&board.outline.vertices)),
+        ("cutouts", Json::Array(board.outline.cutouts.iter().map(|c| points(&c.vertices)).collect())),
+        ("stackup", Json::Array(stackup)),
+        ("copper_layers", Json::Array(board.stackup.copper_layers.iter().map(|l| Json::from(l.value())).collect())),
+        ("ground_zones", Json::Array(zones)),
+        ("region", points(&corners(site.area))),
+        ("perimeter", Json::Array(site.perimeter.iter().map(|e| Json::from(*e as i64)).collect())),
+        ("track_width_nm", Json::from(site.width)),
+        ("clearance_nm", Json::from(site.clearance)),
+        ("feed_land_nm", Json::Array(vec![Json::from(land.size.width_nm), Json::from(land.size.height_nm)])),
+        ("feed_local_nm", Json::Array(vec![Json::from(site.feed_u), Json::from(site.feed_v)])),
+        ("bands", Json::Array(site.bands.iter().map(|b| Json::from(b.text.as_str())).collect())),
+        ("max_return_loss_db", Json::from(format!("{}", site.max_return_loss_db))),
+    ]);
+    let canonical = Dumps::compact().sort_keys(true).dumps(&document);
+    let digest: String = Sha256::digest(canonical.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("sha256:{digest}")
+}
+
+/// Why pixel tiles cannot be bound on this board, if they cannot: tiles are
+/// owned copper polygons, and no host zone may overlap a private macro region
+/// on a layer where the macro owns area copper.
+pub fn tile_zone_conflict(board: &PhysicalBoard, site: &AntennaSite) -> Option<String> {
+    let ring = corners(site.area);
+    let only = [CopperLayer::Front];
+    let zones: Vec<&str> = board
+        .zones
+        .iter()
+        .filter(|zone| {
+            zone.layers.contains(&CopperLayer::Front)
+                && crate::hard_macros::zone_outlines_overlap(&only, &zone.outer, &only, &ring)
+        })
+        .map(|zone| zone.id.as_str())
+        .collect();
+    (!zones.is_empty()).then(|| {
+        format!(
+            "pixel tiles are owned copper polygons, so no F.Cu copper_zone may overlap or touch the antenna \
+             region; draw {} with a gap around the region (polygon_mm or a placement region), which also keeps \
+             ground out of it",
+            zones.join(", ")
+        )
+    })
+}
+
+/// The provenance of a bound geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Provenance {
+    /// The first-order template (no `geometry` in the source).
+    Template,
+    /// A source geometry with a matching `tuned_for`.
+    Tuned,
+    /// A source geometry without `tuned_for`.
+    Manual,
+}
+
+impl Provenance {
+    pub fn value(self) -> &'static str {
+        match self {
+            Provenance::Template => "template",
+            Provenance::Tuned => "tuned",
+            Provenance::Manual => "manual",
+        }
+    }
+}
+
+/// The geometry a site binds and its provenance; a stale `tuned_for` fails.
+pub fn chosen_geometry(board: &PhysicalBoard, site: &AntennaSite) -> Result<(Geometry, Provenance)> {
+    let Some(geometry) = &site.geometry else { return Ok((template_geometry(site), Provenance::Template)) };
+    let Some(tuned_for) = &site.tuned_for else { return Ok((geometry.clone(), Provenance::Manual)) };
+    let current = site_digest(board, site);
+    if *tuned_for != current {
+        return Err(Error::Value(format!(
+            "antenna {}: geometry was tuned for {tuned_for} but the board now gives {current}; an input of the \
+             full-wave model changed (outline, stack-up, ground zones, region, track rules, feed, bands or target). \
+             Re-run `copper synthesize-antenna BOARD --antenna {}`, or remove tuned_for to keep the geometry untuned",
+            repr(&site.name),
+            site.name
         )));
     }
-    let mut path = vec![feed_centre];
-    if target_length <= stub {
-        path.push(frame.point(feed_along, frame.inner + frame.outward * target_length));
-    } else {
-        path.push(frame.point(feed_along, centreline));
-        path.push(frame.point(feed_along + (target_length - stub), centreline));
+    Ok((geometry.clone(), Provenance::Tuned))
+}
+
+fn unresolved(provenance: Provenance) -> Vec<&'static str> {
+    let mut items = vec![match provenance {
+        Provenance::Template => {
+            "First-order quarter-wave monopole template: no field solution, no resonance or return-loss evidence"
+        }
+        Provenance::Tuned => {
+            "Tuned in a full-wave model of the board outline, stack-up and ground zones only; components, other \
+             copper, the enclosure and any cable are not in that model"
+        }
+        Provenance::Manual => "Source geometry without tuned_for: no resonance or return-loss evidence",
+    }];
+    items.extend([
+        "Host ground plane, enclosure, battery and nearby metal shift resonance",
+        "Matching network values and bench tuning in the final enclosure remain mandatory",
+        "No regulatory (radiated emission) claim follows from this geometry",
+    ]);
+    items
+}
+
+/// One antenna ready to bind.
+struct Synthesis {
+    asset: Json,
+    keepout: PlacementKeepout,
+    record: Json,
+}
+
+fn synthesize(board: &PhysicalBoard, site: &AntennaSite) -> Result<Synthesis> {
+    let problem = |message: String| Error::Value(format!("antenna {}: {message}", repr(&site.name)));
+    let (geometry, provenance) = chosen_geometry(board, site)?;
+    let layout = match (layout(site, &geometry), provenance) {
+        (Ok(layout), _) => layout,
+        (Err(Error::Value(message)), Provenance::Template) => {
+            let detail = message.split_once(": ").map_or(message.as_str(), |(_, rest)| rest);
+            return Err(problem(format!(
+                "the first-order quarter-wave monopole template at {} (effective permittivity {:.3}) does not \
+                 fit; {detail}. A meander fits more length: set topology = meander and run \
+                 `copper synthesize-antenna`",
+                format_hz(site.centre_hz()),
+                site.eps_eff
+            )));
+        }
+        (Err(error), _) => return Err(error),
+    };
+    if !layout.tiles.is_empty()
+        && let Some(message) = tile_zone_conflict(board, site)
+    {
+        return Err(problem(message));
     }
+    let footprint = &board.footprints[&site.footprint];
+    let pose = site.pose;
+    let frame = &site.frame;
+    let ring = corners(site.area);
     let local = |point: Point| Point::new(point.x_nm - pose.x_nm, point.y_nm - pose.y_nm);
+    let board_point = |(u, v): (i64, i64)| frame.to_board(u, v);
     let local_ring: Vec<Json> = ring.iter().map(|point| point_json(local(*point))).collect();
     let layers: Vec<&str> = board.stackup.copper_layers.iter().map(|layer| layer.value()).collect();
-    let pad_json = Json::Array(vec![Json::from(MEMBER), Json::from(pad.as_str())]);
+    let pad = site.feed.pad.as_str();
+    let pad_json = Json::Array(vec![Json::from(MEMBER), Json::from(pad)]);
     let mut points = vec![object(vec![("pad", pad_json.clone())])];
-    points.extend(path.iter().skip(1).map(|point| point_json(local(*point))));
-    let region_id = format!("{name}-region");
-    let edge_id = format!("{name}-edge");
+    points.extend(layout.path.iter().skip(1).map(|p| point_json(local(board_point(*p)))));
+    let polygons: Vec<Json> = layout
+        .tiles
+        .iter()
+        .enumerate()
+        .map(|(i, [u0, v0, u1, v1])| {
+            let vertices = [(*u0, *v0), (*u1, *v0), (*u1, *v1), (*u0, *v1)];
+            object(vec![
+                ("id", Json::from(format!("{}-tile-{i}", site.name))),
+                ("net", Json::from(FEED_ROLE)),
+                ("layer", Json::from(CopperLayer::Front.value())),
+                ("vertices", Json::Array(vertices.iter().map(|p| point_json(local(board_point(*p)))).collect())),
+            ])
+        })
+        .collect();
+    let region_id = format!("{}-region", site.name);
+    let edge_id = format!("{}-edge", site.name);
     let region_row = |id: &str, block_copper: bool| {
         object(vec![
             ("id", Json::from(id)),
@@ -446,26 +1037,28 @@ fn synthesize(
             ("block_zones", Json::Bool(true)),
         ])
     };
-    let unresolved = [
-        "First-order quarter-wave monopole template: no field solution, no resonance or return-loss evidence",
-        "Host ground plane, enclosure, battery and nearby metal are not modelled; they shift resonance",
-        "Matching network values and bench tuning in the final enclosure remain mandatory",
-        "No regulatory (radiated emission) claim follows from this geometry",
-    ];
+    let unresolved = unresolved(provenance);
+    let current = site_digest(board, site);
     let synthesis = object(vec![
         ("generator", Json::from(GENERATOR)),
-        ("declaration", Json::from(constraint.origins.first().map_or("", String::as_str))),
-        ("topology", Json::from("monopole")),
-        ("band", Json::from(band.text.as_str())),
-        ("centre_frequency_hz", Json::from(centre_hz.to_fixed_string().as_str())),
-        ("stackup_dielectric", Json::from(dielectric.as_str())),
-        ("effective_permittivity", Json::from(format!("{eps_eff:.6}").as_str())),
-        ("quarter_wave_nm", Json::from(target_length)),
-        ("path_length_nm", Json::from(target_length)),
-        ("track_width_nm", Json::from(width)),
+        ("declaration", Json::from(site.declaration.as_str())),
+        ("provenance", Json::from(provenance.value())),
+        ("topology", Json::from(geometry.topology().value())),
+        ("geometry", Json::from(geometry.to_source())),
+        ("site_digest", Json::from(current.as_str())),
+        ("tuned_for", site.tuned_for.as_deref().map_or(Json::Null, Json::from)),
+        ("bands", Json::Array(site.bands.iter().map(|b| Json::from(b.text.as_str())).collect())),
+        ("centre_frequency_hz", Json::from(format!("{:.0}", site.centre_hz()))),
+        ("stackup_dielectric", Json::from(site.dielectric.as_str())),
+        ("effective_permittivity", Json::from(format!("{:.6}", site.eps_eff))),
+        ("quarter_wave_nm", Json::from(quarter_wave_nm(site.centre_hz(), site.eps_eff))),
+        ("path_length_nm", Json::from(layout.length_nm)),
+        ("track_width_nm", Json::from(site.width)),
+        ("tiles", Json::from(layout.tiles.len() as i64)),
         ("region_nm", Json::Array(ring.iter().map(|point| point_json(*point)).collect())),
-        ("perimeter_edges", Json::Array(perimeter.iter().map(|edge| Json::from(*edge as i64)).collect())),
+        ("perimeter_edges", Json::Array(site.perimeter.iter().map(|edge| Json::from(*edge as i64)).collect())),
     ]);
+    let isolated: Vec<Json> = site.isolated.iter().map(|number| texts(&[MEMBER, number])).collect();
     let asset = object(vec![
         ("schema", Json::from("copperlib-physical-hard-macro/v0.5")),
         ("production_publishable", Json::Bool(false)),
@@ -482,14 +1075,14 @@ fn synthesize(
                 ("edge_clearance_nm", Json::from(MEMBER_EDGE_CLEARANCE_NM)),
             ])]),
         ),
-        ("pad_nets", Json::Array(vec![texts(&[MEMBER, pad.as_str(), FEED_ROLE])])),
-        ("isolated_pads", Json::Array(isolated.iter().map(|number| texts(&[MEMBER, number])).collect())),
+        ("pad_nets", Json::Array(vec![texts(&[MEMBER, pad, FEED_ROLE])])),
+        ("isolated_pads", Json::Array(isolated)),
         (
             "tracks",
             Json::Array(vec![object(vec![
                 ("net", Json::from(FEED_ROLE)),
                 ("layer", Json::from(CopperLayer::Front.value())),
-                ("width_nm", Json::from(width)),
+                ("width_nm", Json::from(site.width)),
                 ("points", Json::Array(points)),
             ])]),
         ),
@@ -507,14 +1100,14 @@ fn synthesize(
         ("protected_regions", Json::Array(vec![region_row(&region_id, true)])),
         ("keepouts", Json::Array(vec![region_row(&edge_id, false)])),
         ("zones", Json::Array(Vec::new())),
-        ("polygons", Json::Array(Vec::new())),
+        ("polygons", Json::Array(polygons)),
         ("plane_returns", Json::Array(Vec::new())),
         ("width_contracts", Json::Array(Vec::new())),
         (
             "edge_openings",
             Json::Array(vec![object(vec![
                 ("keepout", Json::from(edge_id.as_str())),
-                ("edge_indices", Json::Array(perimeter.iter().map(|edge| Json::from(*edge as i64)).collect())),
+                ("edge_indices", Json::Array(site.perimeter.iter().map(|edge| Json::from(*edge as i64)).collect())),
             ])]),
         ),
         ("required_layers", texts(&layers)),
@@ -523,9 +1116,9 @@ fn synthesize(
         ("unresolved", texts(&unresolved)),
     ]);
     copper_lang::macros::validate_macro_asset_data(&asset).map_err(problem)?;
-    let keepout_area = area.expanded(keepout_margin);
+    let keepout_area = site.area.expanded(site.keepout_margin);
     let keepout = PlacementKeepout::new(
-        &format!("{name}-components"),
+        &format!("{}-components", site.name),
         BoardOutline::rectangle(
             keepout_area.max_x - keepout_area.min_x,
             keepout_area.max_y - keepout_area.min_y,
@@ -538,35 +1131,23 @@ fn synthesize(
         Json::Object(object) => object,
         _ => Object::new(),
     };
-    record.insert("name".to_owned(), Json::from(name.as_str()));
-    record.insert("net".to_owned(), Json::from(net.name.as_str()));
-    record.insert("ground".to_owned(), Json::from(ground));
-    record.insert("feed".to_owned(), Json::from(target.as_str()));
+    record.insert("name".to_owned(), Json::from(site.name.as_str()));
+    record.insert("net".to_owned(), Json::from(site.feed_net.as_str()));
+    record.insert("ground".to_owned(), Json::from(site.ground.as_str()));
+    record.insert("feed".to_owned(), Json::from(site.feed.to_string()));
     record.insert("feed_pose_nm".to_owned(), point_json(pose));
-    record.insert("path_nm".to_owned(), Json::Array(path.iter().map(|point| point_json(*point)).collect()));
+    record.insert("path_nm".to_owned(), Json::Array(layout.path.iter().map(|p| point_json(board_point(*p))).collect()));
     record.insert("placement_keepout".to_owned(), Json::from(keepout.name.as_str()));
     record.insert("unresolved".to_owned(), texts(&unresolved));
-    Ok(Synthesis {
-        name,
-        reference: reference.to_owned(),
-        net: net.name.clone(),
-        pose,
-        asset,
-        keepout,
-        record: Json::Object(record),
-    })
-}
-
-fn format_hz(hertz: &Decimal) -> String {
-    let value = decimal_f64(hertz);
-    if value >= 1e9 { format!("{:.4} GHz", value / 1e9) } else { format!("{:.3} MHz", value / 1e6) }
+    Ok(Synthesis { asset, keepout, record: Json::Object(record) })
 }
 
 /// Fix the feed component at its synthesized pose, reserve the region for
 /// components, and bind the generated macro through the immutable binder.
-fn bind(mut board: PhysicalBoard, synthesis: Synthesis) -> Result<PhysicalBoard> {
-    let Synthesis { name, reference, net, pose, asset, keepout, .. } = synthesis;
-    let problem = |message: String| Error::Value(format!("antenna {}: {message}", repr(&name)));
+fn bind(mut board: PhysicalBoard, site: &AntennaSite, synthesis: Synthesis) -> Result<PhysicalBoard> {
+    let Synthesis { asset, keepout, .. } = synthesis;
+    let (name, reference, pose) = (&site.name, &site.feed.component, site.pose);
+    let problem = |message: String| Error::Value(format!("antenna {}: {message}", repr(name)));
     if board.keepouts.iter().any(|existing| existing.name == keepout.name) {
         return Err(problem(format!("placement keepout {} already exists", repr(&keepout.name))));
     }
@@ -574,16 +1155,16 @@ fn bind(mut board: PhysicalBoard, synthesis: Synthesis) -> Result<PhysicalBoard>
     let mut rule = board
         .placement_rules
         .iter()
-        .find(|rule| rule.reference == reference)
+        .find(|rule| rule.reference == *reference)
         .cloned()
-        .unwrap_or_else(|| ComponentPlacementRule::new(&reference));
+        .unwrap_or_else(|| ComponentPlacementRule::new(reference));
     if rule.fixed_position.is_some_and(|position| position != pose)
         || rule.fixed_rotation_degrees.as_ref().is_some_and(|rotation| *rotation != zero)
         || rule.side.is_some_and(|side| side != BoardSide::Front)
     {
         return Err(problem(format!(
             "feed component {} already has a conflicting fixed placement; the antenna fixes its pose",
-            repr(&reference)
+            repr(reference)
         )));
     }
     rule.fixed_position = Some(pose);
@@ -593,11 +1174,11 @@ fn bind(mut board: PhysicalBoard, synthesis: Synthesis) -> Result<PhysicalBoard>
     rule.edge_clearance_nm = Some(MEMBER_EDGE_CLEARANCE_NM);
     rule.region = None;
     let rule = rule.normalized()?;
-    board.placement_rules.retain(|existing| existing.reference != reference);
+    board.placement_rules.retain(|existing| existing.reference != *reference);
     board.placement_rules.push(rule);
     board.placement_rules.sort_by(|a, b| a.reference.cmp(&b.reference));
     for placement in &mut board.placements {
-        if placement.reference == reference {
+        if placement.reference == *reference {
             placement.position = pose;
             placement.rotation_degrees = zero.clone();
             placement.side = BoardSide::Front;
@@ -607,9 +1188,9 @@ fn bind(mut board: PhysicalBoard, synthesis: Synthesis) -> Result<PhysicalBoard>
     let raw = copper_lang::macros::canonical_macro_bytes(&asset);
     let digest: String = Sha256::digest(&raw).iter().map(|byte| format!("{byte:02x}")).collect();
     let members: IndexMap<String, String> = [(MEMBER.to_owned(), reference.clone())].into_iter().collect();
-    let nets: IndexMap<String, String> = [(FEED_ROLE.to_owned(), net)].into_iter().collect();
+    let nets: IndexMap<String, String> = [(FEED_ROLE.to_owned(), site.feed_net.clone())].into_iter().collect();
     let asset_path = format!("generated:{GENERATOR}:{name}");
-    let mut board = match bind_hard_macro(board, Path::new(&asset_path), &raw, &digest, &name, &members, &nets) {
+    let mut board = match bind_hard_macro(board, Path::new(&asset_path), &raw, &digest, name, &members, &nets) {
         Ok(board) => board,
         Err(Error::Value(message)) => return Err(problem(format!("generated macro rejected: {message}"))),
         Err(other) => return Err(other),
@@ -618,21 +1199,16 @@ fn bind(mut board: PhysicalBoard, synthesis: Synthesis) -> Result<PhysicalBoard>
     Ok(board)
 }
 
-/// `apply_antenna_constraints`: synthesize and bind every `constraint antenna`.
-/// Records every synthesis in `metadata["antenna_synthesis"]`.
-pub(crate) fn apply_antenna_constraints(
-    mut board: PhysicalBoard,
-    flat: &FlatElectricalView,
-    components: &IndexMap<&str, &Selected>,
-) -> Result<PhysicalBoard> {
+/// `apply_antenna_constraints`: resolve, realize and bind every
+/// `constraint antenna`. Records every synthesis in
+/// `metadata["antenna_synthesis"]`.
+pub fn apply_antenna_constraints(mut board: PhysicalBoard, flat: &FlatElectricalView) -> Result<PhysicalBoard> {
+    let sites = resolve_sites(&board, flat)?;
     let mut records = Vec::new();
-    for (index, constraint) in flat.constraints.iter().enumerate() {
-        if constraint.kind != ConstraintKind::Antenna {
-            continue;
-        }
-        let synthesis = synthesize(&board, flat, components, index, constraint)?;
+    for site in &sites {
+        let synthesis = synthesize(&board, site)?;
         records.push(synthesis.record.clone());
-        board = bind(board, synthesis)?;
+        board = bind(board, site, synthesis)?;
     }
     if !records.is_empty() {
         let text = Dumps::new().sort_keys(true).dumps(&Json::Array(records));
@@ -655,6 +1231,20 @@ pub fn recorded_syntheses(board: &PhysicalBoard) -> Vec<Object> {
     }
 }
 
+/// A short human-readable statement of `site`'s band and target.
+pub fn describe(site: &AntennaSite) -> String {
+    let bands: Vec<&str> = site.bands.iter().map(|b| b.text.as_str()).collect();
+    format!(
+        "antenna {} on {} ({}), target {:.1} dB over {}, centre {}",
+        repr(&site.name),
+        site.feed,
+        site.feed_net,
+        site.max_return_loss_db,
+        bands.join("; "),
+        format_hz(site.centre_hz())
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -673,14 +1263,27 @@ mod tests {
         assert_eq!(frame.axis, Axis::X);
         assert_eq!(frame.inner, 6_000_000);
         assert_eq!(frame.outward, -1);
+        assert_eq!(frame.to_board(2_000_000, 1_000_000), Point::new(22_000_000, 5_000_000));
         // A corner region shares a short side too; the long run still wins.
-        let frame = frame_or_panic(area, &[0, 3]);
-        assert_eq!(frame.axis, Axis::X);
+        assert_eq!(super::frame(area, &[0, 3]).expect("a frame").axis, Axis::X);
         assert!(super::frame(area, &[]).is_err());
         assert!(super::frame(area, &[0, 2]).is_err());
     }
 
-    fn frame_or_panic(area: Bounds, perimeter: &[usize]) -> Frame {
-        frame(area, perimeter).expect("a frame")
+    #[test]
+    fn geometry_source_round_trips_and_rejects_dc_shorted_kinds() {
+        for text in [
+            "monopole height=3mm length=17.46mm",
+            "meander height=4.5mm depth=3mm pitch=1.5mm turns=4 tail=2.12mm",
+            "pixel cell=1mm columns=5 rows=2 bits=a5c",
+        ] {
+            let geometry = Geometry::parse(text).expect(text);
+            assert_eq!(geometry.to_source(), text);
+        }
+        assert!(Geometry::parse("monopole height=3mm").is_err());
+        assert!(Geometry::parse("monopole height=3 length=4mm").is_err());
+        assert!(Geometry::parse("pixel cell=1mm columns=5 rows=2 bits=a5d").is_err());
+        let error = Geometry::parse("inverted_f height=3mm").unwrap_err();
+        assert!(error.contains("net tie"), "{error}");
     }
 }

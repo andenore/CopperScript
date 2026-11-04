@@ -12,6 +12,7 @@ Install the binary with `cargo install --locked --path crates/copper`.
 | `copper-lang` | Lexer, parser, package resolution, lowering (electrical, mechanical, silkscreen), ERC, the compiled JSON and the KiCad schematic backend |
 | `copper-web` | Bounded in-memory compiler/ERC/query adapter for the browser playground; builds to native Rust for tests and WebAssembly for `site/demo/` |
 | `copper-web-route` | Separately loaded WASM adapter for small, source-owned synthetic boards; invokes the standard bounded routing pipeline and exports actual scene geometry and internal DRC |
+| `copper-antenna` | Full-wave trace-antenna synthesis for `constraint antenna`: the board EM model on the pinned pure-Rust FDTD solver `ems`, L-section matching, resonance tuning, Nelder-Mead polish, fine verification with radiation efficiency, a pixel genetic algorithm and the `copperscript-antenna-synthesis/v0.1` report (`copper synthesize-antenna`) |
 | `copper-pcb` | Physical board IR, physicalization (proxy and resolved footprints), placement templates, hard-macro scenes and the KiCad PCB/project backend |
 | `copper-drc` | Physical DRC findings and coverage, exact copper connectivity, breakout spacing, placement legality and hard-macro materialization; signal-integrity screening (`si-check`) |
 | `copper-lsp` | The language server (`copper lsp`): Content-Length framing, JSON-RPC dispatch with Python's error codes and messages, the debounced diagnostics worker, recovering parse, symbols, hover, definition, completion, compiler-backed diagnostics and quick fixes |

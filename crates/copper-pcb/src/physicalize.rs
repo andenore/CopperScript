@@ -1020,7 +1020,7 @@ pub fn physicalize(
         physical = crate::hard_macros::apply_source_macros(physical, &flat, locked, offline)?;
     }
     if flat.constraints.iter().any(|c| c.kind == ConstraintKind::Antenna) {
-        physical = crate::antenna::apply_antenna_constraints(physical, &flat, &component_index)?;
+        physical = crate::antenna::apply_antenna_constraints(physical, &flat)?;
     }
     Ok(physical)
 }

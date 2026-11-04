@@ -1,13 +1,39 @@
 # PCB trace-antenna synthesis in CopperScript
 
-Research date: 4 November 2026. Status: step 1 of the sequence below is
-implemented (`constraint antenna(...)` lowering to a generated hard macro with
-a template-tier monopole; see [the language reference](language-reference.md#trace-antenna-synthesis)
-and `examples/antenna_synthesis`). Everything else is a proposal. Nothing
-below changes the qualification boundary in
-[engineering qualification](engineering-qualification.md): a synthesized and
-simulated antenna is a design draft with simulation evidence, never bench
-qualification or regulatory compliance.
+Research date: 4 November 2026. Nothing below changes the qualification
+boundary in [engineering qualification](engineering-qualification.md): a
+synthesized and simulated antenna is a design draft with simulation evidence,
+never bench qualification or regulatory compliance.
+
+## Status
+
+Implemented (see [the language reference](language-reference.md#trace-antenna-synthesis)
+and `examples/antenna_synthesis`):
+
+- `constraint antenna(...)` lowering to a generated one-member hard macro,
+  with `geometry` (monopole, meander, pixel) and `tuned_for`, the site digest
+  of every full-wave model input; a stale digest fails closed.
+- The `copper-antenna` crate and `copper synthesize-antenna`: a board-level
+  full-wave model on the pure-Rust FDTD solver `ems` 0.0.5 (pinned), L-section
+  matching synthesis, resonance tuning by electrical-length scaling, bounded
+  Nelder-Mead polish, fine-mesh verification with a length correction and
+  radiation efficiency from a near-to-far-field box, and a pixel genetic
+  algorithm. The report is `copperscript-antenna-synthesis/v0.1`.
+
+Not implemented:
+
+- **DC-shorted radiators** (inverted-F, PIFA, loops). Their copper joins the
+  feed net to ground, which CopperScript can only express as component-owned
+  copper with a net tie (KiCad `net_tie_pad_groups` with footprint copper).
+  That needs footprint copper graphics in the physical footprint model, DRC
+  and export. The solver handles them (see the AN043 validation below).
+- Pixel tiles are owned copper polygons, and hard-macro rules forbid a host
+  zone on a layer where a macro owns area copper; pixel antennas therefore
+  need the `F.Cu` ground zone drawn around the region.
+- Multi-band synthesis, robust optimization over permittivity spread,
+  E-series snapping and tolerance analysis of matching parts, NFC loops,
+  back-side antennas and non-rectangular regions.
+- An openEMS cross-check backend.
 
 ## The question
 
@@ -301,6 +327,77 @@ CopperLib's contract schema:
 4. Fabricate one board (Tier 1 output) and measure S11 with a VNA; record the
    resonance shift. That number is the honest systematic error to print in
    every report until more boards exist.
+
+## Validation results
+
+All runs on the pinned `ems` 0.0.5 with 12 threads on a laptop CPU.
+
+**Free-space strip dipole** (58 mm, 1 mm wide, 1 mm gap, 0.5 mm cells): the
+input impedance at resonance is 73.3 - 0.1j ohm at 2.405 GHz, the textbook
+73 ohm, about 7 % below c/2L as expected for a strip of that width. Two
+seconds per run.
+
+**TI AN043 meandered inverted-F**, rebuilt from the dimension drawing
+(Figure 3, Table 1 of SWRA117D) on the CC2511 dongle stack quoted from its
+readme (0.25/0.50/0.25 mm FR4, ground on layers 2, 3 and 4). The ground-plane
+length and the FR4 permittivity are not published, so they were swept:
+
+| Ground | er | Mesh | Resonance | Best S11 | -10 dB band |
+| --- | --- | --- | --- | --- | --- |
+| 20 mm | 4.3 | 0.25 mm | 2.415 GHz | -5.0 dB | none |
+| 30 mm | 4.3 | 0.25 mm | 2.370 GHz | -9.7 dB | none |
+| 30 mm | 4.3 | 0.15 mm | 2.345 GHz | -9.0 dB | none |
+| 40 mm | 4.3 | 0.25 mm | 2.360 GHz | -27.7 dB | 2.255-2.515 GHz |
+| 40 mm | 3.9 | 0.25 mm | 2.430 GHz | -19.6 dB | 2.315-2.600 GHz |
+| TI measured, free space | | | 2.475 GHz | -24 dB | about 250 MHz |
+| TI IE3D, mesh 5 | | | 2.43 GHz | -17 dB | |
+
+With a 40 mm ground the match and bandwidth reproduce the measurement; with
+er 3.9 the resonance lands on TI's own fine-mesh simulation and 45 MHz
+(1.8 %) below the measurement, inside the 50 MHz criterion. The mesh is
+converged to about 1 %. Sensitivities: about 18 MHz per 0.1 of er, and the
+ground length sets the match (a 20 mm ground leaves it at -5 dB). Each run
+took 3.5 to 8 minutes at 1 million cells.
+
+**End-to-end synthesis on `examples/antenna_synthesis`** (40 x 30 mm, 1.51 mm
+FR4 er 4.4, ground on both layers, 22 x 6 mm corner region, 1 mm track,
+2400-2483.5 MHz, budget 10), 34.5 minutes with five unrelated routing runs
+sharing the CPU:
+
+| Stage | Geometry | Resonance | Bare | Matched |
+| --- | --- | --- | --- | --- |
+| Template, coarse | monopole 5.3 mm / 17.46 mm | 2.930 GHz | -0.9 dB | -9.7 dB |
+| Resonance tuning, coarse | 22.00 mm | 2.451 GHz | -2.9 dB | -12.5 dB |
+| Polish winner, coarse | 22.66 mm | 2.388 GHz | -3.3 dB | -12.7 dB |
+| Fine verification | 22.66 mm | 2.387 GHz | -3.1 dB | -12.1 dB |
+
+Coarse and fine meshes agree on the resonance to 1 MHz. The result meets
+-10 dB over the band with 0.94 nH series then 2.61 pF shunt (antenna side
+first) and 85 % radiation efficiency. The bare match is poor, as expected for
+a monopole parallel to a ground edge 5.3 mm away; the matching network is
+part of the design, not an afterthought. Coarse evaluations cost about
+105 seconds at 1.4 million cells and fine ones five to eight minutes at 2.5
+million, so a state-of-the-art pixel search of the published scale (about
+1,500 evaluations) would take about two days on this machine; the pixel
+algorithm is implemented with a budget and tested on small grids.
+
+**Lessons that are now in the model**:
+
+- The solver keeps every edge of a PEC sheet metal whatever lies over it, so
+  ground is clipped geometrically around the antenna region and feed slot.
+  An early model that covered ground with a higher-priority dielectric left
+  the radiator on the ground pour: resonance did not move with length.
+- Two unstitched ground planes form a parallel-plate cavity that a vertical
+  port drives. The model stitches ground layers at a tenth of the guided
+  wavelength and uses an in-plane port across the feed slot when `F.Cu` has
+  ground at the feed; both are stated in every report.
+- A one-cell gap whose two nodes touch metal discretizes as a PEC short, so
+  the feed slot is modelled at least one coarse cell wide with a mesh line
+  inside the port.
+- The first-order template uses the microstrip permittivity, which assumes
+  ground under the trace; an antenna region has none. On the example board
+  the 17.46 mm template resonates at 2.93 GHz, 20 % high, which is why
+  synthesis matters.
 
 ## Risks
 

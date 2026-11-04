@@ -24,6 +24,11 @@ board AntennaSynthesisProbe {
         ground = GND;
         bands = "2400 MHz-2483.5 MHz";
         track_width = 1mm;
+        // From `copper synthesize-antenna` (full-wave, fine mesh): -12.1 dB
+        // worst over the band with 0.94 nH series then 2.61 pF shunt from the
+        // antenna side, 85 % radiation efficiency. Simulation only.
+        geometry = "monopole height=5.3mm length=22.66mm";
+        tuned_for = "sha256:cfc7f2ea8a0d30f248e315c10878928f34e89cbc0577c5621560c2755e3426fd";
     }
 
     mechanical {

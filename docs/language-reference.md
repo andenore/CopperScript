@@ -1123,12 +1123,12 @@ requirements include its vias.
 
 ### Trace antenna synthesis
 
-`constraint antenna(COMPONENT.PIN)` reserves a board-edge region and asks the
-compiler to generate a printed antenna inside it, fed from that pin. The
-target is the feed pad of a one-land antenna feed component; its net is the
-antenna feed net. The implementation is the **template tier** only: a
-first-order quarter-wave monopole, scaled by the stack-up's effective
-permittivity, with no field solution.
+`constraint antenna(COMPONENT.PIN)` reserves a board-edge region and places a
+printed antenna inside it, fed from that pin. The target is the feed pad of a
+one-land antenna feed component; its net is the antenna feed net. Without a
+`geometry`, lowering uses a first-order template; `copper synthesize-antenna`
+tunes the geometry in a full-wave model of the board and prints the
+`geometry` and `tuned_for` lines to paste back.
 
 ```copper
 constraint antenna(ANT1.FEED) {
@@ -1138,21 +1138,84 @@ constraint antenna(ANT1.FEED) {
     // or polygon_mm = "18,0;40,0;40,6;18,6";
     ground = GND;                     // the host reference ground net
     bands = "2400 MHz-2483.5 MHz";    // LOW-HIGH with units; ';' separates bands
+    max_return_loss_db = -10;         // synthesis target over every band (default -10)
     track_width = 1mm;                // default: the board's default track width
     keepout_margin = 0.5mm;           // extra component clearance around the region
-    topology = auto;                  // auto | monopole; inverted_f, meander, loop reserved
-    solver = template;                // template; parametric, pixel reserved
-    side = front;                     // back is not implemented
+    topology = auto;                  // auto | monopole | meander | pixel
+    geometry = "meander height=4.6mm depth=3.1mm pitch=2mm turns=1 tail=6.2mm";
+    tuned_for = "sha256:...";         // site digest the geometry was tuned for
 }
 ```
 
 Exactly one region form is required; the region must be a rectangle whose
 one edge lies on the straight outer board perimeter while the opposite edge
 faces the host ground. When both axes qualify (a corner), the longer run is
-used. `ground` must name an existing net (ERC reports an unknown one). Only
-one band is synthesized today; multi-band declarations, the reserved
-topologies and solvers, back-side antennas and curved regions or outlines are
-rejected as not implemented rather than approximated.
+used. `ground` must name an existing net (ERC reports an unknown one).
+`inverted_f` and `loop` are reserved: they are DC-shorted to ground, which
+needs component-owned copper with a net tie that CopperScript does not have,
+so they fail as not implemented. Back-side antennas and curved regions or
+outlines also fail as not implemented.
+
+#### Geometry
+
+Local coordinates run along the board edge (`u`, from the region's low end)
+and across it (`v`, from the ground edge). Every geometry starts at the feed
+pad, just outside the region on the ground side, with a stub up the feed's
+column:
+
+- `monopole height=H length=L`: the stub to `H`, then a run along the edge;
+  `L` is the conductor length from the ground edge.
+- `meander height=H depth=D pitch=P turns=N tail=T`: the stub to `H`, one
+  pitch along, `N` U-shaped meanders hanging `D` below `H` with legs `P`
+  apart centre to centre, then a straight `T`.
+- `pixel cell=C columns=M rows=K bits=HEX`: an `M` x `K` grid of `C` tiles,
+  row-major from the ground edge, with one column centred on the feed; only
+  tiles 4-connected to the tile above the feed are realized. Tiles are
+  owned copper polygons, so no `F.Cu` `copper_zone` may overlap or touch the
+  antenna region: draw the ground zone with a gap around it.
+
+Lengths are millimetres with an `mm` suffix, on whole nanometres. Every
+geometry must keep its copper the board clearance plus half a track inside
+the region, and meander legs at least the clearance apart; a geometry that
+does not fit fails with the length it needs.
+
+#### Tuning and staleness
+
+`tuned_for` is the site digest: a hash of every input the full-wave model
+reads (outline and cutouts, stack-up thicknesses, permittivities and loss
+tangents, the ground net's zones, region, frame, track width, clearance,
+feed land and position, bands, target and generator version). When
+`tuned_for` is present and differs from the current board's digest,
+lowering fails and names both digests: re-run `copper synthesize-antenna`,
+or remove `tuned_for` to keep the geometry as an untuned manual one.
+Placements of other components, other nets and the enclosure are not in the
+model and so not in the digest.
+
+```sh
+copper synthesize-antenna board.copper --antenna bt --report build/bt-antenna.json --locked --offline
+copper synthesize-antenna board.copper --antenna bt --verify --locked --offline
+```
+
+The command physicalizes the board without its antenna declarations,
+resolves the site, and searches in a full-wave FDTD model (the pure-Rust
+`ems` solver): the length is scaled until the series resonance sits on the
+band centre, then a bounded Nelder-Mead search over height and length
+polishes the worst-case return loss on a coarse mesh (two cells across the
+track), and the winner is verified on a mesh twice as fine with one more
+length correction and the radiation efficiency from a near-to-far-field box.
+`topology = pixel` runs a seeded genetic algorithm over the region's tiles
+instead. Every candidate is scored by its worst return loss over every band
+with the best two-element L-section matching network synthesized from its
+simulated feed impedance, unless it already meets the target bare.
+`--budget` caps coarse evaluations (default 12); `--no-fine` skips
+verification; `--verify` evaluates the declared geometry without searching.
+The report (`copperscript-antenna-synthesis/v0.1`) holds the search history,
+the final curve, the matching values, efficiency, assumptions and the
+unresolved bench work. The model leaves out components, other nets, zone
+holes, the enclosure and cables, and its matching parts are ideal: the result
+is simulation evidence, not bench or regulatory evidence.
+
+#### Lowering
 
 Lowering generates a one-member hard macro in the `v0.5` asset contract and
 binds it through the ordinary immutable binder, so placement, routing, fill
@@ -1161,13 +1224,12 @@ exclusion, export locking and port-continuity proof need nothing new:
 - The feed component is the anchor, fixed just outside the region on the
   ground side (its pad at the board clearance from the region, its courtyard
   clear of the component keepout). A conflicting `fixed_placement` fails.
-- The radiator is locked `F.Cu` copper of `track_width`: a stub from the
-  feed through the region's ground-side edge to its centreline, then a run
-  along the board edge, totalling one scaled quarter wave at the band centre.
-  The effective permittivity is the Hammerstad-Jensen microstrip estimate
-  for the dielectric declared directly under `F.Cu`; a stack-up without `er`
-  there fails. A region too short for the path fails with the required and
-  available lengths.
+- The radiator is locked `F.Cu` copper: the geometry's track of
+  `track_width`, and for pixel geometries one copper polygon per tile. The
+  template is a monopole whose run sits on the region's centreline, totalling
+  one quarter wave at the band centre scaled by the Hammerstad-Jensen
+  effective permittivity of the dielectric under `F.Cu`; a stack-up without
+  `er` there fails.
 - The region is a protected region on every copper layer (no foreign tracks,
   vias or fill), a zone keepout with `edge_openings` for its perimeter edges,
   and a `PlacementKeepout` (both sides, expanded by `keepout_margin`) for
@@ -1175,14 +1237,15 @@ exclusion, export locking and port-continuity proof need nothing new:
 - The feed pad is the macro's one external port; ordinary routing reaches it
   from the matching network.
 
-`metadata["antenna_synthesis"]` records each synthesis (band, centre
-frequency, effective permittivity, quarter wave, path, pose, region) and the
-macro's `source` repeats it. Requirement verification passes an antenna
-declaration only when its generated copper is present and materialized, and
-says so without any return-loss, radiation, matching or regulatory claim; the
-macro's `unresolved` list keeps bench tuning in the final enclosure mandatory.
-The example is `examples/antenna_synthesis`; the design and the planned
-solver tiers are in [the research note](pcb-antenna-synthesis-research.md).
+`metadata["antenna_synthesis"]` records each synthesis (provenance
+`template`, `tuned` or `manual`, geometry, site digest, band, effective
+permittivity, path, pose, region) and the macro's `source` repeats it.
+Requirement verification passes an antenna declaration only when its
+generated copper is present and materialized, and says so without any
+return-loss, radiation, matching or regulatory claim; the macro's
+`unresolved` list keeps bench tuning in the final enclosure mandatory. The
+example is `examples/antenna_synthesis`; the design, validation and
+remaining work are in [the research note](pcb-antenna-synthesis-research.md).
 
 A component-scoped drill clearance is a documented exception to the board's
 `minimum_hole_clearance` (mechanical `rules`, default 0.25 mm), for a vendor

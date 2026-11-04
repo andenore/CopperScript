@@ -38,18 +38,14 @@ pub const PARAMETERS: [&str; 16] = [
     "track_width",
     "keepout_margin",
     "max_return_loss_db",
-    "solver",
-    "simulation_budget",
+    "geometry",
+    "tuned_for",
 ];
 
-/// Accepted `topology` words. Only `auto` and `monopole` are synthesized today;
-/// the others are reserved vocabulary that physical lowering reports as not
-/// implemented rather than approximating.
-pub const TOPOLOGIES: [&str; 5] = ["auto", "monopole", "inverted_f", "meander", "loop"];
-
-/// Accepted `solver` words. Only `template` (analytic first-order scaling,
-/// no field solution) is implemented.
-pub const SOLVERS: [&str; 3] = ["template", "parametric", "pixel"];
+/// Accepted `topology` words. `inverted_f` and `loop` are reserved: they are
+/// DC-shorted to ground and need component-owned copper with a net tie, so
+/// physical lowering reports them as not implemented rather than approximating.
+pub const TOPOLOGIES: [&str; 6] = ["auto", "monopole", "meander", "pixel", "inverted_f", "loop"];
 
 /// One declared operating band, `LOW-HIGH`, in hertz.
 #[derive(Clone, Debug, PartialEq)]
@@ -162,7 +158,7 @@ pub fn validate_antenna(declaration: &ConstraintDecl, parameters: &IndexMap<Stri
             }
         }
     }
-    for name in ["region", "polygon_mm", "ground", "name"] {
+    for name in ["region", "polygon_mm", "ground", "name", "geometry", "tuned_for"] {
         if parameters.contains_key(name) && text(parameters, name).is_none_or(|value| strip(value).is_empty()) {
             return fail(format!("antenna parameter {} must be a nonempty string", repr(name)));
         }
@@ -181,10 +177,15 @@ pub fn validate_antenna(declaration: &ConstraintDecl, parameters: &IndexMap<Stri
     {
         return fail("antenna side must be front or back".to_owned());
     }
-    for (name, allowed) in [("topology", &TOPOLOGIES[..]), ("solver", &SOLVERS[..])] {
-        if parameters.contains_key(name) && !text(parameters, name).is_some_and(|value| allowed.contains(&value)) {
-            return fail(format!("antenna {name} must be one of {}", allowed.join(", ")));
-        }
+    if parameters.contains_key("topology") && !text(parameters, "topology").is_some_and(|v| TOPOLOGIES.contains(&v)) {
+        return fail(format!("antenna topology must be one of {}", TOPOLOGIES.join(", ")));
+    }
+    if let Some(digest) = text(parameters, "tuned_for")
+        && !(digest.len() == 71
+            && digest.starts_with("sha256:")
+            && digest[7..].chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()))
+    {
+        return fail("antenna tuned_for must be sha256: followed by 64 lowercase hex digits".to_owned());
     }
     if parameters.contains_key("track_width")
         && !length(parameters, "track_width").is_some_and(|value| *value.base_value() > Decimal::zero())
@@ -200,11 +201,6 @@ pub fn validate_antenna(declaration: &ConstraintDecl, parameters: &IndexMap<Stri
         && !matches!(parameters.get("max_return_loss_db"), Some(ParameterValue::Int(_) | ParameterValue::Float(_)))
     {
         return fail("antenna max_return_loss_db must be a number".to_owned());
-    }
-    if parameters.contains_key("simulation_budget")
-        && !matches!(parameters.get("simulation_budget"), Some(ParameterValue::Int(value)) if value.sign() != num_bigint::Sign::Minus)
-    {
-        return fail("antenna simulation_budget must be a nonnegative integer".to_owned());
     }
     Ok(())
 }
