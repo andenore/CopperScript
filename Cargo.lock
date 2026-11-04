@@ -40,6 +40,7 @@ name = "copper"
 version = "0.1.0"
 dependencies = [
  "copper-assembly",
+ "copper-cam",
  "copper-drc",
  "copper-editor",
  "copper-json",
@@ -67,6 +68,15 @@ dependencies = [
  "copper-units",
  "indexmap",
  "sha2",
+]
+
+[[package]]
+name = "copper-cam"
+version = "0.1.0"
+dependencies = [
+ "copper-json",
+ "copper-physical",
+ "indexmap",
 ]
 
 [[package]]

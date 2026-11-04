@@ -24,6 +24,7 @@ unicode-general-category = "1"
 copper-json = { path = "crates/copper-json" }
 copper-lang = { path = "crates/copper-lang" }
 copper-assembly = { path = "crates/copper-assembly" }
+copper-cam = { path = "crates/copper-cam" }
 copper-lsp = { path = "crates/copper-lsp" }
 copper-drc = { path = "crates/copper-drc" }
 copper-editor = { path = "crates/copper-editor" }
