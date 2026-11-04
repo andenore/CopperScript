@@ -9,6 +9,7 @@
 //! change a finding. Filled-zone checks need zone fills, which only the
 //! KiCad manufacturing stage produces.
 
+pub mod arcs;
 pub mod breakout;
 pub mod connectivity;
 pub mod digest;
@@ -137,7 +138,7 @@ impl Finding {
     }
 }
 
-fn sorted_pair(first: &str, second: &str) -> Vec<String> {
+pub(crate) fn sorted_pair(first: &str, second: &str) -> Vec<String> {
     let mut pair = vec![first.to_owned(), second.to_owned()];
     pair.sort();
     pair
@@ -306,7 +307,16 @@ pub fn run_physical_drc(board: &PhysicalBoard, policy: Policy) -> Result<Report>
     check_copper_spacing(board, &mut findings, &mut relaxations)?;
     check_fixed_polygons(board, &mut findings)?;
     check_copper_artwork(board, &mut findings)?;
+    crate::arcs::check_arcs(board, &mut findings)?;
     covered.push(coverage("shorts_and_clearance", Executed, true, ""));
+    if !board.arcs.is_empty() {
+        covered.push(coverage(
+            "arched_copper",
+            Executed,
+            true,
+            "arc widths, layers, spacing, holes, keep-outs and reservations measured in floating point from the exact arc centre; board edge on widened chord chains",
+        ));
+    }
     let copper_art: Vec<&Artwork> = board.silkscreen.iter().filter(|item| artwork_layer(item).is_some()).collect();
     if !copper_art.is_empty() {
         covered.push(coverage(
@@ -497,7 +507,7 @@ fn layer_indexes(board: &PhysicalBoard) -> IndexMap<CopperLayer, usize> {
 }
 
 /// `_via_covers_layer`.
-fn via_covers_layer(board: &PhysicalBoard, via: &Via, layer: CopperLayer) -> Result<bool> {
+pub(crate) fn via_covers_layer(board: &PhysicalBoard, via: &Via, layer: CopperLayer) -> Result<bool> {
     let indexes = layer_indexes(board);
     let index = |l: CopperLayer| indexes.get(&l).copied().ok_or_else(|| Error::Value(format!("{:?}", l.value())));
     let (a, b) = (index(via.from_layer)?, index(via.to_layer)?);
@@ -521,7 +531,8 @@ fn routed_length(board: &PhysicalBoard, net: &str) -> i64 {
         .iter()
         .filter(|t| t.net == net)
         .map(|t| round_int(hypot((t.end.x_nm - t.start.x_nm) as f64, (t.end.y_nm - t.start.y_nm) as f64)))
-        .sum()
+        .sum::<i64>()
+        + crate::arcs::routed_arc_length_nm(board, net)
 }
 
 /// `_check_connectivity`.
@@ -866,17 +877,17 @@ fn check_length_match(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Res
 }
 
 /// `_PadCopper`.
-struct PadCopper {
-    identity: String,
-    net: String,
-    shape: RoundedConvexShape,
-    layers: Vec<CopperLayer>,
-    clearance_nm: i64,
-    component: String,
+pub(crate) struct PadCopper {
+    pub(crate) identity: String,
+    pub(crate) net: String,
+    pub(crate) shape: RoundedConvexShape,
+    pub(crate) layers: Vec<CopperLayer>,
+    pub(crate) clearance_nm: i64,
+    pub(crate) component: String,
 }
 
 /// `_copper_pads`: every plated land, unconnected ones on their own net.
-fn copper_pads(board: &PhysicalBoard) -> Vec<PadCopper> {
+pub(crate) fn copper_pads(board: &PhysicalBoard) -> Vec<PadCopper> {
     let pad_nets: IndexMap<&PadReference, &str> =
         board.nets.iter().flat_map(|n| n.pads.iter().map(move |p| (p, n.name.as_str()))).collect();
     let mut result = Vec::new();

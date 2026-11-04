@@ -13,8 +13,8 @@ use copper_json::{Dumps, Object, Value};
 use copper_lang::paths;
 use copper_pcb::board::RouteKind;
 use copper_pcb::board::{
-    DecouplingLink, NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, Placement, ReturnViaPolicy, Stackup,
-    TuningStyle,
+    CornerStyle, DecouplingLink, NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, Placement,
+    ReturnViaPolicy, Stackup, TuningStyle,
 };
 use copper_pcb::{Result, kicad_pcb, project};
 use copper_physical::footprint::{FootprintPad, PadKind, PadShape, PhysicalFootprint, Size};
@@ -114,6 +114,8 @@ pub fn general_rule(net: &str) -> NetRoutingRule {
         tuning_style: TuningStyle::Bumps,
         tuning_spacing_nm: None,
         tuning_group: None,
+        corner_style: CornerStyle::Octilinear,
+        corner_radius_nm: None,
     }
 }
 
@@ -149,6 +151,7 @@ pub fn board(
         rules: DesignRules::default(),
         tracks: Vec::new(),
         vias: Vec::new(),
+        arcs: Vec::new(),
         metadata: IndexMap::new(),
         regions: Vec::new(),
         keepouts: Vec::new(),

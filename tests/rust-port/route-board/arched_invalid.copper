@@ -1,0 +1,10 @@
+// Rust-port corpus input: a corner_radius without corner_style = "arc"
+// fails CMP110; not a circuit.
+board ArchedInvalid {
+    import parts "./bga/parts";
+    component J1: parts.Pair;
+    component J2: parts.Pair;
+    net A { J1.A; J2.A; }
+    net B { J1.B; J2.B; }
+    constraint routing(A) { corner_radius = 0.3mm; }
+}

@@ -1388,6 +1388,7 @@ pub fn matched_local_candidates(
             style: rule.tuning_style,
             leg_gap_nm: rule.tuning_spacing_nm,
             vias: own_vias,
+            corners: crate::arc_corners::corner_policies(board),
             ..Default::default()
         },
     )?;

@@ -1427,11 +1427,36 @@ fn finish(
     } else {
         copper_route::route_cleanup::trim_dangling_overhangs(&output_board, &fixed)?
     };
+    // CS-174: arched corners are the last change to the copper before the
+    // exact DRC and the native checks, so no cleanup sees a trimmed leg as
+    // dangling.
+    let (output_board, arc_corners) = if stopped {
+        (output_board, None)
+    } else {
+        match copper_route::arc_corners::arch_board(&output_board)
+            .map_err(|error| copper_pcb::Error::NotImplemented(error.crash_line()))?
+        {
+            Some((arched, outcome)) => {
+                emit(
+                    progress,
+                    "arc_corners",
+                    "finished",
+                    vec![
+                        ("arcs", Value::from(outcome.arcs as i64)),
+                        ("retained_corners", Value::from(outcome.retained.len() as i64)),
+                    ],
+                );
+                (arched, Some(outcome))
+            }
+            None => (output_board, None),
+        }
+    };
     let output_drc = if !stopped
         && ((context.stitch_enabled && stitch.is_some())
             || duplicate_stitch.added_track_count != 0
             || trimmed_overhangs
-            || swept_single_layer_vias)
+            || swept_single_layer_vias
+            || arc_corners.as_ref().is_some_and(|outcome| outcome.arcs != 0))
     {
         copper_route::drc_report::run_physical_drc(&output_board, copper_drc::Policy::default())?
     } else {
@@ -1876,6 +1901,9 @@ fn finish(
     }
     if let Some(cleanup) = native_cleanup {
         report.insert("native_cleanup".to_owned(), cleanup);
+    }
+    if let Some(outcome) = &arc_corners {
+        report.insert("arc_corners".to_owned(), outcome.document());
     }
     if let Some(feedback) = &filled_feedback {
         report.insert("filled_copper_feedback".to_owned(), parse_document(&feedback.to_json()));

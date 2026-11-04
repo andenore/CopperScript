@@ -1772,6 +1772,62 @@ location, and `CMP117` with the routing constraint's location marks a
 `tuning_group` outside any `length_match` group, one spanning two of them,
 or pair members that disagree.
 
+### Arched corners
+
+```copper
+constraint routing(RF_FEED) { kind = rf_feed; width = 0.3mm; corner_style = "arc"; corner_radius = 1mm; }
+constraint routing(LVDS_P) {
+    kind = differential; partner = LVDS_N; width = 0.1mm; pair_gap = 0.1mm;
+    corner_style = "arc"; corner_radius = 0.3mm; tuning_style = "serpentine"; tuning_amplitude_limit = 1mm;
+}
+```
+
+- `corner_style` is `"octilinear"` (the default: 45° chamfers where the
+  router can place them) or `"arc"`. After routing, smoothing, tuning and
+  cleanup, the arc-corner stage replaces every corner of an arc-style net
+  where exactly two of its tracks of one layer and width meet, away from
+  vias, lands and immutable macro copper, by a circular arc tangent to both
+  legs. KiCad receives native `(arc ...)` tracks.
+- `corner_radius` (a positive length, only with `"arc"`) is the arc radius,
+  by default three times the net's routing width. Where a piece between two
+  corners cannot hold both tangents (r·tan(θ/2) each), the larger radii on
+  that piece come down to a common level that fits; a corner whose legs
+  cannot hold half the width stays sharp. Both members of a pair must
+  declare the same `corner_style` and `corner_radius`; the member inside a
+  turn takes the radius and its partner the radius plus the lane spacing, so
+  the pair stays concentric and keeps its gap. A member turning alone takes
+  its own radius.
+- An arc is emitted only when its copper is clear of foreign copper,
+  keep-outs, macro regions, routing reservations and the board edge by the
+  rule's clearance plus 2 nm (the partner's copper is concentric by
+  construction). A refused corner stays sharp, as does one blocked by a via
+  or land. The route report's `arc_corners` entry counts the arcs and lists
+  every retained corner with its reason; `summary.copper.arcs` counts them
+  and `track_length_mm` includes their length. The stage is the last change
+  to the copper before the exact DRC and the native checks, so KiCad sees
+  the arcs; a net the filled-copper feedback loop reroutes afterwards loses
+  its arcs (its new copper is octilinear).
+- Lengths count an arc at radius × sweep. Length-match and pair-skew tuning
+  of arc-style nets plan against the same policy: bumps and serpentines keep
+  sharp 90° corners for the stage, every unit is measured as arched, and a
+  step may gain up to 4 nm beyond its even target. Tops and risers are
+  semicircular where their length allows two tangents of the radius; each
+  pair member turns through two inside and two outside corners per bump or
+  leg, so both gain the same length. `tuning_group` requires octilinear
+  corners. The final `DRC-LENGTH-MATCH` check measures the emitted copper,
+  so a corner the stage refused shows up there.
+- Exact DRC measures arc distances in floating point from the exact centre
+  of the three stored points and reports a violation when a distance falls
+  more than 8 nm short (the rounding of those points moves a circle by a few
+  nanometres); board-edge checks use the inscribed chord chain widened by its
+  sagitta, which is conservative. A `DRC-ARC-GEOMETRY` error marks an arc
+  whose points are collinear or span more than 180°.
+
+Invalid values fail with `CMP110` (`corner_style` outside the two names,
+`corner_radius` without `"arc"`, `tuning_group` with `"arc"`), and pair
+members that disagree on corner style or radius fail when the board is
+physicalized.
+
 ### Breakout regions
 
 A breakout region lets a pair leave a fine-pitch pin field (a 0.4–0.5 mm

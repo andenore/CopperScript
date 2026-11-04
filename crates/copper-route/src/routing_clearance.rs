@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use copper_drc::breakout::BreakoutRegions;
 use copper_drc::legality::shape_in_board;
 use copper_json::{Dumps, Value as Json};
-use copper_pcb::board::{NetRoutingRule, PadReference, PhysicalBoard, TrackSegment, Via};
+use copper_pcb::board::{NetRoutingRule, PadReference, PhysicalBoard, TrackArc, TrackSegment, Via};
 use copper_pcb::hard_macros::macro_reservations;
 use copper_pcb::keepouts::resolved_copper_keepouts;
 use copper_pcb::transform::{PlacementTransform, placed_pad_shape};
@@ -461,7 +461,21 @@ impl<'b> RoutingClearanceIndex<'b> {
         for (ordinal, via) in board.vias.iter().enumerate() {
             index.add_via(via.clone(), true, Some(format!("via:{ordinal}")))?;
         }
+        for (ordinal, arc) in board.arcs.iter().enumerate() {
+            index.add_arc(arc, format!("arc:{ordinal}"));
+        }
         Ok(index)
+    }
+
+    /// `add_arc`: an arched corner (CS-174) as locked copper, one object per
+    /// chord capsule of its widened chord chain (a sound over-approximation).
+    pub fn add_arc(&mut self, arc: &TrackArc, occurrence: String) {
+        for shape in arc.clearance_pieces() {
+            let mut object = CopperObject::new(&arc.net, vec![arc.layer], shape);
+            object.locked = true;
+            object.occurrence = occurrence.clone();
+            self.add(object);
+        }
     }
 
     /// `_pad_index_template`: the immutable pad broad phase (objects and drilled holes).

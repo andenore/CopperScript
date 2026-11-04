@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use indexmap::{IndexMap, IndexSet};
 
-use copper_pcb::board::{CopperPolygon, PadReference, PhysicalBoard, PhysicalNet, TrackSegment, Via};
+use copper_pcb::board::{CopperPolygon, PadReference, PhysicalBoard, PhysicalNet, TrackArc, TrackSegment, Via};
 use copper_pcb::hard_macros::layer_index;
 use copper_pcb::transform::PlacementTransform;
 use copper_pcb::{Error, Result};
@@ -214,6 +214,7 @@ pub struct Candidate<'a> {
     pub tracks: Option<&'a [TrackSegment]>,
     pub vias: Option<&'a [Via]>,
     pub polygons: Option<&'a [CopperPolygon]>,
+    pub arcs: Option<&'a [TrackArc]>,
 }
 
 /// `_explicit_copper_contacts`: the exact graph's objects, pad nodes and internal edges.
@@ -226,6 +227,7 @@ pub fn explicit_copper_contacts(
     let tracks = candidate.tracks.unwrap_or(&board.tracks);
     let vias = candidate.vias.unwrap_or(&board.vias);
     let polygons = candidate.polygons.unwrap_or(&board.polygons);
+    let arcs = candidate.arcs.unwrap_or(&board.arcs);
     let mut objects = Vec::new();
     let mut pad_nodes: IndexMap<PadReference, Vec<String>> = IndexMap::new();
     let mut internal = Vec::new();
@@ -288,6 +290,20 @@ pub fn explicit_copper_contacts(
             drill: None,
             capped_layers: Vec::new(),
         });
+    }
+    for (index, arc) in arcs.iter().enumerate().filter(|(_, a)| selected(&a.net)) {
+        // The chord capsules lie inside the arc's copper and overlap each
+        // other at their shared vertices, so the chain is one connected object.
+        for (piece, shape) in arc.contact_pieces().into_iter().enumerate() {
+            objects.push(CopperContact {
+                identity: format!("arc:{index}:{piece}"),
+                net: arc.net.clone(),
+                layers: vec![arc.layer],
+                shape,
+                drill: None,
+                capped_layers: Vec::new(),
+            });
+        }
     }
     for (index, via) in vias.iter().enumerate().filter(|(_, v)| selected(&v.net)) {
         objects.push(via_copper_contact(board, via, format!("via:{index}"))?);

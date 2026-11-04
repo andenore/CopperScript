@@ -74,7 +74,8 @@ pub fn connection_summary(board: &PhysicalBoard, drc: Option<&Report>) -> Result
             let (dx, dy) = ((t.end.x_nm - t.start.x_nm) as i128, (t.end.y_nm - t.start.y_nm) as i128);
             round_int(((dx * dx + dy * dy) as f64).powf(0.5))
         })
-        .sum();
+        .sum::<i64>()
+        + board.arcs.iter().map(|arc| arc.length_nm()).sum::<i64>();
     let completion = if s_connections != 0 {
         round_digits(1.0 - crate::routing_lattice::true_div(s_opens as i128, s_connections as i128), 4)
     } else {
@@ -126,6 +127,7 @@ pub fn connection_summary(board: &PhysicalBoard, drc: Option<&Report>) -> Result
             object(vec![
                 ("tracks", int(board.tracks.len() as i64)),
                 ("vias", int(board.vias.len() as i64)),
+                ("arcs", int(board.arcs.len() as i64)),
                 (
                     "track_length_mm",
                     Value::Float(round_digits(crate::routing_lattice::true_div(length as i128, 1_000_000), 3)),

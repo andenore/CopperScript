@@ -965,6 +965,7 @@ pub fn physicalize(
         rules,
         tracks: Vec::new(),
         vias: Vec::new(),
+        arcs: Vec::new(),
         metadata,
         regions: lowered.regions,
         keepouts,
@@ -1630,6 +1631,8 @@ fn lower_routing_rule(net: &str, parameters: &Parameters) -> Result<NetRoutingRu
     let tuning_style = enum_value(parameters, "tuning_style", "bumps", "TuningStyle", TuningStyle::parse)?;
     let tuning_spacing_nm = optional_length(parameters, "tuning_spacing")?;
     let tuning_group = optional_string(parameters, "tuning_group")?;
+    let corner_style = enum_value(parameters, "corner_style", "octilinear", "CornerStyle", CornerStyle::parse)?;
+    let corner_radius_nm = optional_length(parameters, "corner_radius")?;
     Ok(NetRoutingRule {
         net: net.to_owned(),
         kind,
@@ -1664,6 +1667,8 @@ fn lower_routing_rule(net: &str, parameters: &Parameters) -> Result<NetRoutingRu
         tuning_style,
         tuning_spacing_nm,
         tuning_group,
+        corner_style,
+        corner_radius_nm,
     })
 }
 
@@ -2408,6 +2413,13 @@ fn validate_references(
             if partner.tuning_group != rule.tuning_group {
                 return Err(Error::Value(format!(
                     "routing rules for {} and {} must agree on tuning_group",
+                    repr(&rule.net),
+                    repr(&partner.net)
+                )));
+            }
+            if partner.corner_style != rule.corner_style || partner.corner_radius_nm != rule.corner_radius_nm {
+                return Err(Error::Value(format!(
+                    "routing rules for {} and {} must agree on corner_style and corner_radius",
                     repr(&rule.net),
                     repr(&partner.net)
                 )));
