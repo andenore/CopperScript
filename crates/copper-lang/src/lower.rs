@@ -1568,6 +1568,7 @@ pub fn constraint(declaration: &ConstraintDecl) -> Result<Constraint> {
         ConstraintKind::Routing => validate_routing(declaration, &parameters)?,
         ConstraintKind::LengthMatch => validate_length_match(declaration, &parameters)?,
         ConstraintKind::HoleClearance => validate_hole_clearance(declaration, &parameters)?,
+        ConstraintKind::Antenna => crate::antenna::validate_antenna(declaration, &parameters)?,
         ConstraintKind::CourtyardGap => validate_courtyard_gap(declaration, &parameters, mode)?,
         ConstraintKind::PlacementRegion if parameters.contains_key("courtyard_gap") => {
             validate_courtyard_gap(declaration, &parameters, mode)?

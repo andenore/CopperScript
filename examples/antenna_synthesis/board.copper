@@ -1,0 +1,37 @@
+// Trace-antenna synthesis probe: a first-order quarter-wave monopole template
+// generated inside a reserved board-edge region. Not a qualified radio design;
+// no resonance, matching, radiation or regulatory claim. See README.md.
+board AntennaSynthesisProbe {
+    import parts "./parts";
+
+    component U1: parts.RfSource;
+    component ANT1: parts.AntennaFeed;
+
+    net ANT_FEED { U1.RF; ANT1.FEED; }
+    net GND { U1.GND; }
+
+    constraint fixed_placement(U1) { x = 30mm; y = 14mm; }
+    constraint copper_zone(GND) { layers = "F.Cu,B.Cu"; }
+
+    // The region spans the upper-right corner: its top edge is the board
+    // perimeter, its bottom edge faces the host ground.
+    constraint antenna(ANT1.FEED) {
+        name = "bt";
+        x = 18mm;
+        y = 0mm;
+        width = 22mm;
+        height = 6mm;
+        ground = GND;
+        bands = "2400 MHz-2483.5 MHz";
+        track_width = 1mm;
+    }
+
+    mechanical {
+        outline rectangle { width = 40mm; height = 30mm; }
+        stackup {
+            copper F.Cu { thickness = 0.035mm; }
+            dielectric core { thickness = 1.51mm; er = 4.4; loss_tangent = 0.02; material = "FR4"; type = core; }
+            copper B.Cu { thickness = 0.035mm; }
+        }
+    }
+}

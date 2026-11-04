@@ -21,6 +21,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Build, install or test `copper` | [Rust workspace](../crates/README.md) |
 | Add components or reusable circuits | [Integration guidelines](component-integration-guidelines.md) |
 | Author or bind physical macros | [Physical hard macros](physical-hard-macros.md); [definition syntax](macro-definitions.md); [binding syntax](physical-macro-syntax-plan.md); [definition requirements](macro-definition-plan.md) |
+| Synthesize a trace antenna in a reserved region | [Trace antenna synthesis](language-reference.md#trace-antenna-synthesis); design and solver tiers: [research note](pcb-antenna-synthesis-research.md) |
 | Edit mechanics or floorplan | [Mechanical editor](mechanical-editor.md) |
 | Run the physical editor in the browser (WebAssembly) | [Editor WebAssembly plan](editor-wasm-plan.md) |
 | Author mechanical geometry or profiles | [Mechanical language](mechanical-language.md), [profiles](mechanical-profiles.md) |

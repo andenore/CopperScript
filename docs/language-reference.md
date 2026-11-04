@@ -822,7 +822,8 @@ nonzero zone inset still requires a rectangular boundary.
 Known constraint kinds are `max_distance`, `min_distance`, `courtyard_gap`,
 `placement_region`, `fixed_placement`, `allowed_orientations`, `align`,
 `placement_group`, `keepout`, `routing`, `copper_zone`, `via_in_pad`,
-`length_match`, `hole_clearance`, and `note`. Coordinates and rectangle dimensions
+`length_match`, `hole_clearance`, `antenna` (see
+[trace antenna synthesis](#trace-antenna-synthesis)), and `note`. Coordinates and rectangle dimensions
 are lengths in the physical board coordinate system; orientation values are
 unitless degrees. The legalizer accepts any explicitly permitted angle,
 including 45-degree increments; unconstrained components still default to
@@ -1119,6 +1120,69 @@ array's own vias; one failed site rejects the whole array, naming the pad and
 the site. Route and preflight reports list each array (`via_in_pad_arrays`:
 count, pitch, positions), and `via_in_pad_count` and the fabrication
 requirements include its vias.
+
+### Trace antenna synthesis
+
+`constraint antenna(COMPONENT.PIN)` reserves a board-edge region and asks the
+compiler to generate a printed antenna inside it, fed from that pin. The
+target is the feed pad of a one-land antenna feed component; its net is the
+antenna feed net. The implementation is the **template tier** only: a
+first-order quarter-wave monopole, scaled by the stack-up's effective
+permittivity, with no field solution.
+
+```copper
+constraint antenna(ANT1.FEED) {
+    name = "bt";                      // macro and keepout identity; default antenna:N
+    x = 18mm; y = 0mm; width = 22mm; height = 6mm;
+    // or region = "radio-corner";    (a named placement_region)
+    // or polygon_mm = "18,0;40,0;40,6;18,6";
+    ground = GND;                     // the host reference ground net
+    bands = "2400 MHz-2483.5 MHz";    // LOW-HIGH with units; ';' separates bands
+    track_width = 1mm;                // default: the board's default track width
+    keepout_margin = 0.5mm;           // extra component clearance around the region
+    topology = auto;                  // auto | monopole; inverted_f, meander, loop reserved
+    solver = template;                // template; parametric, pixel reserved
+    side = front;                     // back is not implemented
+}
+```
+
+Exactly one region form is required; the region must be a rectangle whose
+one edge lies on the straight outer board perimeter while the opposite edge
+faces the host ground. When both axes qualify (a corner), the longer run is
+used. `ground` must name an existing net (ERC reports an unknown one). Only
+one band is synthesized today; multi-band declarations, the reserved
+topologies and solvers, back-side antennas and curved regions or outlines are
+rejected as not implemented rather than approximated.
+
+Lowering generates a one-member hard macro in the `v0.5` asset contract and
+binds it through the ordinary immutable binder, so placement, routing, fill
+exclusion, export locking and port-continuity proof need nothing new:
+
+- The feed component is the anchor, fixed just outside the region on the
+  ground side (its pad at the board clearance from the region, its courtyard
+  clear of the component keepout). A conflicting `fixed_placement` fails.
+- The radiator is locked `F.Cu` copper of `track_width`: a stub from the
+  feed through the region's ground-side edge to its centreline, then a run
+  along the board edge, totalling one scaled quarter wave at the band centre.
+  The effective permittivity is the Hammerstad-Jensen microstrip estimate
+  for the dielectric declared directly under `F.Cu`; a stack-up without `er`
+  there fails. A region too short for the path fails with the required and
+  available lengths.
+- The region is a protected region on every copper layer (no foreign tracks,
+  vias or fill), a zone keepout with `edge_openings` for its perimeter edges,
+  and a `PlacementKeepout` (both sides, expanded by `keepout_margin`) for
+  other components. Other pads of the feed footprint must be unconnected.
+- The feed pad is the macro's one external port; ordinary routing reaches it
+  from the matching network.
+
+`metadata["antenna_synthesis"]` records each synthesis (band, centre
+frequency, effective permittivity, quarter wave, path, pose, region) and the
+macro's `source` repeats it. Requirement verification passes an antenna
+declaration only when its generated copper is present and materialized, and
+says so without any return-loss, radiation, matching or regulatory claim; the
+macro's `unresolved` list keeps bench tuning in the final enclosure mandatory.
+The example is `examples/antenna_synthesis`; the design and the planned
+solver tiers are in [the research note](pcb-antenna-synthesis-research.md).
 
 A component-scoped drill clearance is a documented exception to the board's
 `minimum_hole_clearance` (mechanical `rules`, default 0.25 mm), for a vendor
