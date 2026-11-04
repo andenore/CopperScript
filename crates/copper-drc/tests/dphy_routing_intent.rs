@@ -5,7 +5,7 @@
 use copper_drc::{CoverageStatus, Policy, Severity, run_physical_drc, signal_integrity::verify_match_groups};
 use copper_lang::compiler::{Design, compile_design_source};
 use copper_pcb::board::{
-    NetMatchGroup, NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, Placement, RouteKind, TrackSegment,
+    NetMatchGroup, NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, Placement, RouteKind, TrackSegment, Via,
 };
 use copper_pcb::physicalize::{Footprints, PhysicalOptions, physicalize, revalidate};
 use copper_physical::footprint::{FootprintPad, PadKind, PadShape, PhysicalFootprint, Size};
@@ -535,4 +535,42 @@ fn pad_spacing_honours_a_net_clearance_without_breakout() {
     let finding =
         drc(&board).findings.into_iter().find(|f| f.code == "DRC-CLEARANCE").expect("HV pad clearance violation");
     assert!(finding.message.contains("pad:HV_A.1") && finding.message.contains("pad:GND_A.1"), "{}", finding.message);
+}
+
+#[test]
+fn vias_below_the_fabrication_minimum_are_findings() {
+    let mut board = routed_lanes(&[("CKP", "10")], "1");
+    board.rules.minimum_via_size_nm = Some(nm("0.45"));
+    board.rules.minimum_via_drill_nm = Some(nm("0.2"));
+    let via = |size: &str, drill: &str| Via {
+        net: "CKP".to_owned(),
+        position: Point::new(7 * MM, 3 * MM),
+        size_nm: nm(size),
+        drill_nm: nm(drill),
+        from_layer: CopperLayer::Front,
+        to_layer: CopperLayer::Back,
+        technology: None,
+        finish: "standard".to_owned(),
+    };
+    let codes = |board: &PhysicalBoard| -> Vec<(String, Option<i64>, Option<i64>)> {
+        drc(board)
+            .findings
+            .into_iter()
+            .filter(|f| f.code == "DRC-VIA-SIZE" || f.code == "DRC-VIA-DRILL")
+            .map(|f| (f.code, f.required_nm, f.measured_nm))
+            .collect()
+    };
+    board.vias = vec![via("0.45", "0.2")];
+    assert_eq!(codes(&board), Vec::new());
+    board.vias = vec![via("0.3", "0.15")];
+    assert_eq!(
+        codes(&board),
+        vec![
+            ("DRC-VIA-DRILL".to_owned(), Some(nm("0.2")), Some(nm("0.15"))),
+            ("DRC-VIA-SIZE".to_owned(), Some(nm("0.45")), Some(nm("0.3"))),
+        ]
+    );
+    // Via-in-pad array vias are a separate process.
+    board.vias = vec![Via { finish: "filled-capped".to_owned(), ..via("0.3", "0.2") }];
+    assert_eq!(codes(&board), Vec::new());
 }
