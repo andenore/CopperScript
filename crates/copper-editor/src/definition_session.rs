@@ -890,7 +890,13 @@ impl DefinitionSession {
         let document = copper_lang::parse(&snapshot.text, &snapshot.filename)?;
         let mut resolver = PackageResolver::for_source(&self.dependency_source, true, true)?;
         if self.dependency_source != self.source {
-            let modules: Vec<String> = resolver.manifest.requirements.keys().cloned().collect();
+            let modules: Vec<String> = resolver
+                .manifest
+                .requirements
+                .keys()
+                .filter(|module| !copper_lang::packages::is_sparse_module(module))
+                .cloned()
+                .collect();
             for module in modules {
                 let package = resolver.resolve(&module, &document.location)?;
                 if self.source.starts_with(&package.directory) {

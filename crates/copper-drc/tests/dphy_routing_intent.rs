@@ -5,7 +5,7 @@
 use copper_drc::{CoverageStatus, Policy, Severity, run_physical_drc, signal_integrity::verify_match_groups};
 use copper_lang::compiler::{Design, compile_design_source};
 use copper_pcb::board::{
-    NetMatchGroup, NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, Placement, RouteKind, TrackSegment,
+    NetMatchGroup, NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, Placement, RouteKind, TrackSegment, Via,
 };
 use copper_pcb::physicalize::{Footprints, PhysicalOptions, physicalize, revalidate};
 use copper_physical::footprint::{FootprintPad, PadKind, PadShape, PhysicalFootprint, Size};
@@ -507,4 +507,70 @@ fn boards_without_groups_report_length_match_not_applicable() {
     let coverage = report.coverage.iter().find(|c| c.check == "length_match").expect("coverage");
     assert_eq!(coverage.status, CoverageStatus::NotApplicable);
     assert!(verify_match_groups(&routed).expect("verified").is_empty());
+}
+
+// --- Copper spacing from a plain net clearance -------------------------------
+
+#[test]
+fn pad_spacing_honours_a_net_clearance_without_breakout() {
+    // 0.4 mm pads 0.5 mm apart edge to edge: inside HV's 1 mm clearance but
+    // well outside the 0.15 mm board minimum the pad index used to search.
+    let mut board = routed_lanes(&[("CKP", "10")], "1");
+    let footprint = board.placements[0].footprint.clone();
+    let zero = Decimal::zero();
+    board.placements = vec![
+        Placement::new("HV_A", &footprint, Point::new(5 * MM, 5 * MM), &zero).unwrap(),
+        Placement::new("GND_A", &footprint, Point::new(5 * MM + nm("0.9"), 5 * MM), &zero).unwrap(),
+    ];
+    board.nets = vec![
+        PhysicalNet { name: "HV".to_owned(), pads: vec![PadReference::new("HV_A", "1")] },
+        PhysicalNet { name: "GND".to_owned(), pads: vec![PadReference::new("GND_A", "1")] },
+    ];
+    board.tracks = Vec::new();
+    board.match_groups = Vec::new();
+    let rule =
+        &physical("constraint routing(CKP) { clearance = 1mm; }", &generic()).expect("physical").net_routing_rules[0];
+    assert_eq!(rule.breakout_length_nm, None);
+    board.net_routing_rules = vec![NetRoutingRule { net: "HV".to_owned(), ..rule.clone() }];
+    let finding =
+        drc(&board).findings.into_iter().find(|f| f.code == "DRC-CLEARANCE").expect("HV pad clearance violation");
+    assert!(finding.message.contains("pad:HV_A.1") && finding.message.contains("pad:GND_A.1"), "{}", finding.message);
+}
+
+#[test]
+fn vias_below_the_fabrication_minimum_are_findings() {
+    let mut board = routed_lanes(&[("CKP", "10")], "1");
+    board.rules.minimum_via_size_nm = Some(nm("0.45"));
+    board.rules.minimum_via_drill_nm = Some(nm("0.2"));
+    let via = |size: &str, drill: &str| Via {
+        net: "CKP".to_owned(),
+        position: Point::new(7 * MM, 3 * MM),
+        size_nm: nm(size),
+        drill_nm: nm(drill),
+        from_layer: CopperLayer::Front,
+        to_layer: CopperLayer::Back,
+        technology: None,
+        finish: "standard".to_owned(),
+    };
+    let codes = |board: &PhysicalBoard| -> Vec<(String, Option<i64>, Option<i64>)> {
+        drc(board)
+            .findings
+            .into_iter()
+            .filter(|f| f.code == "DRC-VIA-SIZE" || f.code == "DRC-VIA-DRILL")
+            .map(|f| (f.code, f.required_nm, f.measured_nm))
+            .collect()
+    };
+    board.vias = vec![via("0.45", "0.2")];
+    assert_eq!(codes(&board), Vec::new());
+    board.vias = vec![via("0.3", "0.15")];
+    assert_eq!(
+        codes(&board),
+        vec![
+            ("DRC-VIA-DRILL".to_owned(), Some(nm("0.2")), Some(nm("0.15"))),
+            ("DRC-VIA-SIZE".to_owned(), Some(nm("0.45")), Some(nm("0.3"))),
+        ]
+    );
+    // Via-in-pad array vias are a separate process.
+    board.vias = vec![Via { finish: "filled-capped".to_owned(), ..via("0.3", "0.2") }];
+    assert_eq!(codes(&board), Vec::new());
 }

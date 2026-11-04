@@ -58,7 +58,7 @@ const COMPOSITION: [&str; 9] = [
     "MechanicalItemDecl",
     "MechanicalDecl",
 ];
-const CORE_PROPERTIES: [&str; 14] = [
+const CORE_PROPERTIES: [&str; 16] = [
     "category",
     "manufacturer",
     "assembled",
@@ -73,6 +73,8 @@ const CORE_PROPERTIES: [&str; 14] = [
     "source_location",
     "source_url",
     "source_checksum",
+    "model",
+    "height",
 ];
 const PROPERTY_DECLS: [&str; 3] = ["PartPropertyDecl", "DevicePropertyDecl", "MacroPropertyDecl"];
 
@@ -438,8 +440,11 @@ pub fn project_catalog(project: &Path, locked: bool, offline: bool, providers: &
     if let Some(first) = unknown.first() {
         return Err(format!("provider not declared in project: {first}"));
     }
-    let mut modules: Vec<String> =
-        if providers.is_empty() { manifest.requirements.keys().cloned().collect() } else { providers.to_vec() };
+    let mut modules: Vec<String> = if providers.is_empty() {
+        manifest.requirements.keys().filter(|module| !crate::packages::is_sparse_module(module)).cloned().collect()
+    } else {
+        providers.to_vec()
+    };
     modules.sort();
     modules.dedup();
     let mut resolver = PackageResolver::new(manifest, locked, offline).map_err(compile)?;

@@ -14,8 +14,29 @@ use crate::routing_clearance::{RoutingBlocker, RoutingClearanceIndex};
 use crate::surface_path::track_inside_board;
 use crate::unified_error::Result;
 
-/// A progress event the router records for its caller.
+/// A progress event the router reports to its caller.
 pub type Event = (&'static str, &'static str, Vec<(&'static str, Value)>);
+
+/// Where negotiation reports its progress events, as they happen: the
+/// caller's observer (an `Option<&mut dyn Progress>`), or a `Vec` that
+/// records them.
+pub trait EventSink {
+    fn push(&mut self, event: Event);
+}
+
+impl EventSink for Vec<Event> {
+    fn push(&mut self, event: Event) {
+        Vec::push(self, event);
+    }
+}
+
+impl EventSink for Option<&mut dyn crate::progress::Progress> {
+    fn push(&mut self, (phase, event, details): Event) {
+        if let Some(observer) = self {
+            observer.observe(phase, event, details);
+        }
+    }
+}
 
 fn int(value: i64) -> Value {
     Value::Int(value.into())
@@ -124,7 +145,7 @@ impl Router<'_, '_> {
     }
 
     /// `_penalise`.
-    fn penalise(&mut self, names: &IndexSet<String>) {
+    pub(crate) fn penalise(&mut self, names: &IndexSet<String>) {
         let inc = self.options.history_increment;
         let g = &self.lattice;
         for name in names {
@@ -148,7 +169,7 @@ impl Router<'_, '_> {
         &mut self,
         deadline: Option<std::time::Instant>,
         only: Option<&IndexSet<String>>,
-        events: &mut Vec<Event>,
+        events: &mut dyn EventSink,
     ) -> Result<(IndexMap<String, NetRoute>, IndexSet<String>, i64)> {
         let options = self.options.clone();
         self.deadline = deadline;

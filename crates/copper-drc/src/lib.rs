@@ -295,7 +295,12 @@ pub fn run_physical_drc(board: &PhysicalBoard, policy: Policy) -> Result<Report>
         "exact existing-barrel span and center distance; no filled-reference or SI proof",
     ));
     check_vias(board, &mut findings);
-    covered.push(coverage("via_geometry_and_budgets", Executed, true, ""));
+    covered.push(coverage(
+        "via_geometry_and_budgets",
+        Executed,
+        true,
+        "filled-capped vias are not held to the minimum via size and drill",
+    ));
     check_board_edge(board, &mut findings)?;
     covered.push(coverage("copper_to_board_edge", Executed, true, ""));
     check_copper_spacing(board, &mut findings, &mut relaxations)?;
@@ -674,6 +679,29 @@ fn check_vias(board: &PhysicalBoard, findings: &mut Vec<Finding>) {
                     .objects([format!("via:{index}")])
                     .nets([via.net.as_str()]),
             );
+        }
+        // Filled-capped via-in-pad vias are a separate fabrication process
+        // that the board minimums do not describe.
+        let minimums = if via.finish == "filled-capped" {
+            [None, None]
+        } else {
+            [board.rules.minimum_via_size_nm, board.rules.minimum_via_drill_nm]
+        };
+        for (code, what, value, minimum) in [
+            ("DRC-VIA-SIZE", "diameter", via.size_nm, minimums[0]),
+            ("DRC-VIA-DRILL", "drill", via.drill_nm, minimums[1]),
+        ] {
+            if let Some(minimum) = minimum
+                && value < minimum
+            {
+                findings.push(
+                    Finding::error(code, format!("via {index} {what} is below the fabrication minimum"))
+                        .objects([format!("via:{index}")])
+                        .nets([via.net.as_str()])
+                        .required(minimum)
+                        .measured(value),
+                );
+            }
         }
     }
     let mut rules: Vec<&NetRoutingRule> = board.net_routing_rules.iter().collect();
@@ -1162,12 +1190,14 @@ fn check_copper_spacing(
     }
     let pads = copper_pads(board);
     let pad_lands: Vec<Option<String>> = pads.iter().map(|p| spacing.land(&p.net, &p.shape.spine)).collect();
+    // Every spacing `between` can require of this pad's net, so the index
+    // never drops a pair whose clearance comes from a net rule.
     let pad_reach = |pad: &PadCopper| {
         let mut reach = board.rules.minimum_clearance_nm.max(pad.clearance_nm);
-        if let Some(rule) = spacing.rules.get(&pad.net)
-            && spacing.regions.declared.contains(&pad.net)
-        {
-            reach = reach.max(rule.clearance_nm.unwrap_or(0)).max(rule.pair_gap_nm.unwrap_or(0));
+        if let Some(rule) = spacing.rules.get(&pad.net) {
+            for value in [rule.clearance_nm, rule.pair_gap_nm, rule.breakout_clearance_nm, rule.breakout_gap_nm] {
+                reach = reach.max(value.unwrap_or(0));
+            }
         }
         reach
     };

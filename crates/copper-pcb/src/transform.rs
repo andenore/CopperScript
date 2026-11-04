@@ -80,11 +80,21 @@ pub fn rotate_offset(center: Point, x: i64, y: i64, degrees: f64) -> Point {
     Rotation::new(degrees).offset(center, x, y)
 }
 
+/// The KiCad angle of `pad` on the board. Mirroring a back-side footprint
+/// reverses its pads' own rotation, as the KiCad export writes it.
+pub fn pad_board_rotation(placement: &Placement, pad: &FootprintPad) -> Decimal {
+    let sum = if placement.side == BoardSide::Back {
+        placement.rotation_degrees.sub(&pad.rotation_degrees)
+    } else {
+        placement.rotation_degrees.add(&pad.rotation_degrees)
+    };
+    sum.expect("finite rotations")
+}
+
 /// `drc.placed_pad_shape`: the pad's copper at a board position.
 pub fn placed_pad_shape(position: Point, pad: &FootprintPad, placement: &Placement) -> RoundedConvexShape {
     let (width, height) = (pad.size.width_nm, pad.size.height_nm);
-    let sum = placement.rotation_degrees.add(&pad.rotation_degrees).expect("finite rotations");
-    let angle = -decimal_f64(&sum);
+    let angle = -decimal_f64(&pad_board_rotation(placement, pad));
     let shape = |spine: Vec<Point>, radius: i64| RoundedConvexShape::new(spine, radius).expect("valid pad shape");
     match pad.shape {
         PadShape::Circle => shape(vec![position], width.min(height) / 2),
@@ -223,7 +233,12 @@ mod tests {
                                     vec![(-x, -y), (x, -y), (x, y), (-x, y)]
                                 }
                             };
-                            let angle = -decimal_f64(&pose.rotation_degrees.add(&pad.rotation_degrees).unwrap());
+                            let sum = if side == BoardSide::Back {
+                                pose.rotation_degrees.sub(&pad.rotation_degrees)
+                            } else {
+                                pose.rotation_degrees.add(&pad.rotation_degrees)
+                            };
+                            let angle = -decimal_f64(&sum.unwrap());
                             let expected = RoundedConvexShape::new(
                                 local.into_iter().map(|(x, y)| legacy_offset(position, x, y, angle)).collect(),
                                 radius,
@@ -239,5 +254,49 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_back_side_pad_is_the_mirror_image_of_the_front_one() {
+        // A rotated rectangular pad mirrors with its footprint: on the back
+        // its copper is the front copper reflected about the placement's y
+        // axis, so its board angle is the placement's minus the pad's.
+        let pad = FootprintPad {
+            number: "1".to_owned(),
+            position: Point::new(0, 0),
+            size: Size::new(2_000_000, 1_000_000).unwrap(),
+            kind: PadKind::Smd,
+            shape: PadShape::Rectangle,
+            rotation_degrees: Decimal::parse("30").unwrap(),
+            drill: None,
+            roundrect_ratio_ppm: 0,
+            has_solder_mask: true,
+            has_solder_paste: true,
+            zone_connection: None,
+            heatsink: false,
+            remove_unused_layers: false,
+            connector_contact: false,
+        };
+        let corners = |side: BoardSide| {
+            let pose = placement("0", side);
+            let position = transformed_local_point(&pose, pad.position);
+            let mut corners: Vec<(i64, i64)> = placed_pad_shape(position, &pad, &pose)
+                .spine
+                .iter()
+                .map(|p| (p.x_nm - position.x_nm, p.y_nm - position.y_nm))
+                .collect();
+            corners.sort();
+            corners
+        };
+        let mut mirrored: Vec<(i64, i64)> = corners(BoardSide::Front).into_iter().map(|(x, y)| (-x, y)).collect();
+        mirrored.sort();
+        let back = corners(BoardSide::Back);
+        for (expected, actual) in mirrored.iter().zip(&back) {
+            assert!(
+                (expected.0 - actual.0).abs() <= 1 && (expected.1 - actual.1).abs() <= 1,
+                "{mirrored:?} != {back:?}"
+            );
+        }
+        assert_eq!(pad_board_rotation(&placement("90", BoardSide::Back), &pad), Decimal::parse("60").unwrap());
     }
 }

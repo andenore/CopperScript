@@ -24,17 +24,54 @@ adapted (noted). "Skipped" tests have no Rust counterpart to test.
 | unified_commit_index | 12 | 10 | 2 | 0 | `tests/unified_commit_index.rs` (10) |
 | placement_global_progress | 11 | 3 | 8 | 0 | `tests/placement_global_progress.rs` (3) |
 | routing_lattice | 9 | 9 | 0 | 0 | `tests/routing_lattice.rs` (9) |
-| routing_quality | 14 | 13 | 1 | 1 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
+| congestion_feedback_flow | 9 | 9 | 0 | 0 | `tests/congestion_feedback_flow.rs` (10) |
+| unified_router_options | 8 | 4 | 4 | 0 | `tests/unified_router_options.rs` (3), `src/unified_router/tests.rs` (1) |
+| unified_congestion_export | 8 | 8 | 0 | 0 | `tests/unified_congestion_export.rs` (8) |
+| unified_search_costs | 7 | 6 | 1 | 0 | `tests/unified_search_costs.rs` (5), `src/unified_router/tests.rs` (1) |
+| unified_review_constraints | 7 | 6 | 1 | 0 | `tests/unified_review_constraints.rs` (6) |
+| routing_clearance_remove | 7 | 7 | 0 | 0 | `tests/routing_clearance_remove.rs` (4), `src/routing_clearance.rs` `tests` (3) |
+| global_target_via_cost | 7 | 7 | 0 | 0 | `src/routing.rs` `tests` (7) |
+| global_search_static_cache | 7 | 5 | 2 | 0 | `src/routing.rs` `tests` (5) |
+| routing_acceptance | 6 | 6 | 0 | 0 | `tests/routing_acceptance.rs` (6) |
+| global_reserved_access | 6 | 6 | 0 | 0 | `tests/global_reserved_access.rs` (6) |
+| global_access_launch_diversity | 6 | 6 | 0 | 0 | `src/routing.rs` `tests` (6) |
+| unified_span_guides | 5 | 4 | 1 | 0 | `tests/unified_span_guides.rs` (4) |
+| routing_hotspot_caches | 5 | 4 | 1 | 0 | `tests/routing_hotspot_caches.rs` (2), copper-pcb `src/hard_macros.rs` `tests` (2) |
+| region_blocker_repair | 5 | 4 | 1 | 0 | copper-place `src/legalize.rs` `tests` (4) |
+| global_via_refinement | 5 | 5 | 0 | 0 | `src/routing.rs` `tests` (5) |
+| global_edge_strip | 5 | 5 | 0 | 0 | `tests/global_edge_strip.rs` (5) |
+| released_escape_revalidation | 4 | 4 | 0 | 0 | `src/flow.rs` `released_escape_revalidation` (4) |
+| global_breakout_demand | 4 | 4 | 0 | 0 | `src/routing.rs` `tests` (4) |
+| escape_capacity | 4 | 0 | 4 | 0 | none |
+| reference_escape_geometry | 4 | 1 | 3 | 0 | `tests/routing_quality.rs` (1) |
+| unified_via_budget_pressure | 3 | 3 | 0 | 0 | `src/unified_router/tests.rs` (3) |
+| unified_pair_budget | 3 | 2 | 1 | 0 | `tests/unified_pair_budget.rs` (2) |
+| unified_lead_conflicts | 3 | 3 | 0 | 0 | `src/unified_router/tests.rs` (3) |
+| global_terminal_fallback_degree | 3 | 3 | 0 | 0 | `src/routing.rs` `tests` (3) |
+| global_polygon_keepouts | 3 | 3 | 0 | 0 | `tests/global_polygon_keepouts.rs` (3) |
+| global_access_diagnostics | 3 | 1 | 2 | 0 | `tests/global_polygon_keepouts.rs` (1) |
+| unified_existing_access | 2 | 2 | 0 | 0 | `tests/unified_existing_access.rs` (2) |
+| unified_direct_cli | 2 | 2 | 0 | 0 | `crates/copper/tests/unified_direct_cli.rs` (2) |
+| surface_package_escape | 2 | 2 | 0 | 0 | `tests/surface_package_escape.rs` (2) |
+| repair_search_reuse | 2 | 1 | 1 | 0 | `tests/repair_search_reuse.rs` (1) |
+| multi_land_routing | 2 | 0 | 2 | 0 | none |
+| global_terminal_capacity_priority | 2 | 2 | 0 | 0 | `src/routing.rs` `tests` (2) |
+| exact_escape | 2 | 0 | 2 | 0 | none |
+| escape_reservation_lifetime | 2 | 1 | 1 | 0 | `tests/escape_reservation_lifetime.rs` (1) |
+| detailed_routing | 2 | 2 | 0 | 0 | `tests/detailed_routing.rs` (2) |
+| routing_review_regressions | 1 | 1 | 0 | 0 | `tests/routing_review_regressions.rs` (1) |
+| routing_hotpath_equivalence | 1 | 1 | 0 | 0 | `src/fanout.rs` `tests` (1) |
+| routing_quality | 14 | 13 | 1 | 0 | `tests/routing_quality.rs` (11), `src/fanout.rs` `tests` (2), `src/escape_assignment.rs` `tests` (1) |
 
-**Status (session a1 stopped here):** 14 of 51 files done: 284 Python tests,
-237 ported (1 of them `#[ignore]`d), 47 skipped. The next file is
-`congestion_feedback_flow`; about 157 tests in 37 files remain (list below).
+**Status: complete.** All 51 files are done: 441 Python tests, 363 ported (1 of
+them `#[ignore]`d), 78 skipped.
 
 Rust changes made for the ports: `router::index_holds` guard in
 `Router::new` (bug fix, see unified_commit_index); `pub(crate)` on
-`rejection_text`, `tune_bus_skew`, `congestion_map`,
+`rejection_text`, `tune_bus_skew`, `congestion_map`, `open_count`, `turn_table`,
+`route_net_budgeted`, `penalise`,
 `Router::{escape_bias, ball_field_via_mask, zone_regions, plane_via_taps}`;
-`#[cfg(test)]` modules in `routing.rs`, `fanout.rs`, `escape_plan.rs`,
+`#[cfg(test)]` modules in `routing.rs`, `routing_clearance.rs`, `fanout.rs`, copper-pcb `hard_macros.rs`, `escape_plan.rs`,
 `escape_assignment.rs`, `unified_router/tests.rs` and copper-place
 `legalize.rs`.
 
@@ -127,9 +164,9 @@ Rust changes made for the ports: `router::index_holds` guard in
   (monkeypatched `route_global`).
 
 ### routing_quality
-- Ignored: `default_planner_consumes_decoupling_role_without_distance_rules`:
-  copper-place's decoupling-access phase reports NotImplemented for a
-  movable pin-associated decoupler (Rust gap, not a test problem).
+- `default_planner_consumes_decoupling_role_without_distance_rules` calls
+  `copper_route::install_hooks()` first: copper-place's decoupling-access
+  phase is the decoupler router, registered from copper-route.
 - Skipped: `test_nested_module_decoupling_endpoint_is_qualified` exercised the
   private elaboration helpers `_expand_one`/`_Template` of the language.
 - The prototype board is `compile_design_source` + `physicalize(Proxy)` at
@@ -195,18 +232,175 @@ Rust changes made for the ports: `router::index_holds` guard in
 - The random node round-trip uses a fixed LCG instead of `random.Random(7)`;
   the cached-offsets identity check is dropped (no cache in Rust).
 
-## Remaining files (in order)
+### congestion_feedback_flow
+- Adapted: Python forced rejected trials by monkeypatching
+  `flow._feedback_score` (the `accept=False` case) and `run_placement_feedback`;
+  the Rust tests starve the detailed search (`maximum_expansions: 1`) so no
+  move of B lets SIG connect while global routing still succeeds.
+- Adapted: `test_feedback_results_round_trip_with_congestion`: Rust has no
+  decoder for saved results, so the encoded result is checked to carry the
+  congestion map and a replay of the saved inputs to export one. Python's
+  `initial_congestion` is recomputed with `feedback_map` (Rust keeps only the
+  final map).
+- `flow._feedback_score` is private; the step-halving test scores with the
+  router metrics (any deterministic score works when reruns never change).
 
-congestion_feedback_flow, unified_router_options, unified_congestion_export,
-unified_search_costs, unified_review_constraints, routing_clearance_remove,
-global_target_via_cost, global_search_static_cache, routing_acceptance,
-global_reserved_access, global_access_launch_diversity, unified_span_guides,
-routing_hotspot_caches, region_blocker_repair, global_via_refinement,
-global_edge_strip, released_escape_revalidation, reference_escape_geometry,
-global_breakout_demand, escape_capacity, unified_via_budget_pressure,
-unified_pair_budget, unified_lead_conflicts, global_terminal_fallback_degree,
-global_polygon_keepouts, global_access_diagnostics, unified_existing_access,
-unified_direct_cli, surface_package_escape, repair_search_reuse,
-multi_land_routing, global_terminal_capacity_priority, exact_escape,
-escape_reservation_lifetime, detailed_routing, routing_review_regressions,
-routing_hotpath_equivalence.
+### unified_router_options
+- Skipped (scripted `_route_net`/`_conflicts`/`_route_net_once` fakes; no Rust
+  seam): `test_failed_nets_are_retried_every_n_iterations`,
+  `test_failed_net_gets_one_retry_before_a_conflict_free_exit`,
+  `test_unconnected_via_budget_retry_keeps_the_shortfall_diagnostic`,
+  `test_connected_via_budget_retry_within_budget_is_kept`.
+- Validation runs through `with_overrides` with JSON values (as `bench --set`);
+  the tuple/hash check has no counterpart. `open_count` is now `pub(crate)`
+  for its unit test; `stitched_pad_board` moved to `support_routers/boards.rs`.
+- `RoutingAccess` replaces Python's bare fanout point.
+
+### unified_congestion_export
+- `value_at` is not ported (lookups via `tile_of`); `off == on` is dropped
+  (no `PartialEq` on the result; copper and net outcomes are compared).
+
+### unified_search_costs
+- One search in Rust: the `native` parametrizations run once; skipped
+  `test_native_kernel_matches_python_search_with_cost_terms`; adapted
+  `test_native_and_python_routes_agree_with_both_cost_terms` to a clean,
+  deterministic route with both cost terms. `turn_table` is now `pub(crate)`
+  (unit test). Random history uses the shared `Lcg` (support module).
+
+### unified_review_constraints
+- Skipped: `test_native_fill_confirms_the_plane_lead_in_connection` (needs a
+  native `kicad-cli` refill).
+- `test_expired_deadline_stops_before_starting_nets`: both cases (negotiation
+  progress events reach the observer live). The patched clock is a 0.5 s
+  budget the observer sleeps past.
+### routing_clearance_remove
+- The fixture (board, deterministic copper, every public answer) is
+  `support_routers/clearance_remove.rs`; answers are compared as `Debug`
+  text. The compaction (`_slots`, `_compact`), unchanged-bins and binned
+  drill (`_hole_clear`) tests read private state: unit tests in
+  `routing_clearance.rs` (no visibility change).
+
+### global_target_via_cost, global_access_launch_diversity
+- They drive the private global router (`route_net`, `terminal_via_cost`,
+  `measure_attempt`, `bounded_access_choices`) on hand-built `Graph`s: unit
+  tests in `routing.rs`. Dropped: the monkeypatched `_build_graph` /
+  `RoutingClearanceIndex` tripwires and `repr(board)` checks (the board is
+  borrowed immutably); "same object" checks became equality.
+
+### global_search_static_cache
+- The original A* is kept as `reference_search` in the `routing.rs` tests and
+  compared with the cached-step `search` (the random trials use `Lcg`).
+- Adapted: the patched `heapq` push/pop event comparison (the path is
+  compared instead), the patched `length_cost`/`_preference_cost` warm-cache
+  check (a warm cache must still answer as the reference) and the point
+  identity/IndexError checks.
+- Skipped: `test_snapshot_defensively_copies_axes_resources_sites_and_layer_preferences`
+  (Rust `Graph` owns its data; `Graph::with` is checked for a fresh cache) and
+  `test_complete_route_artifact_and_fingerprints_match_frozen_search`
+  (monkeypatched `_search` inside `route_global`).
+
+### routing_acceptance
+- `route_case` is private to the `copper` binary; the test repeats its
+  pipeline options.
+
+### global_reserved_access
+- `FanoutResult.routing_accesses` is built in the test from `accesses` and
+  `surface_accesses`. The hard-macro asset of `test_hard_macros.py::fixture`
+  and `_array_board` of `test_pad_via_arrays.py` are rebuilt locally (the test
+  registers the via-in-pad array materializer as the binary does).
+- Adapted: the checked-corner test patched `local_access_path` and used a
+  hand-built two-node graph; it uses the real graph and checks the result.
+
+### unified_span_guides
+- `technology`/`four_layer` moved to `support_routers/boards.rs`.
+- Skipped: `test_guides_survive_every_repair_router` (subclassed `_Router` to
+  observe every repair router).
+
+### routing_hotspot_caches
+- Rust keeps no SMD-land, courtyard or local-shape caches, so the tests check
+  fresh answers after each change. The via-permission cases call the private
+  `validate_macro_via_permissions`: unit tests in copper-pcb `hard_macros.rs`
+  (which includes `support_routers/boards.rs`; copper-pcb gained a test-only
+  `extern crate self as copper_pcb`).
+- Skipped: `test_local_shape_translation_matches_direct_geometry_at_arbitrary_angles`
+  (`_local_land_shapes` has no Rust counterpart).
+
+### region_blocker_repair
+- `exact_repair` is private: unit tests in copper-place `legalize.rs`.
+- Skipped: `test_supplemental_raw_blocker_probes_respect_existing_limit`
+  (counted calls of a monkeypatched `_legal`).
+- Adapted: `test_spread_same_probe_count_detects_right_boundary_blocker_missed_by_prefix`
+  captured the references passed to a patched `_pack_local_components`; the
+  domain facts are checked and the repair must succeed with the tail kept.
+
+### global_via_refinement
+- Unit tests in `routing.rs`. Dropped: the sampler call counts. Adapted:
+  `test_global_refinement_fixes_sampling_overflow_and_preserves_passing_routes`
+  patched the refiner out to get the coarse result; the refined result is
+  checked to pass deterministically without overflow or hotspots.
+
+### released_escape_revalidation
+- Ported as crate-private unit tests of `flow::revalidate_released_escapes`.
+  The monkeypatched `verify_crosslayer_decoupling` of the rollback test is
+  an injected witness check (`revalidate_released_escapes_with`).
+- Added: `src/flow.rs` `released_escape_planning`: `plan_decouplers` without
+  launch options releases a ring of reservations that walls in a supply pad,
+  and revalidation does not mistake the renumbered survivor for a released
+  keepout (released keepouts are matched whole, not by id). In the pipeline
+  this path is unreachable while `reserved` implies launch options (planning
+  swaps instead of releasing), as in Python.
+
+### global_breakout_demand
+- Unit tests in `routing.rs` on the hand-built graph.
+
+### escape_capacity
+- Skipped (all 4): `pcbir.escape_capacity` (the escape certificate) has no
+  Rust implementation.
+
+### reference_escape_geometry
+- Skipped: the three `_interstitial_sites` tests (Rust's fanout has no
+  interstitial launch sites). The decoupler end-face test lives in
+  `tests/routing_quality.rs` beside its `bypass_board`.
+
+### unified_via_budget_pressure, unified_lead_conflicts
+- Unit tests in `unified_router/tests.rs` (`route_net_budgeted` and
+  `penalise` are now `pub(crate)`); one search, so `native` runs once.
+
+### unified_pair_budget
+- Skipped: `test_pipeline_forwards_the_pair_cap` (spied on
+  `flow.route_critical_nets`). `True`/`2.5` caps are JSON overrides.
+
+### global_terminal_fallback_degree, global_terminal_capacity_priority
+- Unit tests in `routing.rs` on hand-built graphs. Dropped: the
+  `local_access_path` call counts and tripwire; `check_hole_copper` has no
+  Rust parameter (the default check is used).
+
+### global_access_diagnostics
+- Skipped (monkeypatched `register_terminal_capacity` /
+  `_global_pin_access_candidates`): the two failure-cause report tests.
+
+### unified_direct_cli
+- Runs the `copper` binary. Dropped: the spies proving the legacy routers
+  are not called; the report's work limits, the saved inputs and the final
+  board's summary are checked.
+
+### surface_package_escape
+- Dropped: the `pin_analysis` assertion (not modelled) and the patched
+  `_surface_layer` comparison (a determinism check instead).
+
+### repair_search_reuse
+- Skipped: `test_benchmark_counts_reused_attempts_and_treats_the_bound_as_an_intervention`
+  (`routing_benchmark.summarize_run` is not ported).
+
+### multi_land_routing, exact_escape
+- Skipped: `bench.route_board_file` with the KiCad board importer, and the
+  OR-Tools `solve_exact_escape`, have no Rust implementation.
+
+### escape_reservation_lifetime
+- Adapted: the `stitch_zone_pads` spy is dropped; the end-to-end result is
+  checked (no escape masks survive, no critical retry). Skipped:
+  `test_failed_critical_retry_converts_whole_endangered_escape_group` (forced
+  a critical miss by patching `route_critical_nets`).
+
+### routing_hotpath_equivalence
+- `OutlineSites` is crate-private: a unit test in `fanout.rs`.

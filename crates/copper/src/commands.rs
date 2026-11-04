@@ -52,12 +52,11 @@ pub const COMMANDS: &[&str] = &[
 const USAGE: &str = "usage: copper COMMAND [ARGS]";
 
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    // Placement's decoupling-access pass runs the decoupler router (copper-route).
-    copper_place::planner::register_decoupling_pass(|board, placements, options, progress| {
-        copper_route::decoupling::improve_decoupling_placement(board, placements, options, progress)
-    });
-    // Via-in-pad arrays check their sites against the routing clearance index.
-    copper_drc::macros::register_array_materializer(copper_route::pad_via_arrays::materialize_via_in_pad_arrays);
+    // Placement's decoupling-access pass runs the decoupler router and
+    // via-in-pad arrays check their sites against the routing clearance
+    // index (both in copper-route); plan-layout and the editor reach them
+    // through copper-place alone.
+    copper_route::install_hooks();
     let Some(command) = args.first() else {
         let _ = writeln!(err, "{USAGE}\ncopper: error: the following arguments are required: command");
         return 2;

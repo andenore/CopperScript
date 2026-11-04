@@ -144,6 +144,82 @@ fn is_git_module_path(module_path: &str) -> bool {
     shape && !parts.iter().any(|part| *part == "." || *part == "..")
 }
 
+/// Whether a required module is too large to clone and inventory (the KiCad
+/// 3D model library, several GB). Such a module is never walked as a package:
+/// [`PackageResolver::resolve_model_asset`] reads single files from it.
+pub fn is_sparse_module(module_path: &str) -> bool {
+    module_path.ends_with("/kicad-packages3D")
+}
+
+const MODEL_SUFFIXES: [&str; 3] = [".step", ".stp", ".wrl"];
+
+/// Runs `git` and returns its standard output.
+fn run_git(arguments: &[&str], location: &Location) -> Result<Vec<u8>> {
+    let output = Command::new("git")
+        .args(["-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "core.longpaths=true"])
+        .args(arguments)
+        .output()
+        .map_err(|failure| error("PKG006", paths::python_os_error(&failure, None), location))?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        Err(error("PKG006", if detail.is_empty() { "git failed".to_owned() } else { detail }, location))
+    }
+}
+
+/// `git show REVISION:PATH` from a blobless shallow clone of `url` kept in
+/// `directory`, cloning it first. Git fetches just that blob on demand.
+fn sparse_git_blob(
+    url: &str,
+    revision: &str,
+    relative: &str,
+    directory: &Path,
+    location: &Location,
+) -> Result<Vec<u8>> {
+    let repository = directory.join("repo");
+    let text = paths::display(&repository);
+    let is_commit = revision.len() == 40 && revision.chars().all(|c| c.is_ascii_hexdigit());
+    if !repository.is_dir() {
+        std::fs::create_dir_all(directory)
+            .map_err(|failure| error("PKG006", paths::python_os_error(&failure, None), location))?;
+        let temporary = directory.join(format!("repo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temporary);
+        let temporary_text = paths::display(&temporary);
+        let mut clone = vec!["clone", "--quiet", "--depth", "1", "--filter=blob:none", "--no-checkout"];
+        if !is_commit {
+            clone.extend(["--branch", revision]);
+        }
+        clone.extend([url, temporary_text.as_str()]);
+        let outcome = run_git(&clone, location).and_then(|_| {
+            if is_commit {
+                run_git(&["-C", &temporary_text, "fetch", "--quiet", "--depth", "1", "origin", revision], location)?;
+            }
+            std::fs::rename(&temporary, &repository)
+                .map_err(|failure| error("PKG006", paths::python_os_error(&failure, None), location))
+        });
+        if temporary.exists() {
+            let _ = std::fs::remove_dir_all(&temporary);
+        }
+        outcome?;
+    }
+    let object = format!("{}:{relative}", if is_commit { revision } else { "HEAD" });
+    run_git(&["-C", &text, "show", &object], location)
+        .map_err(|_| error("PKG004", format!("model {relative} does not exist at revision {revision}"), location))
+}
+
+/// [`sparse_git_blob`] for tests, which clone a local repository.
+#[doc(hidden)]
+pub fn sparse_git_blob_for_tests(
+    url: &str,
+    revision: &str,
+    relative: &str,
+    directory: &Path,
+    location: &Location,
+) -> Result<Vec<u8>> {
+    sparse_git_blob(url, revision, relative, directory, location)
+}
+
 fn is_footprint_library_name(name: &str) -> bool {
     let mut characters = name.chars();
     characters.next().is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -307,7 +383,11 @@ pub fn module_inventory(root: &Path) -> std::result::Result<Vec<LockedFile>, Str
             if kind.is_dir() {
                 pending.push((entry.path(), format!("{relative}/")));
             } else if kind.is_file()
-                && (name == "copper.mod" || LOCKED_SUFFIXES.contains(&paths::extension(&name).to_lowercase().as_str()))
+                && (name == "copper.mod"
+                    // A file named `.copper` has no extension, but
+                    // `package_sources` compiles it.
+                    || name.to_lowercase().ends_with(".copper")
+                    || LOCKED_SUFFIXES.contains(&paths::extension(&name).to_lowercase().as_str()))
             {
                 candidates.push((relative, entry.path()));
             }
@@ -448,6 +528,13 @@ fn bad_identity(identity: &str) -> bool {
         || identity.chars().any(|c| "?#%:".contains(c))
 }
 
+/// Whether `path` lies in a directory below `root` that `module_inventory` skips.
+fn in_ignored_part(path: &Path, root: &Path) -> bool {
+    path.strip_prefix(root).is_ok_and(|relative| {
+        relative.components().any(|part| IGNORED_PARTS.contains(&part.as_os_str().to_string_lossy().as_ref()))
+    })
+}
+
 /// Whether `path` or a parent below `root` is a symlink.
 fn crosses_symlink(unresolved: &Path, root: &Path) -> bool {
     unresolved
@@ -492,6 +579,9 @@ pub fn prepare_dependencies(
     let before = resolver.lock_entries.clone();
     let location = Location { filename: Arc::from(paths::display(source).as_str()), offset: 0, line: 1, column: 1 };
     for (module, version) in requirements {
+        if is_sparse_module(&module) {
+            continue;
+        }
         progress(&format!("Preparing {module}@{version}"));
         resolver.resolve(&module, &location)?;
     }
@@ -713,6 +803,166 @@ impl PackageResolver {
         }
     }
 
+    /// A 3D model file of a module under a pinned revision, hashed against the
+    /// lock. A sparse module ([`is_sparse_module`]) is not cloned whole: the
+    /// file is read from a blobless clone and the lock gains one entry for it,
+    /// so `copper.lock` lists exactly the models a design uses. Any other
+    /// module resolves like an ordinary asset.
+    pub fn resolve_model_asset(&mut self, import_path: &str, location: &Location) -> Result<ResolvedAsset> {
+        let identity = import_path.strip_prefix("https://").unwrap_or(import_path);
+        if !starts_with_any(identity, &["github.com/", "gitlab.com/"]) || bad_identity(identity) {
+            return Err(error("PKG004", "invalid module asset path", location));
+        }
+        let Some(module) = self.matching_module(identity) else {
+            return Err(error(
+                "PKG002",
+                format!("no requirement in copper.mod provides model {}", python_str_repr(identity)),
+                location,
+            ));
+        };
+        if !is_sparse_module(&module) {
+            return self.resolve_asset_with(identity, location, None);
+        }
+        let relative = identity[module.len()..].trim_start_matches('/').to_owned();
+        let extension = paths::extension(&relative).to_lowercase();
+        if relative.is_empty() || !MODEL_SUFFIXES.contains(&extension.as_str()) {
+            return Err(error("PKG004", format!("not a 3D model file: {identity}"), location));
+        }
+        let version = self.manifest.requirements[&module].clone();
+        let replacement = self.manifest.replacements.get(&module).cloned();
+        let remote = self.manifest.remote_replacements.get(&module).cloned();
+        let key = (module.clone(), version.clone());
+        if self.locked && !self.lock_entries.contains_key(&key) {
+            return Err(error(
+                "PKG010",
+                format!("locked resolution requires {module}@{version} in copper.lock"),
+                location,
+            ));
+        }
+        let (path, bytes) = if let Some(replacement) = &replacement {
+            let mut root = PathBuf::from(replacement);
+            if !root.is_absolute() {
+                root = self.manifest.root().join(root);
+            }
+            let unresolved = root.join(&relative);
+            let path = paths::resolve(&unresolved);
+            if !paths::is_relative_to(&path, &paths::resolve(&root))
+                || !path.is_file()
+                || crosses_symlink(&unresolved, &root)
+            {
+                return Err(error("PKG004", format!("model does not exist in the replacement: {identity}"), location));
+            }
+            let bytes = std::fs::read(&path)
+                .map_err(|failure| error("PKG004", paths::python_os_error(&failure, None), location))?;
+            (path, bytes)
+        } else {
+            let (source, revision) = remote.clone().unwrap_or_else(|| (module.clone(), version.clone()));
+            if !is_git_module_path(&source) {
+                return Err(error("PKG005", "invalid Git module path", location));
+            }
+            if revision.is_empty() || revision.starts_with('-') {
+                return Err(error("PKG006", "invalid Git revision", location));
+            }
+            let cache_key = &hex(&Sha256::digest(format!("{source}@{revision}").as_bytes()))[..20];
+            let directory = self.cache_root.join(format!("{cache_key}-sparse"));
+            if directory.symlink_metadata().is_ok_and(|meta| meta.file_type().is_symlink()) {
+                return Err(error("PKG012", "package cache roots may not be symlinks", location));
+            }
+            let path = directory.join("files").join(&relative);
+            if path.is_file() {
+                let bytes = std::fs::read(&path)
+                    .map_err(|failure| error("PKG004", paths::python_os_error(&failure, None), location))?;
+                (paths::resolve(&path), bytes)
+            } else {
+                if self.offline {
+                    return Err(error(
+                        "PKG011",
+                        format!("offline resolution cache miss for {source}@{revision}: {relative}"),
+                        location,
+                    ));
+                }
+                let url = format!("https://{source}.git");
+                let bytes = sparse_git_blob(&url, &revision, &relative, &directory, location)?;
+                let parent = path.parent().unwrap_or(&directory);
+                std::fs::create_dir_all(parent)
+                    .map_err(|failure| error("PKG006", paths::python_os_error(&failure, None), location))?;
+                let temporary = parent.join(format!(".model-{}", std::process::id()));
+                std::fs::write(&temporary, &bytes)
+                    .and_then(|()| std::fs::rename(&temporary, &path))
+                    .map_err(|failure| error("PKG006", paths::python_os_error(&failure, None), location))?;
+                (paths::resolve(&path), bytes)
+            }
+        };
+        let sha256 = hex(&Sha256::digest(&bytes));
+        let file = LockedFile { path: relative.clone(), size: bytes.len() as u64, sha256: sha256.clone() };
+        let source = match (&replacement, &remote) {
+            (Some(replacement), _) => format!("replace:{replacement}"),
+            (None, Some((source, revision))) => format!("replace:sparse-git:https://{source}.git@{revision}"),
+            (None, None) => format!("sparse-git:https://{module}.git"),
+        };
+        let checksum = self.record_model_file(&key, source, file, location)?;
+        Ok(ResolvedAsset { path, identity: identity.to_owned(), module_path: module, version, sha256, checksum })
+    }
+
+    /// Checks `file` against the lock entry of a sparse module, or adds it
+    /// (unless locked). Returns the entry's checksum.
+    fn record_model_file(
+        &mut self,
+        key: &(String, String),
+        source: String,
+        file: LockedFile,
+        location: &Location,
+    ) -> Result<String> {
+        if let Some(entry) = self.lock_entries.get(key) {
+            if let Some(known) = entry.files.iter().find(|known| known.path == file.path) {
+                if *known == file {
+                    return Ok(entry.checksum.clone());
+                }
+                return Err(error(
+                    "PKG008",
+                    format!("lock mismatch: model differs from copper.lock: {}/{}", key.0, file.path),
+                    location,
+                ));
+            }
+            if entry.source != source {
+                return Err(error(
+                    "PKG008",
+                    format!("lock mismatch for {}@{}: expected source {}, got {source}", key.0, key.1, entry.source),
+                    location,
+                ));
+            }
+        }
+        if self.locked {
+            return Err(error(
+                "PKG008",
+                format!("model {}/{} is not in copper.lock; run copper lock", key.0, file.path),
+                location,
+            ));
+        }
+        let mut entry = self.lock_entries.get(key).cloned().unwrap_or_else(|| LockedModule {
+            module_path: key.0.clone(),
+            version: key.1.clone(),
+            source,
+            checksum: String::new(),
+            files: Vec::new(),
+        });
+        entry.files.push(file);
+        entry.files.sort_by(|a, b| a.path.cmp(&b.path));
+        entry.checksum = inventory_checksum(&entry.files);
+        let checksum = entry.checksum.clone();
+        self.lock_entries.insert(key.clone(), entry);
+        if !self.preparation {
+            write_lock(&self.lock_path, &self.lock_entries).map_err(|failure| {
+                error(
+                    "PKG007",
+                    format!("cannot write copper.lock: {}", paths::python_os_error(&failure, None)),
+                    location,
+                )
+            })?;
+        }
+        Ok(checksum)
+    }
+
     /// `PackageResolver.resolve`.
     pub fn resolve(&mut self, import_path: &str, location: &Location) -> Result<ResolvedPackage> {
         if starts_with_any(import_path, &["./", "../"]) {
@@ -764,7 +1014,12 @@ impl PackageResolver {
         };
         let suffix = import_path[module_path.len()..].trim_start_matches('/');
         let package_dir = paths::resolve(&module_root.join(suffix));
-        if !package_dir.is_dir() || !paths::is_relative_to(&package_dir, &module_root) {
+        // `module_inventory` skips ignored directories, so a package inside
+        // one would compile files the lock checksum never covers.
+        if !package_dir.is_dir()
+            || !paths::is_relative_to(&package_dir, &module_root)
+            || in_ignored_part(&package_dir, &module_root)
+        {
             return Err(error(
                 "PKG004",
                 format!(
@@ -821,6 +1076,9 @@ impl PackageResolver {
             .map(|files| inventory_checksum(&files))
             .map_err(|message| error("PKG012", format!("cannot inventory local package: {message}"), location))?;
         let external = self.source_roots.get(&root).cloned();
+        if external.is_some() && in_ignored_part(&directory, &root) {
+            return Err(error("PKG004", "relative package import must stay inside its source module", location));
+        }
         let (module, version, root_checksum) =
             external.clone().unwrap_or((self.manifest.path.clone(), "workspace".to_owned(), checksum.clone()));
         if external.is_some() {

@@ -407,7 +407,7 @@ fn stage_and_publish(
         copy(&rules, &with_suffix(&native, ".kicad_dru"))?;
     }
     let directory = files::parent(pcb);
-    for name in ["fp-lib-table", "CopperScript.pretty"] {
+    for name in ["fp-lib-table", "CopperScript.pretty", "CopperScript.3dshapes"] {
         let path = directory.join(name);
         if path.is_dir() {
             copy_tree(&path, &stage.join(name))?;

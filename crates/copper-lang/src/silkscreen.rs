@@ -728,14 +728,45 @@ fn arc_bounds(a: &Point, b: &Point, c: &Point) -> Result<Vec<Point>, String> {
     ])
 }
 
+/// Stroke advance of each printable ASCII glyph, `!` to `~`, in thousandths of
+/// the text size: KiCad 10.0.6's default stroke font (newstroke), the copper
+/// text font, measured from `kicad-cli pcb export svg` as (width of ten
+/// repeats - width of one) / 9 at size 1 mm and rounded up. A string's ink is
+/// no wider than the sum of its advances.
+const STROKE_ADVANCE_PER_MILLE: [i64; 94] = [
+    476, 762, 1000, 952, 1143, 1238, 476, 667, 667, 762, 1238, 476, 1238, 476, 1048, 952, // ! to 0
+    952, 952, 952, 952, 952, 952, 952, 952, 952, 476, 476, 1238, 1238, 1238, 857, 1286, // 1 to @
+    857, 1000, 1000, 1000, 905, 857, 1000, 1048, 476, 762, 1000, 810, 1143, 1048, 1048, 1000, // A to P
+    1048, 1000, 952, 762, 1048, 857, 1143, 952, 857, 952, 667, 667, 667, 571, 762, 381, // Q to `
+    905, 905, 857, 905, 857, 571, 905, 905, 476, 476, 810, 524, 1333, 905, 905, 905, // a to p
+    905, 619, 810, 571, 905, 762, 1048, 810, 762, 810, 667, 952, 667, 714, // q to ~
+];
+
+/// A glyph's advance in thousandths of the text size; a space or any glyph
+/// outside the table takes 1.6 sizes, more than the widest measured (1.333).
+fn stroke_advance_per_mille(glyph: char) -> i64 {
+    match glyph {
+        '!'..='~' => STROKE_ADVANCE_PER_MILLE[glyph as usize - '!' as usize],
+        _ => 1600,
+    }
+}
+
+/// `ceil(per_mille * length / 1000)` for non-negative values.
+fn ceil_per_mille(per_mille: i64, length: i64) -> i64 {
+    (per_mille * length + 999).div_euclid(1000)
+}
+
 /// `artwork_bounds`: a conservative integer envelope `(left, low, right, high)`.
 pub fn artwork_bounds(item: &Artwork) -> Result<(i64, i64, i64, i64), String> {
     let (points, margin): (Vec<Point>, i64) = match item {
         Artwork::Text { text, position, size_nm, thickness_nm, rotation_degrees, side, .. } => {
             let lines: Vec<&str> = text.split('\n').collect();
-            let longest = lines.iter().map(|line| line.chars().count()).max().unwrap_or(0) as i64;
-            let half_width = (longest + 2) * size_nm;
-            let half_height = (lines.len() as i64 + 1) * size_nm;
+            let widest = lines.iter().map(|line| line.chars().map(stroke_advance_per_mille).sum::<i64>()).max();
+            // Centred text: half the widest line's advance plus 0.1 size of
+            // centring slack; cap tops (with accents) and descenders reach
+            // 0.95 size from the block centre, each further line 0.81 more.
+            let half_width = (ceil_per_mille(widest.unwrap_or(0) + 200, *size_nm) + 1) / 2;
+            let half_height = ceil_per_mille(950 + 810 * (lines.len() as i64 - 1), *size_nm);
             let corners = [
                 (-half_width, -half_height),
                 (half_width, -half_height),

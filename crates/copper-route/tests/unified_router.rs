@@ -745,28 +745,6 @@ fn tuned_bus_copper_survives_route_smoothing() {
     assert!(errors(&drc(&tuned.board)).is_empty());
 }
 
-fn stitched_pad_board() -> PhysicalBoard {
-    // Each GND pad reaches the B.Cu plane only through its own via-in-pad,
-    // and a ring of foreign copper leaves no room for a new via beside it.
-    let mut board = pad_board(&[("GND", &[(5.0, 5.0), (15.0, 15.0)])], 2, vec![]);
-    let mut wall = Vec::new();
-    for (cx, cy) in [(8.0, 8.0), (18.0, 18.0)] {
-        let corners = [
-            (cx - 0.8, cy - 0.8),
-            (cx + 0.8, cy - 0.8),
-            (cx + 0.8, cy + 0.8),
-            (cx - 0.8, cy + 0.8),
-            (cx - 0.8, cy - 0.8),
-        ];
-        wall.extend(corners.windows(2).map(|pair| track("W", pair[0], pair[1], 0.2, F)));
-    }
-    board.tracks = wall;
-    board.vias = vec![via("GND", (8.0, 8.0), 0.3, 0.15, F, B), via("GND", (18.0, 18.0), 0.3, 0.15, F, B)];
-    board.zones = vec![zone("gnd-b", "GND", &[B], rect(0.5, 0.5, 25.5, 25.5))];
-    board.nets.push(net("W", &[]));
-    board
-}
-
 #[test]
 fn pads_already_stitched_into_their_plane_count_as_joined() {
     let board = stitched_pad_board();

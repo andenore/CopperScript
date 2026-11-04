@@ -1,0 +1,37 @@
+// Educational parts from the bundled demonstration library.
+// This example describes connectivity; it is not a qualified hardware design.
+board SensorPlayground {
+    use library "tiny";
+
+    component PS1: VOLTAGE_SOURCE;
+    component U1: STM32_LIKE;
+    component U2: BME280_LIKE;
+    component R1: RESISTOR { value = 4.7 kohm; }
+    component R2: RESISTOR { value = 4.7 kohm; }
+    component C1: CAPACITOR {
+        value = 100 nF;
+        role = "decoupling";
+        decouples = U1.VDD;
+    }
+
+    net V3V3 {
+        PS1.OUT; U1.VDD; U2.VDD;
+        R1.1; R2.1; C1.1;
+    }
+    net GND { PS1.GND; U1.VSS; U2.GND; C1.2; }
+    net I2C_SDA { U1.PB7; U2.SDA; R1.2; }
+    net I2C_SCL { U1.PB6; U2.SCL; R2.2; }
+
+    no_connect U1.PA0, U1.TX { reason = "Unused in this example"; }
+
+    supply V3V3 { voltage = 3.3 V; source = PS1.OUT; }
+    supply GND { voltage = 0 V; external = true; }
+
+    interface SENSOR_BUS: i2c {
+        sda = I2C_SDA;
+        scl = I2C_SCL;
+        pullup = V3V3;
+        bind U1 { sda = PB7; scl = PB6; }
+        bind U2 { sda = SDA; scl = SCL; }
+    }
+}

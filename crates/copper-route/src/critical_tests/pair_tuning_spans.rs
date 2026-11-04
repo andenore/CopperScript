@@ -18,10 +18,10 @@ use crate::test_support_critical::*;
 
 const W: i64 = 145_000;
 const GAP: i64 = 150_000;
-const SKEW: i64 = 63_500;
-const AMP: i64 = 1_000_000;
+pub(super) const SKEW: i64 = 63_500;
+pub(super) const AMP: i64 = 1_000_000;
 
-type Lanes = (Vec<TrackSegment>, Vec<TrackSegment>);
+pub(super) type Lanes = (Vec<TrackSegment>, Vec<TrackSegment>);
 
 /// `fixture(length, neck, spacing)`: pair A/B with 2 mm breakouts (neck
 /// width `neck`); B's far land sits 451 703 nm further out, so B is longer.
@@ -58,12 +58,12 @@ fn fixture(length: i64, neck: i64, spacing: i64) -> (PhysicalBoard, Lanes) {
     (board, lanes)
 }
 
-fn standard() -> (PhysicalBoard, Lanes) {
+pub(super) fn standard() -> (PhysicalBoard, Lanes) {
     fixture(10 * MM, 120_000, W + GAP)
 }
 
 /// `fragment`: every horizontal piece cut at 0.5 mm marks.
-fn fragment(lane: &[TrackSegment]) -> Vec<TrackSegment> {
+pub(super) fn fragment(lane: &[TrackSegment]) -> Vec<TrackSegment> {
     let mut out = Vec::new();
     for t in lane {
         let mut marks: Vec<i64> = (t.start.x_nm..t.end.x_nm).step_by(500_000).collect();
@@ -79,7 +79,13 @@ fn fragments(lanes: &Lanes) -> Lanes {
     (fragment(&lanes.0), fragment(&lanes.1))
 }
 
-fn plain_tuner(a: &mut Vec<TrackSegment>, b: &mut Vec<TrackSegment>, skew: i64, limit: i64, margin: i64) -> PairTuning {
+pub(super) fn plain_tuner(
+    a: &mut Vec<TrackSegment>,
+    b: &mut Vec<TrackSegment>,
+    skew: i64,
+    limit: i64,
+    margin: i64,
+) -> PairTuning {
     tune_pair(a, b, skew, limit, margin, None)
 }
 

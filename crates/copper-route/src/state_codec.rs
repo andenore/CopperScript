@@ -2436,6 +2436,7 @@ pub fn unified_router_options(value: &StateValue) -> Result<UnifiedRouterOptions
         "via_budget_factor" => via_budget_factor = float;
         "via_overrun_factor" => via_overrun_factor = float;
         "bend_cost" => bend_cost = float;
+        "neck_cost" => neck_cost = float;
         "guide_cost" => guide_cost = float;
         "guide_margin_nm" => guide_margin_nm = int;
         "congestion_tile_nm" => congestion_tile_nm = |v| strict_int(v, "congestion_tile_nm must be a positive integer of at least one pitch");
@@ -2516,6 +2517,7 @@ pub fn unified_router_options(value: &StateValue) -> Result<UnifiedRouterOptions
         via_budget_factor: via_budget_factor.unwrap_or(defaults.via_budget_factor),
         via_overrun_factor: via_overrun_factor.unwrap_or(defaults.via_overrun_factor),
         bend_cost: bend_cost.unwrap_or(defaults.bend_cost),
+        neck_cost: neck_cost.unwrap_or(defaults.neck_cost),
         guide_cost: guide_cost.unwrap_or(defaults.guide_cost),
         guide_margin_nm: guide_margin_nm.unwrap_or(defaults.guide_margin_nm),
         congestion_tile_nm: congestion_tile_nm.unwrap_or(defaults.congestion_tile_nm),
@@ -3967,6 +3969,7 @@ pub fn encode_unified_options(o: &UnifiedRouterOptions) -> StateValue {
             ("via_budget_factor", f(o.via_budget_factor)),
             ("via_overrun_factor", f(o.via_overrun_factor)),
             ("bend_cost", f(o.bend_cost)),
+            ("neck_cost", f(o.neck_cost)),
             ("guide_cost", f(o.guide_cost)),
             ("guide_margin_nm", i(o.guide_margin_nm)),
             ("congestion_tile_nm", i(o.congestion_tile_nm)),

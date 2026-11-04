@@ -18,7 +18,7 @@ use crate::test_support_critical::*;
 /// `board_fixture(returns)`: pair A/B between two-pad terminals J1 (5, 12)
 /// and J2 (35, 12) on four layers, allowed on F.Cu and In2.Cu with two vias,
 /// and a full-height F.Cu wall at x = 19..21 mm.
-fn board_fixture(returns: bool) -> PhysicalBoard {
+pub(super) fn board_fixture(returns: bool) -> PhysicalBoard {
     let pads = vec![smd_pad("1", at(0, -500_000), 400_000), smd_pad("2", at(0, 500_000), 400_000)];
     let pair = footprint("pair", pads, Size { width_nm: MM, height_nm: 2 * MM });
     let poses = vec![pose("J1", "pair", mm(5, 12)), pose("J2", "pair", mm(35, 12))];
@@ -72,7 +72,7 @@ fn owner(
     validate_candidate(board, proposed, created, vias, &[], &[], None).expect("validated")
 }
 
-fn hard_errors(board: &PhysicalBoard) -> Vec<String> {
+pub(super) fn hard_errors(board: &PhysicalBoard) -> Vec<String> {
     let report = crate::drc_report::run_physical_drc(board, copper_drc::Policy::default()).expect("DRC");
     report
         .report

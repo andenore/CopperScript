@@ -4,7 +4,7 @@
 
 mod support_routers;
 
-use copper_pcb::board::{NetRoutingRule, PhysicalBoard, PhysicalNet, TrackSegment, Via, ViaKind, ViaTechnology};
+use copper_pcb::board::{PhysicalBoard, PhysicalNet, TrackSegment, Via, ViaKind, ViaTechnology};
 use copper_physical::CopperLayer;
 use copper_route::detailed::DetailedRoutingResult;
 use copper_route::routing_clearance::RoutingClearanceIndex;
@@ -12,7 +12,6 @@ use copper_route::routing_vias::physical_via_span;
 use copper_route::unified_router::UnifiedRouterOptions;
 use copper_route::unified_router::route::route_unified;
 use copper_route::unified_router::router::{NetRoute, Router};
-use copper_units::Decimal;
 use indexmap::{IndexMap, IndexSet};
 use support_routers::routes::{drc, guides};
 use support_routers::*;
@@ -187,36 +186,12 @@ fn repair_rejections_name_this_calls_copper_as_movable() {
 
 // -- via technology spans
 
-fn technology(id: &str, kind: ViaKind, first: CopperLayer, second: CopperLayer) -> ViaTechnology {
-    ViaTechnology {
-        id: id.to_owned(),
-        kind,
-        from_layer: first,
-        to_layer: second,
-        minimum_drill_nm: mm(0.1),
-        minimum_annular_ring_nm: mm(0.1),
-        maximum_aspect_ratio: Decimal::from_i64(12),
-    }
-}
-
 fn through() -> ViaTechnology {
     technology("through", ViaKind::Through, F, B)
 }
 
 fn blind() -> ViaTechnology {
     technology("blind-f1", ViaKind::Blind, F, IN1)
-}
-
-fn four_layer(technologies: Vec<ViaTechnology>, allowed: Option<Vec<CopperLayer>>) -> PhysicalBoard {
-    let mut board = pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)])], 4, vec![]);
-    board.stackup.via_technologies = technologies;
-    if let Some(layers) = allowed {
-        // A wall across F.Cu: A must change layers within `layers`.
-        board.tracks = vec![track("W", (13.0, 1.5), (13.0, 24.5), 0.2, F)];
-        board.nets.push(net("W", &[]));
-        board.net_routing_rules = vec![NetRoutingRule { allowed_layers: layers, ..rule("A") }];
-    }
-    board
 }
 
 fn router_of(board: &PhysicalBoard) -> Router<'_, '_> {

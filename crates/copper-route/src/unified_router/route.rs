@@ -15,7 +15,7 @@ use copper_pcb::zones::{deferred_zone_nets, routing_layers};
 use copper_physical::Point;
 use copper_physical::pyfloat::{hypot, round_int};
 
-use super::negotiate::{Accepted, Event};
+use super::negotiate::{Accepted, EventSink};
 use super::options::UnifiedRouterOptions;
 use super::rasters::FREE;
 use super::router::Router;
@@ -36,12 +36,6 @@ fn int(value: i64) -> Value {
 fn emit(on_progress: &mut Option<&mut dyn Progress>, phase: &str, event: &str, details: Vec<(&'static str, Value)>) {
     if let Some(callback) = on_progress {
         callback.observe(phase, event, details);
-    }
-}
-
-fn forward(on_progress: &mut Option<&mut dyn Progress>, events: &mut Vec<Event>) {
-    for (phase, event, details) in events.drain(..) {
-        emit(on_progress, phase, event, details);
     }
 }
 
@@ -71,7 +65,7 @@ fn net_track_length(board: &PhysicalBoard, name: &str, new_tracks: &[TrackSegmen
 }
 
 /// `_open_count`: (open signal connections, incomplete plane nets).
-fn open_count(
+pub(crate) fn open_count(
     board: &PhysicalBoard,
     nets: &[&PhysicalNet],
     accepted: &Accepted,
@@ -438,7 +432,7 @@ fn repair_attempt(
     seeder: Option<&mut EscapeSeeder<'_>>,
     required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
     deadline: Option<Instant>,
-    events: &mut Vec<Event>,
+    events: &mut dyn EventSink,
 ) -> Result<Option<RepairAttempt>> {
     let mut work: Accepted = accepted.clone();
     let mut done = complete.clone();
@@ -666,7 +660,6 @@ pub fn route_unified(
             }
         }
     }
-    let mut events: Vec<Event> = Vec::new();
     let mut shared = Shared {
         enabled: options.share_commit_index,
         guides: Some(global_route),
@@ -688,8 +681,7 @@ pub fn route_unified(
             nets.iter().copied().filter(|n| bus_names.contains(n.name.as_str())).collect();
         let mut bus_router = Router::new(board, &bus_options, &bus_nets, IndexSet::new(), required_accesses, index)?;
         bus_router.set_guides(shared.guides);
-        let (bus_routes, bus_conflicts, used) = bus_router.negotiate(deadline, None, &mut events)?;
-        forward(&mut on_progress, &mut events);
+        let (bus_routes, bus_conflicts, used) = bus_router.negotiate(deadline, None, &mut on_progress)?;
         let (accepted_bus, _, complete_bus) = bus_router.commit(&bus_routes, &bus_conflicts)?;
         index = bus_router.clearance.take().expect("index");
         drop(bus_router);
@@ -773,8 +765,7 @@ pub fn route_unified(
     }
     setup.push(("seconds", Value::Float(0.0)));
     emit(&mut on_progress, "unified_setup", "finished", setup);
-    let (routes, conflicts, mut iterations) = router.negotiate(deadline, None, &mut events)?;
-    forward(&mut on_progress, &mut events);
+    let (routes, conflicts, mut iterations) = router.negotiate(deadline, None, &mut on_progress)?;
     let (mut accepted, mut rejected, mut complete) = router.commit(&routes, &conflicts)?;
     shared.added(&accepted);
     emit(
@@ -824,9 +815,8 @@ pub fn route_unified(
                 if seed { escape_seeder.as_deref_mut() } else { None },
                 required_accesses,
                 deadline,
-                &mut events,
+                &mut on_progress,
             )?;
-            forward(&mut on_progress, &mut events);
             let Some(attempt) = attempt else { continue };
             iterations += attempt.used;
             let score = open_count(board, &nets, &attempt.work, &plane_nets, &attempt.done)?;
@@ -884,10 +874,9 @@ pub fn route_unified(
             &mut shared,
             &mut slot,
             deadline,
-            &mut events,
+            &mut on_progress,
         )?;
         router.clearance = slot;
-        forward(&mut on_progress, &mut events);
         accepted = adopted;
         complete = adopted_complete;
         iterations += report.0;
@@ -1115,7 +1104,7 @@ fn recheck_pours<'b>(
     shared: &mut Shared<'_>,
     slot: &mut Option<RoutingClearanceIndex<'b>>,
     deadline: Option<Instant>,
-    events: &mut Vec<Event>,
+    events: &mut dyn EventSink,
 ) -> Result<(Accepted, IndexSet<String>, (i64, Vec<(&'static str, Value)>))> {
     let before = pour_estimate(board, accepted)?;
     let routed_planes: IndexSet<&str> =
