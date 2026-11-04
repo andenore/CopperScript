@@ -36,6 +36,7 @@ Targets:
 | `layout` | Placement draft and report, not a routed board |
 | `edit` | Mechanical/floorplan editor |
 | `route` | Rust package escape/routing, saved copper fill and native DRC |
+| `release` | Checksummed bundle of a board's order export, its route run and BOM for manual archiving (see [Release bundles](#release-bundles)) |
 | `compile-examples` (root only) | Compile the registered examples and compatibility fixtures |
 | `check-examples` (root only) | Run `check`, `compile`, and a dry-run of `route` for every registered complete example |
 
@@ -148,3 +149,29 @@ Makefile also includes the shared recipes: `make -C examples/cm4_baseboard route
 Successful routing is **not manufacturing signoff**. Power/current review,
 mechanical/RF qualification, exact assembly selections and manufacturing export
 remain separate obligations; this workflow does not create Gerbers or waive DRC.
+
+## Release bundles
+
+`make release RELEASE=<part>-<rev>` collects what was ordered into
+`build/release/<part>-<rev>/` and a zip of it, for archiving by hand. It runs
+`make/release-build.sh` after the project's `bom` target (clear `RELEASE_DEPS`
+for a board without one) and reads the project's `ORDER` and `LOCK` settings.
+
+| Bundle path | Content |
+| --- | --- |
+| `fab/` | The manufacturing export under `ORDER` (the one directory with a `manifest.json`; `RELEASE_FAB` names another) |
+| `route/` | `run.json`, DRC, route summary, logs and via process of the route run whose filled board was exported |
+| `bom/` | `ORDER`'s CSV lists and assembly report, and the lock |
+| `orders/` | Empty, for the order confirmations |
+| `RELEASE.md` | Commit, remote, dependency pins, KiCad version, route run and the manifest's qualification flags, with a Notes section to fill in |
+| `SHA256SUMS` | Every file in the bundle |
+
+It refuses uncommitted tracked changes, an existing bundle, fab files that no
+longer match their `SHA256SUMS` (the `.kicad_pro`/`.kicad_prl` settings, which
+KiCad rewrites on opening, are exempt), and an export without a passed route
+run. The route run is found by the exported board's SHA-256. If a tracked input
+recorded in that run (the source, `copper.mod`, `copper.lock`, the Makefile)
+differs from `HEAD`, the build stops; set `RELEASE_ACCEPT_DRIFT=1` only when the
+changes leave the fabricated board unchanged, such as BOM-only value changes,
+and RELEASE.md then lists them. Tagging, pushing and uploading the bundle stay
+manual; the target prints the commands.

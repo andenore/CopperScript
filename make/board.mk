@@ -52,3 +52,16 @@ editor-overlay:
 # RUN_DIR selects a new/empty path; intentionally no recursive clean target.
 route:
 	bash "$(BOARD_MK_DIR)/route-build.sh" "$(SOURCE)" --copper "$(COPPER)" --project-root "$(PROJECT_ROOT)" --output-root "$(OUT)/runs" $(if $(strip $(RUN_DIR)),--output-dir "$(RUN_DIR)") $(RESOLVE_ARGS) $(_paths) $(BUILD_ARGS) -- $(_physical) $(ROUTE_ARGS) $(EXTRA_ROUTE_ARGS)
+# Release bundle for manual archiving: the `order` export, the route run that
+# produced it and the BOM, checksummed and zipped under build/release/RELEASE.
+# Set RELEASE (e.g. make release RELEASE=123456-1); the project's `bom` target
+# runs first unless RELEASE_DEPS is cleared. Tagging and archiving stay manual.
+RELEASE ?=
+RELEASE_DEPS ?= bom
+RELEASE_FAB ?=
+RELEASE_ACCEPT_DRIFT ?=
+.PHONY: release
+release: $(if $(filter release,$(MAKECMDGOALS)),$(if $(strip $(RELEASE)),,$(error Set RELEASE, e.g. make release RELEASE=123456-1))) $(RELEASE_DEPS)
+	bash "$(BOARD_MK_DIR)/release-build.sh" "$(RELEASE)" --project-root "$(PROJECT_ROOT)" --source "$(SOURCE)" \
+	 --runs-dir "$(OUT)/runs" $(if $(strip $(ORDER)),--order-dir "$(ORDER)") $(if $(strip $(LOCK)),--lock "$(LOCK)") \
+	 $(if $(strip $(RELEASE_FAB)),--fab-dir "$(RELEASE_FAB)") $(if $(strip $(RELEASE_ACCEPT_DRIFT)),--accept-drift)
