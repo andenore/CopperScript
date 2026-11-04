@@ -113,3 +113,33 @@ fn a_missing_part_model_warns_and_falls_back_to_a_generated_body() {
     let board = std::fs::read_to_string(out.join("b.kicad_pcb")).unwrap();
     assert!(board.contains("(scale (xyz 0.39370078740157477"));
 }
+
+#[test]
+fn a_part_model_outside_its_part_directory_is_not_copied() {
+    // `secret.wrl` sits beside the board, one level above the part file.
+    let vrml = "#VRML V2.0 utf8\n# secret\n";
+    let part = widget("    model = \"../secret.wrl\";");
+    let (stdout, out) =
+        export("export-part-model-escape", BOARD, &[("parts/widget.copper", part.as_str()), ("secret.wrl", vrml)]);
+    assert!(stdout.contains("outside its part file's directory; using a generated body"), "{stdout}");
+    for entry in std::fs::read_dir(out.join("CopperScript.3dshapes")).expect("the model directory") {
+        let path = entry.expect("entry").path();
+        assert_ne!(std::fs::read_to_string(&path).unwrap(), vrml, "{} is the escaped file", path.display());
+    }
+}
+
+#[test]
+fn a_part_model_that_is_not_a_model_file_is_not_copied() {
+    let part = widget("    model = \"models/notes.txt\";");
+    let (stdout, out) = export(
+        "export-part-model-text",
+        BOARD,
+        &[("parts/widget.copper", part.as_str()), ("parts/models/notes.txt", "private\n")],
+    );
+    assert!(stdout.contains("is not a STEP or VRML file; using a generated body"), "{stdout}");
+    let shapes: Vec<_> = std::fs::read_dir(out.join("CopperScript.3dshapes")).expect("the model directory").collect();
+    assert!(
+        shapes.iter().all(|entry| !entry.as_ref().unwrap().file_name().to_string_lossy().ends_with(".txt")),
+        "{shapes:?}"
+    );
+}

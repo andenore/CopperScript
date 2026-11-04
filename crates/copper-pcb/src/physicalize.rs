@@ -616,11 +616,22 @@ fn with_part_3d(
         },
         Some(path) => {
             let base = part.metadata.get(PART_MODEL_SOURCE_KEY).map(String::as_str).unwrap_or_default();
-            let resolved = match std::path::Path::new(base).parent() {
-                Some(directory) => directory.join(path).to_string_lossy().into_owned(),
-                None => path.clone(),
-            };
-            if std::path::Path::new(&resolved).is_file() {
+            let directory = std::path::Path::new(base).parent().unwrap_or(std::path::Path::new(""));
+            let resolved = directory.join(path).to_string_lossy().into_owned();
+            // A dependency's part must not name a file elsewhere on disk:
+            // the model is copied into the manufacturing package.
+            let contained = copper_lang::paths::is_relative_to(
+                &copper_lang::paths::resolve(std::path::Path::new(&resolved)),
+                &copper_lang::paths::resolve(directory),
+            );
+            if !contained {
+                note(format!(
+                    "{}: 3D model {} is outside its part file's directory; using a generated body",
+                    part.name,
+                    repr(path)
+                ));
+                None
+            } else if std::path::Path::new(&resolved).is_file() {
                 Some(resolved)
             } else {
                 note(format!("{}: 3D model {} not found; using a generated body", part.name, repr(&resolved)));

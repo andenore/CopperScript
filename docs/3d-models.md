@@ -39,7 +39,10 @@ footprint gets that `height_nm` (which also feeds the generated body and the
 `__3d_<digest>` suffix, so two parts can share one source footprint and differ
 in 3D. A `model` that is not a file relative to the part file is reported as an
 import warning (`... 3D model ... not found; using a generated body`) and
-ignored.
+ignored. So is one that resolves outside the part file's directory (`../`,
+an absolute path or a symlink out): the model is copied into the
+manufacturing package, so a dependency must not name other files on disk.
+Only `.step`, `.stp`, `.wrl` and `.vrml` files are copied.
 
 ## Fallback body
 

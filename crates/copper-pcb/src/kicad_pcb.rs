@@ -428,6 +428,10 @@ fn copy_local_models(footprint: &mut PhysicalFootprint, files: &mut Vec<Artifact
             kept.push(model);
             continue;
         }
+        if !matches!(model.extension().as_deref(), Some("step" | "stp" | "wrl" | "vrml")) {
+            warnings.push(format!("3D model {} is not a STEP or VRML file; using a generated body", model.path));
+            continue;
+        }
         let Ok(text) = std::fs::read_to_string(path) else {
             warnings.push(format!("3D model {} is not readable text; using a generated body", model.path));
             continue;
