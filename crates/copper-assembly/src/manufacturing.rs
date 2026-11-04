@@ -2,8 +2,9 @@
 //! signoff (`pcbir.manufacturing_files`).
 //!
 //! This consumes the final native board, not a reconstructed physical IR:
-//! filled copper and native edits survive unchanged. `kicad-cli` refills,
-//! checks and exports it in a staging directory that is published only when
+//! filled copper and native edits survive unchanged. `kicad-cli` refills and
+//! checks it in a staging directory; KiCad or CopperScript's own plotter
+//! (`copper-cam`) then exports it, and the directory is published only when
 //! every step and inventory check passed.
 
 use std::path::{Path, PathBuf};
@@ -299,6 +300,14 @@ fn glob(directory: &Path, suffix: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Which program writes the Gerbers, drills, netlist and positions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plotter {
+    Kicad,
+    /// `copper-cam`, from the board as KiCad refilled it.
+    Native,
+}
+
 /// The inputs of one export.
 pub struct Export<'a> {
     pub pcb: &'a Path,
@@ -308,6 +317,31 @@ pub struct Export<'a> {
     /// The reviewed BOM and its `str()`.
     pub bom: Option<(&'a Path, &'a str)>,
     pub replace_existing: bool,
+    pub plotter: Plotter,
+}
+
+/// Plot the refilled staged board with `copper-cam` into the same places
+/// KiCad's exports would use.
+fn plot_natively(board: &Path, gerbers: &Path, drills: &Path, netlist: &Path, positions: &Path) -> Result<()> {
+    let shown = paths::display(board);
+    let text = files::universal_newlines(&read_text(board, &shown, false)?);
+    let parsed = copper_cam::board::parse_board(&text, &shown).map_err(Error::Files)?;
+    let stem = board.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+    let plotted = copper_cam::plot::plot(&parsed, &stem, env!("CARGO_PKG_VERSION")).map_err(Error::Files)?;
+    for (name, contents) in plotted {
+        let path = if name.ends_with(".gbr") {
+            gerbers.join(&name)
+        } else if name.ends_with(".drl") {
+            drills.join(&name)
+        } else if name.ends_with(".d356") {
+            netlist.to_path_buf()
+        } else {
+            positions.to_path_buf()
+        };
+        std::fs::write(&path, contents.as_bytes())
+            .map_err(|failure| Error::Os(open_error(&failure, &paths::display(&path))))?;
+    }
+    Ok(())
 }
 
 /// `export_manufacturing_files`: stage, native-refill and DRC, export,
@@ -457,49 +491,57 @@ fn stage_and_publish(
     for directory in [&gerbers, &drills] {
         std::fs::create_dir(directory).map_err(|failure| Error::Os(os_error(&failure, &shown(directory))))?;
     }
-    let layer_list = layers.join(",");
-    require(
-        &command(&[
-            "pcb",
-            "export",
-            "gerbers",
-            "--layers",
-            &layer_list,
-            "--no-protel-ext",
-            "--subtract-soldermask",
-            "-o",
-            &shown(&gerbers),
-            &native_text,
-        ]),
-        stage,
-        "export Gerbers",
-    )?;
-    require(
-        &command(&[
-            "pcb",
-            "export",
-            "drill",
-            "--format",
-            "excellon",
-            "--excellon-units",
-            "mm",
-            "--drill-origin",
-            "absolute",
-            "--excellon-separate-th",
-            "--generate-report",
-            "-o",
-            &shown(&drills),
-            &native_text,
-        ]),
-        stage,
-        "export drills",
-    )?;
     let netlist = stage.join("board.d356");
-    require(
-        &command(&["pcb", "export", "ipcd356", "-o", &shown(&netlist), &native_text]),
-        stage,
-        "export manufacturing netlist",
-    )?;
+    let native_positions = stage.join(match request.plotter {
+        Plotter::Kicad => "positions-kicad.csv",
+        Plotter::Native => "positions.csv",
+    });
+    if request.plotter == Plotter::Native {
+        plot_natively(&native, &gerbers, &drills, &netlist, &native_positions)?;
+    } else {
+        let layer_list = layers.join(",");
+        require(
+            &command(&[
+                "pcb",
+                "export",
+                "gerbers",
+                "--layers",
+                &layer_list,
+                "--no-protel-ext",
+                "--subtract-soldermask",
+                "-o",
+                &shown(&gerbers),
+                &native_text,
+            ]),
+            stage,
+            "export Gerbers",
+        )?;
+        require(
+            &command(&[
+                "pcb",
+                "export",
+                "drill",
+                "--format",
+                "excellon",
+                "--excellon-units",
+                "mm",
+                "--drill-origin",
+                "absolute",
+                "--excellon-separate-th",
+                "--generate-report",
+                "-o",
+                &shown(&drills),
+                &native_text,
+            ]),
+            stage,
+            "export drills",
+        )?;
+        require(
+            &command(&["pcb", "export", "ipcd356", "-o", &shown(&netlist), &native_text]),
+            stage,
+            "export manufacturing netlist",
+        )?;
+    }
     let artwork = glob(&gerbers, ".gbr");
     let drill_files = glob(&drills, ".drl");
     if artwork.len() != layers.len() || drill_files.is_empty() || !netlist.is_file() {
@@ -513,26 +555,27 @@ fn stage_and_publish(
             return refuse("empty manufacturing output");
         }
     }
-    let native_positions = stage.join("positions-kicad.csv");
-    require(
-        &command(&[
-            "pcb",
-            "export",
-            "pos",
-            "--format",
-            "csv",
-            "--units",
-            "mm",
-            "--side",
-            "both",
-            "--exclude-dnp",
-            "-o",
-            &shown(&native_positions),
-            &native_text,
-        ]),
-        stage,
-        "export positions",
-    )?;
+    if request.plotter == Plotter::Kicad {
+        require(
+            &command(&[
+                "pcb",
+                "export",
+                "pos",
+                "--format",
+                "csv",
+                "--units",
+                "mm",
+                "--side",
+                "both",
+                "--exclude-dnp",
+                "-o",
+                &shown(&native_positions),
+                &native_text,
+            ]),
+            stage,
+            "export positions",
+        )?;
+    }
     if let (Some(references), Some((bom, _))) = (references, request.bom) {
         copy(bom, &stage.join("bom.csv"))?;
         write_jlcpcb_cpl(&native_positions, &shown(&native_positions), &stage.join("cpl.csv"), references)?;
@@ -545,6 +588,13 @@ fn stage_and_publish(
     for (key, value) in [
         ("schema", Value::from("copperscript-manufacturing-files/v0.1")),
         ("kicad_version", Value::from(version.as_str())),
+        (
+            "plotter",
+            Value::from(match request.plotter {
+                Plotter::Kicad => "kicad",
+                Plotter::Native => concat!("copperscript ", env!("CARGO_PKG_VERSION")),
+            }),
+        ),
         ("input_pcb_sha256", Value::from(input_digest.as_str())),
         ("exported_pcb_sha256", Value::from(exported_digest.as_str())),
         ("native_drc", Value::from("passed")),

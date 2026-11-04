@@ -16,8 +16,9 @@ from KiCad: `plot` reads the `filled_polygon`s saved by a refill
 (`kicad-cli pcb drc --refill-zones --save-board`) and never fills zones
 itself. It runs no DRC. On a board that was never refilled, every zone plots
 empty, and the summary line reports the number of fill areas read.
-`export-manufacturing` still uses KiCad's plotter; nothing here changes that
-release path.
+`copper export-manufacturing --plotter native` uses this plotter in the release
+path: KiCad still refills and checks the board in the staging directory, then
+the refilled board is plotted natively.
 
 ## What is plotted
 

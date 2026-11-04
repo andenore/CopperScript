@@ -14,6 +14,12 @@ copper export-manufacturing build/board.kicad_pcb \
   --skip-independent-cam --bom build/bom.csv -o build/assembly-manufacturing
 ```
 
+`--plotter native` keeps the KiCad refill and DRC but writes the Gerbers,
+drills, IPC-D-356 netlist and positions with CopperScript's own plotter
+([native plotting](native-plotting.md)); the manifest's `plotter` field says
+which plotter ran. The files sit in the same places, except that positions are
+`positions.csv` instead of `positions-kicad.csv`.
+
 The explicit acknowledgement is mandatory. This is **manufacturing-file
 generation**, not a qualified release. The Python implementation's strict
 release API and its qualification gates were removed with it. Firmware is not

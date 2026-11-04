@@ -61,6 +61,7 @@ dependencies = [
 name = "copper-assembly"
 version = "0.1.0"
 dependencies = [
+ "copper-cam",
  "copper-json",
  "copper-lang",
  "copper-pcb",
