@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 copper-json.workspace = true
 copper-physical.workspace = true
+i_overlay = "=9.0.1"
 indexmap.workspace = true
 
 [lints]

@@ -90,6 +90,58 @@ pub struct Pad {
     pub mask_margin: Option<i64>,
     pub paste_margin: Option<i64>,
     pub paste_ratio: Option<f64>,
+    /// Local overrides of the zone settings (`None` inherits them).
+    pub zones: PadZoneSettings,
+    /// KiCad's thermal spoke angle; 45 degrees for circles, else 90.
+    pub spoke_angle: f64,
+}
+
+/// How a pad or footprint overrides the connection of zones to its pads.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PadZoneSettings {
+    pub connection: Option<ZoneConnection>,
+    pub thermal_gap: Option<i64>,
+    pub spoke_width: Option<i64>,
+    pub clearance: Option<i64>,
+}
+
+/// KiCad's `ZONE_CONNECTION`: how a zone joins the pads of its net.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoneConnection {
+    None,
+    Thermal,
+    Solid,
+    /// Thermal reliefs for plated through-hole pads, solid for the others.
+    ThroughHoleThermal,
+}
+
+/// A copper zone or a rule area (keepout), in board coordinates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Zone {
+    pub name: String,
+    /// KiCad breaks priority ties by UUID.
+    pub uuid: String,
+    /// Ordinal among the board's top-level zones; `usize::MAX` in a footprint.
+    pub index: usize,
+    pub net: Option<String>,
+    /// Copper layers, by stack index.
+    pub layers: Vec<usize>,
+    pub priority: u32,
+    /// Outline contours; holes are contours inside others (even-odd).
+    pub outline: Vec<Contour>,
+    /// A rule area: `Some(true)` when it forbids copper pours.
+    pub keepout: Option<bool>,
+    pub connection: ZoneConnection,
+    pub clearance: Option<i64>,
+    pub min_thickness: i64,
+    pub thermal_gap: i64,
+    pub spoke_width: i64,
+    /// 0 removes isolated islands, 1 keeps them, 2 removes those below `island_area_min`.
+    pub island_mode: u8,
+    /// Square nanometres.
+    pub island_area_min: f64,
+    /// A footprint's own zone (always a keepout here).
+    pub in_footprint: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -105,6 +157,7 @@ pub struct Footprint {
     pub mask_margin: Option<i64>,
     pub paste_margin: Option<i64>,
     pub paste_ratio: Option<f64>,
+    pub zones: PadZoneSettings,
     pub pads: Vec<Pad>,
 }
 
@@ -206,6 +259,8 @@ pub struct Board {
     pub drawings: Vec<Drawing>,
     pub texts: Vec<Text>,
     pub fills: Vec<Fill>,
+    /// Board zones in file order, then footprint keepouts.
+    pub zones: Vec<Zone>,
 }
 
 impl Board {
@@ -594,6 +649,28 @@ const UNSUPPORTED: &[&str] = &[
     "gr_bbox",
 ];
 
+/// `(zone_connect N)` with KiCad's `ZONE_CONNECTION` numbering.
+fn zone_settings(node: &List, what: &str) -> Result<PadZoneSettings> {
+    let connection = match kicad_mod::first(node, "zone_connect").and_then(|child| kicad_mod::atom(child, 1)) {
+        None | Some("-1") => None,
+        Some("0") => Some(ZoneConnection::None),
+        Some("1") => Some(ZoneConnection::Thermal),
+        Some("2") => Some(ZoneConnection::Solid),
+        Some("3") => Some(ZoneConnection::ThroughHoleThermal),
+        Some(other) => return Err(format!("{what}: unknown zone connection {other:?}")),
+    };
+    let spoke_width = match optional_nm(node, "thermal_bridge_width")? {
+        Some(width) => Some(width),
+        None => optional_nm(node, "thermal_width")?,
+    };
+    Ok(PadZoneSettings {
+        connection,
+        thermal_gap: optional_nm(node, "thermal_gap")?,
+        spoke_width,
+        clearance: optional_nm(node, "clearance")?,
+    })
+}
+
 fn pad(node: &List, stack: &Stack, footprint_position: Point, footprint_angle: f64, what: &str) -> Result<Pad> {
     let pad_number = string(node, 1).unwrap_or_default();
     let what = format!("{what} pad {pad_number:?}");
@@ -658,6 +735,12 @@ fn pad(node: &List, stack: &Stack, footprint_position: Point, footprint_angle: f
             Some(ratio) => Some(ratio),
             None => optional_real(node, "solder_paste_ratio")?,
         },
+        zones: zone_settings(node, &what)?,
+        spoke_angle: match optional_real(node, "thermal_bridge_angle")? {
+            Some(angle) => angle,
+            None if shape == PadShape::Circle => 45.0,
+            None => 90.0,
+        },
     })
 }
 
@@ -701,6 +784,12 @@ fn footprint(node: &List, stack: &Stack, board: &mut Board) -> Result<()> {
                 if !kicad_mod::children(item, "filled_polygon").is_empty() {
                     return Err(format!("{what}: filled footprint zones are not plotted natively"));
                 }
+                if let Some(zone) = zone_definition(item, stack, true, usize::MAX)? {
+                    if zone.keepout.is_none() {
+                        return Err(format!("{what}: footprint copper zones are not filled natively"));
+                    }
+                    board.zones.push(zone);
+                }
             }
             name if UNSUPPORTED.contains(&name) => {
                 return Err(format!("{what}: {name} is not plotted natively"));
@@ -723,6 +812,7 @@ fn footprint(node: &List, stack: &Stack, board: &mut Board) -> Result<()> {
             Some(ratio) => Some(ratio),
             None => optional_real(node, "solder_paste_ratio")?,
         },
+        zones: zone_settings(node, &what)?,
         pads,
     });
     Ok(())
@@ -793,7 +883,120 @@ fn track(node: &List, stack: &Stack, arc: bool) -> Result<Option<Track>> {
     }))
 }
 
-fn zone(node: &List, stack: &Stack, board: &mut Board) -> Result<()> {
+/// The value of `(name VALUE)` inside `(fill ...)`.
+fn fill_value<'a>(fill: Option<&'a List>, name: &str) -> Option<&'a str> {
+    fill.and_then(|fill| kicad_mod::first(fill, name)).and_then(|item| kicad_mod::atom(item, 1))
+}
+
+/// A zone's definition: what the filler needs, or `None` for zones on no
+/// copper layer. Settings the filler does not reproduce are refused.
+fn zone_definition(node: &List, stack: &Stack, in_footprint: bool, index: usize) -> Result<Option<Zone>> {
+    let name = kicad_mod::first(node, "name").and_then(|name| string(name, 1)).unwrap_or_default();
+    let what = format!("zone {name:?}");
+    let net = net(node, stack).or_else(|| {
+        kicad_mod::first(node, "net_name").and_then(|name| string(name, 1)).filter(|name| !name.is_empty())
+    });
+    let names: Vec<String> = match (kicad_mod::first(node, "layer"), kicad_mod::first(node, "layers")) {
+        (Some(layer), _) => string(layer, 1).into_iter().collect(),
+        (None, Some(list)) => (1..list.len()).filter_map(|index| string(list, index)).collect(),
+        (None, None) => Vec::new(),
+    };
+    let mut layers = Vec::new();
+    for layer in &names {
+        match layer.as_str() {
+            "*.Cu" => layers.extend(0..stack.copper.len()),
+            "F&B.Cu" => layers.extend([0, stack.copper.len() - 1]),
+            name => {
+                if let Some(Layer::Copper(index)) = stack.layer(name) {
+                    layers.push(index);
+                }
+            }
+        }
+    }
+    layers.sort_unstable();
+    layers.dedup();
+    if layers.is_empty() {
+        return Ok(None);
+    }
+    let keepout = kicad_mod::first(node, "keepout").map(|keepout| {
+        kicad_mod::first(keepout, "copperpour").and_then(|pour| kicad_mod::atom(pour, 1)) == Some("not_allowed")
+    });
+    let fill = kicad_mod::first(node, "fill");
+    if keepout.is_none() {
+        if fill_value(fill, "mode") == Some("hatch") {
+            return Err(format!("{what}: hatched fills are not filled natively"));
+        }
+        if fill_value(fill, "smoothing").is_some_and(|smoothing| smoothing != "none") {
+            return Err(format!("{what}: corner smoothing is not filled natively"));
+        }
+        if kicad_mod::first(node, "attr").is_some() {
+            return Err(format!("{what}: teardrop zones are not filled natively"));
+        }
+        if kicad_mod::first(node, "filled_areas_thickness").and_then(|item| kicad_mod::atom(item, 1)) == Some("yes") {
+            return Err(format!("{what}: stroked fill outlines (filled_areas_thickness) are not filled natively"));
+        }
+    }
+    let connect = kicad_mod::first(node, "connect_pads");
+    let connection = match connect.and_then(|connect| kicad_mod::atom(connect, 1)) {
+        Some("yes") => ZoneConnection::Solid,
+        Some("no") => ZoneConnection::None,
+        Some("thru_hole_only") => ZoneConnection::ThroughHoleThermal,
+        _ => ZoneConnection::Thermal,
+    };
+    let fill_nm = |name: &str, default: i64| -> Result<i64> {
+        Ok(fill.map(|fill| optional_nm(fill, name)).transpose()?.flatten().unwrap_or(default))
+    };
+    let island_mode = match fill_value(fill, "island_removal_mode") {
+        None | Some("0") => 0,
+        Some("1") => 1,
+        Some("2") => 2,
+        Some(other) => return Err(format!("{what}: unknown island removal mode {other:?}")),
+    };
+    let island_area_min = fill.map(|fill| optional_real(fill, "island_area_min")).transpose()?.flatten().unwrap_or(0.0);
+    let mut outline = Vec::new();
+    for polygon in kicad_mod::children(node, "polygon") {
+        outline.push(contour(child(polygon, "pts", &what)?, &what)?);
+    }
+    if outline.is_empty() {
+        return Err(format!("{what} has no outline"));
+    }
+    let priority = kicad_mod::first(node, "priority").and_then(|p| kicad_mod::atom(p, 1)).and_then(|p| p.parse().ok());
+    Ok(Some(Zone {
+        name,
+        uuid: kicad_mod::first(node, "uuid").and_then(|uuid| string(uuid, 1)).unwrap_or_default(),
+        index,
+        net,
+        layers,
+        priority: priority.unwrap_or(0),
+        outline,
+        keepout,
+        connection,
+        clearance: connect.map(|connect| optional_nm(connect, "clearance")).transpose()?.flatten(),
+        min_thickness: optional_nm(node, "min_thickness")?.unwrap_or(250_000),
+        thermal_gap: fill_nm("thermal_gap", 500_000)?,
+        spoke_width: fill_nm("thermal_bridge_width", 500_000)?,
+        island_mode,
+        // KiCad stores mm^2; square nanometres here.
+        island_area_min: island_area_min * 1e12,
+        in_footprint,
+    }))
+}
+
+fn zone(node: &List, stack: &Stack, board: &mut Board, index: usize, version: i64) -> Result<()> {
+    if let Some(definition) = zone_definition(node, stack, false, index)? {
+        board.zones.push(definition);
+    }
+    // KiCad strokes the fills of older files by the minimum width unless the
+    // zone says otherwise; such fills are not plotted natively.
+    let exact =
+        kicad_mod::first(node, "filled_areas_thickness").and_then(|item| kicad_mod::atom(item, 1)) == Some("no");
+    if version < 20250210
+        && !exact
+        && kicad_mod::first(node, "keepout").is_none()
+        && !kicad_mod::children(node, "filled_polygon").is_empty()
+    {
+        return Err("zone fills stroked by the minimum width (pre-20250210 file without filled_areas_thickness no) are not plotted natively".to_owned());
+    }
     let net = net(node, stack).or_else(|| {
         kicad_mod::first(node, "net_name").and_then(|name| string(name, 1)).filter(|name| !name.is_empty())
     });
@@ -885,8 +1088,14 @@ pub fn parse_board(text: &str, source: &str) -> Result<Board> {
         drawings: Vec::new(),
         texts: Vec::new(),
         fills: Vec::new(),
+        zones: Vec::new(),
     };
     let identity = |point: Point| point;
+    let mut zones = 0;
+    let version: i64 = kicad_mod::first(&root, "version")
+        .and_then(|v| kicad_mod::atom(v, 1))
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     let parsed: Result<()> = (|| {
         for item in lists(&root) {
             let item_tag = tag(item).unwrap_or_default();
@@ -895,7 +1104,10 @@ pub fn parse_board(text: &str, source: &str) -> Result<Board> {
                 "segment" => board.tracks.extend(track(item, &stack, false)?),
                 "arc" => board.tracks.extend(track(item, &stack, true)?),
                 "via" => board.vias.push(via(item, &stack)?),
-                "zone" => zone(item, &stack, &mut board)?,
+                "zone" => {
+                    zone(item, &stack, &mut board, zones, version)?;
+                    zones += 1;
+                }
                 "gr_line" | "gr_arc" | "gr_circle" | "gr_rect" | "gr_poly" => {
                     if let Some(layer) = stack.graphic_layer(item, item_tag)? {
                         board.drawings.push(drawing(item, layer, &identity, item_tag)?);

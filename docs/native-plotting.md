@@ -11,11 +11,12 @@ copper plot build/board.kicad_pcb -o build/native-plot
 copper compare-cam build/kicad-plot build/native-plot --report build/cam-compare.json
 ```
 
-This is step one of removing KiCad from manufacturing. Zone fills still come
-from KiCad: `plot` reads the `filled_polygon`s saved by a refill
-(`kicad-cli pcb drc --refill-zones --save-board`) and never fills zones
-itself. It runs no DRC. On a board that was never refilled, every zone plots
-empty, and the summary line reports the number of fill areas read.
+`plot` reads the `filled_polygon`s saved in the board and never fills zones
+itself. They come from a KiCad refill (`kicad-cli pcb drc --refill-zones
+--save-board`) or from [`copper fill`](native-filling.md). It runs no DRC. On
+a board that was never filled, every zone plots empty, and the summary line
+reports the number of fill areas read.
+
 `copper export-manufacturing --plotter native` uses this plotter in the release
 path: KiCad still refills and checks the board in the staging directory, then
 the refilled board is plotted natively.

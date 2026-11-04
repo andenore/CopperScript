@@ -20,6 +20,7 @@ mod explain;
 mod export_kicad;
 mod export_kicad_pcb;
 mod export_manufacturing;
+mod fill;
 mod issues;
 mod library;
 mod lock;

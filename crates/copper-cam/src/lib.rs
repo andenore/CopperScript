@@ -4,12 +4,17 @@
 //! rasterises every Gerber layer and matches drill hits, netlist records and
 //! positions.
 //!
-//! Zone fills are read from the board as saved by a refill; this crate does
-//! not fill zones.
+//! Zones are filled natively ([`fill`], with the design rules of [`rules`])
+//! and written back into the board ([`pcb_write`]); the plotter reads the
+//! fills saved in the board, natively or by a KiCad refill.
 
 pub mod board;
 pub mod compare;
+pub mod fill;
 pub mod font;
 pub mod geometry;
 pub mod gerber;
+pub mod pcb_write;
 pub mod plot;
+pub mod poly;
+pub mod rules;
