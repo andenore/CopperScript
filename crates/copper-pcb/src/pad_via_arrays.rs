@@ -6,13 +6,13 @@
 use indexmap::IndexMap;
 
 use copper_json::Value;
-use copper_physical::Point;
 use copper_physical::footprint::{FootprintPad, PadKind};
 use copper_physical::geometry::circle_inside_shape;
+use copper_physical::{BoardSide, Point};
 use copper_units::Decimal;
 
 use crate::board::{PadReference, PadViaInPadRule, PhysicalBoard, Placement, Via};
-use crate::transform::{decimal_f64, placed_pad_shape, rotate_offset, transformed_local_point};
+use crate::transform::{decimal_f64, pad_board_rotation, placed_pad_shape, rotate_offset, transformed_local_point};
 use crate::{Error, Result};
 
 /// Today's single fallback via size; the process qualification is unchanged.
@@ -115,7 +115,7 @@ fn unrotated_placement() -> Placement {
         footprint: String::new(),
         position: Point::new(0, 0),
         rotation_degrees: Decimal::zero(),
-        side: copper_physical::BoardSide::Front,
+        side: BoardSide::Front,
         value: String::new(),
         source_path: None,
     }
@@ -146,11 +146,12 @@ pub fn array_sites(
         return Err(Error::Value("array geometry requires its declared owner and footprint".to_owned()));
     }
     let centre = transformed_local_point(placement, pad.position);
-    let sum = placement.rotation_degrees.add(&pad.rotation_degrees).map_err(|e| Error::Value(e.to_string()))?;
-    let angle = -decimal_f64(&sum);
+    let angle = -decimal_f64(&pad_board_rotation(placement, pad));
+    // Offsets are in the pad's frame, which a back-side placement mirrors.
+    let mirror = if placement.side == BoardSide::Back { -1 } else { 1 };
     Ok(offsets(pad, rule)?
         .into_iter()
-        .map(|(row, column, dx, dy)| (row, column, rotate_offset(centre, dx, dy, angle)))
+        .map(|(row, column, dx, dy)| (row, column, rotate_offset(centre, mirror * dx, dy, angle)))
         .collect())
 }
 
