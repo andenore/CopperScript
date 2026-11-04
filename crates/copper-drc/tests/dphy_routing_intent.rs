@@ -508,3 +508,31 @@ fn boards_without_groups_report_length_match_not_applicable() {
     assert_eq!(coverage.status, CoverageStatus::NotApplicable);
     assert!(verify_match_groups(&routed).expect("verified").is_empty());
 }
+
+// --- Copper spacing from a plain net clearance -------------------------------
+
+#[test]
+fn pad_spacing_honours_a_net_clearance_without_breakout() {
+    // 0.4 mm pads 0.5 mm apart edge to edge: inside HV's 1 mm clearance but
+    // well outside the 0.15 mm board minimum the pad index used to search.
+    let mut board = routed_lanes(&[("CKP", "10")], "1");
+    let footprint = board.placements[0].footprint.clone();
+    let zero = Decimal::zero();
+    board.placements = vec![
+        Placement::new("HV_A", &footprint, Point::new(5 * MM, 5 * MM), &zero).unwrap(),
+        Placement::new("GND_A", &footprint, Point::new(5 * MM + nm("0.9"), 5 * MM), &zero).unwrap(),
+    ];
+    board.nets = vec![
+        PhysicalNet { name: "HV".to_owned(), pads: vec![PadReference::new("HV_A", "1")] },
+        PhysicalNet { name: "GND".to_owned(), pads: vec![PadReference::new("GND_A", "1")] },
+    ];
+    board.tracks = Vec::new();
+    board.match_groups = Vec::new();
+    let rule =
+        &physical("constraint routing(CKP) { clearance = 1mm; }", &generic()).expect("physical").net_routing_rules[0];
+    assert_eq!(rule.breakout_length_nm, None);
+    board.net_routing_rules = vec![NetRoutingRule { net: "HV".to_owned(), ..rule.clone() }];
+    let finding =
+        drc(&board).findings.into_iter().find(|f| f.code == "DRC-CLEARANCE").expect("HV pad clearance violation");
+    assert!(finding.message.contains("pad:HV_A.1") && finding.message.contains("pad:GND_A.1"), "{}", finding.message);
+}

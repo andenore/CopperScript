@@ -1162,12 +1162,14 @@ fn check_copper_spacing(
     }
     let pads = copper_pads(board);
     let pad_lands: Vec<Option<String>> = pads.iter().map(|p| spacing.land(&p.net, &p.shape.spine)).collect();
+    // Every spacing `between` can require of this pad's net, so the index
+    // never drops a pair whose clearance comes from a net rule.
     let pad_reach = |pad: &PadCopper| {
         let mut reach = board.rules.minimum_clearance_nm.max(pad.clearance_nm);
-        if let Some(rule) = spacing.rules.get(&pad.net)
-            && spacing.regions.declared.contains(&pad.net)
-        {
-            reach = reach.max(rule.clearance_nm.unwrap_or(0)).max(rule.pair_gap_nm.unwrap_or(0));
+        if let Some(rule) = spacing.rules.get(&pad.net) {
+            for value in [rule.clearance_nm, rule.pair_gap_nm, rule.breakout_clearance_nm, rule.breakout_gap_nm] {
+                reach = reach.max(value.unwrap_or(0));
+            }
         }
         reach
     };
