@@ -383,7 +383,11 @@ pub fn module_inventory(root: &Path) -> std::result::Result<Vec<LockedFile>, Str
             if kind.is_dir() {
                 pending.push((entry.path(), format!("{relative}/")));
             } else if kind.is_file()
-                && (name == "copper.mod" || LOCKED_SUFFIXES.contains(&paths::extension(&name).to_lowercase().as_str()))
+                && (name == "copper.mod"
+                    // A file named `.copper` has no extension, but
+                    // `package_sources` compiles it.
+                    || name.to_lowercase().ends_with(".copper")
+                    || LOCKED_SUFFIXES.contains(&paths::extension(&name).to_lowercase().as_str()))
             {
                 candidates.push((relative, entry.path()));
             }
@@ -522,6 +526,13 @@ fn bad_identity(identity: &str) -> bool {
     identity.contains('\\')
         || identity.split('/').any(|part| part.is_empty() || part == "." || part == "..")
         || identity.chars().any(|c| "?#%:".contains(c))
+}
+
+/// Whether `path` lies in a directory below `root` that `module_inventory` skips.
+fn in_ignored_part(path: &Path, root: &Path) -> bool {
+    path.strip_prefix(root).is_ok_and(|relative| {
+        relative.components().any(|part| IGNORED_PARTS.contains(&part.as_os_str().to_string_lossy().as_ref()))
+    })
 }
 
 /// Whether `path` or a parent below `root` is a symlink.
@@ -1003,7 +1014,12 @@ impl PackageResolver {
         };
         let suffix = import_path[module_path.len()..].trim_start_matches('/');
         let package_dir = paths::resolve(&module_root.join(suffix));
-        if !package_dir.is_dir() || !paths::is_relative_to(&package_dir, &module_root) {
+        // `module_inventory` skips ignored directories, so a package inside
+        // one would compile files the lock checksum never covers.
+        if !package_dir.is_dir()
+            || !paths::is_relative_to(&package_dir, &module_root)
+            || in_ignored_part(&package_dir, &module_root)
+        {
             return Err(error(
                 "PKG004",
                 format!(
@@ -1060,6 +1076,9 @@ impl PackageResolver {
             .map(|files| inventory_checksum(&files))
             .map_err(|message| error("PKG012", format!("cannot inventory local package: {message}"), location))?;
         let external = self.source_roots.get(&root).cloned();
+        if external.is_some() && in_ignored_part(&directory, &root) {
+            return Err(error("PKG004", "relative package import must stay inside its source module", location));
+        }
         let (module, version, root_checksum) =
             external.clone().unwrap_or((self.manifest.path.clone(), "workspace".to_owned(), checksum.clone()));
         if external.is_some() {
