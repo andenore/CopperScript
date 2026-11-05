@@ -24,7 +24,8 @@ and `examples/antenna_synthesis`):
   (`short = R1`): the macro's second member, with a feed-net leg to one land
   and a ground stub and through via at the other, proved as a plane return.
   The link is a real part (0 ohm, or a tuning inductor), which is also how
-  commercial IFAs are tuned.
+  commercial IFAs are tuned. The inverted-F search is scored on bare return
+  loss; the other families on the matched worst case.
 
 Not implemented:
 
@@ -386,6 +387,27 @@ part of the design, not an afterthought. Coarse evaluations cost about
 million, so a state-of-the-art pixel search of the published scale (about
 1,500 evaluations) would take about two days on this machine; the pixel
 algorithm is implemented with a budget and tested on small grids.
+
+**End-to-end inverted-F on `examples/antenna_synthesis/inverted_f.copper`**
+(the same board with a 28 x 6 mm corner region and the link `R1`, budget 8,
+24.9 minutes). The search is scored on bare return loss for this family:
+
+| Stage | Geometry | Resonance | Bare | Matched |
+| --- | --- | --- | --- | --- |
+| Template, coarse | 5.3 mm / 17.46 mm / short 3.53 mm | 2.804 GHz | -2.7 dB | -12.7 dB |
+| Resonance tuning, coarse | 20.05 mm | 2.490 GHz | -8.7 dB | -14.5 dB |
+| Resonance tuning, coarse | 20.44 mm | 2.451 GHz | -8.1 dB | -14.4 dB |
+| Fine verification | 20.05 mm | 2.485 GHz | -8.3 dB | -13.7 dB |
+
+The template, built on the microstrip permittivity, again sits 15 % high;
+two scaling steps put the resonance on the band, and the fine mesh agrees
+with the coarse one within 5 MHz. Five polish evaluations found no better
+bare match (moving the short out to 4 to 4.6 mm raised the resonance), so
+the result stays 1.7 dB short of -10 dB bare and meets the target with
+2.25 nH series then 1.30 pF shunt, at 85 % radiation efficiency. A larger
+budget, or a tuning inductor in place of the 0 ohm link, is the next step
+for a self-matched result; the run is deterministic (a repeat reproduced
+every number).
 
 **Native verification.** KiCad's DRC reports a radiator's open end as
 `track_dangling`. `route-board --verify-plane-fill` excludes exactly the

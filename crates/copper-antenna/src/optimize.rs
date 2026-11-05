@@ -20,6 +20,12 @@
 //!    more length correction if the resonance moved, and the radiation
 //!    efficiency from a near-to-far-field transform.
 //!
+//! Monopoles, meanders and pixel grids are scored by the matched worst case:
+//! their matching network is part of the design. An inverted-F is meant to
+//! be self-matched, with the short spacing as its impedance knob, so its
+//! search scores the bare worst case and the matching network is only
+//! reported.
+//!
 //! Pixel topologies run a seeded genetic algorithm over the tiles of a grid in
 //! the region (binary encoding, tournament selection, uniform crossover,
 //! bit-flip mutation, elitism, connectivity repair to the feed tile), after
@@ -39,6 +45,25 @@ pub struct BandScore {
     pub band: String,
     pub raw_worst_db: f64,
     pub worst_db: f64,
+}
+
+/// What a search minimizes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Objective {
+    /// The worst return loss over every band with the best L-section.
+    Matched,
+    /// The worst return loss over every band without any network.
+    Bare,
+}
+
+impl Score {
+    /// The figure of merit under `objective` (dB, lower is better).
+    pub fn objective_db(&self, objective: Objective) -> f64 {
+        match objective {
+            Objective::Matched => self.worst_db,
+            Objective::Bare => self.raw_worst_db,
+        }
+    }
 }
 
 /// A candidate's figure of merit.
@@ -421,8 +446,9 @@ pub fn synthesize(problem: &Problem, options: &Options, log: &mut dyn FnMut(&str
     let start = initial(site, family)?;
     let mut coords = coordinates(site, &start).expect("parametric");
     let mut best: Option<(Geometry, Score)> = None;
+    let objective = if family == Family::InvertedF { Objective::Bare } else { Objective::Matched };
     let consider = |geometry: &Geometry, score: &Score, best: &mut Option<(Geometry, Score)>| {
-        if best.as_ref().is_none_or(|(_, b)| score.worst_db < b.worst_db) {
+        if best.as_ref().is_none_or(|(_, b)| score.objective_db(objective) < b.objective_db(objective)) {
             *best = Some((geometry.clone(), score.clone()));
         }
     };
@@ -460,7 +486,7 @@ pub fn synthesize(problem: &Problem, options: &Options, log: &mut dyn FnMut(&str
                 match search.run(&geometry, false, "polish")? {
                     Some((_, score)) => {
                         consider(&geometry, &score, &mut best);
-                        Ok(Some(score.worst_db))
+                        Ok(Some(score.objective_db(objective)))
                     }
                     None => Ok(None),
                 }
@@ -491,7 +517,7 @@ pub fn synthesize(problem: &Problem, options: &Options, log: &mut dyn FnMut(&str
             && (fr / f0 - 1.0).abs() > 0.006
             && let Some(corrected) = realize(site, family, &corrected_coords)
             && let Some((corrected_eval, corrected_score)) = search.run(&corrected, true, "correct")?
-            && corrected_score.worst_db < score.worst_db
+            && corrected_score.objective_db(objective) < score.objective_db(objective)
         {
             (geometry, evaluation, score) = (corrected, corrected_eval, corrected_score);
         }

@@ -1214,7 +1214,9 @@ polishes the worst-case return loss on a coarse mesh (two cells across the
 track), and the winner is verified on a mesh twice as fine with one more
 length correction and the radiation efficiency from a near-to-far-field box.
 `topology = pixel` runs a seeded genetic algorithm over the region's tiles
-instead; an inverted-F searches height, length and the short spacing. Every candidate is scored by its worst return loss over every band
+instead; an inverted-F searches height, length and the short spacing, and
+is scored on its bare return loss, since the short spacing is its own
+impedance knob and the matching network is only reported for it. Every candidate is scored by its worst return loss over every band
 with the best two-element L-section matching network synthesized from its
 simulated feed impedance, unless it already meets the target bare.
 `--budget` caps coarse evaluations (default 12); `--no-fine` skips
