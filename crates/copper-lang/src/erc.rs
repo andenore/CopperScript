@@ -1365,7 +1365,7 @@ fn check_no_connects(context: &Context) -> Vec<Diagnostic> {
     diagnostics
 }
 
-const COMPONENT_TARGET_CONSTRAINTS: [ConstraintKind; 9] = [
+const COMPONENT_TARGET_CONSTRAINTS: [ConstraintKind; 10] = [
     ConstraintKind::MaxDistance,
     ConstraintKind::MinDistance,
     ConstraintKind::PlacementRegion,
@@ -1375,6 +1375,7 @@ const COMPONENT_TARGET_CONSTRAINTS: [ConstraintKind; 9] = [
     ConstraintKind::Align,
     ConstraintKind::PlacementGroup,
     ConstraintKind::ViaInPad,
+    ConstraintKind::Antenna,
 ];
 
 fn check_constraint_targets(context: &Context) -> Vec<Diagnostic> {
@@ -1435,6 +1436,44 @@ fn check_constraint_targets(context: &Context) -> Vec<Diagnostic> {
                     ),
                 );
             }
+        }
+    }
+    // An antenna's reference ground is a net, not a component target.
+    for constraint in &context.board.constraints {
+        if constraint.kind != ConstraintKind::Antenna {
+            continue;
+        }
+        if let Some(ParameterValue::Text(short)) = constraint.parameters.get("short")
+            && context.component(short).is_none()
+        {
+            let suggestion = suggest(short, names.iter().map(String::as_str));
+            diagnostics.push(
+                Diagnostic::error(
+                    "UNKNOWN_CONSTRAINT_TARGET",
+                    format!("antenna constraint names unknown short component {}", repr(short)),
+                    short.clone(),
+                )
+                .hint(Some(match &suggestion {
+                    Some(word) => format!("did you mean {}?", repr(word)),
+                    None => "antenna short must be the two-pad link component that ties the arm to ground".to_owned(),
+                })),
+            );
+        }
+        let Some(ParameterValue::Text(ground)) = constraint.parameters.get("ground") else { continue };
+        if context.net(ground).is_none() {
+            let net_names: Vec<&str> = context.board.nets.iter().map(|net| net.name.as_str()).collect();
+            let suggestion = suggest(ground, net_names.iter().copied());
+            diagnostics.push(
+                Diagnostic::error(
+                    "UNKNOWN_CONSTRAINT_TARGET",
+                    format!("antenna constraint names unknown ground net {}", repr(ground)),
+                    ground.clone(),
+                )
+                .hint(Some(match &suggestion {
+                    Some(word) => format!("did you mean {}?", repr(word)),
+                    None => "antenna ground must be an existing net".to_owned(),
+                })),
+            );
         }
     }
     diagnostics

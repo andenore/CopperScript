@@ -34,6 +34,7 @@ macro_rules! text_enum {
 }
 
 pub mod access_sites;
+pub mod arc_corners;
 pub mod bench;
 pub mod bga_fanout;
 pub mod boundary_access;
@@ -113,7 +114,31 @@ pub mod unified_error;
 pub mod unified_router;
 pub mod via_lattice;
 
+// The crate-private half of the ported planes/stitching/tuning tests, which
+// share `tests/support_planes` (its `copper_route::` paths name this crate).
+#[cfg(test)]
+extern crate self as copper_route;
+#[cfg(test)]
+mod critical_tests;
+#[cfg(test)]
+pub(crate) mod test_support_critical;
+#[cfg(test)]
+mod test_support_planes;
+
 pub use copper_pcb::{Error, Result};
+
+/// Install copper-route's implementations of the hooks the lower crates
+/// cannot call directly (they would form a crate cycle): placement's
+/// decoupling-access pass (the decoupler router) and the via-in-pad array
+/// materializer (the routing clearance index). Idempotent; the routing and
+/// placement-for-routing entry points call it, and so does every binary
+/// that plans placement through `copper-place` alone.
+pub fn install_hooks() {
+    copper_place::planner::register_decoupling_pass(|board, placements, options, progress| {
+        decoupling::improve_decoupling_placement(board, placements, options, progress)
+    });
+    copper_drc::macros::register_array_materializer(pad_via_arrays::materialize_via_in_pad_arrays);
+}
 pub use progress::{Progress, emit};
 pub use pypath::display as pypath_display;
 pub use routing::{GlobalRouterOptions, GlobalRoutingResult, GlobalRoutingStatus, route_global};
@@ -145,3 +170,8 @@ pub fn implementation_digest() -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(not_python_version().as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
 }
+
+// The shared router test builders name the crate as integration tests do
+// (`extern crate self as copper_route` is declared once above).
+#[cfg(test)]
+pub(crate) mod test_support_routers;

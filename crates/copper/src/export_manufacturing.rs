@@ -1,11 +1,13 @@
 //! `copper export-manufacturing PCB --skip-independent-cam -o OUTPUT
-//! [--kicad-cli PATH] [--bom BOM] [--replace]`: native-DRC-clean KiCad
-//! manufacturing files without independent CAM qualification.
+//! [--kicad-cli PATH] [--drc kicad|native] [--plotter kicad|native]
+//! [--bom BOM] [--replace]`: native-DRC-clean manufacturing files without
+//! independent CAM qualification, refilled, checked and plotted by KiCad or
+//! by CopperScript itself.
 
 use std::io::Write;
 use std::path::PathBuf;
 
-use copper_assembly::manufacturing::{Export, export_manufacturing_files};
+use copper_assembly::manufacturing::{Checker, Export, Plotter, export_manufacturing_files};
 use copper_json::text;
 use copper_lang::paths;
 
@@ -13,7 +15,7 @@ use crate::option_parser::{self, flag, short_value, value};
 use crate::pypath;
 
 const USAGE: &str = "usage: copper export-manufacturing [-h] [--kicad-cli KICAD_CLI] --skip-independent-cam \
-[--bom BOM] [--replace] -o OUTPUT pcb";
+[--drc {kicad,native}] [--plotter {kicad,native}] [--bom BOM] [--replace] -o OUTPUT pcb";
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let usage_error = |err: &mut dyn Write, message: &str| {
@@ -23,6 +25,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     let specs = [
         value("--kicad-cli"),
         flag("--skip-independent-cam"),
+        value("--plotter"),
+        value("--drc"),
         value("--bom"),
         flag("--replace"),
         short_value("--output", "-o"),
@@ -34,7 +38,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     if parsed.flag("--help") {
         let _ = writeln!(
             out,
-            "{USAGE}\n\nexport native-DRC-clean KiCad manufacturing files without independent CAM qualification"
+            "{USAGE}\n\nexport native-DRC-clean KiCad manufacturing files without independent CAM qualification;\n--drc native refills and checks the board with CopperScript (and reads the plotted files back)\ninstead of kicad-cli; --plotter native writes the files with CopperScript's own plotter;\nwith both, KiCad is not needed"
         );
         return 0;
     }
@@ -45,6 +49,26 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
         _ => {
             return usage_error(err, "the following arguments are required: pcb, --skip-independent-cam, -o/--output");
+        }
+    };
+    let plotter = match parsed.value("--plotter") {
+        None | Some("kicad") => Plotter::Kicad,
+        Some("native") => Plotter::Native,
+        Some(other) => {
+            return usage_error(
+                err,
+                &format!("argument --plotter: invalid choice: '{other}' (choose from 'kicad', 'native')"),
+            );
+        }
+    };
+    let checker = match parsed.value("--drc") {
+        None | Some("kicad") => Checker::Kicad,
+        Some("native") => Checker::Native,
+        Some(other) => {
+            return usage_error(
+                err,
+                &format!("argument --drc: invalid choice: '{other}' (choose from 'kicad', 'native')"),
+            );
         }
     };
     let kicad_cli = pypath::display(parsed.value("--kicad-cli").unwrap_or("kicad-cli"));
@@ -58,21 +82,58 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         kicad_cli: &kicad_cli,
         bom: bom.as_ref().map(|(path, shown)| (path.as_path(), shown.as_str())),
         replace_existing: parsed.flag("--replace"),
+        plotter,
+        checker,
     };
     match export_manufacturing_files(&request) {
         Ok(published) => {
             let _ = text::print(
                 out,
                 &format!(
-                    "Manufacturing files -> {}; native DRC passed; independent CAM skipped; supplier preview review required",
-                    paths::display(&published)
+                    "Manufacturing files -> {}; native DRC passed ({}); plotted by {}; independent CAM skipped; supplier preview review required",
+                    paths::display(&published),
+                    if checker == Checker::Native { "CopperScript, plotted files read back" } else { "KiCad" },
+                    if plotter == Plotter::Native { "CopperScript" } else { "KiCad" }
                 ),
             );
+            // The full package also holds reports, the PCB and a nested zip; fab
+            // upload parsers misread it (JLCPCB reported missing drill files).
+            let mut upload = format!("Upload to the fab: {}", paths::display(&published.join("gerbers-drill.zip")));
+            if request.bom.is_some() {
+                upload.push_str(" (board); bom.csv and cpl.csv (assembly)");
+            }
+            let _ = text::print(out, &format!("{upload}. manufacturing-package.zip is the archive, not an upload."));
             0
         }
         Err(failure) => {
             let _ = text::print(out, &format!("MANUFACTURING EXPORT ERROR: {failure}"));
             2
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plotter_choice_is_validated_before_any_export() {
+        let args: Vec<String> = ["board.kicad_pcb", "--skip-independent-cam", "--plotter", "gerbv", "-o", "out"]
+            .iter()
+            .map(|arg| arg.to_string())
+            .collect();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(run(&args, &mut out, &mut err), 2);
+        let err = String::from_utf8(err).unwrap();
+        assert!(err.contains("invalid choice: 'gerbv' (choose from 'kicad', 'native')"), "{err}");
+        assert!(out.is_empty());
+        let args: Vec<String> = ["board.kicad_pcb", "--skip-independent-cam", "--drc", "freerouting", "-o", "out"]
+            .iter()
+            .map(|arg| arg.to_string())
+            .collect();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(run(&args, &mut out, &mut err), 2);
+        let err = String::from_utf8(err).unwrap();
+        assert!(err.contains("argument --drc: invalid choice: 'freerouting'"), "{err}");
     }
 }

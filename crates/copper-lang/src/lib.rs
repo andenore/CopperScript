@@ -6,6 +6,7 @@
 //! CopperScript replaced. Offsets and columns count Unicode code points, as Python
 //! strings do.
 
+pub mod antenna;
 pub mod compiler;
 pub mod diagnostics;
 pub mod elaborate;

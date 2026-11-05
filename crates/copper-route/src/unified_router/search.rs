@@ -145,7 +145,7 @@ impl Router<'_, '_> {
         Ok(route)
     }
 
-    fn route_net_budgeted(&mut self, index: usize, present: f64) -> Result<NetRoute> {
+    pub(crate) fn route_net_budgeted(&mut self, index: usize, present: f64) -> Result<NetRoute> {
         let mut route = self.route_net_once(index, present)?;
         let Some(budget) = self.specs[index].via_budget else { return Ok(route) };
         if route.via_xy.len() as i64 > budget {
@@ -382,7 +382,7 @@ impl Router<'_, '_> {
     }
 
     /// `_escape_bias`: (nodes, extra history) of the net's escape-plan biases.
-    fn escape_bias(&mut self, net: &str) -> Option<(Vec<i64>, Vec<f64>)> {
+    pub(crate) fn escape_bias(&mut self, net: &str) -> Option<(Vec<i64>, Vec<f64>)> {
         if let Some(cached) = self.escape_bias_cache.get(net) {
             return cached.clone();
         }
@@ -495,7 +495,7 @@ impl Router<'_, '_> {
     }
 
     /// `_turn_table`: bend_cost times the 45-degree turns from move a to move b.
-    fn turn_table(&mut self) -> Vec<f64> {
+    pub(crate) fn turn_table(&mut self) -> Vec<f64> {
         if let Some(cache) = &self.turn_cache {
             return cache.clone();
         }
@@ -777,6 +777,7 @@ impl Router<'_, '_> {
             target_extra: targets.extra.map(|_| &self.extra[..]),
             turn: turn.as_deref(),
             guide: corridor.as_ref().and(self.guide_nodes.as_deref()),
+            neck_cost: self.options.neck_cost,
             via_transitions: transition_table.as_deref(),
             max_expansions: self.options.maximum_expansions,
             nested: None,

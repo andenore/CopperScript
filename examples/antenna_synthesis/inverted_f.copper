@@ -1,0 +1,41 @@
+// Inverted-F probe: the arm is tied to ground through the two-land link R1,
+// which the antenna macro places as its second member with a ground via. The
+// region is 28 mm long: a straight 2.4 GHz arm needs about 21 mm past the
+// link, and the link and feed take the first 6 mm.
+// Not a qualified radio design; no resonance, matching, radiation or
+// regulatory claim. See README.md.
+board AntennaInvertedFProbe {
+    import parts "./parts";
+
+    component U1: parts.RfSource;
+    component ANT1: parts.AntennaFeed;
+    component R1: parts.ShortLink;
+
+    net ANT_FEED { U1.RF; ANT1.FEED; R1.A; }
+    net GND { U1.GND; R1.B; }
+
+    constraint fixed_placement(U1) { x = 30mm; y = 14mm; }
+    constraint copper_zone(GND) { layers = "F.Cu,B.Cu"; }
+
+    constraint antenna(ANT1.FEED) {
+        name = "ifa";
+        x = 12mm;
+        y = 0mm;
+        width = 28mm;
+        height = 6mm;
+        ground = GND;
+        bands = "2400 MHz-2483.5 MHz";
+        track_width = 1mm;
+        topology = inverted_f;
+        short = R1;
+    }
+
+    mechanical {
+        outline rectangle { width = 40mm; height = 30mm; }
+        stackup {
+            copper F.Cu { thickness = 0.035mm; }
+            dielectric core { thickness = 1.51mm; er = 4.4; loss_tangent = 0.02; material = "FR4"; type = core; }
+            copper B.Cu { thickness = 0.035mm; }
+        }
+    }
+}

@@ -1565,3 +1565,249 @@ pub fn legalize(
     }
     Ok(Legalized::Placed(placed, repair_count))
 }
+
+#[cfg(test)]
+#[path = "../../copper-route/tests/support_routers/boards.rs"]
+mod test_boards;
+
+#[cfg(test)]
+mod tests {
+    use super::test_boards::*;
+    use super::*;
+    use copper_pcb::board::{
+        ComponentPlacementRule, PhysicalBoard, PlacementRegion, PlacementTarget, RelativePlacementKind,
+    };
+    use copper_physical::BoardOutline;
+
+    fn max_distance(a: (&str, &str), b: (&str, &str), distance: f64) -> RelativePlacementRule {
+        let target = |(reference, pad): (&str, &str)| PlacementTarget {
+            reference: reference.to_owned(),
+            pad: Some(pad.to_owned()),
+        };
+        RelativePlacementRule {
+            kind: RelativePlacementKind::MaxDistance,
+            targets: vec![target(a), target(b)],
+            distance_nm: Some(mm(distance)),
+            axis: None,
+            tolerance_nm: 0,
+            weight: 1,
+        }
+    }
+
+    fn fixed(reference: &str, x: f64, y: f64) -> ComponentPlacementRule {
+        ComponentPlacementRule {
+            fixed_position: Some(pt(x, y)),
+            fixed_rotation_degrees: Some(Decimal::from_i64(0)),
+            ..ComponentPlacementRule::new(reference)
+        }
+    }
+
+    /// `tests/test_escape_placement.py::test_local_repair_moves_actual_blocker_instead_of_unrelated_recent_component`.
+    #[test]
+    fn local_repair_moves_actual_blocker_instead_of_unrelated_recent_component() {
+        for unrelated_failure in [false, true] {
+            let chip = footprint("chip", vec![pad("1", 1.0, -0.6, 0.3, 0.3), pad("2", 1.0, 0.6, 0.3, 0.3)], 2.0, 2.0);
+            let cap =
+                footprint("capacitor", vec![pad("1", -0.3, 0.0, 0.3, 0.3), pad("2", 0.3, 0.0, 0.3, 0.3)], 1.0, 0.5);
+            let mut placements = vec![
+                placement("U", "chip", 10.0, 10.0),
+                placement("C1", "capacitor", 20.0, 20.0),
+                placement("X", "capacitor", 12.0, 9.4),
+                placement("Y", "capacitor", 20.0, 20.0),
+            ];
+            let mut rules = vec![
+                fixed("U", 10.0, 10.0),
+                ComponentPlacementRule { region: Some("slot".to_owned()), ..ComponentPlacementRule::new("C1") },
+            ];
+            let mut relative = vec![max_distance(("C1", "1"), ("U", "1"), 1.5)];
+            if unrelated_failure {
+                placements.push(placement("Z", "chip", 22.0, 10.0));
+                rules.push(fixed("Z", 22.0, 10.0));
+                relative.push(max_distance(("Y", "1"), ("Z", "1"), 3.0));
+            }
+            let mut board = board("local", 30.0, 30.0, vec![chip, cap], placements, Vec::new());
+            board.placement_rules = rules;
+            board.relative_rules = relative;
+            board.regions = vec![PlacementRegion {
+                name: "slot".to_owned(),
+                outline: BoardOutline::new(
+                    [(11.4, 8.9), (12.6, 8.9), (12.6, 9.9), (11.4, 9.9)].iter().map(|(x, y)| pt(*x, *y)).collect(),
+                    Vec::new(),
+                    None,
+                    None,
+                )
+                .expect("outline"),
+                side: None,
+            }];
+            let options = PlannerOptions {
+                candidate_count: 1,
+                analytical_iterations: 0,
+                refinement_passes: 0,
+                exact_repair_limit: 2,
+                ..PlannerOptions::default()
+            }
+            .validated()
+            .expect("options");
+            let scene = Scene::new(&board, options.policy());
+            let targets: Poses = board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+            let placed: Poses =
+                targets.iter().filter(|(r, _)| *r != "C1").map(|(r, p)| (r.clone(), p.clone())).collect();
+            let order = vec!["X".to_owned(), "Y".to_owned()];
+            let result =
+                exact_repair(&scene, "C1", &placed, &order, &targets, &options).expect("repair").expect("a repair");
+            assert!(result["U"] == targets["U"] && result["Y"] == targets["Y"]);
+            assert_ne!(result["X"], targets["X"]);
+            assert_eq!(scene.checker.placement_solution_is_legal(&result).expect("legal"), !unrelated_failure);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // `tests/test_region_blocker_repair.py`: region-only exact repair.
+
+    fn region(name: &str, x: f64, y: f64, w: f64, h: f64) -> PlacementRegion {
+        PlacementRegion {
+            name: name.to_owned(),
+            outline: BoardOutline::rectangle(mm(w), mm(h), Some(pt(x, y))).expect("outline"),
+            side: Some(BoardSide::Back),
+        }
+    }
+
+    fn back(reference: &str, footprint: &str, x: f64, y: f64) -> Placement {
+        Placement { side: BoardSide::Back, ..placement(reference, footprint, x, y) }
+    }
+
+    struct RegionScene {
+        board: PhysicalBoard,
+        target: Placement,
+        early: Placement,
+        tails: Vec<Placement>,
+    }
+
+    impl RegionScene {
+        fn new(prefix: &str) -> Self {
+            let small = footprint("land", Vec::new(), 1.5, 1.5);
+            let blocker = footprint("held-land", Vec::new(), 2.0, 2.0);
+            let target = back(&format!("{prefix}-trapped"), "land", 13.0, 13.0);
+            let early = back(&format!("{prefix}-early"), "held-land", 13.0, 13.0);
+            let tails: Vec<Placement> =
+                (0..6).map(|i| back(&format!("{prefix}-tail-{i}"), "land", 30.0 + 3.0 * i as f64, 30.0)).collect();
+            let mut placements = vec![target.clone(), early.clone()];
+            placements.extend(tails.iter().cloned());
+            let mut board = board("RegionRepair", 60.0, 50.0, vec![small, blocker], placements, Vec::new());
+            board.regions = vec![region("tight", 12.0, 12.0, 2.0, 2.0), region("flexible", 10.0, 10.0, 8.0, 8.0)];
+            board.placement_rules = vec![
+                ComponentPlacementRule {
+                    region: Some("tight".to_owned()),
+                    side: Some(BoardSide::Back),
+                    ..ComponentPlacementRule::new(&target.reference)
+                },
+                ComponentPlacementRule {
+                    region: Some("flexible".to_owned()),
+                    side: Some(BoardSide::Back),
+                    ..ComponentPlacementRule::new(&early.reference)
+                },
+            ];
+            RegionScene { board, target, early, tails }
+        }
+
+        fn held(&self) -> (Poses, Vec<String>) {
+            let held: Poses =
+                std::iter::once(&self.early).chain(&self.tails).map(|p| (p.reference.clone(), p.clone())).collect();
+            let order = held.keys().cloned().collect();
+            (held, order)
+        }
+
+        fn repair(&self) -> Option<Poses> {
+            let options = repair_options();
+            let scene = Scene::new(&self.board, options.policy());
+            let (held, order) = self.held();
+            let targets: Poses = self.board.placements.iter().map(|p| (p.reference.clone(), p.clone())).collect();
+            exact_repair(&scene, &self.target.reference, &held, &order, &targets, &options).expect("repair")
+        }
+    }
+
+    fn repair_options() -> PlannerOptions {
+        PlannerOptions { exact_repair_limit: 2, ..PlannerOptions::default() }.validated().expect("options")
+    }
+
+    fn solution_legal(board: &PhysicalBoard, result: &Poses) -> bool {
+        Scene::new(board, repair_options().policy()).checker.placement_solution_is_legal(result).expect("legal")
+    }
+
+    #[test]
+    fn region_only_repair_moves_actual_early_blocker_instead_of_unrelated_tail() {
+        for prefix in ["renamed-a", "other"] {
+            let s = RegionScene::new(prefix);
+            let options = repair_options();
+            let scene = Scene::new(&s.board, options.policy());
+            let (held, _) = s.held();
+            let probes =
+                relative_candidates(&scene, &scene.relative, &s.target.reference, &s.target, &held, &options, 250_000)
+                    .expect("probes");
+            assert!(probes.is_empty());
+            let result = s.repair().expect("a repair");
+            assert_ne!(result[&s.early.reference].position, s.early.position, "{prefix}");
+            assert!(s.tails.iter().all(|p| result[&p.reference] == *p));
+            assert!(solution_legal(&s.board, &result));
+        }
+    }
+
+    #[test]
+    fn fixed_actual_blocker_is_never_relaxed_or_moved() {
+        let mut s = RegionScene::new("fixed");
+        s.board.placement_rules[1].fixed_position = Some(s.early.position);
+        s.board.placement_rules[1].fixed_rotation_degrees = Some(Decimal::from_i64(0));
+        assert!(s.repair().is_none());
+    }
+
+    #[test]
+    fn nonrectangular_region_and_effective_rotation_side_remain_legal_authority() {
+        let mut s = RegionScene::new("polygon");
+        s.board.footprints.insert("triangle-land".to_owned(), footprint("triangle-land", Vec::new(), 0.4, 0.4));
+        s.target = Placement { footprint: "triangle-land".to_owned(), position: pt(12.5, 12.5), ..s.target.clone() };
+        s.early.position = s.target.position;
+        s.board.placements[0] = s.target.clone();
+        s.board.placements[1] = s.early.clone();
+        s.board.placement_rules[0].allowed_orientations = vec![Decimal::from_i64(0)];
+        let triangle = BoardOutline::new(vec![pt(12.0, 12.0), pt(14.0, 12.0), pt(12.0, 14.0)], Vec::new(), None, None)
+            .expect("triangle");
+        s.board.regions[0] =
+            PlacementRegion { name: "tight".to_owned(), outline: triangle, side: Some(BoardSide::Back) };
+        let result = s.repair().expect("a repair");
+        assert!(solution_legal(&s.board, &result));
+        let chosen = &result[&s.target.reference];
+        assert!(chosen.side == BoardSide::Back && chosen.rotation_degrees == Decimal::from_i64(0));
+        // A bounding rectangle alone would accept the opposite triangular corner.
+        assert!(chosen.position.x_nm + chosen.position.y_nm + 400_000 <= 26_000_000, "{chosen:?}");
+        assert!(s.tails.iter().all(|p| result[&p.reference] == *p));
+    }
+
+    /// Adapted: Python captured the references `_pack_local_components`
+    /// received; here the domain facts are checked and the repair must move
+    /// the boundary blocker while keeping the tail.
+    #[test]
+    fn spread_same_probe_count_detects_right_boundary_blocker_missed_by_prefix() {
+        for prefix in ["wide-a", "renamed-wide"] {
+            let mut s = RegionScene::new(prefix);
+            s.board.footprints.insert("boundary-land".to_owned(), footprint("boundary-land", Vec::new(), 1.0, 1.0));
+            s.target.position = pt(14.0, 14.0);
+            s.early = Placement { footprint: "boundary-land".to_owned(), position: pt(17.0, 14.0), ..s.early.clone() };
+            s.board.placements[0] = s.target.clone();
+            s.board.placements[1] = s.early.clone();
+            s.board.regions[0] = region("tight", 10.0, 10.0, 8.0, 8.0);
+            let options = repair_options();
+            let scene = Scene::new(&s.board, options.policy());
+            let positions = candidate_positions(&scene, &s.target, &options);
+            let angles = scene.allowed_orientations(&s.target.reference);
+            let domain: Vec<Placement> =
+                positions.iter().flat_map(|p| angles.iter().map(|a| posed(&s.target, *p, a))).collect();
+            assert!(domain.len() as i64 > options.exact_repair_candidates);
+            let early: Poses = [(s.early.reference.clone(), s.early.clone())].into_iter().collect();
+            for candidate in domain.iter().take(options.exact_repair_candidates as usize) {
+                assert!(scene.legal(candidate, &early).expect("legal"));
+            }
+            let result = s.repair().expect("a repair");
+            assert!(s.tails.iter().all(|p| result[&p.reference] == *p), "{prefix}");
+        }
+    }
+}

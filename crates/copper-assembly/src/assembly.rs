@@ -5,8 +5,8 @@ use std::path::Path;
 
 use copper_json::{Dumps, Object, UniqueError, Value, python_casefold, python_isspace};
 use copper_lang::elaborate::elaborate;
-use copper_lang::model::{Board, ComponentInstance, ComponentValue, PartDefinition};
-use copper_lang::serializer::board_value;
+use copper_lang::model::{Board, ComponentInstance, ComponentValue, FlatElectricalView, PartDefinition};
+use copper_lang::serializer::{board_value, component_value, device_value, part_value, quantity_value};
 use copper_pcb::kicad_pcb::kicad_reference;
 use indexmap::IndexMap;
 use sha2::{Digest, Sha256};
@@ -14,16 +14,20 @@ use sha2::{Digest, Sha256};
 use crate::csv::{self, Field};
 use crate::files;
 
-pub const SCHEMA: &str = "copperscript-assembly-lock/v0.2";
-/// v0.3 adds optional per-selection `alternates`; a lock is written as v0.3
-/// only when it records any, so locks without them stay readable by v0.2 tools.
-pub const ALTERNATES_SCHEMA: &str = "copperscript-assembly-lock/v0.3";
-/// v0.1 locks predate `populate` and load unchanged.
-const READABLE_SCHEMAS: [&str; 3] = [ALTERNATES_SCHEMA, SCHEMA, "copperscript-assembly-lock/v0.1"];
+/// v0.4 binds each selection to its own component (`electrical_sha256` per
+/// selection) instead of the whole compiled board, so a change elsewhere on
+/// the board leaves unrelated selections and their reviews valid.
+pub const SCHEMA: &str = "copperscript-assembly-lock/v0.4";
+/// v0.3 added optional per-selection `alternates`.
+const ALTERNATES_SCHEMA: &str = "copperscript-assembly-lock/v0.3";
+/// Legacy locks bind the whole board with one digest; `assembly update`
+/// rewrites them as v0.4. v0.1 locks predate `populate`.
+const LEGACY_SCHEMAS: [&str; 3] =
+    [ALTERNATES_SCHEMA, "copperscript-assembly-lock/v0.2", "copperscript-assembly-lock/v0.1"];
 /// How a populated component reaches the board; only `supplier` components
 /// are ordered and placed by the assembler.
 const POPULATE_MODES: [&str; 3] = ["supplier", "consigned", "none"];
-const SELECTION_FIELDS: [&str; 11] = [
+const SELECTION_FIELDS: [&str; 12] = [
     "reference",
     "part",
     "footprint",
@@ -35,6 +39,7 @@ const SELECTION_FIELDS: [&str; 11] = [
     "reviewed",
     "populate",
     "alternates",
+    "electrical_sha256",
 ];
 const OFFER_FIELDS: [&str; 3] = ["supplier", "supplier_part", "source_url"];
 
@@ -77,6 +82,9 @@ pub struct Selection {
     /// Same manufacturer part from other distributors; the assembler's BOM
     /// still uses only `supplier`/`supplier_part`.
     pub alternates: Vec<Offer>,
+    /// The component this selection was made for (`component_digest`);
+    /// None in a legacy lock, which binds the whole board instead.
+    pub electrical_sha256: Option<String>,
 }
 
 impl Selection {
@@ -99,7 +107,9 @@ impl Selection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Lock {
     pub board: String,
-    pub electrical_sha256: String,
+    /// The whole-board digest of a legacy (v0.1-v0.3) lock; None for v0.4,
+    /// whose selections carry their own.
+    pub electrical_sha256: Option<String>,
     pub selections: Vec<Selection>,
 }
 
@@ -152,6 +162,15 @@ fn offer(entry: &Object) -> Result<Offer> {
     })
 }
 
+fn digest_field(value: &Value) -> Result<String> {
+    match value {
+        Value::Str(text) if text.len() == 64 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) => {
+            Ok(text.clone())
+        }
+        _ => fail("electrical_sha256 must be a lowercase SHA-256 digest"),
+    }
+}
+
 /// `AssemblySelection(**entry)` with its `__post_init__` checks, in order.
 fn selection(entry: &Object, alternates: Vec<Offer>) -> Result<Selection> {
     missing_arguments("AssemblySelection", &["reference", "part", "footprint"], entry)?;
@@ -174,6 +193,7 @@ fn selection(entry: &Object, alternates: Vec<Offer>) -> Result<Selection> {
         // Python compares with `==`, so 1 and True are not modes either.
         Some(_) => return fail(format!("populate must be one of {}", POPULATE_MODES.join(", "))),
     };
+    let electrical_sha256 = entry.get("electrical_sha256").map(digest_field).transpose()?;
     Ok(Selection {
         reference,
         part,
@@ -186,18 +206,8 @@ fn selection(entry: &Object, alternates: Vec<Offer>) -> Result<Selection> {
         reviewed,
         populate,
         alternates,
+        electrical_sha256,
     })
-}
-
-fn new_lock(board: &Value, digest: &Value, selections: Vec<Selection>) -> Result<Lock> {
-    let board = text_field(board, "board")?;
-    let digest = match digest {
-        Value::Str(text) if text.len() == 64 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) => {
-            text.clone()
-        }
-        _ => return fail("electrical_sha256 must be a lowercase SHA-256 digest"),
-    };
-    Ok(Lock { board, electrical_sha256: digest, selections })
 }
 
 /// `load_lock(path)`; `shown` is `str(path)` for OS errors.
@@ -219,12 +229,20 @@ pub fn load_lock(path: &Path, shown: &str) -> Result<Lock> {
             return fail(format!("invalid assembly lock: {message}"));
         }
     };
-    let top = ["schema", "board", "electrical_sha256", "selections"];
-    let data = match data {
-        Value::Object(data) if data.len() == top.len() && top.iter().all(|key| data.contains_key(*key)) => data,
-        _ => return fail("expected schema, board, electrical_sha256 and selections fields only"),
+    let Value::Object(data) = data else {
+        return fail("expected schema, board, selections and (legacy) electrical_sha256 fields only");
     };
-    let schema = data["schema"].as_str().filter(|schema| READABLE_SCHEMAS.contains(schema));
+    let schema = data.get("schema").and_then(Value::as_str);
+    let legacy = schema.is_some_and(|schema| LEGACY_SCHEMAS.contains(&schema));
+    let top: &[&str] = if legacy {
+        &["schema", "board", "electrical_sha256", "selections"]
+    } else {
+        &["schema", "board", "selections"]
+    };
+    if data.len() != top.len() || !top.iter().all(|key| data.contains_key(*key)) {
+        return fail("expected schema, board, selections and (legacy) electrical_sha256 fields only");
+    }
+    let schema = schema.filter(|schema| legacy || *schema == SCHEMA);
     let (Some(schema), Some(entries)) = (schema, data["selections"].as_array()) else {
         return fail("unsupported assembly schema or invalid selections list");
     };
@@ -238,28 +256,33 @@ pub fn load_lock(path: &Path, shown: &str) -> Result<Lock> {
         let mut alternates = Vec::new();
         if let Some(offers) = entry.get("alternates") {
             let offers = offers.as_array().filter(|offers| {
-                schema == ALTERNATES_SCHEMA
+                (schema == ALTERNATES_SCHEMA || schema == SCHEMA)
                     && offers.iter().all(|offer| {
                         offer.as_object().is_some_and(|offer| offer.keys().all(|k| OFFER_FIELDS.contains(&k.as_str())))
                     })
             });
             let Some(offers) = offers else {
-                return fail(format!("alternates require {ALTERNATES_SCHEMA} and supplier offer objects"));
+                return fail(format!("alternates require {ALTERNATES_SCHEMA} or later and supplier offer objects"));
             };
             for item in offers {
                 alternates.push(offer(item.as_object().expect("checked above"))?);
             }
         }
+        if legacy == entry.contains_key("electrical_sha256") {
+            return fail(format!("{SCHEMA} selections, and only they, require electrical_sha256"));
+        }
         selections.push(selection(entry, alternates)?);
     }
-    new_lock(&data["board"], &data["electrical_sha256"], selections)
+    let board = text_field(&data["board"], "board")?;
+    let electrical_sha256 = if legacy { Some(digest_field(&data["electrical_sha256"])?) } else { None };
+    Ok(Lock { board, electrical_sha256, selections })
 }
 
 fn json_text(value: &Option<String>) -> Value {
     value.as_deref().map_or(Value::Null, Value::from)
 }
 
-/// `lock_to_json(lock)`.
+/// `lock_to_json(lock)`: always v0.4, so every selection needs its digest.
 pub fn lock_to_json(lock: &Lock) -> String {
     let selections = lock
         .selections
@@ -276,6 +299,7 @@ pub fn lock_to_json(lock: &Lock) -> String {
             fields.insert("source_url".into(), json_text(&entry.source_url));
             fields.insert("reviewed".into(), Value::Bool(entry.reviewed));
             fields.insert("populate".into(), Value::from(entry.populate.as_str()));
+            fields.insert("electrical_sha256".into(), json_text(&entry.electrical_sha256));
             if !entry.alternates.is_empty() {
                 let offers = entry
                     .alternates
@@ -295,18 +319,21 @@ pub fn lock_to_json(lock: &Lock) -> String {
             Value::Object(fields)
         })
         .collect();
-    let schema =
-        if lock.selections.iter().any(|entry| !entry.alternates.is_empty()) { ALTERNATES_SCHEMA } else { SCHEMA };
     let mut document = Object::new();
-    document.insert("schema".into(), Value::from(schema));
+    document.insert("schema".into(), Value::from(SCHEMA));
     document.insert("board".into(), Value::from(lock.board.as_str()));
-    document.insert("electrical_sha256".into(), Value::from(lock.electrical_sha256.as_str()));
     document.insert("selections".into(), Value::Array(selections));
     Dumps::new().indent(2).sort_keys(true).dumps(&Value::Object(document)) + "\n"
 }
 
+fn sha256_hex(document: &Value) -> String {
+    let canonical = Dumps::new().indent(2).sort_keys(true).dumps(document) + "\n";
+    Sha256::digest(canonical.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// `electrical_digest(board)`: design semantics and library provenance,
-/// without the constraint origins that name checkout paths.
+/// without the constraint origins that name checkout paths. Legacy locks
+/// bind the whole board with it.
 pub fn electrical_digest(board: &Board) -> String {
     let mut document = board_value(board);
     let strip = |unit: &mut Object| {
@@ -326,28 +353,88 @@ pub fn electrical_digest(board: &Board) -> String {
             }
         }
     }
-    let canonical = Dumps::new().indent(2).sort_keys(true).dumps(&Value::Object(document)) + "\n";
-    Sha256::digest(canonical.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect()
+    sha256_hex(&Value::Object(document))
 }
 
-/// The flat components by reference with their library parts (`_components`).
+/// The flat components by reference with their library parts (`_components`),
+/// and the digest of each component's electrical context.
 pub struct Components {
     pub by_reference: IndexMap<String, (ComponentInstance, PartDefinition)>,
+    pub digests: IndexMap<String, String>,
 }
 
 pub fn components(board: &Board) -> Result<Components> {
     let flat = elaborate(board).map_err(AssemblyError)?;
     let mut by_reference = IndexMap::new();
-    for component in flat.components {
+    for component in &flat.components {
         if by_reference.contains_key(&component.reference) {
             return fail(format!("duplicate component reference: {}", component.reference));
         }
         let Some(part) = flat.library.get(&component.part) else {
             return fail(format!("unknown part: {}", component.part));
         };
-        by_reference.insert(component.reference.clone(), (component, part.clone()));
+        by_reference.insert(component.reference.clone(), (component.clone(), part.clone()));
     }
-    Ok(Components { by_reference })
+    let digests = component_digests(&flat, &by_reference);
+    Ok(Components { by_reference, digests })
+}
+
+/// What one selection was reviewed against: the component (value, footprint,
+/// properties), its library part and device, and for every pin the net it is
+/// on, that net's supplies and voltages, and any no-connect. Changes elsewhere
+/// on the board leave it unchanged.
+fn component_digests(
+    flat: &FlatElectricalView,
+    by_reference: &IndexMap<String, (ComponentInstance, PartDefinition)>,
+) -> IndexMap<String, String> {
+    let mut nets: IndexMap<(&str, &str), &str> = IndexMap::new();
+    for net in &flat.nets {
+        for endpoint in &net.endpoints {
+            nets.insert((endpoint.component.as_str(), endpoint.pin.as_str()), net.name.as_str());
+        }
+    }
+    let no_connects: Vec<(&str, &str)> =
+        flat.no_connects.iter().map(|item| (item.endpoint.component.as_str(), item.endpoint.pin.as_str())).collect();
+    let mut digests = IndexMap::new();
+    for (reference, (component, part)) in by_reference {
+        let mut pins: Vec<&str> = part.pins.keys().map(String::as_str).collect();
+        pins.sort();
+        let pins = pins
+            .into_iter()
+            .map(|pin| {
+                let net = nets.get(&(reference.as_str(), pin)).copied();
+                let mut supplies: Vec<Value> = flat
+                    .supplies
+                    .iter()
+                    .filter(|supply| Some(supply.net.as_str()) == net)
+                    .map(|supply| {
+                        Value::Object(Object::from_iter([
+                            ("name".to_owned(), Value::from(supply.name.as_str())),
+                            ("voltage".to_owned(), quantity_value(&supply.voltage)),
+                            ("externally_driven".to_owned(), Value::Bool(supply.externally_driven)),
+                        ]))
+                    })
+                    .collect();
+                supplies.sort_by_key(|supply| Dumps::compact().dumps(supply));
+                Value::Object(Object::from_iter([
+                    ("pin".to_owned(), Value::from(pin)),
+                    ("net".to_owned(), net.map_or(Value::Null, Value::from)),
+                    ("supplies".to_owned(), Value::Array(supplies)),
+                    ("no_connect".to_owned(), Value::Bool(no_connects.contains(&(reference.as_str(), pin)))),
+                ]))
+            })
+            .collect();
+        let device = part.device.as_ref().and_then(|name| flat.devices.get(name)).map_or(Value::Null, device_value);
+        let document = Value::Object(Object::from_iter([
+            ("component".to_owned(), component_value(component)),
+            ("footprint".to_owned(), json_text(&footprint(component, part))),
+            ("part".to_owned(), part_value(part)),
+            ("device".to_owned(), device),
+            ("pins".to_owned(), Value::Array(pins)),
+        ]));
+        digests.insert(reference.clone(), sha256_hex(&document));
+    }
+    digests
 }
 
 fn footprint(component: &ComponentInstance, part: &PartDefinition) -> Option<String> {
@@ -370,9 +457,85 @@ pub fn snapshot(board: &Board) -> Result<Lock> {
         entry.insert("part".into(), Value::from(component.part.as_str()));
         entry.insert("footprint".into(), json_text(&footprint(component, part)));
         entry.insert("manufacturer".into(), json_text(&part.manufacturer));
+        entry.insert("electrical_sha256".into(), Value::from(components.digests[reference].as_str()));
         selections.push(selection(&entry, Vec::new())?);
     }
-    new_lock(&Value::from(board.name.as_str()), &Value::from(electrical_digest(board).as_str()), selections)
+    Ok(Lock { board: text_field(&Value::from(board.name.as_str()), "board")?, electrical_sha256: None, selections })
+}
+
+/// What `update` changed, by reference.
+#[derive(Debug, Default)]
+pub struct Update {
+    /// Selections whose component is unchanged; their review is kept.
+    pub unchanged: usize,
+    /// (reference, what changed, whether a review was reset).
+    pub changed: Vec<(String, String, bool)>,
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+fn shown(value: &Option<String>) -> &str {
+    value.as_deref().unwrap_or("none")
+}
+
+/// `update(board, lock)`: rebind every selection to the current board. A
+/// selection whose component is unchanged keeps its identity and review; a
+/// changed one keeps its identity for reference but is no longer reviewed.
+/// New components get unreviewed snapshot entries and selections for
+/// components that are gone are dropped. Never marks anything reviewed.
+pub fn update(board: &Board, lock: &Lock) -> Result<(Lock, Update)> {
+    if lock.board != board.name {
+        return fail(format!("lock belongs to {}, not {}", lock.board, board.name));
+    }
+    let mut previous: IndexMap<&str, &Selection> = IndexMap::new();
+    for entry in &lock.selections {
+        if previous.insert(entry.reference.as_str(), entry).is_some() {
+            return fail(format!("{} has more than one selection; keep one before updating", entry.reference));
+        }
+    }
+    // A legacy lock only records whether anything on the board changed.
+    let legacy_changed = lock.electrical_sha256.as_ref().is_some_and(|digest| *digest != electrical_digest(board));
+    let fresh = snapshot(board)?;
+    let mut result = Update::default();
+    let mut selections = Vec::new();
+    for current in fresh.selections {
+        let reference = current.reference.clone();
+        let Some(entry) = previous.shift_remove(reference.as_str()) else {
+            result.added.push(reference);
+            selections.push(current);
+            continue;
+        };
+        let mut changes = Vec::new();
+        if entry.part != current.part {
+            changes.push(format!("part {} -> {}", entry.part, current.part));
+        }
+        if entry.footprint != current.footprint {
+            changes.push(format!("footprint {} -> {}", shown(&entry.footprint), shown(&current.footprint)));
+        }
+        if changes.is_empty() {
+            if lock.electrical_sha256.is_some() && legacy_changed {
+                changes.push("not verifiable: the legacy whole-board digest changed".to_owned());
+            } else if lock.electrical_sha256.is_none() && entry.electrical_sha256 != current.electrical_sha256 {
+                changes.push("value, part data or connections changed".to_owned());
+            }
+        }
+        let mut kept = Selection {
+            part: current.part,
+            footprint: current.footprint,
+            electrical_sha256: current.electrical_sha256,
+            ..entry.clone()
+        };
+        if changes.is_empty() {
+            result.unchanged += 1;
+        } else {
+            result.changed.push((reference, changes.join("; "), kept.reviewed));
+            kept.reviewed = false;
+        }
+        selections.push(kept);
+    }
+    result.removed = previous.keys().map(|reference| (*reference).to_owned()).collect();
+    result.removed.sort();
+    Ok((Lock { board: lock.board.clone(), electrical_sha256: None, selections }, result))
 }
 
 fn unresolved_message(populate: &str) -> &'static str {
@@ -404,8 +567,12 @@ pub fn check_assembly(board: &Board, lock: &Lock) -> Result<Object> {
     if lock.board != board.name {
         issue("BOARD_MISMATCH", None, "lock belongs to a different board");
     }
-    if lock.electrical_sha256 != electrical_digest(board) {
-        issue("STALE_LOCK", None, "compiled electrical IR changed; review and regenerate the snapshot");
+    if lock.electrical_sha256.as_ref().is_some_and(|digest| *digest != electrical_digest(board)) {
+        issue(
+            "STALE_LOCK",
+            None,
+            "compiled electrical IR changed; run `copper assembly update` and review the reset selections",
+        );
     }
     let mut seen: Vec<&str> = Vec::new();
     let mut offers: IndexMap<(String, String), (Option<String>, Option<String>)> = IndexMap::new();
@@ -433,6 +600,13 @@ pub fn check_assembly(board: &Board, lock: &Lock) -> Result<Object> {
         }
         if entry.footprint != footprint(component, part) {
             issue("FOOTPRINT_MISMATCH", Some(reference), "selected footprint differs from the board");
+        }
+        if lock.electrical_sha256.is_none() && entry.electrical_sha256.as_ref() != components.digests.get(reference) {
+            issue(
+                "STALE_SELECTION",
+                Some(reference),
+                "part, footprint, value or connections changed; run `copper assembly update` and review it",
+            );
         }
         if entry.populate != "none"
             && let Some(manufacturer) = part.manufacturer.as_deref().filter(|m| !m.is_empty())
@@ -875,7 +1049,6 @@ pub fn write_candidate_bom(
     diagnostics.insert("purpose".into(), Value::from("human_review_only"));
     diagnostics.insert("qualified_release".into(), Value::Bool(false));
     diagnostics.insert("ordering_approved".into(), Value::Bool(false));
-    diagnostics.insert("electrical_sha256".into(), Value::from(lock.electrical_sha256.as_str()));
     diagnostics.insert(
         "native_reference_map".into(),
         Value::Object(reference_map.iter().map(|(k, v)| (k.clone(), Value::from(v.as_str()))).collect()),

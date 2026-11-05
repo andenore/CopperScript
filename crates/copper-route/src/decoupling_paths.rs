@@ -991,15 +991,15 @@ fn witnessed_proposal_tracks(tracks: &[TrackSegment], measured: &DecouplingPathR
 /// `_ConnectionWork`: one allowance per outer transaction, shared by every
 /// lazy connection search, supply, return and return target.
 #[derive(Default)]
-struct ConnectionWork {
-    local_paths: Cell<i64>,
+pub(crate) struct ConnectionWork {
+    pub(crate) local_paths: Cell<i64>,
     inner_bridges: Cell<i64>,
 }
 
 /// A consumer of lazily generated candidates; `Break` stops the producer.
-type Emit<'e, T> = &'e mut dyn FnMut(T) -> Result<ControlFlow<()>>;
+pub(crate) type Emit<'e, T> = &'e mut dyn FnMut(T) -> Result<ControlFlow<()>>;
 
-type Land<'b> = (&'b Placement, &'b FootprintPad, DecouplingPathNode);
+pub(crate) type Land<'b> = (&'b Placement, &'b FootprintPad, DecouplingPathNode);
 
 fn squared(a: Point, b: Point) -> i128 {
     let (dx, dy) = (i128::from(a.x_nm - b.x_nm), i128::from(a.y_nm - b.y_nm));
@@ -1128,7 +1128,7 @@ fn local_launch_sites(
 /// `_cell_maze_launches`: blocked circular-array exits may reach farther
 /// four-land cells, sharing the four local-path slots.
 #[allow(clippy::too_many_arguments)]
-fn cell_maze_launches(
+pub(crate) fn cell_maze_launches(
     board: &PhysicalBoard,
     origin: &Land<'_>,
     net: &str,
@@ -1284,7 +1284,7 @@ fn inner_connections(
 
 /// `_connections`: lazily generated opposite-surface joins of two lands.
 #[allow(clippy::too_many_arguments)]
-fn connections(
+pub(crate) fn connections(
     board: &PhysicalBoard,
     first: &PadReference,
     second: &PadReference,

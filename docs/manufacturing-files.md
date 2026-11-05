@@ -14,21 +14,50 @@ copper export-manufacturing build/board.kicad_pcb \
   --skip-independent-cam --bom build/bom.csv -o build/assembly-manufacturing
 ```
 
+KiCad is the default for every step, and stays available. Two options replace
+steps with CopperScript's own implementations:
+
+- `--plotter native` writes the Gerbers, drills, IPC-D-356 netlist and
+  positions with CopperScript's own plotter ([native plotting](native-plotting.md)).
+  The files sit in the same places, except that positions are `positions.csv`
+  instead of `positions-kicad.csv`.
+- `--drc native` refills the zones with [`copper fill`](native-filling.md) and
+  gates the export on [`copper drc`](native-drc.md) instead of `kicad-cli pcb
+  drc`. Its report is `drc.json`. The plotted Gerbers and drills, from either
+  plotter, are then read back, and their connectivity is checked against the
+  board netlist.
+
+With `--drc native --plotter native`, KiCad is not run and need not be
+installed. The manifest records the choices: `drc`, `plotter`, `cam_readback`
+and `drc_not_checked` (the KiCad checks the native DRC does not make).
+`kicad_version` is `null` when KiCad was not used.
+
+```sh
+copper export-manufacturing build/board.kicad_pcb --skip-independent-cam \
+  --drc native --plotter native -o build/manufacturing
+```
+
 The explicit acknowledgement is mandatory. This is **manufacturing-file
 generation**, not a qualified release. The Python implementation's strict
 release API and its qualification gates were removed with it. Firmware is not
 required to manufacture an unprogrammed board.
 
-The command stages a copy, refills its zones, runs native KiCad DRC at all
-severities, and refuses violations, opens, incomplete reports, failed exports
+The command stages a copy, refills its zones, runs native DRC (KiCad's at all
+severities, or CopperScript's), and refuses violations, opens, incomplete reports, failed exports
 or an existing output directory. Failed stages are removed; the input board
 is never changed. It exports every declared copper layer, both masks,
 silkscreens and pastes, Edge.Cuts, metric plated/nonplated drills and IPC-D-356.
 Gerbers subtract mask openings from silkscreen. Absolute drill and plot origins
-are consistent. `gerbers-drill.zip` contains only artwork and drills; reports,
+are consistent. `gerbers-drill.zip` is the fab upload: only artwork and drills,
+flat at the archive root as in JLCPCB's KiCad guide (JLCPCB reported missing
+drills when they sat in a `drill/` folder). Reports,
 PCB/project, native positions, manifest and SHA-256 checksums accompany it.
 `manufacturing-package.zip` packages all these files and their checksums; the
-checksum list covers archive contents, not the outer package itself.
+checksum list covers archive contents, not the outer package itself. It is the
+archive, **not the fab upload**: it also holds the PCB, reports, footprints and the
+nested `gerbers-drill.zip`, and JLCPCB reported its drills as missing. Upload
+`gerbers-drill.zip` for the board, and `bom.csv` / `cpl.csv` for assembly; the
+command prints these paths.
 Inventory checks are not independent geometric CAM verification.
 For repeat builds, `--replace` permits replacement of a recognized generated
 directory only after all new exports pass; previous output is retained in a

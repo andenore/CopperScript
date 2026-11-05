@@ -5,6 +5,9 @@
 //! These are the planner's hard predicates at its default options. The
 //! planner itself (seeding, legalization, refinement) is not here.
 
+use std::cell::{OnceCell, RefCell};
+use std::rc::Rc;
+
 use indexmap::{IndexMap, IndexSet};
 
 use copper_lang::mechanical::assembly::body_outline;
@@ -765,24 +768,107 @@ fn array_owners(board: &PhysicalBoard) -> IndexSet<&str> {
     board.via_in_pad_rules.iter().filter(|r| r.rows.is_some()).map(|r| r.pad.component.as_str()).collect()
 }
 
-/// `_array_vias`: an owner's required arrays at an accepted pose.
-fn array_vias(board: &PhysicalBoard, pose: &Placement) -> Result<Vec<Via>> {
-    if !array_owners(board).contains(pose.reference.as_str()) {
-        return Ok(Vec::new());
+/// One remembered value per component, valid only while its pose is unchanged.
+type PoseMemo<T> = RefCell<IndexMap<String, (Placement, Rc<T>)>>;
+
+/// An owner's required arrays per owner pad, in declaration order.
+type ArrayCopper = Vec<(PadReference, Vec<Via>)>;
+
+fn memoized<T>(memo: &PoseMemo<T>, pose: &Placement, compute: impl FnOnce() -> Result<T>) -> Result<Rc<T>> {
+    if let Some((held, value)) = memo.borrow().get(&pose.reference)
+        && held == pose
+    {
+        return Ok(value.clone());
     }
-    let poses: Poses = [(pose.reference.clone(), pose.clone())].into_iter().collect();
-    via_in_pad_array_vias(board, Some(&poses))
+    let value = Rc::new(compute()?);
+    memo.borrow_mut().insert(pose.reference.clone(), (pose.clone(), value.clone()));
+    Ok(value)
+}
+
+/// Board-derived maps and per-pose geometry for the hole and via-array checks.
+/// Every entry is a pure function of the board and one pose, so reusing it across
+/// checks changes no verdict; it only avoids rebuilding the same data per pair.
+struct PoseCache<'a> {
+    board: &'a PhysicalBoard,
+    owners: OnceCell<IndexSet<&'a str>>,
+    nets: OnceCell<IndexMap<&'a PadReference, &'a str>>,
+    assigned: OnceCell<IndexMap<&'a PadReference, &'a str>>,
+    geometry: PoseMemo<FootprintGeometry>,
+    vias: PoseMemo<Vec<Via>>,
+    arrays: PoseMemo<ArrayCopper>,
+}
+
+impl<'a> PoseCache<'a> {
+    fn new(board: &'a PhysicalBoard) -> Self {
+        PoseCache {
+            board,
+            owners: OnceCell::new(),
+            nets: OnceCell::new(),
+            assigned: OnceCell::new(),
+            geometry: RefCell::default(),
+            vias: RefCell::default(),
+            arrays: RefCell::default(),
+        }
+    }
+
+    fn owners(&self) -> &IndexSet<&'a str> {
+        self.owners.get_or_init(|| array_owners(self.board))
+    }
+
+    fn nets(&self) -> &IndexMap<&'a PadReference, &'a str> {
+        self.nets.get_or_init(|| net_by_pad(self.board))
+    }
+
+    /// The pad-to-net map `footprint_holes_clear` compares nets with.
+    fn assigned(&self) -> &IndexMap<&'a PadReference, &'a str> {
+        self.assigned.get_or_init(|| {
+            self.board.nets.iter().flat_map(|n| n.pads.iter().map(move |p| (p, n.name.as_str()))).collect()
+        })
+    }
+
+    fn geometry(&self, pose: &Placement) -> Result<Rc<FootprintGeometry>> {
+        memoized(&self.geometry, pose, || footprint_geometry(self.board, pose))
+    }
+
+    /// `_array_vias`: an owner's required arrays at an accepted pose.
+    fn array_vias(&self, pose: &Placement) -> Result<Rc<Vec<Via>>> {
+        memoized(&self.vias, pose, || {
+            if !self.owners().contains(pose.reference.as_str()) {
+                return Ok(Vec::new());
+            }
+            let poses: Poses = [(pose.reference.clone(), pose.clone())].into_iter().collect();
+            via_in_pad_array_vias(self.board, Some(&poses))
+        })
+    }
+
+    /// `_required_array_copper`: an owner's arrays at a pose, per owner pad, in declaration order.
+    fn required_array_copper(&self, pose: &Placement) -> Result<Rc<ArrayCopper>> {
+        memoized(&self.arrays, pose, || {
+            let board = self.board;
+            let nets = self.nets();
+            let mut arrays = Vec::new();
+            for rule in board.via_in_pad_rules.iter().filter(|r| r.rows.is_some() && r.pad.component == pose.reference)
+            {
+                let net = owner_net(nets, rule)?;
+                let vias =
+                    array_sites(board, rule, Some(pose))?.into_iter().map(|(_, _, site)| array_via(board, net, site));
+                arrays.push((rule.pad.clone(), vias.collect()));
+            }
+            Ok(arrays)
+        })
+    }
 }
 
 /// `_array_peer_clear`: an owner's array annuli and drills against one peer's
 /// lands, holes and own arrays.
-fn array_peer_clear(board: &PhysicalBoard, vias: &[Via], peer: &Placement) -> Result<bool> {
+fn array_peer_clear(cache: &PoseCache<'_>, vias: &[Via], peer: &Placement) -> Result<bool> {
     if vias.is_empty() {
         return Ok(true);
     }
-    let geometry = footprint_geometry(board, peer)?;
+    let board = cache.board;
+    let geometry = cache.geometry(peer)?;
     let footprint = &board.footprints[&peer.footprint];
-    let nets = net_by_pad(board);
+    let nets = cache.nets();
     let mut clearances: IndexMap<&str, i64> = IndexMap::new();
     for rule in &board.net_routing_rules {
         clearances.insert(rule.net.as_str(), rule.clearance_nm.unwrap_or(0));
@@ -790,7 +876,7 @@ fn array_peer_clear(board: &PhysicalBoard, vias: &[Via], peer: &Placement) -> Re
     let clearance_of = |net: Option<&str>| net.and_then(|net| clearances.get(net).copied()).unwrap_or(0);
     let minimum = board.rules.minimum_clearance_nm;
     let hole = board.rules.minimum_hole_clearance_nm;
-    let peer_vias = array_vias(board, peer)?;
+    let peer_vias = cache.array_vias(peer)?;
     for via in vias {
         let annulus = shape(vec![via.position], via.size_nm / 2)?;
         let drill = shape(vec![via.position], via.drill_nm / 2)?;
@@ -814,7 +900,7 @@ fn array_peer_clear(board: &PhysicalBoard, vias: &[Via], peer: &Placement) -> Re
         if geometry.holes.iter().any(|(item, _)| !shapes_clear(&drill, item, hole)) {
             return Ok(false);
         }
-        for other in &peer_vias {
+        for other in peer_vias.iter() {
             let other_drill = shape(vec![other.position], other.drill_nm / 2)?;
             if !shapes_clear(&drill, &other_drill, hole) {
                 return Ok(false);
@@ -836,15 +922,15 @@ fn array_peer_clear(board: &PhysicalBoard, vias: &[Via], peer: &Placement) -> Re
 
 /// `_required_arrays_clear`: held owners' arrays against the candidate, and
 /// a candidate owner's arrays against every held peer.
-fn required_arrays_clear(board: &PhysicalBoard, candidate: &Placement, held: &Poses) -> Result<bool> {
-    let owners = array_owners(board);
+fn required_arrays_clear(cache: &PoseCache<'_>, candidate: &Placement, held: &Poses) -> Result<bool> {
+    let owners = cache.owners();
     if owners.is_empty() {
         return Ok(true);
     }
     if owners.contains(candidate.reference.as_str()) {
-        let vias = array_vias(board, candidate)?;
+        let vias = cache.array_vias(candidate)?;
         for (reference, other) in held {
-            if *reference != candidate.reference && !array_peer_clear(board, &vias, other)? {
+            if *reference != candidate.reference && !array_peer_clear(cache, &vias, other)? {
                 return Ok(false);
             }
         }
@@ -852,24 +938,12 @@ fn required_arrays_clear(board: &PhysicalBoard, candidate: &Placement, held: &Po
     for (reference, pose) in held {
         if owners.contains(reference.as_str())
             && *reference != candidate.reference
-            && !array_peer_clear(board, &array_vias(board, pose)?, candidate)?
+            && !array_peer_clear(cache, &cache.array_vias(pose)?, candidate)?
         {
             return Ok(false);
         }
     }
     Ok(true)
-}
-
-/// `_required_array_copper`: an owner's arrays at a pose, per owner pad, in declaration order.
-fn required_array_copper(board: &PhysicalBoard, pose: &Placement) -> Result<Vec<(PadReference, Vec<Via>)>> {
-    let nets = net_by_pad(board);
-    let mut arrays = Vec::new();
-    for rule in board.via_in_pad_rules.iter().filter(|r| r.rows.is_some() && r.pad.component == pose.reference) {
-        let net = owner_net(&nets, rule)?;
-        let vias = array_sites(board, rule, Some(pose))?.into_iter().map(|(_, _, site)| array_via(board, net, site));
-        arrays.push((rule.pad.clone(), vias.collect()));
-    }
-    Ok(arrays)
 }
 
 /// `_lands_touch_required_array`: the full array annulus cannot overlap even a same-net foreign land.
@@ -893,23 +967,24 @@ fn lands_touch_required_array(
 }
 
 /// `_required_array_lands_clear`: reserve declared through-array copper on both sides before routing.
-fn required_array_lands_clear(board: &PhysicalBoard, candidate: &Placement, placed: &Poses) -> Result<bool> {
-    let owners = array_owners(board);
+fn required_array_lands_clear(cache: &PoseCache<'_>, candidate: &Placement, placed: &Poses) -> Result<bool> {
+    let board = cache.board;
+    let owners = cache.owners();
     if owners.is_empty() {
         return Ok(true);
     }
     let mut poses = placed.clone();
     poses.insert(candidate.reference.clone(), candidate.clone());
     for reference in owners {
-        let Some(owner) = poses.get(reference) else { continue };
+        let Some(owner) = poses.get(*reference) else { continue };
         // Moving an owner must recheck every held neighbor; moving a neighbor
         // only needs its own lands checked against each held owner's array.
         let obstacles: Vec<&Placement> =
-            if reference == candidate.reference { poses.values().collect() } else { vec![candidate] };
-        for (owner_pad, vias) in required_array_copper(board, owner)? {
+            if *reference == candidate.reference { poses.values().collect() } else { vec![candidate] };
+        for (owner_pad, vias) in cache.required_array_copper(owner)?.iter() {
             for obstacle in &obstacles {
-                if lands_touch_required_array(board, obstacle, &owner_pad, &vias)?
-                    || lands_meet_macro_copper(board, obstacle, &[], &vias)?
+                if lands_touch_required_array(board, obstacle, owner_pad, vias)?
+                    || lands_meet_macro_copper(board, obstacle, &[], vias)?
                 {
                     return Ok(false);
                 }
@@ -921,17 +996,22 @@ fn required_array_lands_clear(board: &PhysicalBoard, candidate: &Placement, plac
 
 /// `footprint_holes_clear`: candidate and accepted peers, symmetrically on both faces.
 pub fn footprint_holes_clear(board: &PhysicalBoard, candidate: &Placement, held: &Poses) -> Result<bool> {
+    footprint_holes_clear_in(&PoseCache::new(board), candidate, held)
+}
+
+fn footprint_holes_clear_in(cache: &PoseCache<'_>, candidate: &Placement, held: &Poses) -> Result<bool> {
+    let board = cache.board;
     if held.iter().any(|(reference, pose)| *reference != pose.reference) {
         return Ok(false);
     }
-    if !required_arrays_clear(board, candidate, held)? {
+    if !required_arrays_clear(cache, candidate, held)? {
         return Ok(false);
     }
     let clearance = board.rules.minimum_hole_clearance_nm;
     let candidate_has_holes = has_drills(board, candidate);
     let mut candidate_geometry = None;
     if candidate_has_holes {
-        let geometry = footprint_geometry(board, candidate)?;
+        let geometry = cache.geometry(candidate)?;
         let own = board
             .component_hole_clearances
             .iter()
@@ -947,8 +1027,6 @@ pub fn footprint_holes_clear(board: &PhysicalBoard, candidate: &Placement, held:
         }
         candidate_geometry = Some(geometry);
     }
-    let assigned: IndexMap<&PadReference, &str> =
-        board.nets.iter().flat_map(|n| n.pads.iter().map(move |p| (p, n.name.as_str()))).collect();
     for (reference, other) in held {
         if *reference == candidate.reference {
             continue;
@@ -957,10 +1035,11 @@ pub fn footprint_holes_clear(board: &PhysicalBoard, candidate: &Placement, held:
             continue;
         }
         if candidate_geometry.is_none() {
-            candidate_geometry = Some(footprint_geometry(board, candidate)?);
+            candidate_geometry = Some(cache.geometry(candidate)?);
         }
+        let assigned = cache.assigned();
         let geometry = candidate_geometry.as_ref().expect("candidate geometry");
-        let other_geometry = footprint_geometry(board, other)?;
+        let other_geometry = cache.geometry(other)?;
         let reach = clearance.max(board.rules.minimum_clearance_nm).max(1);
         if !geometry.envelope.intersects_expanded(other_geometry.envelope, reach) {
             continue;
@@ -1108,20 +1187,48 @@ impl<'a> Checker<'a> {
         placed: &Poses,
         cluster_keepouts: Option<&[CopperKeepout]>,
     ) -> Result<bool> {
+        self.legal_with(candidate, placed, cluster_keepouts, true, &PoseCache::new(self.board))
+    }
+
+    /// `legal` for a candidate already known to pass `legal(candidate, {}, None)`.
+    /// The checks that read only the candidate (orientation, side, board material,
+    /// screw heads, region, keepouts, corridors, board copper keepouts) cannot fail
+    /// again, so this evaluates only what `placed` can change. The verdict equals
+    /// `legal(candidate, placed, cluster_keepouts)`.
+    fn legal_against(
+        &self,
+        candidate: &Placement,
+        placed: &Poses,
+        cluster_keepouts: Option<&[CopperKeepout]>,
+        cache: &PoseCache<'_>,
+    ) -> Result<bool> {
+        self.legal_with(candidate, placed, cluster_keepouts, false, cache)
+    }
+
+    fn legal_with(
+        &self,
+        candidate: &Placement,
+        placed: &Poses,
+        cluster_keepouts: Option<&[CopperKeepout]>,
+        candidate_checks: bool,
+        cache: &PoseCache<'_>,
+    ) -> Result<bool> {
         let board = self.board;
         let rule = self.rule(&candidate.reference);
-        let allowed = match rule {
-            Some(rule) => match &rule.fixed_rotation_degrees {
-                Some(rotation) => *rotation == candidate.rotation_degrees,
-                None => rule.allowed_orientations.contains(&candidate.rotation_degrees),
-            },
-            None => [0, 90, 180, 270].iter().any(|v| Decimal::from_i64(*v) == candidate.rotation_degrees),
-        };
-        if !allowed {
-            return Ok(false);
-        }
-        if rule.and_then(|r| r.side).is_some_and(|side| side != candidate.side) {
-            return Ok(false);
+        if candidate_checks {
+            let allowed = match rule {
+                Some(rule) => match &rule.fixed_rotation_degrees {
+                    Some(rotation) => *rotation == candidate.rotation_degrees,
+                    None => rule.allowed_orientations.contains(&candidate.rotation_degrees),
+                },
+                None => [0, 90, 180, 270].iter().any(|v| Decimal::from_i64(*v) == candidate.rotation_degrees),
+            };
+            if !allowed {
+                return Ok(false);
+            }
+            if rule.and_then(|r| r.side).is_some_and(|side| side != candidate.side) {
+                return Ok(false);
+            }
         }
         let polygon = placement_polygon(board, candidate);
         // Reject local courtyard collisions before expensive board/cutout checks.
@@ -1131,28 +1238,30 @@ impl<'a> Checker<'a> {
                 return Ok(false);
             }
         }
-        if !footprint_holes_clear(board, candidate, placed)? {
+        if !footprint_holes_clear_in(cache, candidate, placed)? {
             return Ok(false);
         }
-        if !required_array_lands_clear(board, candidate, placed)? {
+        if !required_array_lands_clear(cache, candidate, placed)? {
             return Ok(false);
         }
-        let edge = rule.and_then(|r| r.edge_clearance_nm).unwrap_or(self.policy.edge_clearance_nm);
-        let outline = &board.outline;
-        let inside = if !board.body_overhangs.is_empty() {
-            body_in_material(board, candidate, &shape(polygon.clone(), 0)?, edge)?
-        } else if outline.circular_boundary.is_some()
-            || outline.boundary_path.is_some()
-            || !outline.cutouts.is_empty()
-            || !board.mechanical_holes.is_empty()
-            || !board.mechanical_slots.is_empty()
-        {
-            shape_in_board(board, &shape(polygon.clone(), 0)?, edge, 0)?
-        } else {
-            polygon_inside(&polygon, &outline.vertices, edge)
-        };
-        if !inside {
-            return Ok(false);
+        if candidate_checks {
+            let edge = rule.and_then(|r| r.edge_clearance_nm).unwrap_or(self.policy.edge_clearance_nm);
+            let outline = &board.outline;
+            let inside = if !board.body_overhangs.is_empty() {
+                body_in_material(board, candidate, &shape(polygon.clone(), 0)?, edge)?
+            } else if outline.circular_boundary.is_some()
+                || outline.boundary_path.is_some()
+                || !outline.cutouts.is_empty()
+                || !board.mechanical_holes.is_empty()
+                || !board.mechanical_slots.is_empty()
+            {
+                shape_in_board(board, &shape(polygon.clone(), 0)?, edge, 0)?
+            } else {
+                polygon_inside(&polygon, &outline.vertices, edge)
+            };
+            if !inside {
+                return Ok(false);
+            }
         }
         if (!board.body_overhangs.is_empty()
             || !board.assembly_envelopes.is_empty()
@@ -1161,7 +1270,7 @@ impl<'a> Checker<'a> {
         {
             return Ok(false);
         }
-        for hole in board.mechanical_holes.iter().filter(|h| h.head_clearance_radius_nm != 0) {
+        for hole in board.mechanical_holes.iter().filter(|h| candidate_checks && h.head_clearance_radius_nm != 0) {
             if !shapes_clear(
                 &shape(polygon.clone(), 0)?,
                 &shape(vec![hole.position], hole.head_clearance_radius_nm)?,
@@ -1170,7 +1279,7 @@ impl<'a> Checker<'a> {
                 return Ok(false);
             }
         }
-        if let Some(name) = rule.and_then(|r| r.region.as_ref()) {
+        if let Some(name) = rule.and_then(|r| r.region.as_ref()).filter(|_| candidate_checks) {
             let region = board.regions.iter().find(|r| r.name == *name).expect("validated region");
             if region.side.is_some_and(|side| side != candidate.side) {
                 return Ok(false);
@@ -1210,25 +1319,27 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        for keepout in &board.keepouts {
-            if keepout_blocks(board, keepout, candidate, &polygon) {
-                return Ok(false);
+        if candidate_checks {
+            for keepout in &board.keepouts {
+                if keepout_blocks(board, keepout, candidate, &polygon) {
+                    return Ok(false);
+                }
             }
-        }
-        for corridor in self.reserved_corridors()? {
-            if !corridor.terminal_references.contains(&candidate.reference)
-                && keepout_blocks(board, &corridor.keepout, candidate, &polygon)
-            {
-                return Ok(false);
-            }
-        }
-        if self.policy.auto_pair_corridors && rule.is_none_or(|r| r.fixed_position.is_none()) {
-            // Movable parts only: an authored fixed pose is the author's call.
-            for corridor in self.automatic_pair_corridors()? {
+            for corridor in self.reserved_corridors()? {
                 if !corridor.terminal_references.contains(&candidate.reference)
                     && keepout_blocks(board, &corridor.keepout, candidate, &polygon)
                 {
                     return Ok(false);
+                }
+            }
+            if self.policy.auto_pair_corridors && rule.is_none_or(|r| r.fixed_position.is_none()) {
+                // Movable parts only: an authored fixed pose is the author's call.
+                for corridor in self.automatic_pair_corridors()? {
+                    if !corridor.terminal_references.contains(&candidate.reference)
+                        && keepout_blocks(board, &corridor.keepout, candidate, &polygon)
+                    {
+                        return Ok(false);
+                    }
                 }
             }
         }
@@ -1244,7 +1355,8 @@ impl<'a> Checker<'a> {
             }
         };
         let candidate_layer = side_layer(candidate.side);
-        for keepout in board.copper_keepouts.iter().chain(cluster_keepouts.iter()) {
+        let board_keepouts: &[CopperKeepout] = if candidate_checks { &board.copper_keepouts } else { &[] };
+        for keepout in board_keepouts.iter().chain(cluster_keepouts.iter()) {
             if keepout.block_footprints
                 && keepout.layers.contains(&candidate_layer)
                 && polygons_too_close(&polygon, &keepout.vertices, 0)
@@ -1507,7 +1619,11 @@ pub fn placement_solution_is_legal(board: &PhysicalBoard, placements: &Poses) ->
 
 /// `placement_rejection_reasons`: why a pose is rejected, by the planner's own predicates.
 pub fn placement_rejection_reasons(board: &PhysicalBoard, placements: &Poses) -> Result<Vec<String>> {
-    if placement_solution_is_legal(board, placements)? {
+    // One checker and pose cache for every pair below: rules, gaps, derived corridors
+    // and each component's hole and via-array geometry are computed once.
+    let checker = Checker::new(board, Policy::default());
+    let cache = PoseCache::new(board);
+    if checker.placement_solution_is_legal(placements)? {
         return Ok(Vec::new());
     }
     let original = placement_map(board);
@@ -1520,12 +1636,12 @@ pub fn placement_rejection_reasons(board: &PhysicalBoard, placements: &Poses) ->
     let all_rules = rules(board);
     let empty: Poses = IndexMap::new();
     for (reference, pose) in &sorted {
-        if !footprint_holes_clear(board, pose, &empty)? {
+        if !footprint_holes_clear_in(&cache, pose, &empty)? {
             errors.push(format!("{reference}: own non-plated drill violates pad clearance"));
         }
         for (other_reference, other) in &sorted {
             let single: Poses = [((*other_reference).clone(), (*other).clone())].into_iter().collect();
-            if other_reference < reference && !footprint_holes_clear(board, pose, &single)? {
+            if other_reference < reference && !footprint_holes_clear_in(&cache, pose, &single)? {
                 errors.push(format!(
                     "{reference} / {other_reference}: footprint drill or required via array violates courtyard/copper clearance"
                 ));
@@ -1587,7 +1703,7 @@ pub fn placement_rejection_reasons(board: &PhysicalBoard, placements: &Poses) ->
                 errors.push(format!("{reference}: component height {height} violates enclosure {}", limits.join(", ")));
             }
         }
-        if !legal(pose, &empty, board, None)? {
+        if !checker.legal_with(pose, &empty, None, true, &cache)? {
             let prefix = format!("{reference}:");
             if !errors.iter().any(|e| e.starts_with(&prefix)) {
                 let mut names: Vec<String> = board
@@ -1599,7 +1715,7 @@ pub fn placement_rejection_reasons(board: &PhysicalBoard, placements: &Poses) ->
                     })
                     .map(|k| k.name.clone())
                     .collect();
-                for corridor in reserved_corridors(board)? {
+                for corridor in checker.reserved_corridors()? {
                     if !corridor.terminal_references.contains(reference)
                         && keepout_blocks(board, &corridor.keepout, pose, &polygon)
                     {
@@ -1625,7 +1741,8 @@ pub fn placement_rejection_reasons(board: &PhysicalBoard, placements: &Poses) ->
                     continue;
                 }
                 let single: Poses = [((*other_reference).clone(), (*other).clone())].into_iter().collect();
-                if !legal(pose, &single, board, None)? {
+                // This branch runs only after `legal(pose, {}, None)` passed.
+                if !checker.legal_against(pose, &single, None, &cache)? {
                     errors.push(format!(
                         "{reference} / {other_reference}: courtyard or footprint keepout clearance conflict"
                     ));

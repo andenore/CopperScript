@@ -88,6 +88,10 @@ pub struct UnifiedRouterOptions {
     pub via_budget_factor: f64,
     pub via_overrun_factor: f64,
     pub bend_cost: f64,
+    /// Extra cost, times the step cost, of a step that relies on a breakout
+    /// neck (legal only at the neck width): necks are used only where a
+    /// full-width route would be clearly longer.
+    pub neck_cost: f64,
     pub guide_cost: f64,
     pub guide_margin_nm: i64,
     pub congestion_tile_nm: i64,
@@ -169,6 +173,7 @@ pub const FIELDS: &[&str] = &[
     "via_budget_factor",
     "via_overrun_factor",
     "bend_cost",
+    "neck_cost",
     "guide_cost",
     "guide_margin_nm",
     "congestion_tile_nm",
@@ -251,6 +256,7 @@ impl Default for UnifiedRouterOptions {
             via_budget_factor: 4.0,
             via_overrun_factor: 10.0,
             bend_cost: 0.25,
+            neck_cost: 1.0,
             guide_cost: 0.0,
             guide_margin_nm: 1_000_000,
             congestion_tile_nm: 1_000_000,
@@ -328,8 +334,8 @@ impl UnifiedRouterOptions {
         if self.via_budget_factor <= 0.0 || self.via_overrun_factor < 1.0 {
             return fail("via_budget_factor must be positive and via_overrun_factor at least 1");
         }
-        if !(self.bend_cost >= 0.0 && self.guide_cost >= 0.0) || self.guide_margin_nm < 0 {
-            return fail("bend_cost, guide_cost and guide_margin_nm must not be negative");
+        if !(self.bend_cost >= 0.0 && self.neck_cost >= 0.0 && self.guide_cost >= 0.0) || self.guide_margin_nm < 0 {
+            return fail("bend_cost, neck_cost, guide_cost and guide_margin_nm must not be negative");
         }
         if let Some((x0, y0, x1, y1)) = self.grid_window_nm
             && (x0 >= x1 || y0 >= y1)
@@ -525,6 +531,7 @@ impl UnifiedRouterOptions {
                 "via_budget_factor" => options.via_budget_factor = float(value)?,
                 "via_overrun_factor" => options.via_overrun_factor = float(value)?,
                 "bend_cost" => options.bend_cost = float(value)?,
+                "neck_cost" => options.neck_cost = float(value)?,
                 "guide_cost" => options.guide_cost = float(value)?,
                 "guide_margin_nm" => options.guide_margin_nm = int(value)?,
                 "congestion_tile_nm" => {

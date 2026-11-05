@@ -20,7 +20,7 @@ pub struct PairRefinementStats {
 pub type Lanes = (Vec<TrackSegment>, Vec<TrackSegment>);
 
 /// `_compact`: remove only exact, forward collinear vertices; keep both ends.
-fn compact(points: &[Point]) -> Vec<Point> {
+pub(crate) fn compact(points: &[Point]) -> Vec<Point> {
     let mut result: Vec<Point> = Vec::new();
     for point in points {
         if result.last() == Some(point) {

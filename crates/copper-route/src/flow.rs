@@ -289,7 +289,7 @@ fn plan_array_frames(
 
 /// `_macro_port_halos`: keepouts beyond macro ports whose nets may change
 /// layer, for the escape and bypass planners only.
-fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::CopperKeepout>> {
+pub(crate) fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::CopperKeepout>> {
     let frame = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
     let rules: IndexMap<&str, _> = board.net_routing_rules.iter().map(|rule| (rule.net.as_str(), rule)).collect();
     let poses: IndexMap<&str, _> = board.placements.iter().map(|pose| (pose.reference.as_str(), pose)).collect();
@@ -349,7 +349,7 @@ fn macro_port_halos(board: &PhysicalBoard) -> Result<Vec<copper_physical::Copper
 /// routing; the halo keeps one via site free from one clearance past the
 /// land's outer end, along the land's long axis away from the package
 /// centre, where the neighbouring pins' straight escapes still pass beside it.
-fn plane_pin_halos(board: &PhysicalBoard) -> Vec<copper_physical::CopperKeepout> {
+pub(crate) fn plane_pin_halos(board: &PhysicalBoard) -> Vec<copper_physical::CopperKeepout> {
     use copper_physical::footprint::PadKind;
     use copper_physical::{BoardSide, CopperLayer, Point};
     let zone_nets = copper_pcb::zones::distribution_zone_nets(board);
@@ -524,7 +524,7 @@ fn route_critical_stage(
         Some(fanout) if unified_options.escapes_first => {
             let mut keepouts = halos.clone();
             keepouts.extend(plane_pin_halos(board));
-            plan_ordinary_escapes(board, fanout, on_progress, prefix, &keepouts, &planar)?
+            plan_ordinary_escapes(board, fanout, on_progress, prefix, &keepouts, None, &planar, "finished")?
         }
         _ => None,
     };
@@ -534,10 +534,24 @@ fn route_critical_stage(
         // a critical route cannot take a capacitor's short surface feed.
         let (planned, kept) = plan_decouplers(board, reserved.take(), on_progress, prefix, &halos, unified_fanout)?;
         reserved = kept;
-        if reserved.is_some() && !planned.released.is_empty() {
-            return copper_pcb::not_implemented(
-                "revalidating released escape reservations (flow._revalidate_released_escapes)",
-            );
+        let mut planned = planned;
+        if let Some(kept) = reserved.take() {
+            if planned.released.is_empty() {
+                reserved = Some(kept);
+            } else {
+                let (kept, updated, restored) = revalidate_released_escapes(board, kept, planned)?;
+                planned = updated;
+                emit(on_progress, "ordinary_escapes", "revalidated", restored.fields());
+                reserved = Some(match unified_fanout {
+                    Some(fanout) if !restored.unrestored_nets.is_empty() => {
+                        let mut keepouts = halos.clone();
+                        keepouts.extend(plane_pin_halos(board));
+                        let nets: IndexSet<String> = restored.unrestored_nets.iter().cloned().collect();
+                        resite_escapes(board, fanout, kept, &planned, prefix, &keepouts, &nets, on_progress)?
+                    }
+                    _ => kept,
+                });
+            }
         }
         // The witnesses were admitted in the planning context; the critical
         // router's context has only the final reservations.
@@ -934,6 +948,7 @@ pub fn run_routing_pipeline_staged(
     mut on_progress: Option<ProgressCallback<'_>>,
     mut on_stage: Option<StageCallback<'_>>,
 ) -> Result<RoutingPipelineResult> {
+    crate::install_hooks();
     let mut unified_options = options.unified_options.clone().unwrap_or_default();
     let mut unified_fanout = options.fanout_options.clone();
     let board = copper_pcb::hard_macros::macro_source(board)?;
@@ -1328,7 +1343,7 @@ fn feedback_score(
 // Ordinary escape reservations
 
 /// Planned escape copper and the keepouts that reserve it.
-type Reserved = (Vec<TrackSegment>, Vec<Via>, Vec<copper_physical::CopperKeepout>);
+pub(crate) type Reserved = (Vec<TrackSegment>, Vec<Via>, Vec<copper_physical::CopperKeepout>);
 
 /// `Counter(after) - Counter(before)`, `.elements()` order.
 fn added_elements<T: Clone + Eq + std::hash::Hash>(after: &[T], before: &[T]) -> Vec<T> {
@@ -1395,7 +1410,7 @@ fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
 }
 
 /// `_copper_keepouts`: keepouts covering planned copper plus clearance.
-fn copper_keepouts(
+pub(crate) fn copper_keepouts(
     board: &PhysicalBoard,
     tracks: &[TrackSegment],
     vias: &[Via],
@@ -1489,14 +1504,18 @@ fn route_ordinary_escapes(
 }
 
 /// `_plan_ordinary_escapes`: escapes for crowded ordinary pins, and the
-/// keepouts that reserve them, or None.
+/// keepouts that reserve them, or None. `only_nets` limits the nets planned;
+/// `event` names the closing progress event.
+#[allow(clippy::too_many_arguments)]
 fn plan_ordinary_escapes(
     board: &PhysicalBoard,
     fanout_options: &FanoutOptions,
     on_progress: &mut Option<ProgressCallback<'_>>,
     prefix: (&[TrackSegment], &[Via]),
     keepouts: &[copper_physical::CopperKeepout],
+    only_nets: Option<&IndexSet<String>>,
     exclude: &[String],
+    event: &str,
 ) -> Result<Option<Reserved>> {
     let rules: IndexMap<&str, _> = board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
     let mut supply: IndexSet<&str> = board.zones.iter().map(|z| z.net.as_str()).collect();
@@ -1512,6 +1531,7 @@ fn plan_ordinary_escapes(
                 && !supply.contains(net.name.as_str())
                 && rules.get(net.name.as_str()).is_none_or(|rule| rule.kind == RouteKind::General)
                 && !exclude.contains(&net.name)
+                && only_nets.is_none_or(|only| only.contains(&net.name))
         })
         .map(|net| net.name.clone())
         .collect();
@@ -1521,7 +1541,7 @@ fn plan_ordinary_escapes(
     emit(on_progress, "ordinary_escapes", "started", vec![("nets", int(ordinary.len() as i64))]);
     match route_ordinary_escapes(board, fanout_options, &ordinary, prefix, keepouts) {
         Err(Error::Value(message)) => {
-            emit(on_progress, "ordinary_escapes", "finished", vec![("skipped", text(&message))]);
+            emit(on_progress, "ordinary_escapes", event, vec![("skipped", text(&message))]);
             Ok(None)
         }
         Err(error) => Err(error),
@@ -1533,7 +1553,7 @@ fn plan_ordinary_escapes(
             emit(
                 on_progress,
                 "ordinary_escapes",
-                "finished",
+                event,
                 vec![
                     ("vias", int(vias.len() as i64)),
                     ("tracks", int(tracks.len() as i64)),
@@ -1652,7 +1672,7 @@ fn join_reserved_copper(
 /// `_release_escape_masks`: drop the temporary escape keepouts before
 /// ordinary routing; with `planned_escapes_as_copper` the promised exits join
 /// the ordinary stage's board as copper.
-fn release_escape_masks(
+pub(crate) fn release_escape_masks(
     reserved: Option<&Reserved>,
     critical: &mut CriticalRoutingResult,
     plane_stitch: &mut Option<PlaneStitchResult>,
@@ -2000,6 +2020,246 @@ fn refresh_bypass_witnesses(
     Ok((Held { witnesses, ..held }, None))
 }
 
+/// The outcome of [`revalidate_released_escapes`], reported as the
+/// `ordinary_escapes`/`revalidated` progress event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Revalidation {
+    pub(crate) restored_keepouts: usize,
+    pub(crate) restored_nets: Vec<String>,
+    pub(crate) unrestored_nets: Vec<String>,
+    pub(crate) outcome: &'static str,
+    pub(crate) reason: Option<String>,
+}
+
+impl Revalidation {
+    fn fields(&self) -> Vec<(&'static str, Value)> {
+        let names = |nets: &[String]| Value::Array(nets.iter().map(|n| text(n)).collect());
+        let mut fields = vec![
+            ("restored_keepouts", int(self.restored_keepouts as i64)),
+            ("restored_nets", names(&self.restored_nets)),
+            ("unrestored_nets", names(&self.unrestored_nets)),
+            ("outcome", text(self.outcome)),
+        ];
+        if let Some(reason) = &self.reason {
+            fields.push(("reason", text(reason)));
+        }
+        fields
+    }
+}
+
+/// A fresh verification of one admitted bypass witness in a keepout context
+/// (`verify_crosslayer_decoupling`; replaceable in tests).
+type WitnessCheck<'v> = &'v mut dyn FnMut(
+    &PhysicalBoard,
+    &crate::decoupling_paths::DecouplingCrossLayerWitness,
+    &crate::routing_clearance::RoutingClearanceIndex<'_>,
+) -> Result<crate::decoupling_paths::DecouplingPathResult>;
+
+/// `_revalidate_released_escapes`: restore collateral reservations only as
+/// complete, freshly legal net groups.
+///
+/// Bypass planning releases proximity boxes, not proven conflicting exits; a
+/// surviving complete launch must still constrain the critical routing that
+/// follows. No copper is changed. The restored keepout context gets a fresh
+/// bypass ledger (every witness verified again in it) and ordinary strict
+/// prefix admission; any failed check rolls the whole restoration back and
+/// returns `held` with its original witnesses.
+fn revalidate_released_escapes(
+    board: &PhysicalBoard,
+    reserved: Reserved,
+    held: Held,
+) -> Result<(Reserved, Held, Revalidation)> {
+    let mut verify = |context: &PhysicalBoard,
+                      witness: &crate::decoupling_paths::DecouplingCrossLayerWitness,
+                      index: &crate::routing_clearance::RoutingClearanceIndex<'_>| {
+        crate::decoupling_paths::verify_crosslayer_decoupling(
+            context,
+            &witness.link,
+            Some(&witness.return_target),
+            10_000,
+            Some(index),
+        )
+    };
+    revalidate_released_escapes_with(board, reserved, held, &mut verify)
+}
+
+fn revalidate_released_escapes_with(
+    board: &PhysicalBoard,
+    reserved: Reserved,
+    held: Held,
+    verify: WitnessCheck<'_>,
+) -> Result<(Reserved, Held, Revalidation)> {
+    let frame = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
+    let mut fixed = frame;
+    fixed.tracks.extend(held.tracks.iter().cloned());
+    fixed.vias.extend(held.vias.iter().cloned());
+    let (tracks, vias, keepouts) = reserved;
+    let owners: IndexMap<String, &str> = tracks
+        .iter()
+        .enumerate()
+        .map(|(i, t)| (format!("escape-reserve-track-{i}"), t.net.as_str()))
+        .chain(vias.iter().enumerate().map(|(i, v)| (format!("escape-reserve-via-{i}"), v.net.as_str())))
+        .collect();
+    // A released keepout is matched whole: planning renumbers the surviving
+    // reservations after a release, so an id alone may name another net's.
+    let is_released = |k: &copper_physical::CopperKeepout| held.released.contains(k);
+    let mut affected: Vec<String> = keepouts
+        .iter()
+        .filter(|k| is_released(k))
+        .filter_map(|k| owners.get(&k.id).map(|net| (*net).to_owned()))
+        .collect();
+    affected.sort();
+    affected.dedup();
+    // Preserve the complete original group, not a legal via with a blocked stem.
+    let mut legal: IndexSet<String> = IndexSet::new();
+    {
+        let index = crate::routing_clearance::RoutingClearanceIndex::new(&fixed)?;
+        'nets: for net in &affected {
+            for t in tracks.iter().filter(|t| t.net == *net) {
+                if !index.can_track(&t.net, t.start, t.end, t.width_nm, t.layer)? {
+                    continue 'nets;
+                }
+            }
+            for v in vias.iter().filter(|v| v.net == *net) {
+                let rule = board.net_routing_rules.iter().find(|r| r.net == v.net);
+                if !index.can_via(
+                    &v.net,
+                    v.position,
+                    v.size_nm,
+                    v.from_layer,
+                    v.to_layer,
+                    Some(v.drill_nm),
+                    false,
+                    None,
+                )? || !crate::return_paths::existing_returns_permit(&fixed, rule, v)
+                {
+                    continue 'nets;
+                }
+            }
+            legal.insert(net.clone());
+        }
+    }
+    // Proxy keepouts must themselves avoid the real immutable/bypass prefix.
+    let safe: IndexSet<String> =
+        copper_keepouts(board, &tracks, &vias, "escape-reserve", Some(&fixed)).into_iter().map(|k| k.id).collect();
+    legal.retain(|net| {
+        keepouts
+            .iter()
+            .filter(|k| is_released(k) && owners.get(&k.id).is_some_and(|owner| owner == net))
+            .all(|k| safe.contains(&k.id))
+    });
+    let baseline: Vec<copper_physical::CopperKeepout> = keepouts.iter().filter(|k| !is_released(k)).cloned().collect();
+    let kept: Vec<copper_physical::CopperKeepout> = keepouts
+        .iter()
+        .filter(|k| !is_released(k) || owners.get(&k.id).is_some_and(|net| legal.contains(*net)))
+        .cloned()
+        .collect();
+    let count = kept.len() - baseline.len();
+    let unrestored = Revalidation {
+        restored_keepouts: 0,
+        restored_nets: Vec::new(),
+        unrestored_nets: affected.clone(),
+        outcome: "no_complete_legal_group",
+        reason: None,
+    };
+    if count == 0 {
+        return Ok(((tracks, vias, baseline), held, unrestored));
+    }
+    let mut context = fixed;
+    context.copper_keepouts = board.copper_keepouts.clone();
+    context.copper_keepouts.extend(kept.iter().cloned());
+    let mut witnesses = Vec::new();
+    {
+        let fresh = crate::routing_clearance::RoutingClearanceIndex::new(&context)?;
+        for witness in &held.witnesses {
+            let checked = verify(&context, witness, &fresh)?;
+            match checked.witness {
+                Some(witness) => witnesses.push(witness),
+                None => {
+                    let report = Revalidation {
+                        outcome: "bypass_revalidation_failed",
+                        reason: Some(checked.reason),
+                        ..unrestored
+                    };
+                    return Ok(((tracks, vias, baseline), held, report));
+                }
+            }
+        }
+    }
+    let mut source = board.clone();
+    source.copper_keepouts = context.copper_keepouts.clone();
+    let (_, reason) =
+        crate::bypass_reservations::bypass_copper_reservations(&source, &held.tracks, &held.vias, &witnesses)?;
+    if let Some(reason) = reason {
+        let report = Revalidation { outcome: "prefix_admission_failed", reason: Some(reason), ..unrestored };
+        return Ok(((tracks, vias, baseline), held, report));
+    }
+    let remaining: Vec<copper_physical::CopperKeepout> =
+        held.released.iter().filter(|k| !kept.contains(k)).cloned().collect();
+    let mut restored_nets: Vec<String> = legal.iter().cloned().collect();
+    restored_nets.sort();
+    let report = Revalidation {
+        restored_keepouts: count,
+        unrestored_nets: affected.iter().filter(|net| !legal.contains(*net)).cloned().collect(),
+        restored_nets,
+        outcome: "restored",
+        reason: None,
+    };
+    let updated = Held { released: remaining, witnesses, ..held };
+    Ok(((tracks, vias, kept), updated, report))
+}
+
+/// `_resite_escapes`: plan the exits of `nets` again around the bypass
+/// copper that displaced them.
+///
+/// Revalidation restores only the groups still legal beside the bypass
+/// copper; a ball whose dogbone site that copper took would otherwise be left
+/// to the fanout stage with its cell centres taken. The new escapes plan with
+/// the bypass copper as prefix and the remaining reservations as keepouts;
+/// reservation ids stay index-stable.
+#[allow(clippy::too_many_arguments)]
+fn resite_escapes(
+    board: &PhysicalBoard,
+    fanout_options: &FanoutOptions,
+    reserved: Reserved,
+    held: &Held,
+    prefix: (&[TrackSegment], &[Via]),
+    halos: &[copper_physical::CopperKeepout],
+    nets: &IndexSet<String>,
+    on_progress: &mut Option<ProgressCallback<'_>>,
+) -> Result<Reserved> {
+    let mut prefix_tracks = prefix.0.to_vec();
+    prefix_tracks.extend(held.tracks.iter().cloned());
+    let mut prefix_vias = prefix.1.to_vec();
+    prefix_vias.extend(held.vias.iter().cloned());
+    let mut keepouts = reserved.2.clone();
+    keepouts.extend(halos.iter().cloned());
+    let again = plan_ordinary_escapes(
+        board,
+        fanout_options,
+        on_progress,
+        (&prefix_tracks, &prefix_vias),
+        &keepouts,
+        Some(nets),
+        &[],
+        "resited",
+    )?;
+    let Some((again_tracks, again_vias, _)) = again else {
+        return Ok(reserved);
+    };
+    let (mut tracks, mut vias, _) = reserved;
+    tracks.extend(again_tracks);
+    vias.extend(again_vias);
+    let mut fixed = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board.clone())?)?;
+    fixed.tracks.extend(prefix_tracks);
+    fixed.vias.extend(prefix_vias);
+    let keepouts = copper_keepouts(board, &tracks, &vias, "escape-reserve", Some(&fixed))
+        .into_iter()
+        .filter(|k| !held.released.contains(k))
+        .collect();
+    Ok((tracks, vias, keepouts))
+}
+
 /// The late bypass pass of `_complete_critical_stage`: the links left pending
 /// at planning get the stage's launch options beside the critical copper.
 fn complete_bypasses(
@@ -2057,4 +2317,249 @@ fn complete_bypasses(
         ],
     );
     Ok(())
+}
+
+/// `tests/test_released_escape_revalidation.py`: a proximity release must
+/// not sacrifice a still-legal complete package exit.
+#[cfg(test)]
+mod released_escape_revalidation {
+    use super::*;
+    use crate::test_support_routers as routers;
+    use copper_pcb::board::{PadReference, PhysicalNet};
+
+    fn empty_held(released: Vec<copper_physical::CopperKeepout>) -> Held {
+        Held { tracks: Vec::new(), vias: Vec::new(), keepouts: Vec::new(), released, witnesses: Vec::new() }
+    }
+
+    /// A front clock net `C` along y = 12 mm and the reserved exit of `S`
+    /// (a stem from its pad at (13, 10) mm to a via at (13, 12) mm) that the
+    /// clock would cross; the bypass planning released the whole exit.
+    fn fixture(block_stem: bool) -> (PhysicalBoard, Reserved, Held) {
+        let mut board = routers::pad_board(
+            &[("S", &[(10.0, 7.0), (10.0, 17.0)]), ("C", &[(1.0, 9.0), (19.0, 9.0)])],
+            2,
+            Vec::new(),
+        );
+        board.net_routing_rules = vec![copper_pcb::board::NetRoutingRule {
+            kind: RouteKind::Clock,
+            width_nm: Some(routers::mm(0.2)),
+            allowed_layers: vec![CopperLayer::Front],
+            max_vias: Some(0),
+            ..routers::rule("C")
+        }];
+        let stem = routers::track("S", (13.0, 10.0), (13.0, 12.0), 0.2, CopperLayer::Front);
+        let via = routers::via("S", (13.0, 12.0), 0.6, 0.3, CopperLayer::Front, CopperLayer::Back);
+        if block_stem {
+            board.copper_keepouts = vec![routers::copper_keepout(
+                "real-blocker",
+                &[CopperLayer::Front],
+                routers::rect(12.0, 10.8, 14.0, 11.2),
+            )];
+        }
+        let keepouts = copper_keepouts(
+            &board,
+            std::slice::from_ref(&stem),
+            std::slice::from_ref(&via),
+            "escape-reserve",
+            Some(&board),
+        );
+        assert_eq!(keepouts.len(), 2);
+        (board, (vec![stem], vec![via], keepouts.clone()), empty_held(keepouts))
+    }
+
+    fn critical(board: PhysicalBoard) -> CriticalRoutingResult {
+        let guides =
+            crate::route_global(&board, &crate::GlobalRouterOptions::default(), None, None, None).expect("guides");
+        crate::critical::route_critical_nets(board, &guides, &crate::critical::CriticalOptions::default(), None)
+            .expect("critical")
+    }
+
+    #[test]
+    fn collateral_release_restores_complete_exit_and_deflects_clock() {
+        let (board, reserved, held) = fixture(false);
+        let (kept, updated, report) =
+            revalidate_released_escapes(&board, reserved.clone(), held).expect("revalidation");
+        assert_eq!(kept.2, reserved.2);
+        assert!(updated.released.is_empty());
+        assert_eq!(report.restored_nets, ["S"]);
+        assert_eq!(report.restored_keepouts, reserved.2.len());
+        assert_eq!(report.outcome, "restored");
+        for protect in [false, true] {
+            let mut source = board.clone();
+            source.copper_keepouts = if protect { kept.2.clone() } else { Vec::new() };
+            let routed = critical(source);
+            assert!(routed.nets.iter().all(|n| n.connected), "protect={protect}");
+            // Temporary masks are planning-only; query the actual routed clock copper.
+            let mut actual = routed.board;
+            actual.copper_keepouts.clear();
+            let index = crate::routing_clearance::RoutingClearanceIndex::new(&actual).expect("index");
+            let (stem, via) = (&reserved.0[0], &reserved.1[0]);
+            let legal = index.can_track(&stem.net, stem.start, stem.end, stem.width_nm, stem.layer).expect("track")
+                && index
+                    .can_via(
+                        &via.net,
+                        via.position,
+                        via.size_nm,
+                        via.from_layer,
+                        via.to_layer,
+                        Some(via.drill_nm),
+                        false,
+                        None,
+                    )
+                    .expect("via");
+            assert_eq!(legal, protect);
+        }
+        assert!(board.tracks.is_empty() && board.vias.is_empty());
+    }
+
+    #[test]
+    fn legal_via_cannot_restore_an_exit_with_a_blocked_stem() {
+        let (board, reserved, held) = fixture(true);
+        let original = held.clone();
+        let (kept, updated, report) = revalidate_released_escapes(&board, reserved, held).expect("revalidation");
+        assert!(kept.2.is_empty() && report.restored_keepouts == 0);
+        assert_eq!(report.unrestored_nets, ["S"]);
+        assert_eq!(report.outcome, "no_complete_legal_group");
+        assert_eq!(updated.released, original.released);
+        assert!(updated.witnesses.is_empty() && board.tracks.is_empty() && board.vias.is_empty());
+    }
+
+    /// The cross-layer bypass of `test_decoupling_crosslayer_paths.fixture`
+    /// routed, plus a released escape of a signal net `S` beside it.
+    fn bypass_fixture() -> (PhysicalBoard, Reserved, Held) {
+        let (mut board, _) = crate::test_support_planes::support_planes::decoupling::crosslayer(false, true);
+        let footprint = routers::one_pad();
+        board.placements.push(routers::placement("S0", &footprint.name, 3.0, 3.0));
+        board.placements.push(routers::placement("S1", &footprint.name, 20.0, 3.0));
+        board.footprints.insert(footprint.name.clone(), footprint);
+        board.nets.push(PhysicalNet {
+            name: "S".to_owned(),
+            pads: vec![PadReference::new("S0", "1"), PadReference::new("S1", "1")],
+        });
+        let bypass = crate::decoupling::route_decouplers(&board, None, None, None, None).expect("bypass");
+        assert!(!bypass.admitted_path_witnesses.is_empty());
+        let stem = routers::track("S", (3.0, 3.0), (3.0, 5.0), 0.15, CopperLayer::Front);
+        let via = routers::via("S", (3.0, 5.0), 0.45, 0.2, CopperLayer::Front, CopperLayer::Back);
+        let masks = copper_keepouts(
+            &board,
+            std::slice::from_ref(&stem),
+            std::slice::from_ref(&via),
+            "escape-reserve",
+            Some(&board),
+        );
+        let held = Held {
+            tracks: bypass.created_tracks,
+            vias: bypass.created_vias,
+            keepouts: Vec::new(),
+            released: masks.clone(),
+            witnesses: bypass.admitted_path_witnesses,
+        };
+        (board, (vec![stem], vec![via], masks), held)
+    }
+
+    #[test]
+    fn restored_context_requires_a_new_fresh_bypass_ledger() {
+        let (board, reserved, held) = bypass_fixture();
+        let (kept, updated, report) =
+            revalidate_released_escapes(&board, reserved, held.clone()).expect("revalidation");
+        assert_eq!(report.outcome, "restored", "{report:?}");
+        let mut candidate = board.clone();
+        candidate.tracks = held.tracks.clone();
+        candidate.vias = held.vias.clone();
+        candidate.copper_keepouts = kept.2.clone();
+        let validate = |witness| {
+            crate::decoupling_paths::validate_crosslayer_witness(&candidate, witness, None).expect("validate")
+        };
+        assert!(!validate(&held.witnesses[0]).is_empty());
+        assert_eq!(validate(&updated.witnesses[0]), "");
+        assert_ne!(held.witnesses[0].context_digest, updated.witnesses[0].context_digest);
+        assert_eq!((&updated.tracks, &updated.vias, &updated.keepouts), (&held.tracks, &held.vias, &held.keepouts));
+        assert!(updated.released.is_empty());
+    }
+
+    #[test]
+    fn failed_bypass_revalidation_rolls_back_masks_and_original_ledger() {
+        let (board, reserved, held) = bypass_fixture();
+        let mut failed = |candidate: &PhysicalBoard,
+                          _: &crate::decoupling_paths::DecouplingCrossLayerWitness,
+                          _: &crate::routing_clearance::RoutingClearanceIndex<'_>| {
+            Ok(crate::decoupling_paths::DecouplingPathResult {
+                board: candidate.clone(),
+                created_tracks: Vec::new(),
+                created_vias: Vec::new(),
+                witness: None,
+                reason: "injected verification failure".to_owned(),
+                supply_path: None,
+                return_path: None,
+            })
+        };
+        let (kept, updated, report) =
+            revalidate_released_escapes_with(&board, reserved, held.clone(), &mut failed).expect("revalidation");
+        assert!(kept.2.is_empty());
+        assert_eq!(updated.released, held.released);
+        assert_eq!(updated.witnesses, held.witnesses);
+        assert_eq!(report.outcome, "bypass_revalidation_failed");
+        assert_eq!(report.reason.as_deref(), Some("injected verification failure"));
+        assert_eq!(report.restored_keepouts, 0);
+        assert!(board.tracks.is_empty() && board.vias.is_empty());
+    }
+}
+
+/// Bypass planning that releases an escape reservation, then revalidation.
+/// Planning drops the copper of the group it takes and renumbers the
+/// surviving reservations, so the released group has nothing to restore and
+/// a survivor whose new id equals a released one is not mistaken for it.
+#[cfg(test)]
+mod released_escape_planning {
+    use super::*;
+    use crate::test_support_routers as routers;
+    use copper_pcb::board::{PadReference, PhysicalNet};
+
+    #[test]
+    fn decoupler_planning_releases_a_blocking_reservation_and_revalidation_keeps_the_survivor() {
+        let (mut board, link) = crate::test_support_planes::support_planes::decoupling::crosslayer(false, true);
+        let footprint = routers::one_pad();
+        for (reference, x, y) in [("S0", 3.0, 3.0), ("S1", 20.0, 3.0), ("T0", 3.0, 17.0), ("T1", 20.0, 17.0)] {
+            board.placements.push(routers::placement(reference, &footprint.name, x, y));
+        }
+        board.footprints.insert(footprint.name.clone(), footprint);
+        for name in ["S", "T"] {
+            let pads = vec![PadReference::new(&format!("{name}0"), "1"), PadReference::new(&format!("{name}1"), "1")];
+            board.nets.push(PhysicalNet { name: name.to_owned(), pads });
+        }
+        // A ring of reserved S vias walls in the chip's supply pad at (9, 8)
+        // mm; T's reserved via is far from the bypass.
+        let ring = [(9.0, 8.7), (9.0, 7.3), (9.7, 8.0), (8.3, 8.0), (9.5, 8.5), (8.5, 8.5), (9.5, 7.5), (8.5, 7.5)];
+        let mut vias: Vec<Via> =
+            ring.iter().map(|at| routers::via("S", *at, 0.45, 0.2, CopperLayer::Front, CopperLayer::Back)).collect();
+        vias.push(routers::via("T", (6.0, 17.0), 0.45, 0.2, CopperLayer::Front, CopperLayer::Back));
+        let keepouts = copper_keepouts(&board, &[], &vias, "escape-reserve", Some(&board));
+        assert_eq!(keepouts.len(), vias.len());
+        let walled = {
+            let mut walled = board.clone();
+            walled.copper_keepouts.extend(keepouts.iter().cloned());
+            crate::decoupling::route_decouplers(&walled, None, None, None, None).expect("bypass")
+        };
+        assert!(walled.pending.iter().any(|(item, _)| *item == link), "the reservations must block the bypass");
+        let planned = plan_decouplers(&board, Some((Vec::new(), vias, keepouts)), &mut None, (&[], &[]), &[], None);
+        let (held, reserved) = planned.expect("planning");
+        let reserved = reserved.expect("reservations");
+        assert!(!held.tracks.is_empty() && !held.witnesses.is_empty(), "the bypass routes once released");
+        assert!(!held.released.is_empty(), "planning released the reservation the bypass took");
+        // The taken S copper is gone; T's via is renumbered onto a released id.
+        assert!(reserved.1.iter().all(|v| v.net == "T") && reserved.2.len() == 1);
+        assert!(held.released.iter().any(|k| k.id == reserved.2[0].id));
+        let original = held.clone();
+        let (kept, updated, report) =
+            revalidate_released_escapes(&board, reserved.clone(), held).expect("revalidation");
+        assert_eq!(report.outcome, "no_complete_legal_group", "{report:?}");
+        assert!(report.unrestored_nets.is_empty() && report.restored_keepouts == 0);
+        assert_eq!(kept, reserved);
+        // No copper changed and the original ledger is returned.
+        assert_eq!(
+            (updated.tracks, updated.vias, updated.witnesses),
+            (original.tracks, original.vias, original.witnesses)
+        );
+        assert_eq!(updated.released, original.released);
+    }
 }

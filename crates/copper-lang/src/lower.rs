@@ -1402,6 +1402,19 @@ fn validate_routing(declaration: &ConstraintDecl, parameters: &IndexMap<String, 
     if positive_length(parameters, "tuning_spacing", "routing", location)?.is_some() && !serpentine {
         return Err(error("CMP110", "'tuning_spacing' requires tuning_style = \"serpentine\"", location));
     }
+    let corner = parameters.get("corner_style");
+    let arc = matches!(corner, Some(ParameterValue::Text(text)) if text == "arc");
+    if let Some(corner) = corner
+        && !matches!(corner, ParameterValue::Text(text) if text == "octilinear" || text == "arc")
+    {
+        return Err(error("CMP110", "routing parameter 'corner_style' must be \"octilinear\" or \"arc\"", location));
+    }
+    if positive_length(parameters, "corner_radius", "routing", location)?.is_some() && !arc {
+        return Err(error("CMP110", "'corner_radius' requires corner_style = \"arc\"", location));
+    }
+    if arc && parameters.contains_key("tuning_group") {
+        return Err(error("CMP110", "'tuning_group' requires corner_style = \"octilinear\"", location));
+    }
     if let Some(group) = parameters.get("tuning_group") {
         if !matches!(group, ParameterValue::Text(text) if !blank(text)) {
             return Err(error("CMP110", "routing parameter 'tuning_group' must be a nonempty name", location));
@@ -1568,6 +1581,7 @@ pub fn constraint(declaration: &ConstraintDecl) -> Result<Constraint> {
         ConstraintKind::Routing => validate_routing(declaration, &parameters)?,
         ConstraintKind::LengthMatch => validate_length_match(declaration, &parameters)?,
         ConstraintKind::HoleClearance => validate_hole_clearance(declaration, &parameters)?,
+        ConstraintKind::Antenna => crate::antenna::validate_antenna(declaration, &parameters)?,
         ConstraintKind::CourtyardGap => validate_courtyard_gap(declaration, &parameters, mode)?,
         ConstraintKind::PlacementRegion if parameters.contains_key("courtyard_gap") => {
             validate_courtyard_gap(declaration, &parameters, mode)?

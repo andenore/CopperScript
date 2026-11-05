@@ -428,6 +428,10 @@ fn copy_local_models(footprint: &mut PhysicalFootprint, files: &mut Vec<Artifact
             kept.push(model);
             continue;
         }
+        if !matches!(model.extension().as_deref(), Some("step" | "stp" | "wrl" | "vrml")) {
+            warnings.push(format!("3D model {} is not a STEP or VRML file; using a generated body", model.path));
+            continue;
+        }
         let Ok(text) = std::fs::read_to_string(path) else {
             warnings.push(format!("3D model {} is not readable text; using a generated body", model.path));
             continue;
@@ -1404,9 +1408,28 @@ fn render(board: &PhysicalBoard, library_names: &IndexMap<String, String>) -> Re
             "  )".to_owned(),
         ]);
     }
+    for (index, arc) in board.arcs.iter().enumerate() {
+        lines.extend([
+            "  (arc".to_owned(),
+            format!("    (start {})", point(arc.start)),
+            format!("    (mid {})", point(arc.mid)),
+            format!("    (end {})", point(arc.end)),
+            format!("    (width {})", mm(arc.width_nm)),
+            format!("    (layer {})", quote(arc.layer.value())),
+            format!("    (net {})", net_codes[&arc.net]),
+            format!("    (uuid \"{}\")", stable_uuid(&[&board.name, "arc", &index.to_string()])),
+            "  )".to_owned(),
+        ]);
+    }
     for (index, via) in board.vias.iter().enumerate() {
-        // No source declares via technologies, so every via is a through via.
-        lines.push("  (via".to_owned());
+        // A board state may declare a via catalog: blind, buried and micro
+        // vias keep their KiCad kind (a plain via is a through via).
+        let technology = board.stackup.via_technologies.iter().find(|t| via.technology.as_deref() == Some(&t.id));
+        lines.push(match technology.map(|t| t.kind) {
+            Some(ViaKind::Blind | ViaKind::Buried) => "  (via blind".to_owned(),
+            Some(ViaKind::Microvia) => "  (via micro".to_owned(),
+            _ => "  (via".to_owned(),
+        });
         if macro_vias.contains(via) {
             lines.push("    (locked yes)".to_owned());
         }

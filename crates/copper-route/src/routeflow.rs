@@ -124,6 +124,7 @@ pub fn optimize_placement_for_routing(
     feedback_options: &PlacementRoutingFeedbackOptions,
     mut on_progress: Option<ProgressCallback<'_>>,
 ) -> Result<PlacementRoutingResult> {
+    crate::install_hooks();
     let candidates = if on_progress.is_some() {
         let observe = std::cell::RefCell::new(crate::progress::placement_progress(&mut on_progress));
         generate_placement_candidates_with_progress(board, placement_options, Some(&observe))?

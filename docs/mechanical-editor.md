@@ -137,7 +137,10 @@ with the same footprint and that the new source does not fix; parts not moved in
 this session take the new source's poses. The status line names the parts kept,
 kept parts that now break a rule of the new source (for example a new allowed
 orientation), and those reset because the new source fixes or changed them;
-nothing is written to the source.
+nothing is written to the source. The editor runs this reload automatically when
+its tab regains focus, or when a drag finds the source changed, unless a source
+review is pending or auto-placement is running; then use **Reload source** after
+saving or discarding the review.
 
 ## Mechanical editing
 

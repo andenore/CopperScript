@@ -15,7 +15,7 @@ use copper_pcb::zones::{deferred_zone_nets, routing_layers};
 use copper_physical::Point;
 use copper_physical::pyfloat::{hypot, round_int};
 
-use super::negotiate::{Accepted, Event};
+use super::negotiate::{Accepted, EventSink};
 use super::options::UnifiedRouterOptions;
 use super::rasters::FREE;
 use super::router::Router;
@@ -36,12 +36,6 @@ fn int(value: i64) -> Value {
 fn emit(on_progress: &mut Option<&mut dyn Progress>, phase: &str, event: &str, details: Vec<(&'static str, Value)>) {
     if let Some(callback) = on_progress {
         callback.observe(phase, event, details);
-    }
-}
-
-fn forward(on_progress: &mut Option<&mut dyn Progress>, events: &mut Vec<Event>) {
-    for (phase, event, details) in events.drain(..) {
-        emit(on_progress, phase, event, details);
     }
 }
 
@@ -70,8 +64,25 @@ fn net_track_length(board: &PhysicalBoard, name: &str, new_tracks: &[TrackSegmen
         .sum()
 }
 
+/// `net_track_length` for a length-match member: as arched (CS-174) for an
+/// arc-style net, over the board's copper and every accepted net's.
+fn member_length(
+    board: &PhysicalBoard,
+    name: &str,
+    accepted: &Accepted,
+    corners: &IndexMap<String, crate::arc_corners::CornerPolicy>,
+) -> i64 {
+    let own = accepted.get(name).map_or(&[][..], |c| c.0.as_slice());
+    if !corners.contains_key(name) {
+        return net_track_length(board, name, own);
+    }
+    let all: Vec<&TrackSegment> =
+        board.tracks.iter().chain(accepted.values().flat_map(|(tracks, _)| tracks.iter())).collect();
+    crate::arc_corners::planned_length_nm(&all, name, corners)
+}
+
 /// `_open_count`: (open signal connections, incomplete plane nets).
-fn open_count(
+pub(crate) fn open_count(
     board: &PhysicalBoard,
     nets: &[&PhysicalNet],
     accepted: &Accepted,
@@ -234,7 +245,7 @@ impl Shared<'_> {
 }
 
 /// `_rejection_text`: where the exact commit check rejected a net.
-fn rejection_text(router: &Router<'_, '_>, name: &str) -> String {
+pub(crate) fn rejection_text(router: &Router<'_, '_>, name: &str) -> String {
     let Some(details) = router.rejections.get(name).filter(|d| !d.is_empty()) else {
         return "unified: rejected by exact commit check".to_owned();
     };
@@ -288,7 +299,7 @@ fn failed_points(router: &Router<'_, '_>, failed: &[String]) -> Vec<(String, Poi
 }
 
 /// `_congestion_map`: per-tile contention of the router's final state.
-fn congestion_map(router: &mut Router<'_, '_>, failed: &[String], tile_nm: i64) -> CongestionMap {
+pub(crate) fn congestion_map(router: &mut Router<'_, '_>, failed: &[String], tile_nm: i64) -> CongestionMap {
     let (nl, plane) = (router.lattice.nl as usize, router.lattice.plane as usize);
     let mut node_demand = vec![0.0f64; plane];
     for (column, demand) in node_demand.iter_mut().enumerate() {
@@ -438,7 +449,7 @@ fn repair_attempt(
     seeder: Option<&mut EscapeSeeder<'_>>,
     required_accesses: Option<&IndexMap<PadReference, RoutingAccess>>,
     deadline: Option<Instant>,
-    events: &mut Vec<Event>,
+    events: &mut dyn EventSink,
 ) -> Result<Option<RepairAttempt>> {
     let mut work: Accepted = accepted.clone();
     let mut done = complete.clone();
@@ -666,7 +677,6 @@ pub fn route_unified(
             }
         }
     }
-    let mut events: Vec<Event> = Vec::new();
     let mut shared = Shared {
         enabled: options.share_commit_index,
         guides: Some(global_route),
@@ -688,8 +698,7 @@ pub fn route_unified(
             nets.iter().copied().filter(|n| bus_names.contains(n.name.as_str())).collect();
         let mut bus_router = Router::new(board, &bus_options, &bus_nets, IndexSet::new(), required_accesses, index)?;
         bus_router.set_guides(shared.guides);
-        let (bus_routes, bus_conflicts, used) = bus_router.negotiate(deadline, None, &mut events)?;
-        forward(&mut on_progress, &mut events);
+        let (bus_routes, bus_conflicts, used) = bus_router.negotiate(deadline, None, &mut on_progress)?;
         let (accepted_bus, _, complete_bus) = bus_router.commit(&bus_routes, &bus_conflicts)?;
         index = bus_router.clearance.take().expect("index");
         drop(bus_router);
@@ -773,8 +782,7 @@ pub fn route_unified(
     }
     setup.push(("seconds", Value::Float(0.0)));
     emit(&mut on_progress, "unified_setup", "finished", setup);
-    let (routes, conflicts, mut iterations) = router.negotiate(deadline, None, &mut events)?;
-    forward(&mut on_progress, &mut events);
+    let (routes, conflicts, mut iterations) = router.negotiate(deadline, None, &mut on_progress)?;
     let (mut accepted, mut rejected, mut complete) = router.commit(&routes, &conflicts)?;
     shared.added(&accepted);
     emit(
@@ -824,9 +832,8 @@ pub fn route_unified(
                 if seed { escape_seeder.as_deref_mut() } else { None },
                 required_accesses,
                 deadline,
-                &mut events,
+                &mut on_progress,
             )?;
-            forward(&mut on_progress, &mut events);
             let Some(attempt) = attempt else { continue };
             iterations += attempt.used;
             let score = open_count(board, &nets, &attempt.work, &plane_nets, &attempt.done)?;
@@ -884,10 +891,9 @@ pub fn route_unified(
             &mut shared,
             &mut slot,
             deadline,
-            &mut events,
+            &mut on_progress,
         )?;
         router.clearance = slot;
-        forward(&mut on_progress, &mut events);
         accepted = adopted;
         complete = adopted_complete;
         iterations += report.0;
@@ -1115,7 +1121,7 @@ fn recheck_pours<'b>(
     shared: &mut Shared<'_>,
     slot: &mut Option<RoutingClearanceIndex<'b>>,
     deadline: Option<Instant>,
-    events: &mut Vec<Event>,
+    events: &mut dyn EventSink,
 ) -> Result<(Accepted, IndexSet<String>, (i64, Vec<(&'static str, Value)>))> {
     let before = pour_estimate(board, accepted)?;
     let routed_planes: IndexSet<&str> =
@@ -1284,23 +1290,18 @@ fn recheck_pours<'b>(
 /// past its own `max_length`. Only a net that declares
 /// `tuning_amplitude_limit` is tuned; every member left over the limit is
 /// reported with its reason.
-fn tune_bus_skew(
+pub(crate) fn tune_bus_skew(
     board: &PhysicalBoard,
     accepted: &Accepted,
     rules: &IndexMap<&str, &copper_pcb::board::NetRoutingRule>,
 ) -> Result<(Accepted, Vec<String>)> {
     let mut accepted = accepted.clone();
     let mut notes = Vec::new();
+    let corners = crate::arc_corners::corner_policies(board);
     for group in &board.match_groups {
         let max_skew = group.max_skew_nm;
-        let lengths: IndexMap<&str, i64> = group
-            .nets
-            .iter()
-            .map(|name| {
-                let tracks = accepted.get(name).map_or(&[][..], |c| c.0.as_slice());
-                (name.as_str(), net_track_length(board, name, tracks))
-            })
-            .collect();
+        let lengths: IndexMap<&str, i64> =
+            group.nets.iter().map(|name| (name.as_str(), member_length(board, name, &accepted, &corners))).collect();
         if lengths.values().any(|length| *length == 0) {
             continue;
         }
@@ -1348,6 +1349,7 @@ fn tune_bus_skew(
                     style: rule.tuning_style,
                     leg_gap_nm: rule.tuning_spacing_nm,
                     vias: vias.clone(),
+                    corners: corners.clone(),
                     ..Default::default()
                 },
             )?;

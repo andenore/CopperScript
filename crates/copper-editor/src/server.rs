@@ -88,6 +88,7 @@ fn reason(status: u16) -> &'static str {
         403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
+        501 => "Not Implemented",
         _ => "Error",
     }
 }
@@ -315,7 +316,9 @@ fn handle(server: &Shared, mut stream: TcpStream, port: u16, token: &str) {
             Some(refusal) => refusal,
             None => post(server, &request, &mut stream, initial),
         },
-        other => Outcome::NotImplemented(format!("HTTP {other} requests to the editor")),
+        // `BaseHTTPRequestHandler` answers a method without a `do_` handler
+        // with 501; never end the process for what any web page can send.
+        _ => refused(&request, port, token, false).unwrap_or_else(|| error_body(501, "unsupported method")),
     };
     match outcome {
         Outcome::Respond(status, body, mime) => {

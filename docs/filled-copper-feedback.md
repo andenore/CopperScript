@@ -29,6 +29,16 @@ provisional until native refill verifies actual connectivity. The low-level
 On Windows use the installed absolute executable path. KiCad major 10 is the
 qualified refill adapter; other majors are reported as unsupported, not approved.
 
+`--verify-plane-fill native` refills and checks each candidate with
+CopperScript's own [filler](native-filling.md) and [DRC](native-drc.md)
+instead of `kicad-cli`. The report is written in KiCad's shape, with the
+same UUIDs, so the evidence, the open-net mapping and the dangling-copper
+repairs are the same code either way. The evidence's `kicad_version` then
+reads `copperscript <version>`. The native DRC is narrower than KiCad's (no
+courtyard or silkscreen checks; see its list), so KiCad stays the default.
+`copper bench --kicad-cli native` and `copper benchmark-routing --kicad-cli
+native` select it as well.
+
 The profiles set bounded **computational** work, not electrical constraints.
 Explicit numerical options override the profile, including zero trial budgets.
 No profile forces a fixed component to move or changes RF/power requirements.
@@ -317,6 +327,11 @@ transition anchors; source-zone outlines and installed-component internal joins
 are not repair witnesses. Deduplicate
 equivalent proposals across opens within the shared search budget. Cleanup needs
 exact native object mapping and fresh connectivity, not inferred object identity.
+
+Arched corners (CS-174) are the last change to the copper: the arc-corner
+stage runs after every cleanup and before exact DRC and native verification,
+so no cleanup sees a trimmed leg as dangling. Arcs are locked obstacles to
+any later reroute, and a rerouted net's own arcs go with its tracks.
 
 Missing tools and exhausted budgets remain unresolved evidence, not proof of
 impossibility. A closing benchmark establishes routing only; CAM, electrical,

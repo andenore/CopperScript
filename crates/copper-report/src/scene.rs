@@ -1115,6 +1115,31 @@ pub fn scene_from_physical(board: &StateValue) -> Py<Scene> {
             width: mm(integer(field(track, "width_nm")?, "track width")?),
         });
     }
+    if let Some(arcs) = optional(board, "arcs") {
+        for arc in items(arcs, "arcs")? {
+            let (start, mid, end) =
+                (point(field(arc, "start")?)?, point(field(arc, "mid")?)?, point(field(arc, "end")?)?);
+            let net = text(field(arc, "net")?, "arc net")?.to_owned();
+            let layer = text(field(arc, "layer")?, "arc layer")?.to_owned();
+            let width = mm(integer(field(arc, "width_nm")?, "arc width")?);
+            let chords = arc_points(
+                (mm(start.x_nm), mm(start.y_nm)),
+                (mm(mid.x_nm), mm(mid.y_nm)),
+                (mm(end.x_nm), mm(end.y_nm)),
+            );
+            for pair in chords.windows(2) {
+                if pair[0] != pair[1] {
+                    scene.tracks.push(SceneTrack {
+                        net: net.clone(),
+                        layer: layer.clone(),
+                        start: pair[0],
+                        end: pair[1],
+                        width,
+                    });
+                }
+            }
+        }
+    }
     for via in items(field(board, "vias")?, "vias")? {
         let from = layer_index(text(
             optional(via, "from_layer").unwrap_or(&StateValue::Str("F.Cu".to_owned())),

@@ -62,7 +62,8 @@ fn repr(text: &str) -> String {
 /// The decoupling-access pass (`decoupling.improve_decoupling_placement`):
 /// `(bypass_board, refined, phase options) -> (poses, moves)`. It runs the
 /// decoupler router, which lives in `copper-route` (a dependent of this crate),
-/// so the binary registers it.
+/// so `copper_route::install_hooks` registers it (the routing entry points and
+/// the binary call it).
 pub type DecouplingPass =
     fn(&PhysicalBoard, &Poses, &PlannerOptions, Option<&mut dyn FnMut(&str)>) -> Result<(Poses, i64)>;
 
@@ -98,7 +99,7 @@ fn improve_decoupling_placement(scene: &Scene, refined: &Poses, options: &Planne
     }
     let Some(pass) = DECOUPLING_PASS.get() else {
         return copper_pcb::not_implemented(
-            "decoupling-access placement (movable decouplers need the decoupler router)",
+            "decoupling-access placement without the decoupler router (call copper_route::install_hooks first)",
         );
     };
     let mut bypass_board = board.clone();

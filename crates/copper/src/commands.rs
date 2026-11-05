@@ -3,10 +3,10 @@
 use std::io::Write;
 
 use crate::{
-    agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compile, compile_macro,
-    edit_mechanical, editor_overlay, explain, export_kicad, export_kicad_pcb, export_manufacturing, issues, library,
-    lock, lsp, plan_layout, power_check, query, replay_critical, replay_unified, route_board, route_global, si_check,
-    state, summarize, view,
+    agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compare_cam, compile,
+    compile_macro, drc, edit_mechanical, editor_overlay, explain, export_kicad, export_kicad_pcb, export_manufacturing,
+    fill, issues, library, lock, lsp, plan_layout, plot, power_check, query, replay_critical, replay_unified,
+    route_board, route_global, si_check, state, summarize, synthesize_antenna, view,
 };
 
 /// Exit status of behaviour a command does not implement.
@@ -26,6 +26,10 @@ pub const COMMANDS: &[&str] = &[
     "edit-mechanical",
     "edit",
     "export-manufacturing",
+    "plot",
+    "fill",
+    "drc",
+    "compare-cam",
     "assembly",
     "check",
     "explain",
@@ -41,6 +45,7 @@ pub const COMMANDS: &[&str] = &[
     "compile",
     "export-kicad",
     "export-kicad-pcb",
+    "synthesize-antenna",
     "plan-layout",
     "route-global",
     "route-board",
@@ -52,12 +57,11 @@ pub const COMMANDS: &[&str] = &[
 const USAGE: &str = "usage: copper COMMAND [ARGS]";
 
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    // Placement's decoupling-access pass runs the decoupler router (copper-route).
-    copper_place::planner::register_decoupling_pass(|board, placements, options, progress| {
-        copper_route::decoupling::improve_decoupling_placement(board, placements, options, progress)
-    });
-    // Via-in-pad arrays check their sites against the routing clearance index.
-    copper_drc::macros::register_array_materializer(copper_route::pad_via_arrays::materialize_via_in_pad_arrays);
+    // Placement's decoupling-access pass runs the decoupler router and
+    // via-in-pad arrays check their sites against the routing clearance
+    // index (both in copper-route); plan-layout and the editor reach them
+    // through copper-place alone.
+    copper_route::install_hooks();
     let Some(command) = args.first() else {
         let _ = writeln!(err, "{USAGE}\ncopper: error: the following arguments are required: command");
         return 2;
@@ -84,6 +88,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "power-check" => power_check::run(rest, out, err),
         "export-kicad" => export_kicad::run(rest, out, err),
         "export-kicad-pcb" => export_kicad_pcb::run(rest, out, err),
+        "synthesize-antenna" => synthesize_antenna::run(rest, out, err),
         "lsp" => lsp::run(rest, out, err),
         "explain" => explain::run(rest, out, err),
         "issues" => issues::run(rest, out, err),
@@ -94,6 +99,10 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "route-board" => route_board::run(rest, out, err),
         "replay-critical" => replay_critical::run(rest, out, err),
         "export-manufacturing" => export_manufacturing::run(rest, out, err),
+        "plot" => plot::run(rest, out, err),
+        "fill" => fill::run(rest, out, err),
+        "drc" => drc::run(rest, out, err),
+        "compare-cam" => compare_cam::run(rest, out, err),
         "plan-layout" => plan_layout::run(rest, out, err),
         "bench" => copper_route::ladder::run(rest, out, err),
         "benchmark-routing" => benchmark_routing::run(rest, out, err),

@@ -4,6 +4,11 @@
 //! filled-copper feedback read them, running `kicad-cli` itself
 //! (`verify_filled_planes`) and the native dangling-copper cleanups
 //! (`remove_native_dangling_tracks`, `remove_native_dangling_copper`).
+//!
+//! In place of a `kicad-cli` path, [`NATIVE_CHECKER`] selects CopperScript's
+//! own filler and DRC (`copper-cam`): the export is refilled and checked
+//! without KiCad, and the report is written in KiCad's JSON shape, so the
+//! evidence, its UUID bindings and the repairs read the same either way.
 
 use copper_json::{Dumps, Object, Value};
 use copper_pcb::board::PhysicalBoard;
@@ -71,6 +76,10 @@ pub struct PlaneVerification {
     pub other_violation_count: i64,
     pub findings: Vec<String>,
     pub dangling_track_uuids: Vec<String>,
+    /// `track_dangling` findings excluded from the verdict: a feed-net segment
+    /// of a synthesized antenna ending inside its region is the radiator's
+    /// open end, which KiCad cannot know is deliberate.
+    pub expected_antenna_open_ends: Vec<String>,
     pub native_findings: Vec<NativeFinding>,
     pub artifact_directory: Option<String>,
     pub filled_regions: Vec<NativeFilledRegion>,
@@ -151,6 +160,7 @@ impl PlaneVerification {
         document.insert("other_violation_count".to_owned(), Value::from(self.other_violation_count));
         document.insert("findings".to_owned(), strings(&self.findings));
         document.insert("dangling_track_uuids".to_owned(), strings(&self.dangling_track_uuids));
+        document.insert("expected_antenna_open_ends".to_owned(), strings(&self.expected_antenna_open_ends));
         let native_findings = self
             .native_findings
             .iter()
@@ -266,6 +276,73 @@ impl From<copper_pcb::Error> for NativeError {
     fn from(error: copper_pcb::Error) -> Self {
         NativeError::Pcb(error)
     }
+}
+
+/// The checker argument (`--verify-plane-fill native`) that selects
+/// CopperScript's own refill and DRC instead of a `kicad-cli` executable.
+pub const NATIVE_CHECKER: &str = "native";
+
+/// Whether `checker` names CopperScript's own refill and DRC.
+pub fn is_native_checker(checker: &Path) -> bool {
+    checker.as_os_str() == NATIVE_CHECKER
+}
+
+/// Refill the written board at `pcb_path` natively (when it has zones), save
+/// it, check it, and write the report to `report_path` in KiCad's JSON
+/// shape: findings with `type`, `description` and `items` carrying UUIDs.
+fn native_refill_and_check(pcb_path: &Path, report_path: &Path, refill: bool) -> Result<(), NativeError> {
+    let read = |path: &Path| -> Result<String, NativeError> {
+        let bytes =
+            std::fs::read(path).map_err(|failure| os_error(&failure, Some(&copper_lang::paths::display(path))))?;
+        let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes)).into_owned();
+        Ok(text.replace("\r\n", "\n"))
+    };
+    let failed = |failure: String| NativeError::Runtime(format!("native refill/DRC failed: {failure}"));
+    let shown = copper_lang::paths::display(pcb_path);
+    let text = read(pcb_path)?;
+    let project = read(&pcb_path.with_extension("kicad_pro"))?;
+    let custom_path = pcb_path.with_extension("kicad_dru");
+    let custom = if custom_path.is_file() { Some(read(&custom_path)?) } else { None };
+    let rules = copper_cam::rules::Rules::load(&project, custom.as_deref()).map_err(failed)?;
+    let mut board = copper_cam::board::parse_board(&text, &shown).map_err(failed)?;
+    if refill {
+        let fills = copper_cam::fill::fill_zones(&board, &rules).map_err(failed)?;
+        let filled = copper_cam::pcb_write::write_fills(&text, &board, &fills).map_err(failed)?;
+        std::fs::write(pcb_path, filled.as_bytes()).map_err(|failure| os_error(&failure, Some(&shown)))?;
+        board = copper_cam::board::parse_board(&filled, &shown).map_err(failed)?;
+    }
+    let report = copper_cam::drc::check(&board, &rules).map_err(failed)?;
+    let entries = |list: &[copper_cam::drc::Violation]| {
+        Value::Array(
+            list.iter()
+                .map(|violation| {
+                    let mut entry = Object::new();
+                    entry.insert("type".to_owned(), Value::from(violation.kind));
+                    entry.insert("severity".to_owned(), Value::from("error"));
+                    entry.insert("description".to_owned(), Value::from(violation.description.as_str()));
+                    let items = violation
+                        .uuids
+                        .iter()
+                        .map(|uuid| {
+                            let mut item = Object::new();
+                            item.insert("uuid".to_owned(), Value::from(uuid.as_str()));
+                            Value::Object(item)
+                        })
+                        .collect();
+                    entry.insert("items".to_owned(), Value::Array(items));
+                    Value::Object(entry)
+                })
+                .collect(),
+        )
+    };
+    let mut document = Object::new();
+    document.insert("source".to_owned(), Value::from(shown.as_str()));
+    document.insert("violations".to_owned(), entries(&report.violations));
+    document.insert("unconnected_items".to_owned(), entries(&report.unconnected));
+    document.insert("not_checked".to_owned(), strings(&report.not_checked));
+    let json = Dumps::new().indent(2).dumps(&Value::Object(document)) + "\n";
+    std::fs::write(report_path, json.as_bytes())
+        .map_err(|failure| os_error(&failure, Some(&copper_lang::paths::display(report_path))))
 }
 
 fn runtime<T>(message: impl Into<String>) -> Result<T, NativeError> {
@@ -514,21 +591,27 @@ pub fn verify_filled_planes(
         }
     };
     let cli = copper_lang::paths::display(kicad_cli);
-    let version_result = run(&[cli.clone(), "--version".to_owned()], &stage)?;
-    if version_result.code != 0 {
-        return runtime(format!("KiCad version query failed: {}", version_result.stderr));
-    }
-    let version = strip(&version_result.stdout).lines().next().unwrap_or("").to_owned();
-    let major: Option<i64> = {
-        let digits: String = version.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if digits.is_empty() { None } else { digits.parse().ok() }
+    let native = is_native_checker(kicad_cli);
+    let version = if native {
+        concat!("copperscript ", env!("CARGO_PKG_VERSION")).to_owned()
+    } else {
+        let version_result = run(&[cli.clone(), "--version".to_owned()], &stage)?;
+        if version_result.code != 0 {
+            return runtime(format!("KiCad version query failed: {}", version_result.stderr));
+        }
+        let version = strip(&version_result.stdout).lines().next().unwrap_or("").to_owned();
+        let major: Option<i64> = {
+            let digits: String = version.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() { None } else { digits.parse().ok() }
+        };
+        if major != Some(qualified_major) {
+            return runtime(format!(
+                "KiCad {} is not the qualified major {qualified_major}",
+                copper_json::python_str_repr(&version)
+            ));
+        }
+        version
     };
-    if major != Some(qualified_major) {
-        return runtime(format!(
-            "KiCad {} is not the qualified major {qualified_major}",
-            copper_json::python_str_repr(&version)
-        ));
-    }
     let manifest = copper_pcb::kicad_pcb::generate(board)?;
     if manifest.artifacts.len() < 2 {
         return runtime("KiCad backend omitted the same-stem project");
@@ -562,10 +645,14 @@ pub fn verify_filled_planes(
         command.extend(["--refill-zones".to_owned(), "--save-board".to_owned()]);
     }
     command.push(copper_lang::paths::display(&pcb_path));
-    let result = run(&command, &stage)?;
-    if result.code != 0 || !report_path.is_file() {
-        let detail = [strip(&result.stderr), strip(&result.stdout)].into_iter().find(|t| !t.is_empty());
-        return runtime(format!("KiCad refill/DRC failed: {}", detail.unwrap_or("no report")));
+    if native {
+        native_refill_and_check(&pcb_path, &report_path, !board.zones.is_empty())?;
+    } else {
+        let result = run(&command, &stage)?;
+        if result.code != 0 || !report_path.is_file() {
+            let detail = [strip(&result.stderr), strip(&result.stdout)].into_iter().find(|t| !t.is_empty());
+            return runtime(format!("KiCad refill/DRC failed: {}", detail.unwrap_or("no report")));
+        }
     }
     let report_bytes = std::fs::read(&report_path)
         .map_err(|failure| os_error(&failure, Some(&copper_lang::paths::display(&report_path))))?;
@@ -579,10 +666,42 @@ pub fn verify_filled_planes(
     else {
         return runtime("KiCad DRC report lacks violations/unconnected_items");
     };
+    let objects = native_object_map(board)?;
+    // A synthesized antenna's radiator ends in the open on purpose; KiCad
+    // reports that end as dangling. Exclude exactly those findings.
+    let antennas = antenna_open_end_regions(board);
+    let mut expected_uuids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut expected_antenna_open_ends = Vec::new();
     let mut islands = Vec::new();
     let mut others = Vec::new();
     for item in violations {
-        if violation_type(item)? == "isolated_copper" { islands.push(item) } else { others.push(item) }
+        if violation_type(item)? == "isolated_copper" {
+            islands.push(item);
+            continue;
+        }
+        if violation_type(item)? == "track_dangling"
+            && let Some(Value::Array(entries)) = item.get("items")
+            && let [entry] = entries.as_slice()
+            && let Some(Value::Str(uuid)) = entry.as_object().and_then(|o| o.get("uuid"))
+            && let Some(object) = objects.get(uuid)
+            && object.kind == "segment"
+            && let Some(antenna) = antennas.iter().find(|(net, region, _)| {
+                object.net.as_deref() == Some(net.as_str())
+                    && object.positions_nm.iter().any(|(x, y)| {
+                        copper_physical::geometry::point_in_polygon(copper_physical::Point::new(*x, *y), region)
+                    })
+            })
+        {
+            expected_uuids.insert(uuid.clone());
+            expected_antenna_open_ends.push(format!(
+                "{}: {} (antenna {} open end)",
+                "track_dangling",
+                description(item)?,
+                antenna.2
+            ));
+            continue;
+        }
+        others.push(item);
     }
     let mut findings = Vec::new();
     for item in unconnected.iter().chain(islands.iter().copied()).chain(others.iter().copied()) {
@@ -605,7 +724,6 @@ pub fn verify_filled_planes(
             )));
         }
     }
-    let objects = native_object_map(board)?;
     let mut mapped = Vec::new();
     for (category, entries) in [("unconnected", unconnected), ("violation", violations)] {
         for item in entries {
@@ -615,6 +733,14 @@ pub fn verify_filled_planes(
                 Some(_) => return runtime("malformed KiCad DRC objects"),
             };
             let mut bindings = Vec::new();
+            if let [entry] = raw
+                && entry
+                    .as_object()
+                    .and_then(|o| o.get("uuid"))
+                    .is_some_and(|u| matches!(u, Value::Str(uuid) if expected_uuids.contains(uuid)))
+            {
+                continue;
+            }
             for entry in raw {
                 let Some(Value::Str(uuid)) = entry.as_object().and_then(|o| o.get("uuid")) else {
                     return runtime("malformed KiCad DRC object UUID");
@@ -661,6 +787,7 @@ pub fn verify_filled_planes(
         other_violation_count: others.len() as i64,
         findings,
         dangling_track_uuids: dangling.into_iter().collect(),
+        expected_antenna_open_ends,
         native_findings: mapped,
         artifact_directory: artifact_directory.map(|_| copper_lang::paths::display(&stage)),
         filled_regions: filled,
@@ -668,6 +795,32 @@ pub fn verify_filled_planes(
     };
     evidence.decoupling_assessments = crate::decoupling_fill::assess_decoupling_fill(board, &evidence)?;
     Ok(evidence)
+}
+
+/// The feed net, region and name of every synthesized antenna recorded on
+/// the board (`metadata["antenna_synthesis"]`).
+fn antenna_open_end_regions(board: &PhysicalBoard) -> Vec<(String, Vec<copper_physical::Point>, String)> {
+    copper_pcb::antenna::recorded_syntheses(board)
+        .into_iter()
+        .filter_map(|record| {
+            let net = record.get("net")?.as_str()?.to_owned();
+            let name = record.get("name")?.as_str()?.to_owned();
+            let region: Vec<copper_physical::Point> = record
+                .get("region_nm")?
+                .as_array()?
+                .iter()
+                .filter_map(|p| {
+                    let pair = p.as_array()?;
+                    let coordinate = |value: &Value| match value {
+                        Value::Int(n) => num_traits::ToPrimitive::to_i64(n),
+                        _ => None,
+                    };
+                    Some(copper_physical::Point::new(coordinate(pair.first()?)?, coordinate(pair.get(1)?)?))
+                })
+                .collect();
+            (region.len() >= 3).then_some((net, region, name))
+        })
+        .collect()
 }
 
 /// `tempfile.TemporaryDirectory(prefix=...)`, removed on drop.

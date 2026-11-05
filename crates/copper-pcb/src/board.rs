@@ -8,11 +8,11 @@ use copper_lang::silkscreen::Artwork;
 use copper_physical::footprint::PhysicalFootprint;
 use copper_physical::{
     BoardDatum, BoardEdge, BoardOutline, BoardSide, CopperKeepout, CopperLayer, DesignRules, MechanicalHole,
-    MechanicalSlot, PlacementKeepout, Point,
+    MechanicalSlot, PlacementKeepout, Point, RoundedConvexShape,
 };
 use copper_units::Decimal;
 
-use crate::{Result, decimal_rem, fail};
+use crate::{Error, Result, decimal_rem, fail};
 
 /// `DEFAULT_ADDITIONAL_COURTYARD_GAP_NM`.
 pub const DEFAULT_ADDITIONAL_COURTYARD_GAP_NM: i64 = 500_000;
@@ -241,6 +241,7 @@ text_enum!(RouteKind {
 });
 text_enum!(ReturnViaPolicy { Always = "always", ReferenceChange = "reference_change" });
 text_enum!(TuningStyle { Bumps = "bumps", Serpentine = "serpentine" });
+text_enum!(CornerStyle { Octilinear = "octilinear", Arc = "arc" });
 
 /// `NetRoutingRule`: the fields the export and its validation read.
 #[derive(Clone, Debug, PartialEq)]
@@ -278,9 +279,22 @@ pub struct NetRoutingRule {
     pub tuning_style: TuningStyle,
     pub tuning_spacing_nm: Option<i64>,
     pub tuning_group: Option<String>,
+    /// CS-174: `"arc"` rounds every eligible corner of the net.
+    pub corner_style: CornerStyle,
+    /// CS-174: the arc radius, None for the default of three widths.
+    pub corner_radius_nm: Option<i64>,
 }
 
 impl NetRoutingRule {
+    /// `arc_corner_radius_nm`: the arc radius of an arc-style rule routed at
+    /// `width_nm` (its declared radius, else three widths), None otherwise.
+    pub fn arc_corner_radius_nm(&self, width_nm: i64) -> Option<i64> {
+        if self.corner_style != CornerStyle::Arc {
+            return None;
+        }
+        Some(self.corner_radius_nm.unwrap_or(3 * width_nm))
+    }
+
     /// `NetRoutingRule.__post_init__` and `_validate_signal_integrity_intent`.
     pub fn validate(&self) -> Result<()> {
         if self.return_via_policy == ReturnViaPolicy::ReferenceChange {
@@ -306,6 +320,7 @@ impl NetRoutingRule {
             ("maximum stub length", self.maximum_stub_length_nm),
             ("tuning amplitude limit", self.tuning_amplitude_limit_nm),
             ("tuning spacing", self.tuning_spacing_nm),
+            ("corner radius", self.corner_radius_nm),
             ("maximum return via distance", self.maximum_return_via_distance_nm),
         ] {
             if value.is_some_and(|value| value <= 0) {
@@ -317,6 +332,12 @@ impl NetRoutingRule {
         }
         if self.tuning_spacing_nm.is_some() && self.tuning_style != TuningStyle::Serpentine {
             return fail("routing tuning spacing requires tuning_style \"serpentine\"");
+        }
+        if self.corner_radius_nm.is_some() && self.corner_style != CornerStyle::Arc {
+            return fail("routing corner radius requires corner_style \"arc\"");
+        }
+        if self.tuning_group.is_some() && self.corner_style == CornerStyle::Arc {
+            return fail("routing tuning_group requires corner_style \"octilinear\"");
         }
         let differential = matches!(self.kind, RouteKind::Differential | RouteKind::CanBus);
         if differential {
@@ -547,6 +568,74 @@ pub struct TrackSegment {
     pub end: Point,
     pub width_nm: i64,
     pub layer: CopperLayer,
+}
+
+/// `TrackArc`: a circular copper arc (CS-174) through `start`, `mid` and
+/// `end`, at most 180 degrees, joined to its neighbours at `start` and `end`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TrackArc {
+    pub net: String,
+    pub start: Point,
+    pub mid: Point,
+    pub end: Point,
+    pub width_nm: i64,
+    pub layer: CopperLayer,
+}
+
+impl TrackArc {
+    /// The arc's float geometry (centre, radius, sweep).
+    pub fn geometry(&self) -> Result<copper_physical::arcs::ArcGeometry> {
+        copper_physical::arcs::ArcGeometry::from_points(self.start, self.mid, self.end).map_err(Error::Value)
+    }
+
+    /// `validate`: distinct, non-collinear points, a positive width.
+    pub fn validate(&self) -> Result<()> {
+        if self.width_nm <= 0 {
+            return fail("arc width must be positive");
+        }
+        self.geometry().map(|_| ())
+    }
+
+    /// Rounded centre-line length in nanometres.
+    pub fn length_nm(&self) -> i64 {
+        self.geometry().map_or(0, |geometry| geometry.length_nm())
+    }
+
+    /// `chord_points`: the inscribed chord chain from `start` to `end`.
+    pub fn chord_points(&self) -> Vec<Point> {
+        match self.geometry() {
+            Ok(geometry) => geometry.chords(self.start, self.end, copper_physical::arcs::ARC_CHORD_TOLERANCE_NM),
+            Err(_) => vec![self.start, self.end],
+        }
+    }
+
+    /// `clearance_pieces`: chord capsules that contain the arc's copper (for
+    /// sound clearance queries), each widened by the chain's sagitta bound.
+    pub fn clearance_pieces(&self) -> Vec<RoundedConvexShape> {
+        self.pieces(self.width_nm.div_euclid(2) + copper_physical::arcs::chord_margin_nm())
+    }
+
+    /// `contact_pieces`: chord capsules inside the arc's copper (for sound
+    /// connectivity), each narrowed by the chain's sagitta bound.
+    pub fn contact_pieces(&self) -> Vec<RoundedConvexShape> {
+        self.pieces((self.width_nm.div_euclid(2) - copper_physical::arcs::chord_margin_nm()).max(0))
+    }
+
+    fn pieces(&self, radius_nm: i64) -> Vec<RoundedConvexShape> {
+        self.chord_points()
+            .windows(2)
+            .map(|pair| RoundedConvexShape::new(vec![pair[0], pair[1]], radius_nm).expect("valid chord capsule"))
+            .collect()
+    }
+
+    /// The bounds of the arc's copper.
+    pub fn bounds(&self) -> copper_physical::Bounds {
+        let pad = (self.width_nm + 1).div_euclid(2) + copper_physical::arcs::ARC_ROUNDING_MARGIN_NM;
+        match self.geometry() {
+            Ok(geometry) => geometry.bounds(pad),
+            Err(_) => copper_physical::geometry::bounds(&[self.start, self.mid, self.end]).expanded(pad),
+        }
+    }
 }
 
 /// `Via`.
@@ -801,6 +890,8 @@ pub struct PhysicalBoard {
     pub rules: DesignRules,
     pub tracks: Vec<TrackSegment>,
     pub vias: Vec<Via>,
+    /// Arched corners (CS-174); empty until the arc-corner stage runs.
+    pub arcs: Vec<TrackArc>,
     pub metadata: IndexMap<String, String>,
     pub regions: Vec<PlacementRegion>,
     pub keepouts: Vec<PlacementKeepout>,

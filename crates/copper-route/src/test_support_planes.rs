@@ -1,0 +1,900 @@
+//! Crate-private behaviour tests ported from the former Python suite
+//! (planes, stitching, fanout, vias, tuning and cleanup). The board
+//! builders are shared with the integration tests in `tests/`.
+
+#[path = "../tests/support_planes/mod.rs"]
+pub(crate) mod support_planes;
+
+/// `tests/test_length_match_tuning.py`.
+mod length_match_tuning {
+    use super::support_planes::lanes::*;
+    use super::support_planes::*;
+    use crate::critical::{CriticalOptions, route_critical_nets, validate_candidate};
+
+    fn lane(tracks: &[copper_pcb::board::TrackSegment], name: &str) -> Vec<copper_pcb::board::TrackSegment> {
+        let prefix = format!("{name}_");
+        tracks.iter().filter(|track| track.net.starts_with(&prefix)).cloned().collect()
+    }
+
+    #[test]
+    fn candidates_completing_an_over_skew_group_are_not_rejected_during_routing() {
+        let board = Lanes { amplitude: None, ..Lanes::new(&TWO_LANES) }.build();
+        let routed = route_critical_nets(board.clone(), &global(&board), &CriticalOptions::default(), None).unwrap();
+        let second = routed.nets[1].clone();
+        assert!(routed.nets[0].connected && second.connected);
+        let tracks_a = lane(&routed.locked_tracks, "LANE_A");
+        let tracks_b = lane(&routed.locked_tracks, "LANE_B");
+        // Together the two pairs violate the group skew, yet the candidate
+        // that completes the group passes validation: the tuning pass judges
+        // the group.
+        let (accepted, accepted_tracks, _) =
+            validate_candidate(&board, second.clone(), tracks_b.clone(), Vec::new(), &tracks_a, &[], None).unwrap();
+        assert!(accepted.connected && accepted.diagnostics.is_empty());
+        assert_eq!(accepted_tracks, tracks_b);
+        // Other hard findings still reject it.
+        let mut blocked = board.clone();
+        blocked.copper_keepouts = vec![lane_keepout("on-lane", 14.0, 13.0, 16.0, 15.0)];
+        let (rejected, rejected_tracks, _) =
+            validate_candidate(&blocked, second, tracks_b, Vec::new(), &tracks_a, &[], None).unwrap();
+        assert!(!rejected.connected && rejected_tracks.is_empty());
+        assert!(!rejected.diagnostics.iter().any(|message| message.starts_with("DRC-LENGTH-MATCH")));
+    }
+}
+
+/// `tests/test_serpentine_tuning.py`: S-shaped (two-sided) serpentines (D-PHY plan R10).
+mod serpentine_tuning {
+    use super::support_planes::paths::*;
+    use super::support_planes::*;
+    use crate::RoutingClearanceIndex;
+    use crate::critical::track_length;
+    use crate::critical_tuning::{
+        MATCH_TUNING_LEG_LIMIT, TunerOptions, UnitTuner, UnitTuning, leg_loss, serpentine_path, window_capacity,
+    };
+    use copper_pcb::board::{PhysicalBoard, TrackSegment, TuningStyle};
+    use copper_physical::{CopperLayer, Point};
+
+    const WIDTH: i64 = 140_000;
+    const GAP: i64 = 260_000;
+    const SPACING: i64 = WIDTH + GAP;
+    const AMPLITUDE: i64 = 350_000;
+    const CLEARANCE: i64 = 520_000;
+    const LAYER: CopperLayer = CopperLayer::Front;
+
+    fn empty() -> PhysicalBoard {
+        board("Empty", 60.0, 60.0)
+    }
+
+    fn lane(net: &str, a: Point, b: Point) -> TrackSegment {
+        track(net, a, b, WIDTH, LAYER)
+    }
+
+    /// `PAIRS`: along x, and members in opposite directions along y.
+    fn pairs() -> Vec<(&'static str, Vec<TrackSegment>)> {
+        vec![
+            ("along x", vec![lane("A", mm(5.0, 10.0), mm(45.0, 10.0)), lane("B", mm(5.0, 9.6), mm(45.0, 9.6))]),
+            ("reversed", vec![lane("A", mm(30.0, 50.0), mm(30.0, 10.0)), lane("B", mm(30.4, 10.0), mm(30.4, 50.0))]),
+        ]
+    }
+
+    fn serpentine() -> TunerOptions {
+        TunerOptions { style: TuningStyle::Serpentine, ..TunerOptions::default() }
+    }
+
+    fn tuner(
+        tracks: &[TrackSegment],
+        board: &PhysicalBoard,
+        nets: &[&str],
+        spacing: i64,
+        options: TunerOptions,
+    ) -> UnitTuner {
+        let obstacles = RoutingClearanceIndex::new(board).unwrap();
+        let nets: Vec<String> = nets.iter().map(|net| net.to_string()).collect();
+        UnitTuner::new(board, &obstacles, tracks.to_vec(), &nets, spacing, AMPLITUDE, CLEARANCE, options).unwrap()
+    }
+
+    fn pair_tuner(tracks: &[TrackSegment], board: &PhysicalBoard) -> UnitTuner {
+        tuner(tracks, board, &["A", "B"], SPACING, serpentine())
+    }
+
+    fn length(tracks: &[TrackSegment]) -> i64 {
+        track_length(&tracks.iter().collect::<Vec<_>>())
+    }
+
+    /// Signed distance of every corner from the original line (`_offsets`).
+    fn offsets(path: &[TrackSegment], line: i64, horizontal: bool) -> Vec<i64> {
+        ends(path).map(|p| if horizontal { p.y_nm } else { p.x_nm } - line).collect()
+    }
+
+    fn tracks(plan: &UnitTuning) -> &[TrackSegment] {
+        plan.tracks.as_deref().expect("tuned copper")
+    }
+
+    #[test]
+    fn serpentine_legs_alternate_sides_and_add_exact_equal_lengths() {
+        for (shape, lanes) in pairs() {
+            let tuner = pair_tuner(&lanes, &empty());
+            // The leg pitch is the lane width plus the default leg gap, the
+            // larger of 3 x width and the clearance.
+            assert_eq!(tuner.windows[0].pitch, SPACING + WIDTH + CLEARANCE);
+            for added in [nm(1.5), nm(4.1), nm(7.0)] {
+                let plan = tuner.plan(added).unwrap();
+                assert!(plan.reason.is_empty() && plan.style() == "serpentine" && plan.bumps == 0, "{shape}");
+                assert_eq!(plan.legs as usize, plan.amplitudes_nm.len() + 1);
+                assert!(plan.amplitudes_nm.iter().all(|h| nm(0.234) < *h && *h <= AMPLITUDE));
+                let (low, high) = (plan.amplitudes_nm.iter().min().unwrap(), plan.amplitudes_nm.iter().max().unwrap());
+                assert!(high - low <= 1, "levelled");
+                let (a, b) = (of_net(tracks(&plan), "A"), of_net(tracks(&plan), "B"));
+                for (net, path) in [("A", &a), ("B", &b)] {
+                    // Each member gains exactly the length asked for, stays
+                    // continuous and turns by 45 degrees at most.
+                    assert_eq!(length(path), length(&of_net(&lanes, net)) + added);
+                    assert!(continuous(path));
+                    assert!(sharp_bends(path, &[]).is_empty());
+                }
+                // The members keep the pair spacing through every leg and corner.
+                assert_eq!(least_gap_squared(&a, &b), squared(SPACING));
+                for (first, second) in [(&a, &b), (&b, &a)] {
+                    assert!(
+                        lane_offsets(first, second).iter().all(|o| squared(SPACING) <= *o && *o < squared(SPACING + 2))
+                    );
+                }
+                // The tops alternate sides: the trace crosses its original
+                // line and never rises more than the amplitude limit off it.
+                let horizontal = shape == "along x";
+                let line = if horizontal { lanes[0].start.y_nm } else { lanes[0].start.x_nm };
+                let off = offsets(&a, line, horizontal);
+                assert!(*off.iter().min().unwrap() < 0 && *off.iter().max().unwrap() > 0);
+                assert_eq!(off.iter().map(|o| o.abs()).max().unwrap(), *high);
+            }
+        }
+    }
+
+    #[test]
+    fn each_leg_adds_its_length_less_one_leg_loss_for_both_members() {
+        // Serpentines of one to five tops, at uneven heights: every member
+        // gains 2 x the sum of heights less (tops + 1) leg losses.
+        let pitch = SPACING + WIDTH + CLEARANCE;
+        let cases: [&[i64]; 4] = [
+            &[300_000],
+            &[300_000, 280_001],
+            &[250_017, 333_333, 300_000],
+            &[240_000, 350_000, 240_000, 350_000, 299_999],
+        ];
+        for heights in cases {
+            let sides: Vec<i64> = (0..heights.len()).map(|i| if i % 2 == 0 { 1 } else { -1 }).collect();
+            // Every leg is at least 240 um long: up to (240 um - d) // 2.
+            for chamfer in [1, 1_000, 2_843] {
+                let expected =
+                    2 * heights.iter().sum::<i64>() - (heights.len() as i64 + 1) * leg_loss(chamfer, SPACING);
+                for member in [1, -1] {
+                    let corners = serpentine_path(nm(10.0), pitch, SPACING, &sides, heights, member, chamfer);
+                    let mut points = vec![Point::new(nm(5.0), 0)];
+                    points.extend(corners.iter().map(|(x, y)| Point::new(*x, *y)));
+                    points.push(Point::new(nm(40.0), 0));
+                    let path: Vec<TrackSegment> = points
+                        .windows(2)
+                        .filter(|pair| pair[0] != pair[1])
+                        .map(|pair| lane("A", pair[0], pair[1]))
+                        .collect();
+                    assert_eq!(length(&path) - nm(35.0), expected, "{heights:?} chamfer {chamfer}");
+                }
+            }
+        }
+        // A single net (no partner) loses 2 x (2c - round(c sqrt 2)) per leg.
+        assert_eq!(leg_loss(7_000, 0), 2 * (14_000 - 9_899));
+    }
+
+    #[test]
+    fn a_single_net_snakes_about_its_own_line() {
+        let single = vec![lane("A", mm(5.0, 10.0), mm(45.0, 10.0))];
+        let tuner = tuner(&single, &empty(), &["A"], 0, serpentine());
+        assert_eq!(tuner.windows[0].pitch, WIDTH + CLEARANCE);
+        let plan = tuner.plan(nm(5.0)).unwrap();
+        assert_eq!(plan.style(), "serpentine");
+        let path = of_net(tracks(&plan), "A");
+        assert_eq!(length(&path), nm(45.0));
+        assert!(sharp_bends(&path, &[]).is_empty());
+        let off = offsets(&path, nm(10.0), true);
+        assert!(off.iter().any(|o| *o > 0) && off.iter().any(|o| *o < 0));
+    }
+
+    fn walled(x1: f64) -> PhysicalBoard {
+        let mut board = empty();
+        board.copper_keepouts =
+            vec![keepout("wall", &[CopperLayer::Front, CopperLayer::Back], rect(4.0, 7.0, x1, 9.33))];
+        board
+    }
+
+    #[test]
+    fn serpentines_fall_back_to_one_sided_bumps() {
+        // A wall at the clearance below the pair leaves room on one side
+        // only: no serpentine fits, so the unit gets R3's one-sided bumps upward.
+        let board = walled(46.0);
+        let lanes = pairs().remove(0).1;
+        let tuner = pair_tuner(&lanes, &board);
+        assert!(tuner.windows.is_empty());
+        let plan = tuner.plan(nm(1.0)).unwrap();
+        assert!(plan.reason.is_empty() && plan.style() == "bumps" && plan.legs == 0 && plan.bumps != 0);
+        assert!(offsets(&of_net(tracks(&plan), "B"), nm(9.6), true).iter().all(|o| *o >= 0));
+        let bumps = tuner_bumps(&lanes, &board).tune(nm(1.0)).unwrap().0;
+        assert_eq!(plan.tracks, bumps);
+        // Too little length for tops tall enough to have 45-degree corners on
+        // both members also falls back to bumps.
+        let small = pair_tuner(&lanes, &empty()).plan(nm(0.2)).unwrap();
+        assert!(small.style() == "bumps" && small.bumps != 0);
+        // A wall on one side over part of the run: the serpentine takes the
+        // free stretch, another run keeps bumps.
+        let plan = pair_tuner(&lanes, &walled(25.0)).plan(nm(3.0)).unwrap();
+        assert_eq!(plan.style(), "serpentine");
+        assert!(tracks(&plan).iter().filter(|t| t.start.y_nm < nm(9.6)).all(|t| t.start.x_nm > nm(25.0)));
+    }
+
+    fn tuner_bumps(lanes: &[TrackSegment], board: &PhysicalBoard) -> UnitTuner {
+        tuner(lanes, board, &["A", "B"], SPACING, TunerOptions::default())
+    }
+
+    #[test]
+    fn the_leg_count_is_bounded() {
+        let lanes = pairs().remove(0).1;
+        let options = TunerOptions { leg_limit: 6, bump_limit: 3, ..serpentine() };
+        let tuner = tuner(&lanes, &empty(), &["A", "B"], SPACING, options);
+        // Six legs hold five tops: their full capacity fits, more does not
+        // (nor in the three bumps of the fallback).
+        let five = window_capacity(&tuner.windows[0], &[AMPLITUDE; 5]);
+        let plan = tuner.plan(five - five % 2).unwrap();
+        assert!(plan.reason.is_empty() && plan.legs == 6, "{}", plan.reason);
+        let plan = tuner.plan(five + 2).unwrap();
+        assert!(plan.tracks.is_none());
+        assert!(plan.reason.contains("the limit of 3 bumps; serpentine: insufficient tuning room"), "{}", plan.reason);
+        assert!(plan.reason.ends_with("in 6 leg(s), the limit of 6 legs"), "{}", plan.reason);
+        assert_eq!(MATCH_TUNING_LEG_LIMIT, 32);
+    }
+
+    #[test]
+    fn a_declared_leg_gap_sets_the_pitch() {
+        let lanes = pairs().remove(0).1;
+        let options = TunerOptions { leg_gap_nm: Some(nm(0.8)), ..serpentine() };
+        let tuner = tuner(&lanes, &empty(), &["A", "B"], SPACING, options);
+        assert_eq!(tuner.windows[0].pitch, SPACING + WIDTH + nm(0.8));
+        let plan = tuner.plan(nm(3.0)).unwrap();
+        let mut legs: Vec<i64> =
+            of_net(tracks(&plan), "A").iter().filter(|t| t.start.x_nm == t.end.x_nm).map(|t| t.start.x_nm).collect();
+        legs.sort();
+        legs.dedup();
+        // Facing legs of one member are the gap plus one width apart (centres).
+        assert_eq!(legs.windows(2).map(|pair| pair[1] - pair[0]).min(), Some(nm(0.8) + WIDTH));
+    }
+
+    #[test]
+    fn bumps_in_the_open_run_win_over_a_serpentine_beside_the_lands() {
+        // One net along x. Below it, x 25 to 45 mm is blocked, so a
+        // serpentine only fits at x < 25 mm. Every slot starting before
+        // x = 26 mm counts as inside a breakout region beside the lands here.
+        // One-sided bumps further along add the length outside it and win;
+        // with every slot outside, the serpentine still comes first.
+        let mut board = empty();
+        board.copper_keepouts =
+            vec![keepout("below", &[CopperLayer::Front, CopperLayer::Back], rect(25.0, 8.0, 46.0, 9.8))];
+        let single = vec![lane("A", mm(5.0, 10.0), mm(45.0, 10.0))];
+        let added = nm(1.2);
+        let free = tuner(&single, &board, &["A"], 0, serpentine()).plan(added).unwrap();
+        assert!(free.legs != 0 && free.tracks.is_some());
+        let mut beside = tuner(&single, &board, &["A"], 0, serpentine());
+        let near: Vec<_> = beside
+            .ordered
+            .iter()
+            .copied()
+            .chain(beside.windows.iter().flat_map(|window| window.tops.iter().copied()))
+            .filter(|slot| slot.start < nm(26.0))
+            .collect();
+        beside.inside = near.into_iter().collect();
+        let plan = beside.plan(added).unwrap();
+        assert!(plan.tracks.is_some() && plan.legs == 0);
+        let moved: Vec<_> =
+            tracks(&plan).iter().filter(|t| t.start.y_nm != nm(10.0) || t.end.y_nm != nm(10.0)).collect();
+        assert!(!moved.is_empty() && moved.iter().all(|t| t.start.x_nm.min(t.end.x_nm) > nm(25.5)));
+        assert_eq!(length(tracks(&plan)), nm(40.0) + added);
+    }
+}
+
+/// `tests/test_group_tuning.py::test_tuning_group_steps_are_dropped_when_a_unit_reroutes`.
+mod group_tuning {
+    use super::support_planes::track;
+    use crate::critical::CriticalNetResult;
+    use crate::critical_match::{Committed, RoutingTuning, drop_group_steps};
+    use crate::critical_tuning::MatchTuningUnit;
+    use copper_pcb::board::TrackSegment;
+    use copper_physical::{CopperLayer, Point};
+    use indexmap::IndexMap;
+
+    fn unit(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    /// A result told apart by its `strategy` (the Python test used strings).
+    fn result(name: &str) -> CriticalNetResult {
+        CriticalNetResult {
+            strategy: name.to_owned(),
+            ..CriticalNetResult::new(Vec::new(), true, 0, 0, Vec::new(), 0, Vec::new())
+        }
+    }
+
+    fn step(nets: Vec<String>, group: &str) -> MatchTuningUnit {
+        MatchTuningUnit {
+            lanes: if group.is_empty() { Vec::new() } else { nets.clone() },
+            nets,
+            stage: "routing".to_owned(),
+            style: "bumps".to_owned(),
+            added_length_nm: 2,
+            bumps: 1,
+            legs: 0,
+            amplitudes_nm: vec![5],
+            group: group.to_owned(),
+        }
+    }
+
+    fn strategies(results: &[CriticalNetResult]) -> Vec<&str> {
+        results.iter().map(|result| result.strategy.as_str()).collect()
+    }
+
+    #[test]
+    fn tuning_group_steps_are_dropped_when_a_unit_reroutes() {
+        let (a, b, c) = (unit(&["A_N", "A_P"]), unit(&["B_N", "B_P"]), unit(&["C_N", "C_P"]));
+        let tracks: Vec<Vec<TrackSegment>> = [&a, &b, &c]
+            .iter()
+            .enumerate()
+            .map(|(index, unit)| {
+                let y = index as i64;
+                vec![track(&unit[0], Point::new(0, y), Point::new(10, y), 1, CopperLayer::Front)]
+            })
+            .collect();
+        let tuned = |index: usize| [tracks[index].clone(), tracks[index].clone()].concat();
+        let mut committed: Committed = vec![
+            (a.clone(), tuned(0), Vec::new()),
+            (b.clone(), tuned(1), Vec::new()),
+            (c.clone(), tracks[2].clone(), Vec::new()),
+        ];
+        let mut results = vec![result("a"), result("b-tuned"), result("c")];
+        let index: IndexMap<Vec<String>, usize> =
+            [(a.clone(), 0), (b.clone(), 1), (c.clone(), 2)].into_iter().collect();
+        let ab = [a.clone(), b.clone()].concat();
+        let mut tuning = RoutingTuning {
+            early: vec![step(ab.clone(), "pair-ab"), step(a.clone(), "")],
+            routed: ["A_N", "A_P", "B_N", "B_P"].iter().map(|net| ((*net).to_owned(), 1)).collect(),
+            failed_targets: [(ab, 3), (c.clone(), 3)].into_iter().collect(),
+            as_routed: [
+                (a.clone(), (tracks[0].clone(), result("a-routed"))),
+                (b.clone(), (tracks[1].clone(), result("b-routed"))),
+            ]
+            .into_iter()
+            .collect(),
+            group_failures: IndexMap::new(),
+        };
+        // A re-routed: B goes back to its copper as routed, every step of A and B goes.
+        assert!(drop_group_steps(std::slice::from_ref(&a), &mut committed, &mut results, &index, &mut tuning));
+        assert_eq!(committed[1], (b.clone(), tracks[1].clone(), Vec::new()));
+        assert_eq!(strategies(&results), ["a", "b-routed", "c"]);
+        assert!(tuning.early.is_empty());
+        assert_eq!(tuning.failed_targets.clone().into_iter().collect::<Vec<_>>(), [(c.clone(), 3)]);
+        let kept: Vec<(&Vec<String>, &str)> =
+            tuning.as_routed.iter().map(|(unit, (_, result))| (unit, result.strategy.as_str())).collect();
+        assert_eq!(kept, [(&a, "a-routed")]);
+        assert_eq!(tuning.as_routed[&a].0, tracks[0]);
+        assert_eq!(
+            tuning.routed.clone().into_iter().collect::<Vec<_>>(),
+            [("A_N".to_owned(), 1), ("A_P".to_owned(), 1)]
+        );
+        // Without group steps nothing changes.
+        assert!(!drop_group_steps(&[c], &mut committed, &mut results, &index, &mut tuning));
+    }
+}
+
+/// `tests/test_breakout_regions.py`: the router entry points under breakout regions.
+mod breakout_regions {
+    use super::support_planes::breakout::Row;
+    use super::support_planes::*;
+    use crate::critical::{route_pair, route_single, validate_candidate};
+    use copper_drc::breakout::BreakoutRegions;
+    use copper_pcb::board::{NetRoutingRule, RouteKind};
+    use indexmap::IndexMap;
+    use std::collections::BTreeSet;
+
+    fn region(regions: &BreakoutRegions, track: &copper_pcb::board::TrackSegment) -> Option<String> {
+        regions.region(&track.net, &[track.start, track.end])
+    }
+
+    #[test]
+    fn a_single_ended_guide_candidate_is_cut_at_the_region_boundary() {
+        let mut board = Row { obstacle: false, ..Row::default() }.build();
+        let clock = NetRoutingRule {
+            kind: RouteKind::Clock,
+            priority: 100,
+            width_nm: Some(nm(0.15)),
+            clearance_nm: Some(nm(0.5)),
+            breakout_length_nm: Some(nm(1.0)),
+            breakout_width_nm: Some(nm(0.12)),
+            breakout_clearance_nm: Some(nm(0.15)),
+            ..rule("LANE_P")
+        };
+        board.net_routing_rules = vec![clock.clone()];
+        let guides = global(&board);
+        let guide = guides.routes.iter().find(|route| route.net == "LANE_P");
+        let (result, tracks, _) = route_single(&board, &clock, guide).unwrap();
+        let regions = BreakoutRegions::new(&board);
+        assert!(result.connected, "{:?}", result.diagnostics);
+        let lands: BTreeSet<Option<String>> = tracks.iter().map(|track| region(&regions, track)).collect();
+        assert_eq!(lands, [Some("pad:U1.3:2".to_owned()), Some("pad:J1.3:2".to_owned()), None].into_iter().collect());
+        for track in &tracks {
+            let expected = if region(&regions, track).is_none() { nm(0.15) } else { nm(0.12) };
+            assert_eq!(track.width_nm, expected, "{track:?}");
+        }
+        let mut routed = board.clone();
+        routed.tracks = tracks;
+        let codes: BTreeSet<String> = copper_drc::run_physical_drc(&routed, copper_drc::Policy::default())
+            .unwrap()
+            .findings
+            .into_iter()
+            .filter(|finding| finding.nets.iter().any(|net| net == "LANE_P"))
+            .map(|finding| finding.code)
+            .collect();
+        assert!(
+            !codes.iter().any(|code| ["DRC-CLEARANCE", "DRC-SHORT", "DRC-TRACK-WIDTH"].contains(&code.as_str())),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn critical_validation_applies_the_region_rules() {
+        let board = Row { obstacle: false, ..Row::default() }.build();
+        let routes: IndexMap<String, crate::routing::GlobalNetRoute> =
+            global(&board).routes.into_iter().map(|route| (route.net.clone(), route)).collect();
+        let (first, second) = (&board.net_routing_rules[0], &board.net_routing_rules[1]);
+        let (proposed, tracks, vias) = route_pair(&board, first, second, &routes, false, &board).unwrap();
+        assert_eq!(proposed.strategy, "aligned_pair");
+        assert!(proposed.connected, "{:?}", proposed.diagnostics);
+        let (accepted, kept, _) =
+            validate_candidate(&board, proposed.clone(), tracks.clone(), vias.clone(), &[], &[], None).unwrap();
+        assert!(accepted.connected, "{:?}", accepted.diagnostics);
+        assert_eq!(kept, tracks);
+        // The same copper is illegal when the clearance applies in the pin field...
+        let plain = Row { obstacle: false, breakout: None, ..Row::default() }.build();
+        let (rejected, kept, _) =
+            validate_candidate(&plain, proposed.clone(), tracks.clone(), vias.clone(), &[], &[], None).unwrap();
+        assert!(!rejected.connected && kept.is_empty());
+        assert!(
+            rejected.diagnostics.iter().any(|message| message.starts_with("DRC-CLEARANCE")),
+            "{:?}",
+            rejected.diagnostics
+        );
+        // ...and in the channel, where it passes the test point 0.3 mm away.
+        let obstructed = Row::default().build();
+        let (rejected, _, _) = validate_candidate(&obstructed, proposed, tracks, vias, &[], &[], None).unwrap();
+        assert!(!rejected.connected);
+        assert!(rejected.diagnostics.iter().any(|message| message.contains("TP1.1")), "{:?}", rejected.diagnostics);
+    }
+}
+
+/// `tests/test_interstitial_fanout.py`: ordinary dogbones use exact copper shapes.
+mod interstitial_fanout {
+    use super::support_planes::*;
+    use crate::RoutingClearanceIndex;
+    use crate::fanout::{FanoutOptions, OutlineSites, legal_choices, maze_choices};
+    use copper_pcb::board::PadReference;
+    use copper_physical::{CopperLayer, Point};
+
+    fn launches(
+        board: &copper_pcb::board::PhysicalBoard,
+        endpoint: Point,
+    ) -> Vec<crate::escape_assignment::EscapeCandidate> {
+        let index = RoutingClearanceIndex::new(board).unwrap();
+        let outline = OutlineSites::new(&board.outline.vertices);
+        legal_choices(board, &index, "N5", mm(5.0, 5.0), &board.placements[0], &[endpoint], false, &outline).unwrap()
+    }
+
+    #[test]
+    fn round_pad_interstitial_launch_is_legal_and_does_not_overlap_any_land() {
+        let board = interstitial_board();
+        let endpoint = mm(5.375, 5.375);
+        let index = RoutingClearanceIndex::new(&board).unwrap();
+        assert!(
+            index
+                .can_via("N5", endpoint, 450_000, CopperLayer::Front, CopperLayer::Back, Some(200_000), false, None)
+                .unwrap()
+        );
+        let choices = launches(&board, endpoint);
+        assert!(!choices.is_empty());
+        let (tracks, via) = choices[0].clone();
+        let via = via.expect("a new via");
+        assert_eq!(via.position, endpoint);
+        let mut placed = board.clone();
+        placed.tracks = tracks;
+        placed.vias = vec![via];
+        let policy = copper_drc::Policy { require_completed_detailed_route: false, ..copper_drc::Policy::default() };
+        let errors: Vec<String> = copper_drc::run_physical_drc(&placed, policy)
+            .unwrap()
+            .findings
+            .into_iter()
+            .filter(|f| f.severity == copper_drc::Severity::Error && f.code != "DRC-OPEN-NET")
+            .map(|f| format!("{}: {}", f.code, f.message))
+            .collect();
+        assert!(errors.is_empty(), "{errors:?}");
+    }
+
+    #[test]
+    fn ordinary_launch_still_rejects_actual_same_or_foreign_pad_overlap() {
+        let board = interstitial_board();
+        for endpoint in [mm(5.0, 5.0), mm(5.1, 5.1), mm(5.75, 5.75)] {
+            assert!(launches(&board, endpoint).is_empty(), "{endpoint:?}");
+        }
+    }
+
+    #[test]
+    fn maze_can_use_round_pad_interstitial_site() {
+        let board = interstitial_board();
+        let pose = &board.placements[0];
+        let pad = &board.footprints["array"].pads[4];
+        let pins = [(0, PadReference::new("U", "5"), mm(5.0, 5.0), pose, pad)];
+        let options = FanoutOptions {
+            refinement_step_nm: 125_000,
+            maximum_radius_nm: 600_000,
+            maze_state_budget: 2000,
+            ..FanoutOptions::default()
+        };
+        let index = RoutingClearanceIndex::new(&board).unwrap();
+        let choices = maze_choices(&board, &index, "N5", &pins, &options).unwrap();
+        assert!(!choices.is_empty());
+        let via = choices[0].1.clone().expect("a via");
+        let fresh = RoutingClearanceIndex::new(&board).unwrap();
+        assert!(
+            fresh
+                .can_via("N5", via.position, via.size_nm, via.from_layer, via.to_layer, Some(via.drill_nm), false, None)
+                .unwrap()
+        );
+    }
+}
+
+/// `tests/test_two_leg_fanout.py`: the off-ray site budget and the bounded
+/// maze fallback.
+mod two_leg_fanout {
+    use super::support_planes::fanout::*;
+    use super::support_planes::*;
+    use crate::RoutingClearanceIndex;
+    use crate::fanout::{FanoutOptions, maze_choices, two_leg_candidates};
+    use crate::pin_escape::verified_fanout_path;
+    use copper_pcb::board::PadReference;
+    use std::collections::BTreeSet;
+
+    fn opts() -> FanoutOptions {
+        FanoutOptions { minimum_component_pads: 2, maximum_neighbor_distance_nm: nm(3.0), ..FanoutOptions::default() }
+    }
+
+    #[test]
+    fn two_leg_site_budget_is_bounded_near_to_far_and_has_no_radial_duplicates() {
+        let settings = FanoutOptions { maximum_two_leg_candidates: 17, ..opts() };
+        let candidates = two_leg_candidates(mm(5.0, 6.0), mm(5.0, 7.0), &settings);
+        let distinct: BTreeSet<(i64, i64)> = candidates.iter().map(|p| (p.x_nm, p.y_nm)).collect();
+        assert_eq!((candidates.len(), distinct.len()), (17, 17));
+        let mut radii = Vec::new();
+        for point in &candidates {
+            let (dx, dy) = ((point.x_nm - nm(5.0)).abs(), (point.y_nm - nm(6.0)).abs());
+            assert!(dx != 0 && dy != 0 && dx != dy, "{point:?} lies on a radial ray");
+            radii.push(dx.max(dy));
+        }
+        assert!(radii.windows(2).all(|pair| pair[0] <= pair[1]), "{radii:?}");
+    }
+
+    /// Python emptied `_legal_choices` to reach the maze through
+    /// `route_fanout`; Rust has no seam, so the maze owner is called directly
+    /// on the same pin and its candidate is checked as committed copper.
+    #[test]
+    fn bounded_maze_fallback_retains_exact_clearance_and_determinism() {
+        let board = two_leg_board(true);
+        let settings = FanoutOptions { maze_escapes: true, joint_escapes: false, surface_fallback: false, ..opts() };
+        let pose = &board.placements[0];
+        let pad = &board.footprints["two"].pads[0];
+        let pins = [(nm(2.0), PadReference::new("U", "1"), mm(5.0, 6.0), pose, pad)];
+        let maze = |options: &FanoutOptions| {
+            maze_choices(&board, &RoutingClearanceIndex::new(&board).unwrap(), "A", &pins, options).unwrap()
+        };
+        let choices = maze(&settings);
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices, maze(&settings));
+        let (path, via) = choices[0].clone();
+        let via = via.expect("the maze escape ends in a via");
+        assert_eq!(path.last().unwrap().end, via.position);
+        let mut routed = board.clone();
+        routed.tracks = path.clone();
+        routed.vias = vec![via.clone()];
+        let index = RoutingClearanceIndex::new(&routed).unwrap();
+        let verified = verified_fanout_path(&routed, &PadReference::new("U", "1"), "A", via.position, &index).unwrap();
+        assert!(verified.is_some());
+        assert_drc_clear(
+            &routed,
+            &["DRC-SHORT", "DRC-CLEARANCE", "DRC-VIA-PAD-OVERLAP", "DRC-COPPER-KEEPOUT", "DRC-BOARD-EDGE"],
+        );
+        assert!(maze(&FanoutOptions { maze_state_budget: 1, ..settings }).is_empty());
+    }
+}
+
+/// `tests/test_via_hole_clearance.py`: global via capacity sites.
+mod via_hole_clearance {
+    use super::support_planes::*;
+    use crate::RoutingClearanceIndex;
+    use crate::routing::legal_via_sites;
+    use copper_pcb::board::Via;
+    use copper_physical::CopperLayer;
+
+    #[test]
+    fn global_via_capacity_sites_can_coexist_on_distinct_nets() {
+        let mut base = board("hole-clearance", 20.0, 20.0);
+        base.nets = vec![net("A", &[]), net("B", &[])];
+        base.rules.minimum_clearance_nm = 100_000;
+        base.rules.default_via_size_nm = 450_000;
+        base.rules.default_via_drill_nm = 200_000;
+        let index = RoutingClearanceIndex::new(&base).unwrap();
+        let sites =
+            legal_via_sites(&base, &index, mm(10.0, 10.0), 3_000_000, CopperLayer::Front, CopperLayer::Back).unwrap();
+        assert!(sites.len() > 1, "{sites:?}");
+        // Annulus clearance alone permits 0.55 mm pitch; drill-to-annulus
+        // clearance requires 0.575 mm for this common 0.45/0.20 mm via.
+        let proposals: Vec<Via> =
+            sites.iter().enumerate().map(|(i, p)| via(&format!("net-{i}"), *p, 450_000, 200_000)).collect();
+        assert!(index.candidate_vias_clear(&proposals).unwrap());
+    }
+}
+
+/// `tests/test_decoupling_track_containment.py`: narrow exact containment
+/// avoids redundant producer edges and never waives proof.
+mod decoupling_track_containment {
+    use super::support_planes::decoupling::crosslayer;
+    use super::support_planes::*;
+    use crate::decoupling_paths::{
+        ConnectionWork, ProposalBounds, connections, propose_crosslayer_decoupling, verify_crosslayer_decoupling,
+    };
+    use crate::fanout::FanoutOptions;
+    use crate::flow::track_is_contained;
+    use copper_pcb::board::TrackSegment;
+    use copper_physical::{CopperLayer, Point};
+    use std::ops::ControlFlow;
+
+    fn segment(a: (i64, i64), b: (i64, i64)) -> TrackSegment {
+        track("P", Point::new(a.0, a.1), Point::new(b.0, b.1), 150_000, CopperLayer::Back)
+    }
+
+    #[test]
+    fn true_subsegment_and_reversed_edges_use_exact_existing_geometry() {
+        let cases = [
+            ((0, 0), (10, 0), (2, 0), (8, 0)),
+            ((10, 0), (0, 0), (8, 0), (2, 0)),
+            ((0, 10), (0, 0), (0, 2), (0, 8)),
+            ((0, 0), (10, 10), (8, 8), (2, 2)),
+            ((-10, 10), (10, -10), (-4, 4), (8, -8)),
+            ((0, 0), (10, 0), (0, 0), (10, 0)),
+        ];
+        for (held_a, held_b, first, last) in cases {
+            let held = segment(held_a, held_b);
+            let candidate = segment(first, last);
+            let unrelated = segment((20, 20), (30, 30));
+            assert!(track_is_contained(&candidate, &[held.clone(), unrelated.clone()]), "{candidate:?}");
+            assert!(track_is_contained(&candidate, &[unrelated, held.clone()]), "{candidate:?}");
+            assert_eq!((held.start, held.end), (Point::new(held_a.0, held_a.1), Point::new(held_b.0, held_b.1)));
+        }
+    }
+
+    #[test]
+    fn partial_overlap_other_net_layer_or_either_width_difference_stays_new() {
+        let base = segment((2, 0), (8, 0));
+        let candidates = [
+            segment((-1, 0), (8, 0)), // Partial overlap is still new copper.
+            segment((-1, 0), (11, 0)),
+            segment((2, 1), (8, 1)), // Parallel within physical widths is not this proof.
+            segment((2, 0), (8, 1)),
+            TrackSegment { net: "OTHER".to_owned(), ..base.clone() },
+            TrackSegment { layer: CopperLayer::Front, ..base.clone() },
+            TrackSegment { width_nm: 100_000, ..base.clone() },
+            TrackSegment { width_nm: 200_000, ..base },
+        ];
+        for candidate in candidates {
+            assert!(!track_is_contained(&candidate, &[segment((0, 0), (10, 0))]), "{candidate:?}");
+        }
+    }
+
+    #[test]
+    fn multiple_segments_do_not_masquerade_as_one_containing_source_edge() {
+        let pieces = [segment((0, 0), (5, 0)), segment((5, 0), (10, 0))];
+        assert!(!track_is_contained(&segment((1, 0), (9, 0)), &pieces));
+    }
+
+    #[test]
+    fn large_fixed_point_coordinates_keep_one_nanometre_noncollinearity() {
+        let n = 1i64 << 60;
+        let held = segment((n, n), (n + 100, n + 100));
+        assert!(track_is_contained(&segment((n + 1, n + 1), (n + 99, n + 99)), std::slice::from_ref(&held)));
+        assert!(!track_is_contained(&segment((n + 1, n + 2), (n + 99, n + 99)), &[held]));
+    }
+
+    #[test]
+    fn real_connections_preserve_containing_source_edge_and_add_no_redundant_tail() {
+        for renamed in [false, true] {
+            let (mut source, link) = crosslayer(renamed, true);
+            let held = track(&link.net, mm(9.5, 8.0), mm(9.5, 10.0), 150_000, CopperLayer::Back);
+            source.tracks = vec![held.clone()];
+            let mut candidates = Vec::new();
+            let work = ConnectionWork::default();
+            let options = FanoutOptions::default();
+            let _ =
+                connections(&source, &link.target, &link.capacitor, &link.net, &options, 8, 64, &work, &mut |board| {
+                    candidates.push(board);
+                    Ok(if candidates.len() >= 16 { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })
+                })
+                .unwrap();
+            assert!(!candidates.is_empty());
+            let mut seen_supply = false;
+            for candidate in &candidates {
+                assert_eq!(candidate.tracks[0], held);
+                let additions = &candidate.tracks[source.tracks.len()..];
+                assert!(!additions.iter().any(|t| track_is_contained(t, &source.tracks)), "{additions:?}");
+                seen_supply |=
+                    verify_crosslayer_decoupling(candidate, &link, None, 10_000, None).unwrap().supply_path.is_some();
+            }
+            assert!(seen_supply);
+            let proposed =
+                propose_crosslayer_decoupling(&source, &link, None, &ProposalBounds::default(), &[], None).unwrap();
+            let witness = proposed.witness.as_ref().unwrap_or_else(|| panic!("{}", proposed.reason));
+            assert_eq!(proposed.board.tracks[0], held);
+            for path in [&witness.supply_path, &witness.return_path] {
+                assert!(path.tracks().iter().all(|t| proposed.board.tracks.contains(t)));
+            }
+            assert_eq!(source.tracks, [held]);
+            assert!(source.vias.is_empty());
+        }
+    }
+}
+
+/// `tests/test_decoupling_cell_maze.py`: unsupported, exhausted or
+/// incomplete cells add no maze work.
+mod decoupling_cell_maze {
+    use super::support_planes::decoupling::{cell_grid, crosslayer};
+    use crate::RoutingClearanceIndex;
+    use crate::decoupling_paths::{ConnectionWork, cell_maze_launches, land};
+    use crate::fanout::FanoutOptions;
+    use copper_pcb::board::PhysicalBoard;
+    use std::ops::ControlFlow;
+
+    /// The launches `_cell_maze_launches` emits for the link target, and the
+    /// local path work it used.
+    fn launches(
+        board: &PhysicalBoard,
+        net: &str,
+        target: &copper_pcb::board::PadReference,
+        maze: bool,
+        used: i64,
+    ) -> (usize, i64) {
+        let origin = land(board, target).expect("target land");
+        let options = FanoutOptions { maze_escapes: maze, ..FanoutOptions::default() };
+        let index = RoutingClearanceIndex::new(board).unwrap();
+        let work = ConnectionWork::default();
+        work.local_paths.set(used);
+        let mut emitted = 0;
+        let _ = cell_maze_launches(board, &origin, net, 150_000, &options, 64, &index, &work, &mut |_| {
+            emitted += 1;
+            Ok(ControlFlow::Continue(()))
+        })
+        .unwrap();
+        (emitted, work.local_paths.get())
+    }
+
+    #[test]
+    fn unsupported_or_exhausted_source_maze_adds_no_work() {
+        let (grid, link) = cell_grid(false);
+        assert_eq!(launches(&grid, &link.net, &link.target, false, 0), (0, 0), "disabled");
+        let (plain, plain_link) = crosslayer(false, true);
+        assert_eq!(launches(&plain, &plain_link.net, &plain_link.target, true, 0), (0, 0), "non_array");
+        assert_eq!(launches(&grid, &link.net, &link.target, true, 4), (0, 4), "exhausted");
+    }
+
+    #[test]
+    fn incomplete_circular_cell_does_not_invent_a_via_site() {
+        let (mut board, link) = cell_grid(false);
+        let keep = ["S", "G", "-1:0"];
+        board.footprints.get_mut("chip").unwrap().pads.retain(|p| keep.contains(&p.number.as_str()));
+        for net in &mut board.nets {
+            net.pads.retain(|p| p.component != link.target.component || keep.contains(&p.pad.as_str()));
+        }
+        assert_eq!(launches(&board, &link.net, &link.target, true, 0), (0, 0));
+    }
+}
+
+/// `tests/test_via_layer_contacts.py`: a redundant route must not hide a lost
+/// electrical contact on one via layer.
+mod via_layer_contacts {
+    use super::support_planes::*;
+    use crate::RoutingClearanceIndex;
+    use crate::route_cleanup::{Settler, net_pad_shapes};
+    use crate::route_smoothing::{contacts_preserved, smooth_owned_tracks};
+    use copper_drc::connectivity::{CopperContact, copper_contacts_overlap, via_copper_contact};
+    use copper_pcb::board::{Stackup, TrackSegment, Via};
+    use copper_physical::{CopperLayer, RoundedConvexShape};
+    use indexmap::IndexSet;
+
+    const F: CopperLayer = CopperLayer::Front;
+    const B: CopperLayer = CopperLayer::Back;
+
+    fn shape(spine: Vec<copper_physical::Point>, radius_nm: i64) -> RoundedConvexShape {
+        RoundedConvexShape::new(spine, radius_nm).unwrap()
+    }
+
+    fn contact(layer: CopperLayer, shape: RoundedConvexShape) -> CopperContact {
+        CopperContact {
+            identity: "track".to_owned(),
+            net: "N".to_owned(),
+            layers: vec![layer],
+            shape,
+            drill: None,
+            capped_layers: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn smoothing_preserves_redundant_positive_via_layer_contact() {
+        let (board, before, tangent) = via_layer_board();
+        let net = &board.nets[0];
+        // The tangent keeps every pad connected through the second via, but
+        // the first via loses its F.Cu contact.
+        assert!(!contacts_preserved(&board, net, &before, &tangent).unwrap());
+        let mut complete = board.clone();
+        complete.tracks.extend(before.iter().cloned());
+        let mut index = RoutingClearanceIndex::new(&complete).unwrap();
+        let result = smooth_owned_tracks(&board, &before, &mut index, 2).unwrap();
+        assert!(contacts_preserved(&board, net, &before, &result).unwrap());
+        assert_ne!(result, tangent);
+    }
+
+    #[test]
+    fn via_contact_preserves_drill_cap_and_actual_span() {
+        let inner = CopperLayer::In1;
+        let layers = [F, inner, B];
+        let mut board = board("span", 10.0, 10.0);
+        board.stackup = Stackup::new(layers.to_vec());
+        for finish in ["standard", "filled-capped"] {
+            let mut through = via("N", mm(5.0, 5.0), nm(0.6), nm(0.3));
+            through.finish = finish.to_owned();
+            let via_contact = via_copper_contact(&board, &through, "via".to_owned()).unwrap();
+            // Copper wholly inside the drill touches only a capped exterior layer.
+            let inside = shape(vec![mm(5.0, 5.0), mm(5.1, 5.0)], nm(0.02));
+            for layer in layers {
+                let expected = finish == "filled-capped" && (layer == F || layer == B);
+                assert_eq!(
+                    copper_contacts_overlap(&via_contact, &contact(layer, inside.clone())),
+                    expected,
+                    "{finish} {layer:?}"
+                );
+            }
+            let blind = Via { to_layer: inner, ..through };
+            let blind = via_copper_contact(&board, &blind, "via".to_owned()).unwrap();
+            let annulus = shape(vec![mm(5.2, 5.0)], nm(0.02));
+            assert!(copper_contacts_overlap(&blind, &contact(inner, annulus.clone())), "{finish}");
+            assert!(!copper_contacts_overlap(&blind, &contact(B, annulus)), "{finish}");
+        }
+    }
+
+    #[test]
+    fn cleanup_layer_count_rejects_robust_boundary_tangency_and_open_drill() {
+        let (board, _, tangent) = via_layer_board();
+        let settle = Settler {
+            board: &board,
+            name: "N",
+            net: &board.nets[0],
+            pads: net_pad_shapes(&board, "N"),
+            order: board.stackup.copper_layers.clone(),
+        };
+        // Its annulus exactly touches the track after the cleanup contact margin.
+        let moved = Via { position: mm(5.0, 5.799), ..board.vias[0].clone() };
+        assert_eq!(settle.via_layers(&moved, &tangent).unwrap(), IndexSet::new());
+        let inside =
+            TrackSegment { start: moved.position, end: mm(5.1, 5.799), width_nm: nm(0.04), ..tangent[0].clone() };
+        assert_eq!(settle.via_layers(&moved, std::slice::from_ref(&inside)).unwrap(), IndexSet::new());
+        let capped = Via { finish: "filled-capped".to_owned(), ..moved };
+        assert_eq!(settle.via_layers(&capped, &[inside]).unwrap(), IndexSet::from([F]));
+    }
+}

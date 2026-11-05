@@ -145,6 +145,22 @@ mod option_tests {
         assert_eq!(filled_feedback_options(&arguments, options.direct).maximum_trials, 0);
         assert_eq!(filled_feedback_options(&arguments, false).maximum_trials, 8);
     }
+
+    /// `tests/test_autonomous_plane_access.py::test_cli_reserves_package_access_by_default_with_explicit_opt_out`.
+    #[test]
+    fn package_access_is_reserved_by_default_with_explicit_opt_out() {
+        let parse = |extra: &[&str]| {
+            let argv: Vec<String> = ["board.copper"].iter().chain(extra).map(|text| (*text).to_owned()).collect();
+            let parsed = option_parser::parse_exact(&argv, &specs()).unwrap();
+            let Ok(arguments) = check_arguments(parsed) else { panic!("valid options rejected") };
+            arguments
+        };
+        let default = parse(&[]);
+        assert!(default.fanout() && default.early_plane_stitch());
+        assert!(parse(&["--fanout"]).fanout());
+        assert!(!parse(&["--no-fanout"]).fanout());
+        assert!(!parse(&["--no-early-plane-stitch"]).early_plane_stitch());
+    }
 }
 
 const FLAGS: [&str; 17] = [
@@ -391,6 +407,16 @@ impl Arguments {
             .map_or(default, |(option, _)| *option == name)
     }
 
+    /// Package access is reserved by default: `--no-fanout` opts out.
+    fn fanout(&self) -> bool {
+        self.boolean("--fanout", true)
+    }
+
+    /// Early return-plane contacts by default: `--no-early-plane-stitch` opts out.
+    fn early_plane_stitch(&self) -> bool {
+        self.boolean("--early-plane-stitch", true)
+    }
+
     fn text(&self, name: &str) -> Option<&str> {
         self.parsed.value(name)
     }
@@ -505,7 +531,10 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
         let text = parsed.value(name).unwrap_or(default).to_owned();
         match checked_length(&text, positive) {
             Ok(true) => lengths.push((name, text)),
-            Ok(false) => return usage(format!("argument {name}: expected a finite length in mm, got '{text}'")),
+            Ok(false) => {
+                let bound = if positive { "positive" } else { "nonnegative" };
+                return usage(format!("argument {name}: expected a {bound} finite length in mm, got '{text}'"));
+            }
             Err(Stop::Pending(what)) => return Err(Checked::Pending(what)),
             Err(Stop::Value { message, .. } | Stop::UnknownPart { message, .. }) => return usage(message),
         }
@@ -515,7 +544,9 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
             None => Ok(None),
             Some(text) => match checked_length(text, true) {
                 Ok(true) => Ok(Some(text.to_owned())),
-                Ok(false) => Err(Checked::Usage(format!("argument {name}: expected a positive length, got '{text}'"))),
+                Ok(false) => Err(Checked::Usage(format!(
+                    "argument {name}: expected a positive finite length in mm, got '{text}'"
+                ))),
                 Err(Stop::Pending(what)) => Err(Checked::Pending(what)),
                 Err(Stop::Value { message, .. } | Stop::UnknownPart { message, .. }) => Err(Checked::Usage(message)),
             },
@@ -936,8 +967,7 @@ fn route(
     {
         return Err(fail("plane escape width is below this board's rule floor".to_owned()));
     }
-    let early_options = if (arguments.boolean("--early-plane-stitch", true) && stitch_enabled) || !early_pads.is_empty()
-    {
+    let early_options = if (arguments.early_plane_stitch() && stitch_enabled) || !early_pads.is_empty() {
         Some(
             PlaneStitchOptions {
                 only_pads: (!early_pads.is_empty()).then(|| early_pads.iter().cloned().collect()),
@@ -980,7 +1010,7 @@ fn route(
     }
     .validated()
     .map_err(value_error)?;
-    let fanout_options = if arguments.boolean("--fanout", true) {
+    let fanout_options = if arguments.fanout() {
         Some(
             FanoutOptions {
                 step_nm: length("--fanout-step-mm")?,
@@ -1397,11 +1427,36 @@ fn finish(
     } else {
         copper_route::route_cleanup::trim_dangling_overhangs(&output_board, &fixed)?
     };
+    // CS-174: arched corners are the last change to the copper before the
+    // exact DRC and the native checks, so no cleanup sees a trimmed leg as
+    // dangling.
+    let (output_board, arc_corners) = if stopped {
+        (output_board, None)
+    } else {
+        match copper_route::arc_corners::arch_board(&output_board)
+            .map_err(|error| copper_pcb::Error::NotImplemented(error.crash_line()))?
+        {
+            Some((arched, outcome)) => {
+                emit(
+                    progress,
+                    "arc_corners",
+                    "finished",
+                    vec![
+                        ("arcs", Value::from(outcome.arcs as i64)),
+                        ("retained_corners", Value::from(outcome.retained.len() as i64)),
+                    ],
+                );
+                (arched, Some(outcome))
+            }
+            None => (output_board, None),
+        }
+    };
     let output_drc = if !stopped
         && ((context.stitch_enabled && stitch.is_some())
             || duplicate_stitch.added_track_count != 0
             || trimmed_overhangs
-            || swept_single_layer_vias)
+            || swept_single_layer_vias
+            || arc_corners.as_ref().is_some_and(|outcome| outcome.arcs != 0))
     {
         copper_route::drc_report::run_physical_drc(&output_board, copper_drc::Policy::default())?
     } else {
@@ -1846,6 +1901,9 @@ fn finish(
     }
     if let Some(cleanup) = native_cleanup {
         report.insert("native_cleanup".to_owned(), cleanup);
+    }
+    if let Some(outcome) = &arc_corners {
+        report.insert("arc_corners".to_owned(), outcome.document());
     }
     if let Some(feedback) = &filled_feedback {
         report.insert("filled_copper_feedback".to_owned(), parse_document(&feedback.to_json()));

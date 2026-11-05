@@ -517,7 +517,28 @@ async function operation(action, fields={}, applyImmediately=false) {
     status(`${error.message}${error.status===409 && !accepted?.source_stale ? " Scene reloaded; retry your edit." : ""}`,true);
   }
   finally {busy=false;render();}
+  // A rejected edit may be the first sign of an external save; never retry a failed reload.
+  if (accepted?.source_stale && action!=="reload_source") reloadChangedSource();
 }
+// The .copper file is authoritative. Pick up external saves (e.g. from VS Code) rather
+// than silently refusing drags; reload keeps unsaved positions the new source does not fix.
+function reloadChangedSource() {
+  if (busy || drag || pan || !accepted?.source_writable || accepted.source_review || accepted.placement_job?.status==="running") {
+    if (accepted?.source_stale) status("Source changed externally. Use More → Reload source to continue editing.",true);
+    return;
+  }
+  operation("reload_source");
+}
+async function checkExternalSource() {
+  if (busy || drag || pan || !accepted?.source_writable || document.hidden) return;
+  busy=true;let s=null;
+  try {s=await api("/api/scene");} catch (_) { /* The next explicit operation reports failures. */ }
+  finally {busy=false;}
+  if (!s?.source_stale) return;
+  acceptScene(s);populate();render();reloadChangedSource();
+}
+window.addEventListener("focus",checkExternalSource);
+document.addEventListener("visibilitychange",checkExternalSource);
 function svgPoint(event) {
   const p=new DOMPoint(event.clientX,event.clientY).matrixTransform($("board").getScreenCTM().inverse());
   return [p.x,p.y];
@@ -533,7 +554,10 @@ async function pollJob() {
   } catch(error) {status(error.message,true);}
 }
 function startDrag(event,component,g) {
-  if (event.button!==0 || busy || drag || pan || accepted?.source_stale || accepted?.source_review || $("measure").checked || $("draw-vertices").checked || $("physical-pick-point").checked) return;
+  if (event.button!==0 || busy || drag || pan) return;
+  if (accepted?.source_stale) {reloadChangedSource();return;}
+  if (accepted?.source_review) {status("Save or discard the reviewed source change before moving components.",true);return;}
+  if ($("measure").checked || $("draw-vertices").checked || $("physical-pick-point").checked) return;
   if (event.shiftKey) {
     event.preventDefault();
     const next=selectionSet();

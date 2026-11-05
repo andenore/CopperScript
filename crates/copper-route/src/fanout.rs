@@ -401,7 +401,7 @@ pub(crate) fn legal_choices(
 type Pin<'a> = (i64, PadReference, Point, &'a Placement, &'a FootprintPad);
 
 /// `_maze_choices`: bounded multi-bend launches when straight/elbow domains fail.
-fn maze_choices(
+pub(crate) fn maze_choices(
     board: &PhysicalBoard,
     clearance: &RoutingClearanceIndex<'_>,
     net: &str,
@@ -987,4 +987,79 @@ pub fn route_fanout(
         decoupling_pending_links: bypass.pending.clone(),
     };
     crate::fanout_bypass_completion::complete_late_bypasses(result, &bypass.pending, &options, only_nets)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support_routers::*;
+
+    fn wire(a: (f64, f64), b: (f64, f64)) -> TrackSegment {
+        track("P", a, b, 0.2, CopperLayer::Front)
+    }
+
+    /// `tests/test_routing_quality.py::test_greedy_and_joint_assignment_reject_the_same_net_x` (greedy half).
+    #[test]
+    fn greedy_reservation_rejects_the_same_net_x() {
+        let board = board("quality", 10.0, 10.0, Vec::new(), Vec::new(), vec![net("P", &[])]);
+        let mut index = RoutingClearanceIndex::new(&board).expect("index");
+        let (mut tracks, mut vias) = (Vec::new(), Vec::new());
+        let first = (vec![wire((2.0, 2.0), (4.0, 4.0))], None);
+        let second = (vec![wire((4.0, 2.0), (2.0, 4.0))], None);
+        assert!(reserve(&board, &mut index, &mut tracks, &mut vias, &first).expect("reserve"));
+        assert!(!reserve(&board, &mut index, &mut tracks, &mut vias, &second).expect("reserve"));
+    }
+
+    /// `tests/test_routing_quality.py::test_straight_outward_precedes_diagonal_even_at_farther_radius`.
+    #[test]
+    fn straight_outward_precedes_diagonal_even_at_farther_radius() {
+        let options = FanoutOptions { maximum_radius_nm: mm(1.0), ..FanoutOptions::default() };
+        let points = ray_candidates(pt(6.0, 5.1), pt(5.0, 5.0), &options, false);
+        let at = |p: Point| points.iter().position(|q| *q == p).expect("candidate");
+        assert!(at(pt(7.0, 5.1)) < at(pt(6.5, 5.6)));
+        let rotated = ray_candidates(pt(6.0, 6.0), pt(5.0, 5.0), &options, true);
+        assert_eq!(rotated[0], pt(6.5, 6.5));
+    }
+
+    /// `tests/test_routing_hotpath_equivalence.py::test_outline_sites_match_exact_inside_and_margin_tests`.
+    #[test]
+    fn outline_sites_match_exact_inside_and_margin_tests() {
+        use copper_physical::BoardOutline;
+        use copper_physical::geometry::{point_in_polygon, point_segment_distance_squared};
+        use num_rational::BigRational;
+        let reference = |point: Point, vertices: &[Point], margin: i64| {
+            let squared = BigRational::from_integer((i128::from(margin) * i128::from(margin)).into());
+            point_in_polygon(point, vertices)
+                && (0..vertices.len()).all(|i| {
+                    point_segment_distance_squared(point, vertices[i], vertices[(i + 1) % vertices.len()]) >= squared
+                })
+        };
+        let margin = mm(0.315);
+        let outlines = [
+            BoardOutline::rectangle(mm(10.0), mm(8.0), None).expect("rectangle"),
+            BoardOutline::circle(mm(6.0), None, mm(0.01)).expect("circle"),
+        ];
+        for outline in outlines {
+            let sites = OutlineSites::new(&outline.vertices);
+            let (xs, ys): (Vec<i64>, Vec<i64>) = outline.vertices.iter().map(|p| (p.x_nm, p.y_nm)).unzip();
+            let step = mm(0.25);
+            let mut probes = Vec::new();
+            let (x0, x1) = (xs.iter().min().expect("x") - step, xs.iter().max().expect("x") + 2 * step);
+            let (y0, y1) = (ys.iter().min().expect("y") - step, ys.iter().max().expect("y") + 2 * step);
+            for x in (x0..x1).step_by(step as usize) {
+                for y in (y0..y1).step_by(step as usize) {
+                    probes.push(Point::new(x, y));
+                }
+            }
+            // Exactly one margin inside an edge (tangency) and one nanometre short of it.
+            probes.push(Point::new(margin, mm(4.0)));
+            probes.push(Point::new(margin - 1, mm(4.0)));
+            for point in probes {
+                let expected = reference(point, &outline.vertices, margin);
+                assert_eq!(sites.admits(point, margin), expected, "{point:?}");
+                assert_eq!(sites.admits(point, margin), expected, "{point:?} (cached)");
+            }
+            assert_eq!(sites.admits(Point::new(margin, mm(4.0)), margin), outline.circular_boundary.is_none());
+        }
+    }
 }

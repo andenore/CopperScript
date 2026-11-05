@@ -2,9 +2,14 @@
 //! signoff (`pcbir.manufacturing_files`).
 //!
 //! This consumes the final native board, not a reconstructed physical IR:
-//! filled copper and native edits survive unchanged. `kicad-cli` refills,
-//! checks and exports it in a staging directory that is published only when
-//! every step and inventory check passed.
+//! filled copper and native edits survive unchanged. `kicad-cli` (or, with
+//! [`Checker::Native`], CopperScript's own filler and DRC) refills and
+//! checks it in a staging directory; KiCad or CopperScript's own plotter
+//! (`copper-cam`) then exports it, and the directory is published only when
+//! every step and inventory check passed. With the native checker the
+//! plotted Gerbers and drills are also read back and their connectivity
+//! checked against the board netlist; with the native checker and plotter
+//! no KiCad is run at all.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -166,11 +171,15 @@ fn relative_posix(path: &Path, root: &Path) -> String {
 }
 
 /// `_zip_files`: the files under `root`, sorted, deflated and dated 1980.
-fn zip_files(output: &Path, files: &[PathBuf], root: &Path) -> Result<()> {
+/// `flat` stores each file under its own name at the archive root.
+fn zip_files(output: &Path, files: &[PathBuf], root: &Path, flat: bool) -> Result<()> {
     let mut names: Vec<(Vec<String>, String, &PathBuf)> = files
         .iter()
         .map(|path| {
-            let name = relative_posix(path, root);
+            let name = match path.file_name() {
+                Some(name) if flat => name.to_string_lossy().into_owned(),
+                _ => relative_posix(path, root),
+            };
             (path_key(&name), name, path)
         })
         .collect();
@@ -299,6 +308,23 @@ fn glob(directory: &Path, suffix: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Which program writes the Gerbers, drills, netlist and positions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plotter {
+    Kicad,
+    /// `copper-cam`, from the board as KiCad refilled it.
+    Native,
+}
+
+/// Who refills the zones and runs the release DRC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Checker {
+    /// `kicad-cli pcb drc --refill-zones`.
+    Kicad,
+    /// `copper-cam`'s filler and DRC, then a read-back of the plotted files.
+    Native,
+}
+
 /// The inputs of one export.
 pub struct Export<'a> {
     pub pcb: &'a Path,
@@ -308,6 +334,108 @@ pub struct Export<'a> {
     /// The reviewed BOM and its `str()`.
     pub bom: Option<(&'a Path, &'a str)>,
     pub replace_existing: bool,
+    pub plotter: Plotter,
+    pub checker: Checker,
+}
+
+/// Plot the refilled staged board with `copper-cam` into the same places
+/// KiCad's exports would use.
+fn plot_natively(board: &Path, gerbers: &Path, drills: &Path, netlist: &Path, positions: &Path) -> Result<()> {
+    let shown = paths::display(board);
+    let text = files::universal_newlines(&read_text(board, &shown, false)?);
+    let parsed = copper_cam::board::parse_board(&text, &shown).map_err(Error::Files)?;
+    let stem = board.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+    let plotted = copper_cam::plot::plot(&parsed, &stem, env!("CARGO_PKG_VERSION")).map_err(Error::Files)?;
+    for (name, contents) in plotted {
+        let path = if name.ends_with(".gbr") {
+            gerbers.join(&name)
+        } else if name.ends_with(".drl") {
+            drills.join(&name)
+        } else if name.ends_with(".d356") {
+            netlist.to_path_buf()
+        } else {
+            positions.to_path_buf()
+        };
+        std::fs::write(&path, contents.as_bytes())
+            .map_err(|failure| Error::Os(open_error(&failure, &paths::display(&path))))?;
+    }
+    Ok(())
+}
+
+/// Refill the staged board natively, write it back, and check it with the
+/// native DRC (report in `drc.json`). Returns the filled board.
+fn fill_and_check_natively(board: &Path, stage: &Path) -> Result<copper_cam::board::Board> {
+    let shown = paths::display(board);
+    let text = files::universal_newlines(&read_text(board, &shown, false)?);
+    let unfilled = copper_cam::board::parse_board(&text, &shown).map_err(Error::Files)?;
+    let project = with_suffix(board, ".kicad_pro");
+    let project_text = read_text(&project, &paths::display(&project), true)?;
+    let custom = with_suffix(board, ".kicad_dru");
+    let custom_text = if custom.is_file() { Some(read_text(&custom, &paths::display(&custom), true)?) } else { None };
+    let rules = copper_cam::rules::Rules::load(&project_text, custom_text.as_deref())
+        .map_err(|failure| Error::Files(format!("{}: {failure}", paths::display(&project))))?;
+    let fills = copper_cam::fill::fill_zones(&unfilled, &rules).map_err(Error::Files)?;
+    let filled_text = copper_cam::pcb_write::write_fills(&text, &unfilled, &fills).map_err(Error::Files)?;
+    std::fs::write(board, filled_text.as_bytes()).map_err(|failure| Error::Os(open_error(&failure, &shown)))?;
+    let filled = copper_cam::board::parse_board(&filled_text, &shown).map_err(Error::Files)?;
+    let report = copper_cam::drc::check(&filled, &rules).map_err(Error::Files)?;
+    let name = |path: &Path| path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut rule_files = vec![name(&project)];
+    if custom_text.is_some() {
+        rule_files.push(name(&custom));
+    }
+    let json = report.to_json(&name(board), &rule_files);
+    let drc = stage.join("drc.json");
+    let document = Dumps::new().indent(2).dumps(&json) + "\n";
+    std::fs::write(&drc, document.as_bytes())
+        .map_err(|failure| Error::Os(open_error(&failure, &paths::display(&drc))))?;
+    if !report.passed() {
+        let findings: Vec<String> = report
+            .violations
+            .iter()
+            .chain(&report.unconnected)
+            .take(5)
+            .map(|violation| format!("{}: {}", violation.kind, violation.description))
+            .collect();
+        return refuse(format!(
+            "native DRC report must contain zero violations and opens ({} violation(s), {} unconnected; {})",
+            report.violations.len(),
+            report.unconnected.len(),
+            findings.join("; ")
+        ));
+    }
+    Ok(filled)
+}
+
+/// Read back the plotted copper and drills against the board's netlist.
+fn read_back(board: &copper_cam::board::Board, gerbers: &[PathBuf], drills: &[PathBuf]) -> Result<Value> {
+    let load = |paths_: &[PathBuf]| -> Result<Vec<(String, String)>> {
+        paths_
+            .iter()
+            .map(|path| {
+                let shown = paths::display(path);
+                Ok((shown.clone(), files::universal_newlines(&read_text(path, &shown, false)?)))
+            })
+            .collect()
+    };
+    let (mut gerbers, mut drills) = (gerbers.to_vec(), drills.to_vec());
+    gerbers.sort();
+    drills.sort();
+    let points = copper_cam::readback::test_points(board);
+    let readback =
+        copper_cam::readback::check(&load(&gerbers)?, &load(&drills)?, &points, board.copper_count(), 10_000.0)
+            .map_err(Error::Files)?;
+    if !readback.passed() {
+        let findings: Vec<String> = readback.findings().into_iter().take(5).collect();
+        return refuse(format!("CAM read-back of the plotted files failed: {}", findings.join("; ")));
+    }
+    let mut result = Object::new();
+    result.insert("result".to_owned(), Value::from("passed"));
+    result.insert("pitch_mm".to_owned(), Value::Float(0.01));
+    result.insert("copper_regions".to_owned(), Value::from(readback.regions as u64));
+    result.insert("test_points".to_owned(), Value::from(readback.test_points as u64));
+    result.insert("plated_holes".to_owned(), Value::from(readback.plated_holes as u64));
+    Ok(Value::Object(result))
 }
 
 /// `export_manufacturing_files`: stage, native-refill and DRC, export,
@@ -407,7 +535,7 @@ fn stage_and_publish(
         copy(&rules, &with_suffix(&native, ".kicad_dru"))?;
     }
     let directory = files::parent(pcb);
-    for name in ["fp-lib-table", "CopperScript.pretty"] {
+    for name in ["fp-lib-table", "CopperScript.pretty", "CopperScript.3dshapes"] {
         let path = directory.join(name);
         if path.is_dir() {
             copy_tree(&path, &stage.join(name))?;
@@ -420,86 +548,104 @@ fn stage_and_publish(
         std::iter::once(cli.clone()).chain(args.iter().map(|arg| (*arg).to_owned())).collect()
     };
     let shown = |path: &Path| paths::display(path);
-    let version = run(&command(&["version"]), stage)?;
-    if version.code != 0 || strip(&version.stdout).is_empty() {
-        return refuse("cannot query KiCad version");
-    }
-    let version = strip(&version.stdout).to_owned();
-    let (native_text, drc) = (shown(&native), stage.join("drc.json"));
-    require(
-        &command(&[
-            "pcb",
-            "drc",
-            "--refill-zones",
-            "--save-board",
-            "--format",
-            "json",
-            "--severity-all",
-            "--exit-code-violations",
-            "-o",
-            &shown(&drc),
-            &native_text,
-        ]),
-        stage,
-        "run native DRC",
-    )?;
-    let report_text = read_text(&drc, &shown(&drc), false)?;
-    let report =
-        copper_json::parse(&report_text).map_err(|failure| Error::Files(failure.python_message(&report_text)))?;
-    let clean = |key: &str| match &report {
-        Value::Object(report) => matches!(report.get(key), Some(Value::Array(items)) if items.is_empty()),
-        _ => false,
+    let uses_kicad = request.checker == Checker::Kicad || request.plotter == Plotter::Kicad;
+    let version = if uses_kicad {
+        let version = run(&command(&["version"]), stage)?;
+        if version.code != 0 || strip(&version.stdout).is_empty() {
+            return refuse("cannot query KiCad version");
+        }
+        Some(strip(&version.stdout).to_owned())
+    } else {
+        None
     };
-    if !clean("violations") || !clean("unconnected_items") {
-        return refuse("native DRC report must contain zero violations and opens");
+    let (native_text, drc) = (shown(&native), stage.join("drc.json"));
+    let mut checked_board = None;
+    if request.checker == Checker::Native {
+        checked_board = Some(fill_and_check_natively(&native, stage)?);
+    } else {
+        require(
+            &command(&[
+                "pcb",
+                "drc",
+                "--refill-zones",
+                "--save-board",
+                "--format",
+                "json",
+                "--severity-all",
+                "--exit-code-violations",
+                "-o",
+                &shown(&drc),
+                &native_text,
+            ]),
+            stage,
+            "run native DRC",
+        )?;
+        let report_text = read_text(&drc, &shown(&drc), false)?;
+        let report =
+            copper_json::parse(&report_text).map_err(|failure| Error::Files(failure.python_message(&report_text)))?;
+        let clean = |key: &str| match &report {
+            Value::Object(report) => matches!(report.get(key), Some(Value::Array(items)) if items.is_empty()),
+            _ => false,
+        };
+        if !clean("violations") || !clean("unconnected_items") {
+            return refuse("native DRC report must contain zero violations and opens");
+        }
     }
     let (gerbers, drills) = (stage.join("gerbers"), stage.join("drill"));
     for directory in [&gerbers, &drills] {
         std::fs::create_dir(directory).map_err(|failure| Error::Os(os_error(&failure, &shown(directory))))?;
     }
-    let layer_list = layers.join(",");
-    require(
-        &command(&[
-            "pcb",
-            "export",
-            "gerbers",
-            "--layers",
-            &layer_list,
-            "--no-protel-ext",
-            "--subtract-soldermask",
-            "-o",
-            &shown(&gerbers),
-            &native_text,
-        ]),
-        stage,
-        "export Gerbers",
-    )?;
-    require(
-        &command(&[
-            "pcb",
-            "export",
-            "drill",
-            "--format",
-            "excellon",
-            "--excellon-units",
-            "mm",
-            "--drill-origin",
-            "absolute",
-            "--excellon-separate-th",
-            "--generate-report",
-            "-o",
-            &shown(&drills),
-            &native_text,
-        ]),
-        stage,
-        "export drills",
-    )?;
     let netlist = stage.join("board.d356");
-    require(
-        &command(&["pcb", "export", "ipcd356", "-o", &shown(&netlist), &native_text]),
-        stage,
-        "export manufacturing netlist",
-    )?;
+    let native_positions = stage.join(match request.plotter {
+        Plotter::Kicad => "positions-kicad.csv",
+        Plotter::Native => "positions.csv",
+    });
+    if request.plotter == Plotter::Native {
+        plot_natively(&native, &gerbers, &drills, &netlist, &native_positions)?;
+    } else {
+        let layer_list = layers.join(",");
+        require(
+            &command(&[
+                "pcb",
+                "export",
+                "gerbers",
+                "--layers",
+                &layer_list,
+                "--no-protel-ext",
+                "--subtract-soldermask",
+                "-o",
+                &shown(&gerbers),
+                &native_text,
+            ]),
+            stage,
+            "export Gerbers",
+        )?;
+        require(
+            &command(&[
+                "pcb",
+                "export",
+                "drill",
+                "--format",
+                "excellon",
+                "--excellon-units",
+                "mm",
+                "--drill-origin",
+                "absolute",
+                "--excellon-separate-th",
+                "--generate-report",
+                "-o",
+                &shown(&drills),
+                &native_text,
+            ]),
+            stage,
+            "export drills",
+        )?;
+        require(
+            &command(&["pcb", "export", "ipcd356", "-o", &shown(&netlist), &native_text]),
+            stage,
+            "export manufacturing netlist",
+        )?;
+    }
     let artwork = glob(&gerbers, ".gbr");
     let drill_files = glob(&drills, ".drl");
     if artwork.len() != layers.len() || drill_files.is_empty() || !netlist.is_file() {
@@ -513,38 +659,69 @@ fn stage_and_publish(
             return refuse("empty manufacturing output");
         }
     }
-    let native_positions = stage.join("positions-kicad.csv");
-    require(
-        &command(&[
-            "pcb",
-            "export",
-            "pos",
-            "--format",
-            "csv",
-            "--units",
-            "mm",
-            "--side",
-            "both",
-            "--exclude-dnp",
-            "-o",
-            &shown(&native_positions),
-            &native_text,
-        ]),
-        stage,
-        "export positions",
-    )?;
+    let readback = match &checked_board {
+        Some(board) => Some(read_back(board, &artwork, &drill_files)?),
+        None => None,
+    };
+    if request.plotter == Plotter::Kicad {
+        require(
+            &command(&[
+                "pcb",
+                "export",
+                "pos",
+                "--format",
+                "csv",
+                "--units",
+                "mm",
+                "--side",
+                "both",
+                "--exclude-dnp",
+                "-o",
+                &shown(&native_positions),
+                &native_text,
+            ]),
+            stage,
+            "export positions",
+        )?;
+    }
     if let (Some(references), Some((bom, _))) = (references, request.bom) {
         copy(bom, &stage.join("bom.csv"))?;
         write_jlcpcb_cpl(&native_positions, &shown(&native_positions), &stage.join("cpl.csv"), references)?;
     }
     let archived: Vec<PathBuf> = artwork.iter().chain(&drill_files).cloned().collect();
-    zip_files(&stage.join("gerbers-drill.zip"), &archived, stage)?;
+    // Fab upload: Gerbers and drills side by side at the root, as in JLCPCB's
+    // KiCad guide; JLCPCB reported missing drills when they sat in `drill/`.
+    zip_files(&stage.join("gerbers-drill.zip"), &archived, stage, true)?;
     let mut document = Object::new();
     let input_digest = sha256_hex(&read(pcb, &shown(pcb))?);
     let exported_digest = sha256_hex(&read(&native, &native_text)?);
     for (key, value) in [
         ("schema", Value::from("copperscript-manufacturing-files/v0.1")),
-        ("kicad_version", Value::from(version.as_str())),
+        ("kicad_version", version.as_deref().map_or(Value::Null, Value::from)),
+        (
+            "drc",
+            Value::from(match request.checker {
+                Checker::Kicad => "kicad",
+                Checker::Native => concat!("copperscript ", env!("CARGO_PKG_VERSION")),
+            }),
+        ),
+        (
+            "drc_not_checked",
+            match request.checker {
+                Checker::Kicad => Value::Array(Vec::new()),
+                Checker::Native => {
+                    Value::Array(copper_cam::drc::NOT_CHECKED.iter().map(|text| Value::from(*text)).collect())
+                }
+            },
+        ),
+        ("cam_readback", readback.clone().unwrap_or_else(|| Value::from("not_run"))),
+        (
+            "plotter",
+            Value::from(match request.plotter {
+                Plotter::Kicad => "kicad",
+                Plotter::Native => concat!("copperscript ", env!("CARGO_PKG_VERSION")),
+            }),
+        ),
         ("input_pcb_sha256", Value::from(input_digest.as_str())),
         ("exported_pcb_sha256", Value::from(exported_digest.as_str())),
         ("native_drc", Value::from("passed")),
@@ -584,7 +761,7 @@ fn stage_and_publish(
         .map_err(|failure| Error::Os(open_error(&failure, &shown(&sums_path))))?;
     let mut packaged: Vec<PathBuf> = listed.into_iter().map(|(_, _, path)| path).collect();
     packaged.push(sums_path);
-    zip_files(&stage.join("manufacturing-package.zip"), &packaged, stage)?;
+    zip_files(&stage.join("manufacturing-package.zip"), &packaged, stage, false)?;
     let mut backup = None;
     if output.exists() {
         let parent = files::parent(output);

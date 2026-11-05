@@ -7,7 +7,9 @@ use copper_pcb::board::TrackSegment;
 use copper_physical::Point;
 use copper_physical::pyfloat::{hypot, sum};
 
+use crate::arc_corners::{CornerPolicy, planned_length_nm};
 use crate::critical_tuning::{bump_chamfers, bump_gain, bump_path};
+use indexmap::IndexMap;
 
 /// `_MAX_TUNING_BUMPS`.
 pub const MAX_TUNING_BUMPS: i64 = 8;
@@ -257,8 +259,110 @@ fn arc_projection(path: &[(Point, Point)], point: (f64, f64)) -> f64 {
     best.map_or(0.0, |(_, arc)| arc)
 }
 
+/// `tune_pair_arched`: `tune_pair` for a pair whose corners are arched
+/// (CS-174): lengths are measured as arched and the bumps keep sharp
+/// 90-degree corners for the arc-corner stage. Bump counts rise until the
+/// least height whose arched gain covers the excess fits the amplitude.
+pub fn tune_pair_arched(
+    first: &mut Vec<TrackSegment>,
+    second: &mut Vec<TrackSegment>,
+    max_skew_nm: i64,
+    amplitude_limit_nm: i64,
+    margin_nm: i64,
+    breakout: Option<&BreakoutRegions>,
+    corners: &IndexMap<String, CornerPolicy>,
+) -> PairTuning {
+    let both = |a: &[TrackSegment], b: &[TrackSegment]| -> Vec<TrackSegment> { a.iter().chain(b).cloned().collect() };
+    let arched = |tracks: &[TrackSegment], net: &str| {
+        let refs: Vec<&TrackSegment> = tracks.iter().collect();
+        planned_length_nm(&refs, net, corners)
+    };
+    let (Some(first_net), Some(second_net)) =
+        (first.first().map(|t| t.net.clone()), second.first().map(|t| t.net.clone()))
+    else {
+        return PairTuning::default();
+    };
+    let all = both(first, second);
+    let (first_length, second_length) = (arched(&all, &first_net), arched(&all, &second_net));
+    let skew = (first_length - second_length).abs();
+    if skew <= max_skew_nm || amplitude_limit_nm <= 0 {
+        return PairTuning::default();
+    }
+    let excess = skew - max_skew_nm + margin_nm.min(max_skew_nm);
+    let first_tuned = first_length < second_length;
+    let (target, partner): (&mut Vec<TrackSegment>, &Vec<TrackSegment>) =
+        if first_tuned { (first, second) } else { (second, first) };
+    let target_net = if first_tuned { first_net.clone() } else { second_net.clone() };
+    let width = target.iter().map(|track| track.width_nm).min().expect("a routed member has tracks");
+    let mut sites = tuning_sites(target, partner);
+    if let Some(breakout) = breakout {
+        let inside = |index: usize| {
+            let track = &target[index];
+            breakout.inside_any(Point::new(
+                (track.start.x_nm + track.end.x_nm).div_euclid(2),
+                (track.start.y_nm + track.end.y_nm).div_euclid(2),
+            ))
+        };
+        sites.sort_by_key(|site| inside(site.0));
+    }
+    let partner_copy = partner.clone();
+    let base = arched(&both(target, &partner_copy), &target_net);
+    let realised = |placements: &[(usize, bool, i64)], height: i64| -> (Vec<TrackSegment>, i64) {
+        let mut tuned = target.clone();
+        let mut ordered = placements.to_vec();
+        ordered.sort_by_key(|entry| std::cmp::Reverse(entry.0));
+        for &(index, from_start, bumps) in &ordered {
+            let pieces = serpentine(&tuned[index], bumps, height, 0, from_start, &partner_copy);
+            tuned.splice(index..index + 1, pieces);
+        }
+        let gain = arched(&both(&tuned, &partner_copy), &target_net) - base;
+        (tuned, gain)
+    };
+    for count in 1..=MAX_TUNING_BUMPS {
+        let mut placements: Vec<(usize, bool, i64)> = Vec::new();
+        let mut remaining = count;
+        for &(index, from_start) in &sites {
+            let track = &target[index];
+            let length = (track.end.x_nm - track.start.x_nm).abs() + (track.end.y_nm - track.start.y_nm).abs();
+            let capacity = (length.div_euclid(3 * width) - 1).div_euclid(2);
+            if capacity <= 0 {
+                continue;
+            }
+            let bumps = capacity.min(remaining);
+            placements.retain(|entry| entry.0 != index);
+            placements.push((index, from_start, bumps));
+            remaining -= bumps;
+            if remaining == 0 {
+                break;
+            }
+        }
+        if remaining != 0 {
+            return PairTuning::default();
+        }
+        if realised(&placements, amplitude_limit_nm).1 < excess {
+            continue;
+        }
+        // The least height that covers the excess.
+        let (mut low, mut height) = (0, amplitude_limit_nm);
+        while height - low > 1 {
+            let middle = (low + height).div_euclid(2);
+            if realised(&placements, middle).1 < excess {
+                low = middle;
+            } else {
+                height = middle;
+            }
+        }
+        let (tuned, added) = realised(&placements, height);
+        *target = tuned;
+        let mut replaced: Vec<usize> = placements.iter().map(|entry| entry.0).collect();
+        replaced.sort_unstable();
+        return PairTuning { added_nm: added, first_tuned, replaced };
+    }
+    PairTuning::default()
+}
+
 /// `_serpentine`: replace one axis-aligned segment with `bumps` chamfered
-/// bumps whose chamfer leg is at most `chamfer_width`.
+/// bumps whose chamfer leg is at most `chamfer_width` (0 for sharp corners, CS-174).
 fn serpentine(
     track: &TrackSegment,
     bumps: i64,
@@ -277,7 +381,7 @@ fn serpentine(
         offsets.sort_unstable();
     }
     let (nx, ny) = away_from_partner(track, partner);
-    let (base, top) = bump_chamfers(height, chamfer_width, 0);
+    let (base, top) = if chamfer_width == 0 { (0, 0) } else { bump_chamfers(height, chamfer_width, 0) };
     let at = |distance: i64, rise: i64| {
         Point::new(track.start.x_nm + ux * distance + nx * rise, track.start.y_nm + uy * distance + ny * rise)
     };
@@ -332,4 +436,57 @@ fn away_from_partner(track: &TrackSegment, partner: &[TrackSegment]) -> (i64, i6
 /// `_segment_length`.
 pub(crate) fn segment_length(track: &TrackSegment) -> f64 {
     hypot((track.end.x_nm - track.start.x_nm) as f64, (track.end.y_nm - track.start.y_nm) as f64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::arc_corners::CornerPolicy;
+    use copper_physical::CopperLayer;
+
+    fn track(net: &str, start: (i64, i64), end: (i64, i64)) -> TrackSegment {
+        TrackSegment {
+            net: net.to_owned(),
+            start: Point::new(start.0, start.1),
+            end: Point::new(end.0, end.1),
+            width_nm: 150_000,
+            layer: CopperLayer::Front,
+        }
+    }
+
+    #[test]
+    fn arched_pair_skew_is_compensated_with_sharp_bumps() {
+        // The partner detours by 2 x 1 mm; both members arch at 0.3 mm.
+        let mut first = vec![track("P", (0, 0), (12_000_000, 0))];
+        let mut second = vec![
+            track("N", (0, 300_000), (4_000_000, 300_000)),
+            track("N", (4_000_000, 300_000), (4_000_000, 1_300_000)),
+            track("N", (4_000_000, 1_300_000), (8_000_000, 1_300_000)),
+            track("N", (8_000_000, 1_300_000), (8_000_000, 300_000)),
+            track("N", (8_000_000, 300_000), (12_000_000, 300_000)),
+        ];
+        let corners: IndexMap<String, CornerPolicy> = IndexMap::from([
+            (
+                "P".to_owned(),
+                CornerPolicy { radius_nm: 300_000, partner: Some("N".to_owned()), lane_spacing_nm: 300_000 },
+            ),
+            (
+                "N".to_owned(),
+                CornerPolicy { radius_nm: 300_000, partner: Some("P".to_owned()), lane_spacing_nm: 300_000 },
+            ),
+        ]);
+        let before = (first.clone(), second.clone());
+        let tuning = tune_pair_arched(&mut first, &mut second, 100_000, 1_500_000, 0, None, &corners);
+        assert!(tuning.first_tuned, "{tuning:?}");
+        assert!(tuning.added_nm > 0, "{tuning:?}");
+        assert_eq!(second, before.1);
+        assert!(first.len() > 1 && first.iter().all(|t| t.start.x_nm == t.end.x_nm || t.start.y_nm == t.end.y_nm));
+        let all: Vec<&TrackSegment> = first.iter().chain(&second).collect();
+        let length = |net: &str| planned_length_nm(&all, net, &corners);
+        let skew = (length("P") - length("N")).abs();
+        assert!(skew <= 100_000, "arched skew {skew}");
+        // The octilinear tuner leaves the arched pair's skew as it was.
+        let plain = tune_pair(&mut before.0.clone(), &mut before.1.clone(), 100_000, 1_500_000, 0, None);
+        assert!(plain.added_nm > 0);
+    }
 }

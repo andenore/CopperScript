@@ -8,6 +8,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | --- | --- |
 | Write or change `.copper` | [Language reference](language-reference.md) |
 | Author board silkscreen or change default branding | [Silkscreen](silkscreen.md) |
+| Arch the corners of RF, analog or tuned pair nets | [Arched corners](language-reference.md#arched-corners) |
 | Run check, compile, placement or export | [CLI workflow](cli-workflow.md) |
 | Configure a board build | [Make builds](make-builds.md), [examples](../examples/README.md) |
 | Find parts across dependencies | [Library context](library-context.md) |
@@ -21,10 +22,12 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Build, install or test `copper` | [Rust workspace](../crates/README.md) |
 | Add components or reusable circuits | [Integration guidelines](component-integration-guidelines.md) |
 | Author or bind physical macros | [Physical hard macros](physical-hard-macros.md); [definition syntax](macro-definitions.md); [binding syntax](physical-macro-syntax-plan.md); [definition requirements](macro-definition-plan.md) |
+| Synthesize a trace antenna in a reserved region | [Trace antenna synthesis](language-reference.md#trace-antenna-synthesis); design and solver tiers: [research note](pcb-antenna-synthesis-research.md) |
 | Edit mechanics or floorplan | [Mechanical editor](mechanical-editor.md) |
+| Run the physical editor in the browser (WebAssembly) | [Editor WebAssembly plan](editor-wasm-plan.md) |
 | Author mechanical geometry or profiles | [Mechanical language](mechanical-language.md), [profiles](mechanical-profiles.md) |
 | Assess engineering or release evidence | [Engineering qualification](engineering-qualification.md) |
-| Generate manufacturing or assembly files | [Manufacturing files](manufacturing-files.md), [assembly pinning](assembly-pinning.md) |
+| Generate manufacturing or assembly files | [Manufacturing files](manufacturing-files.md), [native plotting](native-plotting.md), [native zone filling](native-filling.md), [native DRC](native-drc.md), [assembly pinning](assembly-pinning.md) |
 | Share KiCad outputs | [Project export](kicad-project-export.md) |
 | Give parts 3D models or fallback bodies | [3D models](3d-models.md) |
 | Import placed KiCad boards for routing comparison | [KiCad board import](kicad-board-import.md) |

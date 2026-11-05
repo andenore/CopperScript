@@ -616,11 +616,22 @@ fn with_part_3d(
         },
         Some(path) => {
             let base = part.metadata.get(PART_MODEL_SOURCE_KEY).map(String::as_str).unwrap_or_default();
-            let resolved = match std::path::Path::new(base).parent() {
-                Some(directory) => directory.join(path).to_string_lossy().into_owned(),
-                None => path.clone(),
-            };
-            if std::path::Path::new(&resolved).is_file() {
+            let directory = std::path::Path::new(base).parent().unwrap_or(std::path::Path::new(""));
+            let resolved = directory.join(path).to_string_lossy().into_owned();
+            // A dependency's part must not name a file elsewhere on disk:
+            // the model is copied into the manufacturing package.
+            let contained = copper_lang::paths::is_relative_to(
+                &copper_lang::paths::resolve(std::path::Path::new(&resolved)),
+                &copper_lang::paths::resolve(directory),
+            );
+            if !contained {
+                note(format!(
+                    "{}: 3D model {} is outside its part file's directory; using a generated body",
+                    part.name,
+                    repr(path)
+                ));
+                None
+            } else if std::path::Path::new(&resolved).is_file() {
                 Some(resolved)
             } else {
                 note(format!("{}: 3D model {} not found; using a generated body", part.name, repr(&resolved)));
@@ -954,6 +965,7 @@ pub fn physicalize(
         rules,
         tracks: Vec::new(),
         vias: Vec::new(),
+        arcs: Vec::new(),
         metadata,
         regions: lowered.regions,
         keepouts,
@@ -1007,6 +1019,9 @@ pub fn physicalize(
     finish_board(&mut physical, &match_groups, &lowered.region_names)?;
     if !flat.physical_macros.is_empty() {
         physical = crate::hard_macros::apply_source_macros(physical, &flat, locked, offline)?;
+    }
+    if flat.constraints.iter().any(|c| c.kind == ConstraintKind::Antenna) {
+        physical = crate::antenna::apply_antenna_constraints(physical, &flat)?;
     }
     Ok(physical)
 }
@@ -1616,6 +1631,8 @@ fn lower_routing_rule(net: &str, parameters: &Parameters) -> Result<NetRoutingRu
     let tuning_style = enum_value(parameters, "tuning_style", "bumps", "TuningStyle", TuningStyle::parse)?;
     let tuning_spacing_nm = optional_length(parameters, "tuning_spacing")?;
     let tuning_group = optional_string(parameters, "tuning_group")?;
+    let corner_style = enum_value(parameters, "corner_style", "octilinear", "CornerStyle", CornerStyle::parse)?;
+    let corner_radius_nm = optional_length(parameters, "corner_radius")?;
     Ok(NetRoutingRule {
         net: net.to_owned(),
         kind,
@@ -1650,6 +1667,8 @@ fn lower_routing_rule(net: &str, parameters: &Parameters) -> Result<NetRoutingRu
         tuning_style,
         tuning_spacing_nm,
         tuning_group,
+        corner_style,
+        corner_radius_nm,
     })
 }
 
@@ -2394,6 +2413,13 @@ fn validate_references(
             if partner.tuning_group != rule.tuning_group {
                 return Err(Error::Value(format!(
                     "routing rules for {} and {} must agree on tuning_group",
+                    repr(&rule.net),
+                    repr(&partner.net)
+                )));
+            }
+            if partner.corner_style != rule.corner_style || partner.corner_radius_nm != rule.corner_radius_nm {
+                return Err(Error::Value(format!(
+                    "routing rules for {} and {} must agree on corner_style and corner_radius",
                     repr(&rule.net),
                     repr(&partner.net)
                 )));
