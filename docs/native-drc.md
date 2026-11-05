@@ -36,8 +36,11 @@ Distances are edge to edge. As in KiCad, a shortfall of up to 0.5 µm
 - local pad, footprint and zone overrides;
 - custom `clearance`, `hole_clearance` and `edge_clearance` rules.
 
-Violation types use KiCad's names. Types set to `ignore` in the project's
-`rule_severities` are not reported.
+Violation types use KiCad's names. Severities follow the project's
+`rule_severities`, with KiCad 10's defaults where it is silent: a type set to
+`ignore` is not reported, and `track_not_centered_on_via` is reported only
+when the project enables it. Every finding carries the KiCad UUIDs of its
+pads, tracks, vias and zones, so `route-board` can bind it to board objects.
 
 | Check | KiCad type |
 |---|---|
@@ -49,6 +52,15 @@ Violation types use KiCad's names. Types set to `ignore` in the project's
 | Tracks, vias, pads or fills inside a keepout that forbids them | `items_not_allowed` |
 | A net whose pads, tracks and vias form separate groups | `unconnected_items` |
 | Dangling tracks and vias | `track_dangling`, `via_dangling` |
+| A track ending inside a via of its net but off its centre, with no track on that layer reaching the centre | `track_not_centered_on_via` |
+| A fill outline whose connected copper reaches no pad | `isolated_copper` |
+| A thermally connected pad with fewer than two spokes into the fill | `starved_thermal` |
+
+The thermal check follows KiCad. It grows the pad by half its relief gap and
+counts crossings with each fill outline, two per spoke. Spokes into an island
+that touches only one object count only when there is nothing else, and
+connected tracks running from inside the grown pad into the fill count as
+spokes.
 
 The connectivity checks follow KiCad's rules:
 
@@ -67,8 +79,6 @@ The connectivity checks follow KiCad's rules:
 - Silkscreen: clearance to copper and to the board edge, overlaps, and text
   size.
 - Solder mask bridges.
-- Thermal relief spokes (`starved_thermal`).
-- Kept isolated copper islands (`isolated_copper`).
 - Footprint library and schematic parity.
 - Length, skew and differential-pair rules.
 - Keepouts that forbid footprints.
@@ -111,7 +121,7 @@ had no library table.
 | CopperBench | 3 `track_dangling` | the same 3 tracks | passed |
 | CopperAssetTracker | clean | clean | passed |
 | CopperProbe (unfinished) | 10 `track_dangling`, 11 unconnected | the same tracks; 11 unconnected on the same nets | opens on the same 9 nets |
-| BysseControl-32, all zones thermal | 1 `starved_thermal` | clean (not checked) | passed |
+| BysseControl-32, all zones thermal | 1 `starved_thermal` | the same pad, with the same "spoke into an isolated island" cause | passed |
 
 For dangling tracks, KiCad marks the track start and the native report
 marks the dangling end, so findings were matched by track.
@@ -135,3 +145,26 @@ against 27 s for the KiCad path. Compared with the KiCad export:
   [native filling](native-filling.md), at most 0.17 mm² per layer.
 
 The check takes 0.5 to 2 s per board, and the read-back 1 to 9 s.
+
+### Plane verification
+
+`route-board --verify-plane-fill native` was compared with the KiCad
+verifier on the three ladder boards that verify planes, routed by the same
+commit with the same options (`copper bench --only BOARD`, once with
+`--kicad-cli` set to KiCad and once to `native`).
+
+| Board | Routed result | Verification steps | Findings per step |
+|---|---|---|---|
+| CopperLedRing | identical: 51/51, 40 vias, 553.714 mm; 44 s native, 74 s KiCad | 2 and 2 | identical, UUIDs included |
+| CopperAssetTracker | identical: 122/124, 275 vias, 1828.32 mm | 1 and 1 | the same 2 opens on NRF_XC2 and the same repair decision |
+| CopperProbe (unfinished) | identical: 228/237, 2570 tracks and vias | 5 and 5 | the same 7 violations; 12 opens natively, 11 in KiCad |
+
+The extra CopperProbe open is a fill difference, not a check difference.
+The native check finds exactly KiCad's 11 opens on KiCad's own fill of the
+same step. The native fill drops a borderline D18 pocket that KiCad keeps
+(see [native filling](native-filling.md)).
+
+Opens are reported as KiCad's ratsnest reports them: the minimum spanning
+tree over a net's separate groups, each link between the two closest pads,
+vias or track ends. The filled-copper repair builds its proposals from
+those two items.

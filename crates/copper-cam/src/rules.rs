@@ -68,8 +68,9 @@ pub struct Rules {
     pub min_via_annular_width: i64,
     pub min_through_hole_diameter: i64,
     pub min_hole_to_hole: i64,
-    /// Violation types the project sets to `ignore`.
-    pub ignored: Vec<String>,
+    /// The project's `rule_severities`: violation type to `error`,
+    /// `warning` or `ignore`.
+    pub severities: IndexMap<String, String>,
     /// Custom-rule constraints neither the filler nor the check models:
     /// rule name and constraint type.
     pub other_constraints: Vec<(String, String)>,
@@ -254,11 +255,11 @@ impl Rules {
                 patterns.push((glob.to_owned(), class.to_owned()));
             }
         }
-        let mut ignored: Vec<String> = Vec::new();
+        let mut severities = IndexMap::new();
         if let Some(Value::Object(map)) = settings.and_then(|s| s.get("rule_severities")) {
             for (kind, severity) in map {
-                if severity.as_str() == Some("ignore") {
-                    ignored.push(kind.clone());
+                if let Some(severity) = severity.as_str() {
+                    severities.insert(kind.clone(), severity.to_owned());
                 }
             }
         }
@@ -276,13 +277,24 @@ impl Rules {
             min_via_annular_width: rule("min_via_annular_width")?.unwrap_or(0),
             min_through_hole_diameter: rule("min_through_hole_diameter")?.unwrap_or(0),
             min_hole_to_hole: rule("min_hole_to_hole")?.unwrap_or(0),
-            ignored,
+            severities,
             other_constraints,
             class_clearance,
             assignments,
             patterns,
             custom,
         })
+    }
+
+    /// Whether a violation type is not reported: set to `ignore` in the
+    /// project, or ignored by KiCad 10's defaults when the project is silent.
+    pub fn ignores(&self, kind: &str) -> bool {
+        /// KiCad 10 types whose default severity is `ignore`.
+        const DEFAULT_IGNORED: &[&str] = &["track_not_centered_on_via"];
+        match self.severities.get(kind) {
+            Some(severity) => severity == "ignore",
+            None => DEFAULT_IGNORED.contains(&kind),
+        }
     }
 
     pub fn net_class<'a>(&'a self, net: Option<&'a str>) -> &'a str {

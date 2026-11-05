@@ -10,14 +10,15 @@
 //!
 //! Checked: copper clearance and shorts, hole clearance, hole to hole,
 //! copper to board edge (and copper outside the board), track width, via
-//! diameter, annular width, hole size, keepout areas, unconnected pads, and
-//! dangling tracks and vias. [`NOT_CHECKED`] lists what KiCad checks and
+//! diameter, annular width, hole size, keepout areas, unconnected pads,
+//! dangling tracks and vias, tracks ending off a via's centre, isolated
+//! copper islands and starved thermal reliefs. [`NOT_CHECKED`] lists what KiCad checks and
 //! this does not; custom-rule constraints that would tighten a check made
 //! here are refused.
 
 use indexmap::{IndexMap, IndexSet};
 
-use crate::board::{Board, Footprint, Layer, Pad, PadKind, PadShape, Shape, TrackPath};
+use crate::board::{Board, Footprint, Layer, Pad, PadKind, PadShape, Shape, TrackPath, ZoneConnection};
 use crate::fill::{Sets, board_area, flashes};
 use crate::font;
 use crate::geometry::{Point, flatten_arc, rotate, rotate_f64};
@@ -54,8 +55,6 @@ pub const NOT_CHECKED: &[&str] = &[
     "courtyards (courtyards_overlap, courtyard_clearance, malformed_courtyard, npth_inside_courtyard)",
     "silkscreen (silk_over_copper, silk_edge_clearance, silk_overlap, text_height, text_thickness)",
     "solder mask bridges (solder_mask_bridge)",
-    "thermal relief spokes (starved_thermal)",
-    "isolated copper islands (isolated_copper)",
     "footprint libraries and schematic parity (lib_footprint_issues, lib_footprint_mismatch, footprint parity)",
     "length, skew and differential-pair rules",
     "keepouts that forbid footprints",
@@ -69,6 +68,8 @@ pub struct Violation {
     /// Board nanometres, KiCad frame (Y down).
     pub at: (f64, f64),
     pub items: Vec<String>,
+    /// The KiCad UUIDs of the items, where the board gives them.
+    pub uuids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -111,7 +112,20 @@ impl Report {
                             ("pos", object(vec![("x", round(violation.at.0)), ("y", round(violation.at.1))])),
                             (
                                 "items",
-                                Value::Array(violation.items.iter().map(|item| Value::from(item.as_str())).collect()),
+                                Value::Array(
+                                    violation
+                                        .items
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(index, item)| {
+                                            let mut pairs = vec![("description", Value::from(item.as_str()))];
+                                            if let Some(uuid) = violation.uuids.get(index) {
+                                                pairs.push(("uuid", Value::from(uuid.as_str())));
+                                            }
+                                            object(pairs)
+                                        })
+                                        .collect(),
+                                ),
                             ),
                         ])
                     })
@@ -382,6 +396,52 @@ impl Bands {
     }
 }
 
+/// Where segment `a`-`b` crosses `c`-`d` (touching ends included).
+fn crossing(a: P, b: P, c: P, d: P) -> Option<P> {
+    let (r, s) = ((b.0 - a.0, b.1 - a.1), (d.0 - c.0, d.1 - c.1));
+    let denominator = r.0 * s.1 - r.1 * s.0;
+    if denominator == 0.0 {
+        return None;
+    }
+    let (qx, qy) = (c.0 - a.0, c.1 - a.1);
+    let t = (qx * s.1 - qy * s.0) / denominator;
+    let u = (qx * r.1 - qy * r.0) / denominator;
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some((a.0 + t * r.0, a.1 + t * r.1))
+}
+
+/// Even-odd point in polygon.
+fn even_odd(polygon: &[P], p: P) -> bool {
+    let mut inside = false;
+    for index in 0..polygon.len() {
+        let (a, b) = (polygon[index], polygon[(index + 1) % polygon.len()]);
+        if (a.1 <= p.1) != (b.1 <= p.1) && a.0 + (p.1 - a.1) * (b.0 - a.0) / (b.1 - a.1) > p.0 {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// A pad's outline grown by `growth`, curves erring outside by `max_error`.
+fn grown_pad(pad: &Pad, growth: f64, max_error: f64) -> Vec<P> {
+    let (w, h) = if pad.shape == PadShape::Circle {
+        (pad.width as f64, pad.width as f64)
+    } else {
+        (pad.width as f64, pad.height as f64)
+    };
+    let radius = match pad.shape {
+        PadShape::Circle | PadShape::Oval => w.min(h) / 2.0,
+        PadShape::RoundRect(ratio) => (w.min(h) * ratio).round(),
+        PadShape::Rect => 0.0,
+    };
+    let shapes =
+        poly::rounded_rect(pad.center, w + 2.0 * growth, h + 2.0 * growth, radius + growth, pad.angle, max_error);
+    shapes
+        .first()
+        .and_then(|shape| shape.first())
+        .map(|contour| contour.iter().map(|p| (p.x as f64, p.y as f64)).collect())
+        .unwrap_or_default()
+}
+
 fn mm(nm: f64) -> String {
     format!("{:.4}", nm / 1e6)
 }
@@ -476,8 +536,40 @@ impl<'a> Checker<'a> {
     }
 
     fn report(&mut self, kind: &'static str, description: String, at: P, items: Vec<String>) {
-        if !self.rules.ignored.iter().any(|ignored| ignored == kind) {
-            self.violations.push(Violation { kind, description, at, items });
+        self.report_on(kind, description, at, items, Vec::new());
+    }
+
+    /// A finding with the KiCad UUIDs of its items (unknown ones left out,
+    /// so the list may be shorter than `items`).
+    fn report_on(&mut self, kind: &'static str, description: String, at: P, items: Vec<String>, uuids: Vec<String>) {
+        if !self.rules.ignores(kind) {
+            self.violations.push(Violation { kind, description, at, items, uuids });
+        }
+    }
+
+    /// The KiCad UUID of a copper object: its own, or its zone's for a fill.
+    fn uuid(&self, item: &Copper) -> Option<String> {
+        let board = self.board;
+        match item.owner {
+            Owner::Pad(k) => self.pads[k].1.uuid.clone(),
+            Owner::Via(k) => board.vias[k].uuid.clone(),
+            Owner::Track(k) => board.tracks[k].uuid.clone(),
+            Owner::Fill(k) => {
+                board.fills[k].zone.map(|zone| board.zones[zone].uuid.clone()).filter(|uuid| !uuid.is_empty())
+            }
+            Owner::Drawing(_) | Owner::Text(_) => None,
+        }
+    }
+
+    fn uuids(&self, items: &[&Copper]) -> Vec<String> {
+        items.iter().filter_map(|item| self.uuid(item)).collect()
+    }
+
+    fn hole_uuid(&self, hole: &Hole) -> Option<String> {
+        match hole.owner {
+            Owner::Pad(k) => self.pads[k].1.uuid.clone(),
+            Owner::Via(k) => self.board.vias[k].uuid.clone(),
+            _ => None,
         }
     }
 
@@ -725,6 +817,174 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// KiCad's `starved_thermal` on `layer`: each thermally connected pad
+    /// needs two spokes (the default `min_resolved_spokes`). A spoke is a pair
+    /// of crossings of a fill outline with the pad grown by half the relief
+    /// gap; spokes into an island touching one object only are counted only
+    /// when there is nothing else, and connected tracks from inside the pad
+    /// into the fill count as spokes.
+    fn starved_thermals(
+        &self,
+        layer: usize,
+        features: &[Feature],
+        grid: &Grid,
+        stamp: &mut [u32],
+        token: &mut u32,
+        contacts: &IndexMap<usize, IndexSet<Owner>>,
+    ) -> Vec<(usize, usize, P, String)> {
+        let board = self.board;
+        let mut found = Vec::new();
+        for (z, zone) in board.zones.iter().enumerate() {
+            if zone.keepout.is_some() || !zone.layers.contains(&layer) || zone.net.is_none() {
+                continue;
+            }
+            let fills: Vec<usize> = (0..self.items.len())
+                .filter(|&i| {
+                    let item = &self.items[i];
+                    item.layer == layer && matches!(item.owner, Owner::Fill(k) if board.fills[k].zone == Some(z))
+                })
+                .collect();
+            if fills.is_empty() {
+                continue;
+            }
+            let zone_box = zone.outline.iter().flat_map(|path| path.flattened(ARC_ERROR)).fold(None::<Box2>, |b, p| {
+                Some(b.map_or((p, p), |b| ((b.0.0.min(p.0), b.0.1.min(p.1)), (b.1.0.max(p.0), b.1.1.max(p.1)))))
+            });
+            let Some(zone_box) = zone_box else { continue };
+            for (k, (footprint, pad)) in self.pads.iter().enumerate() {
+                if pad.net != zone.net || !flashes(pad, layer) {
+                    continue;
+                }
+                let reach = pad.width.max(pad.height) as f64;
+                let c = point(pad.center);
+                if c.0 + reach < zone_box.0.0
+                    || c.0 - reach > zone_box.1.0
+                    || c.1 + reach < zone_box.0.1
+                    || c.1 - reach > zone_box.1.1
+                {
+                    continue;
+                }
+                if crate::fill::effective_connection(footprint, pad, zone, layer) != ZoneConnection::Thermal {
+                    continue;
+                }
+                let gap = pad.zones.thermal_gap.or(footprint.zones.thermal_gap).unwrap_or(zone.thermal_gap);
+                let outline = grown_pad(pad, (gap / 2) as f64, self.rules.max_error as f64);
+                let (lo, hi) = outline.iter().fold(((f64::MAX, f64::MAX), (f64::MIN, f64::MIN)), |(lo, hi), p| {
+                    ((lo.0.min(p.0), lo.1.min(p.1)), (hi.0.max(p.0), hi.1.max(p.1)))
+                });
+                // Crossings of each fill outline with the grown pad.
+                let mut crossings: IndexMap<usize, IndexSet<(i64, i64)>> = IndexMap::new();
+                *token = token.wrapping_add(1);
+                grid.visit((lo, hi), stamp, *token, |gi| {
+                    let g = &features[gi];
+                    if !fills.contains(&g.item) {
+                        return;
+                    }
+                    for index in 0..outline.len() {
+                        let (a, b) = (outline[index], outline[(index + 1) % outline.len()]);
+                        if let Some(x) = crossing(a, b, g.a, g.b) {
+                            crossings.entry(g.item).or_default().insert((x.0.round() as i64, x.1.round() as i64));
+                        }
+                    }
+                });
+                let (mut spokes, mut ignored) = (0, 0);
+                let mut ignored_at = c;
+                for (fill, points) in &crossings {
+                    if points.len() < 2 {
+                        continue;
+                    }
+                    if contacts.get(fill).map_or(0, IndexSet::len) == 1 {
+                        ignored += points.len() / 2;
+                        let (a, b) = (points[0], points[1]);
+                        ignored_at = ((a.0 + b.0) as f64 / 2.0, (a.1 + b.1) as f64 / 2.0);
+                    } else {
+                        spokes += points.len() / 2;
+                    }
+                }
+                if spokes == 0 && ignored == 0 {
+                    continue;
+                }
+                if spokes < 2 {
+                    // Tracks from inside the grown pad into the fill.
+                    let in_fill = |p: P| fills.iter().any(|&f| even_odd(&self.items[f].paths[0], p));
+                    for track in board.tracks.iter().filter(|t| t.layer == layer && t.net == pad.net) {
+                        let (start, end) = match track.path {
+                            TrackPath::Line { start, end } | TrackPath::Arc { start, end, .. } => {
+                                (point(start), point(end))
+                            }
+                        };
+                        if (even_odd(&outline, start) && in_fill(end)) || (even_odd(&outline, end) && in_fill(start)) {
+                            spokes += 1;
+                        }
+                    }
+                }
+                if spokes == 0 {
+                    spokes += ignored;
+                    ignored = 0;
+                }
+                if spokes < 2 {
+                    let layer_name = &board.copper_layers[layer];
+                    let (text, at) = if ignored > 0 {
+                        (format!("layer {layer_name}: {ignored} spoke(s) connected to an isolated island"), ignored_at)
+                    } else {
+                        (format!("layer {layer_name}: {spokes} of the minimum 2 thermal spokes connected"), c)
+                    };
+                    found.push((z, k, at, text));
+                }
+            }
+        }
+        found
+    }
+
+    /// KiCad's `track_not_centered_on_via`: a track ending inside a via of
+    /// its net but off its centre, when no track on the layer reaches the
+    /// centre.
+    fn off_centre(&self, layer_items: &[usize]) -> Vec<(usize, usize, P)> {
+        let board = self.board;
+        let ends = |k: usize| match board.tracks[k].path {
+            TrackPath::Line { start, end } | TrackPath::Arc { start, end, .. } => [start, end],
+        };
+        let vias: Vec<usize> =
+            layer_items.iter().copied().filter(|&i| matches!(self.items[i].owner, Owner::Via(_))).collect();
+        let tracks: Vec<usize> =
+            layer_items.iter().copied().filter(|&i| matches!(self.items[i].owner, Owner::Track(_))).collect();
+        let mut centred: IndexSet<usize> = IndexSet::new();
+        let mut at_centre: IndexMap<(i64, i64), Vec<usize>> = IndexMap::new();
+        for &v in &vias {
+            let Owner::Via(k) = self.items[v].owner else { continue };
+            at_centre.entry((board.vias[k].center.x, board.vias[k].center.y)).or_default().push(v);
+        }
+        for &t in &tracks {
+            let Owner::Track(k) = self.items[t].owner else { continue };
+            for end in ends(k) {
+                for &v in at_centre.get(&(end.x, end.y)).into_iter().flatten() {
+                    if same_net(self.items[t].net, self.items[v].net) {
+                        centred.insert(v);
+                    }
+                }
+            }
+        }
+        let mut found = Vec::new();
+        for &t in &tracks {
+            let Owner::Track(k) = self.items[t].owner else { continue };
+            'via: for &v in &vias {
+                if centred.contains(&v) || !same_net(self.items[t].net, self.items[v].net) {
+                    continue;
+                }
+                let Owner::Via(j) = self.items[v].owner else { continue };
+                let via = &board.vias[j];
+                for end in ends(k) {
+                    let distance = ((end.x - via.center.x) as f64).hypot((end.y - via.center.y) as f64);
+                    if distance <= via.size as f64 / 2.0 && end != via.center {
+                        found.push((t, v, point(end)));
+                        break 'via;
+                    }
+                }
+            }
+        }
+        found
+    }
+
     fn holes_to_holes(&mut self) {
         let minimum = self.rules.min_hole_to_hole as f64;
         if minimum <= 0.0 {
@@ -823,6 +1083,12 @@ impl<'a> Checker<'a> {
 
         let mut sets = Sets((0..self.items.len()).collect());
         let mut touched = vec![false; self.items.len()];
+        // The distinct objects each fill outline touches directly (KiCad's
+        // connected items of a zone layer), for single-connection islands.
+        let mut contacts: IndexMap<usize, IndexSet<Owner>> = IndexMap::new();
+        let is_fill = |item: usize| matches!(self.items[item].owner, Owner::Fill(_));
+        let mut starved: Vec<(usize, usize, P, String)> = Vec::new();
+        let mut off_centre: Vec<(usize, usize, P)> = Vec::new();
         // Closest approach of each different-net item pair, hole-item pair
         // and item-edge pair within reach.
         let mut pairs: IndexMap<(usize, usize), (f64, P)> = IndexMap::new();
@@ -860,13 +1126,26 @@ impl<'a> Checker<'a> {
                         return;
                     }
                     if same_net(self.items[a].net, self.items[b].net) {
-                        if touched[a] && touched[b] && sets.find(a) == sets.find(b) {
+                        let fills = is_fill(a) || is_fill(b);
+                        if touched[a] && touched[b] && !fills && sets.find(a) == sets.find(b) {
+                            return;
+                        }
+                        if fills
+                            && contacts.get(&a).is_some_and(|seen| seen.contains(&self.items[b].owner))
+                            && contacts.get(&b).is_some_and(|seen| seen.contains(&self.items[a].owner))
+                        {
                             return;
                         }
                         if feature_distance(f, g).0 <= TOUCH {
                             sets.join(a, b);
                             touched[a] = true;
                             touched[b] = true;
+                            if is_fill(a) {
+                                contacts.entry(a).or_default().insert(self.items[b].owner);
+                            }
+                            if is_fill(b) {
+                                contacts.entry(b).or_default().insert(self.items[a].owner);
+                            }
                         }
                         return;
                     }
@@ -907,6 +1186,12 @@ impl<'a> Checker<'a> {
                         sets.join(i, j);
                         touched[i] = true;
                         touched[j] = true;
+                        if is_fill(i) {
+                            contacts.entry(i).or_default().insert(self.items[j].owner);
+                        }
+                        if is_fill(j) {
+                            contacts.entry(j).or_default().insert(self.items[i].owner);
+                        }
                     } else {
                         keep(&mut pairs, (i.min(j), i.max(j)), -1.0, anchor);
                     }
@@ -915,6 +1200,8 @@ impl<'a> Checker<'a> {
                     edge_gaps.insert(i, (-1.0, anchor, usize::MAX));
                 }
             }
+            starved.extend(self.starved_thermals(layer, features, &grid, &mut stamp, &mut token, &contacts));
+            off_centre.extend(self.off_centre(&layer_items));
             // Holes against this layer's copper.
             let mut hole_stamp = vec![u32::MAX; features.len()];
             for (h, hole) in self.holes.iter().enumerate() {
@@ -1079,12 +1366,13 @@ impl<'a> Checker<'a> {
             let required = rules.clearance(&a.rule, &b.rule) as f64;
             if d < required - EPSILON {
                 let items = vec![self.describe(a), self.describe(b)];
+                let uuids = self.uuids(&[a, b]);
                 let text = if d <= 0.0 {
                     format!("clearance 0 mm (overlap) is below the required {} mm", mm(required))
                 } else {
                     format!("clearance {} mm is below the required {} mm", mm(d), mm(required))
                 };
-                self.report("clearance", text, at, items);
+                self.report_on("clearance", text, at, items, uuids);
             }
         }
         // A hole against a via or pad once, not once per layer; against a
@@ -1112,8 +1400,9 @@ impl<'a> Checker<'a> {
             let required = rules.hole_clearance(&hole.rule, &item.rule) as f64;
             if d < required - EPSILON {
                 let items = vec![self.describe_hole(hole), self.describe(item)];
+                let uuids: Vec<String> = self.hole_uuid(hole).into_iter().chain(self.uuid(item)).collect();
                 let text = format!("hole clearance {} mm is below the required {} mm", mm(d.max(0.0)), mm(required));
-                self.report("hole_clearance", text, at, items);
+                self.report_on("hole_clearance", text, at, items, uuids);
             }
         }
         for (&i, &(d, at, _)) in &edge_gaps {
@@ -1121,22 +1410,42 @@ impl<'a> Checker<'a> {
             let required = rules.edge_clearance(&item.rule) as f64;
             if d < required - EPSILON {
                 let items = vec![self.describe(item)];
+                let uuids = self.uuids(&[item]);
                 let text = if d == -1.0 && !poly::shapes_contain(&outline, at) {
                     "copper outside the board outline".to_owned()
                 } else {
                     format!("board edge clearance {} mm is below the required {} mm", mm(d.max(0.0)), mm(required))
                 };
-                self.report("copper_edge_clearance", text, at, items);
+                self.report_on("copper_edge_clearance", text, at, items, uuids);
             }
         }
         for (&(z, i), &at) in &keepout_hits {
             let items = vec![self.describe(&self.items[i])];
+            let uuids: Vec<String> =
+                self.uuid(&self.items[i]).into_iter().chain(Some(board.zones[z].uuid.clone())).collect();
             let name = &board.zones[z].name;
-            self.report("items_not_allowed", format!("item inside keepout area {name:?}"), at, items);
+            self.report_on("items_not_allowed", format!("item inside keepout area {name:?}"), at, items, uuids);
         }
         for &(i, at) in &dangling {
             let items = vec![self.describe(&self.items[i])];
-            self.report("track_dangling", "track end is not connected".to_owned(), at, items);
+            let uuids = self.uuids(&[&self.items[i]]);
+            self.report_on("track_dangling", "track end is not connected".to_owned(), at, items, uuids);
+        }
+        for (track, via, at) in &off_centre {
+            let items = vec![self.describe(&self.items[*track]), self.describe(&self.items[*via])];
+            let uuids = self.uuids(&[&self.items[*track], &self.items[*via]]);
+            let text = "track ends inside a via, off its centre".to_owned();
+            self.report_on("track_not_centered_on_via", text, *at, items, uuids);
+        }
+        for (zone, pad, at, text) in &starved {
+            let mut uuids: Vec<String> = Some(board.zones[*zone].uuid.clone()).into_iter().collect();
+            uuids.extend(self.pads[*pad].1.uuid.clone());
+            let (footprint, found) = self.pads[*pad];
+            let items = vec![
+                format!("zone {:?} {}", board.zones[*zone].name, net_text(board.zones[*zone].net.as_deref())),
+                format!("pad {}.{} {}", footprint.reference, found.number, net_text(found.net.as_deref())),
+            ];
+            self.report_on("starved_thermal", text.clone(), *at, items, uuids);
         }
 
         // Connectivity across layers: vias and plated pads join their layers.
@@ -1178,8 +1487,27 @@ impl<'a> Checker<'a> {
             if layers < 2 {
                 let text = if layers == 0 { "via is not connected" } else { "via is connected on only one layer" };
                 let items = vec![format!("via {} at {}", net_text(via.net.as_deref()), at_text(point(via.center)))];
-                self.report("via_dangling", text.to_owned(), point(via.center), items);
+                let uuids = via.uuid.clone().into_iter().collect();
+                self.report_on("via_dangling", text.to_owned(), point(via.center), items, uuids);
             }
+        }
+        // Isolated copper: a fill outline whose connected copper reaches no
+        // pad (KiCad's orphaned cluster).
+        let mut with_pad: IndexSet<usize> = IndexSet::new();
+        for (index, item) in self.items.iter().enumerate() {
+            if matches!(item.owner, Owner::Pad(_)) && item.net.is_some() {
+                with_pad.insert(sets.find(index));
+            }
+        }
+        for index in 0..self.items.len() {
+            let item = &self.items[index];
+            if !matches!(item.owner, Owner::Fill(_)) || with_pad.contains(&sets.find(index)) {
+                continue;
+            }
+            let items = vec![self.describe(item)];
+            let uuids = self.uuids(&[item]);
+            let at = item.paths[0][0];
+            self.report_on("isolated_copper", "isolated copper fill".to_owned(), at, items, uuids);
         }
         // Unconnected: a net whose pads, tracks and vias form several groups.
         let mut groups: IndexMap<&str, IndexMap<usize, Vec<usize>>> = IndexMap::new();
@@ -1215,16 +1543,63 @@ impl<'a> Checker<'a> {
                     names.join(", ")
                 }
             };
-            for members in &clusters[1..] {
+            // KiCad's ratsnest: the minimum spanning tree over the groups,
+            // each link between the closest anchors (pad and via centres,
+            // track ends) of the two groups it joins.
+            let anchors = |members: &Vec<usize>| -> Vec<(P, usize)> {
+                let mut found = Vec::new();
+                for &i in members {
+                    let item = &self.items[i];
+                    match item.owner {
+                        Owner::Track(_) => {
+                            let path = &item.paths[0];
+                            found.push((path[0], i));
+                            found.push((path[path.len() - 1], i));
+                        }
+                        _ => found.push((item.paths[0][0], i)),
+                    }
+                }
+                found
+            };
+            let anchor_lists: Vec<Vec<(P, usize)>> = clusters.iter().map(|members| anchors(members)).collect();
+            let mut links: Vec<(f64, usize, usize, usize, usize)> = Vec::new();
+            for a in 0..clusters.len() {
+                for b in a + 1..clusters.len() {
+                    let mut best: Option<(f64, usize, usize)> = None;
+                    for &(p, i) in &anchor_lists[a] {
+                        for &(q, j) in &anchor_lists[b] {
+                            let d = (p.0 - q.0).hypot(p.1 - q.1);
+                            if best.is_none_or(|(e, _, _)| d < e) {
+                                best = Some((d, i, j));
+                            }
+                        }
+                    }
+                    if let Some((d, i, j)) = best {
+                        links.push((d, a, b, i, j));
+                    }
+                }
+            }
+            links.sort_by(|x, y| x.0.total_cmp(&y.0).then((x.1, x.2).cmp(&(y.1, y.2))));
+            let mut joined = Sets((0..clusters.len()).collect());
+            for (_, a, b, i, j) in links {
+                if joined.find(a) == joined.find(b) {
+                    continue;
+                }
+                joined.join(a, b);
                 unconnected.push(Violation {
                     kind: "unconnected_items",
-                    description: format!("net [{net}]: {} is not connected to {}", name(members), name(clusters[0])),
-                    at: self.items[members[0]].paths[0][0],
-                    items: vec![self.describe(&self.items[members[0]]), self.describe(&self.items[clusters[0][0]])],
+                    description: format!(
+                        "net [{net}]: {} is not connected to {}",
+                        name(clusters[a]),
+                        name(clusters[b])
+                    ),
+                    at: self.items[i].paths[0][0],
+                    items: vec![self.describe(&self.items[i]), self.describe(&self.items[j])],
+                    uuids: self.uuids(&[&self.items[i], &self.items[j]]),
                 });
             }
         }
-        if self.rules.ignored.iter().any(|kind| kind == "unconnected_items") {
+        if self.rules.ignores("unconnected_items") {
             unconnected.clear();
         }
         Ok(unconnected)

@@ -4,6 +4,11 @@
 //! filled-copper feedback read them, running `kicad-cli` itself
 //! (`verify_filled_planes`) and the native dangling-copper cleanups
 //! (`remove_native_dangling_tracks`, `remove_native_dangling_copper`).
+//!
+//! In place of a `kicad-cli` path, [`NATIVE_CHECKER`] selects CopperScript's
+//! own filler and DRC (`copper-cam`): the export is refilled and checked
+//! without KiCad, and the report is written in KiCad's JSON shape, so the
+//! evidence, its UUID bindings and the repairs read the same either way.
 
 use copper_json::{Dumps, Object, Value};
 use copper_pcb::board::PhysicalBoard;
@@ -268,6 +273,73 @@ impl From<copper_pcb::Error> for NativeError {
     }
 }
 
+/// The checker argument (`--verify-plane-fill native`) that selects
+/// CopperScript's own refill and DRC instead of a `kicad-cli` executable.
+pub const NATIVE_CHECKER: &str = "native";
+
+/// Whether `checker` names CopperScript's own refill and DRC.
+pub fn is_native_checker(checker: &Path) -> bool {
+    checker.as_os_str() == NATIVE_CHECKER
+}
+
+/// Refill the written board at `pcb_path` natively (when it has zones), save
+/// it, check it, and write the report to `report_path` in KiCad's JSON
+/// shape: findings with `type`, `description` and `items` carrying UUIDs.
+fn native_refill_and_check(pcb_path: &Path, report_path: &Path, refill: bool) -> Result<(), NativeError> {
+    let read = |path: &Path| -> Result<String, NativeError> {
+        let bytes =
+            std::fs::read(path).map_err(|failure| os_error(&failure, Some(&copper_lang::paths::display(path))))?;
+        let text = String::from_utf8_lossy(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes)).into_owned();
+        Ok(text.replace("\r\n", "\n"))
+    };
+    let failed = |failure: String| NativeError::Runtime(format!("native refill/DRC failed: {failure}"));
+    let shown = copper_lang::paths::display(pcb_path);
+    let text = read(pcb_path)?;
+    let project = read(&pcb_path.with_extension("kicad_pro"))?;
+    let custom_path = pcb_path.with_extension("kicad_dru");
+    let custom = if custom_path.is_file() { Some(read(&custom_path)?) } else { None };
+    let rules = copper_cam::rules::Rules::load(&project, custom.as_deref()).map_err(failed)?;
+    let mut board = copper_cam::board::parse_board(&text, &shown).map_err(failed)?;
+    if refill {
+        let fills = copper_cam::fill::fill_zones(&board, &rules).map_err(failed)?;
+        let filled = copper_cam::pcb_write::write_fills(&text, &board, &fills).map_err(failed)?;
+        std::fs::write(pcb_path, filled.as_bytes()).map_err(|failure| os_error(&failure, Some(&shown)))?;
+        board = copper_cam::board::parse_board(&filled, &shown).map_err(failed)?;
+    }
+    let report = copper_cam::drc::check(&board, &rules).map_err(failed)?;
+    let entries = |list: &[copper_cam::drc::Violation]| {
+        Value::Array(
+            list.iter()
+                .map(|violation| {
+                    let mut entry = Object::new();
+                    entry.insert("type".to_owned(), Value::from(violation.kind));
+                    entry.insert("severity".to_owned(), Value::from("error"));
+                    entry.insert("description".to_owned(), Value::from(violation.description.as_str()));
+                    let items = violation
+                        .uuids
+                        .iter()
+                        .map(|uuid| {
+                            let mut item = Object::new();
+                            item.insert("uuid".to_owned(), Value::from(uuid.as_str()));
+                            Value::Object(item)
+                        })
+                        .collect();
+                    entry.insert("items".to_owned(), Value::Array(items));
+                    Value::Object(entry)
+                })
+                .collect(),
+        )
+    };
+    let mut document = Object::new();
+    document.insert("source".to_owned(), Value::from(shown.as_str()));
+    document.insert("violations".to_owned(), entries(&report.violations));
+    document.insert("unconnected_items".to_owned(), entries(&report.unconnected));
+    document.insert("not_checked".to_owned(), strings(&report.not_checked));
+    let json = Dumps::new().indent(2).dumps(&Value::Object(document)) + "\n";
+    std::fs::write(report_path, json.as_bytes())
+        .map_err(|failure| os_error(&failure, Some(&copper_lang::paths::display(report_path))))
+}
+
 fn runtime<T>(message: impl Into<String>) -> Result<T, NativeError> {
     Err(NativeError::Runtime(message.into()))
 }
@@ -514,21 +586,27 @@ pub fn verify_filled_planes(
         }
     };
     let cli = copper_lang::paths::display(kicad_cli);
-    let version_result = run(&[cli.clone(), "--version".to_owned()], &stage)?;
-    if version_result.code != 0 {
-        return runtime(format!("KiCad version query failed: {}", version_result.stderr));
-    }
-    let version = strip(&version_result.stdout).lines().next().unwrap_or("").to_owned();
-    let major: Option<i64> = {
-        let digits: String = version.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if digits.is_empty() { None } else { digits.parse().ok() }
+    let native = is_native_checker(kicad_cli);
+    let version = if native {
+        concat!("copperscript ", env!("CARGO_PKG_VERSION")).to_owned()
+    } else {
+        let version_result = run(&[cli.clone(), "--version".to_owned()], &stage)?;
+        if version_result.code != 0 {
+            return runtime(format!("KiCad version query failed: {}", version_result.stderr));
+        }
+        let version = strip(&version_result.stdout).lines().next().unwrap_or("").to_owned();
+        let major: Option<i64> = {
+            let digits: String = version.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() { None } else { digits.parse().ok() }
+        };
+        if major != Some(qualified_major) {
+            return runtime(format!(
+                "KiCad {} is not the qualified major {qualified_major}",
+                copper_json::python_str_repr(&version)
+            ));
+        }
+        version
     };
-    if major != Some(qualified_major) {
-        return runtime(format!(
-            "KiCad {} is not the qualified major {qualified_major}",
-            copper_json::python_str_repr(&version)
-        ));
-    }
     let manifest = copper_pcb::kicad_pcb::generate(board)?;
     if manifest.artifacts.len() < 2 {
         return runtime("KiCad backend omitted the same-stem project");
@@ -562,10 +640,14 @@ pub fn verify_filled_planes(
         command.extend(["--refill-zones".to_owned(), "--save-board".to_owned()]);
     }
     command.push(copper_lang::paths::display(&pcb_path));
-    let result = run(&command, &stage)?;
-    if result.code != 0 || !report_path.is_file() {
-        let detail = [strip(&result.stderr), strip(&result.stdout)].into_iter().find(|t| !t.is_empty());
-        return runtime(format!("KiCad refill/DRC failed: {}", detail.unwrap_or("no report")));
+    if native {
+        native_refill_and_check(&pcb_path, &report_path, !board.zones.is_empty())?;
+    } else {
+        let result = run(&command, &stage)?;
+        if result.code != 0 || !report_path.is_file() {
+            let detail = [strip(&result.stderr), strip(&result.stdout)].into_iter().find(|t| !t.is_empty());
+            return runtime(format!("KiCad refill/DRC failed: {}", detail.unwrap_or("no report")));
+        }
     }
     let report_bytes = std::fs::read(&report_path)
         .map_err(|failure| os_error(&failure, Some(&copper_lang::paths::display(&report_path))))?;

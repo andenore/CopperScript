@@ -30,10 +30,13 @@ The filler follows KiCad 10's own (iterative) refill:
    (45° for round pads, else 90°, unless the pad says otherwise), and keep
    those that reach copper.
 5. Drop necks narrower than the zone's minimum width: shrink by half of it
-   (bevelled), drop fragments smaller than the width, and regrow rounded.
+   (bevelled), drop fragments smaller than the width, bridge fragments whose
+   convex corners are closer than the width (KiCad's `connect_nearby_polys`,
+   with its pairing rules), and regrow rounded within the unpruned fill.
 6. Knock out the fills of higher-priority zones on other nets, grown by
-   their clearance, and prune minimum width again. Higher-priority same-net
-   zones keep their own area.
+   their clearance, and prune minimum width again. This time fragments are
+   bridged before small ones are dropped, as in KiCad. Higher-priority
+   same-net zones keep their own area.
 7. Remove islands. An island is a fill outline whose connected copper (fills,
    tracks, vias, pads of the net) reaches no pad. Each zone's mode applies:
    always, never, or below a minimum area. A zone isolated on every layer is
@@ -82,11 +85,16 @@ native fill without refilling.
 
 | Board | Largest significant difference per copper layer | KiCad DRC on the native fill |
 |---|---|---|
-| BysseControl-32 | 0.17 mm² | same as KiCad's own fill: no clearance violations, 0 unconnected |
-| CopperBench | 0.005 mm² | same as KiCad's own fill |
+| BysseControl-32 | 0.098 mm² | same as KiCad's own fill: no clearance violations, 0 unconnected |
+| CopperBench | none | same as KiCad's own fill |
 | CopperAssetTracker | 0.005 mm² | same as KiCad's own fill |
-| CopperProbe | 3.2 mm² (one island, below) | same as KiCad's own fill |
-| BysseControl-32, all zones thermal | 0.35 mm² across specks of about 0.002 mm² | same as KiCad's own fill (one `starved_thermal` in both) |
+| CopperProbe | none | same as KiCad's own fill |
+| BysseControl-32, all zones thermal | 0.17 mm² across specks of about 0.002 mm² | same as KiCad's own fill (one `starved_thermal` in both) |
+
+Before fragment bridging was reproduced, the largest differences were
+0.17 mm² on BysseControl-32 and 3.2 mm² on CopperProbe. On CopperProbe, a
+region touching the main pour at a single point was removed as an island,
+where KiCad's bridging keeps it.
 
 The raw difference is 0.1–4 mm² per layer, on layers of up to 22,000 mm² of
 copper. It is single-pixel edge noise from the two fillers' different curve
@@ -95,15 +103,13 @@ and DRC took 6.8 s on CopperBench.
 
 Known differences:
 
-- **Point contacts.** On CopperProbe In3.Cu, a 3.2 mm² region touches the
-  main pour only at a single point. Natively the two are 0.8 µm apart, so
-  the region is an island and is removed. KiCad's polygons overlap there by a
-  fraction of a micron, so KiCad keeps it. A point contact does not survive
-  etching, so the copper is floating either way.
-- **Borderline pockets.** A pocket whose width is within a few micrometres of
-  the minimum width (between a via pair and a passing track, for example) can
-  survive in one fill and not the other. KiCad also bridges nearby fragments
-  during pruning (`connect_nearby_polys`), which is not reproduced.
+- **Borderline pockets.** A pocket whose width is close to the minimum
+  width, between a via and a passing track for example, can survive in one
+  fill and not the other. In a routed CopperProbe, a 0.04 mm² pocket of the
+  D18 pour on In2.Cu, about 0.27 mm at its widest against a 0.25 mm minimum,
+  survives KiCad's pruning and not the native one. In KiCad it joins a via
+  group to the rest of the pour, so native plane verification there reports
+  one more D18 open than KiCad (see [native DRC](native-drc.md)).
 
 ## Finding: zone connection codes
 

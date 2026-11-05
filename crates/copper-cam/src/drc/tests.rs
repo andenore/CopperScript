@@ -146,3 +146,71 @@ fn jumper_pad_groups_join_pads_and_short_stubs_dangle() {
     let dangling: Vec<&Violation> = stub.violations.iter().filter(|v| v.kind == "track_dangling").collect();
     assert!(dangling.iter().any(|v| (v.at.0 - 8e6).abs() < 1.0 && (v.at.1 - 5.775e6).abs() < 1.0), "{dangling:#?}");
 }
+
+#[test]
+fn off_centre_vias_isolated_fills_and_uuids() {
+    // A SIG track ending inside the GND via's pad, 0.1 mm off its centre,
+    // is a GND track there; the via has no centred track.
+    // KiCad 10 ignores the check unless the project enables it.
+    let track = "(segment (start 10.1 15) (end 12 15) (width 0.2) (layer \"F.Cu\") (net \"GND\") (uuid \"t-1\"))";
+    assert!(!kinds(&checked(track)).contains(&"track_not_centered_on_via"));
+    let enabled = PROJECT.replace(
+        "\"min_through_hole_diameter\": 0.2}",
+        "\"min_through_hole_diameter\": 0.2}, \"rule_severities\": {\"track_not_centered_on_via\": \"warning\"}",
+    );
+    let enabled_rules = Rules::load(&enabled, None).unwrap();
+    let check_with = |extra: &str| check(&parse_board(&text(extra, false), "test").unwrap(), &enabled_rules).unwrap();
+    let off = check_with(track);
+    let found: Vec<&Violation> = off.violations.iter().filter(|v| v.kind == "track_not_centered_on_via").collect();
+    assert_eq!(found.len(), 1, "{off:#?}");
+    assert_eq!(found[0].uuids, ["t-1"], "{found:#?}");
+    let centred = check_with("(segment (start 10 15) (end 12 15) (width 0.2) (layer \"F.Cu\") (net \"GND\"))");
+    assert!(!kinds(&centred).contains(&"track_not_centered_on_via"), "{centred:#?}");
+    // A kept fill fragment with no pad (island removal off) is isolated copper.
+    let source = text("", true)
+        .replace("(island_removal_mode 0)", "(island_removal_mode 1)")
+        .replace("(layers \"F.Cu\" \"B.Cu\") (uuid \"a\")", "(layers \"F.Cu\" \"B.Cu\") (uuid \"zone-a\")")
+        + "";
+    let wall = "(segment (start 0 18) (end 20 18) (width 0.3) (layer \"F.Cu\") (net \"WALL\"))";
+    let source = source.replace(
+        "(via (at 10 15)",
+        &format!(
+            "{wall}
+  (via (at 10 15)"
+        ),
+    );
+    let board = parse_board(&source, "test").unwrap();
+    let fills = crate::fill::fill_zones(&board, &rules()).unwrap();
+    let written = crate::pcb_write::write_fills(&source, &board, &fills).unwrap();
+    let report = check(&parse_board(&written, "test").unwrap(), &rules()).unwrap();
+    let isolated: Vec<&Violation> = report.violations.iter().filter(|v| v.kind == "isolated_copper").collect();
+    assert_eq!(isolated.len(), 1, "{report:#?}");
+    assert_eq!(isolated[0].uuids, ["zone-a"]);
+}
+
+#[test]
+fn opens_name_the_nearest_pads_of_a_spanning_tree() {
+    // Three unrouted SIG pads in a row: KiCad's ratsnest links each to its
+    // neighbour, never the two ends.
+    let source = text(
+        "(footprint \"L:Q\" (layer \"F.Cu\") (at 10 3)
+    (property \"Reference\" \"Q1\" (at 0 0) (layer \"F.Fab\") (hide yes) (effects (font (size 1 1))))
+    (pad \"1\" smd rect (at 0 0) (size 0.5 0.5) (layers \"F.Cu\") (net \"ROW\") (uuid \"q1\"))
+    (pad \"2\" smd rect (at 2 0) (size 0.5 0.5) (layers \"F.Cu\") (net \"ROW\") (uuid \"q2\"))
+    (pad \"3\" smd rect (at 5 0) (size 0.5 0.5) (layers \"F.Cu\") (net \"ROW\") (uuid \"q3\")))",
+        false,
+    );
+    let report = check(&parse_board(&source, "test").unwrap(), &rules()).unwrap();
+    let mut links: Vec<Vec<String>> = report
+        .unconnected
+        .iter()
+        .filter(|v| v.description.contains("[ROW]"))
+        .map(|v| {
+            let mut uuids = v.uuids.clone();
+            uuids.sort();
+            uuids
+        })
+        .collect();
+    links.sort();
+    assert_eq!(links, [vec!["q1", "q2"], vec!["q2", "q3"]], "{report:#?}");
+}

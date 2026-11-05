@@ -94,6 +94,7 @@ pub struct Pad {
     pub zones: PadZoneSettings,
     /// KiCad's thermal spoke angle; 45 degrees for circles, else 90.
     pub spoke_angle: f64,
+    pub uuid: Option<String>,
 }
 
 /// How a pad or footprint overrides the connection of zones to its pads.
@@ -179,6 +180,7 @@ pub struct Track {
     pub width: i64,
     pub net: Option<String>,
     pub path: TrackPath,
+    pub uuid: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,6 +191,7 @@ pub struct Via {
     pub net: Option<String>,
     /// `Some(true)` tents (covers) the via on that side; `None` uses the board default.
     pub tented: [Option<bool>; 2],
+    pub uuid: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -336,6 +339,11 @@ fn has_atom(node: &List, name: &str) -> bool {
 fn flag(node: &List, name: &str) -> bool {
     has_atom(node, name)
         || kicad_mod::first(node, name).is_some_and(|child| !matches!(kicad_mod::atom(child, 1), Some("no" | "false")))
+}
+
+/// An item's `(uuid ...)` (`(tstamp ...)` in older files).
+fn uuid(node: &List) -> Option<String> {
+    kicad_mod::first(node, "uuid").or_else(|| kicad_mod::first(node, "tstamp")).and_then(|item| string(item, 1))
 }
 
 fn string(node: &List, index: usize) -> Option<String> {
@@ -773,6 +781,7 @@ fn pad(node: &List, stack: &Stack, footprint_position: Point, footprint_angle: f
             None if shape == PadShape::Circle => 45.0,
             None => 90.0,
         },
+        uuid: uuid(node),
     })
 }
 
@@ -894,6 +903,7 @@ fn via(node: &List, stack: &Stack) -> Result<Via> {
         drill: number(child(node, "drill", &what)?, 1, "via drill")?,
         net: net(node, stack),
         tented: tenting(node),
+        uuid: uuid(node),
     })
 }
 
@@ -915,6 +925,7 @@ fn track(node: &List, stack: &Stack, arc: bool) -> Result<Option<Track>> {
         width: number(child(node, "width", what)?, 1, "track width")?,
         net: net(node, stack),
         path,
+        uuid: uuid(node),
     }))
 }
 

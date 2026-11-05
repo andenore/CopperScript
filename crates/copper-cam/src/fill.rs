@@ -17,7 +17,7 @@
 //! Curves become polygons that err outside the true shape, so knockouts are
 //! never smaller than required.
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 
 use crate::board::{Board, Footprint, Layer, Pad, PadKind, PadShape, Shape, TrackPath, Zone, ZoneConnection};
 use crate::font;
@@ -97,6 +97,19 @@ pub(crate) fn flashes(pad: &Pad, layer: usize) -> bool {
             && pad.drill.is_some_and(|(w, h)| pad.width <= w && pad.height <= h))
 }
 
+/// How a zone connects to a pad on `layer`: the pad's, then the footprint's,
+/// then the zone's setting; through-hole thermals resolve by pad kind, and a
+/// thermal pad without copper on the layer is not connected.
+pub(crate) fn effective_connection(footprint: &Footprint, pad: &Pad, zone: &Zone, layer: usize) -> ZoneConnection {
+    let connection = pad.zones.connection.or(footprint.zones.connection).unwrap_or(zone.connection);
+    let connection = match connection {
+        ZoneConnection::ThroughHoleThermal if pad.kind == PadKind::ThroughHole => ZoneConnection::Thermal,
+        ZoneConnection::ThroughHoleThermal => ZoneConnection::Solid,
+        other => other,
+    };
+    if connection == ZoneConnection::Thermal && !flashes(pad, layer) { ZoneConnection::None } else { connection }
+}
+
 struct Filler<'a> {
     board: &'a Board,
     rules: &'a Rules,
@@ -156,13 +169,7 @@ impl<'a> Filler<'a> {
     }
 
     fn connection(&self, footprint: &Footprint, pad: &Pad, zone: &Zone, layer: usize) -> ZoneConnection {
-        let connection = pad.zones.connection.or(footprint.zones.connection).unwrap_or(zone.connection);
-        let connection = match connection {
-            ZoneConnection::ThroughHoleThermal if pad.kind == PadKind::ThroughHole => ZoneConnection::Thermal,
-            ZoneConnection::ThroughHoleThermal => ZoneConnection::Solid,
-            other => other,
-        };
-        if connection == ZoneConnection::Thermal && !flashes(pad, layer) { ZoneConnection::None } else { connection }
+        effective_connection(footprint, pad, zone, layer)
     }
 
     /// Clearance knockouts on `layer` for `zone`, and its thermally connected pads.
@@ -375,18 +382,50 @@ impl<'a> Filler<'a> {
         result
     }
 
-    /// Remove features narrower than the zone's minimum width.
-    fn prune(&self, shapes: &Shapes, zone: &Zone) -> Shapes {
+    /// Remove features narrower than the zone's minimum width, as KiCad
+    /// does: shrink by just under half of it, drop pieces smaller than it,
+    /// bridge pieces whose convex corners are closer than it
+    /// (`connect_nearby_polys`), and grow back within the input. The first
+    /// prune drops small pieces before bridging; the prune after zone
+    /// knockouts (`after_knockouts`) bridges first, so a piece's size
+    /// includes the bridges it starts.
+    fn prune(&self, shapes: &Shapes, zone: &Zone, after_knockouts: bool) -> Shapes {
         let shrink = zone.min_thickness / 2 - EPSILON;
         if shrink <= EPSILON {
             return shapes.clone();
         }
+        let min = zone.min_thickness;
         let mut deflated = poly::offset(shapes, -shrink, false, self.max_error);
-        deflated.retain(|shape| {
-            let (x0, y0, x1, y1) = poly::bounds(shape);
-            (x1 - x0).max(y1 - y0) >= zone.min_thickness
-        });
-        poly::offset(&deflated, shrink, true, self.max_error)
+        let big = |bounds: (i64, i64, i64, i64)| (bounds.2 - bounds.0).max(bounds.3 - bounds.1) >= min;
+        let bridges = if after_knockouts {
+            let bridges = nearby_bridges(&deflated, min as f64);
+            let mut bounds: Vec<(i64, i64, i64, i64)> = deflated.iter().map(|shape| poly::bounds(shape)).collect();
+            for &(shape, _, to) in &bridges {
+                let b = &mut bounds[shape];
+                let (x, y) = (to.0.round() as i64, to.1.round() as i64);
+                *b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+            }
+            let keep: Vec<bool> = bounds.into_iter().map(big).collect();
+            let kept: Vec<_> = bridges.into_iter().filter(|&(shape, _, _)| keep[shape]).collect();
+            let mut index = 0;
+            deflated.retain(|_| {
+                index += 1;
+                keep[index - 1]
+            });
+            kept
+        } else {
+            deflated.retain(|shape| big(poly::bounds(shape)));
+            nearby_bridges(&deflated, min as f64)
+        };
+        let mut grown = poly::offset(&deflated, shrink, true, self.max_error);
+        if bridges.is_empty() {
+            return grown;
+        }
+        let as_point = |p: (f64, f64)| Point::new(p.0.round() as i64, p.1.round() as i64);
+        for (_, from, to) in bridges {
+            grown.extend(poly::capsule(as_point(from), as_point(to), 2.0 * shrink as f64, self.max_error));
+        }
+        poly::intersection(&poly::union(&grown), shapes)
     }
 
     /// Higher-priority other-net zone fills on `layer`, grown by their clearance.
@@ -426,7 +465,7 @@ impl<'a> Filler<'a> {
         // Spokes that reach copper surviving the clearances and minimum width.
         let spokes: Vec<_> = thermal.iter().flat_map(|(footprint, pad)| self.spokes(zone, footprint, pad)).collect();
         if !spokes.is_empty() {
-            let test = self.prune(&poly::difference(&fill, &holes), zone);
+            let test = self.prune(&poly::difference(&fill, &holes), zone, false);
             for (index, (shape, test_point, outline)) in spokes.iter().enumerate() {
                 let reaches = poly::shapes_contain(&test, *test_point)
                     || spokes.iter().enumerate().any(|(other, (_, other_point, other_outline))| {
@@ -441,7 +480,7 @@ impl<'a> Filler<'a> {
             fill = poly::union(&fill);
         }
         fill = poly::difference(&fill, &holes);
-        fill = self.prune(&fill, zone);
+        fill = self.prune(&fill, zone, false);
         let mut trim = holes;
         for (_, pad) in &thermal {
             trim.extend(self.hole_shape(pad, 0.0));
@@ -466,7 +505,7 @@ impl<'a> Filler<'a> {
         let mut fill = first.clone();
         if !clearances.is_empty() {
             fill = poly::difference(&fill, &clearances);
-            let pruned = self.prune(&fill, zone);
+            let pruned = self.prune(&fill, zone, true);
             fill = poly::intersection(&pruned, &fill);
         }
         // Higher-priority same-net zones govern their own area: their outline
@@ -494,6 +533,123 @@ impl<'a> Filler<'a> {
         fill.retain(|shape| poly::shape_area(shape) >= noise);
         fill
     }
+}
+
+/// A bridge between two deflated pieces: (piece of the first corner, first
+/// corner, second corner).
+type Bridge = (usize, (f64, f64), (f64, f64));
+
+/// KiCad's `connect_nearby_polys` on deflated shapes: for each convex corner,
+/// in outline order, the nearest other convex corner closer than `distance`
+/// (corners of the same contour only when they are at least `distance`
+/// apart along it), skipping corners next to an earlier match.
+fn nearby_bridges(shapes: &Shapes, distance: f64) -> Vec<Bridge> {
+    struct Corner {
+        at: (f64, f64),
+        shape: usize,
+        contour: usize,
+        index: usize,
+        count: usize,
+        along: f64,
+        perimeter: f64,
+        convex: bool,
+    }
+    let mut corners: Vec<Corner> = Vec::new();
+    let mut contour_id = 0;
+    for (shape_index, shape) in shapes.iter().enumerate() {
+        // i_overlay winds holes opposite to their outer contour, so a corner
+        // is convex toward the copper when it turns like the outer contour.
+        let outer_sign = shape.first().map_or(1.0, |outer| (poly::double_area(outer) as f64).signum());
+        for contour in shape {
+            let n = contour.len();
+            if n < 3 {
+                contour_id += 1;
+                continue;
+            }
+            let point = |i: usize| (contour[i % n].x as f64, contour[i % n].y as f64);
+            let mut along = 0.0;
+            let mut lengths = Vec::with_capacity(n);
+            for i in 0..n {
+                lengths.push(along);
+                let (a, b) = (point(i), point(i + 1));
+                along += (b.0 - a.0).hypot(b.1 - a.1);
+            }
+            for (i, &length) in lengths.iter().enumerate() {
+                let (a, b, c) = (point(i + n - 1), point(i), point(i + 1));
+                let cross = (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0);
+                corners.push(Corner {
+                    at: b,
+                    shape: shape_index,
+                    contour: contour_id,
+                    index: i,
+                    count: n,
+                    along: length,
+                    perimeter: along,
+                    convex: cross * outer_sign > 0.0,
+                });
+            }
+            contour_id += 1;
+        }
+    }
+    if corners.is_empty() {
+        return Vec::new();
+    }
+    // A grid of corner indices with cells of `distance`.
+    let cell = distance.max(1.0);
+    let key = |p: (f64, f64)| ((p.0 / cell).floor() as i64, (p.1 / cell).floor() as i64);
+    let mut grid: IndexMap<(i64, i64), Vec<usize>> = IndexMap::new();
+    for (index, corner) in corners.iter().enumerate() {
+        if corner.convex {
+            grid.entry(key(corner.at)).or_default().push(index);
+        }
+    }
+    // The corner `offset` steps along the contour from corner `index`.
+    let step = |index: usize, offset: i64| {
+        let corner = &corners[index];
+        let position = (corner.index as i64 + offset).rem_euclid(corner.count as i64) as usize;
+        index - corner.index + position
+    };
+    let mut visited: IndexSet<usize> = IndexSet::new();
+    let mut pairs: IndexSet<(usize, usize, usize, usize)> = IndexSet::new();
+    let mut bridges = Vec::new();
+    for p in 0..corners.len() {
+        let corner = &corners[p];
+        if !corner.convex || visited.contains(&p) {
+            continue;
+        }
+        let (cx, cy) = key(corner.at);
+        let mut best: Option<(f64, usize)> = None;
+        for gx in cx - 1..=cx + 1 {
+            for gy in cy - 1..=cy + 1 {
+                for &q in grid.get(&(gx, gy)).into_iter().flatten() {
+                    let other = &corners[q];
+                    if other.contour == corner.contour {
+                        let direct = (other.along - corner.along).abs();
+                        if direct.min(corner.perimeter - direct) < distance {
+                            continue;
+                        }
+                    }
+                    let d = (other.at.0 - corner.at.0).hypot(other.at.1 - corner.at.1);
+                    if d > 0.0 && d < distance && best.is_none_or(|(e, _)| d < e) {
+                        best = Some((d, q));
+                    }
+                }
+            }
+        }
+        let Some((_, q)) = best else { continue };
+        visited.insert(p);
+        let other = &corners[q];
+        if visited.contains(&q) || !pairs.insert((corner.contour, other.contour, corner.index, other.index)) {
+            continue;
+        }
+        for offset in [-2, -1, 1, 2] {
+            visited.insert(step(p, offset));
+            visited.insert(step(q, offset));
+        }
+        visited.insert(q);
+        bridges.push((corner.shape, corner.at, other.at));
+    }
+    bridges
 }
 
 /// The board interior from its Edge.Cuts outline (even-odd, so cutouts are holes).

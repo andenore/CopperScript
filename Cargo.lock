@@ -214,6 +214,7 @@ dependencies = [
 name = "copper-route"
 version = "0.1.0"
 dependencies = [
+ "copper-cam",
  "copper-drc",
  "copper-editor",
  "copper-json",
