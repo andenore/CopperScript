@@ -1,7 +1,8 @@
 //! The board-level full-wave model of one antenna site, and its evaluation.
 //!
 //! The model holds what [`copper_pcb::antenna::site_digest`] covers and
-//! nothing else: the board outline extruded through every declared
+//! nothing else (any change to how it is simulated bumps
+//! [`copper_pcb::antenna::MODEL_REVISION`]): the board outline extruded through every declared
 //! dielectric (permittivity and loss tangent), the ground net's copper zones
 //! on their layers as zero-thickness PEC sheets clipped around the antenna
 //! region and the feed's clearance slot, the radiator and the feed land, and a

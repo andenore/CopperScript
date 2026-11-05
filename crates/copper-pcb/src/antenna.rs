@@ -46,6 +46,12 @@ use crate::{Error, Result, fail};
 /// The generator identity recorded in every synthesized macro's `source` and
 /// in every [`site_digest`]: a generator change invalidates tuned geometry.
 pub const GENERATOR: &str = "copper antenna/v0.2";
+/// The revision of the full-wave model behind [`site_digest`]: its analysis
+/// sweep, excitation, modelled ground stitching and mesh rules. Bump it with
+/// every change to what the model simulates for given inputs, so geometry
+/// tuned under an earlier model reads as stale and must be resynthesized.
+/// Revision 2: the sweep covers every band and stitching follows its top.
+pub const MODEL_REVISION: i64 = 2;
 /// The `members[].reference` and `net` role names inside the generated asset.
 const MEMBER: &str = "ANT";
 const SHORT_MEMBER: &str = "SHORT";
@@ -1082,7 +1088,8 @@ pub fn layout(site: &AntennaSite, geometry: &Geometry) -> Result<Layout> {
 
 /// The digest of every input the full-wave model of `site` reads: outline,
 /// stack-up, the ground net's zones, region, frame, track rules, feed land
-/// and pose, bands, target and generator. `tuned_for` must equal it.
+/// and pose, bands, target, generator and model revision. `tuned_for` must
+/// equal it.
 pub fn site_digest(board: &PhysicalBoard, site: &AntennaSite) -> String {
     let points = |ring: &[Point]| Json::Array(ring.iter().map(|p| point_json(*p)).collect());
     let decimal = |value: &Option<Decimal>| value.as_ref().map_or(Json::Null, |d| Json::from(d.to_sci_string()));
@@ -1115,6 +1122,7 @@ pub fn site_digest(board: &PhysicalBoard, site: &AntennaSite) -> String {
     let land = &site.feed_land;
     let document = object(vec![
         ("generator", Json::from(GENERATOR)),
+        ("model_revision", Json::from(MODEL_REVISION)),
         ("outline", points(&board.outline.vertices)),
         ("cutouts", Json::Array(board.outline.cutouts.iter().map(|c| points(&c.vertices)).collect())),
         ("stackup", Json::Array(stackup)),

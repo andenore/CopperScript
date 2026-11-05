@@ -1194,7 +1194,8 @@ does not fit fails with the length it needs.
 `tuned_for` is the site digest: a hash of every input the full-wave model
 reads (outline and cutouts, stack-up thicknesses, permittivities and loss
 tangents, the ground net's zones, region, frame, track width, clearance,
-feed land and position, bands, target and generator version). When
+feed land and position, bands, target, generator version and the model
+revision, which changes whenever the simulated model itself changes). When
 `tuned_for` is present and differs from the current board's digest,
 lowering fails and names both digests: re-run `copper synthesize-antenna`,
 or remove `tuned_for` to keep the geometry as an untuned manual one.
