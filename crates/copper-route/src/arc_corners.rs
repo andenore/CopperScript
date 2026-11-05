@@ -696,8 +696,10 @@ fn arc_touches(arc: &TrackArc, layer: CopperLayer, shape: &RoundedConvexShape) -
 }
 
 /// `lost_contacts`: `(arc, contact)` pairs where a contact (`contacts`: same-net
-/// vias and lands) touched the original leg of the arc `accepted[arc]` but
+/// vias and lands) touched an original leg of the arc `accepted[arc]` but
 /// touches none of the net's copper on that layer once `copper` is emitted.
+/// The arcs blamed are those whose trimmed-away leg pieces (corner to tangent
+/// point) touched the contact, or, failing that, every arc on a leg that did.
 fn lost_contacts(
     tracks: &[TrackSegment],
     copper: &ArchedCopper,
@@ -706,26 +708,36 @@ fn lost_contacts(
 ) -> Vec<(usize, usize)> {
     let mut lost = Vec::new();
     for (contact_index, contact) in contacts.iter().enumerate() {
-        let mut checked: IndexSet<CopperLayer> = IndexSet::new();
+        let mut layers: IndexMap<CopperLayer, (Vec<usize>, Vec<usize>)> = IndexMap::new();
         for (arc_index, arc) in accepted.iter().enumerate() {
             if arc.net != contact.net || !contact.layers.contains(&arc.layer) {
                 continue;
             }
-            let legs = [&tracks[arc.incoming], &tracks[arc.outgoing]];
-            if !legs.iter().any(|leg| track_touches(leg, arc.layer, &contact.shape)) {
+            let (incoming, outgoing) = (&tracks[arc.incoming], &tracks[arc.outgoing]);
+            if !track_touches(incoming, arc.layer, &contact.shape)
+                && !track_touches(outgoing, arc.layer, &contact.shape)
+            {
                 continue;
             }
-            let layer = arc.layer;
-            let still = checked.contains(&layer)
-                || copper
-                    .tracks
-                    .iter()
-                    .any(|track| track.net == contact.net && track_touches(track, layer, &contact.shape))
+            let removed = [
+                TrackSegment { start: arc.start, end: arc.corner, ..incoming.clone() },
+                TrackSegment { start: arc.corner, end: arc.end, ..outgoing.clone() },
+            ];
+            let (direct, sharing) = layers.entry(arc.layer).or_default();
+            sharing.push(arc_index);
+            if removed.iter().any(|piece| track_touches(piece, arc.layer, &contact.shape)) {
+                direct.push(arc_index);
+            }
+        }
+        for (layer, (direct, sharing)) in layers {
+            let still = copper
+                .tracks
+                .iter()
+                .any(|track| track.net == contact.net && track_touches(track, layer, &contact.shape))
                 || copper.arcs.iter().any(|arc| arc.net == contact.net && arc_touches(arc, layer, &contact.shape));
-            if still {
-                checked.insert(layer);
-            } else {
-                lost.push((arc_index, contact_index));
+            if !still {
+                let blamed = if direct.is_empty() { sharing } else { direct };
+                lost.extend(blamed.into_iter().map(|arc_index| (arc_index, contact_index)));
             }
         }
     }
