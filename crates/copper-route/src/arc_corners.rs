@@ -128,7 +128,10 @@ fn unit(from: Point, to: Point) -> Option<Vector> {
 }
 
 fn at(point: Point, direction: Vector, distance: f64) -> Point {
-    Point::new(round_int(point.x_nm as f64 + direction.0 * distance), round_int(point.y_nm as f64 + direction.1 * distance))
+    Point::new(
+        round_int(point.x_nm as f64 + direction.0 * distance),
+        round_int(point.y_nm as f64 + direction.1 * distance),
+    )
 }
 
 fn track_length_nm(track: &TrackSegment) -> i64 {
@@ -216,7 +219,8 @@ pub fn plan_arched_copper(
             plan.retained.push(retained(net, layer, point, "the legs double back"));
             continue;
         }
-        let Some(bisector) = unit(Point::new(0, 0), Point::new(round_int((d2.0 - d1.0) * 1e9), round_int((d2.1 - d1.1) * 1e9)))
+        let Some(bisector) =
+            unit(Point::new(0, 0), Point::new(round_int((d2.0 - d1.0) * 1e9), round_int((d2.1 - d1.1) * 1e9)))
         else {
             continue;
         };
@@ -338,7 +342,12 @@ pub fn plan_arched_copper(
         if radius < minimum || radius < 1.0 {
             for &c in members {
                 let corner = &corners[c];
-                plan.retained.push(retained(&corner.net, corner.layer, corner.point, "the legs are too short for an arc"));
+                plan.retained.push(retained(
+                    &corner.net,
+                    corner.layer,
+                    corner.point,
+                    "the legs are too short for an arc",
+                ));
             }
             continue;
         }

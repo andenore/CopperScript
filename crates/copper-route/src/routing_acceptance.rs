@@ -13,8 +13,8 @@ use copper_json::{Dumps, Object, Value};
 use copper_lang::paths;
 use copper_pcb::board::RouteKind;
 use copper_pcb::board::{
-    CornerStyle, DecouplingLink, NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, Placement,
-    ReturnViaPolicy, Stackup, TuningStyle,
+    CornerStyle, DecouplingLink, NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, Placement, ReturnViaPolicy,
+    Stackup, TuningStyle,
 };
 use copper_pcb::{Result, kicad_pcb, project};
 use copper_physical::footprint::{FootprintPad, PadKind, PadShape, PhysicalFootprint, Size};

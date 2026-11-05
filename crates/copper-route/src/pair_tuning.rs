@@ -277,7 +277,8 @@ pub fn tune_pair_arched(
         let refs: Vec<&TrackSegment> = tracks.iter().collect();
         planned_length_nm(&refs, net, corners)
     };
-    let (Some(first_net), Some(second_net)) = (first.first().map(|t| t.net.clone()), second.first().map(|t| t.net.clone()))
+    let (Some(first_net), Some(second_net)) =
+        (first.first().map(|t| t.net.clone()), second.first().map(|t| t.net.clone()))
     else {
         return PairTuning::default();
     };
@@ -465,8 +466,14 @@ mod tests {
             track("N", (8_000_000, 300_000), (12_000_000, 300_000)),
         ];
         let corners: IndexMap<String, CornerPolicy> = IndexMap::from([
-            ("P".to_owned(), CornerPolicy { radius_nm: 300_000, partner: Some("N".to_owned()), lane_spacing_nm: 300_000 }),
-            ("N".to_owned(), CornerPolicy { radius_nm: 300_000, partner: Some("P".to_owned()), lane_spacing_nm: 300_000 }),
+            (
+                "P".to_owned(),
+                CornerPolicy { radius_nm: 300_000, partner: Some("N".to_owned()), lane_spacing_nm: 300_000 },
+            ),
+            (
+                "N".to_owned(),
+                CornerPolicy { radius_nm: 300_000, partner: Some("P".to_owned()), lane_spacing_nm: 300_000 },
+            ),
         ]);
         let before = (first.clone(), second.clone());
         let tuning = tune_pair_arched(&mut first, &mut second, 100_000, 1_500_000, 0, None, &corners);

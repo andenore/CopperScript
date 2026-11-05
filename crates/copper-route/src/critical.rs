@@ -2250,9 +2250,15 @@ fn finish_pair(
     if let Some(max_skew) = max_skew {
         let amplitude = min_declared(first.tuning_amplitude_limit_nm, second.tuning_amplitude_limit_nm).unwrap_or(0);
         let margin = if breakout.any() { crate::pair_tuning::BREAKOUT_TUNING_MARGIN_NM } else { 0 };
-        tuned_length =
-            tune(&mut first_tracks, &mut second_tracks, max_skew, amplitude, margin, breakout.any().then_some(&breakout))
-                .added_nm;
+        tuned_length = tune(
+            &mut first_tracks,
+            &mut second_tracks,
+            max_skew,
+            amplitude,
+            margin,
+            breakout.any().then_some(&breakout),
+        )
+        .added_nm;
         if tuned_length == 0 && coarse.is_none_or(|_| guides.0.vias.is_empty()) {
             // Guide/via/access anchors and lead-in junctions cannot become
             // artificial straight-run joins.

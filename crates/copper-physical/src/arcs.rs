@@ -333,7 +333,8 @@ mod tests {
         let disk = RoundedConvexShape::new(vec![p(1000 - 1300, 1000)], 100).unwrap();
         assert!((shape_distance(&arc, &disk) - 200.0).abs() < 1e-6);
         // A polygon enclosing the arc has distance 0.
-        let square = RoundedConvexShape::new(vec![p(-500, -500), p(2500, -500), p(2500, 2500), p(-500, 2500)], 0).unwrap();
+        let square =
+            RoundedConvexShape::new(vec![p(-500, -500), p(2500, -500), p(2500, 2500), p(-500, 2500)], 0).unwrap();
         assert_eq!(shape_distance(&arc, &square), 0.0);
     }
 }

@@ -11,7 +11,9 @@ use indexmap::IndexMap;
 use copper_pcb::board::{NetRoutingRule, PhysicalBoard, TrackArc};
 use copper_pcb::keepouts::resolved_copper_keepouts;
 use copper_pcb::{Error, Result};
-use copper_physical::arcs::{ARC_DISTANCE_EPSILON_NM, ArcGeometry, arc_distance, point_distance, segment_distance, shape_distance};
+use copper_physical::arcs::{
+    ARC_DISTANCE_EPSILON_NM, ArcGeometry, arc_distance, point_distance, segment_distance, shape_distance,
+};
 use copper_physical::geometry::point_in_polygon;
 use copper_physical::mechanical::shape_in_outline;
 use copper_physical::pyfloat::round_int;
@@ -29,9 +31,21 @@ fn short(measured: f64, required: i64) -> bool {
     measured + ARC_DISTANCE_EPSILON_NM < required as f64
 }
 
-fn spacing_finding(measured: f64, message: String, objects: [String; 2], nets: Vec<String>, layers: Vec<String>, required: i64) -> Finding {
+fn spacing_finding(
+    measured: f64,
+    message: String,
+    objects: [String; 2],
+    nets: Vec<String>,
+    layers: Vec<String>,
+    required: i64,
+) -> Finding {
     let code = if measured <= ARC_DISTANCE_EPSILON_NM { "DRC-SHORT" } else { "DRC-CLEARANCE" };
-    Finding::error(code, message).objects(objects).nets(nets).layers(layers).required(required).measured(round_int(measured).max(0))
+    Finding::error(code, message)
+        .objects(objects)
+        .nets(nets)
+        .layers(layers)
+        .required(required)
+        .measured(round_int(measured).max(0))
 }
 
 /// `routed_arc_length_nm`: the arcs of `net`, each at its true length.
@@ -49,7 +63,8 @@ pub(crate) fn check_arcs(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> 
     let spacing = BreakoutSpacing::new(board);
     let pads: Vec<PadCopper> = copper_pads(board);
     let pad_lands: Vec<Option<String>> = pads.iter().map(|p| spacing.land(&p.net, &p.shape.spine)).collect();
-    let track_lands: Vec<Option<String>> = board.tracks.iter().map(|t| spacing.land(&t.net, &[t.start, t.end])).collect();
+    let track_lands: Vec<Option<String>> =
+        board.tracks.iter().map(|t| spacing.land(&t.net, &[t.start, t.end])).collect();
     let via_lands: Vec<Option<String>> = board.vias.iter().map(|v| spacing.land(&v.net, &[v.position])).collect();
     let arc_lands: Vec<Option<String>> = board.arcs.iter().map(|a| spacing.land(&a.net, &[a.start, a.end])).collect();
     let geometries: Vec<Result<ArcGeometry>> = board.arcs.iter().map(geometry).collect();
@@ -80,7 +95,10 @@ pub(crate) fn check_arcs(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> 
             findings.push(
                 Finding::error(
                     "DRC-TRACK-WIDTH",
-                    format!("arc {index} on {} is below its minimum or routing profile width", copper_json::python_str_repr(&arc.net)),
+                    format!(
+                        "arc {index} on {} is below its minimum or routing profile width",
+                        copper_json::python_str_repr(&arc.net)
+                    ),
                 )
                 .objects([object.as_str()])
                 .nets([arc.net.as_str()])
@@ -96,7 +114,10 @@ pub(crate) fn check_arcs(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> 
             findings.push(
                 Finding::error(
                     "DRC-LAYER",
-                    format!("net {} uses a layer excluded by its routing profile", copper_json::python_str_repr(&arc.net)),
+                    format!(
+                        "net {} uses a layer excluded by its routing profile",
+                        copper_json::python_str_repr(&arc.net)
+                    ),
                 )
                 .nets([arc.net.as_str()])
                 .layers([layer]),
@@ -124,7 +145,8 @@ pub(crate) fn check_arcs(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> 
             if track.net == arc.net || track.layer != arc.layer {
                 continue;
             }
-            let (clearance, _) = spacing.between(&arc.net, arc_lands[index].as_deref(), &track.net, track_lands[track_index].as_deref());
+            let (clearance, _) =
+                spacing.between(&arc.net, arc_lands[index].as_deref(), &track.net, track_lands[track_index].as_deref());
             let required = half + track.width_nm.div_euclid(2) + clearance;
             let measured = segment_distance(&geometry, track.start, track.end);
             if short(measured, required) {
@@ -144,7 +166,8 @@ pub(crate) fn check_arcs(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> 
                 continue;
             }
             let Ok(other_geometry) = &geometries[other_index] else { continue };
-            let (clearance, _) = spacing.between(&arc.net, arc_lands[index].as_deref(), &other.net, arc_lands[other_index].as_deref());
+            let (clearance, _) =
+                spacing.between(&arc.net, arc_lands[index].as_deref(), &other.net, arc_lands[other_index].as_deref());
             let required = half + other.width_nm.div_euclid(2) + clearance;
             let measured = arc_distance(&geometry, other_geometry);
             if short(measured, required) {
@@ -164,7 +187,8 @@ pub(crate) fn check_arcs(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> 
                 continue;
             }
             let measured = point_distance(&geometry, (via.position.x_nm as f64, via.position.y_nm as f64));
-            let (clearance, _) = spacing.between(&arc.net, arc_lands[index].as_deref(), &via.net, via_lands[via_index].as_deref());
+            let (clearance, _) =
+                spacing.between(&arc.net, arc_lands[index].as_deref(), &via.net, via_lands[via_index].as_deref());
             let required = half + via.size_nm.div_euclid(2) + clearance;
             if short(measured, required) {
                 findings.push(spacing_finding(
@@ -179,11 +203,14 @@ pub(crate) fn check_arcs(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> 
             let drill_required = half + via.drill_nm.div_euclid(2) + hole_clearance;
             if short(measured, drill_required) {
                 findings.push(
-                    Finding::error("DRC-HOLE-CLEARANCE", format!("via {via_index} drill violates arc {index} clearance"))
-                        .objects([format!("via:{via_index}"), object.clone()])
-                        .nets(sorted_pair(&arc.net, &via.net))
-                        .required(hole_clearance)
-                        .measured((round_int(measured) - half - via.drill_nm.div_euclid(2)).max(0)),
+                    Finding::error(
+                        "DRC-HOLE-CLEARANCE",
+                        format!("via {via_index} drill violates arc {index} clearance"),
+                    )
+                    .objects([format!("via:{via_index}"), object.clone()])
+                    .nets(sorted_pair(&arc.net, &via.net))
+                    .required(hole_clearance)
+                    .measured((round_int(measured) - half - via.drill_nm.div_euclid(2)).max(0)),
                 );
             }
         }
@@ -211,7 +238,8 @@ pub(crate) fn check_arcs(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> 
             if polygon.net == arc.net || polygon.layer != arc.layer {
                 continue;
             }
-            let clearance = board.rules.minimum_clearance_nm.max(net_clearance(&arc.net)).max(net_clearance(&polygon.net));
+            let clearance =
+                board.rules.minimum_clearance_nm.max(net_clearance(&arc.net)).max(net_clearance(&polygon.net));
             let measured = shape_distance(&geometry, &shape(polygon.vertices.clone(), 0)?);
             if short(measured, half + clearance) {
                 findings.push(

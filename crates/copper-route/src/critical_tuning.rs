@@ -837,8 +837,10 @@ impl UnitTuner {
         if let Some(unit) = &self.arched {
             // Arched corners: every leg loses its two corners' arcs; the
             // estimate is corrected against the arched length.
-            let loss: i64 =
-                chosen.iter().map(|window| (window.tops.len() as i64 + 1) * unit.leg_loss(window.tops[0].spacing)).sum();
+            let loss: i64 = chosen
+                .iter()
+                .map(|window| (window.tops.len() as i64 + 1) * unit.leg_loss(window.tops[0].spacing))
+                .sum();
             let heights = levelled(&rooms, added_nm + loss, &gain);
             let sizes: Vec<usize> = chosen.iter().map(|window| window.tops.len()).collect();
             let build = |heights: &[i64]| {
@@ -2267,8 +2269,8 @@ pub(crate) mod tests {
         let nets = ["S".to_owned()];
         for style in [TuningStyle::Bumps, TuningStyle::Serpentine] {
             let options = TunerOptions { style, corners: corners.clone(), ..TunerOptions::default() };
-            let tuner = UnitTuner::new(&board, &index, tracks.clone(), &nets, 0, 2_000_000, 200_000, options)
-                .expect("tuner");
+            let tuner =
+                UnitTuner::new(&board, &index, tracks.clone(), &nets, 0, 2_000_000, 200_000, options).expect("tuner");
             assert!(tuner.is_arched());
             for target in [1_000_000, 3_000_000] {
                 let plan = tuner.plan(target).expect("plan");
