@@ -642,11 +642,14 @@ impl PackageResolver {
         })
     }
 
-    /// A resolver over already supplied source files; never reads or writes a cache.
+    /// A resolver over already supplied source files; never reads or writes a
+    /// cache. `source_directory` is the entry file's directory, as in
+    /// `for_source`, so relative assets are based where native ones are.
     pub fn from_snapshot(
         manifest: ModuleManifest,
         lock_entries: LockEntries,
         snapshot: Arc<crate::snapshot::SourceSnapshot>,
+        source_directory: PathBuf,
     ) -> Self {
         let root = manifest.root();
         let reader = snapshot.clone();
@@ -657,7 +660,7 @@ impl PackageResolver {
             lock_path: root.join("copper.lock"),
             lock_entries,
             source_roots: IndexMap::new(),
-            source_directory: root,
+            source_directory,
             manifest,
             source_reader: Some(Arc::new(move |path| reader.read(path))),
             snapshot: Some(snapshot),

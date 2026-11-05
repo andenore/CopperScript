@@ -182,6 +182,21 @@ impl ProjectSnapshot {
                 // Unsupported providers fail when imported, without blocking unused footprint requirements.
                 root.parent().expect("virtual root").join("dependencies").join(module)
             };
+            if local.is_some() {
+                // Native locked compilation inventories the replacement on disk,
+                // so a source the lock does not list is a lock mismatch (PKG008).
+                let listed: BTreeSet<PathBuf> = locked.files.iter().map(|f| module_root.join(&f.path)).collect();
+                if let Some(extra) =
+                    source.requests.keys().find(|p| p.starts_with(&module_root) && !listed.contains(*p))
+                {
+                    let path = paths::as_posix(extra.strip_prefix(&root).expect("workspace path"));
+                    return Err(CopperScriptError::new(
+                        "PKG008",
+                        format!("lock mismatch for {module}@{version}: {path} is not in the locked inventory"),
+                        packages::location("copper.lock", 1),
+                    ));
+                }
+            }
             source.module_roots.insert(module.clone(), module_root.clone());
             source.inventories.insert(module_root.clone(), locked.files.clone());
             for file in locked.files.iter().filter(|f| f.path.ends_with(".copper")) {
@@ -240,7 +255,8 @@ impl ProjectSnapshot {
         Ok(Self { entry: root.join(entry), source: Arc::new(source), manifest, locks })
     }
     pub fn resolver(&self) -> PackageResolver {
-        PackageResolver::from_snapshot(self.manifest.clone(), self.locks.clone(), self.source.clone())
+        let directory = self.entry.parent().expect("entry inside workspace").to_path_buf();
+        PackageResolver::from_snapshot(self.manifest.clone(), self.locks.clone(), self.source.clone(), directory)
     }
     /// Discover transitive imports with the real parser and package resolver.
     pub fn plan(&self) -> Result<Vec<Value>, CopperScriptError> {
@@ -425,6 +441,48 @@ mod tests {
             .code,
             "CMP021"
         );
+    }
+    /// `fixture` with `replace MODULE => ./vendor` and the locked sources in
+    /// the workspace inventory.
+    fn local_replacement() -> Value {
+        let mut raw = fixture();
+        let Value::Object(fields) = &mut raw else { panic!() };
+        fields.insert(
+            "manifest".into(),
+            Value::from(format!(
+                "module github.com/acme/board\nrequire {MODULE} {VERSION}\nreplace {MODULE} => ./vendor"
+            )),
+        );
+        let lock = fields["lock"].as_str().unwrap().replace(&format!("git:https://{MODULE}.git"), "replace:./vendor");
+        fields.insert("lock".into(), Value::from(lock));
+        let Value::Array(files) = fields.get_mut("workspace_files").unwrap() else { panic!() };
+        files.extend([Value::from("vendor/pkg/unit.copper"), Value::from("vendor/support/passive.copper")]);
+        raw
+    }
+    #[test]
+    fn local_replacement_sources_outside_the_lock_are_rejected() {
+        assert!(ProjectSnapshot::from_json(&copper_json::Dumps::compact().dumps(&local_replacement())).is_ok());
+        let mut raw = local_replacement();
+        let Value::Object(fields) = &mut raw else { panic!() };
+        let Value::Array(files) = fields.get_mut("workspace_files").unwrap() else { panic!() };
+        files.push(Value::from("vendor/pkg/added.copper"));
+        let error = ProjectSnapshot::from_json(&copper_json::Dumps::compact().dumps(&raw)).err().unwrap();
+        assert_eq!(error.code, "PKG008");
+        assert!(error.message.contains("vendor/pkg/added.copper"), "{}", error.message);
+    }
+    #[test]
+    fn nested_entries_base_relative_assets_on_the_entry_directory() {
+        let mut raw = fixture();
+        let Value::Object(fields) = &mut raw else { panic!() };
+        fields.insert("entry".into(), Value::from("boards/board.copper"));
+        let Value::Array(files) = fields.get_mut("workspace_files").unwrap() else { panic!() };
+        files.push(Value::from("boards/board.copper"));
+        supply(&mut raw, "workspace/boards/board.copper", BOARD);
+        let project = snapshot(&raw);
+        let resolver = project.resolver();
+        assert_eq!(resolver.source_directory, project.entry.parent().unwrap());
+        let location = packages::location(&paths::display(&project.entry), 1);
+        assert_eq!(resolver.qualify_footprint("./parts/r.kicad_mod", &location).unwrap(), "parts/r.kicad_mod");
     }
     #[test]
     fn manifest_replacements_keep_source_locks_and_module_boundaries() {
