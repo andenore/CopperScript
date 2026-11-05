@@ -28,7 +28,7 @@ board AntennaSynthesisProbe {
         // worst over the band with 0.94 nH series then 2.61 pF shunt from the
         // antenna side, 85 % radiation efficiency. Simulation only.
         geometry = "monopole height=5.3mm length=22.66mm";
-        tuned_for = "sha256:b5f8b7fbc10b788a9b62d9604094c0994f95d5d2f9f7ca054f2f7c218df0a5fb";
+        tuned_for = "sha256:0198a99022a6c48e46df2643707cfce5bfc151fbf08479937c12ca4e23181ad8";
     }
 
     mechanical {
