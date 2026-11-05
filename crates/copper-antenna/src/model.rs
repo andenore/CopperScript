@@ -156,7 +156,8 @@ pub struct Problem<'a> {
     /// in nanometres: the board clearance, widened to one coarse cell so the
     /// port spans the mesh the same way in every fidelity.
     pub slot_gap: i64,
-    /// Analysis frequencies: 201 points over 0.8 to 1.2 times the centre.
+    /// Analysis frequencies ([`sweep_frequencies`]): from below the lowest
+    /// band to above the highest, at least 0.8 to 1.2 times the centre.
     pub freqs: Vec<f64>,
 }
 
@@ -263,7 +264,14 @@ impl<'a> Problem<'a> {
             }
         }
         let centre = site.centre_hz();
-        let guided = C0_MM_PER_S / (centre * 1.2) / stack.max_er().sqrt();
+        let bands: Vec<(f64, f64)> = site
+            .bands
+            .iter()
+            .map(|b| (copper_pcb::antenna::decimal_f64(&b.low_hz), copper_pcb::antenna::decimal_f64(&b.high_hz)))
+            .collect();
+        let freqs = sweep_frequencies(&bands);
+        let f_top = freqs.last().copied().unwrap_or(centre * 1.2);
+        let guided = C0_MM_PER_S / f_top / stack.max_er().sqrt();
         let stitch_pitch = (guided / 10.0).min(5.0);
         let ground_layers: Vec<(CopperLayer, f64)> = stack
             .copper
@@ -299,7 +307,6 @@ impl<'a> Problem<'a> {
                 y += stitch_pitch;
             }
         }
-        let freqs = (0..=200).map(|i| centre * (0.8 + 0.4 * f64::from(i) / 200.0)).collect();
         Ok(Problem { board, site, stack, ground, stitching, stitch_pitch, port, slot, slot_gap, freqs })
     }
 
@@ -316,6 +323,32 @@ impl<'a> Problem<'a> {
             }
         }
     }
+}
+
+/// `sweep_frequencies`: the analysis frequencies for `bands` (`(low, high)`
+/// in hertz). The sweep spans at least 0.8 to 1.2 times the combined centre
+/// and always reaches 10 % beyond the lowest and highest band limits, so
+/// every requested band lies inside the simulated range; its step is at most
+/// 0.2 % of the centre.
+pub fn sweep_frequencies(bands: &[(f64, f64)]) -> Vec<f64> {
+    let low = bands.iter().map(|b| b.0).fold(f64::INFINITY, f64::min);
+    let high = bands.iter().map(|b| b.1).fold(f64::NEG_INFINITY, f64::max);
+    if !(low.is_finite() && high.is_finite() && low > 0.0 && high >= low) {
+        return Vec::new();
+    }
+    let centre = (low + high) / 2.0;
+    let (start, stop) = ((0.8 * centre).min(0.9 * low), (1.2 * centre).max(1.1 * high));
+    let steps = ((stop - start) / (0.002 * centre) - 1e-6).ceil().max(200.0) as u32;
+    (0..=steps).map(|i| start + (stop - start) * f64::from(i) / f64::from(steps)).collect()
+}
+
+/// `excitation`: the Gaussian pulse `(f0, fc)` (20 dB half-bandwidth `fc`)
+/// for a sweep over `freqs`: centred on the sweep with twice its half-span,
+/// kept below `f0` so the pulse carries little DC.
+fn excitation(freqs: &[f64]) -> (f64, f64) {
+    let (start, stop) = (freqs[0], freqs[freqs.len() - 1]);
+    let (f0, half) = ((start + stop) / 2.0, (stop - start) / 2.0);
+    (f0, (2.0 * half).min(0.95 * f0).max(half))
 }
 
 /// One full-wave evaluation.
@@ -410,6 +443,9 @@ fn sheet(model: &mut ContinuousStructure, id: PropertyId, r: Rect, z: f64) -> Re
 /// Build and run one evaluation of `layout`.
 pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Result<Evaluation, String> {
     let (board, site, stack) = (problem.board, problem.site, &problem.stack);
+    if problem.freqs.len() < 2 {
+        return Err("antenna bands give no analysis frequencies".to_owned());
+    }
     let started = Instant::now();
     let centre = site.centre_hz();
     let mut model = ContinuousStructure::new();
@@ -536,7 +572,10 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
     let cells = n[0].saturating_sub(1) * n[1].saturating_sub(1) * n[2].saturating_sub(1);
 
     let fdtd = Fdtd::new()
-        .waveform(Waveform::gaussian(centre, 0.4 * centre))
+        .waveform({
+            let (f0, fc) = excitation(&problem.freqs);
+            Waveform::gaussian(f0, fc)
+        })
         .boundaries(Boundaries::all(Boundary::pml(PML_CELLS)))
         .end_criteria(EndCriteria::energy_decay_db(fidelity.decay_db))
         .max_time(fidelity.max_time_ns * 1e-9)
@@ -604,6 +643,28 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sweep_covers_every_band() {
+        let bands = [(2.4e9, 2.4835e9), (5.15e9, 5.85e9)];
+        let freqs = sweep_frequencies(&bands);
+        let (start, stop) = (freqs[0], *freqs.last().unwrap());
+        for (low, high) in bands {
+            assert!(start < low && high < stop, "{start}..{stop} misses {low}..{high}");
+        }
+        assert!(freqs.windows(2).all(|w| w[1] > w[0]));
+        assert!(freqs.windows(2).all(|w| w[1] - w[0] <= 0.002 * 4.125e9 + 1.0));
+        // The pulse reaches the whole sweep at its 20 dB points.
+        let (f0, fc) = excitation(&freqs);
+        assert!(f0 - fc <= start && stop <= f0 + fc, "{f0} ± {fc}");
+        // A single narrow band keeps the historical 0.8..1.2 sweep and pulse.
+        let centre = (2.4e9 + 2.4835e9) / 2.0;
+        let freqs = sweep_frequencies(&[(2.4e9, 2.4835e9)]);
+        assert_eq!(freqs.len(), 201);
+        assert!((freqs[0] - 0.8 * centre).abs() < 1.0 && (freqs[200] - 1.2 * centre).abs() < 1.0);
+        let (f0, fc) = excitation(&freqs);
+        assert!((f0 - centre).abs() < 1.0 && (fc - 0.4 * centre).abs() < 1.0);
+    }
 
     #[test]
     fn kept_lines_survive_merging() {

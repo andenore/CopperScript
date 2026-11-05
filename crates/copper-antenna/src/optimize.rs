@@ -103,10 +103,23 @@ pub struct Outcome {
     pub method: &'static str,
 }
 
-fn interpolate(freqs: &[f64], values: &[ems::prelude::Complex64], f: f64) -> ems::prelude::Complex64 {
+/// `interpolate`: `values` at `f`, linear between the simulated `freqs`;
+/// an error when `f` lies outside them, which would be extrapolation.
+fn interpolate(freqs: &[f64], values: &[ems::prelude::Complex64], f: f64) -> Result<ems::prelude::Complex64, String> {
+    let (Some(first), Some(last)) = (freqs.first(), freqs.last()) else {
+        return Err("no simulated frequencies to interpolate".to_owned());
+    };
+    if freqs.len() < 2 || !(*first..=*last).contains(&f) {
+        return Err(format!(
+            "{:.4} GHz lies outside the simulated {:.4}..{:.4} GHz; refusing to extrapolate",
+            f / 1e9,
+            first / 1e9,
+            last / 1e9
+        ));
+    }
     let i = freqs.partition_point(|x| *x < f).clamp(1, freqs.len() - 1);
     let t = (f - freqs[i - 1]) / (freqs[i] - freqs[i - 1]);
-    values[i - 1] * (1.0 - t) + values[i] * t
+    Ok(values[i - 1] * (1.0 - t) + values[i] * t)
 }
 
 /// The series resonance (reactance crossing zero upward) nearest `f0`, or the
@@ -122,8 +135,9 @@ pub fn resonance(evaluation: &Evaluation, f0: f64) -> Option<f64> {
         .or_else(|| evaluation.s11_db.iter().enumerate().min_by(|a, b| a.1.total_cmp(b.1)).map(|(i, _)| f[i]))
 }
 
-/// Worst return loss over every band, bare and with the best L-section.
-pub fn score(site: &AntennaSite, evaluation: &Evaluation) -> Score {
+/// Worst return loss over every band, bare and with the best L-section; an
+/// error when a band reaches outside the simulated frequencies.
+pub fn score(site: &AntennaSite, evaluation: &Evaluation) -> Result<Score, String> {
     let f0 = site.centre_hz();
     let points: Vec<Vec<f64>> = site
         .bands
@@ -136,13 +150,15 @@ pub fn score(site: &AntennaSite, evaluation: &Evaluation) -> Score {
             fs
         })
         .collect();
+    let impedances: Vec<Vec<(f64, ems::prelude::Complex64)>> = points
+        .iter()
+        .map(|fs| fs.iter().map(|f| Ok((*f, interpolate(&evaluation.freqs, &evaluation.z, *f)?))).collect())
+        .collect::<Result<_, String>>()?;
     let worst = |network: &Network| -> (f64, Vec<f64>) {
-        let per_band: Vec<f64> = points
+        let per_band: Vec<f64> = impedances
             .iter()
-            .map(|fs| {
-                fs.iter()
-                    .map(|f| return_loss_db(network.apply(interpolate(&evaluation.freqs, &evaluation.z, *f), *f), 50.0))
-                    .fold(f64::NEG_INFINITY, f64::max)
+            .map(|band| {
+                band.iter().map(|(f, z)| return_loss_db(network.apply(*z, *f), 50.0)).fold(f64::NEG_INFINITY, f64::max)
             })
             .collect();
         (per_band.iter().copied().fold(f64::NEG_INFINITY, f64::max), per_band)
@@ -151,7 +167,7 @@ pub fn score(site: &AntennaSite, evaluation: &Evaluation) -> Score {
     let (raw_worst_db, raw_bands) = worst(&bare);
     let mut best = (raw_worst_db, raw_bands.clone(), bare);
     if raw_worst_db > site.max_return_loss_db {
-        for network in l_sections(interpolate(&evaluation.freqs, &evaluation.z, f0), f0, 50.0) {
+        for network in l_sections(interpolate(&evaluation.freqs, &evaluation.z, f0)?, f0, 50.0) {
             let (value, bands) = worst(&network);
             if value < best.0 {
                 best = (value, bands, network);
@@ -164,7 +180,7 @@ pub fn score(site: &AntennaSite, evaluation: &Evaluation) -> Score {
         .zip(raw_bands.iter().zip(&best.1))
         .map(|(band, (raw, matched))| BandScore { band: band.text.clone(), raw_worst_db: *raw, worst_db: *matched })
         .collect();
-    Score { worst_db: best.0, raw_worst_db, network: best.2, resonance_hz: resonance(evaluation, f0), bands }
+    Ok(Score { worst_db: best.0, raw_worst_db, network: best.2, resonance_hz: resonance(evaluation, f0), bands })
 }
 
 /// The parametric family of a site.
@@ -300,7 +316,7 @@ impl Search<'_, '_> {
             self.used += 1;
         }
         let evaluation = evaluate(self.problem, &realized, &fidelity)?;
-        let score = score(site, &evaluation);
+        let score = score(site, &evaluation)?;
         (self.log)(&format!(
             "  {stage:<9} {:<6} {:<62} resonance {:>10}  bare {:6.1} dB  matched {:6.1} dB  {:.2} Mcells {} steps {:.2} ps {:5.1} s{}",
             fidelity.name,
@@ -656,7 +672,7 @@ pub fn verify(
     let realized = layout(site, geometry).map_err(|e| e.to_string())?;
     let fidelity = if fine { Fidelity::fine(site, threads) } else { Fidelity::coarse(site, threads) };
     let evaluation = evaluate(problem, &realized, &fidelity)?;
-    let score = score(site, &evaluation);
+    let score = score(site, &evaluation)?;
     Ok((evaluation, score))
 }
 
