@@ -171,11 +171,15 @@ fn relative_posix(path: &Path, root: &Path) -> String {
 }
 
 /// `_zip_files`: the files under `root`, sorted, deflated and dated 1980.
-fn zip_files(output: &Path, files: &[PathBuf], root: &Path) -> Result<()> {
+/// `flat` stores each file under its own name at the archive root.
+fn zip_files(output: &Path, files: &[PathBuf], root: &Path, flat: bool) -> Result<()> {
     let mut names: Vec<(Vec<String>, String, &PathBuf)> = files
         .iter()
         .map(|path| {
-            let name = relative_posix(path, root);
+            let name = match path.file_name() {
+                Some(name) if flat => name.to_string_lossy().into_owned(),
+                _ => relative_posix(path, root),
+            };
             (path_key(&name), name, path)
         })
         .collect();
@@ -685,7 +689,9 @@ fn stage_and_publish(
         write_jlcpcb_cpl(&native_positions, &shown(&native_positions), &stage.join("cpl.csv"), references)?;
     }
     let archived: Vec<PathBuf> = artwork.iter().chain(&drill_files).cloned().collect();
-    zip_files(&stage.join("gerbers-drill.zip"), &archived, stage)?;
+    // Fab upload: Gerbers and drills side by side at the root, as in JLCPCB's
+    // KiCad guide; JLCPCB reported missing drills when they sat in `drill/`.
+    zip_files(&stage.join("gerbers-drill.zip"), &archived, stage, true)?;
     let mut document = Object::new();
     let input_digest = sha256_hex(&read(pcb, &shown(pcb))?);
     let exported_digest = sha256_hex(&read(&native, &native_text)?);
@@ -755,7 +761,7 @@ fn stage_and_publish(
         .map_err(|failure| Error::Os(open_error(&failure, &shown(&sums_path))))?;
     let mut packaged: Vec<PathBuf> = listed.into_iter().map(|(_, _, path)| path).collect();
     packaged.push(sums_path);
-    zip_files(&stage.join("manufacturing-package.zip"), &packaged, stage)?;
+    zip_files(&stage.join("manufacturing-package.zip"), &packaged, stage, false)?;
     let mut backup = None;
     if output.exists() {
         let parent = files::parent(output);

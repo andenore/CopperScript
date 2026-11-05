@@ -29,6 +29,7 @@ macro_rules! text_enum {
 #[cfg(test)]
 extern crate self as copper_pcb;
 
+pub mod antenna;
 pub mod board;
 pub mod hard_macros;
 pub mod keepouts;

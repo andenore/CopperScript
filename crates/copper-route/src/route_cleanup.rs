@@ -629,6 +629,7 @@ mod tests {
             rules: DesignRules::default(),
             tracks: Vec::new(),
             vias: Vec::new(),
+            arcs: Vec::new(),
             metadata: IndexMap::new(),
             regions: Vec::new(),
             keepouts: Vec::new(),

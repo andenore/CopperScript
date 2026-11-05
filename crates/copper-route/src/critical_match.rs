@@ -39,7 +39,12 @@ pub(crate) struct RoutingTuning {
     pub group_failures: IndexMap<String, String>,
 }
 
-fn net_length(copper: &[&TrackSegment], net: &str) -> i64 {
+/// A member's track length: as routed, or as arched for an arc-style net (CS-174).
+fn net_length(board: &PhysicalBoard, copper: &[&TrackSegment], net: &str) -> i64 {
+    let corners = crate::arc_corners::corner_policies(board);
+    if corners.contains_key(net) {
+        return crate::arc_corners::planned_length_nm(copper, net, &corners);
+    }
     let items: Vec<&TrackSegment> = copper.iter().copied().filter(|t| t.net == net).collect();
     track_length(&items)
 }
@@ -243,7 +248,7 @@ pub(crate) fn tune_match_groups(
             let current_tracks: Vec<&TrackSegment> = current.tracks.iter().collect();
             let via_paths = via_lengths(board, &current_tracks, &current.vias, &group.nets)?;
             for net in &group.nets {
-                after.insert(net.clone(), net_length(&copper, net) + via_paths[net.as_str()]);
+                after.insert(net.clone(), net_length(board, &copper, net) + via_paths[net.as_str()]);
             }
             let skew_after = spread(&after);
             if skew_after > group.max_skew_nm {
@@ -362,7 +367,7 @@ pub(crate) fn tune_bundle_pairs(
         let via_paths = via_lengths(board, &copper, committed_vias(base_vias, committed), &group.nets)?;
         for net in &group.nets {
             if copper.iter().any(|t| t.net == *net) {
-                lengths.insert(net.clone(), net_length(&copper, net) + via_paths[net.as_str()]);
+                lengths.insert(net.clone(), net_length(board, &copper, net) + via_paths[net.as_str()]);
             }
         }
         via_paths
@@ -728,6 +733,7 @@ fn tune_unit(
             style: rules[unit[0].as_str()].tuning_style,
             leg_gap_nm: leg_gap,
             vias: unit_vias.clone(),
+            corners: crate::arc_corners::corner_policies(board),
             ..TunerOptions::default()
         },
     )?;

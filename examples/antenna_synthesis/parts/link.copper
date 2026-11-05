@@ -1,0 +1,8 @@
+// Synthetic two-land shorting link: the inverted-F's DC short to ground. On a
+// real board this is a 0402 0 ohm link or a tuning inductor; the lands reuse
+// the source footprint. Not a reusable part or a qualified RF component.
+part ShortLink {
+    footprint = "../source.kicad_mod";
+    pin A { number = "1"; domains = "analog"; directions = "passive"; }
+    pin B { number = "2"; domains = "analog"; directions = "passive"; }
+}

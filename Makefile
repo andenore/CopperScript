@@ -9,14 +9,14 @@ include $(COPPER_ROOT)/make/board.mk
 # the maintained LED-ring board and routing benchmark live in CopperLedRing.
 EXAMPLES := valid hierarchical cm4 full-vertical nrf52 round-led-ring \
  mechanical-outline mechanical-editor mechanical-anchors mechanical-curves mechanical-reference mechanical-profile device-model \
- resolved-footprint rc-filter inrush
+ resolved-footprint rc-filter inrush antenna-synthesis
 # These examples contain complete footprint identities and support physical
 # layout/editor smoke checks. The remaining examples are electrical or
 # simulation fixtures and are checked through check/compile and route recipe
 # expansion only.
 PHYSICAL_EXAMPLES := cm4 full-vertical nrf52 round-led-ring \
  mechanical-outline mechanical-editor mechanical-anchors mechanical-curves mechanical-reference mechanical-profile \
- resolved-footprint
+ resolved-footprint antenna-synthesis
 .PHONY: check-examples compile-examples
 .PHONY: $(addprefix check-example-,$(EXAMPLES)) $(addprefix compile-example-,$(EXAMPLES))
 

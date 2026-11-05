@@ -48,10 +48,16 @@ or an existing output directory. Failed stages are removed; the input board
 is never changed. It exports every declared copper layer, both masks,
 silkscreens and pastes, Edge.Cuts, metric plated/nonplated drills and IPC-D-356.
 Gerbers subtract mask openings from silkscreen. Absolute drill and plot origins
-are consistent. `gerbers-drill.zip` contains only artwork and drills; reports,
+are consistent. `gerbers-drill.zip` is the fab upload: only artwork and drills,
+flat at the archive root as in JLCPCB's KiCad guide (JLCPCB reported missing
+drills when they sat in a `drill/` folder). Reports,
 PCB/project, native positions, manifest and SHA-256 checksums accompany it.
 `manufacturing-package.zip` packages all these files and their checksums; the
-checksum list covers archive contents, not the outer package itself.
+checksum list covers archive contents, not the outer package itself. It is the
+archive, **not the fab upload**: it also holds the PCB, reports, footprints and the
+nested `gerbers-drill.zip`, and JLCPCB reported its drills as missing. Upload
+`gerbers-drill.zip` for the board, and `bom.csv` / `cpl.csv` for assembly; the
+command prints these paths.
 Inventory checks are not independent geometric CAM verification.
 For repeat builds, `--replace` permits replacement of a recognized generated
 directory only after all new exports pass; previous output is retained in a

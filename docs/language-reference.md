@@ -822,7 +822,8 @@ nonzero zone inset still requires a rectangular boundary.
 Known constraint kinds are `max_distance`, `min_distance`, `courtyard_gap`,
 `placement_region`, `fixed_placement`, `allowed_orientations`, `align`,
 `placement_group`, `keepout`, `routing`, `copper_zone`, `via_in_pad`,
-`length_match`, `hole_clearance`, and `note`. Coordinates and rectangle dimensions
+`length_match`, `hole_clearance`, `antenna` (see
+[trace antenna synthesis](#trace-antenna-synthesis)), and `note`. Coordinates and rectangle dimensions
 are lengths in the physical board coordinate system; orientation values are
 unitless degrees. The legalizer accepts any explicitly permitted angle,
 including 45-degree increments; unconstrained components still default to
@@ -1119,6 +1120,153 @@ array's own vias; one failed site rejects the whole array, naming the pad and
 the site. Route and preflight reports list each array (`via_in_pad_arrays`:
 count, pitch, positions), and `via_in_pad_count` and the fabrication
 requirements include its vias.
+
+### Trace antenna synthesis
+
+`constraint antenna(COMPONENT.PIN)` reserves a board-edge region and places a
+printed antenna inside it, fed from that pin. The target is the feed pad of a
+one-land antenna feed component; its net is the antenna feed net. Without a
+`geometry`, lowering uses a first-order template; `copper synthesize-antenna`
+tunes the geometry in a full-wave model of the board and prints the
+`geometry` and `tuned_for` lines to paste back.
+
+```copper
+constraint antenna(ANT1.FEED) {
+    name = "bt";                      // macro and keepout identity; default antenna:N
+    x = 18mm; y = 0mm; width = 22mm; height = 6mm;
+    // or region = "radio-corner";    (a named placement_region)
+    // or polygon_mm = "18,0;40,0;40,6;18,6";
+    ground = GND;                     // the host reference ground net
+    bands = "2400 MHz-2483.5 MHz";    // LOW-HIGH with units; ';' separates bands
+    max_return_loss_db = -10;         // synthesis target over every band (default -10)
+    track_width = 1mm;                // default: the board's default track width
+    keepout_margin = 0.5mm;           // extra component clearance around the region
+    topology = auto;                  // auto | monopole | meander | inverted_f | pixel
+    short = R1;                       // inverted_f: the two-land link that ties the arm to ground
+    geometry = "meander height=4.6mm depth=3.1mm pitch=2mm turns=1 tail=6.2mm";
+    tuned_for = "sha256:...";         // site digest the geometry was tuned for
+}
+```
+
+Exactly one region form is required; the region must be a rectangle whose
+one edge lies on the straight outer board perimeter while the opposite edge
+faces the host ground. When both axes qualify (a corner), the longer run is
+used. `ground` must name an existing net (ERC reports an unknown one). An
+inverted-F needs `short`: a placed two-land component (a 0 ohm link, or a
+tuning inductor) with one land on the feed net and the other on the ground
+net; ERC reports an unknown one, and `topology = inverted_f` without it is a
+compile error. `loop` is reserved and fails as not implemented, as do
+back-side antennas and curved regions or outlines.
+
+#### Geometry
+
+Local coordinates run along the board edge (`u`, from the region's low end)
+and across it (`v`, from the ground edge). Every geometry starts at the feed
+pad, just outside the region on the ground side, with a stub up the feed's
+column:
+
+- `monopole height=H length=L`: the stub to `H`, then a run along the edge;
+  `L` is the conductor length from the ground edge.
+- `meander height=H depth=D pitch=P turns=N tail=T`: the stub to `H`, one
+  pitch along, `N` U-shaped meanders hanging `D` below `H` with legs `P`
+  apart centre to centre, then a straight `T`.
+- `inverted_f height=H length=L short=S`: the stub to `H`, where the arm
+  runs `L` from the short leg to its open end; the leg stands `S` before
+  the feed and runs down to the link's feed land. The link is rotated so its
+  feed land faces the region, and stands between the region start and the
+  feed: `S` must keep both bodies and both legs clear, and may use up to a
+  fifth of the region (at most 6 mm). A ground-net stub and a through via at
+  the link's ground land return it to the ground plane; the via must sit in
+  a ground zone.
+- `pixel cell=C columns=M rows=K bits=HEX`: an `M` x `K` grid of `C` tiles,
+  row-major from the ground edge, with one column centred on the feed; only
+  tiles 4-connected to the tile above the feed are realized. Tiles are
+  owned copper polygons, so no `F.Cu` `copper_zone` may overlap or touch the
+  antenna region: draw the ground zone with a gap around it.
+
+Lengths are millimetres with an `mm` suffix, on whole nanometres. Every
+geometry must keep its copper the board clearance plus half a track inside
+the region, and meander legs at least the clearance apart; a geometry that
+does not fit fails with the length it needs.
+
+#### Tuning and staleness
+
+`tuned_for` is the site digest: a hash of every input the full-wave model
+reads (outline and cutouts, stack-up thicknesses, permittivities and loss
+tangents, the ground net's zones, region, frame, track width, clearance,
+feed land and position, bands, target and generator version). When
+`tuned_for` is present and differs from the current board's digest,
+lowering fails and names both digests: re-run `copper synthesize-antenna`,
+or remove `tuned_for` to keep the geometry as an untuned manual one.
+Placements of other components, other nets and the enclosure are not in the
+model and so not in the digest.
+
+```sh
+copper synthesize-antenna board.copper --antenna bt --report build/bt-antenna.json --locked --offline
+copper synthesize-antenna board.copper --antenna bt --verify --locked --offline
+```
+
+The command physicalizes the board without its antenna declarations,
+resolves the site, and searches in a full-wave FDTD model (the pure-Rust
+`ems` solver): the length is scaled until the series resonance sits on the
+band centre, then a bounded Nelder-Mead search over height and length
+polishes the worst-case return loss on a coarse mesh (two cells across the
+track), and the winner is verified on a mesh twice as fine with one more
+length correction and the radiation efficiency from a near-to-far-field box.
+`topology = pixel` runs a seeded genetic algorithm over the region's tiles
+instead; an inverted-F searches height, length and the short spacing, and
+is scored on its bare return loss, since the short spacing is its own
+impedance knob and the matching network is only reported for it. Every candidate is scored by its worst return loss over every band
+with the best two-element L-section matching network synthesized from its
+simulated feed impedance, unless it already meets the target bare.
+`--budget` caps coarse evaluations (default 12); `--no-fine` skips
+verification; `--verify` evaluates the declared geometry without searching.
+The report (`copperscript-antenna-synthesis/v0.1`) holds the search history,
+the final curve, the matching values, efficiency, assumptions and the
+unresolved bench work. The model leaves out components, other nets, zone
+holes, the enclosure and cables, and its matching parts are ideal: the result
+is simulation evidence, not bench or regulatory evidence.
+
+#### Lowering
+
+Lowering generates a one-member hard macro in the `v0.5` asset contract and
+binds it through the ordinary immutable binder, so placement, routing, fill
+exclusion, export locking and port-continuity proof need nothing new:
+
+- The feed component is the anchor, fixed just outside the region on the
+  ground side (its pad at the board clearance from the region, its courtyard
+  clear of the component keepout). A conflicting `fixed_placement` fails.
+  An inverted-F's link is the second member, fixed the same way; its ground
+  land is a private pad with a `plane_return` proved by the macro's via.
+- The radiator is locked `F.Cu` copper: the geometry's track of
+  `track_width`, and for pixel geometries one copper polygon per tile. The
+  template is a monopole whose run sits on the region's centreline, totalling
+  one quarter wave at the band centre scaled by the Hammerstad-Jensen
+  effective permittivity of the dielectric under `F.Cu`; a stack-up without
+  `er` there fails.
+- The region is a protected region on every copper layer (no foreign tracks,
+  vias or fill), a zone keepout with `edge_openings` for its perimeter edges,
+  and a `PlacementKeepout` (both sides, expanded by `keepout_margin`) for
+  other components. Other pads of the feed footprint must be unconnected.
+- The feed pad is the macro's one external port; ordinary routing reaches it
+  from the matching network.
+
+KiCad's DRC reports the radiator's open end as a dangling track; native
+verification (`route-board --verify-plane-fill`) excludes that one finding
+per antenna, by net and region, and records it as an expected open end. A
+ground island that the short's via joins only through the zone fill is
+proved by that refill, so an inverted-F needs native verification for a
+passing route.
+
+`metadata["antenna_synthesis"]` records each synthesis (provenance
+`template`, `tuned` or `manual`, geometry, site digest, band, effective
+permittivity, path, pose, region) and the macro's `source` repeats it.
+Requirement verification passes an antenna declaration only when its
+generated copper is present and materialized, and says so without any
+return-loss, radiation, matching or regulatory claim; the macro's
+`unresolved` list keeps bench tuning in the final enclosure mandatory. The
+example is `examples/antenna_synthesis`; the design, validation and
+remaining work are in [the research note](pcb-antenna-synthesis-research.md).
 
 A component-scoped drill clearance is a documented exception to the board's
 `minimum_hole_clearance` (mechanical `rules`, default 0.25 mm), for a vendor
@@ -1623,6 +1771,62 @@ nets, a net in two groups, duplicate group ids) carry the constraint's
 location, and `CMP117` with the routing constraint's location marks a
 `tuning_group` outside any `length_match` group, one spanning two of them,
 or pair members that disagree.
+
+### Arched corners
+
+```copper
+constraint routing(RF_FEED) { kind = rf_feed; width = 0.3mm; corner_style = "arc"; corner_radius = 1mm; }
+constraint routing(LVDS_P) {
+    kind = differential; partner = LVDS_N; width = 0.1mm; pair_gap = 0.1mm;
+    corner_style = "arc"; corner_radius = 0.3mm; tuning_style = "serpentine"; tuning_amplitude_limit = 1mm;
+}
+```
+
+- `corner_style` is `"octilinear"` (the default: 45° chamfers where the
+  router can place them) or `"arc"`. After routing, smoothing, tuning and
+  cleanup, the arc-corner stage replaces every corner of an arc-style net
+  where exactly two of its tracks of one layer and width meet, away from
+  vias, lands and immutable macro copper, by a circular arc tangent to both
+  legs. KiCad receives native `(arc ...)` tracks.
+- `corner_radius` (a positive length, only with `"arc"`) is the arc radius,
+  by default three times the net's routing width. Where a piece between two
+  corners cannot hold both tangents (r·tan(θ/2) each), the larger radii on
+  that piece come down to a common level that fits; a corner whose legs
+  cannot hold half the width stays sharp. Both members of a pair must
+  declare the same `corner_style` and `corner_radius`; the member inside a
+  turn takes the radius and its partner the radius plus the lane spacing, so
+  the pair stays concentric and keeps its gap. A member turning alone takes
+  its own radius.
+- An arc is emitted only when its copper is clear of foreign copper,
+  keep-outs, macro regions, routing reservations and the board edge by the
+  rule's clearance plus 2 nm (the partner's copper is concentric by
+  construction). A refused corner stays sharp, as does one blocked by a via
+  or land. The route report's `arc_corners` entry counts the arcs and lists
+  every retained corner with its reason; `summary.copper.arcs` counts them
+  and `track_length_mm` includes their length. The stage is the last change
+  to the copper before the exact DRC and the native checks, so KiCad sees
+  the arcs; a net the filled-copper feedback loop reroutes afterwards loses
+  its arcs (its new copper is octilinear).
+- Lengths count an arc at radius × sweep. Length-match and pair-skew tuning
+  of arc-style nets plan against the same policy: bumps and serpentines keep
+  sharp 90° corners for the stage, every unit is measured as arched, and a
+  step may gain up to 4 nm beyond its even target. Tops and risers are
+  semicircular where their length allows two tangents of the radius; each
+  pair member turns through two inside and two outside corners per bump or
+  leg, so both gain the same length. `tuning_group` requires octilinear
+  corners. The final `DRC-LENGTH-MATCH` check measures the emitted copper,
+  so a corner the stage refused shows up there.
+- Exact DRC measures arc distances in floating point from the exact centre
+  of the three stored points and reports a violation when a distance falls
+  more than 8 nm short (the rounding of those points moves a circle by a few
+  nanometres); board-edge checks use the inscribed chord chain widened by its
+  sagitta, which is conservative. A `DRC-ARC-GEOMETRY` error marks an arc
+  whose points are collinear or span more than 180°.
+
+Invalid values fail with `CMP110` (`corner_style` outside the two names,
+`corner_radius` without `"arc"`, `tuning_group` with `"arc"`), and pair
+members that disagree on corner style or radius fail when the board is
+physicalized.
 
 ### Breakout regions
 

@@ -64,6 +64,23 @@ fn net_track_length(board: &PhysicalBoard, name: &str, new_tracks: &[TrackSegmen
         .sum()
 }
 
+/// `net_track_length` for a length-match member: as arched (CS-174) for an
+/// arc-style net, over the board's copper and every accepted net's.
+fn member_length(
+    board: &PhysicalBoard,
+    name: &str,
+    accepted: &Accepted,
+    corners: &IndexMap<String, crate::arc_corners::CornerPolicy>,
+) -> i64 {
+    let own = accepted.get(name).map_or(&[][..], |c| c.0.as_slice());
+    if !corners.contains_key(name) {
+        return net_track_length(board, name, own);
+    }
+    let all: Vec<&TrackSegment> =
+        board.tracks.iter().chain(accepted.values().flat_map(|(tracks, _)| tracks.iter())).collect();
+    crate::arc_corners::planned_length_nm(&all, name, corners)
+}
+
 /// `_open_count`: (open signal connections, incomplete plane nets).
 pub(crate) fn open_count(
     board: &PhysicalBoard,
@@ -1280,16 +1297,11 @@ pub(crate) fn tune_bus_skew(
 ) -> Result<(Accepted, Vec<String>)> {
     let mut accepted = accepted.clone();
     let mut notes = Vec::new();
+    let corners = crate::arc_corners::corner_policies(board);
     for group in &board.match_groups {
         let max_skew = group.max_skew_nm;
-        let lengths: IndexMap<&str, i64> = group
-            .nets
-            .iter()
-            .map(|name| {
-                let tracks = accepted.get(name).map_or(&[][..], |c| c.0.as_slice());
-                (name.as_str(), net_track_length(board, name, tracks))
-            })
-            .collect();
+        let lengths: IndexMap<&str, i64> =
+            group.nets.iter().map(|name| (name.as_str(), member_length(board, name, &accepted, &corners))).collect();
         if lengths.values().any(|length| *length == 0) {
             continue;
         }
@@ -1337,6 +1349,7 @@ pub(crate) fn tune_bus_skew(
                     style: rule.tuning_style,
                     leg_gap_nm: rule.tuning_spacing_nm,
                     vias: vias.clone(),
+                    corners: corners.clone(),
                     ..Default::default()
                 },
             )?;

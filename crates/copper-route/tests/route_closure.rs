@@ -114,6 +114,7 @@ fn evidence_for(board: &PhysicalBoard) -> PlaneVerification {
         other_violation_count: 0,
         findings: Vec::new(),
         dangling_track_uuids: Vec::new(),
+        expected_antenna_open_ends: Vec::new(),
         native_findings: Vec::new(),
         artifact_directory: None,
         filled_regions: Vec::new(),

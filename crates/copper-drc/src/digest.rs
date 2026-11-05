@@ -606,7 +606,26 @@ fn routing_rule_document(rule: &NetRoutingRule) -> Json {
     if let Some(group) = &rule.tuning_group {
         document.push(j_list(vec![j_str("tuning_group"), j_str(group)]));
     }
+    if rule.corner_style != CornerStyle::Octilinear || rule.corner_radius_nm.is_some() {
+        document.push(j_list(vec![j_str("corners"), j_str(rule.corner_style.value()), j_opt(rule.corner_radius_nm)]));
+    }
     j_list(document)
+}
+
+type ArcIdentity = (String, String, (i64, i64), (i64, i64), (i64, i64), i64);
+
+/// An arc's identity: direction-free (its ends sorted, the mid point as stored).
+fn arc_identity(item: &TrackArc) -> ArcIdentity {
+    let mut endpoints = [(item.start.x_nm, item.start.y_nm), (item.end.x_nm, item.end.y_nm)];
+    endpoints.sort();
+    (
+        item.net.clone(),
+        item.layer.value().to_owned(),
+        endpoints[0],
+        (item.mid.x_nm, item.mid.y_nm),
+        endpoints[1],
+        item.width_nm,
+    )
 }
 
 fn track_identity(item: &TrackSegment) -> (String, String, (i64, i64), (i64, i64), i64) {
@@ -988,6 +1007,27 @@ pub fn board_document(board: &PhysicalBoard) -> Json {
                 .collect(),
         ),
     ));
+    if !board.arcs.is_empty() {
+        let mut arcs: Vec<ArcIdentity> = board.arcs.iter().map(arc_identity).collect();
+        arcs.sort();
+        document.push((
+            "arcs",
+            j_list(
+                arcs.into_iter()
+                    .map(|(net, layer, a, m, b, width)| {
+                        j_list(vec![
+                            j_str(&net),
+                            j_str(&layer),
+                            j_list(vec![j_int(a.0), j_int(a.1)]),
+                            j_list(vec![j_int(m.0), j_int(m.1)]),
+                            j_list(vec![j_int(b.0), j_int(b.1)]),
+                            j_int(width),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ));
+    }
     if !board.polygons.is_empty() {
         document.push(("polygons", reprs(&board.polygons, |p| p.id.clone(), copper_polygon)));
     }

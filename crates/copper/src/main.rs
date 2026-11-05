@@ -40,6 +40,7 @@ mod route_global;
 mod si_check;
 mod state;
 mod summarize;
+mod synthesize_antenna;
 mod view;
 
 use std::io::{self, Write};

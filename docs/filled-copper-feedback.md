@@ -328,6 +328,11 @@ are not repair witnesses. Deduplicate
 equivalent proposals across opens within the shared search budget. Cleanup needs
 exact native object mapping and fresh connectivity, not inferred object identity.
 
+Arched corners (CS-174) are the last change to the copper: the arc-corner
+stage runs after every cleanup and before exact DRC and native verification,
+so no cleanup sees a trimmed leg as dangling. Arcs are locked obstacles to
+any later reroute, and a rerouted net's own arcs go with its tracks.
+
 Missing tools and exhausted budgets remain unresolved evidence, not proof of
 impossibility. A closing benchmark establishes routing only; CAM, electrical,
 RF/power, assembly and prototype approval retain their separate gates.

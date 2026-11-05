@@ -10,6 +10,7 @@
 //! Lengths are limited to [`MAX_COORDINATE`]; the frontend refuses larger
 //! values as not implemented rather than risk an overflow.
 
+pub mod arcs;
 pub mod board;
 pub mod body;
 pub mod curves;

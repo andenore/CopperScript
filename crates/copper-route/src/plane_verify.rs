@@ -76,6 +76,10 @@ pub struct PlaneVerification {
     pub other_violation_count: i64,
     pub findings: Vec<String>,
     pub dangling_track_uuids: Vec<String>,
+    /// `track_dangling` findings excluded from the verdict: a feed-net segment
+    /// of a synthesized antenna ending inside its region is the radiator's
+    /// open end, which KiCad cannot know is deliberate.
+    pub expected_antenna_open_ends: Vec<String>,
     pub native_findings: Vec<NativeFinding>,
     pub artifact_directory: Option<String>,
     pub filled_regions: Vec<NativeFilledRegion>,
@@ -156,6 +160,7 @@ impl PlaneVerification {
         document.insert("other_violation_count".to_owned(), Value::from(self.other_violation_count));
         document.insert("findings".to_owned(), strings(&self.findings));
         document.insert("dangling_track_uuids".to_owned(), strings(&self.dangling_track_uuids));
+        document.insert("expected_antenna_open_ends".to_owned(), strings(&self.expected_antenna_open_ends));
         let native_findings = self
             .native_findings
             .iter()
@@ -661,10 +666,42 @@ pub fn verify_filled_planes(
     else {
         return runtime("KiCad DRC report lacks violations/unconnected_items");
     };
+    let objects = native_object_map(board)?;
+    // A synthesized antenna's radiator ends in the open on purpose; KiCad
+    // reports that end as dangling. Exclude exactly those findings.
+    let antennas = antenna_open_end_regions(board);
+    let mut expected_uuids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut expected_antenna_open_ends = Vec::new();
     let mut islands = Vec::new();
     let mut others = Vec::new();
     for item in violations {
-        if violation_type(item)? == "isolated_copper" { islands.push(item) } else { others.push(item) }
+        if violation_type(item)? == "isolated_copper" {
+            islands.push(item);
+            continue;
+        }
+        if violation_type(item)? == "track_dangling"
+            && let Some(Value::Array(entries)) = item.get("items")
+            && let [entry] = entries.as_slice()
+            && let Some(Value::Str(uuid)) = entry.as_object().and_then(|o| o.get("uuid"))
+            && let Some(object) = objects.get(uuid)
+            && object.kind == "segment"
+            && let Some(antenna) = antennas.iter().find(|(net, region, _)| {
+                object.net.as_deref() == Some(net.as_str())
+                    && object.positions_nm.iter().any(|(x, y)| {
+                        copper_physical::geometry::point_in_polygon(copper_physical::Point::new(*x, *y), region)
+                    })
+            })
+        {
+            expected_uuids.insert(uuid.clone());
+            expected_antenna_open_ends.push(format!(
+                "{}: {} (antenna {} open end)",
+                "track_dangling",
+                description(item)?,
+                antenna.2
+            ));
+            continue;
+        }
+        others.push(item);
     }
     let mut findings = Vec::new();
     for item in unconnected.iter().chain(islands.iter().copied()).chain(others.iter().copied()) {
@@ -687,7 +724,6 @@ pub fn verify_filled_planes(
             )));
         }
     }
-    let objects = native_object_map(board)?;
     let mut mapped = Vec::new();
     for (category, entries) in [("unconnected", unconnected), ("violation", violations)] {
         for item in entries {
@@ -697,6 +733,14 @@ pub fn verify_filled_planes(
                 Some(_) => return runtime("malformed KiCad DRC objects"),
             };
             let mut bindings = Vec::new();
+            if let [entry] = raw
+                && entry
+                    .as_object()
+                    .and_then(|o| o.get("uuid"))
+                    .is_some_and(|u| matches!(u, Value::Str(uuid) if expected_uuids.contains(uuid)))
+            {
+                continue;
+            }
             for entry in raw {
                 let Some(Value::Str(uuid)) = entry.as_object().and_then(|o| o.get("uuid")) else {
                     return runtime("malformed KiCad DRC object UUID");
@@ -743,6 +787,7 @@ pub fn verify_filled_planes(
         other_violation_count: others.len() as i64,
         findings,
         dangling_track_uuids: dangling.into_iter().collect(),
+        expected_antenna_open_ends,
         native_findings: mapped,
         artifact_directory: artifact_directory.map(|_| copper_lang::paths::display(&stage)),
         filled_regions: filled,
@@ -750,6 +795,32 @@ pub fn verify_filled_planes(
     };
     evidence.decoupling_assessments = crate::decoupling_fill::assess_decoupling_fill(board, &evidence)?;
     Ok(evidence)
+}
+
+/// The feed net, region and name of every synthesized antenna recorded on
+/// the board (`metadata["antenna_synthesis"]`).
+fn antenna_open_end_regions(board: &PhysicalBoard) -> Vec<(String, Vec<copper_physical::Point>, String)> {
+    copper_pcb::antenna::recorded_syntheses(board)
+        .into_iter()
+        .filter_map(|record| {
+            let net = record.get("net")?.as_str()?.to_owned();
+            let name = record.get("name")?.as_str()?.to_owned();
+            let region: Vec<copper_physical::Point> = record
+                .get("region_nm")?
+                .as_array()?
+                .iter()
+                .filter_map(|p| {
+                    let pair = p.as_array()?;
+                    let coordinate = |value: &Value| match value {
+                        Value::Int(n) => num_traits::ToPrimitive::to_i64(n),
+                        _ => None,
+                    };
+                    Some(copper_physical::Point::new(coordinate(pair.first()?)?, coordinate(pair.get(1)?)?))
+                })
+                .collect();
+            (region.len() >= 3).then_some((net, region, name))
+        })
+        .collect()
 }
 
 /// `tempfile.TemporaryDirectory(prefix=...)`, removed on drop.
