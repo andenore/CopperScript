@@ -185,35 +185,27 @@ pub fn segment_distance(arc: &ArcGeometry, a: Point, b: Point) -> f64 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let length_squared = dx * dx + dy * dy;
     if length_squared > 0.0 {
-        // The foot of the centre on the segment: where the circle comes
-        // closest to the line, when the arc covers that direction.
+        // The foot of the centre on the line: where the circle comes closest
+        // to it, when the foot lies on the segment and the arc covers that
+        // direction.
         let t = ((arc.center.0 - a.0) * dx + (arc.center.1 - a.1) * dy) / length_squared;
-        if (0.0..=1.0).contains(&t) {
-            let foot = (a.0 + t * dx, a.1 + t * dy);
-            let (fx, fy) = (foot.0 - arc.center.0, foot.1 - arc.center.1);
-            let distance = hypot(fx, fy);
-            if distance == 0.0 {
-                // The line passes through the centre: it meets the circle in
-                // both directions of the segment.
-                for sign in [1.0, -1.0] {
-                    if arc.contains_angle((sign * dy).atan2(sign * dx)) {
-                        best = best.min(0.0);
-                    }
-                }
-            } else if arc.contains_angle(fy.atan2(fx)) {
-                best = best.min((distance - arc.radius).abs());
-            }
-            // Circle crossings on the segment, when the arc covers them.
-            if distance < arc.radius {
-                let along = (arc.radius * arc.radius - distance * distance).sqrt();
-                let length = length_squared.sqrt();
-                for sign in [1.0, -1.0] {
-                    let s = t + sign * along / length;
-                    if (0.0..=1.0).contains(&s) {
-                        let point = (a.0 + s * dx, a.1 + s * dy);
-                        if arc.contains_angle((point.1 - arc.center.1).atan2(point.0 - arc.center.0)) {
-                            best = 0.0;
-                        }
+        let foot = (a.0 + t * dx, a.1 + t * dy);
+        let (fx, fy) = (foot.0 - arc.center.0, foot.1 - arc.center.1);
+        let distance = hypot(fx, fy);
+        if (0.0..=1.0).contains(&t) && distance > 0.0 && arc.contains_angle(fy.atan2(fx)) {
+            best = best.min((distance - arc.radius).abs());
+        }
+        // Circle crossings of the line, tested on their own: a segment can
+        // cross the arc although the centre projects outside it.
+        if distance <= arc.radius {
+            let along = (arc.radius * arc.radius - distance * distance).max(0.0).sqrt();
+            let length = length_squared.sqrt();
+            for sign in [1.0, -1.0] {
+                let s = t + sign * along / length;
+                if (0.0..=1.0).contains(&s) {
+                    let point = (a.0 + s * dx, a.1 + s * dy);
+                    if arc.contains_angle((point.1 - arc.center.1).atan2(point.0 - arc.center.0)) {
+                        best = 0.0;
                     }
                 }
             }
@@ -316,6 +308,21 @@ mod tests {
     }
 
     #[test]
+    fn segment_crossing_with_centre_projecting_outside_it_is_a_short() {
+        // A 10 mm semicircle (centre (0, 0), radius 5 mm) over the top half.
+        let arc = ArcGeometry::from_points(p(5_000_000, 0), p(0, 5_000_000), p(-5_000_000, 0)).expect("arc");
+        // The track crosses the arc at (3 mm, 4 mm) but the centre projects
+        // beyond its start, so no foot of the centre lies on it.
+        let distance = segment_distance(&arc, p(3_000_000, 4_000_000), p(9_000_000, 4_000_000));
+        assert_eq!(distance, 0.0);
+        let distance = segment_distance(&arc, p(1_000_000, 4_000_000), p(9_000_000, 4_000_000));
+        assert_eq!(distance, 0.0);
+        // A diagonal track entering from outside, crossing once.
+        let distance = segment_distance(&arc, p(2_000_000, 2_000_000), p(8_000_000, 8_000_000));
+        assert_eq!(distance, 0.0);
+    }
+
+    #[test]
     fn distances() {
         let arc = quarter();
         // A point on the far side of the centre is nearest the end points.
@@ -326,6 +333,9 @@ mod tests {
         assert_eq!(segment_distance(&arc, p(0, 0), p(0, 3000)), 0.0);
         // A vertical line at x = -200 misses by 200.
         assert!((segment_distance(&arc, p(-200, 0), p(-200, 3000)) - 200.0).abs() < 1e-6);
+        // A segment through the centre that stops short of the arc keeps its gap.
+        let d = segment_distance(&arc, p(1000, 1000), p(1000, 1500));
+        assert!((d - 500.0).abs() < 1.0, "{d} {arc:?}");
         // A concentric arc 300 larger stays 300 away.
         let outer = ArcGeometry { radius: arc.radius + 300.0, ..arc };
         assert!((arc_distance(&arc, &outer) - 300.0).abs() < 1e-6);

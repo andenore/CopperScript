@@ -21,7 +21,7 @@ use indexmap::{IndexMap, IndexSet};
 
 use crate::board::{Board, Footprint, Layer, Pad, PadKind, PadShape, Shape, TrackPath, Zone, ZoneConnection};
 use crate::font;
-use crate::geometry::{Contour as Path, Point, flatten_arc, rotate_f64};
+use crate::geometry::{Contour as Path, Edge, Point, flatten_arc, rotate_f64};
 use crate::poly::{self, Shapes};
 use crate::rules::{Item, Rules};
 
@@ -147,6 +147,16 @@ impl<'a> Filler<'a> {
         (za.priority, &za.uuid) > (zb.priority, &zb.uuid)
     }
 
+    /// The copper of `track`: a round-ended stroke of its width.
+    fn track_copper(&self, track: &crate::board::Track) -> Shapes {
+        match track.path {
+            TrackPath::Line { start, end } => poly::capsule(start, end, track.width as f64, self.max_error),
+            TrackPath::Arc { start, mid, end } => {
+                poly::polyline(&flatten_arc(start, mid, end, self.max_error), track.width as f64, false, self.max_error)
+            }
+        }
+    }
+
     fn pad_shape(&self, pad: &Pad, growth: f64) -> Shapes {
         let (w, h) = match pad.shape {
             PadShape::Circle => (pad.width as f64, pad.width as f64),
@@ -263,9 +273,11 @@ impl<'a> Filler<'a> {
                     }
                 }
                 TrackPath::Arc { start, mid, end } => {
+                    // The flattened chords lie inside the arc by up to the
+                    // chord error: widen the stroke by it on both sides.
                     holes.extend(poly::polyline(
                         &flatten_arc(start, mid, end, self.max_error),
-                        width,
+                        width + 2.0 * self.max_error,
                         false,
                         self.max_error,
                     ));
@@ -306,8 +318,10 @@ impl<'a> Filler<'a> {
         let e = self.max_error;
         match shape {
             Shape::Line { start, end } => poly::capsule(*start, *end, width + 2.0 * gap, e),
+            // Flattened curves stray from the true line by up to the chord
+            // error `e`; the strokes grow by it on both sides.
             Shape::Arc { start, mid, end } => {
-                poly::polyline(&flatten_arc(*start, *mid, *end, e), width + 2.0 * gap, false, e)
+                poly::polyline(&flatten_arc(*start, *mid, *end, e), width + 2.0 * gap + 2.0 * e, false, e)
             }
             Shape::Circle { center, radius } => {
                 if filled {
@@ -315,12 +329,14 @@ impl<'a> Filler<'a> {
                 } else {
                     let ring = poly::circle(*center, *radius as f64, e);
                     let points: Vec<(f64, f64)> = ring[0][0].iter().map(|p| (p.x as f64, p.y as f64)).collect();
-                    poly::polyline(&points, width + 2.0 * gap, true, e)
+                    poly::polyline(&points, width + 2.0 * gap + 2.0 * e, true, e)
                 }
             }
             Shape::Polygon(path) => {
                 let points = path_points(path, e);
-                let mut shapes = poly::polyline(&points, width + 2.0 * gap, true, e);
+                let curved = path.edges.iter().any(|edge| matches!(edge, Edge::Arc { .. }));
+                let allowance = if curved { 2.0 * e } else { 0.0 };
+                let mut shapes = poly::polyline(&points, width + 2.0 * gap + allowance, true, e);
                 if filled {
                     shapes.extend(poly::polygon(&points));
                 }
@@ -762,6 +778,11 @@ fn connected_to_pads(filler: &Filler, fills: &IndexMap<(usize, usize), Shapes>) 
         let (s0, p0, v0, t0) = (0, shapes.len(), shapes.len() + pads.len(), shapes.len() + pads.len() + vias.len());
         let mut sets = Sets((0..t0 + tracks.len()).collect());
         let pad_shapes: Vec<Shapes> = pads.iter().map(|pad| filler.pad_shape(pad, 0.0)).collect();
+        // The complete copper of each track: a fill region, pad or via the
+        // track crosses joins it, wherever along the track that happens.
+        let track_shapes: Vec<Shapes> = tracks.iter().map(|track| filler.track_copper(track)).collect();
+        let track_bounds: Vec<Option<Bounds>> = track_shapes.iter().map(shapes_bounds).collect();
+        let touches = |a: &Shapes, b: &Shapes| !poly::intersection(a, b).is_empty();
         let fill_shape = |zone: usize, layer: usize, index: usize| &fills[&(zone, layer)][index];
         for (si, &(zone, layer, index, bounds)) in shapes.iter().enumerate() {
             let shape = fill_shape(zone, layer, index);
@@ -788,10 +809,15 @@ fn connected_to_pads(filler: &Filler, fills: &IndexMap<(usize, usize), Shapes>) 
                 let ends = match track.path {
                     TrackPath::Line { start, end } | TrackPath::Arc { start, end, .. } => [start, end],
                 };
-                if ends.iter().any(|end| {
+                let Some(copper_bounds) = track_bounds[ti] else { continue };
+                if !overlaps(bounds, copper_bounds) {
+                    continue;
+                }
+                let at_end = ends.iter().any(|end| {
                     overlaps(bounds, point_bounds(*end, track.width))
                         && near_shape(shape, (end.x as f64, end.y as f64), track.width as f64 / 2.0)
-                }) {
+                });
+                if at_end || touches(&track_shapes[ti], &as_shapes) {
                     sets.join(s0 + si, t0 + ti);
                 }
             }
@@ -810,16 +836,23 @@ fn connected_to_pads(filler: &Filler, fills: &IndexMap<(usize, usize), Shapes>) 
                 TrackPath::Line { start, end } | TrackPath::Arc { start, end, .. } => (start, end),
             };
             let ends = [(start.x as f64, start.y as f64), (end.x as f64, end.y as f64)];
+            let Some(copper_bounds) = track_bounds[ti] else { continue };
             for (pi, pad) in pads.iter().enumerate() {
                 if pad.layers.has(Layer::Copper(track.layer))
-                    && ends.iter().any(|&p| near_shape(&pad_shapes[pi][0], p, track.width as f64 / 2.0))
+                    && overlaps(copper_bounds, point_bounds(pad.center, pad.width.max(pad.height)))
+                    && (ends.iter().any(|&p| near_shape(&pad_shapes[pi][0], p, track.width as f64 / 2.0))
+                        || touches(&track_shapes[ti], &pad_shapes[pi]))
                 {
                     sets.join(t0 + ti, p0 + pi);
                 }
             }
             for (vi, via) in vias.iter().enumerate() {
                 let centre = (via.center.x as f64, via.center.y as f64);
+                if !overlaps(copper_bounds, point_bounds(via.center, via.size)) {
+                    continue;
+                }
                 if ends.iter().any(|p| (p.0 - centre.0).hypot(p.1 - centre.1) <= (via.size + track.width) as f64 / 2.0)
+                    || track_shapes[ti].iter().any(|shape| near_shape(shape, centre, via.size as f64 / 2.0))
                 {
                     sets.join(t0 + ti, v0 + vi);
                 }
@@ -833,9 +866,18 @@ fn connected_to_pads(filler: &Filler, fills: &IndexMap<(usize, usize), Shapes>) 
                 };
                 let (a, b) = ((os.x as f64, os.y as f64), (oe.x as f64, oe.y as f64));
                 let reach = (track.width.max(other.width)) as f64 / 2.0;
-                if ends.iter().any(|&p| segment_distance(p, a, b) <= reach)
-                    || [a, b].iter().any(|&p| segment_distance(p, ends[0], ends[1]) <= reach)
-                {
+                let straight =
+                    matches!(track.path, TrackPath::Line { .. }) && matches!(other.path, TrackPath::Line { .. });
+                let joined = (straight
+                    && (ends.iter().any(|&p| segment_distance(p, a, b) <= reach)
+                        || [a, b].iter().any(|&p| segment_distance(p, ends[0], ends[1]) <= reach)))
+                    || match (track_bounds[ti], track_bounds[tj]) {
+                        (Some(first), Some(second)) => {
+                            overlaps(first, second) && touches(&track_shapes[ti], &track_shapes[tj])
+                        }
+                        _ => false,
+                    };
+                if joined {
                     sets.join(t0 + ti, t0 + tj);
                 }
             }
@@ -1039,5 +1081,92 @@ mod tests {
         let d = r / std::f64::consts::SQRT_2;
         assert!(at(&fill, 15.0 + d, 15.0 + d), "spoke on the diagonal");
         assert!(!at(&fill, 15.0, 15.0), "the hole itself is not filled");
+    }
+
+    fn parse(items: &str) -> Board {
+        let text = format!(
+            "(kicad_pcb (version 20260206)
+  (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal) (25 \"Edge.Cuts\" user))
+  (footprint \"L:P\" (layer \"F.Cu\") (at 2 10)
+    (property \"Reference\" \"P1\" (at 0 0) (layer \"F.Fab\") (hide yes) (effects (font (size 1 1))))
+    (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net \"GND\")))
+  (gr_rect (start 0 0) (end 20 20) (stroke (width 0.1) (type default)) (fill no) (layer \"Edge.Cuts\"))
+  {items}
+  (zone (net \"GND\") (layer \"F.Cu\") (uuid \"a\") (name \"gnd\") (connect_pads yes (clearance 0.2))
+    (min_thickness 0.25) (filled_areas_thickness no)
+    (fill yes (thermal_gap 0.4) (thermal_bridge_width 0.4) (island_removal_mode 0))
+    (polygon (pts (xy -1 -1) (xy 21 -1) (xy 21 21) (xy -1 21)))))"
+        );
+        parse_board(&text, "test").unwrap()
+    }
+
+    #[test]
+    fn arc_knockouts_keep_the_full_clearance() {
+        // A 0.3 mm SIG arc of radius 5 mm about (10, 10), through (10, 5).
+        let board = parse("(arc (start 5 10) (mid 10 5) (end 15 10) (width 0.3) (layer \"F.Cu\") (net \"SIG\"))");
+        let rules = Rules::load(PROJECT, None).unwrap();
+        let fills = fill_zones(&board, &rules).unwrap();
+        let (centre, radius, half) = ((10e6, 10e6), 5e6, 0.15e6);
+        let ends = [(5e6, 10e6), (15e6, 10e6)];
+        // Distance from `p` to the arc's copper edge.
+        let copper = |p: (f64, f64)| {
+            let (dx, dy) = (p.0 - centre.0, p.1 - centre.1);
+            let line = if dy <= 0.0 {
+                (dx.hypot(dy) - radius).abs()
+            } else {
+                ends.iter().map(|e| (p.0 - e.0).hypot(p.1 - e.1)).fold(f64::INFINITY, f64::min)
+            };
+            line - half
+        };
+        let foot = |q: (f64, f64), a: (f64, f64), b: (f64, f64)| {
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let t = (((q.0 - a.0) * dx + (q.1 - a.1) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+            (a.0 + t * dx, a.1 + t * dy)
+        };
+        let mut nearest = f64::INFINITY;
+        for fill in &fills {
+            for shape in &fill.shapes {
+                for contour in shape {
+                    for i in 0..contour.len() {
+                        let (a, b) = (contour[i], contour[(i + 1) % contour.len()]);
+                        let (a, b) = ((a.x as f64, a.y as f64), (b.x as f64, b.y as f64));
+                        for q in [centre, ends[0], ends[1]] {
+                            nearest = nearest.min(copper(foot(q, a, b)));
+                        }
+                        nearest = nearest.min(copper(a));
+                    }
+                }
+            }
+        }
+        assert!(nearest >= 0.2e6, "fill comes {nearest} nm from the arc");
+    }
+
+    #[test]
+    fn a_track_crossing_a_region_connects_it() {
+        // Two pour keep-outs split the pour into three regions; a GND track
+        // from the pad at (2, 10) to x = 18 runs through all three.
+        let keepout = |x: f64| {
+            format!(
+                "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"k{x}\") (hatch edge 0.5)
+    (connect_pads (clearance 0)) (min_thickness 0.25)
+    (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed))
+    (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+    (polygon (pts (xy {a} -1) (xy {b} -1) (xy {b} 21) (xy {a} 21))))",
+                a = x - 0.5,
+                b = x + 0.5
+            )
+        };
+        let items = format!(
+            "(segment (start 2 10) (end 18 10) (width 0.3) (layer \"F.Cu\") (net \"GND\"))\n{}\n{}",
+            keepout(7.0),
+            keepout(13.0)
+        );
+        let rules = Rules::load(PROJECT, None).unwrap();
+        let fills = fill_zones(&parse(&items), &rules).unwrap();
+        assert_eq!(fills.len(), 1);
+        let fill = &fills[0].shapes;
+        assert_eq!(fill.len(), 3, "every region the GND track reaches stays");
+        assert!(at(fill, 3.0, 5.0) && at(fill, 10.0, 5.0) && at(fill, 17.0, 5.0));
+        assert_eq!(fills[0].islands_removed, 0);
     }
 }

@@ -634,8 +634,36 @@ pub fn arch_board(board: &PhysicalBoard) -> Result<Option<(PhysicalBoard, ArcCor
             None => accepted.push(arc),
         }
     }
+    // Contact: every via or land the original legs touched must still touch
+    // the trimmed legs or the arc; otherwise the arc's group stays sharp.
+    let contacts: Vec<&crate::routing_clearance::CopperObject> = clearance
+        .objects()
+        .into_iter()
+        .filter(|object| policies.contains_key(&object.net) && (object.is_pad || object.occurrence.starts_with("via:")))
+        .collect();
+    let mut copper = emit_arched_copper(&board.tracks, &accepted);
+    loop {
+        let lost = lost_contacts(&board.tracks, &copper, &accepted, &contacts);
+        if lost.is_empty() {
+            break;
+        }
+        let mut groups: IndexMap<usize, String> = IndexMap::new();
+        for (arc_index, contact) in lost {
+            let object = contacts[contact];
+            let what = if object.occurrence.is_empty() { object.net.clone() } else { object.occurrence.clone() };
+            groups.entry(accepted[arc_index].group).or_insert_with(|| format!("contact with {what} along a leg"));
+        }
+        let mut kept = Vec::new();
+        for arc in accepted {
+            match groups.get(&arc.group) {
+                Some(reason) => outcome.retained.push(retained(&arc.net, arc.layer, arc.corner, reason)),
+                None => kept.push(arc),
+            }
+        }
+        accepted = kept;
+        copper = emit_arched_copper(&board.tracks, &accepted);
+    }
     outcome.retained.sort_by_key(|item| (item.net.clone(), item.layer.value(), item.corner.x_nm, item.corner.y_nm));
-    let copper = emit_arched_copper(&board.tracks, &accepted);
     outcome.arcs = copper.arcs.len();
     let mut nets: IndexSet<String> = copper.arcs.iter().map(|arc| arc.net.clone()).collect();
     nets.sort();
@@ -644,6 +672,64 @@ pub fn arch_board(board: &PhysicalBoard) -> Result<Option<(PhysicalBoard, ArcCor
     arched.tracks = copper.tracks;
     arched.arcs = copper.arcs;
     Ok(Some((arched, outcome)))
+}
+
+fn track_copper(track: &TrackSegment) -> Option<RoundedConvexShape> {
+    RoundedConvexShape::new(vec![track.start, track.end], track.width_nm.div_euclid(2)).ok()
+}
+
+/// Whether `track` touches `shape` on `layer`.
+fn track_touches(track: &TrackSegment, layer: CopperLayer, shape: &RoundedConvexShape) -> bool {
+    let half = track.width_nm.div_euclid(2);
+    let bounds = &shape.bounds;
+    let near = track.start.x_nm.min(track.end.x_nm) - half <= bounds.max_x
+        && track.start.x_nm.max(track.end.x_nm) + half >= bounds.min_x
+        && track.start.y_nm.min(track.end.y_nm) - half <= bounds.max_y
+        && track.start.y_nm.max(track.end.y_nm) + half >= bounds.min_y;
+    track.layer == layer && near && track_copper(track).is_some_and(|copper| shapes_touch_or_overlap(&copper, shape))
+}
+
+/// Whether `arc` touches `shape` on `layer`.
+fn arc_touches(arc: &TrackArc, layer: CopperLayer, shape: &RoundedConvexShape) -> bool {
+    arc.layer == layer
+        && arc.geometry().is_ok_and(|geometry| shape_distance(&geometry, shape) <= arc.width_nm.div_euclid(2) as f64)
+}
+
+/// `lost_contacts`: `(arc, contact)` pairs where a contact (`contacts`: same-net
+/// vias and lands) touched the original leg of the arc `accepted[arc]` but
+/// touches none of the net's copper on that layer once `copper` is emitted.
+fn lost_contacts(
+    tracks: &[TrackSegment],
+    copper: &ArchedCopper,
+    accepted: &[PlannedArc],
+    contacts: &[&crate::routing_clearance::CopperObject],
+) -> Vec<(usize, usize)> {
+    let mut lost = Vec::new();
+    for (contact_index, contact) in contacts.iter().enumerate() {
+        let mut checked: IndexSet<CopperLayer> = IndexSet::new();
+        for (arc_index, arc) in accepted.iter().enumerate() {
+            if arc.net != contact.net || !contact.layers.contains(&arc.layer) {
+                continue;
+            }
+            let legs = [&tracks[arc.incoming], &tracks[arc.outgoing]];
+            if !legs.iter().any(|leg| track_touches(leg, arc.layer, &contact.shape)) {
+                continue;
+            }
+            let layer = arc.layer;
+            let still = checked.contains(&layer)
+                || copper
+                    .tracks
+                    .iter()
+                    .any(|track| track.net == contact.net && track_touches(track, layer, &contact.shape))
+                || copper.arcs.iter().any(|arc| arc.net == contact.net && arc_touches(arc, layer, &contact.shape));
+            if still {
+                checked.insert(layer);
+            } else {
+                lost.push((arc_index, contact_index));
+            }
+        }
+    }
+    lost
 }
 
 /// `arc_obstruction`: why the planned arc may not be emitted, if anything
@@ -843,5 +929,47 @@ inner {inner:?} {g_inner:?}"
         assert_eq!(outcome.retained.len(), 1, "{:?}", outcome.retained);
         assert!(outcome.retained[0].reason.starts_with("clearance to"));
         assert_eq!(arched.tracks.len(), 5);
+    }
+
+    #[test]
+    fn a_via_along_a_trimmed_leg_keeps_its_corner_sharp() {
+        let mut board = board();
+        let rule = NetRoutingRule {
+            corner_style: CornerStyle::Arc,
+            corner_radius_nm: Some(MM),
+            ..crate::routing_acceptance::general_rule("S")
+        };
+        board.net_routing_rules.push(rule);
+        board.tracks = vec![
+            track("S", (3 * MM, 6 * MM), (10 * MM, 6 * MM), 200_000),
+            track("S", (10 * MM, 6 * MM), (10 * MM, 9 * MM), 200_000),
+            track("S", (10 * MM, 9 * MM), (17 * MM, 9 * MM), 200_000),
+        ];
+        // A 0.6 mm via 0.1 mm off the first leg, 50 µm before the corner: it
+        // touches the leg (reach 0.4 mm), but the arc of radius 1 mm centred
+        // at (9, 7) mm passes about 0.45 mm from it and the trimmed leg ends
+        // at 9 mm.
+        let via = |x: i64, y: i64| copper_pcb::board::Via {
+            net: "S".to_owned(),
+            position: Point::new(x, y),
+            size_nm: 600_000,
+            drill_nm: 300_000,
+            from_layer: CopperLayer::Front,
+            to_layer: CopperLayer::Back,
+            technology: None,
+            finish: "standard".to_owned(),
+        };
+        board.vias = vec![via(9_950_000, 5_900_000)];
+        let (arched, outcome) = arch_board(&board).unwrap().expect("arc-style net");
+        assert_eq!(outcome.arcs, 1, "{:?}", outcome.retained);
+        let kept = outcome.retained.iter().find(|item| item.corner == Point::new(10 * MM, 6 * MM)).expect("kept");
+        assert!(kept.reason.starts_with("contact with via:0"), "{}", kept.reason);
+        assert!(
+            arched.tracks.iter().any(|t| t.start == Point::new(3 * MM, 6 * MM) && t.end == Point::new(10 * MM, 6 * MM))
+        );
+        // A via the arc still covers does not hold the corner back.
+        board.vias = vec![via(9_500_000, 6_000_000)];
+        let (_, outcome) = arch_board(&board).unwrap().expect("arc-style net");
+        assert_eq!(outcome.arcs, 2, "{:?}", outcome.retained);
     }
 }
