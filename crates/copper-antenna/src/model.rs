@@ -381,6 +381,22 @@ pub fn copper_rects(site: &AntennaSite, layout: &Layout) -> Vec<Rect> {
     rects.extend(layout.tiles.iter().map(|[u0, v0, u1, v1]| board_rect(site, *u0, *v0, *u1, *v1)));
     let (along, across) = land_halves(site);
     rects.push(board_rect(site, site.feed_u - along, site.feed_v - across, site.feed_u + along, site.feed_v + across));
+    // The inverted-F short: its leg, the link bridged as one conductor from
+    // its feed land to its ground land, and the ground stub to the via.
+    if let (Some(link), Some(short)) = (&site.short, &layout.short) {
+        rects.extend(short.leg.windows(2).map(|pair| {
+            let ((ua, va), (ub, vb)) = (pair[0], pair[1]);
+            board_rect(site, ua.min(ub) - half, va.min(vb) - half, ua.max(ub) + half, va.max(vb) + half)
+        }));
+        let (fu, fv) = short.feed_pad;
+        let (gu, gv) = short.ground_pad;
+        let reach = half.max(link.feed_pad.size.width_nm.min(link.feed_pad.size.height_nm) / 2);
+        rects.push(board_rect(site, fu.min(gu) - reach, fv.min(gv) - reach, fu.max(gu) + reach, fv.max(gv) + reach));
+        let (vu, vv) = short.via;
+        rects.push(board_rect(site, gu.min(vu) - half, gv.min(vv) - half, gu.max(vu) + half, gv.max(vv) + half));
+        let r = link.via_size / 2;
+        rects.push(board_rect(site, vu - r, vv - r, vu + r, vv + r));
+    }
     rects
 }
 

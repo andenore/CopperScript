@@ -47,6 +47,10 @@ and [the research note](../../docs/pcb-antenna-synthesis-research.md).
 
 `too_short.copper` is the same board with an 8 mm region; its template is
 refused with the length it needs and a pointer to meanders.
+`inverted_f.copper` adds the two-land link `R1` between the feed net and
+ground and declares `topology = inverted_f; short = R1;`: the macro places
+the link as its second member, runs the short leg to its feed land and a
+ground stub and via from its ground land.
 
 Synthesis is simulation evidence for one model of the board: components,
 other nets, the enclosure and cables are not in it, ground layers are assumed

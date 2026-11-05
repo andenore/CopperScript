@@ -1443,6 +1443,22 @@ fn check_constraint_targets(context: &Context) -> Vec<Diagnostic> {
         if constraint.kind != ConstraintKind::Antenna {
             continue;
         }
+        if let Some(ParameterValue::Text(short)) = constraint.parameters.get("short")
+            && context.component(short).is_none()
+        {
+            let suggestion = suggest(short, names.iter().map(String::as_str));
+            diagnostics.push(
+                Diagnostic::error(
+                    "UNKNOWN_CONSTRAINT_TARGET",
+                    format!("antenna constraint names unknown short component {}", repr(short)),
+                    short.clone(),
+                )
+                .hint(Some(match &suggestion {
+                    Some(word) => format!("did you mean {}?", repr(word)),
+                    None => "antenna short must be the two-pad link component that ties the arm to ground".to_owned(),
+                })),
+            );
+        }
         let Some(ParameterValue::Text(ground)) = constraint.parameters.get("ground") else { continue };
         if context.net(ground).is_none() {
             let net_names: Vec<&str> = context.board.nets.iter().map(|net| net.name.as_str()).collect();

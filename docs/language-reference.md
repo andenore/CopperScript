@@ -1141,7 +1141,8 @@ constraint antenna(ANT1.FEED) {
     max_return_loss_db = -10;         // synthesis target over every band (default -10)
     track_width = 1mm;                // default: the board's default track width
     keepout_margin = 0.5mm;           // extra component clearance around the region
-    topology = auto;                  // auto | monopole | meander | pixel
+    topology = auto;                  // auto | monopole | meander | inverted_f | pixel
+    short = R1;                       // inverted_f: the two-land link that ties the arm to ground
     geometry = "meander height=4.6mm depth=3.1mm pitch=2mm turns=1 tail=6.2mm";
     tuned_for = "sha256:...";         // site digest the geometry was tuned for
 }
@@ -1150,11 +1151,12 @@ constraint antenna(ANT1.FEED) {
 Exactly one region form is required; the region must be a rectangle whose
 one edge lies on the straight outer board perimeter while the opposite edge
 faces the host ground. When both axes qualify (a corner), the longer run is
-used. `ground` must name an existing net (ERC reports an unknown one).
-`inverted_f` and `loop` are reserved: they are DC-shorted to ground, which
-needs component-owned copper with a net tie that CopperScript does not have,
-so they fail as not implemented. Back-side antennas and curved regions or
-outlines also fail as not implemented.
+used. `ground` must name an existing net (ERC reports an unknown one). An
+inverted-F needs `short`: a placed two-land component (a 0 ohm link, or a
+tuning inductor) with one land on the feed net and the other on the ground
+net; ERC reports an unknown one, and `topology = inverted_f` without it is a
+compile error. `loop` is reserved and fails as not implemented, as do
+back-side antennas and curved regions or outlines.
 
 #### Geometry
 
@@ -1168,6 +1170,14 @@ column:
 - `meander height=H depth=D pitch=P turns=N tail=T`: the stub to `H`, one
   pitch along, `N` U-shaped meanders hanging `D` below `H` with legs `P`
   apart centre to centre, then a straight `T`.
+- `inverted_f height=H length=L short=S`: the stub to `H`, where the arm
+  runs `L` from the short leg to its open end; the leg stands `S` before
+  the feed and runs down to the link's feed land. The link is rotated so its
+  feed land faces the region, and stands between the region start and the
+  feed: `S` must keep both bodies and both legs clear, and may use up to a
+  fifth of the region (at most 6 mm). A ground-net stub and a through via at
+  the link's ground land return it to the ground plane; the via must sit in
+  a ground zone.
 - `pixel cell=C columns=M rows=K bits=HEX`: an `M` x `K` grid of `C` tiles,
   row-major from the ground edge, with one column centred on the feed; only
   tiles 4-connected to the tile above the feed are realized. Tiles are
@@ -1204,7 +1214,7 @@ polishes the worst-case return loss on a coarse mesh (two cells across the
 track), and the winner is verified on a mesh twice as fine with one more
 length correction and the radiation efficiency from a near-to-far-field box.
 `topology = pixel` runs a seeded genetic algorithm over the region's tiles
-instead. Every candidate is scored by its worst return loss over every band
+instead; an inverted-F searches height, length and the short spacing. Every candidate is scored by its worst return loss over every band
 with the best two-element L-section matching network synthesized from its
 simulated feed impedance, unless it already meets the target bare.
 `--budget` caps coarse evaluations (default 12); `--no-fine` skips
@@ -1224,6 +1234,8 @@ exclusion, export locking and port-continuity proof need nothing new:
 - The feed component is the anchor, fixed just outside the region on the
   ground side (its pad at the board clearance from the region, its courtyard
   clear of the component keepout). A conflicting `fixed_placement` fails.
+  An inverted-F's link is the second member, fixed the same way; its ground
+  land is a private pad with a `plane_return` proved by the macro's via.
 - The radiator is locked `F.Cu` copper: the geometry's track of
   `track_width`, and for pixel geometries one copper polygon per tile. The
   template is a monopole whose run sits on the region's centreline, totalling
@@ -1236,6 +1248,13 @@ exclusion, export locking and port-continuity proof need nothing new:
   other components. Other pads of the feed footprint must be unconnected.
 - The feed pad is the macro's one external port; ordinary routing reaches it
   from the matching network.
+
+KiCad's DRC reports the radiator's open end as a dangling track; native
+verification (`route-board --verify-plane-fill`) excludes that one finding
+per antenna, by net and region, and records it as an expected open end. A
+ground island that the short's via joins only through the zone fill is
+proved by that refill, so an inverted-F needs native verification for a
+passing route.
 
 `metadata["antenna_synthesis"]` records each synthesis (provenance
 `template`, `tuned` or `manual`, geometry, site digest, band, effective

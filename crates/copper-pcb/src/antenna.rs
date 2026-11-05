@@ -14,9 +14,11 @@
 //!
 //! Geometry tuned by `copper synthesize-antenna` (the full-wave solver in the
 //! `copper-antenna` crate) carries `tuned_for`, the [`site_digest`] of every
-//! input that model used; a changed input fails closed. Only feed-net copper is
-//! generated: DC-shorted radiators (inverted-F, loops) need component-owned
-//! copper with a net tie, which CopperScript does not have yet. Nothing here
+//! input that model used; a changed input fails closed. An inverted-F ties its
+//! arm to ground through `short`, a two-pad link component (a 0 ohm link or a
+//! tuning inductor) that becomes the macro's second member: a feed-net leg
+//! reaches its first pad, and a ground-net stub and through via at its second
+//! pad return to the ground plane. Loops stay unimplemented. Nothing here
 //! establishes resonance, matching, radiation or regulatory compliance; the
 //! generated macro says so in `unresolved`. See
 //! `docs/pcb-antenna-synthesis-research.md`.
@@ -37,6 +39,7 @@ use copper_units::Decimal;
 use crate::board::*;
 use crate::hard_macros::{bind_hard_macro, ring_covers_segment};
 use crate::physicalize::physical_pin_number;
+use crate::transform::transform_local;
 use crate::zones::{length_nm, polygon_boundary};
 use crate::{Error, Result, fail};
 
@@ -45,7 +48,9 @@ use crate::{Error, Result, fail};
 pub const GENERATOR: &str = "copper antenna/v0.2";
 /// The `members[].reference` and `net` role names inside the generated asset.
 const MEMBER: &str = "ANT";
+const SHORT_MEMBER: &str = "SHORT";
 const FEED_ROLE: &str = "feed";
+const GROUND_ROLE: &str = "ground";
 pub const SPEED_OF_LIGHT_M_PER_S: f64 = 299_792_458.0;
 /// Synthesized lengths are rounded to this grid (10 µm).
 pub const LENGTH_GRID_NM: i64 = 10_000;
@@ -121,6 +126,7 @@ pub enum Topology {
     Auto,
     Monopole,
     Meander,
+    InvertedF,
     Pixel,
 }
 
@@ -130,6 +136,7 @@ impl Topology {
             Topology::Auto => "auto",
             Topology::Monopole => "monopole",
             Topology::Meander => "meander",
+            Topology::InvertedF => "inverted_f",
             Topology::Pixel => "pixel",
         }
     }
@@ -145,6 +152,10 @@ pub enum Geometry {
     /// it with `pitch` between adjacent legs (centre to centre), then a
     /// straight `tail` along the board edge.
     Meander { height: i64, depth: i64, pitch: i64, turns: u32, tail: i64 },
+    /// An inverted-F: the arm at `height` is `length` long from the short
+    /// leg to its open end; the feed stub meets it `short` along from the
+    /// leg, which runs down to the link component tying it to ground.
+    InvertedF { height: i64, length: i64, short: i64 },
     /// A `columns` x `rows` grid of square `cell` tiles over the region,
     /// row-major from the ground edge, with one column centred on the feed;
     /// only tiles 4-connected to the feed tile are realized.
@@ -177,6 +188,7 @@ impl Geometry {
         match self {
             Geometry::Monopole { .. } => Topology::Monopole,
             Geometry::Meander { .. } => Topology::Meander,
+            Geometry::InvertedF { .. } => Topology::InvertedF,
             Geometry::Pixel { .. } => Topology::Pixel,
         }
     }
@@ -194,6 +206,9 @@ impl Geometry {
                 mm_text(*pitch),
                 mm_text(*tail)
             ),
+            Geometry::InvertedF { height, length, short } => {
+                format!("inverted_f height={} length={} short={}", mm_text(*height), mm_text(*length), mm_text(*short))
+            }
             Geometry::Pixel { cell, columns, rows, bits } => {
                 let mut hex = String::new();
                 for chunk in bits.chunks(4) {
@@ -221,13 +236,9 @@ impl Geometry {
         let expected: &[&str] = match kind {
             "monopole" => &["height", "length"],
             "meander" => &["height", "depth", "pitch", "turns", "tail"],
+            "inverted_f" => &["height", "length", "short"],
             "pixel" => &["cell", "columns", "rows", "bits"],
-            "inverted_f" | "loop" => {
-                return Err(format!(
-                    "{kind} geometry is DC-shorted to ground and needs component-owned copper with a net tie, \
-                     which CopperScript does not support yet"
-                ));
-            }
+            "loop" => return Err("loop geometry is not implemented".to_owned()),
             other => return Err(format!("unknown antenna geometry {}", repr(other))),
         };
         let mut keys: Vec<&str> = fields.keys().copied().collect();
@@ -250,6 +261,9 @@ impl Geometry {
                 turns: count("turns")?,
                 tail: length("tail")?,
             },
+            "inverted_f" => {
+                Geometry::InvertedF { height: length("height")?, length: length("length")?, short: length("short")? }
+            }
             _ => {
                 let (columns, rows) = (count("columns")?, count("rows")?);
                 let total = columns as usize * rows as usize;
@@ -281,6 +295,47 @@ pub struct Layout {
     pub tiles: Vec<[i64; 4]>,
     /// Centreline length of the track from the ground edge (v = 0) on.
     pub length_nm: i64,
+    /// The inverted-F short, when the geometry has one.
+    pub short: Option<ShortLayout>,
+}
+
+/// The realized short of an inverted-F, in the site's local frame.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShortLayout {
+    /// The feed-net leg from the arm down to the link's feed pad centre.
+    pub leg: Vec<(i64, i64)>,
+    /// The link member's centre.
+    pub centre: (i64, i64),
+    pub feed_pad: (i64, i64),
+    pub ground_pad: (i64, i64),
+    /// The ground via's centre, beyond the ground pad.
+    pub via: (i64, i64),
+}
+
+/// The two-pad link that ties an inverted-F arm to ground.
+#[derive(Clone, Debug)]
+pub struct ShortLink {
+    pub reference: String,
+    /// The footprint key in `PhysicalBoard.footprints`.
+    pub footprint: String,
+    pub feed_pad: FootprintPad,
+    pub ground_pad: FootprintPad,
+    /// The member rotation that puts the feed pad toward the region.
+    pub rotation: i64,
+    /// Pad centre offsets from the member centre, rotated, as `(along, across)`.
+    pub feed_offset: (i64, i64),
+    pub ground_offset: (i64, i64),
+    /// The feed pad centre's `v` (negative: outside the region on the ground side).
+    pub standoff: i64,
+    /// The ground via centre's `v`.
+    pub via_v: i64,
+    pub via_size: i64,
+    pub via_drill: i64,
+    /// The last copper layer, which the via reaches.
+    pub via_to: CopperLayer,
+    /// Feed-to-leg spacing limits: the bodies must clear, the legs the clearance.
+    pub short_min: i64,
+    pub short_max: i64,
 }
 
 /// Everything a declaration fixes about one antenna, resolved on the board.
@@ -314,6 +369,7 @@ pub struct AntennaSite {
     pub dielectric: String,
     pub geometry: Option<Geometry>,
     pub tuned_for: Option<String>,
+    pub short: Option<ShortLink>,
 }
 
 impl AntennaSite {
@@ -522,12 +578,9 @@ fn resolve_site(
         "auto" => Topology::Auto,
         "monopole" => Topology::Monopole,
         "meander" => Topology::Meander,
+        "inverted_f" => Topology::InvertedF,
         "pixel" => Topology::Pixel,
-        other => {
-            return crate::not_implemented(&format!(
-                "antenna topology {other}: DC-shorted radiators need component-owned copper with a net tie"
-            ));
-        }
+        other => return crate::not_implemented(&format!("antenna topology {other}")),
     };
     if text(parameters, "side") == Some("back") {
         return crate::not_implemented("a back-side synthesized antenna");
@@ -630,33 +683,33 @@ fn resolve_site(
 
     // The feed pad sits just outside the region on the ground side; the
     // component body must also clear the placement keepout and the board edge.
-    let pad_along_half = match frame.axis {
-        Axis::X => land.size.width_nm / 2,
-        Axis::Y => land.size.height_nm / 2,
+    let feed_fit = standoff(&frame, footprint, land, land.position, clearance, keepout_margin);
+    let base = margin.max(feed_fit.body_along_half + MEMBER_EDGE_CLEARANCE_NM);
+    let mut feed_u = base;
+
+    // The short link of an inverted-F sits between the region start and the feed.
+    let short = match text(parameters, "short") {
+        None if topology == Topology::InvertedF => {
+            return Err(problem("topology inverted_f requires short, the two-pad link component".to_owned()));
+        }
+        None => None,
+        Some(link_reference) => {
+            let mut link =
+                resolve_short_link(board, &frame, link_reference, &net.name, &ground, clearance, keepout_margin)
+                    .map_err(wrap)?;
+            let link_half = link.short_min;
+            link.short_min = (width + clearance).max(link_half + feed_fit.body_along_half + clearance);
+            link.short_min = snap(link.short_min + LENGTH_GRID_NM - 1);
+            link.short_max = snap((frame.length() / 5).min(6_000_000)).max(link.short_min);
+            let base = base.max(link_half + MEMBER_EDGE_CLEARANCE_NM);
+            feed_u = base + link.short_max;
+            Some(link)
+        }
     };
-    let pad_across_half = match frame.axis {
-        Axis::X => land.size.height_nm / 2,
-        Axis::Y => land.size.width_nm / 2,
-    };
-    let body: Vec<Point> = if footprint.courtyard.is_empty() {
-        let (w, h) = (footprint.body_size.width_nm / 2, footprint.body_size.height_nm / 2);
-        vec![Point::new(-w, -h), Point::new(w, -h), Point::new(w, h), Point::new(-w, h)]
-    } else {
-        footprint.courtyard.clone()
-    };
-    let body_toward_region = body
-        .iter()
-        .map(|v| frame.outward * (frame.across(*v) - frame.across(land.position)))
-        .max()
-        .unwrap_or(pad_across_half)
-        .max(pad_across_half);
-    let body_along_half =
-        body.iter().map(|v| (frame.along(*v) - frame.along(land.position)).abs()).max().unwrap_or(pad_along_half);
-    let feed_u = margin.max(body_along_half + MEMBER_EDGE_CLEARANCE_NM);
     if feed_u + margin > frame.length() {
         return Err(problem("the region is too short for the feed component body".to_owned()));
     }
-    let pad_gap = (clearance + pad_across_half).max(body_toward_region + keepout_margin + clearance);
+    let pad_gap = feed_fit.gap;
     let feed_centre = frame.to_board(feed_u, -pad_gap);
     let pose = Point::new(feed_centre.x_nm - land.position.x_nm, feed_centre.y_nm - land.position.y_nm);
     Ok(AntennaSite {
@@ -684,6 +737,159 @@ fn resolve_site(
         dielectric,
         geometry,
         tuned_for,
+        short,
+    })
+}
+
+/// How far a component must stand off the region so its land `land` (centred
+/// at `land_centre` in footprint coordinates) is the board clearance from the
+/// region and its body clears the component keepout.
+struct Standoff {
+    gap: i64,
+    body_along_half: i64,
+}
+
+fn standoff(
+    frame: &Frame,
+    footprint: &copper_physical::footprint::PhysicalFootprint,
+    land: &FootprintPad,
+    land_centre: Point,
+    clearance: i64,
+    keepout_margin: i64,
+) -> Standoff {
+    let pad_along_half = match frame.axis {
+        Axis::X => land.size.width_nm / 2,
+        Axis::Y => land.size.height_nm / 2,
+    };
+    let pad_across_half = match frame.axis {
+        Axis::X => land.size.height_nm / 2,
+        Axis::Y => land.size.width_nm / 2,
+    };
+    let body: Vec<Point> = if footprint.courtyard.is_empty() {
+        let (w, h) = (footprint.body_size.width_nm / 2, footprint.body_size.height_nm / 2);
+        vec![Point::new(-w, -h), Point::new(w, -h), Point::new(w, h), Point::new(-w, h)]
+    } else {
+        footprint.courtyard.clone()
+    };
+    let body_toward_region = body
+        .iter()
+        .map(|v| frame.outward * (frame.across(*v) - frame.across(land_centre)))
+        .max()
+        .unwrap_or(pad_across_half)
+        .max(pad_across_half);
+    let body_along_half =
+        body.iter().map(|v| (frame.along(*v) - frame.along(land_centre)).abs()).max().unwrap_or(pad_along_half);
+    let gap = (clearance + pad_across_half).max(body_toward_region + keepout_margin + clearance);
+    Standoff { gap, body_along_half }
+}
+
+/// Footprint point `point` rotated by `degrees` on the front side, as frame
+/// `(along, toward the region)` offsets.
+fn rotated_offset(frame: &Frame, point: Point, degrees: i64) -> (i64, i64) {
+    let rotated = transform_local(point, &Decimal::from_i64(degrees), BoardSide::Front);
+    (frame.along(rotated), frame.outward * frame.across(rotated))
+}
+
+fn rotated_size(size: copper_physical::footprint::Size, degrees: i64) -> copper_physical::footprint::Size {
+    if degrees % 180 == 0 {
+        size
+    } else {
+        copper_physical::footprint::Size { width_nm: size.height_nm, height_nm: size.width_nm }
+    }
+}
+
+/// Resolve `short`: a placed two-pad component with one land on the feed net
+/// and the other on the ground net, rotated so the feed land faces the
+/// region. `short_min` returns the body's half extent along the edge; the
+/// caller sets the spacing limits.
+fn resolve_short_link(
+    board: &PhysicalBoard,
+    frame: &Frame,
+    reference: &str,
+    feed_net: &str,
+    ground: &str,
+    clearance: i64,
+    keepout_margin: i64,
+) -> Result<ShortLink> {
+    let Some(placement) = board.placements.iter().find(|p| p.reference == reference) else {
+        return Err(Error::Value(format!("short component {} has no selected footprint", repr(reference))));
+    };
+    let footprint = &board.footprints[&placement.footprint];
+    let electrical: Vec<&FootprintPad> = footprint.pads.iter().filter(|p| p.kind.is_electrical()).collect();
+    let [first, second] = electrical.as_slice() else {
+        return Err(Error::Value(format!(
+            "short component {} must have exactly two electrical lands (a 0 ohm link or tuning inductor)",
+            repr(reference)
+        )));
+    };
+    let net_of = |pad: &FootprintPad| {
+        let key = PadReference::new(reference, &pad.number);
+        board.nets.iter().find(|net| net.pads.contains(&key)).map(|net| net.name.as_str())
+    };
+    let (feed_pad, ground_pad): (&FootprintPad, &FootprintPad) = match (net_of(first), net_of(second)) {
+        (Some(a), Some(b)) if a == feed_net && b == ground => (first, second),
+        (Some(a), Some(b)) if b == feed_net && a == ground => (second, first),
+        _ => {
+            return Err(Error::Value(format!(
+                "short component {} must connect one land to the feed net {} and the other to ground {}",
+                repr(reference),
+                repr(feed_net),
+                repr(ground)
+            )));
+        }
+    };
+    // The rotation that puts the feed land toward the region with the lands aligned across.
+    let rotation = [0, 90, 180, 270]
+        .into_iter()
+        .map(|degrees| {
+            let (fa, fx) = rotated_offset(frame, feed_pad.position, degrees);
+            let (ga, gx) = rotated_offset(frame, ground_pad.position, degrees);
+            (degrees, fx - gx, (fa - ga).abs())
+        })
+        .filter(|(_, toward, _)| *toward > 0)
+        .min_by_key(|(_, toward, skew)| (*skew, -*toward))
+        .map(|(degrees, _, _)| degrees)
+        .ok_or_else(|| Error::Value(format!("short component {} has coincident lands", repr(reference))))?;
+    let feed_offset = rotated_offset(frame, feed_pad.position, rotation);
+    let ground_offset = rotated_offset(frame, ground_pad.position, rotation);
+    let angle = Decimal::from_i64(rotation);
+    let mut rotated = footprint.clone();
+    rotated.courtyard = footprint.courtyard.iter().map(|p| transform_local(*p, &angle, BoardSide::Front)).collect();
+    rotated.body_size = rotated_size(footprint.body_size, rotation);
+    let mut land = feed_pad.clone();
+    land.size = rotated_size(feed_pad.size, rotation);
+    let fit = standoff(
+        frame,
+        &rotated,
+        &land,
+        transform_local(feed_pad.position, &angle, BoardSide::Front),
+        clearance,
+        keepout_margin,
+    );
+    let ground_size = rotated_size(ground_pad.size, rotation);
+    let ground_across_half = match frame.axis {
+        Axis::X => ground_size.height_nm / 2,
+        Axis::Y => ground_size.width_nm / 2,
+    };
+    let rules = &board.rules;
+    let standoff_v = -fit.gap;
+    let ground_v = standoff_v - (feed_offset.1 - ground_offset.1);
+    let via_v = ground_v - ground_across_half - clearance - rules.default_via_size_nm / 2;
+    Ok(ShortLink {
+        reference: reference.to_owned(),
+        footprint: placement.footprint.clone(),
+        feed_pad: feed_pad.clone(),
+        ground_pad: ground_pad.clone(),
+        rotation,
+        feed_offset,
+        ground_offset,
+        standoff: standoff_v,
+        via_v,
+        via_size: rules.default_via_size_nm,
+        via_drill: rules.default_via_drill_nm,
+        via_to: *board.stackup.copper_layers.last().expect("a stackup has copper"),
+        short_min: fit.body_along_half,
+        short_max: 0,
     })
 }
 
@@ -691,7 +897,15 @@ fn resolve_site(
 /// scaled by the Hammerstad-Jensen effective permittivity, with its run on
 /// the region's centreline.
 pub fn template_geometry(site: &AntennaSite) -> Geometry {
-    Geometry::Monopole { height: site.frame.depth() / 2, length: quarter_wave_nm(site.centre_hz(), site.eps_eff) }
+    let length = quarter_wave_nm(site.centre_hz(), site.eps_eff);
+    match &site.short {
+        Some(link) => Geometry::InvertedF {
+            height: snap(site.frame.depth() - site.margin() - LENGTH_GRID_NM / 2),
+            length,
+            short: snap((link.short_min + link.short_max) / 2),
+        },
+        None => Geometry::Monopole { height: site.frame.depth() / 2, length },
+    }
 }
 
 /// The feed track's path and the tiles of `geometry`, checked to fit the
@@ -739,7 +953,39 @@ pub fn layout(site: &AntennaSite, geometry: &Geometry) -> Result<Layout> {
                 path.push((u0, height));
                 path.push((u0 + (length - height), height));
             }
-            Ok(Layout { path, tiles: Vec::new(), length_nm: length })
+            Ok(Layout { path, tiles: Vec::new(), length_nm: length, short: None })
+        }
+        Geometry::InvertedF { height, length, short } => {
+            let (height, length, spacing) = (*height, *length, *short);
+            let Some(link) = &site.short else {
+                return Err(problem("inverted_f geometry needs short, the two-pad link component".to_owned()));
+            };
+            fits_height(height)?;
+            if spacing < link.short_min || spacing > link.short_max {
+                return Err(problem(format!(
+                    "inverted_f short {} must stay between {} (bodies and legs clear) and {} (the room before the feed)",
+                    mm(spacing),
+                    mm(link.short_min),
+                    mm(link.short_max)
+                )));
+            }
+            if length <= spacing + w {
+                return Err(problem("inverted_f length must reach past the feed stub".to_owned()));
+            }
+            let leg_u = u0 - spacing;
+            fits_end(leg_u + length, length)?;
+            // Feed stub to the arm; the arm from the leg top to the open end.
+            let path = vec![(u0, pad_v), (u0, height), (leg_u, height), (leg_u + length, height)];
+            let feed_pad = (leg_u, link.standoff);
+            let centre = (leg_u - link.feed_offset.0, link.standoff - link.feed_offset.1);
+            let ground_pad = (centre.0 + link.ground_offset.0, centre.1 + link.ground_offset.1);
+            let via = (ground_pad.0, link.via_v);
+            // The leg runs at track width to the link land's near edge, then
+            // at the land's width into it, so it stays clear of the ground land.
+            let near_edge = (leg_u, link.standoff + link.feed_pad.size.width_nm.min(link.feed_pad.size.height_nm) / 2);
+            let short =
+                ShortLayout { leg: vec![(leg_u, height), near_edge, feed_pad], centre, feed_pad, ground_pad, via };
+            Ok(Layout { path, tiles: Vec::new(), length_nm: length, short: Some(short) })
         }
         Geometry::Meander { height, depth: drop, pitch, turns, tail } => {
             let (height, drop, pitch) = (*height, *drop, *pitch);
@@ -776,7 +1022,7 @@ pub fn layout(site: &AntennaSite, geometry: &Geometry) -> Result<Layout> {
             let length = height + pitch + i64::from(*turns) * (2 * drop + 2 * pitch) + tail;
             fits_end(u, length)?;
             // The meander's feed stub and its first down leg are `pitch` apart, as are all legs.
-            Ok(Layout { path, tiles: Vec::new(), length_nm: length })
+            Ok(Layout { path, tiles: Vec::new(), length_nm: length, short: None })
         }
         Geometry::Pixel { cell, columns, rows, bits } => {
             let (cell, columns, rows) = (*cell, *columns as i64, *rows as i64);
@@ -829,7 +1075,7 @@ pub fn layout(site: &AntennaSite, geometry: &Geometry) -> Result<Layout> {
                 })
                 .collect();
             let path = vec![(u0, pad_v), (u0, bottom + cell / 2)];
-            Ok(Layout { path, tiles, length_nm: bottom + cell / 2 })
+            Ok(Layout { path, tiles, length_nm: bottom + cell / 2, short: None })
         }
     }
 }
@@ -882,6 +1128,34 @@ pub fn site_digest(board: &PhysicalBoard, site: &AntennaSite) -> String {
         ("feed_local_nm", Json::Array(vec![Json::from(site.feed_u), Json::from(site.feed_v)])),
         ("bands", Json::Array(site.bands.iter().map(|b| Json::from(b.text.as_str())).collect())),
         ("max_return_loss_db", Json::from(format!("{}", site.max_return_loss_db))),
+        (
+            "short",
+            site.short.as_ref().map_or(Json::Null, |link| {
+                object(vec![
+                    ("footprint", Json::from(board.footprints[&link.footprint].name.as_str())),
+                    ("rotation", Json::from(link.rotation)),
+                    (
+                        "feed_offset_nm",
+                        Json::Array(vec![Json::from(link.feed_offset.0), Json::from(link.feed_offset.1)]),
+                    ),
+                    (
+                        "ground_offset_nm",
+                        Json::Array(vec![Json::from(link.ground_offset.0), Json::from(link.ground_offset.1)]),
+                    ),
+                    (
+                        "feed_land_nm",
+                        Json::Array(vec![
+                            Json::from(link.feed_pad.size.width_nm),
+                            Json::from(link.feed_pad.size.height_nm),
+                        ]),
+                    ),
+                    ("standoff_nm", Json::from(link.standoff)),
+                    ("via_v_nm", Json::from(link.via_v)),
+                    ("via_size_nm", Json::from(link.via_size)),
+                    ("short_range_nm", Json::Array(vec![Json::from(link.short_min), Json::from(link.short_max)])),
+                ])
+            }),
+        ),
     ]);
     let canonical = Dumps::compact().sort_keys(true).dumps(&document);
     let digest: String = Sha256::digest(canonical.as_bytes()).iter().map(|byte| format!("{byte:02x}")).collect();
@@ -954,7 +1228,7 @@ pub fn chosen_geometry(board: &PhysicalBoard, site: &AntennaSite) -> Result<(Geo
 fn unresolved(provenance: Provenance) -> Vec<&'static str> {
     let mut items = vec![match provenance {
         Provenance::Template => {
-            "First-order quarter-wave monopole template: no field solution, no resonance or return-loss evidence"
+            "First-order quarter-wave template: no field solution, no resonance or return-loss evidence"
         }
         Provenance::Tuned => {
             "Tuned in a full-wave model of the board outline, stack-up and ground zones only; components, other \
@@ -975,6 +1249,8 @@ struct Synthesis {
     asset: Json,
     keepout: PlacementKeepout,
     record: Json,
+    /// The short link's board pose and rotation, when the geometry has one.
+    short_pose: Option<(Point, i64)>,
 }
 
 fn synthesize(board: &PhysicalBoard, site: &AntennaSite) -> Result<Synthesis> {
@@ -1011,6 +1287,96 @@ fn synthesize(board: &PhysicalBoard, site: &AntennaSite) -> Result<Synthesis> {
     let pad_json = Json::Array(vec![Json::from(MEMBER), Json::from(pad)]);
     let mut points = vec![object(vec![("pad", pad_json.clone())])];
     points.extend(layout.path.iter().skip(1).map(|p| point_json(local(board_point(*p)))));
+    let mut tracks = vec![object(vec![
+        ("net", Json::from(FEED_ROLE)),
+        ("layer", Json::from(CopperLayer::Front.value())),
+        ("width_nm", Json::from(site.width)),
+        ("points", Json::Array(points)),
+    ])];
+    let mut members = vec![object(vec![
+        ("reference", Json::from(MEMBER)),
+        ("footprint", Json::from(footprint.name.as_str())),
+        ("footprint_digest", Json::from(footprint_geometry_digest(footprint).as_str())),
+        ("center_nm", point_json(Point::new(0, 0))),
+        ("rotation_degrees", Json::from("0")),
+        ("edge_clearance_nm", Json::from(MEMBER_EDGE_CLEARANCE_NM)),
+    ])];
+    let mut pad_nets = vec![texts(&[MEMBER, pad, FEED_ROLE])];
+    let mut vias = Vec::new();
+    let mut plane_returns = Vec::new();
+    let mut short_pose: Option<(Point, i64)> = None;
+    if let (Some(link), Some(realized)) = (&site.short, &layout.short) {
+        let link_footprint = &board.footprints[&link.footprint];
+        let centre = board_point(realized.centre);
+        let via = board_point(realized.via);
+        let ground_zoned = board
+            .zones
+            .iter()
+            .any(|zone| zone.net == site.ground && copper_physical::geometry::point_in_polygon(via, &zone.outer));
+        if !ground_zoned {
+            return Err(problem(format!(
+                "the short's ground via at ({}, {}) must sit inside a copper_zone on {}",
+                mm(via.x_nm),
+                mm(via.y_nm),
+                site.ground
+            )));
+        }
+        members.push(object(vec![
+            ("reference", Json::from(SHORT_MEMBER)),
+            ("footprint", Json::from(link_footprint.name.as_str())),
+            ("footprint_digest", Json::from(footprint_geometry_digest(link_footprint).as_str())),
+            ("center_nm", point_json(local(centre))),
+            ("rotation_degrees", Json::from(link.rotation.to_string())),
+            ("edge_clearance_nm", Json::from(MEMBER_EDGE_CLEARANCE_NM)),
+        ]));
+        let feed_land = Json::Array(vec![Json::from(SHORT_MEMBER), Json::from(link.feed_pad.number.as_str())]);
+        let ground_land = Json::Array(vec![Json::from(SHORT_MEMBER), Json::from(link.ground_pad.number.as_str())]);
+        pad_nets.push(texts(&[SHORT_MEMBER, &link.feed_pad.number, FEED_ROLE]));
+        pad_nets.push(texts(&[SHORT_MEMBER, &link.ground_pad.number, GROUND_ROLE]));
+        let land_width = |pad: &FootprintPad| pad.size.width_nm.min(pad.size.height_nm).min(site.width);
+        let leg: Vec<Json> = realized.leg.iter().map(|p| point_json(local(board_point(*p)))).collect();
+        let near_edge = leg[leg.len() - 2].clone();
+        tracks.push(object(vec![
+            ("net", Json::from(FEED_ROLE)),
+            ("layer", Json::from(CopperLayer::Front.value())),
+            ("width_nm", Json::from(site.width)),
+            ("points", Json::Array(leg[..leg.len() - 1].to_vec())),
+        ]));
+        tracks.push(object(vec![
+            ("net", Json::from(FEED_ROLE)),
+            ("layer", Json::from(CopperLayer::Front.value())),
+            ("width_nm", Json::from(land_width(&link.feed_pad))),
+            ("points", Json::Array(vec![near_edge, object(vec![("pad", feed_land)])])),
+        ]));
+        tracks.push(object(vec![
+            ("net", Json::from(GROUND_ROLE)),
+            ("layer", Json::from(CopperLayer::Front.value())),
+            ("width_nm", Json::from(land_width(&link.ground_pad))),
+            ("points", Json::Array(vec![object(vec![("pad", ground_land.clone())]), point_json(local(via))])),
+        ]));
+        vias.push(object(vec![
+            ("net", Json::from(GROUND_ROLE)),
+            ("position_nm", point_json(local(via))),
+            ("size_nm", Json::from(link.via_size)),
+            ("drill_nm", Json::from(link.via_drill)),
+            ("from_layer", Json::from(CopperLayer::Front.value())),
+            ("to_layer", Json::from(link.via_to.value())),
+            ("technology", Json::Null),
+            ("finish", Json::from("standard")),
+        ]));
+        plane_returns.push(object(vec![
+            ("net", Json::from(GROUND_ROLE)),
+            ("layers", Json::Array(board.stackup.copper_layers.iter().map(|l| Json::from(l.value())).collect())),
+            ("pads", Json::Array(vec![ground_land])),
+            ("dedicated_contacts", Json::Array(Vec::new())),
+        ]));
+        short_pose = Some((centre, link.rotation));
+    }
+    // The feed port covers every private pad on the feed net.
+    let mut port_pads = vec![pad_json.clone()];
+    if let Some(link) = &site.short {
+        port_pads.push(Json::Array(vec![Json::from(SHORT_MEMBER), Json::from(link.feed_pad.number.as_str())]));
+    }
     let polygons: Vec<Json> = layout
         .tiles
         .iter()
@@ -1064,29 +1430,11 @@ fn synthesize(board: &PhysicalBoard, site: &AntennaSite) -> Result<Synthesis> {
         ("production_publishable", Json::Bool(false)),
         ("source", synthesis.clone()),
         ("anchor", Json::from(MEMBER)),
-        (
-            "members",
-            Json::Array(vec![object(vec![
-                ("reference", Json::from(MEMBER)),
-                ("footprint", Json::from(footprint.name.as_str())),
-                ("footprint_digest", Json::from(footprint_geometry_digest(footprint).as_str())),
-                ("center_nm", point_json(Point::new(0, 0))),
-                ("rotation_degrees", Json::from("0")),
-                ("edge_clearance_nm", Json::from(MEMBER_EDGE_CLEARANCE_NM)),
-            ])]),
-        ),
-        ("pad_nets", Json::Array(vec![texts(&[MEMBER, pad, FEED_ROLE])])),
+        ("members", Json::Array(members)),
+        ("pad_nets", Json::Array(pad_nets)),
         ("isolated_pads", Json::Array(isolated)),
-        (
-            "tracks",
-            Json::Array(vec![object(vec![
-                ("net", Json::from(FEED_ROLE)),
-                ("layer", Json::from(CopperLayer::Front.value())),
-                ("width_nm", Json::from(site.width)),
-                ("points", Json::Array(points)),
-            ])]),
-        ),
-        ("vias", Json::Array(Vec::new())),
+        ("tracks", Json::Array(tracks)),
+        ("vias", Json::Array(vias)),
         (
             "ports",
             Json::Array(vec![object(vec![
@@ -1094,14 +1442,14 @@ fn synthesize(board: &PhysicalBoard, site: &AntennaSite) -> Result<Synthesis> {
                 ("net", Json::from(FEED_ROLE)),
                 ("point", object(vec![("pad", pad_json.clone())])),
                 ("layer", Json::from(CopperLayer::Front.value())),
-                ("pads", Json::Array(vec![pad_json])),
+                ("pads", Json::Array(port_pads)),
             ])]),
         ),
         ("protected_regions", Json::Array(vec![region_row(&region_id, true)])),
         ("keepouts", Json::Array(vec![region_row(&edge_id, false)])),
         ("zones", Json::Array(Vec::new())),
         ("polygons", Json::Array(polygons)),
-        ("plane_returns", Json::Array(Vec::new())),
+        ("plane_returns", Json::Array(plane_returns)),
         ("width_contracts", Json::Array(Vec::new())),
         (
             "edge_openings",
@@ -1139,56 +1487,75 @@ fn synthesize(board: &PhysicalBoard, site: &AntennaSite) -> Result<Synthesis> {
     record.insert("path_nm".to_owned(), Json::Array(layout.path.iter().map(|p| point_json(board_point(*p))).collect()));
     record.insert("placement_keepout".to_owned(), Json::from(keepout.name.as_str()));
     record.insert("unresolved".to_owned(), texts(&unresolved));
-    Ok(Synthesis { asset, keepout, record: Json::Object(record) })
+    if let Some((centre, rotation)) = short_pose {
+        record.insert("short_pose_nm".to_owned(), point_json(centre));
+        record.insert("short_rotation".to_owned(), Json::from(rotation));
+    }
+    Ok(Synthesis { asset, keepout, record: Json::Object(record), short_pose })
 }
 
 /// Fix the feed component at its synthesized pose, reserve the region for
 /// components, and bind the generated macro through the immutable binder.
+/// Fix `reference` at `pose` with `rotation` on the front side, both as a
+/// placement rule and in the draft placement.
+fn fix_member(board: &mut PhysicalBoard, name: &str, reference: &str, pose: Point, rotation: i64) -> Result<()> {
+    let problem = |message: String| Error::Value(format!("antenna {}: {message}", repr(name)));
+    let angle = Decimal::from_i64(rotation);
+    let mut rule = board
+        .placement_rules
+        .iter()
+        .find(|rule| rule.reference == reference)
+        .cloned()
+        .unwrap_or_else(|| ComponentPlacementRule::new(reference));
+    if rule.fixed_position.is_some_and(|position| position != pose)
+        || rule.fixed_rotation_degrees.as_ref().is_some_and(|r| *r != angle)
+        || rule.side.is_some_and(|side| side != BoardSide::Front)
+    {
+        return Err(problem(format!(
+            "component {} already has a conflicting fixed placement; the antenna fixes its pose",
+            repr(reference)
+        )));
+    }
+    rule.fixed_position = Some(pose);
+    rule.fixed_rotation_degrees = Some(angle.clone());
+    rule.side = Some(BoardSide::Front);
+    rule.allowed_orientations = vec![angle.clone()];
+    rule.edge_clearance_nm = Some(MEMBER_EDGE_CLEARANCE_NM);
+    rule.region = None;
+    let rule = rule.normalized()?;
+    board.placement_rules.retain(|existing| existing.reference != reference);
+    board.placement_rules.push(rule);
+    board.placement_rules.sort_by(|a, b| a.reference.cmp(&b.reference));
+    for placement in &mut board.placements {
+        if placement.reference == reference {
+            placement.position = pose;
+            placement.rotation_degrees = angle.clone();
+            placement.side = BoardSide::Front;
+        }
+    }
+    Ok(())
+}
+
 fn bind(mut board: PhysicalBoard, site: &AntennaSite, synthesis: Synthesis) -> Result<PhysicalBoard> {
-    let Synthesis { asset, keepout, .. } = synthesis;
+    let Synthesis { asset, keepout, short_pose, .. } = synthesis;
     let (name, reference, pose) = (&site.name, &site.feed.component, site.pose);
     let problem = |message: String| Error::Value(format!("antenna {}: {message}", repr(name)));
     if board.keepouts.iter().any(|existing| existing.name == keepout.name) {
         return Err(problem(format!("placement keepout {} already exists", repr(&keepout.name))));
     }
-    let zero = Decimal::zero();
-    let mut rule = board
-        .placement_rules
-        .iter()
-        .find(|rule| rule.reference == *reference)
-        .cloned()
-        .unwrap_or_else(|| ComponentPlacementRule::new(reference));
-    if rule.fixed_position.is_some_and(|position| position != pose)
-        || rule.fixed_rotation_degrees.as_ref().is_some_and(|rotation| *rotation != zero)
-        || rule.side.is_some_and(|side| side != BoardSide::Front)
-    {
-        return Err(problem(format!(
-            "feed component {} already has a conflicting fixed placement; the antenna fixes its pose",
-            repr(reference)
-        )));
-    }
-    rule.fixed_position = Some(pose);
-    rule.fixed_rotation_degrees = Some(zero.clone());
-    rule.side = Some(BoardSide::Front);
-    rule.allowed_orientations = vec![zero.clone()];
-    rule.edge_clearance_nm = Some(MEMBER_EDGE_CLEARANCE_NM);
-    rule.region = None;
-    let rule = rule.normalized()?;
-    board.placement_rules.retain(|existing| existing.reference != *reference);
-    board.placement_rules.push(rule);
-    board.placement_rules.sort_by(|a, b| a.reference.cmp(&b.reference));
-    for placement in &mut board.placements {
-        if placement.reference == *reference {
-            placement.position = pose;
-            placement.rotation_degrees = zero.clone();
-            placement.side = BoardSide::Front;
-        }
+    fix_member(&mut board, name, reference, pose, 0)?;
+    if let (Some(link), Some((centre, rotation))) = (&site.short, short_pose) {
+        fix_member(&mut board, name, &link.reference, centre, rotation)?;
     }
     board.keepouts.push(keepout);
     let raw = copper_lang::macros::canonical_macro_bytes(&asset);
     let digest: String = Sha256::digest(&raw).iter().map(|byte| format!("{byte:02x}")).collect();
-    let members: IndexMap<String, String> = [(MEMBER.to_owned(), reference.clone())].into_iter().collect();
-    let nets: IndexMap<String, String> = [(FEED_ROLE.to_owned(), site.feed_net.clone())].into_iter().collect();
+    let mut members: IndexMap<String, String> = [(MEMBER.to_owned(), reference.clone())].into_iter().collect();
+    let mut nets: IndexMap<String, String> = [(FEED_ROLE.to_owned(), site.feed_net.clone())].into_iter().collect();
+    if let Some(link) = &site.short {
+        members.insert(SHORT_MEMBER.to_owned(), link.reference.clone());
+        nets.insert(GROUND_ROLE.to_owned(), site.ground.clone());
+    }
     let asset_path = format!("generated:{GENERATOR}:{name}");
     let mut board = match bind_hard_macro(board, Path::new(&asset_path), &raw, &digest, name, &members, &nets) {
         Ok(board) => board,
@@ -1235,10 +1602,11 @@ pub fn recorded_syntheses(board: &PhysicalBoard) -> Vec<Object> {
 pub fn describe(site: &AntennaSite) -> String {
     let bands: Vec<&str> = site.bands.iter().map(|b| b.text.as_str()).collect();
     format!(
-        "antenna {} on {} ({}), target {:.1} dB over {}, centre {}",
+        "antenna {} on {} ({}){}, target {:.1} dB over {}, centre {}",
         repr(&site.name),
         site.feed,
         site.feed_net,
+        site.short.as_ref().map_or(String::new(), |link| format!(", shorted through {}", link.reference)),
         site.max_return_loss_db,
         bands.join("; "),
         format_hz(site.centre_hz())
@@ -1275,6 +1643,7 @@ mod tests {
         for text in [
             "monopole height=3mm length=17.46mm",
             "meander height=4.5mm depth=3mm pitch=1.5mm turns=4 tail=2.12mm",
+            "inverted_f height=5.3mm length=17mm short=2.5mm",
             "pixel cell=1mm columns=5 rows=2 bits=a5c",
         ] {
             let geometry = Geometry::parse(text).expect(text);
@@ -1283,7 +1652,7 @@ mod tests {
         assert!(Geometry::parse("monopole height=3mm").is_err());
         assert!(Geometry::parse("monopole height=3 length=4mm").is_err());
         assert!(Geometry::parse("pixel cell=1mm columns=5 rows=2 bits=a5d").is_err());
-        let error = Geometry::parse("inverted_f height=3mm").unwrap_err();
-        assert!(error.contains("net tie"), "{error}");
+        assert!(Geometry::parse("inverted_f height=3mm").is_err());
+        assert!(Geometry::parse("loop radius=3mm").unwrap_err().contains("not implemented"));
     }
 }

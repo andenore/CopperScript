@@ -111,7 +111,7 @@ fn mutated_example(name: &str, edit: impl Fn(&str) -> String) -> PathBuf {
         std::fs::copy(workspace().join("examples/antenna_synthesis").join(item), directory.join(item)).expect(item);
     }
     std::fs::create_dir_all(directory.join("parts")).expect("parts");
-    for item in ["feed.copper", "source.copper"] {
+    for item in ["feed.copper", "source.copper", "link.copper"] {
         std::fs::copy(
             workspace().join("examples/antenna_synthesis/parts").join(item),
             directory.join("parts").join(item),
@@ -247,6 +247,89 @@ fn a_manual_pixel_grid_keeps_only_tiles_connected_to_the_feed() {
     ] {
         assert!(exported.contains(tile), "{tile}\n{exported}");
     }
+}
+
+/// KiCad's command line, when the standard Windows or Linux install is present.
+fn kicad_cli() -> Option<&'static str> {
+    ["C:/Program Files/KiCad/10.0/bin/kicad-cli.exe", "/usr/bin/kicad-cli", "/usr/local/bin/kicad-cli"]
+        .into_iter()
+        .find(|path| Path::new(path).is_file())
+}
+
+#[test]
+fn an_inverted_f_binds_its_short_link_with_a_leg_and_a_ground_via() {
+    let directory = scratch("inverted-f");
+    let pcb = directory.join("board.kicad_pcb");
+    let report = directory.join("route.json");
+    // The link's ground island joins the source's ground pad only through the
+    // zone fill, which only KiCad's refill can prove; without it the route is
+    // reported open and the verdict is not a pass, but the macro still binds.
+    let (pcb_text, report_text) = (pcb.to_string_lossy().into_owned(), report.to_string_lossy().into_owned());
+    let mut args = vec![
+        "route-board",
+        "examples/antenna_synthesis/inverted_f.copper",
+        "-o",
+        &pcb_text,
+        "--report",
+        &report_text,
+        "--locked",
+        "--offline",
+    ];
+    let verifying = kicad_cli();
+    if let Some(cli) = verifying {
+        args.extend(["--verify-plane-fill", cli]);
+    }
+    let (status, output) = copper(&args);
+    if verifying.is_some() {
+        assert_eq!(status, 0, "{output}");
+        assert!(output.contains("native fill verified=True"), "{output}");
+    } else {
+        assert!(output.contains("DRC-OPEN-NET [GND]"), "{output}");
+    }
+    let exported = std::fs::read_to_string(&pcb).expect("the exported board");
+    // The link R1 needs 1.46 mm of spacing (bodies and legs clear) and gets
+    // 5.6 mm of room (a fifth of the 28 mm region), so the feed sits at
+    // u = 1 + 5.6 = 6.6 mm (x = 18.6). The template short is their midpoint,
+    // 3.53 mm: the leg at x = 15.07, the arm 17.46 mm to x = 32.53. The leg
+    // runs at track width to R1's feed land edge (y = 6.4), then at land width.
+    for (start, end) in [
+        ("18.6 6.65", "18.6 0.7"),  // feed stub to the arm height
+        ("18.6 0.7", "15.07 0.7"),  // arm back to the leg
+        ("15.07 0.7", "32.53 0.7"), // arm to the open end
+        ("15.07 0.7", "15.07 6.4"), // the leg down to R1's feed land edge
+        ("15.07 6.4", "15.07 6.7"), // into the land
+        ("15.07 7.7", "15.07 8.6"), // R1's ground land to the via
+    ] {
+        assert!(
+            exported.contains(&format!("(start {start})")) && exported.contains(&format!("(end {end})")),
+            "{start} -> {end}\n{exported}"
+        );
+    }
+    assert!(exported.contains("(at 15.07 8.6)"), "{exported}");
+    // R1 stands between the region start and the feed, rotated across the edge.
+    assert!(exported.contains("(at 15.07 7.2 90)") || exported.contains("(at 15.07 7.2 270)"), "{exported}");
+    let report = std::fs::read_to_string(&report).expect("the route report");
+    assert!(report.contains("synthesized antenna copper preserved and materialized"), "{report}");
+    if verifying.is_some() {
+        // KiCad flags the arm's open end as dangling; it is excluded by name.
+        assert!(report.contains("(antenna ifa open end)"), "{report}");
+    }
+}
+
+#[test]
+fn an_inverted_f_needs_its_short_link() {
+    let board = mutated_example("ifa-no-short", |source| {
+        source.replace("track_width = 1mm;", "track_width = 1mm;\n        topology = inverted_f;")
+    });
+    let (status, output) = copper(&["check", &board.to_string_lossy(), "--locked", "--offline"]);
+    assert_ne!(status, 0, "{output}");
+    assert!(output.contains("requires short"), "{output}");
+    let board = mutated_example("ifa-bad-short", |source| {
+        source.replace("track_width = 1mm;", "track_width = 1mm;\n        topology = inverted_f; short = R9;")
+    });
+    let (status, output) = copper(&["check", &board.to_string_lossy(), "--locked", "--offline"]);
+    assert_ne!(status, 0, "{output}");
+    assert!(output.contains("unknown short component 'R9'"), "{output}");
 }
 
 #[test]

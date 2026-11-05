@@ -20,13 +20,19 @@ and `examples/antenna_synthesis`):
   radiation efficiency from a near-to-far-field box, and a pixel genetic
   algorithm. The report is `copperscript-antenna-synthesis/v0.1`.
 
+- Inverted-F antennas, shorted through a declared two-land link component
+  (`short = R1`): the macro's second member, with a feed-net leg to one land
+  and a ground stub and through via at the other, proved as a plane return.
+  The link is a real part (0 ohm, or a tuning inductor), which is also how
+  commercial IFAs are tuned.
+
 Not implemented:
 
-- **DC-shorted radiators** (inverted-F, PIFA, loops). Their copper joins the
-  feed net to ground, which CopperScript can only express as component-owned
-  copper with a net tie (KiCad `net_tie_pad_groups` with footprint copper).
-  That needs footprint copper graphics in the physical footprint model, DRC
-  and export. The solver handles them (see the AN043 validation below).
+- **Loops and copper-only shorts.** A short without a component would need
+  a net tie: the footprint importer rejects KiCad `net_tie_pad_groups`, and
+  internal pad groups refuse to bridge nets, so that would touch the
+  footprint model, DRC, connectivity, routing, export and the frozen state
+  codec. The link component sidesteps all of it.
 - Pixel tiles are owned copper polygons, and hard-macro rules forbid a host
   zone on a layer where a macro owns area copper; pixel antennas therefore
   need the `F.Cu` ground zone drawn around the region.
@@ -380,6 +386,14 @@ part of the design, not an afterthought. Coarse evaluations cost about
 million, so a state-of-the-art pixel search of the published scale (about
 1,500 evaluations) would take about two days on this machine; the pixel
 algorithm is implemented with a budget and tested on small grids.
+
+**Native verification.** KiCad's DRC reports a radiator's open end as
+`track_dangling`. `route-board --verify-plane-fill` excludes exactly the
+findings whose single item is a feed-net segment of a synthesized antenna
+ending inside its region, lists them in the verification record as
+`expected_antenna_open_ends`, and judges everything else as before. The
+inverted-F example passes native verification with its link's ground island
+joined through the refilled zone.
 
 **Lessons that are now in the model**:
 

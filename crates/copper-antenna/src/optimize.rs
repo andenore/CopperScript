@@ -5,15 +5,16 @@
 //! the best L-section matching network synthesized from its simulated feed
 //! impedance ([`crate::matching`]) unless it already meets the target bare.
 //!
-//! Parametric families (monopole, meandered monopole) share a two-variable
-//! description, `(height, length)`: the run's height above the ground edge and
-//! the conductor length, realized constructively (fewest meander turns that
-//! fit). Search is multi-fidelity, in the spirit of space mapping:
+//! Parametric families share a short coordinate vector: `(height, length)`
+//! for the monopole and meandered monopole (the run's height above the ground
+//! edge and the conductor length, realized constructively as the fewest
+//! meander turns that fit), plus the feed-to-leg spacing `short` for the
+//! inverted-F. Search is multi-fidelity, in the spirit of space mapping:
 //!
 //! 1. **Resonance tuning** on the coarse mesh: the length is scaled by
 //!    `f_resonance / f_centre` until the series resonance sits on the band
 //!    centre (electrical length is inversely proportional to frequency).
-//! 2. **Polish**: a bounded Nelder-Mead search over `(height, length)` on the
+//! 2. **Polish**: a bounded Nelder-Mead search over the coordinates on the
 //!    coarse mesh, minimizing the matched worst-case return loss.
 //! 3. **Fine verification**: the winner on a mesh twice as fine, with one
 //!    more length correction if the resonance moved, and the radiation
@@ -146,6 +147,7 @@ pub fn score(site: &AntennaSite, evaluation: &Evaluation) -> Score {
 enum Family {
     Monopole,
     Meander,
+    InvertedF,
     Auto,
 }
 
@@ -191,12 +193,25 @@ fn meander_for(site: &AntennaSite, height: i64, length: i64) -> Option<Geometry>
     None
 }
 
-fn realize(site: &AntennaSite, family: Family, height: i64, length: i64) -> Option<Geometry> {
-    let (height, length) = (snap(height), snap(length));
+/// The geometry of `family` at `coords` (`[height, length]`, plus `short`
+/// for the inverted-F), snapped to the grid; `None` when it does not fit.
+fn realize(site: &AntennaSite, family: Family, coords: &[i64]) -> Option<Geometry> {
+    let (height, length) = (snap(coords[0]), snap(coords[1]));
     let monopole = Geometry::Monopole { height, length };
     match family {
         Family::Monopole => layout(site, &monopole).ok().map(|_| monopole),
         Family::Meander => meander_for(site, height, length),
+        Family::InvertedF => {
+            // The arm runs from the leg to the usable end of the region: clamp
+            // the length to that room rather than failing, so a scaled or
+            // reflected step past the end still yields the longest arm.
+            let link = site.short.as_ref()?;
+            let short = snap(*coords.get(2)?).clamp(link.short_min, link.short_max);
+            let room = site.frame.length() - site.margin() - (site.feed_u - short);
+            let length = length.clamp(snap(short + site.width + copper_pcb::antenna::LENGTH_GRID_NM), snap(room));
+            let geometry = Geometry::InvertedF { height, length, short };
+            layout(site, &geometry).ok().map(|_| geometry)
+        }
         Family::Auto => {
             if layout(site, &monopole).is_ok() {
                 Some(monopole)
@@ -207,11 +222,12 @@ fn realize(site: &AntennaSite, family: Family, height: i64, length: i64) -> Opti
     }
 }
 
-/// `(height, length)` of a parametric geometry.
-fn coordinates(site: &AntennaSite, geometry: &Geometry) -> Option<(i64, i64)> {
+/// The coordinates of a parametric geometry (see [`realize`]).
+fn coordinates(site: &AntennaSite, geometry: &Geometry) -> Option<Vec<i64>> {
     match geometry {
-        Geometry::Monopole { height, length } => Some((*height, *length)),
-        Geometry::Meander { height, .. } => layout(site, geometry).ok().map(|l| (*height, l.length_nm)),
+        Geometry::Monopole { height, length } => Some(vec![*height, *length]),
+        Geometry::Meander { height, .. } => layout(site, geometry).ok().map(|l| vec![*height, l.length_nm]),
+        Geometry::InvertedF { height, length, short } => Some(vec![*height, *length, *short]),
         Geometry::Pixel { .. } => None,
     }
 }
@@ -297,72 +313,84 @@ impl Search<'_, '_> {
 fn initial(site: &AntennaSite, family: Family) -> Result<Geometry, String> {
     let length = quarter_wave_nm(site.centre_hz(), site.eps_eff);
     let height = snap(site.frame.depth() - site.margin() - copper_pcb::antenna::LENGTH_GRID_NM / 2);
-    realize(site, family, height, length).ok_or_else(|| {
+    let mut coords = vec![height, length];
+    if let Some(link) = &site.short {
+        coords.push((link.short_min + link.short_max) / 2);
+    }
+    realize(site, family, &coords).ok_or_else(|| {
         format!(
-            "the region cannot hold a quarter wave ({:.2} mm at effective permittivity {:.3}) as a {}; enlarge it \
+            "the region cannot hold a quarter wave ({:.2} mm at effective permittivity {:.3}) as {}; enlarge it \
              along the board edge or deepen it",
             length as f64 * 1e-6,
             site.eps_eff,
             match family {
-                Family::Monopole => "monopole",
-                Family::Meander => "meander",
-                Family::Auto => "monopole or meander",
+                Family::Monopole => "a monopole",
+                Family::Meander => "a meander",
+                Family::InvertedF => "an inverted-F",
+                Family::Auto => "a monopole or meander",
             }
         )
     })
 }
 
-/// A bounded two-variable Nelder-Mead minimization. `f` returns `None` for
-/// infeasible points (treated as +inf) and stops the search when the budget
-/// is spent (`Err`).
+/// A bounded Nelder-Mead minimization over `start.len()` variables. `f`
+/// returns `None` for infeasible points (treated as +inf) and stops the
+/// search when the budget is spent (`Err`).
 fn nelder_mead(
-    mut f: impl FnMut([f64; 2]) -> Result<Option<f64>, String>,
-    start: [f64; 2],
-    step: [f64; 2],
+    mut f: impl FnMut(&[f64]) -> Result<Option<f64>, String>,
+    start: Vec<f64>,
+    step: Vec<f64>,
     iterations: usize,
-) -> Result<([f64; 2], f64), String> {
-    let mut value = |x: [f64; 2]| -> Result<f64, String> { Ok(f(x)?.unwrap_or(f64::INFINITY)) };
-    let mut simplex = vec![start, [start[0] + step[0], start[1]], [start[0], start[1] + step[1]]];
+) -> Result<(Vec<f64>, f64), String> {
+    let n = start.len();
+    let mut value = |x: &[f64]| -> Result<f64, String> { Ok(f(x)?.unwrap_or(f64::INFINITY)) };
+    let mut simplex: Vec<Vec<f64>> = vec![start.clone()];
+    for i in 0..n {
+        let mut vertex = start.clone();
+        vertex[i] += step[i];
+        simplex.push(vertex);
+    }
     let mut values = Vec::new();
     for x in &simplex {
-        values.push(value(*x)?);
+        values.push(value(x)?);
     }
+    let last = n;
     for _ in 0..iterations {
-        let mut order: Vec<usize> = (0..3).collect();
+        let mut order: Vec<usize> = (0..=n).collect();
         order.sort_by(|a, b| values[*a].total_cmp(&values[*b]));
-        simplex = order.iter().map(|i| simplex[*i]).collect();
+        simplex = order.iter().map(|i| simplex[*i].clone()).collect();
         values = order.iter().map(|i| values[*i]).collect();
-        let centroid = [(simplex[0][0] + simplex[1][0]) / 2.0, (simplex[0][1] + simplex[1][1]) / 2.0];
+        let centroid: Vec<f64> = (0..n).map(|k| simplex[..last].iter().map(|v| v[k]).sum::<f64>() / n as f64).collect();
         let along =
-            |t: f64| [centroid[0] + t * (simplex[2][0] - centroid[0]), centroid[1] + t * (simplex[2][1] - centroid[1])];
+            |t: f64| -> Vec<f64> { (0..n).map(|k| centroid[k] + t * (simplex[last][k] - centroid[k])).collect() };
         let reflected = along(-1.0);
-        let fr = value(reflected)?;
+        let fr = value(&reflected)?;
         if fr < values[0] {
             let expanded = along(-2.0);
-            let fe = value(expanded)?;
-            (simplex[2], values[2]) = if fe < fr { (expanded, fe) } else { (reflected, fr) };
-        } else if fr < values[1] {
-            (simplex[2], values[2]) = (reflected, fr);
+            let fe = value(&expanded)?;
+            (simplex[last], values[last]) = if fe < fr { (expanded, fe) } else { (reflected, fr) };
+        } else if fr < values[last - 1] {
+            (simplex[last], values[last]) = (reflected, fr);
         } else {
             let contracted = along(0.5);
-            let fc = value(contracted)?;
-            if fc < values[2] {
-                (simplex[2], values[2]) = (contracted, fc);
+            let fc = value(&contracted)?;
+            if fc < values[last] {
+                (simplex[last], values[last]) = (contracted, fc);
             } else {
-                for i in 1..3 {
-                    simplex[i] = [(simplex[0][0] + simplex[i][0]) / 2.0, (simplex[0][1] + simplex[i][1]) / 2.0];
-                    values[i] = value(simplex[i])?;
+                for i in 1..=n {
+                    simplex[i] = (0..n).map(|k| (simplex[0][k] + simplex[i][k]) / 2.0).collect();
+                    values[i] = value(&simplex[i])?;
                 }
             }
         }
-        let spread = (simplex[1][0] - simplex[0][0]).abs().max((simplex[2][0] - simplex[0][0]).abs())
-            + (simplex[1][1] - simplex[0][1]).abs().max((simplex[2][1] - simplex[0][1]).abs());
+        let spread: f64 =
+            (0..n).map(|k| simplex[1..].iter().map(|v| (v[k] - simplex[0][k]).abs()).fold(0.0, f64::max)).sum();
         if spread < 20_000.0 {
             break;
         }
     }
-    let best = (0..3).min_by(|a, b| values[*a].total_cmp(&values[*b])).expect("a simplex");
-    Ok((simplex[best], values[best]))
+    let best = (0..=n).min_by(|a, b| values[*a].total_cmp(&values[*b])).expect("a simplex");
+    Ok((simplex[best].clone(), values[best]))
 }
 
 const BUDGET_SPENT: &str = "budget spent";
@@ -373,9 +401,10 @@ pub fn synthesize(problem: &Problem, options: &Options, log: &mut dyn FnMut(&str
     if site.topology == Topology::Pixel {
         return synthesize_pixel(problem, options, log);
     }
-    let family = match site.topology {
-        Topology::Monopole => Family::Monopole,
-        Topology::Meander => Family::Meander,
+    let family = match (site.topology, site.short.is_some()) {
+        (Topology::Monopole, _) => Family::Monopole,
+        (Topology::Meander, _) => Family::Meander,
+        (Topology::InvertedF, _) | (Topology::Auto, true) => Family::InvertedF,
         _ => Family::Auto,
     };
     let mut search = Search {
@@ -390,7 +419,7 @@ pub fn synthesize(problem: &Problem, options: &Options, log: &mut dyn FnMut(&str
     };
     let f0 = site.centre_hz();
     let start = initial(site, family)?;
-    let (mut height, mut length) = coordinates(site, &start).expect("parametric");
+    let mut coords = coordinates(site, &start).expect("parametric");
     let mut best: Option<(Geometry, Score)> = None;
     let consider = |geometry: &Geometry, score: &Score, best: &mut Option<(Geometry, Score)>| {
         if best.as_ref().is_none_or(|(_, b)| score.worst_db < b.worst_db) {
@@ -400,29 +429,34 @@ pub fn synthesize(problem: &Problem, options: &Options, log: &mut dyn FnMut(&str
 
     // 1. Resonance tuning.
     for _ in 0..5 {
-        let Some(geometry) = realize(site, family, height, length) else { break };
+        let Some(geometry) = realize(site, family, &coords) else { break };
         let Some((_, score)) = search.run(&geometry, false, "resonance")? else { break };
         consider(&geometry, &score, &mut best);
         let Some(fr) = score.resonance_hz else { break };
         if (fr / f0 - 1.0).abs() < 0.004 || search.exhausted() {
             break;
         }
-        length = (length as f64 * fr / f0) as i64;
+        coords[1] = (coords[1] as f64 * fr / f0) as i64;
     }
 
     // 2. Polish over (height, length).
     if !search.exhausted()
         && let Some((geometry, _)) = &best
     {
-        let (h0, l0) = coordinates(site, geometry).expect("parametric");
-        let step = [((site.frame.depth() - 2 * site.margin()) as f64 / 4.0).max(200_000.0), l0 as f64 * 0.03];
+        let start = coordinates(site, geometry).expect("parametric");
+        let mut step =
+            vec![((site.frame.depth() - 2 * site.margin()) as f64 / 4.0).max(200_000.0), start[1] as f64 * 0.03];
+        if let Some(link) = &site.short {
+            step.push(((link.short_max - link.short_min) as f64 / 4.0).max(100_000.0));
+        }
         let iterations = search.budget.saturating_sub(search.used);
         let result = nelder_mead(
             |x| {
                 if search.exhausted() {
                     return Err(BUDGET_SPENT.to_owned());
                 }
-                let Some(geometry) = realize(site, family, x[0] as i64, x[1] as i64) else { return Ok(None) };
+                let coords: Vec<i64> = x.iter().map(|v| *v as i64).collect();
+                let Some(geometry) = realize(site, family, &coords) else { return Ok(None) };
                 match search.run(&geometry, false, "polish")? {
                     Some((_, score)) => {
                         consider(&geometry, &score, &mut best);
@@ -431,7 +465,7 @@ pub fn synthesize(problem: &Problem, options: &Options, log: &mut dyn FnMut(&str
                     None => Ok(None),
                 }
             },
-            [h0 as f64, l0 as f64],
+            start.iter().map(|v| *v as f64).collect(),
             step,
             iterations,
         );
@@ -444,16 +478,18 @@ pub fn synthesize(problem: &Problem, options: &Options, log: &mut dyn FnMut(&str
     let Some((mut geometry, mut score)) = best else {
         return Err("no candidate geometry could be evaluated; raise the budget or enlarge the region".to_owned());
     };
-    (height, length) = coordinates(site, &geometry).expect("parametric");
+    coords = coordinates(site, &geometry).expect("parametric");
     let (mut evaluation, _) = search.cache[&(geometry.to_source(), "coarse")].clone();
 
     // 3. Fine verification, with one length correction if the resonance moved.
     if options.fine {
         let (fine_eval, fine_score) = search.run(&geometry, true, "verify")?.expect("a realizable geometry");
         (evaluation, score) = (fine_eval, fine_score);
+        let mut corrected_coords = coords.clone();
+        corrected_coords[1] = (coords[1] as f64 * score.resonance_hz.unwrap_or(f0) / f0) as i64;
         if let Some(fr) = score.resonance_hz
             && (fr / f0 - 1.0).abs() > 0.006
-            && let Some(corrected) = realize(site, family, height, (length as f64 * fr / f0) as i64)
+            && let Some(corrected) = realize(site, family, &corrected_coords)
             && let Some((corrected_eval, corrected_score)) = search.run(&corrected, true, "correct")?
             && corrected_score.worst_db < score.worst_db
         {
@@ -605,12 +641,17 @@ mod tests {
     #[test]
     fn nelder_mead_finds_a_bowl_minimum() {
         let (x, value) = nelder_mead(
-            |x| Ok(Some((x[0] - 3_000_000.0).powi(2) + (x[1] - 18_000_000.0).powi(2))),
-            [1_000_000.0, 15_000_000.0],
-            [500_000.0, 500_000.0],
-            200,
+            |x| Ok(Some((x[0] - 3_000_000.0).powi(2) + (x[1] - 18_000_000.0).powi(2) + (x[2] - 2_000_000.0).powi(2))),
+            vec![1_000_000.0, 15_000_000.0, 1_000_000.0],
+            vec![500_000.0, 500_000.0, 300_000.0],
+            400,
         )
         .expect("a minimum");
-        assert!((x[0] - 3_000_000.0).abs() < 30_000.0 && (x[1] - 18_000_000.0).abs() < 30_000.0, "{x:?} {value}");
+        assert!(
+            (x[0] - 3_000_000.0).abs() < 30_000.0
+                && (x[1] - 18_000_000.0).abs() < 30_000.0
+                && (x[2] - 2_000_000.0).abs() < 30_000.0,
+            "{x:?} {value}"
+        );
     }
 }

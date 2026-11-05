@@ -23,7 +23,7 @@ pub const CODE: &str = "CMP126";
 
 /// Every parameter an antenna declaration accepts (besides the generic
 /// `id`, `mode`, `consumers` and `verifier`).
-pub const PARAMETERS: [&str; 16] = [
+pub const PARAMETERS: [&str; 17] = [
     "name",
     "region",
     "polygon_mm",
@@ -40,11 +40,12 @@ pub const PARAMETERS: [&str; 16] = [
     "max_return_loss_db",
     "geometry",
     "tuned_for",
+    "short",
 ];
 
-/// Accepted `topology` words. `inverted_f` and `loop` are reserved: they are
-/// DC-shorted to ground and need component-owned copper with a net tie, so
-/// physical lowering reports them as not implemented rather than approximating.
+/// Accepted `topology` words. `inverted_f` needs `short`, a two-pad link
+/// component that ties the arm to ground. `loop` is reserved: physical
+/// lowering reports it as not implemented rather than approximating.
 pub const TOPOLOGIES: [&str; 6] = ["auto", "monopole", "meander", "pixel", "inverted_f", "loop"];
 
 /// One declared operating band, `LOW-HIGH`, in hertz.
@@ -158,7 +159,7 @@ pub fn validate_antenna(declaration: &ConstraintDecl, parameters: &IndexMap<Stri
             }
         }
     }
-    for name in ["region", "polygon_mm", "ground", "name", "geometry", "tuned_for"] {
+    for name in ["region", "polygon_mm", "ground", "name", "geometry", "tuned_for", "short"] {
         if parameters.contains_key(name) && text(parameters, name).is_none_or(|value| strip(value).is_empty()) {
             return fail(format!("antenna parameter {} must be a nonempty string", repr(name)));
         }
@@ -176,6 +177,16 @@ pub fn validate_antenna(declaration: &ConstraintDecl, parameters: &IndexMap<Stri
         && !matches!(side, ParameterValue::Text(value) if value == "front" || value == "back")
     {
         return fail("antenna side must be front or back".to_owned());
+    }
+    if let Some(short) = text(parameters, "short")
+        && (short.contains('.') || short.contains('/'))
+    {
+        return fail(
+            "antenna short must be a component reference, the two-pad link that ties the arm to ground".to_owned(),
+        );
+    }
+    if text(parameters, "topology") == Some("inverted_f") && !parameters.contains_key("short") {
+        return fail("antenna topology inverted_f requires short, the two-pad link component".to_owned());
     }
     if parameters.contains_key("topology") && !text(parameters, "topology").is_some_and(|v| TOPOLOGIES.contains(&v)) {
         return fail(format!("antenna topology must be one of {}", TOPOLOGIES.join(", ")));

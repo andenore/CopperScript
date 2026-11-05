@@ -37,6 +37,14 @@ pub fn assumptions(problem: &Problem) -> Vec<String> {
             )
         },
         "Zero-thickness PEC copper; dielectric loss from each layer's loss tangent at the band centre".to_owned(),
+        match &site.short {
+            Some(link) => format!(
+                "The short link {} is modelled as ideal copper from its feed land through its ground land and via \
+                 to the ground plane; a 0402 0 ohm link adds about 0.4 nH, a tuning inductor its own value",
+                link.reference
+            ),
+            None => "No DC short to ground: the radiator is fed-net copper only".to_owned(),
+        },
         "Matching values are ideal lossless parts; part Q, parasitics, tolerance and E-series snapping are not \
          modelled"
             .to_owned(),
