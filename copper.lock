@@ -60064,6 +60064,94 @@
       "version": "7ebfa6b23cc292a56f751b7b5f4a0e12eeef69dd"
     },
     {
+      "checksum": "sha256:bfb21c96b415000322adf124c92f82b96062604bb57a127a580a05a9296cb958",
+      "files": [
+        {
+          "path": "Button_Switch_SMD.3dshapes/SW_SPST_TL3342.step",
+          "sha256": "23b1770b921df25f489d37b5636ad4a292f966c00638da7b5cb4b7f97d11c639",
+          "size": 406589
+        },
+        {
+          "path": "Capacitor_SMD.3dshapes/C_0402_1005Metric.step",
+          "sha256": "03e44c4b2b727b8d4b6b1fd598cbd12dd5e614f1dfeefa96a92a07e3a3b312a2",
+          "size": 43502
+        },
+        {
+          "path": "Capacitor_SMD.3dshapes/C_0603_1608Metric.step",
+          "sha256": "4857b3dc717675bf1fb22edda622ac3b3ae03cf44d81eefaf3fa3ba3a86d84c1",
+          "size": 43450
+        },
+        {
+          "path": "Capacitor_SMD.3dshapes/C_0805_2012Metric.step",
+          "sha256": "9a669c1a2f1ea25b88b401acef6efeaa80a067bd7da9db6993de719a7fbe155c",
+          "size": 43618
+        },
+        {
+          "path": "Capacitor_SMD.3dshapes/C_1210_3225Metric.step",
+          "sha256": "f8510481c5044113cf49b0fa6dd54ddab9224508bd6808e1afab8ef0cefdefc9",
+          "size": 43502
+        },
+        {
+          "path": "Connector_Coaxial.3dshapes/U.FL_Hirose_U.FL-R-SMT-1_Vertical.step",
+          "sha256": "bb861ac13b1fa3709690e81d82a64544b02d4420ea410f7334fc7a4b57f8e71a",
+          "size": 70713
+        },
+        {
+          "path": "Connector_PinHeader_2.54mm.3dshapes/PinHeader_1x04_P2.54mm_Vertical.step",
+          "sha256": "a74079b8d06bda78847623b39ee1855ffd1d9a8c1e896b349e4f1dc2056d44d9",
+          "size": 145684
+        },
+        {
+          "path": "Inductor_SMD.3dshapes/L_0402_1005Metric.step",
+          "sha256": "8bf2ae2bbd9d8b716db21d8d7fb903fac5ba2696150c3ec2e35bcea17b208ff2",
+          "size": 43502
+        },
+        {
+          "path": "LED_SMD.3dshapes/LED_0603_1608Metric.step",
+          "sha256": "98343205ec260ec165026ba2d44329a23096779ac36c553ea84aa7b370242e6d",
+          "size": 77068
+        },
+        {
+          "path": "Package_LGA.3dshapes/LGA-12_2x2mm_P0.5mm.step",
+          "sha256": "5e6c16287491528f89c09590e0d5dace14debf478226f74b45504eb906119145",
+          "size": 105329
+        },
+        {
+          "path": "Package_QFP.3dshapes/LQFP-64_10x10mm_P0.5mm.step",
+          "sha256": "b0c827bc5c05552175d28affe44a5bd2ab45c9c36efff6ff07a74cc449b13db4",
+          "size": 867325
+        },
+        {
+          "path": "Package_SO.3dshapes/TSSOP-8_3x3mm_P0.65mm.step",
+          "sha256": "cf28a51742b2e31065e201d1b313207140cbfb49062efd938788f7a310d02738",
+          "size": 124242
+        },
+        {
+          "path": "Package_TO_SOT_SMD.3dshapes/SOT-23.step",
+          "sha256": "dd5d1711204e1d8d26cd11490923bd84340820baa69538c385a4300ec2539bc0",
+          "size": 60296
+        },
+        {
+          "path": "RF_Antenna.3dshapes/Johanson_2450AT18x100.step",
+          "sha256": "7d3afc869543ea1b697aee6824adc8f8b73ba56896d97c82088a686380379d63",
+          "size": 52412
+        },
+        {
+          "path": "Resistor_SMD.3dshapes/R_0402_1005Metric.step",
+          "sha256": "91507e5af4251cb4ef38e04889c9b98da29904432bd83786bba13ae9b605eacb",
+          "size": 40756
+        },
+        {
+          "path": "Resistor_SMD.3dshapes/R_0603_1608Metric.step",
+          "sha256": "1875571c326d0d9e96f36b4efeb8094068ef7619f0a449c781caf0b49c2e5861",
+          "size": 40618
+        }
+      ],
+      "module": "github.com/KiCad/kicad-packages3D",
+      "source": "replace:sparse-git:https://gitlab.com/kicad/libraries/kicad-packages3D.git@10.0.8",
+      "version": "10.0.8"
+    },
+    {
       "checksum": "sha256:a29f47a0a04f5d5eb4763f0b610fc7c55954e995d2b89f9647285ff7be92cbe2",
       "files": [
         {
