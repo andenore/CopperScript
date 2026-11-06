@@ -1,4 +1,7 @@
 {
+  "schema": "copperscript-ir/v0.1",
+  "kind": "board",
+  "name": "CopperAssetTracker",
   "components": [
     {
       "footprint": "Capacitor_SMD:C_0402_1005Metric",
@@ -16,8 +19,6 @@
       }
     }
   ],
-  "kind": "board",
-  "name": "CopperAssetTracker",
   "nets": [
     {
       "endpoints": [
@@ -30,6 +31,5 @@
       ],
       "name": "V3V8"
     }
-  ],
-  "schema": "copperscript-ir/v0.1"
+  ]
 }

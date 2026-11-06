@@ -11,7 +11,7 @@ design with LLM agents. The primary action is to try the compiler example; the
 secondary action is to inspect a complete, documented board.
 
 - Introduce CopperScript consistently across the three repository READMEs.
-- Show actual source, inspectable IR and native KiCad illustrations rather than
+- Show actual source, inspectable IR and illustrations rendered from native plots rather than
   invented renders or unsupported performance claims.
 - Explain language intent, hard macros, antenna synthesis, the shared
   workflow, the tracker, quick start, practical questions and repository
@@ -147,24 +147,23 @@ filled from the JSON, the prose is not.
 ## Maintain the recorded showcase
 
 The five tracker SVGs, two IR excerpts, `rendering.json` and `snapshot.json` are byte-for-byte copies from
-CopperAssetTracker's `docs/showcase/`. The current illustrations represent the
-`promo-reroute-20261013` fresh source-matched routing review, not a released
-board. Its snapshot binds the exact exported PCB, source, native DRC, route
-summary, in-language macro binding and rendered-asset hashes. Native DRC is clean, but five check types were
-ignored, 13 electrical-requirement checks remain blocked, independent CAM was
-not run for this review. No new manufacturing export is claimed, and
-supplier/assembly review is incomplete. `qualified_release` stays
-false. The site links to current board status separately.
+CopperAssetTracker's `docs/showcase/`, made by its `make showcase`
+(`docs/showcase.md` there). The current illustrations are the
+`native-showcase-20261106` routing review, built without KiCad: the current
+source routed with native plane verification, then `copper fill`, `copper drc
+--cam` (zero violations, zero unconnected, CAM read-back clean) and `copper
+plot`. The snapshot binds the tracker commit and inputs, the compiler commit and
+executable, the route, DRC and read-back results and every asset by SHA-256.
+Native DRC lists the checks it does not make; 12 electrical-requirement checks
+remain blocked; no independent CAM or manufacturing export was made, and
+`qualified_release` is false. The site links to current board status separately.
 
-Surface pad geometry is plotted separately by KiCad and overlaid in gold so
-ground-connected lands remain visible against a fill. The placement image also
-includes those native pads. The combined view shows all six copper layers,
-tracks, vias and package outlines, hiding zones and solid copper fill graphics
-only in a temporary plotting copy. Overlapping reference/value labels are hidden
-in placement and combined views. `rendering.json` records the layers, hidden
-geometry counts and hashes of the preserved native pads/tracks. The input PCB,
-route and DRC evidence are unchanged. See the tracker's figure-refresh guide for
-the exact retained-candidate workflow; historical source status is preserved.
+Every view is drawn by `copper render` from the plotted Gerbers, viewed from
+above without mirroring. Gold is copper inside the solder-mask openings
+(exposed copper); the placement view shows the front silkscreen and the
+openings themselves. The combined view draws all six copper layers from a plot
+of the routed board before zone filling. `rendering.json` records each view's
+plot and layer plates.
 
 Refresh from a regenerated, source-matched tracker showcase:
 

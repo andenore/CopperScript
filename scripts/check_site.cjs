@@ -117,12 +117,19 @@ function checkSite(site = SITE) {
     for (const name of SNAPSHOT_ASSETS)
       if (sha256(path.join(assets, name)) !== snapshot.rendered_assets[name])
         errors.push(`${name}: bytes do not match the recorded showcase snapshot`);
+    // The views are copper render pictures of the native plot; the combined
+    // view draws every copper layer from the plot made before zone filling.
     const rendering = JSON.parse(fs.readFileSync(path.join(assets, "rendering.json"), "utf8"));
-    if (rendering.pcb_sha256 !== snapshot.pcb_sha256) errors.push("Rendering metadata describes a different PCB");
-    if (JSON.stringify(rendering.all_layers) !== JSON.stringify(snapshot.copper_layers) || rendering.views["routing-all.svg"].copper_fills)
+    if (rendering.renderer !== "copper render") errors.push("Showcase views must be rendered by copper render");
+    const combined = rendering.views["routing-all.svg"];
+    const drawn = new Set(combined.plates.map(plate => plate.split(/[&:]/)[0]));
+    if (!snapshot.copper_layers.every(layer => drawn.has(layer)) || combined.zone_fills)
       errors.push("Combined board view must show the full copper stack with fills hidden");
-    if (rendering.native_geometry.footprints !== snapshot.component_count || !(rendering.native_geometry.pads > 0))
-      errors.push("Rendering metadata is missing the recorded footprints/pads");
+    if (!(snapshot.component_count > 0) || snapshot.route.status !== "pass" || !snapshot.native_drc.passed)
+      errors.push("Showcase snapshot is missing its passed route, native DRC or footprint count");
+    for (const [name, view] of Object.entries(rendering.views))
+      if (!/<title>/.test(fs.readFileSync(path.join(assets, name), "utf8").slice(0, 600)) || !view.plates.length)
+        errors.push(`${name}: rendered view lacks a title or plates`);
     for (const file of fs.readdirSync(assets)) {
       if (file.endsWith(".svg")) checkXml(path.join(assets, file));
       if (file.endsWith(".json")) JSON.parse(fs.readFileSync(path.join(assets, file), "utf8"));
