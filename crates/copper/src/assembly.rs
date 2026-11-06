@@ -1,10 +1,12 @@
 //! `copper assembly {snapshot,update,check,bom,candidate-bom} BOARD [--locked] [--offline] ...`:
-//! pin and check explicit assembly selections offline.
+//! pin and check explicit assembly selections offline. `copper assembly offers`
+//! is the one networked action: a timestamped live availability report.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use copper_assembly::assembly::{self, AssemblyError, Lock};
+use copper_assembly::offers;
 use copper_json::text;
 use copper_json::{Dumps, Value};
 use copper_lang::compiler::{LoadError, load_design};
@@ -15,7 +17,20 @@ use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::option_parser::{self, Spec, flag, short_value, value};
 use crate::pypath;
 
-const USAGE: &str = "usage: copper assembly [-h] {snapshot,update,check,bom,candidate-bom} ...";
+const USAGE: &str = "usage: copper assembly [-h] {snapshot,update,check,bom,candidate-bom,offers} ...";
+const ACTIONS: [&str; 6] = ["snapshot", "update", "check", "bom", "candidate-bom", "offers"];
+const OFFERS_USAGE: &str = "usage: copper assembly offers [-h] [--lock LOCK] [-o OUTPUT] [--distributors NAMES] \
+[--provider NAMES] [--quantity BOARDS] [--min-stock N] [--within-weeks W] [--country CC] [--currency CUR] \
+[--write-alternates] board
+
+Look up live distributor offers for every fitted manufacturer part in the lock
+from each configured provider: digikey (DIGIKEY_CLIENT_ID, DIGIKEY_CLIENT_SECRET),
+mouser (MOUSER_API_KEY), farnell (FARNELL_API_KEY, optional FARNELL_STORE) and
+nexar/Octopart (NEXAR_CLIENT_ID, NEXAR_CLIENT_SECRET). --provider limits the
+lookup to the named ones. Writes a timestamped report, by default under the
+board's build/assembly-offers/. --write-alternates adds offers for the same
+manufacturer part from distributors not yet listed on a selection; nothing
+else in the lock changes.";
 
 fn specs(action: &str) -> Vec<Spec> {
     let mut specs = vec![flag("--locked"), flag("--offline")];
@@ -28,6 +43,18 @@ fn specs(action: &str) -> Vec<Spec> {
             short_value("--output", "-o"),
             value("--hand-assembly"),
             value("--ordering"),
+        ]),
+        "offers" => specs.extend([
+            value("--lock"),
+            short_value("--output", "-o"),
+            value("--distributors"),
+            value("--provider"),
+            value("--quantity"),
+            value("--min-stock"),
+            value("--within-weeks"),
+            value("--country"),
+            value("--currency"),
+            flag("--write-alternates"),
         ]),
         _ => specs.extend([value("--lock"), short_value("--output", "-o"), value("--positions")]),
     }
@@ -59,12 +86,13 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(out, "{USAGE}\n\npin and check explicit assembly selections offline");
         return 0;
     }
-    if !["snapshot", "update", "check", "bom", "candidate-bom"].contains(&action.as_str()) {
+    if !ACTIONS.contains(&action.as_str()) {
         return usage_error(
             err,
             &format!(
                 "argument assembly_command: invalid choice: '{action}' \
-                 (choose from snapshot, update, check, bom, candidate-bom)"
+                 (choose from {})",
+                ACTIONS.join(", ")
             ),
         );
     }
@@ -73,8 +101,29 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         Err(message) => return usage_error(err, &message),
     };
     if parsed.flag("--help") {
-        let _ = writeln!(out, "usage: copper assembly {action} [-h] [--locked] [--offline] ... board");
+        if action == "offers" {
+            let _ = writeln!(out, "{OFFERS_USAGE}");
+        } else {
+            let _ = writeln!(out, "usage: copper assembly {action} [-h] [--locked] [--offline] ... board");
+        }
         return 0;
+    }
+    if action == "offers" {
+        let board = match parsed.positionals.as_slice() {
+            [board] => board.clone(),
+            [_, extra @ ..] => return usage_error(err, &format!("unrecognized arguments: {}", extra.join(" "))),
+            [] => return usage_error(err, "the following arguments are required: board"),
+        };
+        if parsed.flag("--offline") {
+            return usage_error(err, "offers queries the Nexar API and cannot run --offline");
+        }
+        return match run_offers(&parsed, &board, out) {
+            Ok(code) => code,
+            Err(AssemblyError(message)) => {
+                let _ = text::print(out, &format!("ASSEMBLY ERROR: {message}"));
+                2
+            }
+        };
     }
     let required: &[&str] = match action.as_str() {
         "snapshot" => &["--output"],
@@ -288,4 +337,146 @@ fn execute(
             text::print(out, &format!("Generated ordering list -> {}; {total} component(s) with sourcing", path.shown));
     }
     Ok(0)
+}
+
+fn count_option(parsed: &option_parser::Parsed, name: &str) -> Result<Option<u64>, AssemblyError> {
+    parsed
+        .value(name)
+        .map(|text| text.parse::<u64>().map_err(|_| AssemblyError(format!("{name} must be a whole number"))))
+        .transpose()
+}
+
+/// `assembly offers`: never compiles the board and never runs from any other
+/// action; the lock alone names what to look up.
+fn run_offers(parsed: &option_parser::Parsed, board: &str, out: &mut dyn Write) -> Result<u8, AssemblyError> {
+    let board_path = PathArg::new(board);
+    let directory = copper_assembly::files::parent(&board_path.path);
+    let in_directory = |name: &str| {
+        let path = directory.join(name);
+        PathArg { shown: path.display().to_string(), path }
+    };
+    let lock_path = parsed.value("--lock").map(PathArg::new).unwrap_or_else(|| in_directory("assembly.lock"));
+    let quantity = count_option(parsed, "--quantity")?.unwrap_or(1);
+    if quantity == 0 {
+        return Err(AssemblyError("--quantity must be at least 1".into()));
+    }
+    let criteria = offers::Criteria {
+        quantity,
+        min_stock: count_option(parsed, "--min-stock")?,
+        within_weeks: count_option(parsed, "--within-weeks")?,
+    };
+    let locale = offers::Locale {
+        country: parsed.value("--country").unwrap_or("US").to_owned(),
+        currency: parsed.value("--currency").unwrap_or("USD").to_owned(),
+    };
+    let list = |name: &str| -> Option<Vec<String>> {
+        parsed
+            .value(name)
+            .map(|names| names.split(',').map(str::trim).filter(|name| !name.is_empty()).map(str::to_owned).collect())
+    };
+    let lock = assembly::load_lock(&lock_path.path, &lock_path.shown)?;
+    let write_alternates = parsed.flag("--write-alternates");
+    if write_alternates {
+        // Refuse before any network call, and never reformat a hand-edited lock.
+        let current = std::fs::read_to_string(&lock_path.path)
+            .map_err(|failure| AssemblyError(copper_assembly::files::open_error(&failure, &lock_path.shown)))?;
+        if lock.electrical_sha256.is_some()
+            || copper_assembly::files::universal_newlines(&current) != assembly::lock_to_json(&lock)
+        {
+            return Err(AssemblyError(format!(
+                "--write-alternates rewrites only a canonical {} lock; run `copper assembly update` first",
+                assembly::SCHEMA
+            )));
+        }
+    }
+    let distributors: Vec<String> = list("--distributors").unwrap_or_else(|| offers::lock_distributors(&lock));
+    if distributors.is_empty() {
+        return Err(AssemblyError("no distributors to look up; pass --distributors".into()));
+    }
+    let (lines, unidentified) = offers::lines(&lock);
+    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let generated_at = offers::utc_timestamp(seconds);
+    let output = parsed.value("--output").map(PathArg::new).unwrap_or_else(|| {
+        let stamp: String = generated_at.chars().filter(|c| *c != '-' && *c != ':').collect();
+        in_directory(&format!("build/assembly-offers/offers-{stamp}.json"))
+    });
+
+    let providers = offers::enabled_providers(list("--provider").as_deref(), &locale)?;
+    let (results, used, provider_errors) = offers::fetch_all(&offers::Curl, &providers, &lines, &distributors)?;
+
+    let request = offers::Request {
+        board: &lock.board,
+        lock: &lock_path.shown,
+        generated_at: &generated_at,
+        distributors: &distributors,
+        providers: &used,
+        provider_errors: &provider_errors,
+        locale: &locale,
+        criteria,
+    };
+    copper_assembly::files::mkdir_parents(&copper_assembly::files::parent(&output.path), true, true)
+        .map_err(AssemblyError)?;
+    text::write_text(&output.path, &offers::report(&request, &results, &unidentified))
+        .map_err(|failure| AssemblyError(copper_assembly::files::open_error(&failure, &output.shown)))?;
+    let short = offers::shortfalls(&results, &criteria);
+    let _ = text::print(
+        out,
+        &format!(
+            "Offers for {} part(s) from {} via {} at {generated_at} -> {}; {} without an adequate offer for \
+             {quantity} board(s); live data, not a reservation",
+            results.len(),
+            distributors.join(", "),
+            used.join(", "),
+            output.shown,
+            short.len()
+        ),
+    );
+    for (provider, message) in &provider_errors {
+        let _ = text::print(out, &format!("PROVIDER ERROR: {provider}: {message}; its offers are missing"));
+    }
+    for result in short.iter().take(40) {
+        let _ = text::print(
+            out,
+            &format!(
+                "SHORT: {} {} ({}): {}",
+                result.line.manufacturer,
+                result.line.mpn,
+                result.line.references.join(", "),
+                offers::shortfall_reason(result)
+            ),
+        );
+    }
+    if short.len() > 40 {
+        let _ = text::print(out, &format!("... and {} more", short.len() - 40));
+    }
+    if !unidentified.is_empty() {
+        let _ = text::print(out, &format!("UNIDENTIFIED (no manufacturer and MPN): {}", unidentified.join(", ")));
+    }
+    if write_alternates {
+        let (updated, added) = offers::add_alternates(&lock, &results, &distributors, &criteria)?;
+        if !added.is_empty() {
+            // Replace the lock only once the new one is fully written.
+            let staged = lock_path.path.with_extension("lock.offers");
+            let failed =
+                |failure: std::io::Error| AssemblyError(copper_assembly::files::open_error(&failure, &lock_path.shown));
+            std::fs::write(&staged, assembly::lock_to_json(&updated)).map_err(failed)?;
+            std::fs::rename(&staged, &lock_path.path).map_err(failed)?;
+        }
+        let _ = text::print(
+            out,
+            &format!(
+                "Added {} alternate offer(s) -> {}; selections and reviews unchanged",
+                added.len(),
+                lock_path.shown
+            ),
+        );
+        for (reference, supplier, code) in added.iter().take(40) {
+            let _ = text::print(out, &format!("ADDED: {reference}: {supplier} {code}"));
+        }
+        if added.len() > 40 {
+            let _ = text::print(out, &format!("... and {} more", added.len() - 40));
+        }
+    }
+    let gated = criteria.min_stock.is_some() || criteria.within_weeks.is_some();
+    Ok(if gated && !short.is_empty() { 1 } else { 0 })
 }

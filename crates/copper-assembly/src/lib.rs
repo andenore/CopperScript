@@ -11,4 +11,5 @@ pub mod csv;
 pub mod deflate;
 pub mod files;
 pub mod manufacturing;
+pub mod offers;
 pub mod zip;
