@@ -77,5 +77,5 @@ board CM4Baseboard {
     constraint fixed_placement(C_VREF) { x = 6mm; y = 46mm; rotation = 90; side = front; }
     constraint fixed_placement(R_LED) { x = 6mm; y = 38mm; rotation = 90; side = front; }
     constraint fixed_placement(D1) { x = 6mm; y = 34mm; rotation = 90; side = front; }
-    constraint copper_zone(GND) { layers = "In1.Cu,B.Cu"; inset = 0.5mm; pad_connection = solid; }
+    constraint copper_zone(GND) { layers = "In1.Cu,B.Cu"; inset = 0.5mm; }
 }

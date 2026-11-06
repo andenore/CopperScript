@@ -223,9 +223,9 @@ board Fx10Bridge {
     }
 
     // Six-layer stack: In1.Cu ground reference under the USB pairs, In3.Cu core plane.
-    constraint copper_zone(GND) { id = "ground-reference"; layers = "In1.Cu"; inset = 0.5mm; pad_connection = solid; }
+    constraint copper_zone(GND) { id = "ground-reference"; layers = "In1.Cu"; inset = 0.5mm; }
     constraint copper_zone(VCORE) {
-        id = "core-plane"; layers = "In3.Cu"; inset = 0.5mm; pad_connection = solid; island_policy = "remove_all";
+        id = "core-plane"; layers = "In3.Cu"; inset = 0.5mm; island_policy = "remove_all";
     }
 
     // JLCPCB six-layer floors with its 0.45 mm / 0.2 mm multilayer via: the

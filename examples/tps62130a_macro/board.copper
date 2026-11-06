@@ -17,7 +17,7 @@ board BuckLayoutTrial {
     supply VOUT { voltage = 1.2V; source = B.VOUT; }
     supply GND { voltage = 0V; external = true; }
 
-    constraint copper_zone(GND) { layers = "In1.Cu,In4.Cu"; pad_connection = solid; }
+    constraint copper_zone(GND) { layers = "In1.Cu,In4.Cu"; }
     constraint via_in_pad(B/U.EP) { process = "filled-capped"; }
     constraint routing(VIN) { width = 0.25mm; }
     constraint routing(VOUT) { width = 0.25mm; }

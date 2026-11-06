@@ -791,7 +791,7 @@ fn definition_catalog(scene: &Object) -> Vec<Value> {
                 ("priority", "0"),
                 ("clearance", "0.2 mm"),
                 ("minimum_width", "0.2 mm"),
-                ("pad_connection", "solid"),
+                ("pad_connection", "thermal"),
             ]),
         ),
         ("keepout", texts(&[("layers", &layers), ("vertices", vertices)])),

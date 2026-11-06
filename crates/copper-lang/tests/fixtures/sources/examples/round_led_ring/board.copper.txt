@@ -1,0 +1,141 @@
+// Deprecated fixture: use https://github.com/andenore/CopperLedRing for board work.
+// Retained for compiler regression coverage and existing commands.
+// 12 independent, low-current red LED channels on a 50 mm circular board.
+// Outline, ring poses and ground-pour intent are declared below.
+// CR2032 is primary (not rechargeable). SWD VREF is sense only; no power injection.
+board RoundLedRing {
+    // Keep branding inside the open centre, clear of the circular LED rim.
+    silkscreen { branding { position = (30mm, 27mm); size = 8mm; layout = stacked; } }
+    use library "tiny";
+    import nordic "github.com/andenore/CopperLib/packages/parts/nordic/nrf52832";
+    import keystone "github.com/andenore/CopperLib/packages/parts/keystone/3034";
+    import swd "github.com/andenore/CopperLib/packages/interfaces/arm/swd-10pin";
+    import generic_led "github.com/andenore/CopperLib/packages/generic/led-0603";
+
+    component U1: nordic.NRF52832_QFAA;
+    component BT1: keystone.KEYSTONE_3034;
+    component J_SWD: swd.SWD_HEADER;
+    // Generic red 0603 references, not yet orderable LED selections.
+    component LED1: generic_led.LED;
+    component LED2: generic_led.LED;
+    component LED3: generic_led.LED;
+    component LED4: generic_led.LED;
+    component LED5: generic_led.LED;
+    component LED6: generic_led.LED;
+    component LED7: generic_led.LED;
+    component LED8: generic_led.LED;
+    component LED9: generic_led.LED;
+    component LED10: generic_led.LED;
+    component LED11: generic_led.LED;
+    component LED12: generic_led.LED;
+    component R_LED1: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED2: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED3: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED4: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED5: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED6: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED7: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED8: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED9: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED10: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED11: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    component R_LED12: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+    // QFAA LDO support. DEC2/DCC unused; firmware must keep DC/DC disabled.
+    component C_DEC1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_DEC3: CAPACITOR { value = 100pF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_DEC4: CAPACITOR { value = 1uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component C_VDD1: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_VDD2: CAPACITOR { value = 100nF; footprint = "Capacitor_SMD:C_0402_1005Metric"; }
+    component C_BULK: CAPACITOR { value = 4.7uF; footprint = "Capacitor_SMD:C_0603_1608Metric"; }
+    component R_RESET: RESISTOR { value = 10kohm; footprint = "Resistor_SMD:R_0603_1608Metric"; }
+
+    net VBAT {
+        BT1.POS; U1.VDD_1; U1.VDD_2; U1.VDD_3; J_SWD.VREF;
+        C_VDD1.1; C_VDD2.1; C_BULK.1; R_RESET.1;
+        R_LED1.1; R_LED2.1; R_LED3.1; R_LED4.1; R_LED5.1; R_LED6.1;
+        R_LED7.1; R_LED8.1; R_LED9.1; R_LED10.1; R_LED11.1; R_LED12.1;
+    }
+    net GND {
+        BT1.NEG; U1.VSS_1; U1.VSS_2; U1.VSS_EP;
+        J_SWD.GND; J_SWD.GND_5; J_SWD.GND_DETECT;
+        C_DEC1.2; C_DEC3.2; C_DEC4.2; C_VDD1.2; C_VDD2.2; C_BULK.2;
+    }
+    net DEC1 { U1.DEC1; C_DEC1.1; }
+    net DEC3 { U1.DEC3; C_DEC3.1; }
+    net DEC4 { U1.DEC4; C_DEC4.1; }
+    net RESET { U1.P0_21_NRESET; J_SWD.RESET; R_RESET.2; }
+    net SWDIO { U1.SWDIO; J_SWD.SWDIO; }
+    net SWDCLK { U1.SWDCLK; J_SWD.SWDCLK; }
+    // Clockwise from 12 o'clock. GPIO sinks current: output LOW turns on.
+    net LED1_K { U1.P0_28; LED1.K; }
+    net LED2_K { U1.P0_26; LED2.K; }
+    net LED3_K { U1.P0_25; LED3.K; }
+    net LED4_K { U1.P0_24; LED4.K; }
+    net LED5_K { U1.P0_22; LED5.K; }
+    net LED6_K { U1.P0_20; LED6.K; }
+    net LED7_K { U1.P0_17; LED7.K; }
+    net LED8_K { U1.P0_14; LED8.K; }
+    net LED9_K { U1.P0_06; LED9.K; }
+    net LED10_K { U1.P0_03; LED10.K; }
+    net LED11_K { U1.P0_02; LED11.K; }
+    net LED12_K { U1.P0_30; LED12.K; }
+    net LED1_A { R_LED1.2; LED1.A; }
+    net LED2_A { R_LED2.2; LED2.A; }
+    net LED3_A { R_LED3.2; LED3.A; }
+    net LED4_A { R_LED4.2; LED4.A; }
+    net LED5_A { R_LED5.2; LED5.A; }
+    net LED6_A { R_LED6.2; LED6.A; }
+    net LED7_A { R_LED7.2; LED7.A; }
+    net LED8_A { R_LED8.2; LED8.A; }
+    net LED9_A { R_LED9.2; LED9.A; }
+    net LED10_A { R_LED10.2; LED10.A; }
+    net LED11_A { R_LED11.2; LED11.A; }
+    net LED12_A { R_LED12.2; LED12.A; }
+
+    supply VBAT { voltage = 3V; external = true; }
+    supply GND { voltage = 0V; external = true; }
+
+    // LED controller only: internal clocks; ANT/XC1/XC2 unconnected, radio off.
+    // Offsets keep the MCU copper projection clear of all rear holder contacts.
+    constraint fixed_placement(U1) { x = 13.5mm; y = 25mm; rotation = 0; side = front; }
+    constraint fixed_placement(BT1) { x = 29mm; y = 25mm; rotation = 0; side = back; }
+    constraint fixed_placement(J_SWD) { x = 25mm; y = 16mm; rotation = 0; side = front; }
+    constraint fixed_placement(C_DEC1) { x = 8.5mm; y = 22.5mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_DEC3) { x = 18.2mm; y = 27.5mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_DEC4) { x = 11.5mm; y = 19.2mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_VDD1) { x = 8.5mm; y = 27.5mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_VDD2) { x = 18.3mm; y = 24mm; rotation = 90; side = front; }
+    constraint fixed_placement(C_BULK) { x = 14.5mm; y = 20mm; rotation = 0; side = front; }
+    constraint fixed_placement(R_RESET) { x = 9.5mm; y = 30mm; rotation = 0; side = front; }
+
+    mechanical {
+        outline circle { center = (25mm, 25mm); diameter = 50mm; }
+        rules { minimum_track_width = 0.15mm; minimum_clearance = 0.15mm; }
+    }
+    constraint copper_zone(GND) { layers = "B.Cu"; inset = 0.5mm; pad_connection = solid; }
+
+    constraint fixed_placement(LED1) { x = 25.000000mm; y = 3.000000mm; rotation = 90; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED1) { x = 25.000000mm; y = 6.800000mm; rotation = 90; side = front; }
+    constraint fixed_placement(LED2) { x = 36.000000mm; y = 5.947441mm; rotation = 60; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED2) { x = 34.100000mm; y = 9.238338mm; rotation = 60; side = front; }
+    constraint fixed_placement(LED3) { x = 44.052559mm; y = 14.000000mm; rotation = 30; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED3) { x = 40.761662mm; y = 15.900000mm; rotation = 30; side = front; }
+    constraint fixed_placement(LED4) { x = 47.000000mm; y = 25.000000mm; rotation = 0; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED4) { x = 43.200000mm; y = 25.000000mm; rotation = 0; side = front; }
+    constraint fixed_placement(LED5) { x = 44.052559mm; y = 36.000000mm; rotation = 330; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED5) { x = 40.761662mm; y = 34.100000mm; rotation = 330; side = front; }
+    constraint fixed_placement(LED6) { x = 36.000000mm; y = 44.052559mm; rotation = 300; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED6) { x = 34.100000mm; y = 40.761662mm; rotation = 300; side = front; }
+    constraint fixed_placement(LED7) { x = 25.000000mm; y = 47.000000mm; rotation = 270; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED7) { x = 25.000000mm; y = 43.200000mm; rotation = 270; side = front; }
+    constraint fixed_placement(LED8) { x = 14.000000mm; y = 44.052559mm; rotation = 240; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED8) { x = 15.900000mm; y = 40.761662mm; rotation = 240; side = front; }
+    constraint fixed_placement(LED9) { x = 5.947441mm; y = 36.000000mm; rotation = 210; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED9) { x = 9.238338mm; y = 34.100000mm; rotation = 210; side = front; }
+    constraint fixed_placement(LED10) { x = 3.000000mm; y = 25.000000mm; rotation = 180; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED10) { x = 6.800000mm; y = 25.000000mm; rotation = 180; side = front; }
+    constraint fixed_placement(LED11) { x = 5.947441mm; y = 14.000000mm; rotation = 150; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED11) { x = 9.238338mm; y = 15.900000mm; rotation = 150; side = front; }
+    constraint fixed_placement(LED12) { x = 14.000000mm; y = 5.947441mm; rotation = 120; side = front; edge_clearance = 1mm; }
+    constraint fixed_placement(R_LED12) { x = 15.900000mm; y = 9.238338mm; rotation = 120; side = front; }
+}

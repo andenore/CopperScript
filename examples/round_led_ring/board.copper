@@ -112,7 +112,7 @@ board RoundLedRing {
         outline circle { center = (25mm, 25mm); diameter = 50mm; }
         rules { minimum_track_width = 0.15mm; minimum_clearance = 0.15mm; }
     }
-    constraint copper_zone(GND) { layers = "B.Cu"; inset = 0.5mm; pad_connection = solid; }
+    constraint copper_zone(GND) { layers = "B.Cu"; inset = 0.5mm; }
 
     constraint fixed_placement(LED1) { x = 25.000000mm; y = 3.000000mm; rotation = 90; side = front; edge_clearance = 1mm; }
     constraint fixed_placement(R_LED1) { x = 25.000000mm; y = 6.800000mm; rotation = 90; side = front; }
