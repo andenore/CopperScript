@@ -15,7 +15,11 @@
 # Requires bash, git, jq, zip and sha256sum (or shasum).
 set -o pipefail
 
-die() { echo "RELEASE ERROR: $*" >&2; exit 2; }
+# Paths this run claimed exclusively (the bundle directory, its zip and the
+# zip's scratch directory); only they are removed on failure, so the name
+# can be reused.
+claimed=()
+die() { echo "RELEASE ERROR: $*" >&2; [ "${#claimed[@]}" -eq 0 ] || rm -rf "${claimed[@]}"; exit 2; }
 sha256() { if command -v sha256sum > /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 sha256sums() { if command -v sha256sum > /dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 absolute() { if [ -d "$1" ]; then (cd "$1" && pwd -P); else echo "$(cd "$(dirname "$1")" && pwd -P)/$(basename "$1")"; fi; }
@@ -90,16 +94,26 @@ if [ "${#drift[@]}" -gt 0 ] && [ "$accept_drift" -ne 1 ]; then
   die "the board was routed from inputs that differ from HEAD: ${drift[*]}."$'\n'"Route and order again, or confirm the changes leave the fabricated board unchanged and rerun with RELEASE_ACCEPT_DRIFT=1"
 fi
 
-mkdir -p "$bundle/route" "$bundle/bom" "$bundle/orders" || die "cannot create $bundle"
-cp -a "$fab_dir" "$bundle/fab"
+# Claim the bundle and its zip atomically: another release of the same name
+# may have started since the check above, and its files are not ours.
+mkdir -p "$output_root" || die "cannot create $output_root"
+mkdir "$bundle" 2> /dev/null || die "$bundle already exists; a release bundle is never overwritten"
+claimed+=("$bundle")
+(set -o noclobber; : > "$bundle.zip") 2> /dev/null || die "$bundle.zip already exists; a release bundle is never overwritten"
+claimed+=("$bundle.zip")
+mkdir "$bundle/route" "$bundle/bom" "$bundle/orders" || die "cannot create $bundle"
+# Every copy is checked: the bundle's SHA256SUMS would otherwise vouch for a
+# partial copy.
+cp -a "$fab_dir" "$bundle/fab" || die "cannot copy $fab_dir"
+diff -rq "$fab_dir" "$bundle/fab" > /dev/null || die "the copy of $fab_dir differs from it"
 for file in run.json route-report.summary.json kicad-drc.json routing.log fill.log; do
-  [ -f "$run/$file" ] && cp "$run/$file" "$bundle/route/"
+  if [ -f "$run/$file" ]; then cp "$run/$file" "$bundle/route/" || die "cannot copy $run/$file"; fi
 done
-cp "$run"/*.via-process.json "$bundle/route/" 2> /dev/null
-for file in "$order_dir"/*.csv "$order_dir"/assembly-report.json; do
-  [ -f "$file" ] && cp "$file" "$bundle/bom/"
+for file in "$run"/*.via-process.json "$order_dir"/*.csv "$order_dir"/assembly-report.json; do
+  case "$file" in "$run"/*) target="$bundle/route/" ;; *) target="$bundle/bom/" ;; esac
+  if [ -f "$file" ]; then cp "$file" "$target" || die "cannot copy $file"; fi
 done
-[ -n "$lock" ] && [ -f "$lock" ] && cp "$lock" "$bundle/bom/"
+if [ -n "$lock" ] && [ -f "$lock" ]; then cp "$lock" "$bundle/bom/" || die "cannot copy $lock"; fi
 
 remote="$(git remote get-url origin 2> /dev/null || echo none)"
 routed_commit="$(jq -r '.provenance.git_commit // "unknown"' "$run/run.json")"
@@ -157,10 +171,18 @@ bom_lines=""
   echo "| \`bom/\` | Ordering and hand-assembly lists$([ -n "$bom_lines" ] && echo " ($bom_lines ordering lines)"), assembly report and lock |"
   echo "| \`orders/\` | Order confirmations (add them) |"
   echo "| \`SHA256SUMS\` | Checksums of every file in this bundle |"
-} > "$bundle/RELEASE.md"
+} > "$bundle/RELEASE.md" || die "cannot write $bundle/RELEASE.md"
 
-(cd "$bundle" && find . -type f ! -name SHA256SUMS | LC_ALL=C sort | while IFS= read -r file; do sha256sums "$file"; done > SHA256SUMS) || die "checksums failed"
-(cd "$output_root" && zip -qr "$name.zip" "$name") || die "zip failed"
+(cd "$bundle" && find . -type f ! -name SHA256SUMS | LC_ALL=C sort | while IFS= read -r file; do sha256sums "$file" || exit 1; done > SHA256SUMS) || die "checksums failed"
+# The archive is made in a scratch directory this run creates (mktemp -d
+# refuses an existing path), beside the bundle so the move stays on one
+# filesystem, and then replaces the claimed placeholder.
+scratch="$(mktemp -d "$output_root/.$name.zip.XXXXXX")" || die "cannot create a scratch directory in $output_root"
+claimed+=("$scratch")
+(cd "$output_root" && zip -qr "$(basename "$scratch")/$name.zip" "$name") || die "zip failed"
+mv -f "$scratch/$name.zip" "$bundle.zip" || die "cannot move the zip into place"
+rmdir "$scratch" || die "cannot remove $scratch"
+claimed=()
 
 cat << EOF
 Release bundle -> $bundle ($bundle.zip)
