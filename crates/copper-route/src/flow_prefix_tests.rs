@@ -269,6 +269,28 @@ fn the_direct_pipeline_keeps_every_lattice_dogbone() {
 }
 
 #[test]
+fn placement_feedback_ranks_a_lost_retention_policy_first() {
+    let policy = |requested: bool| RetainedEscapePolicy {
+        requested,
+        applicability: "applicable",
+        reason: "",
+        recognized_packages: 1,
+        mandatory_inner_obligations: 1,
+        censused_obligations: 1,
+        unsupported_pattern_candidates: 0,
+        unsupported_pattern_components: Vec::new(),
+        allocated_inner_sites: 1,
+        existing_inner_launches: 0,
+        pending_inner: Vec::new(),
+    };
+    let board = recognized_inner_scene();
+    // Requested, but no admitted prefix: the final pass would fail.
+    assert_eq!(retention_rank(&policy(true), None, &board), 1);
+    // Not requested: nothing to lose.
+    assert_eq!(retention_rank(&policy(false), None, &board), 0);
+}
+
+#[test]
 fn retention_scope_non_bga_keeps_legacy_pipeline_geometry_and_reports_not_applicable() {
     let (source, _) = crate::test_support_planes::support_planes::decoupling::crosslayer(false, true);
     let global_route = crate::route_global(&source, &GlobalRouterOptions::default(), None, None, None).unwrap();

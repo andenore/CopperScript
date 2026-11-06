@@ -2118,7 +2118,15 @@ pub fn run_routing_pipeline_staged(
                 ),
             })
         };
-        let score = |state: &FeedbackState<TailPayload>| feedback_score(&state.critical, &state.detailed, &state.drc);
+        // The run passes only if the requested escape-retention policy holds,
+        // so a trial that loses it never displaces one that keeps it.
+        let score = |state: &FeedbackState<TailPayload>| {
+            let (prefix, policy) = (&state.payload.3, &state.payload.4);
+            let mut score = vec![retention_rank(policy, prefix.as_ref(), &state.detailed.board)];
+            score.extend(feedback_score(&state.critical, &state.detailed, &state.drc)?);
+            debug_assert_eq!(score.len(), SCORE_ORDER.len(), "one SCORE_ORDER label per score component");
+            Ok(score)
+        };
         let looped = crate::congestion_feedback::run_placement_feedback(
             state,
             feedback_budget,
@@ -2321,8 +2329,10 @@ fn route_tail(
     })
 }
 
-/// Meaning of each acceptance score component (`_feedback_score`); lower is better.
-pub const SCORE_ORDER: [&str; 7] = [
+/// Meaning of each acceptance score component (`retention_rank`, then
+/// `_feedback_score`); lower is better.
+pub const SCORE_ORDER: [&str; 8] = [
+    "retention_policy_unmet",
     "hard_drc_errors",
     "open_signal_nets",
     "critical_failures",
@@ -2331,6 +2341,18 @@ pub const SCORE_ORDER: [&str; 7] = [
     "total_length_nm",
     "vias",
 ];
+
+/// 0 when a routed result satisfies the requested escape-retention policy
+/// (as the final pass requires), 1 when it does not: the leading, most
+/// significant placement-feedback score.
+fn retention_rank(
+    policy: &RetainedEscapePolicy,
+    prefix: Option<&crate::fixed_prefix::AdmittedFixedPrefix>,
+    board: &PhysicalBoard,
+) -> i64 {
+    let preserved = prefix.is_some_and(|prefix| prefix.missing_copper_occurrences(board) == (0, 0));
+    i64::from(!policy.requested_policy_satisfied(preserved))
+}
 
 /// `_feedback_score`: the acceptance tuple of the placement feedback loop.
 fn feedback_score(
