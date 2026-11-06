@@ -149,6 +149,11 @@ impl ProjectSnapshot {
             if !safe_path(module) {
                 return Err(fail("unsafe module identity"));
             }
+            // KiCad's 3D library holds no sources and is locked per model file
+            // (`sparse-git:`); this electrical snapshot loads no physical assets.
+            if packages::is_sparse_module(module) {
+                continue;
+            }
             let Some(locked) = locks.get(&(module.clone(), version.clone())) else { continue };
             let local = manifest.replacements.get(module);
             let remote = manifest.remote_replacements.get(module);
@@ -418,6 +423,34 @@ mod tests {
                 .message
                 .contains("locked source differs")
         );
+    }
+    #[test]
+    fn a_required_3d_model_library_does_not_block_the_snapshot() {
+        const MODELS: &str = "github.com/KiCad/kicad-packages3D";
+        let mut raw = fixture();
+        let Value::Object(fields) = &mut raw else { panic!() };
+        let model = "Package_SO.3dshapes/SOIC-8_3.9x4.9mm_P1.27mm.step";
+        let files = vec![LockedFile { path: model.into(), size: 4, sha256: hash(b"STEP") }];
+        let sparse = packages::LockedModule {
+            module_path: MODELS.into(),
+            version: "10.0.8".into(),
+            source: "replace:sparse-git:https://gitlab.com/kicad/libraries/kicad-packages3D.git@10.0.8".into(),
+            checksum: packages::inventory_checksum(&files),
+            files,
+        };
+        let mut locks = packages::parse_lock(fields["lock"].as_str().unwrap(), Path::new("copper.lock")).unwrap();
+        locks.insert((MODELS.into(), "10.0.8".into()), sparse);
+        fields.insert("lock".into(), Value::from(packages::lock_text(&locks)));
+        fields.insert(
+            "manifest".into(),
+            Value::from(format!(
+                "module github.com/acme/board\nrequire {MODULE} {VERSION}\nrequire {MODELS} 10.0.8\n\
+                 replace {MODELS} => gitlab.com/kicad/libraries/kicad-packages3D 10.0.8"
+            )),
+        );
+        let project = snapshot(&raw);
+        assert!(!project.source.module_roots.contains_key(MODELS));
+        assert!(project.source.module_roots.contains_key(MODULE));
     }
     #[test]
     fn relative_imports_cannot_escape_workspace_and_cycles_remain_compiler_errors() {
