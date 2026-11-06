@@ -272,7 +272,7 @@ pub(crate) fn check_arcs(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> 
                 continue;
             }
             let measured = shape_distance(&geometry, &shape(keepout.vertices.clone(), 0)?);
-            if measured < half as f64 + ARC_DISTANCE_EPSILON_NM {
+            if short(measured, half) {
                 findings.push(
                     Finding::error("DRC-COPPER-KEEPOUT", format!("arc {index} enters copper keepout {}", keepout.id))
                         .objects([keepout.id.clone(), object.clone()])

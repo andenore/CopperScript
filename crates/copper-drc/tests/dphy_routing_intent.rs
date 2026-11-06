@@ -5,7 +5,8 @@
 use copper_drc::{CoverageStatus, Policy, Severity, run_physical_drc, signal_integrity::verify_match_groups};
 use copper_lang::compiler::{Design, compile_design_source};
 use copper_pcb::board::{
-    NetMatchGroup, NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, Placement, RouteKind, TrackSegment, Via,
+    NetMatchGroup, NetRoutingRule, PadReference, PhysicalBoard, PhysicalNet, Placement, RouteKind, TrackArc,
+    TrackSegment, Via,
 };
 use copper_pcb::physicalize::{Footprints, PhysicalOptions, physicalize, revalidate};
 use copper_physical::footprint::{FootprintPad, PadKind, PadShape, PhysicalFootprint, Size};
@@ -576,4 +577,40 @@ fn vias_below_the_fabrication_minimum_are_findings() {
     // Via-in-pad array vias are a separate process.
     board.vias = vec![Via { finish: "filled-capped".to_owned(), ..via("0.3", "0.2") }];
     assert_eq!(codes(&board), Vec::new());
+}
+
+#[test]
+fn an_arc_just_outside_a_keepout_passes_and_one_just_inside_fails() {
+    // A quarter arc about (5, 6) mm of radius 1 mm, 0.2 mm wide: it ends at
+    // (6, 6) heading +y, so its copper reaches x = 6.1 mm there.
+    let mut board = routed_lanes(&[("CKP", "10")], "1");
+    let half_root = 707_107;
+    board.arcs = vec![TrackArc {
+        net: "CKP".to_owned(),
+        start: Point::new(5 * MM, 5 * MM),
+        mid: Point::new(5 * MM + half_root, 6 * MM - half_root),
+        end: Point::new(6 * MM, 6 * MM),
+        width_nm: 200_000,
+        layer: CopperLayer::Front,
+    }];
+    let keepout = |x0: i64| copper_physical::CopperKeepout {
+        id: "k".to_owned(),
+        layers: vec![CopperLayer::Front],
+        vertices: vec![
+            Point::new(x0, 5 * MM),
+            Point::new(x0 + MM, 5 * MM),
+            Point::new(x0 + MM, 7 * MM),
+            Point::new(x0, 7 * MM),
+        ],
+        block_tracks: true,
+        block_vias: true,
+        block_pads: false,
+        block_zones: false,
+        block_footprints: false,
+    };
+    let entered = |board: &PhysicalBoard| drc(board).findings.iter().any(|f| f.code == "DRC-COPPER-KEEPOUT");
+    board.copper_keepouts = vec![keepout(6 * MM + 100_005)];
+    assert!(!entered(&board), "copper 5 nm outside the keepout");
+    board.copper_keepouts = vec![keepout(6 * MM + 99_900)];
+    assert!(entered(&board), "copper 100 nm inside the keepout");
 }
