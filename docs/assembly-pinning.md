@@ -33,8 +33,11 @@ supplier, supplier part and source URL. Use it to quote, buy spares or
 re-order; the supplier BOM and hand-assembly list remain the files the
 assembler and the hand-fitter work from.
 
-`--assembly-sheet` writes `copperscript.assembly-sheet/v1`, the input for
-tracking a manual build in CopperReview's **Assembly** mode. It lists every
+CopperReview's **Assembly** mode tracks a manual build from `assembly.lock`
+itself (picked up from a project folder, or opened beside the board), taking
+values from the board. That skips `assembly check`. `--assembly-sheet` writes
+the checked equivalent, `copperscript.assembly-sheet/v1`, which opens the same
+way and keeps the same progress. It lists every
 selection once, sorted by board designator, with:
 
 | Field | Meaning |
