@@ -129,7 +129,15 @@ impl<'a> Filler<'a> {
             let (za, zb) = (&board.zones[a], &board.zones[b]);
             (zb.priority, &zb.uuid).cmp(&(za.priority, &za.uuid))
         });
-        Ok(Filler { board, rules, max_error, board_area, worst: rules.worst_clearance(), order })
+        // Local zone, pad and footprint clearances can exceed every rule.
+        let local = board
+            .zones
+            .iter()
+            .filter_map(|zone| zone.clearance)
+            .chain(board.pads().filter_map(|(footprint, pad)| pad.zones.clearance.or(footprint.zones.clearance)))
+            .max()
+            .unwrap_or(0);
+        Ok(Filler { board, rules, max_error, board_area, worst: rules.worst_clearance().max(local), order })
     }
 
     fn zone_item(zone: &'a Zone) -> Item<'a> {
@@ -1025,7 +1033,11 @@ mod tests {
     /// through-hole pad at (15, 15) joined by thermal reliefs. The strip
     /// beyond y = 17 reaches no GND pad.
     fn board(connection: &str) -> Board {
-        let text = format!(
+        parse_board(&source(connection), "test").unwrap()
+    }
+
+    fn source(connection: &str) -> String {
+        format!(
             "(kicad_pcb (version 20260206)
   (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal) (25 \"Edge.Cuts\" user))
   (footprint \"L:P\" (layer \"F.Cu\") (at 5 5)
@@ -1041,8 +1053,7 @@ mod tests {
     (min_thickness 0.25) (filled_areas_thickness no)
     (fill yes (thermal_gap 0.4) (thermal_bridge_width 0.4) (island_removal_mode 0))
     (polygon (pts (xy -1 -1) (xy 21 -1) (xy 21 21) (xy -1 21)))))"
-        );
-        parse_board(&text, "test").unwrap()
+        )
     }
 
     fn filled(connection: &str) -> Shapes {
@@ -1070,6 +1081,19 @@ mod tests {
         assert!(!at(&fill, 0.45, 5.0) && at(&fill, 0.6, 5.0));
         // Solid connection: the pads are covered.
         assert!(at(&fill, 5.0, 5.0));
+    }
+
+    #[test]
+    fn a_zone_clearance_reaches_tracks_beyond_the_outline() {
+        // The pour ends at y = 8; the SIG track's edge at y = 9.85 is 1.85 mm
+        // away, beyond every rule but inside the zone's own 3 mm clearance.
+        let text = source(" yes")
+            .replace("(connect_pads yes (clearance 0.2))", "(connect_pads yes (clearance 3))")
+            .replace("(xy 21 21) (xy -1 21)", "(xy 21 8) (xy -1 8)");
+        let rules = Rules::load(PROJECT, None).unwrap();
+        let fill = fill_zones(&parse_board(&text, "test").unwrap(), &rules).unwrap().remove(0).shapes;
+        assert!(at(&fill, 5.0, 6.5), "the pour stays clear of the track");
+        assert!(!at(&fill, 5.0, 7.5), "copper inside the zone clearance of the SIG track");
     }
 
     #[test]

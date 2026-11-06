@@ -88,6 +88,20 @@ fn clearance_shorts_and_dangling_tracks() {
 }
 
 #[test]
+fn a_local_pad_clearance_is_checked_beyond_the_rule_reach() {
+    // The OTHER pad's edge is 0.7 mm from the SIG track's: farther than every
+    // board rule (the widest is the 0.5 mm edge clearance) but inside the
+    // pad's own 1 mm clearance.
+    let pad = "(footprint \"L:Q\" (layer \"F.Cu\") (at 10 11.35)
+    (property \"Reference\" \"Q1\" (at 0 0) (layer \"F.Fab\") (hide yes) (effects (font (size 1 1))))
+    (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net \"OTHER\") (clearance 1)))";
+    let report = checked(pad);
+    let clearance: Vec<&Violation> = report.violations.iter().filter(|v| v.kind == "clearance").collect();
+    assert_eq!(clearance.len(), 1, "{report:#?}");
+    assert!(clearance[0].description.contains("required 1.0000 mm"), "{}", clearance[0].description);
+}
+
+#[test]
 fn opens_edges_holes_and_sizes() {
     // Without the SIG track, R1's pads are unconnected.
     let source =

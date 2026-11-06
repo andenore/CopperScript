@@ -1058,7 +1058,10 @@ impl<'a> Checker<'a> {
         let board = self.board;
         let rules = self.rules;
         let count = board.copper_count();
-        let reach = rules.worst_clearance() as f64 + EPSILON;
+        // Local pad, footprint and zone clearances can exceed every rule, and
+        // `rules.clearance` applies them to the pairs found within reach.
+        let local = self.items.iter().filter_map(|item| item.rule.local_clearance).max().unwrap_or(0);
+        let reach = rules.worst_clearance().max(local) as f64 + EPSILON;
         // Per-layer features of every copper object.
         let mut layer_features: Vec<Vec<Feature>> = vec![Vec::new(); count];
         // Each item's features: a range of its layer's list.
