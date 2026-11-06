@@ -102,6 +102,7 @@ fn real_completion_preserves_surface_handoff_and_ordinary_occurrence_owners() {
         layer: CopperLayer::Front,
         launch_position: path[0].start,
         path: path.clone(),
+        via_layers: Vec::new(),
     };
     incumbent.accesses.shift_remove(&link.target);
     incumbent.surface_accesses = Some([(link.target.clone(), surface.clone())].into_iter().collect());

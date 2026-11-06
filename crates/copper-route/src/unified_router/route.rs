@@ -657,12 +657,13 @@ pub fn route_unified(
     {
         // A replayable input state for iterating on the router alone
         // (see replay_unified); a working artifact, not evidence.
-        let text = crate::state_codec::inputs_state_text(
+        let text = crate::state_codec::inputs_state_text_with_accesses(
             board,
             global_route,
             options,
             only_nets,
-            fanout_accesses.is_some() || required_accesses.is_some(),
+            fanout_accesses,
+            required_accesses,
         )?;
         save_inputs(path, &text)?;
     }

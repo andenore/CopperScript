@@ -112,6 +112,9 @@ pub struct RoutingAccess {
     pub layer: CopperLayer,
     pub launch_position: Point,
     pub path: Vec<TrackSegment>,
+    /// Continue through the existing terminal barrel onto these layers. The
+    /// source path stays on `layer`; the barrel is freshly verified by callers.
+    pub via_layers: Vec<CopperLayer>,
 }
 
 impl RoutingAccess {
@@ -119,7 +122,7 @@ impl RoutingAccess {
         if path.is_empty() {
             return Err(Error::Value("routing access requires an explicit path".to_owned()));
         }
-        Ok(RoutingAccess { position, layer, launch_position, path })
+        Ok(RoutingAccess { position, layer, launch_position, path, via_layers: Vec::new() })
     }
 }
 
@@ -208,6 +211,51 @@ pub fn verified_routing_access(
     }
     if cursor != access.position {
         return Ok(None);
+    }
+    if !access.via_layers.is_empty() {
+        let allowed = routing_layers(board, net, rule);
+        if access.via_layers.iter().any(|destination| *destination == access.layer || !allowed.contains(destination)) {
+            return Ok(None);
+        }
+        let vias: Vec<_> = board.vias.iter().filter(|via| via.position == access.position).collect();
+        let [via] = vias.as_slice() else { return Ok(None) };
+        let stack = &board.stackup.copper_layers;
+        let (Some(first), Some(last)) = (
+            stack.iter().position(|layer| *layer == via.from_layer),
+            stack.iter().position(|layer| *layer == via.to_layer),
+        ) else {
+            return Ok(None);
+        };
+        let span = &stack[first.min(last)..=first.max(last)];
+        if via.net != net
+            || !span.contains(&access.layer)
+            || access.via_layers.iter().any(|layer| !span.contains(layer))
+            || !crate::return_paths::existing_returns_permit(board, rule, via)
+            || !via_inside_board(board, via.position, via.size_nm)?
+            || !clearance.can_via(
+                net,
+                via.position,
+                via.size_nm,
+                via.from_layer,
+                via.to_layer,
+                Some(via.drill_nm),
+                false,
+                None,
+            )?
+            || crate::routing_vias::select_via_technology(
+                &board.stackup,
+                via.from_layer,
+                via.to_layer,
+                via.size_nm,
+                via.drill_nm,
+            )
+            .map_or(true, |technology| technology != via.technology)
+            || rule
+                .and_then(|rule| rule.max_vias)
+                .is_some_and(|limit| board.vias.iter().filter(|via| via.net == net).count() as i64 > limit)
+        {
+            return Ok(None);
+        }
     }
     let pose = pose(board, &pad.component)?;
     let side = if pose.side == BoardSide::Front { CopperLayer::Front } else { CopperLayer::Back };

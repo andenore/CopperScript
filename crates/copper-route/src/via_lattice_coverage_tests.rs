@@ -26,6 +26,38 @@ fn coverage<'a>(result: &'a LatticeResult, pad: &str) -> &'a BallCoverage {
         .expect("connected ball census entry")
 }
 
+#[test]
+fn retained_signal_handoff_requires_exact_lattice_ownership_and_fresh_copper() {
+    use crate::fixed_prefix::{AdmittedFixedPrefix, FixedContribution, FixedPrefixRole};
+    let mut source = inner_board(&[15]);
+    source.placements.iter_mut().find(|pose| pose.reference == "J").unwrap().position.x_nm = 25_000_000;
+    let plan = plan(&source, None);
+    let contribution = FixedContribution {
+        id: "sites".into(),
+        role: FixedPrefixRole::ViaLattice,
+        tracks: plan.tracks.clone(),
+        vias: plan.vias.clone(),
+    };
+    let prefix = AdmittedFixedPrefix::admit(&source, std::slice::from_ref(&contribution)).unwrap();
+    let handoff = retained_signal_accesses(prefix.board(), &plan.lattices, &plan.tracks, &plan.vias, &prefix).unwrap();
+    assert!(handoff.pending.is_empty(), "{:?}", handoff.pending);
+    assert_eq!(handoff.accesses.len(), 1);
+    assert!(!handoff.accesses.values().next().unwrap().via_layers.is_empty());
+    let mut duplicate = prefix.board().clone();
+    duplicate.vias.push(plan.vias[0].clone());
+    let stale = retained_signal_accesses(&duplicate, &plan.lattices, &plan.tracks, &plan.vias, &prefix).unwrap();
+    assert!(stale.accesses.is_empty() && !stale.pending.is_empty());
+    let mut ordinary = contribution;
+    ordinary.role = FixedPrefixRole::OrdinaryEscape;
+    let prefix = AdmittedFixedPrefix::admit(&source, &[ordinary]).unwrap();
+    let wrong_owner =
+        retained_signal_accesses(prefix.board(), &plan.lattices, &plan.tracks, &plan.vias, &prefix).unwrap();
+    assert!(
+        wrong_owner.accesses.is_empty() && !wrong_owner.pending.is_empty(),
+        "matching geometry is not lattice ownership"
+    );
+}
+
 fn assert_pending(result: &LatticeResult, pad: &str, reason: &str) {
     assert_eq!(coverage(result, pad).status, BallSiteStatus::Pending(reason.to_owned()));
     assert!(result.lattices[0].unsited.iter().any(|(reference, why)| reference.pad == pad && why == reason));

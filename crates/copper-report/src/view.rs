@@ -390,6 +390,22 @@ pub fn legend(
     if via_context.len() > limit {
         lines.push(format!("  ... {} more visible vias", via_context.len() - limit));
     }
+    let focused_tracks: Vec<_> = tracks.iter().filter(|t| listed(&request.highlight, &t.net)).collect();
+    for track in focused_tracks.iter().take(limit) {
+        lines.push(format!(
+            "  track {} {} ({},{}) -> ({},{}) width {} mm",
+            track.net,
+            track.layer,
+            fixed(track.start.0, 3),
+            fixed(track.start.1, 3),
+            fixed(track.end.0, 3),
+            fixed(track.end.1, 3),
+            fixed(track.width, 3)
+        ));
+    }
+    if focused_tracks.len() > limit {
+        lines.push(format!("  ... {} more highlighted track segments", focused_tracks.len() - limit));
+    }
     for net in &request.highlight {
         let net_vias = vias.iter().filter(|v| py::eq_str(net, &v.net)).count();
         let mut per_layer: Vec<(&str, usize)> = Vec::new();
@@ -849,6 +865,10 @@ mod tests {
         for index in 0..12 {
             scene.vias.push(via(&format!("EXTRA_{index}"), 4.0 + f64::from(index), &["F.Cu", "B.Cu"]));
         }
+        scene.tracks = vec![
+            SceneTrack { net: "TARGET".into(), layer: "B.Cu".into(), start: (1.0, 2.0), end: (3.0, 2.0), width: 0.15 },
+            SceneTrack { net: "TARGET".into(), layer: "F.Cu".into(), start: (1.0, 2.0), end: (3.0, 2.0), width: 0.20 },
+        ];
         let request = ViewRequest {
             window: [0.0, 0.0, 18.0, 4.0],
             layers: vec!["B.Cu".into()],
@@ -860,6 +880,8 @@ mod tests {
         let samples: Vec<_> = lines.iter().filter(|line| line.starts_with("  via ")).collect();
         assert_eq!(samples.len(), 14);
         assert_eq!(samples[0], "  via TARGET @(2.000,2.000) diameter 0.450 mm drill 0.200 mm F.Cu/B.Cu");
+        assert!(lines.iter().any(|line| line == "  track TARGET B.Cu (1.000,2.000) -> (3.000,2.000) width 0.150 mm"));
+        assert!(!lines.iter().any(|line| line.starts_with("  track TARGET F.Cu")));
         assert!(samples[1].starts_with("  via OTHER "));
         assert!(lines.iter().any(|line| line == "  ... 1 more visible vias"));
         assert!(!lines.iter().any(|line| line.contains("HIDDEN_LAYER") || line.contains("OUTSIDE")));

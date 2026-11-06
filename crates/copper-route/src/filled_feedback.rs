@@ -352,6 +352,65 @@ fn native_trial_outcome(
     Ok(if after.unconnected_count < before.unconnected_count { "accepted" } else { "native_not_improved" })
 }
 
+/// Reuse the geometry-bound native non-regression guard for cleanup. A strict
+/// reduction in dead ends may commit while unrelated protected findings remain;
+/// zero missing connections and unchanged remaining violation geometry are
+/// mandatory, and the final native verdict remains authoritative.
+pub(crate) fn native_cleanup_trial_outcome(
+    before_board: &PhysicalBoard,
+    before: &PlaneVerification,
+    after_board: &PhysicalBoard,
+    after: &PlaneVerification,
+) -> copper_pcb::Result<&'static str> {
+    let outcome = native_trial_outcome(before_board, before, after_board, after)?;
+    if before.unconnected_count != 0 || after.unconnected_count != 0 {
+        return Ok("native_cleanup_incomplete_nets");
+    }
+    if outcome != "native_not_improved" {
+        return Ok(outcome);
+    }
+    if after.other_violation_count >= before.other_violation_count {
+        return Ok("native_not_improved");
+    }
+    if !cleanup_budgets_not_worse(before_board, after_board)? {
+        return Ok("native_cleanup_budget_regression");
+    }
+    Ok("accepted")
+}
+
+pub(crate) fn cleanup_budgets_not_worse(
+    before_board: &PhysicalBoard,
+    after_board: &PhysicalBoard,
+) -> copper_pcb::Result<bool> {
+    type BudgetKey = (String, Vec<String>, Vec<String>);
+    let budgets = |board: &PhysicalBoard| -> copper_pcb::Result<std::collections::BTreeMap<BudgetKey, i64>> {
+        let mut budgets = std::collections::BTreeMap::new();
+        for finding in crate::drc_report::run_physical_drc(board, copper_drc::Policy::default())?.report.findings {
+            if !["DRC-MAX-LENGTH", "DRC-MAX-VIAS", "DRC-LENGTH-MATCH", "DRC-DIFF-SKEW"].contains(&finding.code.as_str())
+            {
+                continue;
+            }
+            let mut nets = finding.nets;
+            let mut objects = finding.objects;
+            nets.sort();
+            objects.sort();
+            let excess = match (finding.measured_nm, finding.required_nm) {
+                (Some(actual), Some(limit)) => actual.saturating_sub(limit).max(0),
+                _ => i64::MAX,
+            };
+            budgets
+                .entry((finding.code, nets, objects))
+                .and_modify(|old: &mut i64| *old = (*old).max(excess))
+                .or_insert(excess);
+        }
+        Ok(budgets)
+    };
+    let old = budgets(before_board)?;
+    Ok(!budgets(after_board)?
+        .iter()
+        .any(|(key, excess)| *excess == i64::MAX || *excess > old.get(key).copied().unwrap_or(0)))
+}
+
 /// `_hard_findings`: physical DRC errors other than opens.
 fn hard_findings(board: &PhysicalBoard) -> copper_pcb::Result<bool> {
     let report = crate::drc_report::run_physical_drc(board, copper_drc::Policy::default())?;

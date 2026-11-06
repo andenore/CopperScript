@@ -2544,6 +2544,7 @@ fn routing_access(value: &StateValue) -> Result<RoutingAccess> {
         "layer" => layer = copper_layer;
         "launch_position" => launch = point;
         "path" => path = |v| list(v, track_segment);
+        "via_layers" => via_layers = |v| list(v, copper_layer);
     });
     reader.required(&[
         ("position", position.is_none()),
@@ -2551,13 +2552,15 @@ fn routing_access(value: &StateValue) -> Result<RoutingAccess> {
         ("launch_position", launch.is_none()),
         ("path", path.is_none()),
     ])?;
-    RoutingAccess::new(
+    let mut access = RoutingAccess::new(
         position.expect("required"),
         layer.expect("required"),
         launch.expect("required"),
         path.expect("required"),
     )
-    .map_err(Error::from)
+    .map_err(Error::from)?;
+    access.via_layers = via_layers.unwrap_or_default();
+    Ok(access)
 }
 
 /// A `dict[PadReference, RoutingAccess]`.
@@ -4073,6 +4076,39 @@ pub fn inputs_state_text(
     if has_accesses {
         return not_implemented("unified router save_inputs_path with fanout or required accesses");
     }
+    inputs_state_text_with_accesses(board, global_route, options, only_nets, None, None)
+}
+
+/// Save actual verified access constraints, including retained via launches,
+/// so replay cannot silently fall back to the original surface pad.
+pub fn inputs_state_text_with_accesses(
+    board: &PhysicalBoard,
+    global_route: &GlobalRoutingResult,
+    options: &UnifiedRouterOptions,
+    only_nets: Option<&IndexSet<String>>,
+    fanout: Option<&IndexMap<PadReference, RoutingAccess>>,
+    required: Option<&IndexMap<PadReference, RoutingAccess>>,
+) -> Result<String> {
+    let encode_accesses = |items: Option<&IndexMap<PadReference, RoutingAccess>>| {
+        items.map_or(StateValue::Null, |items| {
+            let entries = items
+                .iter()
+                .map(|(pad, access)| {
+                    let mut fields = vec![
+                        ("position", e_point(&access.position)),
+                        ("layer", e_layer(&access.layer)),
+                        ("launch_position", e_point(&access.launch_position)),
+                        ("path", tuple(&access.path, e_track)),
+                    ];
+                    if !access.via_layers.is_empty() {
+                        fields.push(("via_layers", StateValue::List(access.via_layers.iter().map(e_layer).collect())));
+                    }
+                    (e_pad_reference(pad), dc("pcbir.pin_escape:RoutingAccess", fields))
+                })
+                .collect();
+            StateValue::Map { entries, proxy: false }
+        })
+    };
     let mut saved = options.clone();
     saved.save_inputs_path = None;
     let only = only_nets.map_or(StateValue::Null, |names| StateValue::FrozenSet(names.iter().map(|n| s(n)).collect()));
@@ -4080,11 +4116,11 @@ pub fn inputs_state_text(
         (s("board"), encode_board(board)),
         (s("global_route"), encode_global_route(global_route)),
         (s("options"), encode_unified_options(&saved)),
-        (s("fanout_accesses"), StateValue::Null),
+        (s("fanout_accesses"), encode_accesses(fanout)),
         (s("fanout_created_vias"), StateValue::Null),
         (s("fanout_created_tracks"), StateValue::Null),
         (s("only_nets"), only),
-        (s("required_accesses"), StateValue::Null),
+        (s("required_accesses"), encode_accesses(required)),
     ];
     let metadata = Object::from([("note".to_owned(), Value::from("route_unified inputs"))]);
     Ok(StateDocument::new("builtins:dict", metadata, StateValue::Map { entries, proxy: false }).to_text())
@@ -4379,6 +4415,22 @@ fn encode_fixed_prefix(prefix: &crate::fixed_prefix::AdmittedFixedPrefix) -> Sta
         "pcbir.fixed_prefix:Input",
         vec![("source", encode_board(prefix.source())), ("contributions", StateValue::Tuple(contributions))],
     )
+}
+
+/// Exact final board, replacement prefix and freshly measured path ledger.
+pub(crate) fn retirement_state_text(
+    board: &PhysicalBoard,
+    prefix: &crate::fixed_prefix::AdmittedFixedPrefix,
+    witnesses: &[crate::decoupling_paths::DecouplingCrossLayerWitness],
+    surface_feeds: &crate::bypass_links::WitnessPaths,
+) -> String {
+    let entries = vec![
+        (s("board"), encode_board(board)),
+        (s("retained_prefix"), encode_fixed_prefix(prefix)),
+        (s("renewed_witnesses"), tuple(witnesses, e_witness)),
+        (s("renewed_surface_feeds"), StateValue::List(surface_feeds.iter().map(|(link, tracks)| StateValue::Map { entries: vec![(s("link"), e_decoupling_link(link)), (s("tracks"), tuple(tracks, e_track)), (s("qualification"), s("Same-surface supply feed only; return copper unchanged, return path and electrical performance unqualified"))], proxy: false }).collect())),
+    ];
+    StateDocument::new("builtins:dict", Object::new(), StateValue::Map { entries, proxy: false }).to_text()
 }
 
 fn fixed_contribution(value: &StateValue) -> Result<crate::fixed_prefix::FixedContribution> {

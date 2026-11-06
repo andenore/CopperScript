@@ -241,6 +241,61 @@ fn shape(spine: Vec<Point>, radius_nm: i64) -> Result<RoundedConvexShape> {
     RoundedConvexShape::new(spine, radius_nm).map_err(|error| copper_pcb::Error::Value(error.to_string()))
 }
 
+/// Exact integral projection onto the existing centreline. No rounded cut
+/// point or grazing annulus contact can authorize a trim.
+fn integral_projection(track: &TrackSegment, position: Point) -> Option<Point> {
+    let (dx, dy) = (
+        i128::from(track.end.x_nm) - i128::from(track.start.x_nm),
+        i128::from(track.end.y_nm) - i128::from(track.start.y_nm),
+    );
+    let squared = dx.checked_mul(dx)?.checked_add(dy.checked_mul(dy)?)?;
+    if squared == 0 {
+        return None;
+    }
+    let (px, py) = (
+        i128::from(position.x_nm) - i128::from(track.start.x_nm),
+        i128::from(position.y_nm) - i128::from(track.start.y_nm),
+    );
+    let dot = px.checked_mul(dx)?.checked_add(py.checked_mul(dy)?)?;
+    if !(0..=squared).contains(&dot) {
+        return None;
+    }
+    let (x, y) = (dx.checked_mul(dot)?, dy.checked_mul(dot)?);
+    if x % squared != 0 || y % squared != 0 {
+        return None;
+    }
+    Some(Point::new(
+        i64::try_from(i128::from(track.start.x_nm).checked_add(x / squared)?).ok()?,
+        i64::try_from(i128::from(track.start.y_nm).checked_add(y / squared)?).ok()?,
+    ))
+}
+
+fn contained_via_anchor(track: &TrackSegment, via: &Via) -> Result<Option<Point>> {
+    let Some(point) = integral_projection(track, via.position) else { return Ok(None) };
+    let land = shape(vec![via.position], via.size_nm.div_euclid(2))?;
+    Ok(circle_inside_shape(point, (track.width_nm + 1).div_euclid(2), &land).then_some(point))
+}
+
+/// Retain a full minimum-width copper neck between two existing endpoint
+/// disks. The projected cut creates no copper and must lie inside the other
+/// land. Unsupported contacts are never rounded into anchors.
+fn width_contact_anchor(track: &TrackSegment, partner: &TrackSegment, minimum: i64) -> Option<Point> {
+    let (a, b) = (track.width_nm.div_euclid(2), partner.width_nm.div_euclid(2));
+    if minimum <= 0 || a < (minimum + 1).div_euclid(2) || b < (minimum + 1).div_euclid(2) {
+        return None;
+    }
+    let reach = i128::from(a) + i128::from(b) - i128::from(minimum);
+    let squared = reach.checked_mul(reach)?;
+    for end in [partner.start, partner.end] {
+        let Some(point) = integral_projection(track, end) else { continue };
+        let distance = point_segment_distance_squared(point, end, end);
+        if distance <= rational(squared) && distance < rational(i128::from(b).checked_mul(i128::from(b))?) {
+            return Some(point);
+        }
+    }
+    None
+}
+
 /// `native_stub_candidate`: an exact copper-subset trial, never acceptance or
 /// fill evidence. Each rejection appends `{"reason": ..., details}`.
 pub fn native_stub_candidate(
@@ -253,9 +308,192 @@ pub fn native_stub_candidate(
     native_stub_candidate_for_items(board, evidence, protected, protected_vias, None, diagnostics)
 }
 
+/// Find a disposable subset without letting an unrelated protected finding
+/// veto every trim. The complete native record remains the validation input;
+/// selection grants no authority over source, macro, array or prefix copper.
+pub(crate) fn disposable_stub_candidate(
+    board: &PhysicalBoard,
+    evidence: &PlaneVerification,
+    protected: &Multiset<TrackSegment>,
+    protected_vias: Option<&Multiset<Via>>,
+    diagnostics: &mut Vec<Value>,
+) -> Result<Option<PhysicalBoard>> {
+    if evidence.native_findings.len() > 64 {
+        return native_stub_candidate(board, evidence, protected, protected_vias, diagnostics);
+    }
+    let mut groups: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for finding in &evidence.native_findings {
+        let [item] = finding.items.as_slice() else { continue };
+        let (Some(net), Some(index)) = (item.net.as_deref(), item.index.and_then(|i| usize::try_from(i).ok())) else {
+            continue;
+        };
+        if board.net_routing_rules.iter().any(|r| r.net == net && r.kind != RouteKind::General)
+            || board.zones.iter().any(|zone| zone.net == net)
+        {
+            continue;
+        }
+        let disposable = match (finding.kind.as_str(), item.kind.as_str()) {
+            ("track_dangling", "segment") => {
+                board.tracks.get(index).is_some_and(|track| protected.get(track).copied().unwrap_or(0) == 0)
+            }
+            ("via_dangling", "via") => board
+                .vias
+                .get(index)
+                .is_some_and(|via| protected_vias.is_some_and(|guards| guards.get(via).copied().unwrap_or(0) == 0)),
+            _ => false,
+        };
+        if disposable {
+            groups.entry(net).or_default().insert(item.uuid.clone());
+        }
+    }
+    let all: BTreeSet<String> = groups.values().flatten().cloned().collect();
+    if all.is_empty() {
+        diagnostics.push(Value::Object(copper_json::Object::from([(
+            "reason".into(),
+            Value::from("no_disposable_native_items"),
+        )])));
+        return Ok(None);
+    }
+    if let Some(candidate) =
+        native_stub_candidate_for_items(board, evidence, protected, protected_vias, Some(&all), diagnostics)?
+    {
+        if crate::filled_feedback::cleanup_budgets_not_worse(board, &candidate)? {
+            return Ok(Some(candidate));
+        }
+        diagnostics.push(Value::Object(copper_json::Object::from([(
+            "reason".into(),
+            Value::from("cleanup_budget_regression"),
+        )])));
+    }
+    // At most one trial per native net (at most 64 findings), without another
+    // refill. Essential or unsupported geometry on one net stays unchanged.
+    if groups.len() > 1 {
+        for selection in groups.values() {
+            if let Some(candidate) = native_stub_candidate_for_items(
+                board,
+                evidence,
+                protected,
+                protected_vias,
+                Some(selection),
+                diagnostics,
+            )? && crate::filled_feedback::cleanup_budgets_not_worse(board, &candidate)?
+            {
+                return Ok(Some(candidate));
+            }
+        }
+    }
+    Ok(None)
+}
+
 /// Propose a caller-selected subset of *the original, complete* native
 /// findings. UUID selection never bypasses fresh binding or copper guards.
 /// Like the whole-batch helper this returns no acceptance certificate.
+pub(crate) fn ordinary_retirement_candidate(
+    board: &PhysicalBoard,
+    evidence: &PlaneVerification,
+    protected: &Multiset<TrackSegment>,
+    protected_vias: &Multiset<Via>,
+    prefix: &crate::fixed_prefix::AdmittedFixedPrefix,
+    excluded_nets: &BTreeSet<String>,
+    diagnostics: &mut Vec<Value>,
+) -> Result<Option<(PhysicalBoard, crate::fixed_prefix::AdmittedFixedPrefix, BTreeSet<String>)>> {
+    use crate::fixed_prefix::FixedPrefixRole;
+    if evidence.unconnected_count != 0
+        || evidence.native_findings.len() > 64
+        || !evidence.matches(board)?
+        || prefix.missing_copper_occurrences(board) != (0, 0)
+    {
+        return Ok(None);
+    }
+    let (tracks, vias) = (multiset(&board.tracks), multiset(&board.vias));
+    let (pt, pv) = (multiset(&prefix.board().tracks), multiset(&prefix.board().vias));
+    let (mut relaxed, mut relaxed_vias) = (protected.clone(), protected_vias.clone());
+    for part in prefix.contributions().iter().filter(|p| p.role == FixedPrefixRole::OrdinaryEscape) {
+        for track in &part.tracks {
+            if tracks.get(track) == Some(&1) && pt.get(track) == Some(&1) && protected.get(track) == Some(&1) {
+                relaxed.shift_remove(track);
+            }
+        }
+        for via in &part.vias {
+            if vias.get(via) == Some(&1) && pv.get(via) == Some(&1) && protected_vias.get(via) == Some(&1) {
+                relaxed_vias.shift_remove(via);
+            }
+        }
+    }
+    let objects = native_object_map(board)?;
+    let mut groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for finding in &evidence.native_findings {
+        let [item] = finding.items.as_slice() else { continue };
+        let (Some(net), Some(index)) = (&item.net, item.index.and_then(|i| usize::try_from(i).ok())) else { continue };
+        if excluded_nets.contains(net) || objects.get(&item.uuid) != Some(item) {
+            continue;
+        }
+        let eligible = match (finding.kind.as_str(), item.kind.as_str()) {
+            ("track_dangling", "segment") => {
+                board.tracks.get(index).is_some_and(|t| protected.get(t) == Some(&1) && !relaxed.contains_key(t))
+            }
+            ("via_dangling", "via") => board
+                .vias
+                .get(index)
+                .is_some_and(|v| protected_vias.get(v) == Some(&1) && !relaxed_vias.contains_key(v)),
+            _ => false,
+        };
+        if eligible {
+            groups.entry(net.clone()).or_default().insert(item.uuid.clone());
+        }
+    }
+    let mut selected = BTreeSet::new();
+    let mut nets = BTreeSet::new();
+    for (net, selection) in groups {
+        let Some(candidate) = native_stub_candidate_for_items(
+            board,
+            evidence,
+            &relaxed,
+            Some(&relaxed_vias),
+            Some(&selection),
+            diagnostics,
+        )?
+        else {
+            continue;
+        };
+        if !crate::filled_feedback::cleanup_budgets_not_worse(board, &candidate)? {
+            continue;
+        }
+        match prefix.readmit_ordinary_retirement(board, &candidate) {
+            Ok(_) => {
+                selected.extend(selection);
+                nets.insert(net);
+            }
+            Err(error) => diagnostics.push(Value::Object(copper_json::Object::from([
+                ("reason".into(), Value::from(format!("prefix_readmission_rejected: {error}"))),
+                ("net".into(), Value::from(net)),
+            ]))),
+        }
+    }
+    if selected.is_empty() {
+        return Ok(None);
+    }
+    let Some(candidate) =
+        native_stub_candidate_for_items(board, evidence, &relaxed, Some(&relaxed_vias), Some(&selected), diagnostics)?
+    else {
+        return Ok(None);
+    };
+    if !crate::filled_feedback::cleanup_budgets_not_worse(board, &candidate)? {
+        return Ok(None);
+    }
+    match prefix.readmit_ordinary_retirement(board, &candidate) {
+        Ok(fresh) => Ok(Some((candidate, fresh, nets))),
+        Err(error) => {
+            diagnostics.push(Value::Object(copper_json::Object::from([(
+                "reason".into(),
+                Value::from(format!("prefix_readmission_rejected: {error}")),
+            )])));
+            Ok(None)
+        }
+    }
+}
+
+/// Propose a caller-selected subset of the complete original native evidence.
 pub(crate) fn native_stub_candidate_for_items(
     board: &PhysicalBoard,
     evidence: &PlaneVerification,
@@ -322,15 +560,14 @@ pub(crate) fn native_stub_candidate_for_items(
     for finding in findings {
         let item = &finding.items[0];
         let kind = if finding.kind == "track_dangling" { "segment" } else { "via" };
-        if objects.get(&item.uuid) != Some(item)
-            || item.kind != kind
-            || item.index.is_none()
-            || item.net.as_deref().is_some_and(|net| critical.contains(net))
-        {
+        if objects.get(&item.uuid) != Some(item) || item.kind != kind || item.index.is_none() {
             return reject("unbound_or_critical_item", vec![("uuid", Value::from(item.uuid.as_str()))]);
         }
         if selected.is_some_and(|selection| !selection.contains(&item.uuid)) {
             continue;
+        }
+        if item.net.as_deref().is_some_and(|net| critical.contains(net)) {
+            return reject("unbound_or_critical_item", vec![("uuid", Value::from(item.uuid.as_str()))]);
         }
         let index = item.index.expect("index") as usize;
         if kind == "segment" {
@@ -391,8 +628,12 @@ pub(crate) fn native_stub_candidate_for_items(
             }
             match junctions(track.start, track.end, other.start, other.end) {
                 None => {
-                    whole_only = true;
-                    width_partners.push(other);
+                    if let Some(point) = width_contact_anchor(track, other, board.rules.minimum_track_width_nm) {
+                        anchors.insert(point);
+                    } else {
+                        whole_only = true;
+                        width_partners.push(other);
+                    }
                 }
                 Some(points) => anchors.extend(points),
             }
@@ -410,9 +651,11 @@ pub(crate) fn native_stub_candidate_for_items(
                 continue;
             }
             if !point_on_segment(via.position, track.start, track.end) {
-                // An annulus-edge contact supplies no safe centre-line trim
-                // point. Trial whole-segment removal under the same exact pad
-                // partition and fresh-native guards as width-only junctions.
+                if let Some(point) = contained_via_anchor(track, via)? {
+                    anchors.insert(point);
+                    continue;
+                }
+                // Partial/grazing contact still supplies no safe trim point.
                 whole_only = true;
                 continue;
             }
@@ -459,7 +702,7 @@ pub(crate) fn native_stub_candidate_for_items(
             }
             anchors.extend(points);
         }
-        if whole_only {
+        if whole_only && anchors.len() < 2 {
             // Do not invent a cut point for a width-only junction. If the
             // segment carries the connection, the rejoin below is tried instead.
             if let Some(joined) = rejoined_segment(track, &anchors, &width_partners, &clearance)? {
@@ -481,7 +724,11 @@ pub(crate) fn native_stub_candidate_for_items(
             let mut trimmed = track.clone();
             trimmed.start = ordered[0];
             trimmed.end = *ordered.last().expect("anchors");
-            Some(trimmed)
+            // A native dead-end report can name a fully overlapped redundant
+            // segment: there is no overhang to shorten. Trial whole removal
+            // instead; the exact pad-partition check below rejects removal of
+            // an essential connector, and native verification is still required.
+            (trimmed != *track).then_some(trimmed)
         };
         replacements.insert(index, replacement);
     }

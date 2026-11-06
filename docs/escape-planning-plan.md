@@ -65,6 +65,37 @@ trials. A fresh source-level rerun is currently blocked by its archived module's
 missing `CopperProbeParts-hybrid` replacement directory; checkpoint replays do
 not verify rebuilding that source.
 
+Further unmerged follow-up, 2026-11-06: ordinary routing consumes 25 freshly
+qualified retained inner-ball signal barrels as required other-layer ports.
+Alternate joined-pad-tree attachments cannot bypass them; typed saved inputs
+retain the constraints. The final fresh CopperProbe run preserves all 43 sites,
+237/237 signal connections and zero native gaps, reduces dangling findings
+22 to 17, and passes ADC matching without changing its 12.7 mm limit. SWDIO
+uses its original dogbone on In2.Cu, shrinking 17.637 to 8.273 mm. Independent
+native cleanup commits safe mutable subsets while keeping protected escapes.
+The full other-board ladder retains its copper metrics and connection counts;
+both actual consumers remain native-clean. Some per-net lengths and three
+retained-track findings regress; the tradeoffs, final hashes and bounded
+optional-retirement trials are recorded in the
+[closure plan](rust-routing-closure-plan.md#native-dead-ends-and-retained-launch-handoff-2026-11-06).
+This does not implement boundary-channel planning, field exclusion or live
+optional-prefix/dependency retirement, and is not a clean native DRC certificate.
+
+Further unmerged closure, 2026-11-06: optional ordinary-prefix retirement is
+freshly admitted from the original clean source and joined to dependency renewal.
+Exact existing-contact trims and provisional owned via/exposed-leg trials share
+the existing four-round native limit. Full CopperProbe runs progress from 17
+dangling findings (P22) to 10 (P23), seven (P24), then **zero (P25)**. P25 retains
+237/237 signal connections, all 43 mandatory sites, zero hard geometry errors,
+zero native gaps/islands and the unchanged passing ADC matching limit. KiCad
+10.0.6 passes; track copper is 2,850.455 mm with 346 vias. All nine other ladder
+exports are byte-identical to P22; both consumers remain native-clean. All 1,397
+default workspace tests pass. Same-surface feed-only proofs remain distinct
+from cross-layer supply/return witnesses, and unresolved local checks remain
+explicit. SENSE/TX1 length warnings and electrical qualification are unfinished.
+Frozen compiler/native hashes, serial timing controls and detailed limits are in
+the [closure plan](rust-routing-closure-plan.md#optional-escape-retirement-and-contact-trims-2026-11-06).
+
 Update this table when a step's PR merges with the ladder table and the
 full-vertical outcome. The PCBWorld D3 benchmark was removed with the Python
 implementation; earlier rows quote its clean counts as history.

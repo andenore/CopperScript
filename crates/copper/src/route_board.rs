@@ -1540,22 +1540,34 @@ fn finish(
                 &protected_vias,
                 result.retained_prefix.as_ref(),
             )?;
-            let cleanup = copper_route::plane_verify::remove_native_dangling_tracks(
+            let cleanup = copper_route::plane_verify::cleanup_native_dead_ends(
                 &output_board,
                 &verification,
                 &protected,
                 Some(&protected_vias),
+                result.retained_prefix.as_ref(),
                 Path::new(native_cli),
                 Some(&evidence_directory.join("native-cleanup")),
                 &mut diagnostics,
             );
-            let (cleaned, after, accepted) = match cleanup {
+            let cleanup = match cleanup {
                 Ok(found) => found,
                 Err(NativeError::Pcb(copper_pcb::Error::NotImplemented(what))) => {
                     return Err(copper_pcb::Error::NotImplemented(what));
                 }
                 Err(error) => return Ok(Finished::PlaneError { message: error.to_string() }),
             };
+            let copper_route::plane_verify::NativeCleanupResult {
+                board: cleaned,
+                verification: after,
+                changed: accepted,
+                retained_prefix,
+                protected_tracks: protected,
+                protected_vias,
+                dependency_renewal,
+            } = cleanup;
+            let protected_vias = protected_vias.expect("final cleanup supplied explicit via guards");
+            result.retained_prefix = retained_prefix;
             let removed = |from: &[copper_pcb::board::TrackSegment], to: &[copper_pcb::board::TrackSegment]| {
                 copper_route::dependency_reroute::subtract(
                     &copper_route::dependency_reroute::multiset(from),
@@ -1570,6 +1582,13 @@ fn finish(
             )
             .values()
             .sum::<i64>();
+            let final_cleanup_census = copper_route::native_stub_cleanup::native_cleanup_census(
+                &cleaned,
+                &after,
+                &protected,
+                &protected_vias,
+                result.retained_prefix.as_ref(),
+            )?;
             native_cleanup = Some(object_of(vec![
                 ("status", Value::from(if accepted { "accepted" } else { "unchanged" })),
                 ("before_digest", Value::from(verification.board_digest.as_str())),
@@ -1583,7 +1602,9 @@ fn finish(
                 ("added_track_occurrences", Value::from(removed(&cleaned.tracks, &output_board.tracks))),
                 ("removed_via_occurrences", Value::from(removed_vias)),
                 ("diagnostics", Value::Array(diagnostics)),
-                ("census", cleanup_census),
+                ("before_census", cleanup_census),
+                ("census", final_cleanup_census),
+                ("dependency_renewal", dependency_renewal.unwrap_or(Value::Null)),
                 ("protected_tracks", Value::from(protected.values().sum::<i64>())),
                 ("protected_vias", Value::from(protected_vias.values().sum::<i64>())),
             ]));

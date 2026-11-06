@@ -1035,7 +1035,8 @@ fn native_repair_title(title: &mut String, records: &Value) -> Py<()> {
 
 fn native_cleanup_records(cleanup: &Value, nets: &[Value]) -> Value {
     let Some(mut result) = cleanup.as_object().cloned() else { return Value::Null };
-    if let Some(Value::Object(census)) = result.get_mut("census") {
+    for key in ["census", "before_census"] {
+        let Some(Value::Object(census)) = result.get_mut(key) else { continue };
         if let Some(Value::Array(items)) = census.get_mut("items") {
             items.retain(|item| item.get("net").is_some_and(|net| nets.iter().any(|selected| py::eq(net, selected))));
         }
@@ -2821,6 +2822,8 @@ mod tests {
             "census":{"fresh_native_binding":true,"items":[
                 {"net":"A","producer":"ordinary_escape","caller_protected":true},
                 {"net":"B","producer":"via_lattice","caller_protected":true}
+            ]},"before_census":{"board_digest":"before","items":[
+                {"net":"A","producer":"unresolved"},{"net":"B","producer":"ordinary_escape"}
             ]}}"#,
         )
         .unwrap();
@@ -2834,6 +2837,9 @@ mod tests {
         assert_eq!(items[0].get("caller_protected"), Some(&Value::Bool(true)));
         assert!(census.get("issue_filter_scope").unwrap().as_str().unwrap().contains("remain global"));
         assert_eq!(raw.get("census").unwrap().get("items").unwrap().as_array().unwrap().len(), 2);
+        let before = selected.get("before_census").unwrap();
+        assert_eq!(before.get("board_digest"), Some(&Value::from("before")));
+        assert_eq!(before.get("items").unwrap().as_array().unwrap().len(), 1);
         assert_eq!(native_cleanup_records(&Value::Null, &[]), Value::Null);
     }
 

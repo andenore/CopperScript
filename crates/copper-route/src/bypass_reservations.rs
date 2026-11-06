@@ -531,7 +531,7 @@ use copper_pcb::board::PadReference;
 
 /// A saved `DecouplingCrossLayerWitness`, or `None` when it is not one (or
 /// one of its paths or steps is untyped).
-fn saved_witness(value: &copper_state::StateValue) -> Result<Option<DecouplingCrossLayerWitness>> {
+pub(crate) fn saved_witness(value: &copper_state::StateValue) -> Result<Option<DecouplingCrossLayerWitness>> {
     use copper_pcb::state_codec::{Fields, pad_reference, text, type_name};
     if type_name(value) != Some("pcbir.decoupling_paths:DecouplingCrossLayerWitness") {
         return Ok(None);
@@ -566,7 +566,7 @@ fn saved_witness(value: &copper_state::StateValue) -> Result<Option<DecouplingCr
     }))
 }
 
-fn saved_link(value: &copper_state::StateValue) -> Result<copper_pcb::board::DecouplingLink> {
+pub(crate) fn saved_link(value: &copper_state::StateValue) -> Result<copper_pcb::board::DecouplingLink> {
     use copper_pcb::state_codec::{Fields, pad_reference, text};
     let fields = Fields::of(value, "pcbir.physical:DecouplingLink")?;
     fields.allow(&["capacitor", "target", "return_pad", "net", "return_net"])?;

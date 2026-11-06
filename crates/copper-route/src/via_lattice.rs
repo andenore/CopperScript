@@ -162,6 +162,81 @@ impl LatticeResult {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct RetainedSignalAccesses {
+    pub accesses: IndexMap<PadReference, crate::pin_escape::RoutingAccess>,
+    pub pending: Vec<String>,
+}
+
+/// Handoff the original, admitted inner-ball signal launches to area routing.
+/// Ownership comes from the producer's exact ranges and prefix contribution;
+/// proximity to a ball or a matching net name is never removal/port authority.
+pub(crate) fn retained_signal_accesses(
+    board: &PhysicalBoard,
+    packages: &[PackageLattice],
+    tracks: &[TrackSegment],
+    vias: &[Via],
+    prefix: &crate::fixed_prefix::AdmittedFixedPrefix,
+) -> Result<RetainedSignalAccesses> {
+    use crate::fixed_prefix::FixedPrefixRole;
+    let mut result = RetainedSignalAccesses::default();
+    let clearance = RoutingClearanceIndex::new(board)?;
+    for package in packages {
+        for site in &package.sites {
+            if !package.coverage.iter().any(|c| c.pad == site.pad && c.mandatory_inner)
+                || board.zones.iter().any(|zone| zone.net == site.net)
+                || board.net_routing_rules.iter().any(|rule| rule.net == site.net && rule.kind != RouteKind::General)
+            {
+                continue;
+            }
+            let Some(via) = vias.get(site.via_occurrence) else {
+                result.pending.push(format!("{}: missing producer via occurrence", site.pad));
+                continue;
+            };
+            let Some(path) = tracks.get(site.track_range.clone()).filter(|path| !path.is_empty()) else {
+                result.pending.push(format!("{}: missing producer path occurrences", site.pad));
+                continue;
+            };
+            let owned = prefix.contributions().iter().any(|part| {
+                part.role == FixedPrefixRole::ViaLattice
+                    && part.vias.contains(via)
+                    && path.iter().all(|track| part.tracks.contains(track))
+            });
+            if !owned
+                || prefix.missing_copper_occurrences(board) != (0, 0)
+                || board.vias.iter().filter(|item| *item == via).count() != 1
+                || path.iter().any(|track| board.tracks.iter().filter(|item| *item == track).count() != 1)
+            {
+                result.pending.push(format!("{}: retained launch ownership or occurrences unresolved", site.pad));
+                continue;
+            }
+            let Some(first) = board.stackup.copper_layers.iter().position(|layer| *layer == via.from_layer) else {
+                continue;
+            };
+            let Some(last) = board.stackup.copper_layers.iter().position(|layer| *layer == via.to_layer) else {
+                continue;
+            };
+            let span = &board.stackup.copper_layers[first.min(last)..=first.max(last)];
+            let rule = board.net_routing_rules.iter().find(|rule| rule.net == site.net);
+            let mut access =
+                crate::pin_escape::RoutingAccess::new(site.position, path[0].layer, path[0].start, path.to_vec())?;
+            access.via_layers = routing_layers(board, &site.net, rule)
+                .into_iter()
+                .filter(|layer| *layer != access.layer && span.contains(layer))
+                .collect();
+            if access.via_layers.is_empty()
+                || crate::pin_escape::verified_routing_access(board, &site.pad, &site.net, &access, &clearance)?
+                    .is_none()
+            {
+                result.pending.push(format!("{}: retained launch has no freshly verified continuation", site.pad));
+                continue;
+            }
+            result.accesses.insert(site.pad.clone(), access);
+        }
+    }
+    Ok(result)
+}
+
 // Assignment costs: the outward diagonal is free; another diagonal, a cell in
 // the outer band (for a signal ball) or outside the array cost extra.
 const OTHER_DIAGONAL: i64 = 2;

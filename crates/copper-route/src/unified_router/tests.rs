@@ -23,6 +23,47 @@ fn a_board() -> PhysicalBoard {
 }
 
 #[test]
+fn required_via_access_is_used_on_another_layer_and_survives_saved_input_replay() {
+    use crate::pin_escape::RoutingAccess;
+    use copper_pcb::board::PadReference;
+    let mut board = a_board();
+    let stem = track("A", (6.0, 13.0), (8.0, 13.0), 0.2, F);
+    board.tracks.push(stem.clone());
+    board.vias.push(via("A", (8.0, 13.0), 0.6, 0.3, F, CopperLayer::Back));
+    let mut access = RoutingAccess::new(pt(8.0, 13.0), F, pt(6.0, 13.0), vec![stem]).unwrap();
+    access.via_layers = vec![CopperLayer::Back];
+    let required = IndexMap::from([(PadReference::new("A_0", "1"), access)]);
+    let global = routes::guides(&board);
+    let options = opts();
+    let routed =
+        super::route::route_unified(&board, &global, &options, None, None, Some(&required), None, None).unwrap();
+    assert!(routed.nets.iter().all(|net| net.connected));
+    assert!(routed.board.tracks.starts_with(&board.tracks) && routed.board.vias.starts_with(&board.vias));
+    assert!(
+        routed.board.tracks.iter().any(|t| t.net == "A"
+            && t.layer == CopperLayer::Back
+            && (t.start == pt(8.0, 13.0) || t.end == pt(8.0, 13.0))),
+        "the reserved barrel must carry onward copper"
+    );
+    let text =
+        crate::state_codec::inputs_state_text_with_accesses(&board, &global, &options, None, None, Some(&required))
+            .unwrap();
+    let saved = crate::state_codec::load_inputs(&text, "held-via.state.json").unwrap();
+    assert_eq!(
+        saved.required_accesses,
+        Some(required.iter().map(|(pad, access)| (pad.clone(), access.clone())).collect())
+    );
+    let replay = super::replay_unified(&text, "held-via.state.json", &super::ReplayRequest::default(), None).unwrap();
+    assert_eq!(replay.board.tracks, routed.board.tracks);
+    assert_eq!(replay.board.vias, routed.board.vias);
+    board.vias.clear();
+    assert!(
+        super::route::route_unified(&board, &global, &options, None, None, Some(&required), None, None).is_err(),
+        "a saved destination layer cannot invent the missing via"
+    );
+}
+
+#[test]
 fn selected_seed_keeps_one_mutable_occupancy_frame_for_later_nets() {
     let board = pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)]), ("B", &[(10.0, 3.0), (10.0, 17.0)])], 2, vec![]);
     let options = UnifiedRouterOptions { maximum_iterations: 8, ..opts() };

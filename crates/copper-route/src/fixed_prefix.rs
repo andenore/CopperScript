@@ -181,6 +181,96 @@ impl AdmittedFixedPrefix {
         // A cached or forged digest is never an admission credential.
         Ok(fresh)
     }
+
+    /// Renew optional generated ownership after a removal/shortening trial.
+    /// The original clean source remains the admission source. Every changed
+    /// occurrence must have one unique ordinary owner; all other copper stays
+    /// exact. This is proposal admission, not native/dependency acceptance.
+    pub(crate) fn readmit_ordinary_retirement(&self, before: &PhysicalBoard, after: &PhysicalBoard) -> Result<Self> {
+        use crate::dependency_reroute::{multiset, subtract};
+        use copper_physical::geometry::point_on_segment;
+        let reject = || Error::Value("optional retirement changed unowned, ambiguous or mandatory copper".to_owned());
+        self.revalidate_for(self.source())?;
+        if self.missing_copper_occurrences(before) != (0, 0) {
+            return Err(reject());
+        }
+        let mut intent = after.clone();
+        intent.tracks = before.tracks.clone();
+        intent.vias = before.vias.clone();
+        if intent != *before {
+            return Err(reject());
+        }
+        let (bt, bv) = (multiset(&before.tracks), multiset(&before.vias));
+        let (pt, pv) = (multiset(&self.board.tracks), multiset(&self.board.vias));
+        let removed_tracks = subtract(&bt, &multiset(&after.tracks));
+        let removed_vias = subtract(&bv, &multiset(&after.vias));
+        let added_tracks = subtract(&multiset(&after.tracks), &bt);
+        if !subtract(&multiset(&after.vias), &bv).is_empty() {
+            return Err(reject());
+        }
+        let mut parts = self.contributions.clone();
+        let mut owners = Vec::new();
+        for (track, count) in &removed_tracks {
+            let matches: Vec<_> = parts
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.role == FixedPrefixRole::OrdinaryEscape && p.tracks.contains(track))
+                .map(|(i, _)| i)
+                .collect();
+            let [owner] = matches.as_slice() else { return Err(reject()) };
+            if *count != 1 || bt.get(track) != Some(&1) || pt.get(track) != Some(&1) {
+                return Err(reject());
+            }
+            owners.push((track.clone(), *owner));
+        }
+        for (via, count) in &removed_vias {
+            let matches: Vec<_> = parts
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.role == FixedPrefixRole::OrdinaryEscape && p.vias.contains(via))
+                .map(|(i, _)| i)
+                .collect();
+            let [owner] = matches.as_slice() else { return Err(reject()) };
+            if *count != 1 || bv.get(via) != Some(&1) || pv.get(via) != Some(&1) {
+                return Err(reject());
+            }
+            parts[*owner].vias.retain(|v| v != via);
+        }
+        let mut replacements = Vec::new();
+        for (track, count) in &added_tracks {
+            let matches: Vec<_> = owners
+                .iter()
+                .filter(|(old, _)| {
+                    old.net == track.net
+                        && old.layer == track.layer
+                        && old.width_nm == track.width_nm
+                        && track.start != track.end
+                        && point_on_segment(track.start, old.start, old.end)
+                        && point_on_segment(track.end, old.start, old.end)
+                })
+                .collect();
+            let [(old, owner)] = matches.as_slice() else { return Err(reject()) };
+            if *count != 1 || bt.contains_key(track) || replacements.iter().any(|(original, _, _)| original == old) {
+                return Err(reject());
+            }
+            replacements.push((old.clone(), *owner, track.clone()));
+        }
+        for (old, owner) in owners {
+            let part = &mut parts[owner];
+            let position = part.tracks.iter().position(|t| *t == old).ok_or_else(reject)?;
+            match replacements.iter().find(|(original, _, _)| *original == old) {
+                Some((_, _, replacement)) => part.tracks[position] = replacement.clone(),
+                None => {
+                    part.tracks.remove(position);
+                }
+            }
+        }
+        let fresh = Self::admit(self.source(), &parts)?;
+        if fresh.missing_copper_occurrences(after) != (0, 0) {
+            return Err(reject());
+        }
+        Ok(fresh)
+    }
 }
 
 #[cfg(test)]

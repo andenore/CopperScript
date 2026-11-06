@@ -12,7 +12,7 @@ use indexmap::{IndexMap, IndexSet};
 use copper_drc::Policy;
 use copper_drc::connectivity::{Candidate, explicit_copper_connectivity};
 use copper_json::Value;
-use copper_pcb::board::{PhysicalBoard, RouteKind};
+use copper_pcb::board::{PadReference, PhysicalBoard, RouteKind};
 use copper_pcb::board::{TrackSegment, Via};
 use copper_physical::CopperLayer;
 use copper_physical::Point;
@@ -1717,6 +1717,7 @@ fn complete_critical_stage(
 fn route_ordinary_stage(
     unified_options: &UnifiedRouterOptions,
     fanout_options: Option<&FanoutOptions>,
+    required_accesses: Option<&IndexMap<PadReference, crate::pin_escape::RoutingAccess>>,
     pre_detailed: &PhysicalBoard,
     global_route: &GlobalRoutingResult,
     drc_policy: Policy,
@@ -1738,7 +1739,7 @@ fn route_ordinary_stage(
         unified_options,
         None,
         None,
-        None,
+        required_accesses,
         escape_seeder,
         reborrow(on_progress),
     )
@@ -2262,9 +2263,31 @@ fn route_tail(
         tail.unified_options,
         on_progress,
     )?;
+    let accesses = match (lattice, retained_prefix.as_ref()) {
+        (Some(plan), Some(prefix)) => crate::via_lattice::retained_signal_accesses(
+            &pre_detailed,
+            &plan.packages,
+            &plan.tracks,
+            &plan.vias,
+            prefix,
+        )?,
+        _ => crate::via_lattice::RetainedSignalAccesses::default(),
+    };
+    if !accesses.accesses.is_empty() || !accesses.pending.is_empty() {
+        emit(
+            on_progress,
+            "retained_launch_accesses",
+            "assessed",
+            vec![
+                ("verified", int(accesses.accesses.len() as i64)),
+                ("pending", Value::Array(accesses.pending.iter().map(|item| text(item)).collect())),
+            ],
+        );
+    }
     let (detailed, drc, duplicate) = route_ordinary_stage(
         tail.unified_options,
         tail.unified_fanout,
+        (!accesses.accesses.is_empty()).then_some(&accesses.accesses),
         &pre_detailed,
         &placement.global_route,
         tail.drc_policy,

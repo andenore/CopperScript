@@ -112,6 +112,121 @@ pub struct DecouplingPathResult {
     pub return_path: Option<DecouplingCopperPath>,
 }
 
+/// Fresh explicit-path observations for a final copper retirement trial.
+/// Unresolved associations remain unresolved and cannot authorize changes on
+/// either of their nets. This never upgrades a native fill join to a path.
+#[derive(Clone, Debug)]
+pub(crate) struct RetirementDependencies {
+    pub board_digest: String,
+    pub witnesses: Vec<DecouplingCrossLayerWitness>,
+    pub surface_feeds: crate::bypass_links::WitnessPaths,
+    pub unresolved: Vec<(DecouplingLink, String)>,
+}
+
+fn retirement_surface_feeds(
+    board: &PhysicalBoard,
+    links: &[DecouplingLink],
+) -> Result<crate::bypass_links::WitnessPaths> {
+    let nets = links.iter().map(|link| link.net.clone()).collect();
+    let mut paths = crate::bypass_links::WitnessPaths::new();
+    let verified = crate::bypass_links::verified_bypass_links(board, &nets, Some(&mut paths), None, &[])?;
+    paths.retain(|link, _| links.contains(link) && verified.contains(link));
+    Ok(paths)
+}
+
+pub(crate) fn retirement_dependencies(board: &PhysicalBoard) -> Result<RetirementDependencies> {
+    let index = RoutingClearanceIndex::new(board)?;
+    let mut snapshot = RetirementDependencies {
+        board_digest: board_digest(board),
+        witnesses: Vec::new(),
+        surface_feeds: IndexMap::new(),
+        unresolved: Vec::new(),
+    };
+    for link in &board.decoupling_links {
+        let result = verify_crosslayer_decoupling(board, link, None, 10_000, Some(&index))?;
+        match result.witness {
+            Some(witness) => snapshot.witnesses.push(witness),
+            None => snapshot.unresolved.push((link.clone(), result.reason)),
+        }
+    }
+    let legacy: Vec<_> = snapshot
+        .unresolved
+        .iter()
+        .filter(|(_, reason)| reason == "opposite_surfaces_required_use_legacy_surface_helper")
+        .map(|(link, _)| link.clone())
+        .collect();
+    snapshot.surface_feeds = retirement_surface_feeds(board, &legacy)?;
+    snapshot.unresolved.retain(|(link, _)| !snapshot.surface_feeds.contains_key(link));
+    Ok(snapshot)
+}
+
+/// Re-derive every established association on the candidate, retaining the
+/// same declared return target. Failure identifies changed nets to roll back;
+/// an old witness/context digest is never edited into a replacement proof.
+pub(crate) fn renew_retirement_dependencies(
+    before: &PhysicalBoard,
+    after: &PhysicalBoard,
+    previous: &RetirementDependencies,
+    changed_nets: &IndexSet<String>,
+) -> Result<(Option<RetirementDependencies>, IndexSet<String>)> {
+    if previous.board_digest != board_digest(before) || before.decoupling_links != after.decoupling_links {
+        return Err(Error::Value("stale retirement dependency snapshot".to_owned()));
+    }
+    let mut rejected = IndexSet::new();
+    let mut affected = |link: &DecouplingLink| {
+        for net in [&link.net, &link.return_net] {
+            if changed_nets.contains(net) {
+                rejected.insert(net.clone());
+            }
+        }
+    };
+    for (link, _) in &previous.unresolved {
+        affected(link);
+    }
+    let index = RoutingClearanceIndex::new(after)?;
+    let mut witnesses = Vec::new();
+    for old in &previous.witnesses {
+        let result = verify_crosslayer_decoupling(after, &old.link, Some(&old.return_target), 10_000, Some(&index))?;
+        match result.witness {
+            Some(witness) => witnesses.push(witness),
+            None => affected(&old.link),
+        }
+    }
+    let links: Vec<_> = previous.surface_feeds.keys().cloned().collect();
+    let surface_feeds = retirement_surface_feeds(after, &links)?;
+    for (link, old) in &previous.surface_feeds {
+        let length = |path: &[TrackSegment]| path.iter().map(crate::routing_metrics::track_length_nm).sum::<i64>();
+        let same_return = crate::dependency_reroute::multiset(
+            &before.tracks.iter().filter(|t| t.net == link.return_net).cloned().collect::<Vec<_>>(),
+        ) == crate::dependency_reroute::multiset(
+            &after.tracks.iter().filter(|t| t.net == link.return_net).cloned().collect::<Vec<_>>(),
+        ) && crate::dependency_reroute::multiset(
+            &before.vias.iter().filter(|v| v.net == link.return_net).cloned().collect::<Vec<_>>(),
+        ) == crate::dependency_reroute::multiset(
+            &after.vias.iter().filter(|v| v.net == link.return_net).cloned().collect::<Vec<_>>(),
+        );
+        if !same_return || surface_feeds.get(link).is_none_or(|path| length(path) > length(old)) {
+            affected(link);
+        }
+    }
+    // Removing only owned copper cannot invalidate an unaffected path. If a
+    // fresh measurement nevertheless fails, do not return a partial ledger.
+    if (witnesses.len() != previous.witnesses.len() || surface_feeds.len() != previous.surface_feeds.len())
+        && rejected.is_empty()
+    {
+        return Ok((None, changed_nets.clone()));
+    }
+    Ok((
+        rejected.is_empty().then(|| RetirementDependencies {
+            board_digest: board_digest(after),
+            witnesses,
+            surface_feeds,
+            unresolved: previous.unresolved.clone(),
+        }),
+        rejected,
+    ))
+}
+
 impl DecouplingPathResult {
     fn rejected(board: &PhysicalBoard, reason: &str) -> Self {
         DecouplingPathResult {

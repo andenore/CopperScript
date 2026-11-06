@@ -1543,9 +1543,30 @@ impl<'p, 'b> Router<'p, 'b> {
             if !required.is_empty() {
                 anchors = required
                     .iter()
-                    .map(|access| Ok((access.position, vec![copper_layer_index(&layers, access.layer)?], None)))
+                    .map(|access| {
+                        let destinations =
+                            if access.via_layers.is_empty() { vec![access.layer] } else { access.via_layers.clone() };
+                        let indexes = destinations
+                            .iter()
+                            .map(|layer| copper_layer_index(&layers, *layer))
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok((access.position, indexes, None))
+                    })
                     .collect::<Result<_>>()?;
                 host_tracks.clear();
+                // Required ports replace every alternate attachment to this
+                // existing pad tree, including the original surface launch.
+                // Otherwise joined copper lets search bypass the held barrel.
+                if required.iter().any(|access| !access.via_layers.is_empty()) {
+                    joined.clear();
+                    for (position, indexes, _) in &anchors {
+                        for &layer in indexes {
+                            if let Some(node) = self.lattice.snap(layer as i64, *position) {
+                                joined.insert(node);
+                            }
+                        }
+                    }
+                }
             }
             if !joined.is_empty() {
                 spec.joined.insert(components.len(), joined);

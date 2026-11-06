@@ -10,6 +10,56 @@ fn contribution(id: &str, role: FixedPrefixRole, tracks: Vec<TrackSegment>, vias
 }
 
 #[test]
+fn ordinary_retirement_readmits_from_the_original_source_and_keeps_other_owners_exact() {
+    let source = routers::pad_board(&[("S", &[(2.0, 2.0), (18.0, 2.0)]), ("T", &[])], 2, Vec::new());
+    let leg = routers::track("S", (5.0, 5.0), (10.0, 5.0), 0.2, CopperLayer::Front);
+    let barrel = routers::via("S", (10.0, 5.0), 0.6, 0.3, CopperLayer::Front, CopperLayer::Back);
+    let mandatory = routers::track("T", (5.0, 12.0), (10.0, 12.0), 0.2, CopperLayer::Front);
+    let prefix = AdmittedFixedPrefix::admit(
+        &source,
+        &[
+            contribution("optional", FixedPrefixRole::OrdinaryEscape, vec![leg.clone()], vec![barrel]),
+            contribution("mandatory", FixedPrefixRole::ViaLattice, vec![mandatory.clone()], vec![]),
+        ],
+    )
+    .unwrap();
+    let mut before = prefix.board().clone();
+    let mutable = routers::track("S", (11.0, 5.0), (14.0, 5.0), 0.2, CopperLayer::Front);
+    before.tracks.push(mutable.clone());
+    let mut after = before.clone();
+    after.tracks[0].end = copper_physical::Point::new(9_000_000, 5_000_000);
+    after.vias.clear();
+    let fresh = prefix.readmit_ordinary_retirement(&before, &after).unwrap();
+    assert_eq!(fresh.source(), &source);
+    assert_eq!(fresh.missing_copper_occurrences(&after), (0, 0));
+    assert_eq!(fresh.contributions()[1], prefix.contributions()[1]);
+    assert_eq!(prefix.contributions()[0].tracks, vec![leg]);
+    let mut bad = after.clone();
+    bad.tracks.retain(|t| t != &mutable);
+    assert!(prefix.readmit_ordinary_retirement(&before, &bad).is_err());
+    let mut bad = after.clone();
+    bad.tracks.retain(|t| t != &mandatory);
+    assert!(prefix.readmit_ordinary_retirement(&before, &bad).is_err());
+    let mut bad = after.clone();
+    bad.tracks[0].end = copper_physical::Point::new(11_000_000, 5_000_000);
+    assert!(prefix.readmit_ordinary_retirement(&before, &bad).is_err());
+    let mut bad = after;
+    bad.metadata.insert("changed-intent".into(), "yes".into());
+    assert!(prefix.readmit_ordinary_retirement(&before, &bad).is_err());
+    let duplicate = AdmittedFixedPrefix::admit(
+        &source,
+        &[
+            contribution("one", FixedPrefixRole::OrdinaryEscape, prefix.contributions()[0].tracks.clone(), vec![]),
+            contribution("two", FixedPrefixRole::OrdinaryEscape, prefix.contributions()[0].tracks.clone(), vec![]),
+        ],
+    )
+    .unwrap();
+    let mut missing = duplicate.board().clone();
+    missing.tracks.pop();
+    assert!(duplicate.readmit_ordinary_retirement(duplicate.board(), &missing).is_err());
+}
+
+#[test]
 fn empty_explicit_frame_matches_the_legacy_critical_input_path() {
     let mut source = routers::pad_board(&[("C", &[(2.0, 2.0), (15.0, 2.0)])], 2, Vec::new());
     source.net_routing_rules.push(copper_pcb::board::NetRoutingRule {

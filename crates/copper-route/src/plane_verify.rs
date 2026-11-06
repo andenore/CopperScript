@@ -1003,7 +1003,7 @@ pub fn remove_native_dangling_copper(
 
 /// `remove_native_dangling_tracks`: trim native ordinary dead ends; via
 /// removal needs explicit ownership guards. All rounds stay inside one
-/// transaction: only a fully clean fresh refill commits. The flag is whether
+/// transaction: only a fresh geometry-bound improvement commits. The flag is whether
 /// the cleaned board was accepted.
 pub fn remove_native_dangling_tracks(
     board: &PhysicalBoard,
@@ -1014,28 +1014,358 @@ pub fn remove_native_dangling_tracks(
     artifact_directory: Option<&Path>,
     diagnostics: &mut Vec<Value>,
 ) -> Result<(PhysicalBoard, PlaneVerification, bool), NativeError> {
-    let (mut current, mut checked) = (board.clone(), evidence.clone());
+    let result = cleanup_native_dead_ends(
+        board,
+        evidence,
+        protected,
+        protected_vias,
+        None,
+        kicad_cli,
+        artifact_directory,
+        diagnostics,
+    )?;
+    Ok((result.board, result.verification, result.changed))
+}
+
+/// Atomic final cleanup, with optional generated-prefix retirement authority.
+/// Historical stage boards/witnesses are not rewritten into new certificates.
+#[derive(Clone, Debug)]
+pub struct NativeCleanupResult {
+    pub board: PhysicalBoard,
+    pub verification: PlaneVerification,
+    pub changed: bool,
+    pub retained_prefix: Option<crate::fixed_prefix::AdmittedFixedPrefix>,
+    pub protected_tracks: crate::dependency_reroute::Multiset<copper_pcb::board::TrackSegment>,
+    pub protected_vias: Option<crate::dependency_reroute::Multiset<copper_pcb::board::Via>>,
+    pub dependency_renewal: Option<Value>,
+}
+
+/// Share the existing four-round bound between disposable cleanup and optional
+/// retirement. Every rejected candidate rolls back all copper and ownership.
+#[allow(clippy::too_many_arguments)]
+pub fn cleanup_native_dead_ends(
+    board: &PhysicalBoard,
+    evidence: &PlaneVerification,
+    protected: &crate::dependency_reroute::Multiset<copper_pcb::board::TrackSegment>,
+    protected_vias: Option<&crate::dependency_reroute::Multiset<copper_pcb::board::Via>>,
+    prefix: Option<&crate::fixed_prefix::AdmittedFixedPrefix>,
+    kicad_cli: &Path,
+    artifact_directory: Option<&Path>,
+    diagnostics: &mut Vec<Value>,
+) -> Result<NativeCleanupResult, NativeError> {
+    use crate::dependency_reroute::{multiset, subtract};
+    let mut current = NativeCleanupResult {
+        board: board.clone(),
+        verification: evidence.clone(),
+        changed: false,
+        retained_prefix: prefix.cloned(),
+        protected_tracks: protected.clone(),
+        protected_vias: protected_vias.cloned(),
+        dependency_renewal: None,
+    };
+    // Supplying retirement authority never weakens the prefix's mandatory
+    // protection, even if a caller omits those occurrences from its guards.
+    if let Some(prefix) = prefix {
+        for (track, count) in multiset(&prefix.board().tracks) {
+            let guard = current.protected_tracks.entry(track).or_default();
+            *guard = (*guard).max(count);
+        }
+        if let Some(guards) = &mut current.protected_vias {
+            for (via, count) in multiset(&prefix.board().vias) {
+                let guard = guards.entry(via).or_default();
+                *guard = (*guard).max(count);
+            }
+        }
+    }
+    let mut excluded = std::collections::BTreeSet::new();
+    let mut dependencies = None;
+    let mut tentative: Option<NativeCleanupResult> = None;
+    let mut tentative_rejections = std::collections::BTreeSet::new();
     for index in 0..4 {
-        let Some(candidate) = crate::native_stub_cleanup::native_stub_candidate(
-            &current,
-            &checked,
-            protected,
-            protected_vias,
-            diagnostics,
-        )
-        .map_err(NativeError::Pcb)?
-        else {
+        let trial = tentative.take();
+        let working = trial.as_ref().unwrap_or(&current);
+        let disposable = if trial.is_none() {
+            crate::native_stub_cleanup::disposable_stub_candidate(
+                &working.board,
+                &working.verification,
+                &working.protected_tracks,
+                working.protected_vias.as_ref(),
+                diagnostics,
+            )?
+        } else {
+            None
+        };
+        let (candidate, fresh, mut nets) = if let Some(candidate) = disposable {
+            (candidate, None, std::collections::BTreeSet::new())
+        } else if let (Some(prefix), Some(vias)) = (&working.retained_prefix, &working.protected_vias) {
+            let Some((candidate, fresh, nets)) = crate::native_stub_cleanup::ordinary_retirement_candidate(
+                &working.board,
+                &working.verification,
+                &working.protected_tracks,
+                vias,
+                prefix,
+                &excluded,
+                diagnostics,
+            )?
+            else {
+                if trial.is_some() {
+                    excluded.extend(tentative_rejections.iter().cloned());
+                    diagnostics.push(Value::Object(Object::from([(
+                        "reason".into(),
+                        Value::from("rollback_unfinished_retirement_chain"),
+                    )])));
+                    continue;
+                }
+                break;
+            };
+            (candidate, Some(fresh), nets)
+        } else {
             break;
         };
+        // A tentative via removal is never the new source of ownership or
+        // dependency authority. Re-admit the complete delta from the incumbent.
+        let fresh = if fresh.is_some() {
+            match current
+                .retained_prefix
+                .as_ref()
+                .expect("retirement authority")
+                .readmit_ordinary_retirement(&current.board, &candidate)
+            {
+                Ok(prefix) => Some(prefix),
+                Err(error) => {
+                    diagnostics.push(Value::Object(Object::from([(
+                        "reason".into(),
+                        Value::from(format!("retirement_chain_readmission_rejected: {error}")),
+                    )])));
+                    excluded.extend(nets);
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        for (track, _) in subtract(&multiset(&current.board.tracks), &multiset(&candidate.tracks))
+            .into_iter()
+            .chain(subtract(&multiset(&candidate.tracks), &multiset(&current.board.tracks)))
+        {
+            nets.insert(track.net);
+        }
+        for (via, _) in subtract(&multiset(&current.board.vias), &multiset(&candidate.vias)) {
+            nets.insert(via.net);
+        }
+        let renewed = if fresh.is_some() {
+            if dependencies.is_none() {
+                dependencies = Some(crate::decoupling_paths::retirement_dependencies(&current.board)?);
+            }
+            let changed = nets.iter().cloned().collect();
+            let (renewed, rejected) = crate::decoupling_paths::renew_retirement_dependencies(
+                &current.board,
+                &candidate,
+                dependencies.as_ref().expect("fresh snapshot"),
+                &changed,
+            )?;
+            if renewed.is_none() {
+                diagnostics.push(Value::Object(Object::from([
+                    ("reason".into(), Value::from("retirement_dependency_revalidation_rejected")),
+                    ("nets".into(), Value::Array(rejected.iter().map(|n| Value::from(n.as_str())).collect())),
+                ])));
+                if rejected.is_empty() {
+                    break;
+                }
+                excluded.extend(rejected);
+                continue;
+            }
+            renewed
+        } else {
+            None
+        };
         let stage = artifact_directory.map(|d| d.join(format!("round-{:03}", index + 1)));
-        checked = verify_filled_planes(&candidate, kicad_cli, 10, stage.as_deref())?;
-        if !checked.matches(&candidate).map_err(NativeError::Pcb)? {
+        let checked = verify_filled_planes(&candidate, kicad_cli, 10, stage.as_deref())?;
+        let outcome = crate::filled_feedback::native_cleanup_trial_outcome(
+            &current.board,
+            &current.verification,
+            &candidate,
+            &checked,
+        )?;
+        diagnostics.push(Value::Object(Object::from([
+            ("round".into(), Value::from((index + 1) as i64)),
+            ("native_guard_outcome".into(), Value::from(outcome)),
+            ("optional_prefix_trial".into(), Value::Bool(fresh.is_some())),
+        ])));
+        if outcome != "accepted" {
+            if fresh.is_none() {
+                break;
+            }
+            // Roll back whole net groups implicated by the rejected native
+            // result, including an exposed old launch leg. These names only
+            // remove trial authority; they never authorize deletion.
+            let rejected: std::collections::BTreeSet<_> = checked
+                .native_findings
+                .iter()
+                .flat_map(|f| &f.items)
+                .filter_map(|i| i.net.as_ref())
+                .filter(|net| nets.contains(*net))
+                .cloned()
+                .collect();
+            if rejected.is_empty() {
+                break;
+            }
+            let findings: Vec<_> = checked
+                .native_findings
+                .iter()
+                .filter(|finding| {
+                    finding.items.iter().any(|item| item.net.as_ref().is_some_and(|net| nets.contains(net)))
+                })
+                .collect();
+            diagnostics.push(Value::Object(Object::from([
+                ("candidate_not_adopted".into(), Value::Bool(true)),
+                ("candidate_board_digest".into(), Value::from(checked.board_digest.as_str())),
+                (
+                    "artifact_directory".into(),
+                    checked.artifact_directory.as_ref().map_or(Value::Null, |path| Value::from(path.as_str())),
+                ),
+                (
+                    "findings_on_trial_nets".into(),
+                    Value::Array(
+                        findings
+                            .iter()
+                            .take(16)
+                            .map(|finding| {
+                                Value::Object(Object::from([
+                                    ("type".into(), Value::from(finding.kind.as_str())),
+                                    ("category".into(), Value::from(finding.category.as_str())),
+                                    (
+                                        "items".into(),
+                                        Value::Array(finding.items.iter().map(NativeCopperItem::document).collect()),
+                                    ),
+                                ]))
+                            })
+                            .collect(),
+                    ),
+                ),
+                ("omitted_findings".into(), Value::from(findings.len().saturating_sub(16) as i64)),
+            ])));
+            if index < 3
+                && checked.unconnected_count == 0
+                && checked.island_count == 0
+                && checked.matches(&candidate)?
+                && checked.native_findings.iter().all(|finding| {
+                    finding.category != "violation"
+                        || matches!(finding.kind.as_str(), "track_dangling" | "via_dangling" | "lib_footprint_issues")
+                })
+            {
+                let mut pending = current.clone();
+                pending.board = candidate;
+                pending.verification = checked;
+                pending.retained_prefix = fresh;
+                // Keep exact newly shortened prefix occurrences guarded while
+                // considering only newly native-reported owned launch legs.
+                if let Some(prefix) = &pending.retained_prefix {
+                    for (track, count) in multiset(&prefix.board().tracks) {
+                        let guard = pending.protected_tracks.entry(track).or_default();
+                        *guard = (*guard).max(count);
+                    }
+                    if let Some(guards) = &mut pending.protected_vias {
+                        for (via, count) in multiset(&prefix.board().vias) {
+                            let guard = guards.entry(via).or_default();
+                            *guard = (*guard).max(count);
+                        }
+                    }
+                }
+                tentative_rejections.extend(rejected.iter().cloned());
+                diagnostics.push(Value::Object(Object::from([(
+                    "reason".into(),
+                    Value::from("trial_owned_exposed_legs_without_adoption"),
+                )])));
+                tentative = Some(pending);
+                continue;
+            }
+            diagnostics.push(Value::Object(Object::from([
+                ("reason".into(), Value::from("rollback_native_implicated_groups")),
+                ("nets".into(), Value::Array(rejected.iter().map(|n| Value::from(n.as_str())).collect())),
+            ])));
+            excluded.extend(rejected);
+            continue;
+        }
+        if let Some(fresh) = fresh {
+            for (track, count) in subtract(&multiset(&current.board.tracks), &multiset(&candidate.tracks)) {
+                if let Some(guard) = current.protected_tracks.get_mut(&track) {
+                    *guard = (*guard - count).max(0);
+                }
+            }
+            current.protected_tracks.retain(|_, count| *count > 0);
+            for (track, count) in subtract(&multiset(&candidate.tracks), &multiset(&current.board.tracks)) {
+                *current.protected_tracks.entry(track).or_default() += count;
+            }
+            if let Some(guards) = &mut current.protected_vias {
+                for (via, count) in subtract(&multiset(&current.board.vias), &multiset(&candidate.vias)) {
+                    if let Some(guard) = guards.get_mut(&via) {
+                        *guard = (*guard - count).max(0);
+                    }
+                }
+                guards.retain(|_, count| *count > 0);
+            }
+            let ledger = renewed.expect("fresh retirement dependencies");
+            let mut record = Object::from([
+                (
+                    "before_board_digest".into(),
+                    Value::from(dependencies.as_ref().expect("fresh snapshot").board_digest.as_str()),
+                ),
+                ("after_board_digest".into(), Value::from(ledger.board_digest.as_str())),
+                ("verified_associations".into(), Value::from(ledger.witnesses.len() as i64)),
+                ("verified_surface_feeds".into(), Value::from(ledger.surface_feeds.len() as i64)),
+                ("unresolved_associations".into(), Value::from(ledger.unresolved.len() as i64)),
+                (
+                    "qualification".into(),
+                    Value::from(
+                        "Fresh cross-layer supply/return paths; same-surface supply feeds only, with unchanged return copper and non-increasing feed length; unresolved associations and electrical performance remain unqualified",
+                    ),
+                ),
+                (
+                    "pending".into(),
+                    Value::Array(
+                        ledger
+                            .unresolved
+                            .iter()
+                            .map(|(link, reason)| {
+                                Value::Object(Object::from([
+                                    ("capacitor".into(), Value::from(link.capacitor.to_string())),
+                                    ("target".into(), Value::from(link.target.to_string())),
+                                    ("reason".into(), Value::from(reason.as_str())),
+                                ]))
+                            })
+                            .collect(),
+                    ),
+                ),
+            ]);
+            if let Some(stage) = &stage {
+                let path = stage.join("retirement.state.json");
+                std::fs::write(
+                    &path,
+                    crate::state_codec::retirement_state_text(
+                        &candidate,
+                        &fresh,
+                        &ledger.witnesses,
+                        &ledger.surface_feeds,
+                    ),
+                )
+                .map_err(|e| os_error(&e, path.to_str()))?;
+                record.insert("state_path".into(), Value::from(path.to_string_lossy().into_owned()));
+            }
+            current.dependency_renewal = Some(Value::Object(record));
+            current.retained_prefix = Some(fresh);
+            current.board = candidate;
+            current.verification = checked;
+            current.changed = true;
+            // A later copper mutation would need another path renewal.
+            break;
+        };
+        current.board = candidate;
+        current.verification = checked;
+        current.changed = true;
+        if current.verification.passed {
             break;
         }
-        if checked.passed {
-            return Ok((candidate, checked, true));
-        }
-        current = candidate;
     }
-    Ok((board.clone(), evidence.clone(), false))
+    Ok(current)
 }

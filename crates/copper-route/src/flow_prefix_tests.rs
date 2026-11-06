@@ -399,6 +399,77 @@ fn captured_witnesses(held: &Held) -> Vec<crate::decoupling_paths::DecouplingCro
 }
 
 #[test]
+fn optional_retirement_rederives_paths_and_rejects_lost_or_unresolved_dependencies() {
+    use crate::decoupling_paths::{
+        renew_retirement_dependencies, retirement_dependencies, validate_crosslayer_witness,
+    };
+    let (source, link) = crate::test_support_planes::support_planes::decoupling::crosslayer(false, true);
+    let routed = crate::fanout::route_fanout(&source, None, None).unwrap();
+    let mut before = routed.board;
+    before.tracks.push(routers::track(&link.net, (20.0, 15.0), (21.0, 15.0), 0.15, CopperLayer::Front));
+    let snapshot = retirement_dependencies(&before).unwrap();
+    assert_eq!(snapshot.witnesses.len(), 1);
+    let mut after = before.clone();
+    after.tracks.pop();
+    let changed = [link.net.clone()].into_iter().collect();
+    let (fresh, rejected) = renew_retirement_dependencies(&before, &after, &snapshot, &changed).unwrap();
+    assert!(rejected.is_empty());
+    let fresh = fresh.unwrap();
+    assert_ne!(snapshot.board_digest, fresh.board_digest);
+    assert_eq!(fresh.witnesses[0].return_target, snapshot.witnesses[0].return_target);
+    assert_eq!(validate_crosslayer_witness(&after, &fresh.witnesses[0], None).unwrap(), "");
+    let edge = snapshot.witnesses[0].supply_path.tracks()[0].clone();
+    after.tracks.retain(|t| *t != edge);
+    let (failed, rejected) = renew_retirement_dependencies(&before, &after, &snapshot, &changed).unwrap();
+    assert!(failed.is_none() && rejected.contains(&link.net));
+    assert!(before.tracks.contains(&edge), "failed trials do not mutate their incumbent");
+    let unknown = retirement_dependencies(&source).unwrap();
+    assert_eq!(unknown.unresolved.len(), 1);
+    assert!(renew_retirement_dependencies(&source, &source, &unknown, &changed).unwrap().0.is_none());
+    let mut changed_source = before.clone();
+    changed_source.metadata.insert("stale".into(), "yes".into());
+    assert!(renew_retirement_dependencies(&changed_source, &after, &snapshot, &changed).is_err());
+}
+
+#[test]
+fn optional_retirement_renews_surface_feeds_without_promoting_return_qualification() {
+    use crate::decoupling_paths::{renew_retirement_dependencies, retirement_dependencies};
+    let (mut before, link) = crate::test_support_planes::support_planes::decoupling::crosslayer(false, true);
+    before.placements.iter_mut().find(|p| p.reference == link.capacitor.component).unwrap().side =
+        copper_physical::BoardSide::Front;
+    before.tracks.extend([
+        routers::track(&link.net, (9.0, 8.0), (12.5, 8.0), 0.15, CopperLayer::Front),
+        routers::track(&link.net, (12.5, 8.0), (12.5, 9.0), 0.15, CopperLayer::Front),
+        routers::track(&link.return_net, (13.5, 9.0), (13.5, 10.0), 0.15, CopperLayer::Front),
+        routers::track(&link.return_net, (13.5, 10.0), (9.0, 10.0), 0.15, CopperLayer::Front),
+        routers::track(&link.net, (20.0, 15.0), (21.0, 15.0), 0.15, CopperLayer::Front),
+    ]);
+    let snapshot = retirement_dependencies(&before).unwrap();
+    assert!(snapshot.witnesses.is_empty());
+    assert!(snapshot.unresolved.is_empty());
+    assert_eq!(snapshot.surface_feeds.len(), 1);
+    let changed = [link.net.clone(), link.return_net.clone()].into_iter().collect();
+    let mut after = before.clone();
+    after.tracks.pop();
+    let renewed = renew_retirement_dependencies(&before, &after, &snapshot, &changed).unwrap().0.unwrap();
+    assert!(renewed.witnesses.is_empty(), "feed verification is not supply/return qualification");
+    assert_eq!(renewed.surface_feeds.len(), 1);
+    let mut changed_return = after.clone();
+    changed_return.tracks.pop();
+    assert!(renew_retirement_dependencies(&before, &changed_return, &snapshot, &changed).unwrap().0.is_none());
+    after.tracks.drain(..2);
+    after.tracks.extend([
+        routers::track(&link.net, (9.0, 8.0), (9.0, 7.0), 0.15, CopperLayer::Front),
+        routers::track(&link.net, (9.0, 7.0), (12.5, 7.0), 0.15, CopperLayer::Front),
+        routers::track(&link.net, (12.5, 7.0), (12.5, 9.0), 0.15, CopperLayer::Front),
+    ]);
+    assert!(
+        renew_retirement_dependencies(&before, &after, &snapshot, &changed).unwrap().0.is_none(),
+        "a longer feed must reject"
+    );
+}
+
+#[test]
 fn removing_producer_masks_keeps_original_owned_path_when_fresh_search_selects_a_shortcut() {
     let (source, link) = crate::test_support_planes::support_planes::decoupling::crosslayer(false, true);
     let prefix = crate::fixed_prefix::AdmittedFixedPrefix::admit(&source, &[]).expect("clean source");

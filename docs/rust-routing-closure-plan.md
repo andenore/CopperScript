@@ -1,5 +1,193 @@
 # Rust placement and routing closure plan
 
+## Optional escape retirement and contact trims, 2026-11-06
+
+Unmerged follow-up after P22, with unchanged board, macro and routing limits:
+
+| Candidate | Scope | Full native missing / dangling | Required sites |
+| --- | --- | --- | --- |
+| P22 | Previous control | 0 / 17 | 43, retained |
+| P23 | Fresh optional-prefix and dependency admission | 0 / 10 | 43, retained |
+| P24 | Exact existing contact trims | 0 / 7 | 43, retained |
+| P25 | Joint owned via/exposed-leg retirement | **0 / 0**, native clean | **43, retained** |
+
+P23 (`build/p23-ordinary-retirement`) completes in 1,340.1 s with 237/237
+signals, zero hard geometry errors/islands, 353 vias and 2,854.297 mm copper.
+P24 (`build/p24-contact-trim`) completes in 1,429.8 s with the same connection,
+geometry and site results, 353 vias and 2,853.105 mm copper. Timings include
+concurrent compilation/benchmark work and do not establish a speed change.
+Normal case manifests bind the frozen compilers and all changed Rust files.
+
+**Final P25** (`build/p25-exposed-leg-retirement`) completes in 1,275.0 s with
+237/237 signal connections, zero native missing connections, zero native
+violations/islands and zero hard geometry errors. KiCad 10.0.6 passes. All 43
+mandatory sites and their exact copper remain, and ADC matching passes the
+unchanged 12.7 mm limit. There are 2,543 tracks, 346 vias and 2,850.455 mm copper:
+11 fewer vias and 5.867 mm less track copper than P22. Cleanup uses three native
+rounds: mutable tails commit, the standalone via trial is rejected, then the
+combined owned via/leg candidate commits. Fifteen old track occurrences are
+replaced by nine, and 11 unused ordinary vias are removed. The source board,
+macro, limits and frozen Rust file bindings still match.
+
+Final compiler SHA-256:
+`6451B220F5898FC824DCF9D22D60BC3ADF81D8322F6AA2721894F5C204B5637B`.
+Final native PCB SHA-256:
+`6531D854CAFBA4D7C7DA99E19A7EF1E7042445866CF4E20F288A61B6BC6F1F30`,
+under `build/pf-nat/p25/native-cleanup/round-003`. All 17 prior native findings
+are gone; no connection regresses. Per-net copper lengths mostly shrink;
+ADC_D2/D3 each grow 0.041650 mm. These and the before/after via counts are in
+the normal case's `per-net-comparison.json`. Three existing maximum-length
+warnings remain: SENSE 9.873107/4 mm, TX1M 8.204671/8 mm and TX1P 8.141204/8 mm.
+Native-clean connectivity does not waive these or establish electrical signoff.
+
+Optional retirement now renews ownership from the original clean source, never
+from a routed board relabelled as source. Only uniquely owned ordinary-prefix
+occurrences may change; replacements remain same-net/layer/width subsegments.
+Source, macros, mandatory lattice sites and required-array multiplicity stay
+exact. Caller guard omissions do not waive mandatory-prefix protection.
+
+The remaining useful ADC_D1/D5/SDATA legs required trims rather than deletion.
+Integral via projections need full endpoint-disk containment. Width contacts
+need a retained inscribed neck at least as wide as the board minimum. ADC_D5's
+existing 0.15 mm F.Cu stub ends at x=80.000 mm beside a vertical launch at
+x=80.050 mm: trimming that launch to y=22.750 mm keeps the 0.10 mm minimum neck
+and adds no copper. Copper View now prints highlighted track positions/widths;
+the aligned manufacturer comparison remains in the normal comparison outputs.
+
+P25 keeps rejected dangling-only via candidates provisional while assessing
+their newly native-reported owned legs. The complete delta and dependencies
+are always re-proved against the incumbent, not the provisional board; no
+intermediate candidate is adopted. Disposable, optional and exposed-leg trials
+share the existing four-round native bound. Failed trials retain bounded located
+findings, artifact bindings and `candidate_not_adopted` provenance.
+
+Both P25 saved-board tests are native-clean, with zero missing connections,
+violations or islands. Their exact typed state reloads and freshly validates
+46 cross-layer supply/return witnesses and 19 separate same-surface supply feeds.
+The latter require non-increasing measured feed length and unchanged return
+copper; they do not gain return-path qualification. Four associations remain
+unqualified by this local checker (two immutable macro associations, one absent
+explicit supply path and one absent explicit return path); global native
+continuity does not upgrade that scope. The final native-clean candidate is in
+`build/p25-exposed-leg-retirement/full-prefix-probe`.
+
+All 1,397 default release workspace tests pass, zero fail; six opt-in tests are
+excluded from that default run. The real-board retirement opt-in was additionally
+run on the original 17-finding board and the seven-finding continuation, including
+exact prefix/witness/feed state reload and fresh path verification. All-target
+release Clippy with warnings denied and formatting/whitespace checks pass. All
+nine other ladder boards have byte-identical PCB exports, identical copper
+metrics and unchanged connection counts against P22. Both actual consumers stay
+native-clean; the round LED example and FX10 bridge retain their existing one
+and four signal opens. A loaded LedRing timing flag (118.5 to 162.2 s) does not
+reproduce at that scale in serial controls: the first control takes 69.0 s,
+then warm baseline runs take 10.5/10.5/10.7 s and warm candidate runs take
+10.8/11.0/12.2 s. Warm medians are 10.5 versus 11.0 s, with the remaining small
+difference and load/startup variation reported rather than a speed claim. See
+`build/p25-led-timing-control/measurements.json`. Existing SENSE/TX1 maximum-length
+warnings remain separate work; ADC matching is not eased.
+
+## Native dead ends and retained launch handoff, 2026-11-06
+
+The post-merge P20 census binds all 22 native dead ends: four mutable ADC
+track tails, 17 retained ordinary-escape occurrences, and one mandatory
+SWDIO lattice via. Producer attribution does not authorize retirement.
+Independent disposable cleanup now uses complete native evidence, exact
+ownership and pad partitions, strict native non-regression and length/skew/via
+budget non-regression. A protected unrelated finding no longer vetoes safe
+cleanup. Fresh partial improvements may commit while native DRC remains failed.
+Before and final ownership censuses have separate board bindings.
+
+Ordinary routing also receives freshly verified required ports at retained
+inner-ball signal barrels, with every legal other signal layer available.
+Joined pad-tree attachments cannot bypass the required port. The exact ports
+survive typed unified-input replay. This is local launch consumption, not
+package-boundary channel planning or field exclusion.
+
+`build/p21-dangling-cleanup` completes the unchanged CopperProbe source with
+237/237 signal connections, zero native missing connections, zero hard geometry
+errors, zero islands, all 43 mandatory sites preserved, and 18 dangling findings
+(seven tracks, 11 vias). All 25 eligible signal ports verify. Copper View confirms
+SWDIO's original dogbone now carries onward In2.Cu copper: its track length falls
+17.637 to 8.273 mm and its via count from three to two. ADC matching passes the
+unchanged 12.7 mm limit; SENSE and connector-side TX1 maximum-length warnings
+remain. Total copper is 2,856.372 mm with 357 vias, against 2,844.896 mm and
+354 vias in P20. This is a tradeoff, not a universal length improvement:
+D18 grows 13.12 mm, FX_V33 6.21 mm and ACQ_EN 4.29 mm. Per-net measurements
+are in the normal case's `per-net-comparison.json`. The aligned manufacturer
+comparison remains 169 pads, 180 degrees and zero fit RMS; the reference's
+other board, net assignments and layer roles are not adopted as equivalent.
+
+A saved-P20 native trial additionally verifies whole removal of the redundant
+ADC_D9 overlap: four mutable tails can be removed, 22 findings become 18,
+zero gaps remain, and no routing budget worsens. This overlap improvement is
+newer than the P21 executable. Its full fresh-source run is P22.
+
+**Final P22:** `build/p22-dangling-cleanup` verifies 237/237 signals, zero native
+missing connections, zero hard geometry errors/islands, all 43 mandatory sites,
+and **17 dead ends: six tracks and 11 vias**. Every final census row is freshly
+bound and protected ordinary-escape copper. ADC matching still passes. Copper
+is 2,544 tracks, 357 vias and 2,856.322 mm. The final cleanup removes five
+unprotected track occurrences after feedback; its native result remains failed
+because of the protected findings. Wall time is 1,207.1 s under concurrent load;
+this is not a speed comparison. Frozen compiler SHA-256:
+`DCC7D4A6D95EF246F276AE3A21172D228A128014137F162FF7DD67C86E25A560`.
+Fresh final native PCB SHA-256:
+`2FB8C4EB78EA90BCCAE8C311AAAC653E2BFE5841141C0303B8B0111712E4C9B2`,
+under `build/pf-nat/p22/native-cleanup/round-001`. Source, macro and all measured
+Rust file hashes still match the frozen input manifest.
+
+Dangling counts improve on ADC_D10 (1 to 0), ADC_D2 (2 to 0), ADC_D3 (2 to 1),
+ADC_D9, CC1, SWDIO and XTALIN (each 1 to 0). Three newly unused retained track
+legs appear on ADC_SDATA, CC2 and XTALOUT (each 0 to 1). These are finding
+migrations, not new missing connections. Exact per-net before/after lengths,
+via counts and dangling counts are in P22's `per-net-comparison.json`.
+
+All nine other final ladder cases retain their control connection counts,
+zero hard errors and identical copper counts/lengths. Both CopperLedRing and
+CopperAssetTracker remain native-clean and their PCB exports are byte-identical
+to P20. Two example exports have changed model-library metadata; their copper
+metrics are unchanged. The existing round LED and FX10 bridge opens remain one
+and four. The actual ordinary-input replay retains all 76 nets' detailed length,
+track and via counts and SWDIO's new route. It marks three distribution-zone
+nets connected where the main pipeline marks them deferred, so its status
+fingerprint is not asserted equivalent to full native pipeline completion.
+
+Final verification: 1,391 default workspace tests pass, zero fail, five remain
+opt-in in the default run (`build/p22-workspace-tests.log`). Both real-board
+cleanup opt-ins were additionally executed with fresh KiCad: disposable cleanup
+on P20 and optional-prefix feasibility on P21. The final routing/report unit
+suites pass 527 and 48 tests. Workspace all-target release Clippy with warnings
+denied, formatting and whitespace checks pass. Builds/tests use locked offline
+dependencies, release with LTO off and eight codegen units, matching the routing
+comparison profile. CopperProbe still has only its 229 pre-existing archive
+deletions; authored consumer sources were not changed by this work.
+
+The strict optional-prefix feasibility trial on P21 tests every remaining net.
+Eight findings can be removed/trimmed together: 18 become 10 with zero native
+gaps or islands and no budget regression. The candidate is **not adopted**:
+three original ordinary-prefix tracks and four vias change. It still needs a
+replacement admitted prefix and fresh dependency validation. ADC_D1, ADC_D5
+and ADC_SDATA whole-removal/trim proposals lose explicit pad partitions;
+ADC_CLKM, VBUS, PWR/SW and NEG_FB trials introduce native violations. Their
+failures remain explicit rather than being waived by connected-net status.
+The actual FX10 windows and aligned reference overlays are retained in the
+normal P21 case. No board, macro, placement constraint or routing limit changed.
+
+The remaining work is two distinct transactions. First, admit the replacement
+optional prefix from its original clean source, preserving every mandatory
+lattice/macro/required-array occurrence, then freshly validate all affected
+supply/return dependencies before accepting the feasible subset. Native
+connectivity alone is insufficient. Second, repair useful launch tails rather
+than deleting their connecting segments: ADC_D1's F.Cu centreline is x=83.100 mm
+beside a via at (83.250, 22.875) mm, but continues to y=23.300 mm; ADC_SDATA's
+x=79.750 mm launch passes a via at (79.625, 12.000) mm. The aligned kit provides
+completed via exits, whereas these generated launches continue beyond their
+off-centre land contacts. An exact, width-aware contact trim needs its own
+partition/native checks and renewed ownership; a guessed annulus cut is not
+authorized. The seven residual via findings additionally need their exposed
+launch legs assessed together, since bare via removal introduces new findings.
+
 ## Main integration, 2026-11-06
 
 Merged upstream main `dbdd016a903cf3d6f9a89968e33b8a758fa4529b` with the

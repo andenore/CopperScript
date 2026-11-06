@@ -133,26 +133,53 @@ clearance, via technology/span, return requirements and applicable budgets.
 A same-net via without its legal pad path does not suppress escape generation.
 Reuse preserves the input copper and avoids generating a competing branch
 before prefix admission; it never authorizes deleting an admitted occurrence.
-This proves a local transition only. It does not certify a package-boundary
-channel, force onward routing onto an inner layer, or implement field exclusion.
+This proves a local transition only, not a package-boundary channel or field
+exclusion. With a retained via-lattice prefix, ordinary routing also receives
+required ports for freshly qualified, mandatory inner-ball general signals.
+Those ports start on the existing barrel's other permitted signal layers;
+alternate attachments to the original pad tree are excluded. The exact lattice
+producer occurrences and admitted prefix must still be present. Zone and
+specialized routes retain their existing handling. Saved unified inputs retain
+these ports, including their destination layers, for equivalent replay.
 
 The final CLI pass can trim a mixed set of ordinary dangling tracks and vias.
-The source, prepared prefix, macros, critical nets and required via arrays stay
-protected. Existing track-only API callers cannot authorize
+The source, macros, critical nets, mandatory lattice copper and required via
+arrays stay protected. A caller may additionally supply its admitted prefix for
+strictly owned optional-escape retirement after native connection completion.
+Existing track-only API callers cannot authorize
 via removal without explicitly supplying via ownership guards. Via cleanup on
 zone nets is unsupported.
 
 Every proposal preserves exact explicit pad partitions. Off-centre land entries
 may anchor a trim only when the complete existing endpoint disk lies inside the
-pad. Grazing or width-only contacts permit a whole-segment removal trial, never
+pad. Unsupported grazing contacts permit a whole-segment removal trial, never
 an invented cut point; any lost pad connection rejects that trial.
-The same rule applies when a track touches a via annulus off its centre line:
-the annulus is not an inferred trim anchor. A removal proposal still needs the
-unchanged pad partitions and the caller's fresh native refill.
+An off-centre via may supply an anchor only at an exact integral projection onto
+the existing track, with its complete endpoint disk contained in the via land.
+An existing same-layer track endpoint may supply a projected contact anchor
+only when the two endpoint disks retain an inscribed neck at least as wide as
+the board minimum; the cut centre must lie inside the partner land. No new
+copper or rounded projection is introduced. Unsupported contacts never supply
+cut points. Two other supported anchors can still justify a trim under exact
+pad partitions and fresh native checks; otherwise only whole removal/rejoin is
+trialled. These proposals do not certify electrical performance.
 Removing a one-layer via may expose its old launch leg. At most four fresh native
-rounds form one transaction, and only a completely clean matched refill commits.
-Stale evidence, protected exposed legs, unsupported findings or an exhausted bound
-restore the original board and evidence. The route report records cleanup
+rounds form one transaction. The production pass selects independently disposable
+findings rather than letting unrelated protected items veto all cleanup. It tries
+the eligible batch, then bounded per-net subsets when pad partitions or routing
+budgets reject the batch. A fully anchored reported segment may be trialled as a
+whole removal; essential connectors remain protected by exact pad partitions.
+Each accepted result must retain zero native missing connections, introduce no
+new geometry-bound native violation or island, strictly reduce native violations,
+and preserve or improve length, skew and via-budget excesses. Protected findings
+may remain, so an accepted cleanup is not a clean native DRC certificate. A failed
+later round returns the last freshly verified accepted result, or the original
+board and evidence when no round qualifies. A dangling-only rejected candidate
+with zero gaps/islands may provisionally expose its next owned leg for the next
+round. It is never adopted independently: the complete delta and dependency
+proofs are re-admitted against the incumbent, and the final native guard compares
+with that incumbent. Unsupported or unfinished chains roll back. The same four
+rounds cover disposable cleanup, retirement and exposed-leg trials. The report records cleanup
 digests, removed/replaced occurrence counts, artifact paths and rejection reasons.
 
 `native_cleanup.census` observes every dangling item even when the first protected
@@ -164,11 +191,21 @@ retirement authority. `copper issues --net` filters its item rows while retainin
 the explicitly global cleanup counters and digests.
 
 A selected-item trial consumes the complete original native evidence and exact
-UUID selection; it does not manufacture a filtered verification record. This is
-currently a diagnostic feasibility API. The production cleanup retains its
-whole-transaction guards and cannot retire an admitted ordinary escape simply
-because its net is connected or its producer is known. Prefix replacement and
-fresh dependency admission are separate requirements.
+UUID selection; it does not manufacture a filtered verification record. Selected
+optional-prefix retirement cannot use connected-net or producer labels as
+authority. Every changed occurrence needs unique ordinary-prefix ownership;
+replacement tracks must be same-width/layer/net subsegments of their original
+edges. The prefix is freshly admitted from its original clean source, preserving
+all other occurrences and mandatory roles. Every established explicit cross-layer
+supply/return association is derived again, retaining its declared return target.
+Legacy same-surface supply feeds are verified separately, must not grow in
+measured length, and require their return copper to stay exact; these remain
+feed-only observations, not return-path qualification. Unresolved associations
+cannot authorize changes on either of their nets. The exact final board, renewed
+prefix and path ledger are saved in `retirement.state.json`; the `retained_prefix`
+key distinguishes this completed board from a critical input's `fixed_prefix`.
+Historical producer witnesses are not rewritten. Failed trials include bounded,
+located native findings and artifact bindings under `candidate_not_adopted`.
 
 ## Repair transaction
 

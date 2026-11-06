@@ -650,7 +650,7 @@ fn cleanup_census_attributes_unique_occurrences_and_never_promotes_stale_or_dupl
 }
 
 #[test]
-fn cleanup_off_centre_via_allows_only_a_whole_segment_trial_that_keeps_pad_partitions() {
+fn cleanup_off_centre_via_whole_trials_keep_pad_partitions() {
     let mut board = fixture();
     board.vias[0].position.x_nm += mm(0.1);
     let native = evidence(&board, 0, vec![finding(&board, "track", 3), finding(&board, "via", 0)]);
@@ -684,9 +684,460 @@ fn cleanup_off_centre_via_allows_only_a_whole_segment_trial_that_keeps_pad_parti
     );
 }
 
+#[test]
+fn cleanup_trims_at_a_contained_via_projection_but_does_not_guess_grazing_contacts() {
+    use crate::test_support_routers::{track as segment, via};
+    let mut board = pad_board(
+        &[("S", &[(0.0, 0.0), (8.0, 0.0)])],
+        2,
+        vec![
+            segment("S", (3.0, 3.0), (7.0, 3.0), 0.2, CopperLayer::Front),
+            segment("S", (6.0, 3.1), (11.0, 3.0), 0.2, CopperLayer::Back),
+        ],
+    );
+    board.placements[1].side = copper_physical::BoardSide::Back;
+    board.vias.push(via("S", (6.0, 3.1), 0.6, 0.3, CopperLayer::Front, CopperLayer::Back));
+    let mut diagnostics = Vec::new();
+    let native = evidence(&board, 0, vec![finding(&board, "track", 0)]);
+    let candidate = crate::native_stub_cleanup::native_stub_candidate(
+        &board,
+        &native,
+        &multiset(&[]),
+        Some(&multiset(&board.vias)),
+        &mut diagnostics,
+    )
+    .unwrap()
+    .expect("contained off-centre via entry");
+    assert_eq!(candidate.tracks[0].end, pt(6.0, 3.0));
+    assert_eq!(candidate.tracks[1], board.tracks[1]);
+    assert_eq!(candidate.vias, board.vias);
+    board.vias[0].position = pt(6.0, 3.29);
+    board.tracks[1].start = board.vias[0].position;
+    let grazing = evidence(&board, 0, vec![finding(&board, "track", 0)]);
+    assert!(
+        crate::native_stub_cleanup::native_stub_candidate(
+            &board,
+            &grazing,
+            &multiset(&[]),
+            Some(&multiset(&board.vias)),
+            &mut diagnostics
+        )
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
+fn cleanup_keeps_a_verified_width_contact_neck_and_rejects_a_subminimum_overlap() {
+    use crate::test_support_routers::{track as segment, via};
+    let mut board = pad_board(
+        &[("S", &[(0.0, 0.0), (8.0, 0.0)])],
+        2,
+        vec![
+            segment("S", (3.0, 3.0), (7.0, 3.0), 0.2, CopperLayer::Front),
+            segment("S", (6.0, 3.3), (6.0, 3.05), 0.2, CopperLayer::Front),
+            segment("S", (6.0, 3.3), (11.0, 3.0), 0.2, CopperLayer::Back),
+        ],
+    );
+    board.placements[1].side = copper_physical::BoardSide::Back;
+    board.vias.push(via("S", (6.0, 3.3), 0.6, 0.3, CopperLayer::Front, CopperLayer::Back));
+    let native = evidence(&board, 0, vec![finding(&board, "track", 0)]);
+    let mut diagnostics = Vec::new();
+    let candidate = crate::native_stub_cleanup::native_stub_candidate(
+        &board,
+        &native,
+        &multiset(&board.tracks[1..]),
+        Some(&multiset(&board.vias)),
+        &mut diagnostics,
+    )
+    .unwrap()
+    .expect("minimum-width neck retained");
+    assert_eq!(candidate.tracks[0].end, pt(6.0, 3.0));
+    assert_eq!(&candidate.tracks[1..], &board.tracks[1..]);
+    board.tracks[1].end = pt(6.0, 3.19);
+    let native = evidence(&board, 0, vec![finding(&board, "track", 0)]);
+    assert!(
+        crate::native_stub_cleanup::native_stub_candidate(
+            &board,
+            &native,
+            &multiset(&board.tracks[1..]),
+            Some(&multiset(&board.vias)),
+            &mut diagnostics
+        )
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
+fn disposable_cleanup_trims_an_independent_tail_without_retiring_a_protected_via() {
+    let mut board = fixture();
+    board.tracks.push(track("SIGNAL", (7.0, 11.0), (7.0, 13.0)));
+    let native = evidence(&board, 0, vec![finding(&board, "via", 0), finding(&board, "track", 4)]);
+    let mut diagnostics = Vec::new();
+    let candidate = crate::native_stub_cleanup::disposable_stub_candidate(
+        &board,
+        &native,
+        &multiset(&board.tracks[..4]),
+        Some(&multiset(&board.vias)),
+        &mut diagnostics,
+    )
+    .unwrap()
+    .expect("independent disposable tail");
+    assert_eq!(candidate.tracks, board.tracks[..4]);
+    assert_eq!(candidate.vias, board.vias);
+    let after = evidence(&candidate, 0, vec![finding(&candidate, "via", 0)]);
+    let census = crate::native_stub_cleanup::native_cleanup_census(
+        &candidate,
+        &after,
+        &multiset(&board.tracks[..4]),
+        &multiset(&board.vias),
+        None,
+    )
+    .unwrap();
+    assert_eq!(census.get("fresh_native_binding"), Some(&Value::Bool(true)));
+    assert_eq!(census.get("items").unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(native_cleanup_trial_outcome(&board, &native, &candidate, &after).unwrap(), "accepted");
+    assert_eq!(native_cleanup_trial_outcome(&board, &native, &board, &native).unwrap(), "native_not_improved");
+    let open = evidence(&candidate, 1, vec![finding(&candidate, "via", 0)]);
+    assert_eq!(
+        native_cleanup_trial_outcome(&board, &native, &candidate, &open).unwrap(),
+        "native_cleanup_incomplete_nets"
+    );
+    let mut changed = candidate.clone();
+    changed.vias[0].size_nm += mm(0.1);
+    let changed_native = evidence(&changed, 0, vec![finding(&changed, "via", 0)]);
+    assert_eq!(
+        native_cleanup_trial_outcome(&board, &native, &changed, &changed_native).unwrap(),
+        "native_new_violations"
+    );
+}
+
+#[test]
+fn disposable_cleanup_keeps_unselected_critical_copper_but_requires_its_exact_native_binding() {
+    let mut board = fixture();
+    board.tracks.push(track("SIGNAL", (7.0, 11.0), (7.0, 13.0)));
+    board.tracks.push(track("CLOCK", (16.0, 5.0), (16.0, 7.0)));
+    board.nets.push(copper_pcb::board::PhysicalNet { name: "CLOCK".into(), pads: vec![] });
+    board.net_routing_rules.push(copper_pcb::board::NetRoutingRule {
+        kind: copper_pcb::board::RouteKind::Clock,
+        ..crate::routing_acceptance::general_rule("CLOCK")
+    });
+    let mut native =
+        evidence(&board, 0, vec![finding(&board, "via", 0), finding(&board, "track", 4), finding(&board, "track", 5)]);
+    let mut diagnostics = Vec::new();
+    let candidate = crate::native_stub_cleanup::disposable_stub_candidate(
+        &board,
+        &native,
+        &multiset(&board.tracks[..4]),
+        Some(&multiset(&board.vias)),
+        &mut diagnostics,
+    )
+    .unwrap()
+    .expect("critical finding must not veto an unrelated tail");
+    assert_eq!(candidate.tracks.last(), board.tracks.last());
+    assert_eq!(candidate.tracks.len(), board.tracks.len() - 1);
+    assert_eq!(candidate.vias, board.vias);
+    native.native_findings[2].items[0].uuid.push_str("-unbound");
+    assert!(
+        crate::native_stub_cleanup::disposable_stub_candidate(
+            &board,
+            &native,
+            &multiset(&board.tracks[..4]),
+            Some(&multiset(&board.vias)),
+            &mut diagnostics,
+        )
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
+fn optional_retirement_protects_mandatory_prefix_even_when_caller_guards_are_empty() {
+    use crate::fixed_prefix::{AdmittedFixedPrefix, FixedContribution, FixedPrefixRole};
+    let board = fixture();
+    let mut source = board.clone();
+    source.tracks.clear();
+    source.vias.clear();
+    let prefix = AdmittedFixedPrefix::admit(
+        &source,
+        &[FixedContribution {
+            id: "mandatory".into(),
+            role: FixedPrefixRole::ViaLattice,
+            tracks: board.tracks.clone(),
+            vias: board.vias.clone(),
+        }],
+    )
+    .unwrap();
+    let native = evidence(&board, 0, vec![finding(&board, "via", 0), finding(&board, "track", 3)]);
+    let result = crate::plane_verify::cleanup_native_dead_ends(
+        &board,
+        &native,
+        &multiset(&[]),
+        Some(&multiset(&[])),
+        Some(&prefix),
+        std::path::Path::new("must-not-run"),
+        None,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(!result.changed);
+    assert_eq!(result.board, board);
+    assert_eq!(result.retained_prefix.unwrap().missing_copper_occurrences(&board), (0, 0));
+}
+
+#[test]
+fn disposable_cleanup_does_not_exchange_a_dead_end_for_a_length_match_failure() {
+    let mut board = pad_board(
+        &[("A", &[(3.0, 10.0), (11.0, 10.0)]), ("B", &[(3.0, 17.0), (13.0, 17.0)])],
+        2,
+        vec![
+            track("A", (6.0, 13.0), (14.0, 13.0)),
+            track("A", (10.0, 13.0), (10.0, 15.0)),
+            track("B", (6.0, 20.0), (16.0, 20.0)),
+        ],
+    );
+    board.match_groups.push(copper_pcb::board::NetMatchGroup {
+        id: "matched".into(),
+        nets: vec!["A".into(), "B".into()],
+        max_skew_nm: mm(1.0),
+    });
+    board.vias.push(crate::test_support_routers::via(
+        "B",
+        (6.0, 20.0),
+        0.6,
+        0.3,
+        CopperLayer::Front,
+        CopperLayer::Back,
+    ));
+    let native = evidence(&board, 0, vec![finding(&board, "track", 1), finding(&board, "via", 0)]);
+    let mut candidate = board.clone();
+    candidate.tracks.remove(1);
+    let after = evidence(&candidate, 0, vec![finding(&candidate, "via", 0)]);
+    assert_eq!(
+        native_cleanup_trial_outcome(&board, &native, &candidate, &after).unwrap(),
+        "native_cleanup_budget_regression"
+    );
+    let mut diagnostics = Vec::new();
+    assert!(
+        crate::native_stub_cleanup::disposable_stub_candidate(
+            &board,
+            &native,
+            &multiset(&[board.tracks[0].clone(), board.tracks[2].clone()]),
+            Some(&multiset(&board.vias)),
+            &mut diagnostics,
+        )
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
+fn disposable_cleanup_can_trial_a_fully_overlapped_segment_but_keeps_essential_connectors() {
+    let mut board = fixture();
+    board.tracks.push(track("SIGNAL", (6.0, 11.0), (6.05, 11.0)));
+    let native = evidence(&board, 0, vec![finding(&board, "track", 4)]);
+    let mut diagnostics = Vec::new();
+    let candidate = crate::native_stub_cleanup::disposable_stub_candidate(
+        &board,
+        &native,
+        &multiset(&board.tracks[..4]),
+        Some(&multiset(&board.vias)),
+        &mut diagnostics,
+    )
+    .unwrap()
+    .expect("fully overlapped disposable segment");
+    assert_eq!(candidate.tracks, board.tracks[..4]);
+    assert_eq!(candidate.vias, board.vias);
+    let essential = evidence(&board, 0, vec![finding(&board, "track", 2)]);
+    let guards =
+        multiset(&[board.tracks[0].clone(), board.tracks[1].clone(), board.tracks[3].clone(), board.tracks[4].clone()]);
+    assert!(
+        crate::native_stub_cleanup::disposable_stub_candidate(
+            &board,
+            &essential,
+            &guards,
+            Some(&multiset(&board.vias)),
+            &mut diagnostics,
+        )
+        .unwrap()
+        .is_none(),
+        "even a reported dead end cannot authorize breaking the only pad-to-pad conductor"
+    );
+}
+
 /// Real-board feasibility trial using the same typed checkpoints and native
 /// verifier as route-board. It never adopts the candidate or rewrites the
 /// incumbent prefix/witnesses. Paths must be supplied explicitly by the caller.
+#[test]
+#[ignore = "requires a final board checkpoint, matching report and KiCad 10"]
+fn native_disposable_cleanup_preserves_other_findings_on_saved_board() {
+    use std::path::PathBuf;
+    let path = |name: &str| PathBuf::from(std::env::var(name).expect(name));
+    let document =
+        copper_state::StateDocument::read(&std::fs::read_to_string(path("COPPER_CLEANUP_FINAL")).unwrap()).unwrap();
+    let board = copper_pcb::state_codec::board(&document.value).unwrap();
+    let report = copper_json::parse(&std::fs::read_to_string(path("COPPER_CLEANUP_REPORT")).unwrap()).unwrap();
+    let census = report.get("native_cleanup").unwrap().get("census").unwrap();
+    assert_eq!(
+        census.get("board_digest").and_then(Value::as_str),
+        Some(copper_drc::digest::physical_board_digest(&board).as_str())
+    );
+    assert_eq!(census.get("fresh_native_binding"), Some(&Value::Bool(true)));
+    let directory = path("COPPER_CLEANUP_OUTPUT");
+    std::fs::create_dir_all(&directory).unwrap();
+    let cli = path("COPPER_KICAD_CLI");
+    let before = crate::plane_verify::verify_filled_planes(&board, &cli, 10, Some(&directory.join("before"))).unwrap();
+    assert_eq!(before.unconnected_count, 0);
+    let objects = native_object_map(&board).unwrap();
+    let mut guards = multiset(&board.tracks);
+    let via_guards = multiset(&board.vias);
+    for row in census.get("items").unwrap().as_array().unwrap() {
+        if row.get("caller_protected") != Some(&Value::Bool(false))
+            || row.get("kind").and_then(Value::as_str) != Some("track_dangling")
+        {
+            continue;
+        }
+        assert_eq!(row.get("bound"), Some(&Value::Bool(true)));
+        let object = &objects[row.get("uuid").and_then(Value::as_str).unwrap()];
+        assert_eq!(object.kind, "segment");
+        let index = object.index.unwrap() as usize;
+        assert_eq!(row.get("index"), Some(&Value::from(index as i64)));
+        assert_eq!(board.tracks.iter().filter(|track| *track == &board.tracks[index]).count(), 1);
+        guards.shift_remove(&board.tracks[index]);
+    }
+    let mut diagnostics = Vec::new();
+    let (candidate, after, accepted) = crate::plane_verify::remove_native_dangling_tracks(
+        &board,
+        &before,
+        &guards,
+        Some(&via_guards),
+        &cli,
+        Some(&directory.join("cleanup")),
+        &mut diagnostics,
+    )
+    .unwrap();
+    let result = Value::Object(copper_json::Object::from([
+        ("adopted".into(), Value::Bool(false)),
+        ("scope".into(), Value::from("Diagnostic only; production still derives ownership from its live pipeline")),
+        ("native_before".into(), before.document()),
+        ("native_after".into(), after.document()),
+        ("accepted_trial".into(), Value::Bool(accepted)),
+        ("diagnostics".into(), Value::Array(diagnostics)),
+    ]));
+    std::fs::write(directory.join("result.json"), copper_json::Dumps::new().indent(2).sort_keys(true).dumps(&result))
+        .unwrap();
+    assert!(accepted);
+    assert_eq!(candidate.vias, board.vias);
+    assert!(subtract(&guards, &multiset(&candidate.tracks)).is_empty());
+    assert_eq!(after.unconnected_count, 0);
+    assert!(after.other_violation_count < before.other_violation_count);
+    eprintln!(
+        "Native dead ends {} -> {}; vias unchanged; zero missing connections",
+        before.other_violation_count, after.other_violation_count
+    );
+}
+
+/// Real-board optional-prefix feasibility trial; never adopts its candidate.
+#[test]
+#[ignore = "requires saved final/critical checkpoints and KiCad 10"]
+fn native_ordinary_retirement_renews_prefix_and_paths_on_saved_board() {
+    use copper_state::{StateDocument, StateValue};
+    use std::path::PathBuf;
+    let path = |name: &str| PathBuf::from(std::env::var(name).expect(name));
+    let read = |name: &str| StateDocument::read(&std::fs::read_to_string(path(name)).unwrap()).unwrap();
+    let final_document = read("COPPER_RETIREMENT_FINAL");
+    let map_field = |value: &StateValue, name: &str| -> Option<StateValue> {
+        if let StateValue::Map { entries, .. } = value {
+            entries.iter().find(|(k, _)| matches!(k, StateValue::Str(k) if k == name)).map(|(_, value)| value.clone())
+        } else {
+            None
+        }
+    };
+    let board_value = map_field(&final_document.value, "board").unwrap_or_else(|| final_document.value.clone());
+    let board = copper_pcb::state_codec::board(&board_value).unwrap();
+    let prefix_value = map_field(&final_document.value, "retained_prefix").unwrap_or_else(|| {
+        map_field(&read("COPPER_RETIREMENT_CRITICAL").value, "fixed_prefix").expect("critical prefix")
+    });
+    let prefix = crate::state_codec::fixed_prefix_input(&prefix_value).unwrap();
+    assert_eq!(prefix.missing_copper_occurrences(&board), (0, 0));
+    let directory = path("COPPER_RETIREMENT_OUTPUT");
+    std::fs::create_dir_all(&directory).unwrap();
+    let cli = path("KICAD_CLI");
+    let before = crate::plane_verify::verify_filled_planes(&board, &cli, 10, Some(&directory.join("before"))).unwrap();
+    let mut diagnostics = Vec::new();
+    let result = crate::plane_verify::cleanup_native_dead_ends(
+        &board,
+        &before,
+        &multiset(&board.tracks),
+        Some(&multiset(&board.vias)),
+        Some(&prefix),
+        &cli,
+        Some(&directory.join("cleanup")),
+        &mut diagnostics,
+    )
+    .unwrap();
+    let record = Value::Object(copper_json::Object::from([
+        ("native_before".into(), before.document()),
+        ("native_after".into(), result.verification.document()),
+        ("changed".into(), Value::Bool(result.changed)),
+        ("dependency_renewal".into(), result.dependency_renewal.clone().unwrap_or(Value::Null)),
+        ("diagnostics".into(), Value::Array(diagnostics)),
+    ]));
+    std::fs::write(directory.join("result.json"), copper_json::Dumps::new().indent(2).sort_keys(true).dumps(&record))
+        .unwrap();
+    assert!(
+        result.changed && result.dependency_renewal.is_some(),
+        "must renew ownership and dependencies, not just test deletion"
+    );
+    assert_eq!(result.verification.unconnected_count, 0);
+    assert!(result.verification.other_violation_count < before.other_violation_count);
+    let fresh = result.retained_prefix.as_ref().unwrap();
+    assert_eq!(fresh.source(), prefix.source());
+    assert_eq!(fresh.missing_copper_occurrences(&result.board), (0, 0));
+    assert_ne!(prefix.missing_copper_occurrences(&result.board), (0, 0));
+    for part in prefix.contributions().iter().filter(|p| p.role == crate::fixed_prefix::FixedPrefixRole::ViaLattice) {
+        assert!(fresh.contributions().contains(part));
+    }
+    let state_path = result.dependency_renewal.as_ref().unwrap().get("state_path").unwrap().as_str().unwrap();
+    let saved = StateDocument::read(&std::fs::read_to_string(state_path).unwrap()).unwrap();
+    let StateValue::Map { entries, .. } = &saved.value else { panic!("retirement state") };
+    let field = |name: &str| &entries.iter().find(|(k, _)| matches!(k, StateValue::Str(k) if k == name)).unwrap().1;
+    assert_eq!(copper_pcb::state_codec::board(field("board")).unwrap(), result.board);
+    let saved_prefix = crate::state_codec::fixed_prefix_input(field("retained_prefix")).unwrap();
+    assert_eq!(saved_prefix.contributions(), fresh.contributions());
+    let StateValue::Tuple(witnesses) = field("renewed_witnesses") else { panic!("witnesses") };
+    for value in witnesses {
+        let witness = crate::bypass_reservations::saved_witness(value).unwrap().unwrap();
+        assert_eq!(crate::decoupling_paths::validate_crosslayer_witness(&result.board, &witness, None).unwrap(), "");
+    }
+    let StateValue::List(feeds) = field("renewed_surface_feeds") else { panic!("surface feeds") };
+    let mut decoded = crate::bypass_links::WitnessPaths::new();
+    for feed in feeds {
+        let link = crate::bypass_reservations::saved_link(&map_field(feed, "link").unwrap()).unwrap();
+        let Some(StateValue::Tuple(tracks)) = map_field(feed, "tracks") else { panic!("feed tracks") };
+        decoded.insert(
+            link,
+            tracks.iter().map(copper_pcb::state_codec::track).collect::<std::result::Result<Vec<_>, _>>().unwrap(),
+        );
+    }
+    let nets = decoded.keys().map(|link| link.net.clone()).collect();
+    let mut measured = crate::bypass_links::WitnessPaths::new();
+    let verified =
+        crate::bypass_links::verified_bypass_links(&result.board, &nets, Some(&mut measured), None, &[]).unwrap();
+    for (link, tracks) in decoded {
+        assert!(verified.contains(&link));
+        assert_eq!(measured[&link], tracks);
+    }
+    eprintln!(
+        "Native dead ends {} -> {}; fresh prefix and {} dependency witnesses",
+        before.other_violation_count,
+        result.verification.other_violation_count,
+        witnesses.len()
+    );
+}
+
+/// Real-board optional-prefix feasibility trial; never adopts its candidate.
 #[test]
 #[ignore = "requires saved final/ordinary/critical checkpoints and KiCad 10"]
 fn native_optional_escape_retirement_feasibility() {
@@ -818,10 +1269,8 @@ fn native_optional_escape_retirement_feasibility() {
                 Some(&directory.join(format!("net-{index:02}"))),
             )
             .unwrap();
-            let outcome = native_trial_outcome(&board, &native, &candidate, &after).unwrap();
-            let safe = outcome == "native_not_improved"
-                && after.unconnected_count == 0
-                && after.other_violation_count < native.other_violation_count;
+            let outcome = native_cleanup_trial_outcome(&board, &native, &candidate, &after).unwrap();
+            let safe = outcome == "accepted";
             row.insert("native_guard_outcome".into(), Value::from(outcome));
             row.insert("feasible".into(), Value::Bool(safe));
             row.insert("native_after".into(), after.document());
@@ -851,7 +1300,7 @@ fn native_optional_escape_retirement_feasibility() {
                     .unwrap();
             report.insert(
                 "combined_native_guard_outcome".into(),
-                Value::from(native_trial_outcome(&board, &native, &candidate, &after).unwrap()),
+                Value::from(native_cleanup_trial_outcome(&board, &native, &candidate, &after).unwrap()),
             );
             report.insert("combined_native_after".into(), after.document());
             report.insert(
