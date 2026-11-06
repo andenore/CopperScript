@@ -800,6 +800,35 @@ fn track_segment(value: &StateValue) -> Result<TrackSegment> {
     Ok(TrackSegment { net: net.expect("required"), start, end, width_nm: width, layer: layer.expect("required") })
 }
 
+fn track_arc(value: &StateValue) -> Result<TrackArc> {
+    dataclass!(reader, value, "pcbir.physical:TrackArc", {
+        "net" => net = text;
+        "start" => start = point;
+        "mid" => mid = point;
+        "end" => end = point;
+        "width_nm" => width = int;
+        "layer" => layer = copper_layer;
+    });
+    reader.required(&[
+        ("net", net.is_none()),
+        ("start", start.is_none()),
+        ("mid", mid.is_none()),
+        ("end", end.is_none()),
+        ("width_nm", width.is_none()),
+        ("layer", layer.is_none()),
+    ])?;
+    let arc = TrackArc {
+        net: net.expect("required"),
+        start: start.expect("required"),
+        mid: mid.expect("required"),
+        end: end.expect("required"),
+        width_nm: width.expect("required"),
+        layer: layer.expect("required"),
+    };
+    arc.validate()?;
+    Ok(arc)
+}
+
 fn via(value: &StateValue) -> Result<Via> {
     dataclass!(reader, value, "pcbir.physical:Via", {
         "net" => net = text;
@@ -973,6 +1002,8 @@ fn net_routing_rule(value: &StateValue) -> Result<NetRoutingRule> {
         "tuning_style" => style = |v| enumeration(v, "pcbir.physical:TuningStyle", TuningStyle::parse);
         "tuning_spacing_nm" => spacing = |v| optional(v, int);
         "tuning_group" => group = |v| optional(v, text);
+        "corner_style" => corner = |v| enumeration(v, "pcbir.physical:CornerStyle", CornerStyle::parse);
+        "corner_radius_nm" => corner_radius = |v| optional(v, int);
     });
     reader.required(&[("net", net.is_none())])?;
     let rule = NetRoutingRule {
@@ -1009,6 +1040,8 @@ fn net_routing_rule(value: &StateValue) -> Result<NetRoutingRule> {
         tuning_style: style.unwrap_or(TuningStyle::Bumps),
         tuning_spacing_nm: spacing.flatten(),
         tuning_group: group.flatten(),
+        corner_style: corner.unwrap_or(CornerStyle::Octilinear),
+        corner_radius_nm: corner_radius.flatten(),
     };
     rule.validate()?;
     Ok(rule)
@@ -1680,6 +1713,7 @@ pub fn physical_board(value: &StateValue) -> Result<PhysicalBoard> {
         "rules" => rules = design_rules;
         "tracks" => tracks = |v| list(v, track_segment);
         "vias" => vias = |v| list(v, via);
+        "arcs" => arcs = |v| list(v, track_arc);
         "metadata" => metadata = text_map;
         "regions" => regions = |v| list(v, placement_region);
         "keepouts" => keepouts = |v| list(v, placement_keepout);
@@ -1730,6 +1764,7 @@ pub fn physical_board(value: &StateValue) -> Result<PhysicalBoard> {
         rules: rules.unwrap_or_default(),
         tracks: tracks.unwrap_or_default(),
         vias: vias.unwrap_or_default(),
+        arcs: arcs.unwrap_or_default(),
         metadata: metadata.unwrap_or_default(),
         regions: regions.unwrap_or_default(),
         keepouts: keepouts.unwrap_or_default(),
@@ -2869,6 +2904,20 @@ fn e_track(track: &TrackSegment) -> StateValue {
     )
 }
 
+fn e_arc(arc: &TrackArc) -> StateValue {
+    dc(
+        "pcbir.physical:TrackArc",
+        vec![
+            ("net", s(&arc.net)),
+            ("start", e_point(&arc.start)),
+            ("mid", e_point(&arc.mid)),
+            ("end", e_point(&arc.end)),
+            ("width_nm", i(arc.width_nm)),
+            ("layer", e_layer(&arc.layer)),
+        ],
+    )
+}
+
 fn e_via(via: &Via) -> StateValue {
     dc(
         "pcbir.physical:Via",
@@ -2970,6 +3019,8 @@ fn e_rule(rule: &NetRoutingRule) -> StateValue {
             ("tuning_style", en("pcbir.physical:TuningStyle", rule.tuning_style.value())),
             ("tuning_spacing_nm", opt_int(rule.tuning_spacing_nm)),
             ("tuning_group", opt_text(&rule.tuning_group)),
+            ("corner_style", en("pcbir.physical:CornerStyle", rule.corner_style.value())),
+            ("corner_radius_nm", opt_int(rule.corner_radius_nm)),
         ],
     )
 }
@@ -3175,6 +3226,7 @@ pub fn encode_board(board: &PhysicalBoard) -> StateValue {
             ),
             ("tracks", tuple(&board.tracks, e_track)),
             ("vias", tuple(&board.vias, e_via)),
+            ("arcs", tuple(&board.arcs, e_arc)),
             ("metadata", e_text_map(&board.metadata, true)),
             (
                 "regions",

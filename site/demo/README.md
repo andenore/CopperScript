@@ -50,6 +50,13 @@ Use `target/release/copper.exe` on Windows. Rust adapter tests are included in
   JSON containing the existing `copperscript.check/v1` document and native
   component, pin and net queries. Decimal quantity strings retain native
   semantics. The frontend renders text with DOM text nodes, never source HTML.
+- `copper-web::review` is the read-only review boundary used by CopperReview.
+  It reuses the same guarded compilation/ERC/query path and returns
+  `copperscript.review-analysis/v1`, with `electrical_ir` containing the exact
+  `serializer::design_json` text used by the CLI. Compilable ERC failures retain
+  their IR for inspection; syntax/import failures return `electrical_ir: null`.
+  The original `analyze` response contract is unchanged. This export does not
+  add a project resolver or a PCB importer.
 - The example uses the existing `tiny` demonstration library. It makes no
   manufacturer-backed component or hardware-function claim.
 - Package imports are rejected with a located `WEB_IMPORT` finding before

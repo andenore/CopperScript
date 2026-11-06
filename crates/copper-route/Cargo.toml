@@ -8,6 +8,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+copper-cam.workspace = true
 copper-drc.workspace = true
 copper-json.workspace = true
 copper-lang.workspace = true

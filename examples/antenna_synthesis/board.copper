@@ -1,0 +1,42 @@
+// Trace-antenna synthesis probe: a first-order quarter-wave monopole template
+// generated inside a reserved board-edge region. Not a qualified radio design;
+// no resonance, matching, radiation or regulatory claim. See README.md.
+board AntennaSynthesisProbe {
+    import parts "./parts";
+
+    component U1: parts.RfSource;
+    component ANT1: parts.AntennaFeed;
+
+    net ANT_FEED { U1.RF; ANT1.FEED; }
+    net GND { U1.GND; }
+
+    constraint fixed_placement(U1) { x = 30mm; y = 14mm; }
+    constraint copper_zone(GND) { layers = "F.Cu,B.Cu"; }
+
+    // The region spans the upper-right corner: its top edge is the board
+    // perimeter, its bottom edge faces the host ground.
+    constraint antenna(ANT1.FEED) {
+        name = "bt";
+        x = 18mm;
+        y = 0mm;
+        width = 22mm;
+        height = 6mm;
+        ground = GND;
+        bands = "2400 MHz-2483.5 MHz";
+        track_width = 1mm;
+        // From `copper synthesize-antenna` (full-wave, fine mesh): -12.1 dB
+        // worst over the band with 0.94 nH series then 2.61 pF shunt from the
+        // antenna side, 85 % radiation efficiency. Simulation only.
+        geometry = "monopole height=5.3mm length=22.66mm";
+        tuned_for = "sha256:0198a99022a6c48e46df2643707cfce5bfc151fbf08479937c12ca4e23181ad8";
+    }
+
+    mechanical {
+        outline rectangle { width = 40mm; height = 30mm; }
+        stackup {
+            copper F.Cu { thickness = 0.035mm; }
+            dielectric core { thickness = 1.51mm; er = 4.4; loss_tangent = 0.02; material = "FR4"; type = core; }
+            copper B.Cu { thickness = 0.035mm; }
+        }
+    }
+}

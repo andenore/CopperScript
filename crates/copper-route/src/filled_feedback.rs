@@ -1068,6 +1068,7 @@ pub fn improve_filled_copper(
     let mut intent = board.clone();
     intent.tracks = source.tracks.clone();
     intent.vias = source.vias.clone();
+    intent.arcs = source.arcs.clone();
     intent.metadata = source.metadata.clone();
     if board.placements != source.placements || intent != *source {
         return Err(pcb(copper_pcb::Error::Value(
@@ -1226,6 +1227,9 @@ pub fn improve_filled_copper(
             let mut fixed = board.clone();
             fixed.tracks = fixed_tracks;
             fixed.vias = fixed_vias;
+            // A rerouted net's arched corners (CS-174) go with its tracks; the
+            // other nets' arcs stay as locked copper.
+            fixed.arcs.retain(|arc| !eligible.contains(&arc.net));
             let clearance = RoutingClearanceIndex::new(&fixed).map_err(pcb)?;
             let mut full = RoutingClearanceIndex::new(&fixed).map_err(pcb)?;
             for item in &mutable_tracks {

@@ -34,6 +34,7 @@ macro_rules! text_enum {
 }
 
 pub mod access_sites;
+pub mod arc_corners;
 pub mod bench;
 pub mod bga_fanout;
 pub mod boundary_access;

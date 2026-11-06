@@ -682,3 +682,29 @@ fn bus_skew_read_only_clock_deficit_includes_source_via_depth() {
     assert_eq!(notes, vec!["bus: A is 800000 nm short; its copper is not the bus router's"]);
     assert_eq!(board, saved, "input Clock copper remains read-only");
 }
+
+#[test]
+fn bus_skew_tuning_combines_arched_copper_and_via_depth() {
+    let (mut board, mut before) = via_depth_bus(copper_pcb::board::RouteKind::General);
+    for rule in &mut board.net_routing_rules {
+        rule.corner_style = copper_pcb::board::CornerStyle::Arc;
+        rule.corner_radius_nm = Some(mm(0.3));
+    }
+    before.get_mut("B").expect("B").0 =
+        vec![track("B", (6.0, 17.0), (14.0, 17.0), 0.2, F), track("B", (14.0, 17.0), (14.0, 23.0), 0.2, F)];
+    let source = board.clone();
+    let (tuned, notes) = tune_bus_skew(&board, &before, &rules(&board)).expect("tune");
+    assert!(notes.is_empty(), "{notes:?}");
+    assert_eq!(tuned["A"].1, before["A"].1, "via contacts must survive tuning");
+    assert_eq!(tuned["B"], before["B"], "the longer member stays untouched");
+    let mut result = board.clone();
+    for (tracks, vias) in tuned.values() {
+        result.tracks.extend(tracks.iter().cloned());
+        result.vias.extend(vias.iter().cloned());
+    }
+    let (arched, _) = crate::arc_corners::arch_board(&result).expect("arch").expect("arc policy");
+    assert!(!arched.arcs.is_empty(), "exercise actual curved copper");
+    let check = copper_drc::signal_integrity::verify_match_groups(&arched).expect("match check");
+    assert_eq!(check[0].status, "pass", "{:?}", check[0].members);
+    assert_eq!(board, source, "source copper remains immutable");
+}

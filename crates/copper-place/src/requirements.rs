@@ -446,6 +446,31 @@ fn evaluate(
     if route.is_none() {
         return outcome("blocked", "requires final routing-stage evidence; placement alone is insufficient");
     }
+    if constraint.kind == ConstraintKind::Antenna {
+        // The synthesized macro is found through its recorded declaration, not
+        // its name: `name` is optional and the ID may be user-chosen.
+        let declaration = constraint.origins.first().map_or("", String::as_str);
+        let recorded = copper_pcb::antenna::recorded_syntheses(scene.board);
+        let name = recorded
+            .iter()
+            .find(|row| row.get("declaration").and_then(Value::as_str) == Some(declaration))
+            .and_then(|row| row.get("name").and_then(Value::as_str));
+        let present = name.is_some_and(|name| {
+            scene.board.hard_macros.iter().any(|m| m.cluster == name)
+                && scene.board.rigid_clusters.iter().any(|c| c.name == name)
+        });
+        let Some(name) = name.filter(|_| present) else {
+            return outcome("fail", "synthesized antenna macro is missing from the physical board");
+        };
+        if !scene.board.materialized_macros.iter().any(|m| m == name) {
+            return outcome("blocked", "synthesized antenna copper is not materialized");
+        }
+        return outcome(
+            "pass",
+            "synthesized antenna copper preserved and materialized; first-order template with no return-loss, \
+             radiation, matching or regulatory evidence",
+        );
+    }
     if constraint.kind == ConstraintKind::CopperZone {
         let Some(expected) = lowered.zones.first() else {
             return Err(Unresolved::NotImplemented("an unlowered copper zone (Python crashes)".to_owned()));

@@ -39,6 +39,7 @@ fn bare_board(name: &str, outline: BoardOutline) -> PhysicalBoard {
         rules: DesignRules::default(),
         tracks: Vec::new(),
         vias: Vec::new(),
+        arcs: Vec::new(),
         metadata: IndexMap::new(),
         regions: Vec::new(),
         keepouts: Vec::new(),
@@ -408,6 +409,7 @@ fn validate_ports(host: &MacroBoard, data: &Value, segments: &[Segment]) -> Resu
         tracks: None,
         vias: None,
         polygons: Some(&polygons),
+        arcs: None,
     };
     let graph = copper_drc::connectivity::explicit_copper_connectivity(&owner, candidate)?;
     for port in ports {

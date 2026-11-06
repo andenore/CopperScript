@@ -1408,6 +1408,19 @@ fn render(board: &PhysicalBoard, library_names: &IndexMap<String, String>) -> Re
             "  )".to_owned(),
         ]);
     }
+    for (index, arc) in board.arcs.iter().enumerate() {
+        lines.extend([
+            "  (arc".to_owned(),
+            format!("    (start {})", point(arc.start)),
+            format!("    (mid {})", point(arc.mid)),
+            format!("    (end {})", point(arc.end)),
+            format!("    (width {})", mm(arc.width_nm)),
+            format!("    (layer {})", quote(arc.layer.value())),
+            format!("    (net {})", net_codes[&arc.net]),
+            format!("    (uuid \"{}\")", stable_uuid(&[&board.name, "arc", &index.to_string()])),
+            "  )".to_owned(),
+        ]);
+    }
     for (index, via) in board.vias.iter().enumerate() {
         // A board state may declare a via catalog: blind, buried and micro
         // vias keep their KiCad kind (a plain via is a through via).

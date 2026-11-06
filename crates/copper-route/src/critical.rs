@@ -2407,10 +2407,20 @@ fn finish_pair(
     }
     let max_skew = min_declared(first.max_skew_nm, second.max_skew_nm);
     let mut tuned_length = 0;
+    // CS-174: an arched pair is measured and tuned as arched.
+    let corners = crate::arc_corners::corner_policies(board);
+    let arched = corners.contains_key(&first.net) && corners.contains_key(&second.net);
+    let tune = |a: &mut Vec<TrackSegment>, b: &mut Vec<TrackSegment>, skew: i64, limit: i64, margin: i64, regions| {
+        if arched {
+            crate::pair_tuning::tune_pair_arched(a, b, skew, limit, margin, regions, &corners)
+        } else {
+            crate::pair_tuning::tune_pair(a, b, skew, limit, margin, regions)
+        }
+    };
     if let Some(max_skew) = max_skew {
         let amplitude = min_declared(first.tuning_amplitude_limit_nm, second.tuning_amplitude_limit_nm).unwrap_or(0);
         let margin = if breakout.any() { crate::pair_tuning::BREAKOUT_TUNING_MARGIN_NM } else { 0 };
-        tuned_length = crate::pair_tuning::tune_pair(
+        tuned_length = tune(
             &mut first_tracks,
             &mut second_tracks,
             max_skew,
@@ -2434,7 +2444,7 @@ fn finish_pair(
             let proposed: Vec<Via> =
                 via_pairs.iter().flat_map(|(a, b)| [a.clone(), b.clone()]).chain(return_vias.iter().cloned()).collect();
             let tuner = |a: &mut Vec<TrackSegment>, b: &mut Vec<TrackSegment>, skew: i64, limit: i64, margin: i64| {
-                crate::pair_tuning::tune_pair(a, b, skew, limit, margin, None)
+                tune(a, b, skew, limit, margin, None)
             };
             tuned_length = crate::pair_tuning_spans::tune_virtual_pair_spans(
                 &mut first_tracks,
@@ -2457,8 +2467,15 @@ fn finish_pair(
     }
     let first_refs: Vec<&TrackSegment> = first_tracks.iter().collect();
     let second_refs: Vec<&TrackSegment> = second_tracks.iter().collect();
-    let first_length = track_length(&first_refs);
-    let second_length = track_length(&second_refs);
+    let (first_length, second_length) = if arched {
+        let all: Vec<&TrackSegment> = first_refs.iter().chain(&second_refs).copied().collect();
+        (
+            crate::arc_corners::planned_length_nm(&all, &first.net, &corners),
+            crate::arc_corners::planned_length_nm(&all, &second.net, &corners),
+        )
+    } else {
+        (track_length(&first_refs), track_length(&second_refs))
+    };
     let skew = (first_length - second_length).abs();
     let center_spacing = first_width + gap;
     let coupled = coupled_length(&first_tracks, &second_tracks, center_spacing);

@@ -608,7 +608,8 @@ fn routed_track_length_nm(board: &PhysicalBoard, net: &str) -> i64 {
         .iter()
         .filter(|track| track.net == net)
         .map(|t| round_int(hypot((t.end.x_nm - t.start.x_nm) as f64, (t.end.y_nm - t.start.y_nm) as f64)))
-        .sum()
+        .sum::<i64>()
+        + crate::arcs::routed_arc_length_nm(board, net)
 }
 
 /// `copper_layer_depths_nm`: each copper layer's centre below the top

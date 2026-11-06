@@ -15,7 +15,8 @@ copper assembly snapshot board.copper --locked --offline -o assembly.lock
 copper assembly update board.copper --locked --offline --lock assembly.lock
 copper assembly check board.copper --locked --offline --lock assembly.lock --report build/assembly.json
 copper assembly bom board.copper --locked --offline --lock assembly.lock -o build/bom.csv \
-    --hand-assembly build/hand-assembly.csv --ordering build/ordering.csv
+    --hand-assembly build/hand-assembly.csv --ordering build/ordering.csv \
+    --assembly-sheet build/assembly-sheet.json
 ```
 
 `--hand-assembly` writes the components the supplier will not place: every
@@ -31,6 +32,31 @@ designator, with value, manufacturer, MPN, footprint, assembly route
 supplier, supplier part and source URL. Use it to quote, buy spares or
 re-order; the supplier BOM and hand-assembly list remain the files the
 assembler and the hand-fitter work from.
+
+CopperReview's **Assembly** mode tracks a manual build from `assembly.lock`
+itself (picked up from a project folder, or opened beside the board), taking
+values from the board. That skips `assembly check`. `--assembly-sheet` writes
+the checked equivalent, `copperscript.assembly-sheet/v1`, which opens the same
+way and keeps the same progress. It lists every
+selection once, sorted by board designator, with:
+
+| Field | Meaning |
+| --- | --- |
+| `reference`, `designator` | CopperScript reference (hierarchical path) and the KiCad designator it becomes |
+| `part`, `value` | Library part and component value, formatted like the BOM (`100 nF`) |
+| `manufacturer`, `mpn`, `footprint` | The reviewed part identity; null for `do not fit` parts without one |
+| `populate`, `assembly` | Lock mode and route: `supplier-assembled`, `hand-assemble` or `do not fit` |
+| `supplier`, `supplier_part`, `source_url` | The primary offer, if recorded |
+| `electrical_sha256` | The component digest the selection was reviewed against |
+
+The top level carries `board`, `lock` (lock schema and the SHA-256 of the lock
+file's bytes), `summary` (counts per route) and `limits`. The sheet has no
+placement: side, position and pads come from the board export opened beside
+it, matched by `reference` against the footprint's `CopperScriptPath` and then
+by designator. A tracker keeps a component's progress only while its
+`electrical_sha256`, MPN and footprint are unchanged. Like the other lists,
+the sheet is refused unless the assembly check passes. Recording a part as
+placed or inspected does not qualify the assembly.
 
 ### Alternate offers
 
@@ -137,6 +163,73 @@ Supplier offers should eventually live beside exact reusable CopperLib parts.
 This bounded prototype uses explicit board-side selections without changing
 the electrical language or claiming generic passives are qualified replacements.
 There are no board-specific rules or selections in the compiler.
+
+## Live distributor offers
+
+`copper assembly offers` is the one networked assembly action. It reads the
+lock (no compilation), looks up every fitted manufacturer+MPN with each
+configured provider and writes a timestamped report:
+
+```sh
+export MOUSER_API_KEY=...                            # any provider(s), see below
+copper assembly offers board.copper --quantity 5 --distributors DigiKey,Mouser,Farnell \
+    --min-stock 100 --within-weeks 8 --currency EUR --country NO
+```
+
+### Providers
+
+A provider is enabled when its environment variables are set; `--provider
+digikey,mouser` limits the lookup to those (naming an unconfigured one is an
+error). Each is queried only when it sells for a requested distributor, and
+results are merged per part: one offer per distributor and SKU, a direct API's
+offer winning over Nexar's.
+
+| `--provider` | Distributors | Register | Environment | Limits (paced) |
+| --- | --- | --- | --- | --- |
+| `digikey` | DigiKey | [developer.digikey.com](https://developer.digikey.com): production app with the Product Information API (v4) | `DIGIKEY_CLIENT_ID`, `DIGIKEY_CLIENT_SECRET` | 120/min, 1000/day |
+| `mouser` | Mouser | [mouser.com/api-hub](https://www.mouser.com/api-hub/): Search API key | `MOUSER_API_KEY` | 30/min, 1000/day |
+| `farnell` | Farnell, Newark or element14, by store | [partner.element14.com](https://partner.element14.com): Product Search API key | `FARNELL_API_KEY`, optional `FARNELL_STORE` (default `uk.farnell.com`; e.g. `no.farnell.com`, `www.newark.com`) | 2/s, 1000/day |
+| `nexar` | every authorized seller Octopart lists | [portal.nexar.com](https://portal.nexar.com): application with the Supply scope (needs a plan with a part quota) | `NEXAR_CLIENT_ID`, `NEXAR_CLIENT_SECRET` | per plan |
+
+DigiKey and Nexar take `--country`/`--currency` (default `US`/`USD`);
+Mouser prices come in the API account's currency and Farnell's in the store's.
+Requests are spaced under each per-minute limit, one per part (Nexar batches
+20). An HTTP 429 stops that provider with a rate-limit error. A provider that
+fails is reported (`PROVIDER ERROR`, `provider_errors`) and its offers are left
+out; the command fails only when every queried provider fails. Daily limits
+bound how many parts one run can look up. TME, LCSC, Arrow and other
+distributor APIs can be added as further providers.
+
+### Report
+
+- The lock defaults to `assembly.lock` beside the board and the report to
+  `build/assembly-offers/offers-YYYYMMDDTHHMMSSZ.json` there (`--lock`, `-o`).
+  Schema `copperscript-assembly-offers/v0.1`, marked `"deterministic": false`,
+  with the providers used.
+- Per part: references, quantity needed (`--quantity` boards, default 1), the
+  exact match (MPN equal without case, manufacturer prefix-equal without case
+  or punctuation, so `Murata` matches `Murata Electronics`) or the near-miss
+  candidates, and for each requested distributor every offer: source
+  provider, SKU, stock, factory lead days, MOQ, packaging, URL and price breaks.
+- `--distributors` defaults to the suppliers already named in the lock and
+  compares names without case or punctuation (`DigiKey` is `Digi-Key`).
+- An offer is adequate when stock covers the build and `--min-stock`, or, with
+  `--within-weeks`, when the factory lead time fits. Parts with no adequate
+  offer are listed as `SHORT` and under `shortfall`; with `--min-stock` or
+  `--within-weeks` the command then exits 1.
+- `--write-alternates` adds, per fitted selection, one offer for the same
+  manufacturer part from each requested distributor not yet listed on it
+  (preferring an adequate offer, then the smallest MOQ). It writes only
+  `supplier`, `supplier_part` and a non-tracking `source_url`, skips codes the
+  lock gives another part, and never changes MPNs, primary offers, `populate`
+  or `reviewed`. It needs a canonical v0.4 lock (as `assembly update` writes).
+
+Credentials come only from the environment variables above. They, access
+tokens and API keys in query strings travel to `curl` on standard input, never
+on a command line, and are never printed or written; errors show URLs without
+their query string. `--offline` is refused. Check, compile, lock and BOM
+export never touch the network, and the report is never an input to them.
+Live stock is not a reservation.
 
 ## Unapproved review candidates
 

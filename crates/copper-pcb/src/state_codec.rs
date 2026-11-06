@@ -248,6 +248,22 @@ pub fn track(value: &StateValue) -> Result<TrackSegment> {
     Ok(track)
 }
 
+/// `pcbir.physical:TrackArc`.
+pub fn arc(value: &StateValue) -> Result<TrackArc> {
+    let fields = Fields::of(value, "pcbir.physical:TrackArc")?;
+    fields.allow(&["net", "start", "mid", "end", "width_nm", "layer"])?;
+    let arc = TrackArc {
+        net: text(fields.required("net")?)?,
+        start: point(fields.required("start")?)?,
+        mid: point(fields.required("mid")?)?,
+        end: point(fields.required("end")?)?,
+        width_nm: integer(fields.required("width_nm")?)?,
+        layer: layer(fields.required("layer")?)?,
+    };
+    arc.validate()?;
+    Ok(arc)
+}
+
 pub fn via(value: &StateValue) -> Result<Via> {
     let fields = Fields::of(value, "pcbir.physical:Via")?;
     fields.allow(&["net", "position", "size_nm", "drill_nm", "from_layer", "to_layer", "technology", "finish"])?;
@@ -770,6 +786,8 @@ pub fn routing_rule(value: &StateValue) -> Result<NetRoutingRule> {
         "tuning_style",
         "tuning_spacing_nm",
         "tuning_group",
+        "corner_style",
+        "corner_radius_nm",
     ])?;
     let flag = |name: &str| fields.get(name).map(boolean).transpose().map(|v| v.unwrap_or(false));
     let rule = NetRoutingRule {
@@ -815,6 +833,11 @@ pub fn routing_rule(value: &StateValue) -> Result<NetRoutingRule> {
         },
         tuning_spacing_nm: optional_integer(fields.get("tuning_spacing_nm"))?,
         tuning_group: optional_text(fields.get("tuning_group"))?,
+        corner_style: match fields.get("corner_style") {
+            None => CornerStyle::Octilinear,
+            Some(style) => enumeration(style, "CornerStyle", CornerStyle::parse)?,
+        },
+        corner_radius_nm: optional_integer(fields.get("corner_radius_nm"))?,
     };
     rule.validate()?;
     Ok(rule)
@@ -1299,6 +1322,7 @@ pub fn board(value: &StateValue) -> Result<PhysicalBoard> {
         "rules",
         "tracks",
         "vias",
+        "arcs",
         "metadata",
         "regions",
         "keepouts",
@@ -1354,6 +1378,7 @@ pub fn board(value: &StateValue) -> Result<PhysicalBoard> {
         },
         tracks: sequence(fields.get("tracks"), track)?,
         vias: sequence(fields.get("vias"), via)?,
+        arcs: sequence(fields.get("arcs"), arc)?,
         metadata: string_map(fields.get("metadata"), text)?,
         regions: sequence(fields.get("regions"), placement_region)?,
         keepouts: sequence(fields.get("keepouts"), placement_keepout)?,

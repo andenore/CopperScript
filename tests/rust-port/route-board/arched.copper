@@ -1,0 +1,30 @@
+// Rust-port corpus input: connectors placed so every route turns, with
+// arched corners (CS-174) on a differential pair and two ordinary nets; not
+// a circuit.
+board Arched {
+    import parts "./bga/parts";
+    component J1: parts.Pair;
+    component J2: parts.Pair;
+    component J3: parts.Pair;
+    component J4: parts.Pair;
+    net DP { J1.A; J2.A; }
+    net DN { J1.B; J2.B; }
+    net A { J3.A; J4.A; }
+    net B { J3.B; J4.B; }
+    constraint fixed_placement(J1) { x = 20 mm; y = 20 mm; rotation = 0; }
+    constraint fixed_placement(J2) { x = 70 mm; y = 55 mm; rotation = 0; }
+    constraint fixed_placement(J3) { x = 20 mm; y = 60 mm; rotation = 0; }
+    constraint fixed_placement(J4) { x = 80 mm; y = 20 mm; rotation = 0; }
+    constraint routing(DP) {
+        kind = differential; priority = 100; partner = DN;
+        width = 0.2mm; pair_gap = 0.2mm; max_vias = 0; allowed_layers = "F.Cu";
+        corner_style = "arc"; corner_radius = 0.4mm;
+    }
+    constraint routing(DN) {
+        kind = differential; priority = 100; partner = DP;
+        width = 0.2mm; pair_gap = 0.2mm; max_vias = 0; allowed_layers = "F.Cu";
+        corner_style = "arc"; corner_radius = 0.4mm;
+    }
+    constraint routing(A) { corner_style = "arc"; }
+    constraint routing(B) { corner_style = "arc"; corner_radius = 0.3mm; }
+}

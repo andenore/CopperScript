@@ -1055,3 +1055,51 @@ leaves the copper unchanged, reports the longest run against the run a group
 bump needs, the amplitude against the least group height, or the room on each
 side, and its units are tuned one by one. Boards without the property MUST
 route byte-identically. See R14 in the [D-PHY routing plan](language-reference.md).
+
+## CS-174 — Arched corners for RF, analog and tuned pairs (Accepted)
+
+A routing rule MAY declare `corner_style = "arc"` (default `"octilinear"`)
+and `corner_radius` (a positive length, by default three times the net's
+width). After routing, smoothing and tuning, before exact DRC, the arc-corner
+stage replaces every corner of such a net where exactly two of its tracks of
+one layer and width meet, away from vias and lands, by a circular `TrackArc`
+tangent to both legs: the legs are trimmed by the tangent length
+r·tan(θ/2) for the turn θ, and the corner keeps a straight piece between
+consecutive arcs. The radius is `corner_radius`, reduced where the legs are
+too short so that the two tangents of every piece fit it, never below half
+the width (such a corner stays sharp and is reported). The two members of a
+differential pair turn concentrically: the member inside the turn takes
+`corner_radius`, its partner `corner_radius` plus the lane spacing, matched by
+the turn and the lane spacing; a member that turns alone takes its own radius.
+Arc copper is checked exactly where it can be and conservatively otherwise:
+an arc meets its legs at shared integer endpoints; routing clearance and
+board-edge queries use an inscribed chord chain whose capsules are widened by
+the chain's sagitta (at most 100 nm) plus 2 nm, so a passing query is sound;
+exact DRC and the stage itself measure arc distances in floating point from
+the exact rational centre of the three stored points; DRC reports a violation
+when the distance falls more than 8 nm short (rounding those points moves a
+circle, and a pair's two circles, by a few nanometres), and the stage asks
+2 nm more than the rule. An arc that cannot be checked clear of foreign
+copper, keep-outs or the board edge is not emitted; its corner stays sharp
+and the route report lists it. The stage never moves vias, lands, immutable
+macro copper, polygons or copper of other nets, and no arc is created by any
+other stage.
+
+Lengths count arcs at their true length (radius × sweep, rounded). Tuning
+of an arc-style net plans against the same arc-corner policy: the tuners
+emit sharp 90° corners, measure a unit's length as its arched length
+(`arc_corners::planned_length_nm`), and gain what the stage later realises
+(within 4 nm above the even target) unless a corner is refused by
+clearance, which the final length-match DRC then reports. The stage runs
+once, as the last change to the copper before exact DRC and the native
+checks; a net the filled-copper feedback loop reroutes afterwards loses its
+arcs. Serpentine tops and bump risers are therefore
+semicircular where their length allows two tangents of the radius; both
+members of a pair gain the same length because each turns through two
+inside and two outside corners per bump or leg. `tuning_group` (CS-173)
+requires octilinear corners in this step. 45° route-style chamfers are not
+applied to arc-style nets, so a 90° turn is one arc, not two.
+
+Boards without the property MUST route byte-identically; KiCad exports arcs
+as native `(arc ...)` tracks, and the DRC digest, saved states and scenes
+carry them. See [arched routing](language-reference.md#arched-corners).

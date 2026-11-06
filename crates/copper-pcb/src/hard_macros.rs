@@ -1219,7 +1219,7 @@ pub fn cluster_placement_matches(board: &PhysicalBoard, placements: &IndexMap<St
 }
 
 /// Shapely's `exterior.covers(LineString([a, b]))`: collinear ring edges cover the segment.
-fn ring_covers_segment(ring: &[Point], a: Point, b: Point) -> bool {
+pub(crate) fn ring_covers_segment(ring: &[Point], a: Point, b: Point) -> bool {
     let (dx, dy) = (i128::from(b.x_nm - a.x_nm), i128::from(b.y_nm - a.y_nm));
     let length = dx * dx + dy * dy;
     let along = |p: Point| i128::from(p.x_nm - a.x_nm) * dx + i128::from(p.y_nm - a.y_nm) * dy;

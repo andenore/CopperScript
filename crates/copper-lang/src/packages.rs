@@ -235,6 +235,11 @@ pub fn read_manifest(path: &Path) -> Result<ModuleManifest> {
             format!("cannot read manifest: {}", paths::python_os_error(&failure, Some(&paths::display(path)))),
         )
     })?;
+    parse_manifest(&text, path)
+}
+
+/// Parse an in-memory manifest with the same rules as the CLI.
+pub fn parse_manifest(text: &str, path: &Path) -> Result<ModuleManifest> {
     let mut module_path: Option<String> = None;
     let mut requirements = IndexMap::new();
     let mut replacements = IndexMap::new();
@@ -418,7 +423,7 @@ pub fn inventory_checksum(files: &[LockedFile]) -> String {
     format!("sha256:{}", hex(&digest.finalize()))
 }
 
-type LockEntries = IndexMap<(String, String), LockedModule>;
+pub type LockEntries = IndexMap<(String, String), LockedModule>;
 
 /// `_read_lock`.
 pub fn read_lock(path: &Path) -> Result<LockEntries> {
@@ -430,7 +435,15 @@ pub fn read_lock(path: &Path) -> Result<LockEntries> {
     };
     let text =
         std::fs::read_to_string(path).map_err(|e| failure(paths::python_os_error(&e, Some(&paths::display(path)))))?;
-    let document = copper_json::parse(&text).map_err(|e| failure(e.python_message(&text)))?;
+    parse_lock(&text, path)
+}
+
+/// Parse a supplied lockfile without filesystem access or lock mutation.
+pub fn parse_lock(text: &str, path: &Path) -> Result<LockEntries> {
+    let failure = |message: String| {
+        error("PKG007", format!("cannot read copper.lock: {message}"), &location(&paths::display(path), 1))
+    };
+    let document = copper_json::parse(text).map_err(|e| failure(e.python_message(text)))?;
     let modules =
         match (document.get("schema").and_then(Value::as_str), document.get("modules").and_then(Value::as_array)) {
             (Some(LOCK_SCHEMA), Some(modules)) => modules,
@@ -613,6 +626,8 @@ pub struct PackageResolver {
     pub source_directory: PathBuf,
     /// Reads package sources instead of the filesystem (the language server).
     pub source_reader: Option<SourceReader>,
+    /// Read-only, bounded source snapshot used by browser electrical review.
+    pub snapshot: Option<Arc<crate::snapshot::SourceSnapshot>>,
     /// `prepare_dependencies`' resolver: new pins are recorded in memory and
     /// a changed existing pin is an error.
     pub preparation: bool,
@@ -633,8 +648,42 @@ impl PackageResolver {
             source_directory: paths::resolve(&root),
             manifest,
             source_reader: None,
+            snapshot: None,
             preparation: false,
         })
+    }
+
+    /// A resolver over already supplied source files; never reads or writes a
+    /// cache. `source_directory` is the entry file's directory, as in
+    /// `for_source`, so relative assets are based where native ones are.
+    pub fn from_snapshot(
+        manifest: ModuleManifest,
+        lock_entries: LockEntries,
+        snapshot: Arc<crate::snapshot::SourceSnapshot>,
+        source_directory: PathBuf,
+    ) -> Self {
+        let root = manifest.root();
+        let reader = snapshot.clone();
+        Self {
+            cache_root: root.join(".copper-cache/pkg"),
+            locked: true,
+            offline: true,
+            lock_path: root.join("copper.lock"),
+            lock_entries,
+            source_roots: IndexMap::new(),
+            source_directory,
+            manifest,
+            source_reader: Some(Arc::new(move |path| reader.read(path))),
+            snapshot: Some(snapshot),
+            preparation: false,
+        }
+    }
+
+    pub fn source_paths(&self, directory: &Path) -> Vec<PathBuf> {
+        match &self.snapshot {
+            Some(snapshot) => snapshot.sources(directory),
+            None => crate::compiler::package_sources(directory),
+        }
     }
 
     /// `PackageResolver.for_source`: the manifest at or above `source`, or an
@@ -828,6 +877,9 @@ impl PackageResolver {
         if relative.is_empty() || !MODEL_SUFFIXES.contains(&extension.as_str()) {
             return Err(error("PKG004", format!("not a 3D model file: {identity}"), location));
         }
+        if self.snapshot.is_some() {
+            return Err(error("WEB_PACKAGE", "3D model libraries are not available in this source snapshot", location));
+        }
         let version = self.manifest.requirements[&module].clone();
         let replacement = self.manifest.replacements.get(&module).cloned();
         let remote = self.manifest.remote_replacements.get(&module).cloned();
@@ -968,7 +1020,7 @@ impl PackageResolver {
         if starts_with_any(import_path, &["./", "../"]) {
             return self.resolve_relative(import_path, location);
         }
-        if !self.manifest.filename.is_file() {
+        if self.snapshot.is_none() && !self.manifest.filename.is_file() {
             return Err(error(
                 "PKG001",
                 "URL package imports require a copper.mod in this directory or a parent",
@@ -993,7 +1045,13 @@ impl PackageResolver {
                 location,
             ));
         }
-        let module_root = if let Some(replacement) = &replacement {
+        let module_root = if let Some(snapshot) = &self.snapshot {
+            snapshot
+                .module_roots
+                .get(&module_path)
+                .cloned()
+                .ok_or_else(|| error("WEB_PACKAGE", "module is not present in this source snapshot", location))?
+        } else if let Some(replacement) = &replacement {
             let mut root = PathBuf::from(replacement);
             if !root.is_absolute() {
                 root = self.manifest.root().join(root);
@@ -1016,7 +1074,7 @@ impl PackageResolver {
         let package_dir = paths::resolve(&module_root.join(suffix));
         // `module_inventory` skips ignored directories, so a package inside
         // one would compile files the lock checksum never covers.
-        if !package_dir.is_dir()
+        if !self.snapshot.as_ref().map_or_else(|| package_dir.is_dir(), |s| s.is_dir(&package_dir))
             || !paths::is_relative_to(&package_dir, &module_root)
             || in_ignored_part(&package_dir, &module_root)
         {
@@ -1030,9 +1088,13 @@ impl PackageResolver {
                 location,
             ));
         }
-        let files = module_inventory(&module_root).map_err(|message| {
-            error("PKG012", format!("cannot inventory {module_path}@{version}: {message}"), location)
-        })?;
+        let files = self
+            .snapshot
+            .as_ref()
+            .map_or_else(|| module_inventory(&module_root), |s| s.inventory(&module_root))
+            .map_err(|message| {
+                error("PKG012", format!("cannot inventory {module_path}@{version}: {message}"), location)
+            })?;
         let checksum = inventory_checksum(&files);
         let source = match (&replacement, &remote) {
             (Some(replacement), _) => format!("replace:{replacement}"),
@@ -1067,12 +1129,15 @@ impl PackageResolver {
         if import_path.contains('\\')
             || !paths::is_relative_to(&importer, &root)
             || !paths::is_relative_to(&directory, &root)
-            || !directory.is_dir()
-            || crosses_symlink(&unresolved, &root)
+            || !self.snapshot.as_ref().map_or_else(|| directory.is_dir(), |s| s.is_dir(&directory))
+            || (self.snapshot.is_none() && crosses_symlink(&unresolved, &root))
         {
             return Err(error("PKG004", "relative package import must stay inside its source module", location));
         }
-        let checksum = module_inventory(&directory)
+        let checksum = self
+            .snapshot
+            .as_ref()
+            .map_or_else(|| module_inventory(&directory), |s| s.inventory(&directory))
             .map(|files| inventory_checksum(&files))
             .map_err(|message| error("PKG012", format!("cannot inventory local package: {message}"), location))?;
         let external = self.source_roots.get(&root).cloned();
@@ -1082,7 +1147,12 @@ impl PackageResolver {
         let (module, version, root_checksum) =
             external.clone().unwrap_or((self.manifest.path.clone(), "workspace".to_owned(), checksum.clone()));
         if external.is_some() {
-            let current = module_inventory(&root).map(|files| inventory_checksum(&files)).ok();
+            let current = self
+                .snapshot
+                .as_ref()
+                .map_or_else(|| module_inventory(&root), |s| s.inventory(&root))
+                .map(|files| inventory_checksum(&files))
+                .ok();
             if current.as_deref() != Some(root_checksum.as_str()) {
                 return Err(error("PKG008", "source module changed during relative import resolution", location));
             }

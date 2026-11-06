@@ -1,5 +1,5 @@
 //! `copper assembly bom` for a board fitted entirely by hand: no supplier BOM,
-//! but the hand-assembly and ordering lists are still written.
+//! but the hand-assembly and ordering lists and the assembly sheet are still written.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -58,6 +58,7 @@ fn an_all_consigned_board_writes_its_lists_and_no_supplier_bom() {
     std::fs::write(&bom, "stale\n").expect("a stale BOM");
     let ordering = directory.join("ordering.csv");
     let hand = directory.join("hand-assembly.csv");
+    let sheet = directory.join("assembly-sheet.json");
     let (status, stdout) = copper(&[
         "assembly",
         "bom",
@@ -72,6 +73,8 @@ fn an_all_consigned_board_writes_its_lists_and_no_supplier_bom() {
         hand.to_str().expect("utf-8 path"),
         "--ordering",
         ordering.to_str().expect("utf-8 path"),
+        "--assembly-sheet",
+        sheet.to_str().expect("utf-8 path"),
     ]);
     assert_eq!(status, 0, "{stdout}");
     assert!(stdout.contains("No supplier-assembled components"), "{stdout}");
@@ -79,6 +82,58 @@ fn an_all_consigned_board_writes_its_lists_and_no_supplier_bom() {
     let ordered = std::fs::read_to_string(&ordering).expect("the ordering list");
     let fitted = std::fs::read_to_string(&hand).expect("the hand-assembly list");
     assert!(ordered.lines().count() > 1 && fitted.lines().count() == count + 1, "{ordered}\n{fitted}");
+
+    // The assembly sheet lists every selection once, by designator, with its
+    // route and the digest a tracker keys progress on.
+    let lock_bytes = std::fs::read(&lock).expect("the lock");
+    let document = copper_json::parse(&std::fs::read_to_string(&sheet).expect("the sheet")).expect("json");
+    assert_eq!(document.get("schema"), Some(&Value::from("copperscript.assembly-sheet/v1")));
+    let digest = document.get("lock").and_then(|lock| lock.get("sha256")).and_then(Value::as_str);
+    assert_eq!(digest, Some(copper_assembly::files::sha256_hex(&lock_bytes).as_str()));
+    let components = document.get("components").and_then(Value::as_array).expect("components");
+    assert_eq!(components.len(), count);
+    let field = |item: &Value, key: &str| item.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
+    let designators: Vec<String> = components.iter().map(|item| field(item, "designator")).collect();
+    let mut sorted = designators.clone();
+    sorted.sort();
+    assert_eq!(designators, sorted, "sorted by designator");
+    for item in components {
+        let expected = if field(item, "populate") == "none" { "do not fit" } else { "hand-assemble" };
+        assert_eq!(field(item, "assembly"), expected, "{}", field(item, "reference"));
+        assert_eq!(field(item, "electrical_sha256").len(), 64);
+    }
+    let c1 = components.iter().find(|item| field(item, "reference") == "C1").expect("C1");
+    assert_eq!(field(c1, "value"), "100 nF");
+    let summary = document.get("summary").expect("summary");
+    let hand_count = components.iter().filter(|item| field(item, "assembly") == "hand-assemble").count();
+    assert_eq!(summary.get("hand_assemble_count"), Some(&Value::from(hand_count as u64)));
+    assert!(stdout.contains("Generated assembly sheet"), "{stdout}");
+}
+
+#[test]
+fn an_unreviewed_lock_writes_no_assembly_sheet() {
+    let directory = scratch("assembly-sheet-unreviewed");
+    let board = "examples/valid_board/board.copper";
+    let lock = directory.join("assembly.lock");
+    let (status, stdout) = copper(&["assembly", "snapshot", board, "--locked", "--offline", "-o", path(&lock)]);
+    assert_eq!(status, 0, "{stdout}");
+    let sheet = directory.join("assembly-sheet.json");
+    let bom = directory.join("bom.csv");
+    let (status, stdout) = copper(&[
+        "assembly",
+        "bom",
+        board,
+        "--locked",
+        "--offline",
+        "--lock",
+        path(&lock),
+        "-o",
+        path(&bom),
+        "--assembly-sheet",
+        path(&sheet),
+    ]);
+    assert_eq!(status, 2, "{stdout}");
+    assert!(!sheet.exists(), "{stdout}");
 }
 
 fn scratch(name: &str) -> PathBuf {
@@ -229,4 +284,58 @@ fn a_layout_only_change_leaves_every_selection_current() {
     assert!(!stdout.contains("STALE"), "{stdout}");
     assert!(update(&board, &lock).contains(": 7 unchanged, 0 changed"));
     assert!(reviewed(&lock).iter().all(|(_, reviewed)| *reviewed));
+}
+
+/// `assembly offers` without provider credentials: refused before any request,
+/// no report written and the lock untouched.
+#[test]
+fn offers_need_provider_credentials_and_refuse_offline_runs() {
+    let directory = scratch("assembly-offers-credentials");
+    let board = directory.join("board.copper");
+    std::fs::copy(workspace().join("examples/valid_board/board.copper"), &board).expect("the example board");
+    let lock = directory.join("assembly.lock");
+    let (status, stdout) = copper(&["assembly", "snapshot", path(&board), "--locked", "--offline", "-o", path(&lock)]);
+    assert_eq!(status, 0, "{stdout}");
+    let before = std::fs::read_to_string(&lock).expect("the lock");
+    let offers = |extra: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_copper"))
+            .args(["assembly", "offers", path(&board)])
+            .args(extra)
+            .env_remove("NEXAR_CLIENT_ID")
+            .env_remove("NEXAR_CLIENT_SECRET")
+            .env_remove("DIGIKEY_CLIENT_ID")
+            .env_remove("DIGIKEY_CLIENT_SECRET")
+            .env_remove("MOUSER_API_KEY")
+            .env_remove("FARNELL_API_KEY")
+            .output()
+            .expect("the copper binary runs");
+        (
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stdout).into_owned() + &String::from_utf8_lossy(&output.stderr),
+        )
+    };
+    let (status, stdout) = offers(&["--write-alternates", "--quantity", "3", "--distributors", "DigiKey"]);
+    assert_eq!(status, 2, "{stdout}");
+    assert!(stdout.contains("ASSEMBLY ERROR: no offer provider is configured; set any of:"), "{stdout}");
+    assert!(stdout.contains("MOUSER_API_KEY (mouser)") && stdout.contains("NEXAR_CLIENT_ID"), "{stdout}");
+    let (status, stdout) = offers(&["--provider", "mouser", "--distributors", "Mouser"]);
+    assert_eq!(status, 2, "{stdout}");
+    assert!(stdout.contains("offer provider not configured; set MOUSER_API_KEY (mouser)"), "{stdout}");
+    let (status, stdout) = offers(&["--provider", "tme", "--distributors", "TME"]);
+    assert_eq!(status, 2, "{stdout}");
+    assert!(stdout.contains("unknown offer provider 'tme'"), "{stdout}");
+    let (status, stdout) = offers(&["--offline"]);
+    assert_eq!(status, 2, "{stdout}");
+    assert!(stdout.contains("cannot run --offline"), "{stdout}");
+    let (status, stdout) = offers(&["--quantity", "0"]);
+    assert_eq!(status, 2, "{stdout}");
+    assert!(stdout.contains("--quantity must be at least 1"), "{stdout}");
+    // A hand-formatted lock is never rewritten.
+    std::fs::write(&lock, before.replace("\n", "\n\n")).expect("a reformatted lock");
+    let (status, stdout) = offers(&["--write-alternates"]);
+    assert_eq!(status, 2, "{stdout}");
+    assert!(stdout.contains("rewrites only a canonical"), "{stdout}");
+    std::fs::write(&lock, &before).expect("the lock");
+    assert!(!directory.join("build").exists(), "no report without a lookup");
+    assert_eq!(std::fs::read_to_string(&lock).expect("the lock"), before);
 }

@@ -8,7 +8,7 @@
 //! shortcut; so is a necked-down corner whose diagonal would leave its
 //! breakout region.
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 
 use copper_pcb::board::{PhysicalBoard, TrackSegment, Via};
 use copper_physical::geometry::shapes_clear;
@@ -31,6 +31,13 @@ pub fn chamfer_ordinary_corners(
     committed_tracks: Option<&[TrackSegment]>,
 ) -> Result<Vec<TrackSegment>> {
     let committed = committed_tracks.unwrap_or(&board.tracks);
+    // An arc-style net (CS-174) keeps its 90-degree corners for one arc each.
+    let arched: IndexSet<&str> = board
+        .net_routing_rules
+        .iter()
+        .filter(|rule| rule.corner_style == copper_pcb::board::CornerStyle::Arc)
+        .map(|rule| rule.net.as_str())
+        .collect();
     let mut active: Vec<TrackSegment> = tracks.to_vec();
     let mut endpoints: IndexMap<(CopperLayer, Point), Vec<usize>> = IndexMap::new();
     for (index, track) in tracks.iter().enumerate() {
@@ -44,7 +51,7 @@ pub fn chamfer_ordinary_corners(
         let [i, j] = indexes.as_slice() else { continue };
         let (i, j) = (*i, *j);
         let (first, second) = (active[i].clone(), active[j].clone());
-        if first.net != second.net || first.width_nm != second.width_nm {
+        if first.net != second.net || first.width_nm != second.width_nm || arched.contains(first.net.as_str()) {
             continue;
         }
         if (corner != first.start && corner != first.end) || (corner != second.start && corner != second.end) {

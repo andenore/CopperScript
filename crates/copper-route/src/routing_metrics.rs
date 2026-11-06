@@ -49,7 +49,11 @@ pub fn routing_quality(board: &PhysicalBoard, native: Option<&PlaneVerification>
     for net in sorted_nets {
         let tracks: Vec<&TrackSegment> = board.tracks.iter().filter(|t| t.net == net.name).collect();
         let mut entry = Object::new();
-        entry.insert("track_length_nm".to_owned(), Value::from(tracks.iter().map(|t| track_length_nm(t)).sum::<i64>()));
+        let arc_length: i64 = board.arcs.iter().filter(|a| a.net == net.name).map(|a| a.length_nm()).sum();
+        entry.insert(
+            "track_length_nm".to_owned(),
+            Value::from(tracks.iter().map(|t| track_length_nm(t)).sum::<i64>() + arc_length),
+        );
         entry.insert("track_count".to_owned(), Value::from(tracks.len() as i64));
         entry.insert(
             "via_count".to_owned(),
@@ -94,6 +98,7 @@ pub fn routing_quality(board: &PhysicalBoard, native: Option<&PlaneVerification>
                 tracks: Some(&filtered),
                 vias: Some(&[]),
                 polygons: Some(&[]),
+                arcs: Some(&[]),
             };
             surface_graphs.push((key.clone(), explicit_copper_connectivity(board, candidate)?));
         }

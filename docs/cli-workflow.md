@@ -376,7 +376,8 @@ placement trials per feedback iteration.)
 Pass `--verify-plane-fill "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"` to
 refill a disposable KiCad copy and include authoritative open-net/island
 findings in the report; a zone outline or stitched via alone is not proof of
-connectivity. See [routing research tasks](routing-backlog.md).
+connectivity. `--verify-plane-fill native` does the same without KiCad, with
+CopperScript's own [filler](native-filling.md) and [DRC](native-drc.md). See [routing research tasks](routing-backlog.md).
 Use the [current backlog](../TODO.md) for unresolved solver work.
 
 ### Full-vertical routing from a fresh checkout (Windows / PowerShell)

@@ -578,6 +578,7 @@ fn evidence(board: &PhysicalBoard, opens: i64, mut findings: Vec<NativeFinding>)
         other_violation_count: findings.len() as i64,
         findings: Vec::new(),
         dangling_track_uuids: Vec::new(),
+        expected_antenna_open_ends: Vec::new(),
         native_findings: findings,
         artifact_directory: None,
         filled_regions: Vec::new(),

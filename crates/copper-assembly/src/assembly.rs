@@ -889,11 +889,7 @@ pub fn write_ordering_list(board: &Board, lock: &Lock, path: &Path) -> Result<us
     }
     let components = components(board)?;
     let designators = designators(&lock.selections)?;
-    let route = |populate: &str| match populate {
-        "supplier" => "supplier-assembled",
-        "consigned" => "hand-assemble",
-        _ => "do not fit",
-    };
+    let route = assembly_route;
     // One column pair per alternate distributor, by first spelling in
     // supplier order (a stable sort keeps lock order among equals).
     let mut all: Vec<&Offer> = lock.selections.iter().flat_map(|entry| &entry.alternates).collect();
@@ -979,6 +975,93 @@ pub fn write_ordering_list(board: &Board, lock: &Lock, path: &Path) -> Result<us
     }
     write_csv(path, &content)?;
     Ok(total)
+}
+
+/// Schema of the assembly sheet a bench assembly tracker reads.
+pub const SHEET_SCHEMA: &str = "copperscript.assembly-sheet/v1";
+
+fn assembly_route(populate: &str) -> &'static str {
+    match populate {
+        "supplier" => "supplier-assembled",
+        "consigned" => "hand-assemble",
+        _ => "do not fit",
+    }
+}
+
+/// `assembly_sheet`: every selection with its board designator, value, part
+/// identity and assembly route, for tracking a build by hand. `lock_sha256`
+/// is the digest of the lock file's bytes. Placement (side, position) is not
+/// part of the sheet: it comes from the board the tracker opens.
+pub fn assembly_sheet(board: &Board, lock: &Lock, lock_sha256: &str) -> Result<Value> {
+    if !passed(&check_assembly(board, lock)?) {
+        return fail("assembly selections failed; assembly sheet refused");
+    }
+    let components = components(board)?;
+    let designators = designators(&lock.selections)?;
+    let mut entries: Vec<&Selection> = lock.selections.iter().collect();
+    entries.sort_by(|a, b| (&designators[&a.reference], &a.reference).cmp(&(&designators[&b.reference], &b.reference)));
+    let mut counts: IndexMap<&str, usize> =
+        ["supplier-assembled", "hand-assemble", "do not fit"].into_iter().map(|route| (route, 0)).collect();
+    let items: Vec<Value> = entries
+        .into_iter()
+        .map(|entry| {
+            let (component, _) = &components.by_reference[&entry.reference];
+            let route = assembly_route(&entry.populate);
+            *counts.entry(route).or_default() += 1;
+            let mut item = Object::new();
+            item.insert("reference".into(), Value::from(entry.reference.as_str()));
+            item.insert("designator".into(), Value::from(designators[&entry.reference].as_str()));
+            item.insert("part".into(), Value::from(entry.part.as_str()));
+            item.insert("value".into(), json_text(&value_text(component)));
+            item.insert("manufacturer".into(), json_text(&entry.manufacturer));
+            item.insert("mpn".into(), json_text(&entry.mpn));
+            item.insert("footprint".into(), json_text(&entry.footprint));
+            item.insert("populate".into(), Value::from(entry.populate.as_str()));
+            item.insert("assembly".into(), Value::from(route));
+            item.insert("supplier".into(), json_text(&entry.supplier));
+            item.insert("supplier_part".into(), json_text(&entry.supplier_part));
+            item.insert("source_url".into(), json_text(&entry.source_url));
+            // The digest the selection was reviewed against: a tracker keeps
+            // progress for a component only while this is unchanged.
+            item.insert("electrical_sha256".into(), Value::from(components.digests[&entry.reference].as_str()));
+            Value::Object(item)
+        })
+        .collect();
+    let mut lock_identity = Object::new();
+    lock_identity.insert("schema".into(), Value::from(SCHEMA));
+    lock_identity.insert("sha256".into(), Value::from(lock_sha256));
+    let mut summary = Object::new();
+    summary.insert("component_count".into(), Value::from(items.len() as u64));
+    summary.insert("supplier_assembled_count".into(), Value::from(counts["supplier-assembled"] as u64));
+    summary.insert("hand_assemble_count".into(), Value::from(counts["hand-assemble"] as u64));
+    summary.insert("not_fitted_count".into(), Value::from(counts["do not fit"] as u64));
+    let mut document = Object::new();
+    document.insert("schema".into(), Value::from(SHEET_SCHEMA));
+    document.insert("board".into(), Value::from(board.name.as_str()));
+    document.insert("lock".into(), Value::Object(lock_identity));
+    document.insert("summary".into(), Value::Object(summary));
+    document.insert("components".into(), Value::Array(items));
+    document.insert(
+        "limits".into(),
+        Value::Array(
+            [
+                "Placement, side and pads come from the board export the tracker opens, matched by reference.",
+                "Recording a component as placed or inspected is not assembly, electrical or manufacturing qualification.",
+            ]
+            .map(Value::from)
+            .to_vec(),
+        ),
+    );
+    Ok(Value::Object(document))
+}
+
+/// `write_assembly_sheet`: the sheet as indented JSON; returns the number of
+/// components it lists.
+pub fn write_assembly_sheet(board: &Board, lock: &Lock, lock_sha256: &str, path: &Path) -> Result<usize> {
+    let document = assembly_sheet(board, lock, lock_sha256)?;
+    let count = document.get("components").and_then(Value::as_array).map_or(0, <[Value]>::len);
+    write_csv(path, &(Dumps::new().indent(2).dumps(&document) + "\n"))?;
+    Ok(count)
 }
 
 /// `write_candidate_bom(board, lock, directory, native_positions=...)`;

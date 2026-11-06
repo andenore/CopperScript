@@ -105,6 +105,7 @@ text_enum!(ConstraintKind {
     ViaInPad = "via_in_pad",
     LengthMatch = "length_match",
     HoleClearance = "hole_clearance",
+    Antenna = "antenna",
 });
 
 text_enum!(ConstraintMode { Require = "require", Target = "target", Prefer = "prefer", Assume = "assume", External = "external" });

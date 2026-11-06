@@ -3,6 +3,8 @@ module github.com/anden/CopperScript
 require github.com/copperscript/examples v0.1.0
 require github.com/andenore/CopperLib 50655eff5613690a606c9dd1de456b2adae249df
 require github.com/KiCad/kicad-footprints 7ebfa6b23cc292a56f751b7b5f4a0e12eeef69dd
+require github.com/KiCad/kicad-packages3D 10.0.8
+replace github.com/KiCad/kicad-packages3D => gitlab.com/kicad/libraries/kicad-packages3D 10.0.8
 
 footprint-library Connector_Debug github.com/andenore/CopperLib/packages/parts/samtec/ftsh-105-01-l-dv-007-k/footprints
 footprint-library EG800G github.com/andenore/CopperLib/packages/parts/quectel/eg800g-eu/footprints

@@ -175,6 +175,7 @@ pub fn board(name: &str, width_mm: f64, height_mm: f64) -> PhysicalBoard {
         rules: DesignRules::default(),
         tracks: Vec::new(),
         vias: Vec::new(),
+        arcs: Vec::new(),
         metadata: IndexMap::new(),
         regions: Vec::new(),
         keepouts: Vec::new(),
@@ -282,6 +283,8 @@ pub fn rule(net: &str) -> copper_pcb::board::NetRoutingRule {
         tuning_style: TuningStyle::Bumps,
         tuning_spacing_nm: None,
         tuning_group: None,
+        corner_style: copper_pcb::board::CornerStyle::Octilinear,
+        corner_radius_nm: None,
     }
 }
 

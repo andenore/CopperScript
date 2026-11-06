@@ -451,6 +451,7 @@ fn same_but_copper(board: &PhysicalBoard, other: &PhysicalBoard) -> bool {
         rules,
         tracks: _,
         vias: _,
+        arcs: _,
         metadata,
         regions,
         keepouts,

@@ -56,6 +56,9 @@ Choose only the relevant focused record for detailed acceptance criteria:
 - [x] Author named hard-macro definitions in Copper, following the
   [requirements and implementation plan](docs/macro-definition-plan.md).
 - [ ] Extend movable-macro feedback with complete boundary/owner revalidation.
+- [ ] Arched corners (CS-174) follow-ups: concentric arcs for `tuning_group`
+  lanes beyond a pair, re-arching a net the filled-copper feedback loop
+  reroutes, and arcs in the browser routing lab (`copper-web-route`).
 - [ ] Extend qualified mirrored/curved/local-zone macro variants only with exact
   serialization, fingerprints, native fill/export and independent CAM coverage.
 

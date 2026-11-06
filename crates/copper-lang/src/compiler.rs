@@ -371,7 +371,7 @@ fn load_package(
     resolver: &mut PackageResolver,
     stack: &[String],
 ) -> Result<PackageContents> {
-    let sources = package_sources(&resolved.directory);
+    let sources = resolver.source_paths(&resolved.directory);
     if sources.is_empty() {
         let location = crate::packages::location(&paths::display(&resolved.directory), 1);
         return Err(error(

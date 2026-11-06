@@ -213,6 +213,8 @@ fn default_rule(net: &str) -> NetRoutingRule {
         tuning_style: copper_pcb::board::TuningStyle::Bumps,
         tuning_spacing_nm: None,
         tuning_group: None,
+        corner_style: copper_pcb::board::CornerStyle::Octilinear,
+        corner_radius_nm: None,
     }
 }
 
@@ -416,6 +418,7 @@ fn lanes_board(footprint: PhysicalFootprint, placements: Vec<Placement>, nets: V
         rules: copper_physical::DesignRules::default(),
         tracks: Vec::new(),
         vias: Vec::new(),
+        arcs: Vec::new(),
         metadata: IndexMap::new(),
         regions: Vec::new(),
         keepouts: Vec::new(),
