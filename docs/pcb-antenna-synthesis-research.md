@@ -373,7 +373,7 @@ sharing the CPU:
 
 | Stage | Geometry | Resonance | Bare | Matched |
 | --- | --- | --- | --- | --- |
-| Template, coarse | monopole 5.3 mm / 17.46 mm | 2.930 GHz | -0.9 dB | -9.7 dB |
+| Start (template length, full height), coarse | monopole 5.3 mm / 17.46 mm | 2.930 GHz | -0.9 dB | -9.7 dB |
 | Resonance tuning, coarse | 22.00 mm | 2.451 GHz | -2.9 dB | -12.5 dB |
 | Polish winner, coarse | 22.66 mm | 2.388 GHz | -3.3 dB | -12.7 dB |
 | Fine verification | 22.66 mm | 2.387 GHz | -3.1 dB | -12.1 dB |
@@ -432,8 +432,10 @@ joined through the refilled zone.
   inside the port.
 - The first-order template uses the microstrip permittivity, which assumes
   ground under the trace; an antenna region has none. On the example board
-  the 17.46 mm template resonates at 2.93 GHz, 20 % high, which is why
-  synthesis matters.
+  the lowered template (`monopole height=3mm length=17.46mm`) resonates at
+  2.73 GHz on the fine mesh, 12 % high, and misses -10 dB even matched
+  (-8.7 dB); the same length at full height, where synthesis starts,
+  resonates at 2.93 GHz on the coarse mesh. That gap is why synthesis matters.
 
 ## Risks
 
