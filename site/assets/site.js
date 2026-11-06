@@ -31,6 +31,30 @@ links.forEach(link => {
   });
 });
 
+// CopperReview screenshots: the links open each image without JavaScript.
+const shots = {
+  layout: { alt: "CopperReview layout mode showing all copper layers of CopperAssetTracker, the component list and the note form", caption: "Layout · select components, nets or a region of the routed board, write what you observe and what should improve, and export the notes for the next solver iteration." },
+  schematic: { alt: "CopperReview schematic sheet of the CopperAssetTracker MCU with the modem UART interface selected and its endpoints listed", caption: "Schematic · generated sheets, power hierarchy and buses from the compiled IR. Here the modem UART is selected, with its endpoints and the source documents of each part." },
+  "3d": { alt: "CopperReview 3D view of CopperAssetTracker with component bodies on a green solder-mask board", caption: "3D · the board with KiCad's 3D models and generated bodies, orbit, pan and orthographic views." },
+  assembly: { alt: "CopperReview Assembly mode listing CopperAssetTracker parts by assembly line, with the next part to place highlighted", caption: "Assembly · walk a manual build line by line from assembly.lock: what to place next, where, its supplier, and what is placed and inspected." }
+};
+const shotImage = document.getElementById("review-shot");
+const shotCaption = document.getElementById("review-caption");
+const shotLinks = document.querySelectorAll("[data-shot]");
+shotLinks.forEach(link => {
+  link.addEventListener("click", event => {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    const shot = shots[link.dataset.shot];
+    if (!shot || !shotImage || !shotCaption) return;
+    event.preventDefault();
+    shotImage.src = link.getAttribute("href");
+    shotImage.alt = shot.alt;
+    shotCaption.textContent = shot.caption;
+    shotLinks.forEach(item => item.removeAttribute("aria-current"));
+    link.setAttribute("aria-current", "true");
+  });
+});
+
 if (navigator.clipboard && window.isSecureContext) {
   document.querySelectorAll("[data-copy]").forEach(button => {
     button.hidden = false;

@@ -144,6 +144,20 @@ The JSON records the SHA-256 of each input. Review the resonance, band and
 efficiency wording in `index.html` against the new numbers; the stat tiles are
 filled from the JSON, the prose is not.
 
+## Maintain the CopperReview screenshots
+
+`assets/review/` holds four 1600 × 1000 JPEG screenshots (quality 82) of
+CopperReview with the showcase board and its compiled IR: Layout, the
+Electrical schematic with `MODEM_UART` selected, 3D (Realistic, then 3D) and
+Assembly with the tracker's `assembly.lock`. They are captures of the real
+viewer, not mock-ups. Retake them when the showcase or CopperReview's interface
+changes: from a `make showcase` run, copy `filled.kicad_pcb` to
+`CopperAssetTracker.kicad_pcb` beside it (the viewer titles the board by its
+file name), serve it with `python -m copper_review BOARD --stage fully_routed`
+from CopperReview, open the run's `board.json` and the tracker's
+`assembly.lock` through **Open → File…**, and capture each mode at a 1600 × 1000
+viewport.
+
 ## Maintain the recorded showcase
 
 The five tracker SVGs, two IR excerpts, `rendering.json` and `snapshot.json` are byte-for-byte copies from
