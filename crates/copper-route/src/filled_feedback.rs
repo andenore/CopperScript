@@ -300,7 +300,10 @@ fn hard_violations(
                         let Some(index) = index.filter(|index| *index < vias.len()) else { return Ok(None) };
                         ViolationObject::Via(board.vias[index].clone(), vias[index])
                     }
-                    "pad" | "zone" => ViolationObject::Fixed(Dumps::new().sort_keys(true).dumps(&item.document())),
+                    // Arcs are locked copper: arched nets are never displaced.
+                    "pad" | "zone" | "arc" => {
+                        ViolationObject::Fixed(Dumps::new().sort_keys(true).dumps(&item.document()))
+                    }
                     _ => return Ok(None),
                 };
                 keys.push(identities.insert_full(identity).0);
@@ -1213,11 +1216,19 @@ pub fn improve_filled_copper(
     if !known_opens.iter().any(general_zone) {
         return finish(board, Some(evidence), "no_eligible_zone_opens", Vec::new(), Some(OUTSIDE_SCOPE.to_owned()));
     }
+    // A net with arched corners (CS-174) is locked copper: its tracks are
+    // trimmed to the arcs, and rerouted nets are not re-arched.
+    let arched: IndexSet<&str> = board.arcs.iter().map(|arc| arc.net.as_str()).collect();
     let eligible: BTreeSet<String> = initial
         .detailed
         .nets
         .iter()
-        .filter(|item| item.connected && !zone_nets.contains(&item.net) && !specialized.contains(item.net.as_str()))
+        .filter(|item| {
+            item.connected
+                && !zone_nets.contains(&item.net)
+                && !specialized.contains(item.net.as_str())
+                && !arched.contains(item.net.as_str())
+        })
         .map(|item| item.net.clone())
         .collect();
     let prefix = initial.plane_stitch.as_ref().map_or(&initial.critical.board, |stitch| &stitch.board);
@@ -1286,9 +1297,6 @@ pub fn improve_filled_copper(
             let mut fixed = board.clone();
             fixed.tracks = fixed_tracks;
             fixed.vias = fixed_vias;
-            // A rerouted net's arched corners (CS-174) go with its tracks; the
-            // other nets' arcs stay as locked copper.
-            fixed.arcs.retain(|arc| !eligible.contains(&arc.net));
             let clearance = RoutingClearanceIndex::new(&fixed).map_err(pcb)?;
             let mut full = RoutingClearanceIndex::new(&fixed).map_err(pcb)?;
             for item in &mutable_tracks {

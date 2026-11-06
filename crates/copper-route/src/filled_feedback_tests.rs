@@ -1491,3 +1491,38 @@ fn native_kicad_bridge_reduces_opens_despite_reindexed_dangling_copper() {
     let changed = verify_filled_planes(&after, Path::new(&cli), 10, None).unwrap();
     assert_eq!(outcome(&before, &old, &after, &changed), "native_new_violations");
 }
+
+#[test]
+fn native_findings_on_arched_corners_bind_to_their_arc() {
+    let mut board = fixture();
+    board.arcs.push(copper_pcb::board::TrackArc {
+        net: "D18".to_owned(),
+        start: pt(5.0, 3.0),
+        mid: pt(5.7, 3.3),
+        end: pt(6.0, 4.0),
+        width_nm: mm(0.2),
+        layer: CopperLayer::Front,
+    });
+    let arc = item(&board, "arc", 0);
+    // The export names the arc `(uuid stable_uuid(board, "arc", index))`.
+    assert_eq!(arc.uuid, copper_pcb::kicad_pcb::stable_uuid(&[&board.name, "arc", "0"]));
+    let exported = copper_pcb::kicad_pcb::generate(&board).unwrap();
+    assert!(exported.artifacts.iter().any(|artifact| artifact.content.contains(&arc.uuid)));
+    assert_eq!(arc.net.as_deref(), Some("D18"));
+    let open = NativeFinding {
+        category: "unconnected".to_owned(),
+        kind: "unconnected_items".to_owned(),
+        description: String::new(),
+        items: vec![arc.clone()],
+    };
+    let opens = evidence(&board, 1, vec![open]);
+    assert_eq!(mapped_open_nets(&opens), Some(IndexSet::from(["D18".to_owned()])));
+    let violation = NativeFinding {
+        category: "violation".to_owned(),
+        kind: "clearance".to_owned(),
+        description: String::new(),
+        items: vec![arc, item(&board, "segment", 2)],
+    };
+    let violations = evidence(&board, 0, vec![violation]);
+    assert!(hard_violations(&board, &violations, &mut IndexSet::new()).unwrap().is_some());
+}

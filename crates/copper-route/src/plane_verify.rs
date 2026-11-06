@@ -422,6 +422,20 @@ pub fn native_object_map(board: &PhysicalBoard) -> copper_pcb::Result<IndexMap<S
             },
         );
     }
+    // Arched corners (CS-174), named as the export names them.
+    for (index, arc) in board.arcs.iter().enumerate() {
+        add(
+            "arc",
+            &[&index.to_string()],
+            NativeCopperItem {
+                net: Some(arc.net.clone()),
+                layers: vec![arc.layer.value().to_owned()],
+                index: Some(index as i64),
+                positions_nm: [arc.start, arc.mid, arc.end].iter().map(|p| (p.x_nm, p.y_nm)).collect(),
+                ..blank()
+            },
+        );
+    }
     let stack = &board.stackup.copper_layers;
     for (index, via) in board.vias.iter().enumerate() {
         let position = |layer| stack.iter().position(|l| *l == layer).expect("via layer");
