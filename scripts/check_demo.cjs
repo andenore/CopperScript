@@ -64,7 +64,7 @@ async function checkWorker(source) {
   assert.equal(malformed.check.passed, false); assert.equal(malformed.nets.length, 0);
   const imports = check(original.replace("use library", "import x \"https://example.com/parts\";\n    use library"));
   assert.deepEqual(codes(imports), ["WEB_IMPORT"]);
-  assert.deepEqual(codes(check(" ".repeat(32769))), ["WEB_SIZE"]);
+  assert.deepEqual(codes(check(" ".repeat(512 * 1024 + 1))), ["WEB_SIZE"]);
   assert.deepEqual(check(original.replace(/\n/g, "\r\n")), good);
   assert.deepEqual(check(original), good, "Recover to a clean result after failures");
   const unicodeSource = "// 🟠\n" + original.replace("U1.PB7; U2.SDA;", "U1.PB8; U2.SDA;");
