@@ -6,7 +6,8 @@
 //!
 //! Zones are filled natively ([`fill`], with the design rules of [`rules`])
 //! and written back into the board ([`pcb_write`]); the plotter reads the
-//! fills saved in the board, natively or by a KiCad refill.
+//! fills saved in the board, natively or by a KiCad refill. [`render`] draws
+//! plotted Gerbers as SVG illustrations.
 
 pub mod board;
 pub mod compare;
@@ -19,4 +20,5 @@ pub mod pcb_write;
 pub mod plot;
 pub mod poly;
 pub mod readback;
+pub mod render;
 pub mod rules;

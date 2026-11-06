@@ -91,7 +91,6 @@ board Nrf52CoinCell {
         id = "ground-return-plane";
         layers = "In1.Cu";
         inset = 0.5mm;
-        pad_connection = solid;
     }
 
     // Provisional 50 x 40 mm placement. Antenna/RF member poses come from

@@ -441,34 +441,32 @@ board FullVerticalTracker {
         id = "ground-return-plane";
         layers = "In1.Cu,In4.Cu";
         inset = 0.5mm;
-        pad_connection = solid;
     }
     constraint copper_zone(V3V3) {
         id = "logic-power-plane";
         layers = "In3.Cu";
         inset = 0.5mm;
-        pad_connection = solid;
         island_policy = "remove_all";
     }
     constraint copper_zone(GND) {
         id = "top-ground-north"; layers = "F.Cu";
-        polygon_mm = "0.5,0.5;99.5,0.5;99.5,41.6;0.5,41.6";
-        priority = 1; pad_connection = solid; island_policy = "remove_all";
+        polygon_mm = "0.5,0.5;99.5,0.5;99.5,41.3;0.5,41.3";
+        priority = 1; island_policy = "remove_all";
     }
     constraint copper_zone(GND) {
         id = "top-ground-west"; layers = "F.Cu";
         polygon_mm = "0.5,41.0;43,41.0;43,54.0;0.5,54.0";
-        priority = 2; pad_connection = solid; island_policy = "remove_all";
+        priority = 2; island_policy = "remove_all";
     }
     constraint copper_zone(GND) {
         id = "top-ground-east"; layers = "F.Cu";
         polygon_mm = "61,41.0;99.5,41.0;99.5,54.0;61,54.0";
-        priority = 3; pad_connection = solid; island_policy = "remove_all";
+        priority = 3; island_policy = "remove_all";
     }
     constraint copper_zone(GND) {
         id = "top-ground-south"; layers = "F.Cu";
         polygon_mm = "0.5,53.6;99.5,53.6;99.5,79.5;0.5,79.5";
-        priority = 4; pad_connection = solid; island_policy = "remove_all";
+        priority = 4; island_policy = "remove_all";
     }
 
     // Source-selected physical realizations; geometry remains in the assets.

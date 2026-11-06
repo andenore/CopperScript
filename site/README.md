@@ -11,10 +11,11 @@ design with LLM agents. The primary action is to try the compiler example; the
 secondary action is to inspect a complete, documented board.
 
 - Introduce CopperScript consistently across the three repository READMEs.
-- Show actual source, inspectable IR and native KiCad illustrations rather than
+- Show actual source, inspectable IR and illustrations rendered from native plots rather than
   invented renders or unsupported performance claims.
-- Explain language intent, the shared workflow, the tracker, quick start,
-  practical questions and repository ownership in that order.
+- Explain language intent, hard macros, antenna synthesis, the shared
+  workflow, the tracker, quick start, practical questions and repository
+  ownership in that order.
 - Use static HTML/CSS and small progressive enhancements. No framework,
   installation, external fonts, analytics or board build is needed to publish.
 - Add descriptive page metadata, a canonical URL, PNG share image and sitemap.
@@ -39,6 +40,9 @@ python3 -m http.server 8000 --bind 127.0.0.1 --directory site
 
 Open `http://127.0.0.1:8000/`. Check both a wide and a narrow viewport and the
 five board-view links, including the combined six-layer view with fills hidden.
+The hero stacks the top, In2 and bottom showcase plots; hovering widens the
+stack. In the antenna section, switch between the template and the synthesized
+design and hover the return-loss chart.
 Package pads are highlighted gold in the surface, placement and combined views.
 The full-size SVG link follows the selected view. The site also works without JavaScript: the views open
 their SVG files, the quick-start text remains selectable and FAQs use native
@@ -107,27 +111,73 @@ posts are welcome. No posts, account settings or search submissions are sent
 automatically. Track indexed pages, search queries, GitHub referrals and example
 feedback; search-enabled LLM answers are a useful spot check, not a stable score.
 
+## Maintain the antenna figure
+
+`assets/antenna-synthesis.json` holds the antenna section's data: the
+fine-mesh return-loss curves, matching networks and efficiencies of
+`examples/antenna_synthesis` with and without its synthesized `geometry`,
+and the copper of both boards after native routing and fill. Nothing in it is
+drawn by hand or simulated by the site. `check_site.cjs` fails if the
+synthesized geometry or `tuned_for` digest differs from the example's
+declaration, so re-run synthesis and refresh the figure together.
+
+From the repository root, with a release `copper` (each verify run takes a
+few minutes on the fine mesh):
+
+```console
+copper=target/release/copper; out=build/promo
+mkdir -p $out && rm -rf $out/template-src && cp -r examples/antenna_synthesis $out/template-src
+sed -i '/geometry = "/d; /tuned_for = /d' $out/template-src/board.copper
+$copper synthesize-antenna examples/antenna_synthesis/board.copper --verify --report $out/antenna-verify.json --locked --offline
+$copper synthesize-antenna $out/template-src/board.copper --verify --report $out/antenna-template.json --locked --offline
+$copper route-board examples/antenna_synthesis/board.copper -o $out/synth.kicad_pcb --report $out/synth-route.json --locked --offline
+$copper route-board $out/template-src/board.copper -o $out/template.kicad_pcb --report $out/template-route.json --locked --offline
+$copper fill $out/synth.kicad_pcb -o $out/synth.filled.kicad_pcb
+$copper fill $out/template.kicad_pcb -o $out/template.filled.kicad_pcb
+node scripts/update_site_antenna.cjs \
+  --template-report $out/antenna-template.json --template-pcb $out/template.filled.kicad_pcb \
+  --synthesized-report $out/antenna-verify.json --synthesized-pcb $out/synth.filled.kicad_pcb
+node scripts/check_site.cjs
+```
+
+The JSON records the SHA-256 of each input. Review the resonance, band and
+efficiency wording in `index.html` against the new numbers; the stat tiles are
+filled from the JSON, the prose is not.
+
+## Maintain the CopperReview screenshots
+
+`assets/review/` holds four 1600 × 1000 JPEG screenshots (quality 82) of
+CopperReview with the showcase board and its compiled IR: Layout, the
+Electrical schematic with `MODEM_UART` selected, 3D (Realistic, then 3D) and
+Assembly with the tracker's `assembly.lock`. They are captures of the real
+viewer, not mock-ups. Retake them when the showcase or CopperReview's interface
+changes: from a `make showcase` run, copy `filled.kicad_pcb` to
+`CopperAssetTracker.kicad_pcb` beside it (the viewer titles the board by its
+file name), serve it with `python -m copper_review BOARD --stage fully_routed`
+from CopperReview, open the run's `board.json` and the tracker's
+`assembly.lock` through **Open → File…**, and capture each mode at a 1600 × 1000
+viewport.
+
 ## Maintain the recorded showcase
 
 The five tracker SVGs, two IR excerpts, `rendering.json` and `snapshot.json` are byte-for-byte copies from
-CopperAssetTracker's `docs/showcase/`. The current illustrations represent the
-`promo-reroute-20261013` fresh source-matched routing review, not a released
-board. Its snapshot binds the exact exported PCB, source, native DRC, route
-summary, in-language macro binding and rendered-asset hashes. Native DRC is clean, but five check types were
-ignored, 13 electrical-requirement checks remain blocked, independent CAM was
-not run for this review. No new manufacturing export is claimed, and
-supplier/assembly review is incomplete. `qualified_release` stays
-false. The site links to current board status separately.
+CopperAssetTracker's `docs/showcase/`, made by its `make showcase`
+(`docs/showcase.md` there). The current illustrations are the
+`native-showcase-20261106` routing review, built without KiCad: the current
+source routed with native plane verification, then `copper fill`, `copper drc
+--cam` (zero violations, zero unconnected, CAM read-back clean) and `copper
+plot`. The snapshot binds the tracker commit and inputs, the compiler commit and
+executable, the route, DRC and read-back results and every asset by SHA-256.
+Native DRC lists the checks it does not make; 12 electrical-requirement checks
+remain blocked; no independent CAM or manufacturing export was made, and
+`qualified_release` is false. The site links to current board status separately.
 
-Surface pad geometry is plotted separately by KiCad and overlaid in gold so
-ground-connected lands remain visible against a fill. The placement image also
-includes those native pads. The combined view shows all six copper layers,
-tracks, vias and package outlines, hiding zones and solid copper fill graphics
-only in a temporary plotting copy. Overlapping reference/value labels are hidden
-in placement and combined views. `rendering.json` records the layers, hidden
-geometry counts and hashes of the preserved native pads/tracks. The input PCB,
-route and DRC evidence are unchanged. See the tracker's figure-refresh guide for
-the exact retained-candidate workflow; historical source status is preserved.
+Every view is drawn by `copper render` from the plotted Gerbers, viewed from
+above without mirroring. Gold is copper inside the solder-mask openings
+(exposed copper); the placement view shows the front silkscreen and the
+openings themselves. The combined view draws all six copper layers from a plot
+of the routed board before zone filling. `rendering.json` records each view's
+plot and layer plates.
 
 Refresh from a regenerated, source-matched tracker showcase:
 

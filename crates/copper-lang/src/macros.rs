@@ -645,7 +645,7 @@ pub fn lower_macro(
     let mut zones = Vec::new();
     for node in groups.get("zone").cloned().unwrap_or_default() {
         let checks = Checks { location: &node.location };
-        let a = attrs(node, &[])?;
+        let a = attrs(node, &[("pad_connection", text_value("thermal"))])?;
         let layers = checks.layers(&a["layers"])?;
         used_layers.extend(layers.iter().cloned());
         let clearance = checks.length(&a["clearance"], false)?;

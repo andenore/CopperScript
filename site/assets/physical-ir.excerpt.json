@@ -1,22 +1,22 @@
 {
-  "note": "Selected source-checked native PCB placements; not a full physical-IR serialization or production approval.",
+  "note": "Selected placements from the routed showcase board; not a full physical-IR serialization or production approval.",
   "placements": [
     {
-      "footprint": "CopperScript:SIM7670G_LNGV_kicad_mod__dc0ea19d644b367fc68e",
+      "reference": "C_MCU",
+      "footprint": "CopperScript:C_0402_1005Metric__c194d71d44bfbdf13a07",
       "position_mm": {
-        "x": "20",
-        "y": "24"
+        "x": "56.3",
+        "y": "21"
       },
-      "reference": "U_MODEM_U",
       "rotation_degrees": "90"
     },
     {
-      "footprint": "CopperScript:C_0402_1005Metric__86575c98c1bd84414ad1",
+      "reference": "U_MODEM",
+      "footprint": "CopperScript:SIM7670G_LNGV_kicad_mod__dc0ea19d644b367fc68e",
       "position_mm": {
-        "x": "53.599976",
-        "y": "21.190002"
+        "x": "22.1",
+        "y": "24"
       },
-      "reference": "C_MCU",
       "rotation_degrees": "90"
     }
   ],

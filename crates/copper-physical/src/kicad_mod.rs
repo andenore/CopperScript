@@ -712,15 +712,17 @@ fn parse_pad(node: &List, source: &str) -> Result<FootprintPad> {
         }
         heatsink = true;
     }
+    // KiCad's ZONE_CONNECTION numbering; -1 inherits the footprint or zone setting.
     let zone_connection = match first(node, "zone_connect") {
         None => None,
-        Some(zone) => Some(match required_atom(zone, 1, source, "pad zone connection")? {
-            "1" => ZoneConnection::None,
-            "2" => ZoneConnection::Thermal,
-            "3" => ZoneConnection::Solid,
-            "4" => ZoneConnection::ThtThermal,
+        Some(zone) => match required_atom(zone, 1, source, "pad zone connection")? {
+            "-1" => None,
+            "0" => Some(ZoneConnection::None),
+            "1" => Some(ZoneConnection::Thermal),
+            "2" => Some(ZoneConnection::Solid),
+            "3" => Some(ZoneConnection::ThtThermal),
             other => return import(format!("{source}: unsupported pad zone connection {}", repr(other))),
-        }),
+        },
     };
     let mut remove_unused_layers = false;
     if let Some(remove) = first(node, "remove_unused_layers") {
