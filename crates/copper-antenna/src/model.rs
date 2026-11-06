@@ -434,6 +434,11 @@ pub fn copper_rects(site: &AntennaSite, layout: &Layout) -> Vec<Rect> {
     rects
 }
 
+/// The z of a via's far end when it leaves F.Cu, in millimetres.
+fn via_bottom(stack: &Stack, to: CopperLayer) -> Option<f64> {
+    stack.z(to).filter(|z| *z < 0.0)
+}
+
 fn sheet(model: &mut ContinuousStructure, id: PropertyId, r: Rect, z: f64) -> Result<(), String> {
     model
         .add_primitive(id, Primitive::new(BoxShape::new([r[0], r[1], z], [r[2], r[3], z])).with_priority(30))
@@ -481,6 +486,22 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
     let copper = copper_rects(site, layout);
     for rect in &copper {
         sheet(&mut model, antenna, *rect, 0.0)?;
+    }
+    // The short's ground via is a barrel over the span the board gets, F.Cu
+    // to `via_to`, stub below the last ground plane included: a flat square
+    // alone leaves the short open when ground is zoned only below F.Cu.
+    if let (Some(link), Some(short)) = (&site.short, &layout.short) {
+        let (vu, vv) = short.via;
+        let r = link.via_size / 2;
+        let via = board_rect(site, vu - r, vv - r, vu + r, vv + r);
+        if let Some(bottom) = via_bottom(stack, link.via_to) {
+            model
+                .add_primitive(
+                    ground,
+                    Primitive::new(BoxShape::new([via[0], via[1], bottom], [via[2], via[3], 0.0])).with_priority(10),
+                )
+                .map_err(err)?;
+        }
     }
 
     // The port.
@@ -680,6 +701,18 @@ mod tests {
         assert_eq!(lines.first(), Some(&0.0));
         assert!(lines.windows(2).all(|p| p[1] - p[0] >= 0.25 - 1e-12 && p[1] - p[0] <= 0.5 + 1e-12), "{lines:?}");
         assert_eq!(lines.last(), Some(&2.5));
+    }
+
+    #[test]
+    fn the_short_via_barrel_spans_the_fabricated_via() {
+        // F.Cu, In1 (ground under the short, say) and B.Cu: the board's via
+        // runs to B.Cu, so the barrel does too, stub below In1 included.
+        let stack = Stack {
+            copper: vec![(CopperLayer::Front, 0.0), (CopperLayer::In1, -0.2), (CopperLayer::Back, -1.6)],
+            slabs: Vec::new(),
+        };
+        assert_eq!(via_bottom(&stack, CopperLayer::Back), Some(-1.6));
+        assert_eq!(via_bottom(&stack, CopperLayer::Front), None);
     }
 
     #[test]
