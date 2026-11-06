@@ -34,8 +34,14 @@ copper synthesize-antenna examples/antenna_synthesis/board.copper --report build
 copper route-board examples/antenna_synthesis/board.copper -o build/antenna-synthesis.kicad_pcb --report build/antenna-synthesis-route.json --locked --offline
 ```
 
-On this board the template resonates near 2.93 GHz in the full-wave model,
-20 % above the band, because its permittivity assumes ground under the trace.
+On this board the template lowers to `monopole height=3mm length=17.46mm`.
+Verified on the fine mesh (`--verify` on the board without a `geometry`), it
+resonates at 2.73 GHz, 12 % above the band centre, and misses -10 dB even
+with its best L-section match (-8.7 dB worst in band, 69 % radiation
+efficiency), because its permittivity assumes ground under the trace.
+Synthesis starts from the same quarter-wave length at the region's full
+height (5.3 mm), which resonates at 2.93 GHz on the coarse mesh, and tunes it
+from there.
 `board.copper` carries the synthesized geometry and its `tuned_for` digest: a
 22.66 mm monopole at 2.39 GHz that meets -10 dB over the band with 0.94 nH
 series then 2.61 pF shunt from the antenna side, at 85 % radiation efficiency
