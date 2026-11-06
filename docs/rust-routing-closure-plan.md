@@ -1,5 +1,47 @@
 # Rust placement and routing closure plan
 
+## Main integration, 2026-11-06
+
+Merged upstream main `dbdd016a903cf3d6f9a89968e33b8a758fa4529b` with the
+accumulated routing work. Bus tuning preserves both upstream's planned arched
+track lengths and via-depth accounting. A combined regression checks actual
+arched copper, connected endpoints, unchanged via contacts and final DRC
+length matching. The antenna-open-end field is explicit in the native fixture.
+
+The release workspace run accounts for 1,385 default tests after targeted
+reruns. Loopback, temporary Git and three checkpoint-move cases pass with the
+required access; the new arc/via fixture passes after correcting its target-pad
+position. The other 1,379 tests passed in the full run. Formatting and workspace
+all-target Clippy with warnings denied pass, including a final check of the
+changed test module. Two optional tests also pass: the native KiCad bridge
+including its changed-copper negative control, and exact round-trip of the
+fresh actual placement checkpoint. Two optional tests remain unrun because
+their specific final/ordinary/critical or unified saved inputs were not
+supplied. Details are in normal `build/merge-main-*` test logs and
+`build/p20-main-merge/merge-validation.json`.
+
+All nine other ladder cases finish in `build/p20-main-merge-ladder`.
+CopperLedRing, CopperAssetTracker, CM4, nRF52, full-vertical and both browser
+cases have zero signal opens and zero hard geometry errors. The round LED
+example retains one open; FX10 bridge retains four. Consumer copper lengths
+and via counts match the preceding control. Tests, compilation and routing
+ran concurrently, so timings do not establish a performance change.
+
+The same bounded CopperProbe entry and board as `p19-cc2-rotation` finishes
+in `build/p20-main-merge` with 237/237 signal connections, zero native missing
+connections, zero hard geometry errors and zero isolated-copper findings.
+There are 2,566 tracks, 354 vias, no arcs and 2,844.896 mm of track copper,
+matching the accepted pre-merge copper counts and length. Native DRC still
+reports nine dangling tracks and thirteen dangling vias; the existing ADC
+match and SENSE/TX1 length warnings remain. Wall time is 1,224.2 s.
+Fresh KiCad evidence is `build/pf-nat/p20/verification-001`, PCB SHA-256
+`dd95b4074b92608fb0f55e7f5569a091148ef2dc74d0ac142c07c6af3463db17`.
+The Rust executable SHA-256 is
+`DB46DF900F2D6AB4ECC1A60999C27C7A6066DDA35667C812A0817A5AC99A3F53`
+(release, LTO off, eight codegen units). Exact board/macro/main bindings are
+in the standard case's `input-binding.json`. Connection closure remains
+separate from native DRC completion and electrical qualification.
+
 ### Native gap repair and joint routing: zero gaps, quality unfinished
 
 Follow-up: the generic native bridge fix closes D18 on the unchanged C7 source,

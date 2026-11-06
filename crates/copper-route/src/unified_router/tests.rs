@@ -690,6 +690,9 @@ fn bus_skew_tuning_combines_arched_copper_and_via_depth() {
         rule.corner_style = copper_pcb::board::CornerStyle::Arc;
         rule.corner_radius_nm = Some(mm(0.3));
     }
+    let target = board.placements.iter_mut().find(|pose| pose.reference == "B_1").expect("B target");
+    target.position.x_nm = mm(14.0);
+    target.position.y_nm = mm(23.0);
     before.get_mut("B").expect("B").0 =
         vec![track("B", (6.0, 17.0), (14.0, 17.0), 0.2, F), track("B", (14.0, 17.0), (14.0, 23.0), 0.2, F)];
     let source = board.clone();
