@@ -1,5 +1,53 @@
 # Rust placement and routing closure plan
 
+## Latest-main integration and publication, 2026-11-06
+
+Routing changes are committed as `ad6dd53`; tested merged code is
+`438ae037e8d2d78d4b9465b4e30ebba50c86f9fb`, containing remote main
+`2adc450841b5762bf709c68cdd1ba443a7308b49`. Main's thermal-relief parameters,
+correct KiCad pad-zone numbering, rendering command and example changes are
+retained. The consumer pin selects that tested code revision; this validation
+entry changes documentation only.
+
+The fresh standard CopperProbe case is `build/p27-main-publish/probe`, with
+the consumer's bounded candidate-01 profile and fresh placement. It retains
+**237/237 signals, zero native missing connections, zero native other
+violations/islands and zero hard geometry errors**. All 43 mandatory inner-ball
+sites and exact admitted copper occurrences remain. Maximum length,
+differential skew and the unchanged 12.7 mm ADC match query have no findings.
+There are 2,520 tracks, 346 vias and 2827.680 mm of copper, matching P26.
+Runtime is 1055.1 s under concurrent workspace compilation and other ladder
+jobs; P26's 636.0 s reused placement, so that timing is not a like-for-like
+performance comparison. The fresh run remains below the plan's 30 min target.
+
+The other nine cases in `build/p27-main-publish/ladder` preserve completion,
+hard-DRC counts and all copper metrics. CopperLedRing (51/51) and
+CopperAssetTracker (124/124) remain native-clean. Round LED and FX10 bridge
+retain their existing one and four opens. Loaded round LED/nRF52 timing flags
+do not reproduce in serial controls on the same current sources: round LED
+11.5 s before / 10.6 s after; warmed nRF52 4.6 s before / 4.9 s after. The
+initial old-binary nRF52 pass was 36.4 s before warming. No speedup is claimed.
+Controls are `timing-before`, `timing-before-warm` and `timing-after` beneath
+the same build parent; their labels identify frozen old/new binaries rather
+than relying on the runner's current-checkout commit field.
+
+Workspace release tests: **1407 passed, zero failed, six ignored**, across
+137 test targets. Formatting and all-target Clippy with warnings denied pass.
+The consumer's ERC (two existing warnings) and public ADC/clock/macro test
+pass against the merged binary. Build profile is release, LTO off, eight
+codegen units. Executable SHA-256:
+`88FCE3B9E5F7AB77708772FB37880B9B228FDABA4C31F90AEFBF8B6C2E706822`.
+Final native PCB SHA-256:
+`1CEBCD8DBFAF5E4440AC000721308ECDF634DD0D55BFA336451F4D11EE85EC02`,
+at `build/pf-nat/p27/native-cleanup/round-003/CopperProbe.kicad_pcb`.
+
+Consumer board/macro hashes remain P26's
+`E4D9BCF1762C7054840D822ED86F24383BB9E6A29C92D08F42DBA2633C5551E5` /
+`5BCFCA742F2AAA3EEDACFB2417D988256D9A3822A5D794263A7D2979AD4D2F1E`.
+The requirement summary retains 30 blocked/incomplete verifier checks and
+`fabrication_ready = false`; electrical, assembly and CAM qualification remain
+open. Earlier measurements below retain their original bindings and scope.
+
 ## Optional escape retirement and contact trims, 2026-11-06
 
 Unmerged follow-up after P22, with unchanged board, macro and routing limits:
