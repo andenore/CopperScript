@@ -43,6 +43,7 @@ fn specs(action: &str) -> Vec<Spec> {
             short_value("--output", "-o"),
             value("--hand-assembly"),
             value("--ordering"),
+            value("--assembly-sheet"),
         ]),
         "offers" => specs.extend([
             value("--lock"),
@@ -335,6 +336,19 @@ fn execute(
         let total = assembly::write_ordering_list(board, &lock, &path.path)?;
         let _ =
             text::print(out, &format!("Generated ordering list -> {}; {total} component(s) with sourcing", path.shown));
+    }
+    if let Some(path) = argument("--assembly-sheet") {
+        let bytes = std::fs::read(&lock_path.path)
+            .map_err(|failure| AssemblyError(copper_assembly::files::open_error(&failure, &lock_path.shown)))?;
+        let digest = copper_assembly::files::sha256_hex(&bytes);
+        let total = assembly::write_assembly_sheet(board, &lock, &digest, &path.path)?;
+        let _ = text::print(
+            out,
+            &format!(
+                "Generated assembly sheet -> {}; {total} component(s) to track; open it with the board in CopperReview",
+                path.shown
+            ),
+        );
     }
     Ok(0)
 }
