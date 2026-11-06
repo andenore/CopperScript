@@ -399,6 +399,12 @@ pub fn enabled_providers(only: Option<&[String]>, locale: &Locale) -> Result<Vec
     Ok(providers)
 }
 
+/// Every line's offers, the providers used, and each failed provider with its message.
+pub type Fetched = (Vec<LineOffers>, Vec<String>, Vec<(String, String)>);
+
+/// One alternate added to a lock: (reference, supplier, supplier part).
+pub type Addition = (String, String, String);
+
 /// Every line's offers merged across `providers`, and each provider that
 /// failed (its results are dropped, the others kept). Fails only when every
 /// queried provider failed or none serves the requested distributors.
@@ -407,7 +413,7 @@ pub fn fetch_all(
     providers: &[Box<dyn Provider>],
     lines: &[Line],
     distributors: &[String],
-) -> Result<(Vec<LineOffers>, Vec<String>, Vec<(String, String)>)> {
+) -> Result<Fetched> {
     let mut found: Vec<Vec<Found>> = vec![Vec::new(); lines.len()];
     let (mut used, mut errors) = (Vec::new(), Vec::new());
     for provider in providers.iter().filter(|provider| provider.serves(distributors)) {
@@ -706,7 +712,7 @@ pub fn add_alternates(
     results: &[LineOffers],
     distributors: &[String],
     criteria: &Criteria,
-) -> Result<(Lock, Vec<(String, String, String)>)> {
+) -> Result<(Lock, Vec<Addition>)> {
     if lock.electrical_sha256.is_some() {
         return fail(format!("--write-alternates needs a {SCHEMA} lock; run `copper assembly update` first"));
     }

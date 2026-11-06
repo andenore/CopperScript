@@ -201,7 +201,8 @@ mod tests {
 
         let ti = select(&lines[0], found[0].clone(), &distributors());
         assert_eq!(ti.matched, Some(("Texas Instruments".to_owned(), "TPS62130RGTR".to_owned())));
-        let shown: Vec<(&str, Option<i64>, Option<i64>, Option<i64>)> =
+        type Shown<'a> = (&'a str, Option<i64>, Option<i64>, Option<i64>);
+        let shown: Vec<Shown> =
             ti.offers.iter().map(|o| (o.sku.as_str(), o.stock, o.moq, o.factory_lead_days)).collect();
         assert_eq!(
             shown,
