@@ -972,13 +972,37 @@ constraint copper_zone(GND) {
     id = "ground-return-plane";
     layers = "In1.Cu";
     inset = 0.5mm;
-    pad_connection = solid;
 }
 ```
 
 `copper_zone` targets exactly one existing net and lowers to an unfilled
 physical zone inside the declared board outline. `layers` is required;
-`inset`, `clearance`, `minimum_width`, and `pad_connection` are optional. The
+`inset`, `clearance`, `minimum_width`, `pad_connection`, `thermal_gap` and
+`thermal_spoke_width` are optional.
+
+Pads join a zone through thermal reliefs by default: the fill keeps
+`thermal_gap` (default 0.3 mm) around each same-net pad and bridges it with
+four spokes `thermal_spoke_width` wide (default 0.3 mm, or the zone's
+`minimum_width` when that is larger). Reliefs keep the pour from sinking the
+heat of a hand or reflow solder joint, which matters most for ground pads and
+through-hole pins on large pours. `pad_connection` selects `thermal` (the
+default), `solid` (pads flood directly, for example an exposed thermal pad that
+must spread heat or a high-current contact), `tht_thermal` (reliefs on
+through-hole pads only, SMD pads solid) or `none`. A footprint pad's own
+`zone_connect` overrides the zone's setting. Vias always connect solidly.
+Spokes narrower than `minimum_width` are rejected, since the fill would prune
+them; native DRC reports a pad left with fewer than two spokes as
+`starved_thermal`.
+
+```copper
+constraint copper_zone(GND) {
+    layers = "F.Cu,B.Cu";
+    thermal_gap = 0.25mm;
+    thermal_spoke_width = 0.4mm;
+}
+```
+
+The
 `island_policy` optionally selects `remove_all`, `keep_all`, or
 `remove_below_area` (the existing default, with a 10 mm² threshold). Use
 `remove_all` to discard disconnected fill rather than waive native warnings.

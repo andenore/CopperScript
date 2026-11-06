@@ -132,6 +132,24 @@ fn optional_length(parameters: &Parameters, name: &str) -> Result<Option<i64>> {
     if parameters.contains_key(name) { constraint_length(parameters, name).map(Some) } else { Ok(None) }
 }
 
+/// Default thermal relief gap and spoke width of a `copper_zone`.
+const DEFAULT_THERMAL_RELIEF_NM: i64 = 300_000;
+
+/// A zone's thermal relief `(gap, spoke width)`. The spoke width defaults to
+/// 0.3 mm or the zone's minimum width, whichever is larger: a spoke narrower
+/// than the minimum fill width is pruned by the filler and starves the pad.
+fn zone_thermal_relief(parameters: &Parameters, minimum_width_nm: i64) -> Result<(i64, i64)> {
+    let gap = optional_length(parameters, "thermal_gap")?.unwrap_or(DEFAULT_THERMAL_RELIEF_NM);
+    let spoke = optional_length(parameters, "thermal_spoke_width")?;
+    if gap <= 0 || spoke.is_some_and(|width| width <= 0) {
+        return fail("copper_zone thermal_gap and thermal_spoke_width must be positive");
+    }
+    if spoke.is_some_and(|width| width < minimum_width_nm) {
+        return fail("copper_zone thermal_spoke_width must be at least the zone minimum_width");
+    }
+    Ok((gap, spoke.unwrap_or(DEFAULT_THERMAL_RELIEF_NM.max(minimum_width_nm))))
+}
+
 fn courtyard_gap_length(parameters: &Parameters, name: &str) -> Result<i64> {
     let invalid = || Error::Value(format!("courtyard_gap parameter {} must be a nonnegative length", repr(name)));
     let Some(ParameterValue::Quantity(quantity)) = parameters.get(name) else { return Err(invalid()) };
@@ -1207,10 +1225,12 @@ fn lower_physical_constraints(
                 if !net_names.contains(net.as_str()) {
                     return Err(Error::Value(format!("copper_zone references unknown net {}", repr(net))));
                 }
-                const KNOWN: [&str; 15] = [
+                const KNOWN: [&str; 17] = [
                     "layers",
                     "inset",
                     "pad_connection",
+                    "thermal_gap",
+                    "thermal_spoke_width",
                     "clearance",
                     "minimum_width",
                     "island_policy",
@@ -1252,6 +1272,7 @@ fn lower_physical_constraints(
                 };
                 let pad_connection =
                     enum_value(parameters, "pad_connection", "thermal", "ZoneConnection", crate::zone_connection)?;
+                let (thermal_gap_nm, thermal_spoke_width_nm) = zone_thermal_relief(parameters, minimum_width_nm)?;
                 let allow_overlap = constraint_bool(parameters, "allow_same_net_hard_macro_overlap", false)?;
                 let zone = CopperZone {
                     id: constraint
@@ -1267,8 +1288,8 @@ fn lower_physical_constraints(
                     clearance_nm,
                     minimum_width_nm,
                     pad_connection,
-                    thermal_gap_nm: 300_000,
-                    thermal_spoke_width_nm: 300_000,
+                    thermal_gap_nm,
+                    thermal_spoke_width_nm,
                     island_policy,
                     minimum_island_area_nm2: (island_policy == IslandPolicy::RemoveBelowArea)
                         .then_some(10_000_000_000_000),

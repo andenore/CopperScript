@@ -68,7 +68,7 @@ specified otherwise. Names are unique within each kind.
 | `via` | `net`, `at`, `size`, `drill`, `from_layer`, `to_layer`; optional `technology` (default `through`), `finish` (default `standard`) |
 | `port` | `net`, `layer`, `point`, `pads` |
 | `protected_region`, `keepout` | `layers`, `vertices`; optional `block_tracks`, `block_vias`, `block_zones` |
-| `zone` | `net`, `layers`, `vertices`, `priority`, `clearance`, `minimum_width`, `pad_connection` (`solid` or `thermal`) |
+| `zone` | `net`, `layers`, `vertices`, `priority`, `clearance`, `minimum_width`; optional `pad_connection` (`thermal`, the default, or `solid`) |
 | `polygon` | `net`, `layer`, `vertices` |
 | `plane_return` | `net`, `layers`, `pads`; optional named `contact` blocks |
 | `contact` (inside `plane_return`) | `pad`, `at` for a dedicated pad-to-owner-via contact |
