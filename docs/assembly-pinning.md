@@ -15,7 +15,8 @@ copper assembly snapshot board.copper --locked --offline -o assembly.lock
 copper assembly update board.copper --locked --offline --lock assembly.lock
 copper assembly check board.copper --locked --offline --lock assembly.lock --report build/assembly.json
 copper assembly bom board.copper --locked --offline --lock assembly.lock -o build/bom.csv \
-    --hand-assembly build/hand-assembly.csv --ordering build/ordering.csv
+    --hand-assembly build/hand-assembly.csv --ordering build/ordering.csv \
+    --assembly-sheet build/assembly-sheet.json
 ```
 
 `--hand-assembly` writes the components the supplier will not place: every
@@ -31,6 +32,28 @@ designator, with value, manufacturer, MPN, footprint, assembly route
 supplier, supplier part and source URL. Use it to quote, buy spares or
 re-order; the supplier BOM and hand-assembly list remain the files the
 assembler and the hand-fitter work from.
+
+`--assembly-sheet` writes `copperscript.assembly-sheet/v1`, the input for
+tracking a manual build in CopperReview's **Assembly** mode. It lists every
+selection once, sorted by board designator, with:
+
+| Field | Meaning |
+| --- | --- |
+| `reference`, `designator` | CopperScript reference (hierarchical path) and the KiCad designator it becomes |
+| `part`, `value` | Library part and component value, formatted like the BOM (`100 nF`) |
+| `manufacturer`, `mpn`, `footprint` | The reviewed part identity; null for `do not fit` parts without one |
+| `populate`, `assembly` | Lock mode and route: `supplier-assembled`, `hand-assemble` or `do not fit` |
+| `supplier`, `supplier_part`, `source_url` | The primary offer, if recorded |
+| `electrical_sha256` | The component digest the selection was reviewed against |
+
+The top level carries `board`, `lock` (lock schema and the SHA-256 of the lock
+file's bytes), `summary` (counts per route) and `limits`. The sheet has no
+placement: side, position and pads come from the board export opened beside
+it, matched by `reference` against the footprint's `CopperScriptPath` and then
+by designator. A tracker keeps a component's progress only while its
+`electrical_sha256`, MPN and footprint are unchanged. Like the other lists,
+the sheet is refused unless the assembly check passes. Recording a part as
+placed or inspected does not qualify the assembly.
 
 ### Alternate offers
 
