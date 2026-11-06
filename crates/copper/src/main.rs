@@ -32,6 +32,7 @@ mod plot;
 mod power_check;
 mod pypath;
 mod query;
+mod render;
 mod replay_critical;
 mod replay_unified;
 mod report_args;

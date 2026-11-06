@@ -2,7 +2,8 @@
 
 `copper plot` writes the fabrication files of a board without running KiCad:
 one Gerber X2 file per layer, plated and non-plated Excellon drills, an
-IPC-D-356A netlist and a component position CSV. `copper compare-cam` checks
+IPC-D-356A netlist and a component position CSV. `copper render` draws the
+plotted layers as an SVG illustration. `copper compare-cam` checks
 two such file sets against each other, typically KiCad's plot and the native
 plot of the same board.
 
@@ -93,6 +94,30 @@ gives a significant difference. Widened by 15 µm per side, it survives
 erosion only in small spots but shows a large raw difference. Use a finer
 `--pitch-um` for tighter checks; memory grows with the square of the pitch.
 Geometry inside a same-net fill is invisible in the image by construction.
+
+## Illustrations
+
+`copper render` draws a plot directory as one SVG, without KiCad. Each
+`--layer` is a coloured plate drawn in order, bottom first, from the plotted
+artwork read back with the comparison reader: dark objects add, clear objects
+remove, in file order, so polarity and the soldermask subtraction in the
+legend come out as fabricated. `LAYER&WITHIN` draws a layer only where
+another is dark: `F.Cu&F.Mask` is the top copper inside the solder-mask
+openings, i.e. the exposed copper. Layers are named as in KiCad from each
+file's `TF.FileFunction`; colours are `#rgb`/`#rrggbb` with an optional
+opacity, and KiCad's default colour is used when none is given.
+
+```sh
+copper render build/native-plot -o build/top.svg \
+  --layer F.Cu --layer 'F.Cu&F.Mask:#d9a441' --layer 'F.Silkscreen:#3a3f3b' --layer Edge.Cuts
+```
+
+The picture is framed on the board profile (`Edge.Cuts`) plus `--margin`
+(1 mm by default), in millimetres, viewed from above and never mirrored.
+`--background` paints under the profile. To show copper without zone fills,
+plot the board before it is filled: the plotter draws no fill it does not
+read. KiCad's Gerbers render the same way, so the two plots can be compared
+by eye as well as with `compare-cam`.
 
 ## Verification (KiCad 10.0.6)
 

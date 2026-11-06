@@ -394,6 +394,10 @@ nav a {
   color:#c6d7b0;
 }
 
+.syntax-comment {
+  color:#8f9c90;
+}
+
 .code-annotation {
   border-top:1px solid #43504b;
   display:flex;
@@ -480,7 +484,7 @@ nav a {
 
 .pipeline {
   display:grid;
-  grid-template-columns:repeat(4,1fr);
+  grid-template-columns:repeat(5,1fr);
   padding:0;
   margin:0;
   list-style:none;
@@ -507,7 +511,7 @@ nav a {
 .pipeline p {
   font-size:14px;
   color:var(--muted);
-  min-height:105px;
+  min-height:125px;
 }
 
 .step-output {
@@ -1037,5 +1041,349 @@ details p {
 @media(prefers-reduced-motion:reduce) {
   html {
     scroll-behavior:auto;
+  }
+}
+
+/* Hero: three native copper plots stacked in their board order. */
+@property --gap {
+  syntax:"<length>";
+  inherits:true;
+  initial-value:0px;
+}
+
+.hero-stack {
+  transform:none;
+  overflow:hidden;
+}
+
+.stack {
+  position:relative;
+  aspect-ratio:1/.8;
+  perspective:2200px;
+}
+
+.stack-scene {
+  --gap:52px;
+  position:absolute;
+  left:50%;
+  top:50%;
+  width:76%;
+  aspect-ratio:5/4;
+  transform:translate(-50%,-46%) rotateX(57deg) rotateZ(-36deg);
+  transform-style:preserve-3d;
+  animation:stack-open 1.6s cubic-bezier(.2,.7,.2,1) .2s both;
+  transition:--gap .7s cubic-bezier(.2,.7,.2,1);
+}
+
+.hero-stack:hover .stack-scene {
+  --gap:70px;
+}
+
+@keyframes stack-open {
+  from {
+    --gap:0px;
+  }
+}
+
+.plate {
+  position:absolute;
+  inset:0;
+  background:rgba(240,238,228,.72);
+  border:1px solid #c3c6b7;
+  transform:translateZ(calc(var(--gap) * var(--level)));
+}
+
+.plate img {
+  width:100%;
+  height:100%;
+}
+
+.plate-bottom {
+  --level:-1;
+  background:#e6e4d8;
+  box-shadow:18px 22px 30px rgba(32,43,41,.16);
+}
+
+.plate-inner {
+  --level:0;
+}
+
+.plate-top {
+  --level:1;
+  background:rgba(246,244,238,.62);
+}
+
+.plate-label {
+  position:absolute;
+  left:2.5%;
+  top:3%;
+  font-family:var(--mono);
+  font-size:13px;
+  font-weight:600;
+  letter-spacing:.6px;
+  color:var(--copper);
+}
+
+/* Antenna synthesis. */
+.antenna {
+  border-top:1px solid var(--line);
+}
+
+.antenna-grid {
+  display:grid;
+  grid-template-columns:minmax(0,.74fr) minmax(0,1.26fr);
+  gap:40px;
+  align-items:start;
+}
+
+.antenna-grid .code-window pre {
+  font-size:12px;
+}
+
+.antenna-figure {
+  border:1px solid var(--line);
+  background:#ebece3;
+  min-width:0;
+}
+
+.view-controls button {
+  font-size:12px;
+  padding:8px 12px;
+  border:1px solid transparent;
+  background:transparent;
+  color:inherit;
+  cursor:pointer;
+}
+
+.view-controls button[aria-pressed="true"] {
+  background:var(--dark);
+  color:#fff;
+}
+
+.view-controls button:hover {
+  border-color:var(--muted);
+}
+
+.antenna-panels {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);
+}
+
+.antenna-panels figure {
+  padding:22px 22px 14px;
+  min-width:0;
+}
+
+.antenna-board {
+  border-right:1px solid var(--line);
+}
+
+.panel-label {
+  display:flex;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  gap:4px 14px;
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:.4px;
+  color:var(--muted);
+  margin-bottom:14px;
+}
+
+.antenna-board-svg svg,.antenna-chart-svg svg {
+  display:block;
+  width:100%;
+  height:auto;
+  overflow:visible;
+}
+
+.chart-legend {
+  display:flex;
+  gap:14px;
+}
+
+.key::before {
+  content:"";
+  display:inline-block;
+  width:18px;
+  height:0;
+  vertical-align:middle;
+  margin-right:6px;
+  border-top:2px solid var(--copper);
+}
+
+.key-bare::before {
+  border-top:2px dashed #1f7fb0;
+}
+
+.chart-tip {
+  font-family:var(--mono);
+  font-size:10px;
+  fill:var(--ink);
+}
+
+.antenna-stats strong {
+  font-size:26px;
+}
+
+.antenna-stats #antenna-match {
+  font-size:22px;
+  line-height:1.48;
+}
+
+.antenna-board {
+  display:flex;
+  flex-direction:column;
+}
+
+.antenna-board-svg {
+  flex:1;
+  display:grid;
+  align-items:center;
+}
+
+.antenna-table {
+  border-top:1px solid var(--line);
+  border-bottom:0;
+  padding:14px 22px;
+}
+
+.antenna-table summary {
+  font-size:13px;
+}
+
+.antenna-table table {
+  border-collapse:collapse;
+  font-family:var(--mono);
+  font-size:11px;
+  margin-top:12px;
+  width:100%;
+}
+
+.antenna-table th,.antenna-table td {
+  text-align:right;
+  padding:3px 10px;
+  border-bottom:1px solid var(--line);
+}
+
+.antenna-table tr.in-band td {
+  background:#e3dccb;
+}
+
+.antenna-evidence code {
+  font-size:.85em;
+}
+
+@media(max-width:1100px) {
+  .antenna-grid {
+    grid-template-columns:minmax(0,1fr);
+  }
+  .pipeline {
+    grid-template-columns:repeat(3,1fr);
+  }
+}
+
+@media(max-width:760px) {
+  .antenna-panels {
+    grid-template-columns:minmax(0,1fr);
+  }
+  .antenna-board {
+    border-right:0;
+    border-bottom:1px solid var(--line);
+  }
+  .antenna-panels figure {
+    padding:18px 14px 10px;
+  }
+  .antenna-stats strong {
+    font-size:22px;
+  }
+  .plate-label {
+    font-size:10px;
+  }
+  .pipeline {
+    grid-template-columns:repeat(2,1fr);
+  }
+}
+
+@media(prefers-reduced-motion:reduce) {
+  .stack-scene {
+    animation:none;
+    transition:none;
+  }
+}
+
+/* CopperReview screenshots. */
+.review {
+  border-top:1px solid var(--line);
+}
+
+.review-figure {
+  padding:28px 28px 18px;
+}
+
+.review-window {
+  border:1px solid #cbd0c0;
+  box-shadow:0 18px 40px rgba(32,43,41,.12);
+  background:#fff;
+}
+
+.review-window img {
+  width:100%;
+  height:auto;
+}
+
+.review-figure figcaption {
+  text-align:center;
+  font-family:var(--mono);
+  font-size:11px;
+  color:var(--muted);
+  margin-top:18px;
+  min-height:36px;
+}
+
+.review-points {
+  list-style:none;
+  padding:0;
+  margin:38px 0 0;
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:32px;
+  border-top:1px solid var(--line);
+}
+
+.review-points li {
+  padding-top:20px;
+}
+
+.review-points strong {
+  display:block;
+  font-size:17px;
+  margin-bottom:10px;
+}
+
+.review-points span {
+  font-size:14px;
+  color:var(--muted);
+}
+
+.review-actions {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:18px 28px;
+  margin-top:34px;
+}
+
+.review-actions .small {
+  flex-basis:100%;
+}
+
+@media(max-width:760px) {
+  .review-figure {
+    padding:14px 10px 10px;
+  }
+  .review-points {
+    grid-template-columns:minmax(0,1fr);
+    gap:8px;
   }
 }
