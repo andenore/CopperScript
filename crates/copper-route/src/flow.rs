@@ -344,6 +344,7 @@ fn direct_critical(placement: &PlacementRoutingResult) -> Result<CriticalRouting
 
 /// Preserve the actual per-ball site assignments and pending sites alongside
 /// their copper. An allocated site is not a verified package-boundary escape.
+#[derive(Clone)]
 struct Lattice {
     tracks: Vec<TrackSegment>,
     vias: Vec<Via>,
@@ -948,6 +949,11 @@ fn route_critical_stage(
     if retention_policy.requested {
         emit(on_progress, "retained_escape_policy", "assessed", retention_policy.fields());
     }
+    // Without retained escape copper the critical router owns the critical
+    // nets' escapes: the stage plans, reserves and checks without their
+    // dogbones (see `staged_lattice`).
+    let staged = if retain { None } else { lattice.map(|plan| staged_lattice(board, plan)).transpose()? };
+    let lattice = staged.as_ref().or(lattice);
     let prefix: (&[TrackSegment], &[Via]) = lattice.map_or((&[], &[]), |plan| (&plan.tracks, &plan.vias));
     if let Some(plan) = lattice {
         emit(
@@ -1038,6 +1044,11 @@ fn route_critical_stage(
     } else {
         None
     };
+    // A retained prefix that was not admitted falls back to reservations.
+    let fallback =
+        if retain && retained.is_none() { lattice.map(|plan| staged_lattice(board, plan)).transpose()? } else { None };
+    let lattice = fallback.as_ref().or(lattice);
+    let prefix: (&[TrackSegment], &[Via]) = lattice.map_or((&[], &[]), |plan| (&plan.tracks, &plan.vias));
     let critical_inputs = |keepouts: &[copper_physical::CopperKeepout],
                            previous: Option<(&PhysicalBoard, &crate::bypass_reservations::BypassReservation)>,
                            on_progress: &mut Option<ProgressCallback<'_>>|
@@ -1649,7 +1660,12 @@ fn complete_critical_stage(
     escape_plan_options: Option<&EscapePlanOptions>,
 ) -> Result<(CriticalRoutingResult, Option<PlaneStitchResult>)> {
     if let Some(plan) = lattice.filter(|plan| !sites_as_copper && (!plan.tracks.is_empty() || !plan.vias.is_empty())) {
-        // The lattice copper joins the board first (bypasses were planned on it).
+        // The lattice copper joins the board first (bypasses were planned on
+        // it). After a staged critical stage that reserved it, the critical
+        // nets' own dogbones stay out (`staged_lattice`); the direct pipeline
+        // routed no critical stage, so its unified router gets them all.
+        let staged = if unified_options.direct { None } else { Some(staged_lattice(source, plan)?) };
+        let plan = staged.as_ref().unwrap_or(plan);
         critical.board = join_reserved_copper(source, &critical.board, &plan.tracks, &plan.vias, &plan.keepouts)?;
     }
     if let Some(held) = held.filter(|_| !held_as_copper) {
@@ -2450,6 +2466,97 @@ fn via_reservation_octagon(position: Point, size_nm: i64, gap_nm: i64) -> Option
     .into_iter()
     .map(|(x, y)| Some(Point::new(position.x_nm.checked_add(x)?, position.y_nm.checked_add(y)?)))
     .collect()
+}
+
+/// Nets with lattice copper that the critical stage routes: every
+/// non-general net except a ball-grid supply, whose dogbone waits for its plane.
+fn critical_lattice_nets(board: &PhysicalBoard, plan: &Lattice) -> Result<IndexSet<String>> {
+    let supplies = crate::escape_plan::ball_grid_supply_nets(board)?;
+    let critical: IndexSet<&str> = board
+        .net_routing_rules
+        .iter()
+        .filter(|rule| rule.kind != RouteKind::General && !supplies.contains(&rule.net))
+        .map(|rule| rule.net.as_str())
+        .collect();
+    Ok(plan
+        .tracks
+        .iter()
+        .map(|track| &track.net)
+        .chain(plan.vias.iter().map(|via| &via.net))
+        .filter(|net| critical.contains(net.as_str()))
+        .cloned()
+        .collect())
+}
+
+/// The lattice a staged critical stage plans around, reserves and joins when
+/// escape copper is not retained: without the critical nets' own dogbones.
+/// The critical router owns those escapes; reserved, a dogbone keeps its net
+/// from its own ball, and joined afterwards it would be a via stub on the
+/// routed net. Their sites become pending, and the other sites' occurrence
+/// ranges are renumbered for the shorter copper lists.
+fn staged_lattice(board: &PhysicalBoard, plan: &Lattice) -> Result<Lattice> {
+    const REASON: &str = "critical router owns this escape without retained escape copper";
+    let own = critical_lattice_nets(board, plan)?;
+    if own.is_empty() {
+        return Ok(plan.clone());
+    }
+    // `kept[i]`: kept items before occurrence `i`, for renumbering ranges.
+    fn kept_before<T>(items: &[T], keep: impl Fn(&T) -> bool) -> Vec<usize> {
+        let mut counts = Vec::with_capacity(items.len() + 1);
+        let mut count = 0;
+        counts.push(0);
+        for item in items {
+            count += usize::from(keep(item));
+            counts.push(count);
+        }
+        counts
+    }
+    let tracks_before = kept_before(&plan.tracks, |track| !own.contains(&track.net));
+    let vias_before = kept_before(&plan.vias, |via| !own.contains(&via.net));
+    let packages = plan
+        .packages
+        .iter()
+        .map(|package| {
+            let mut package = package.clone();
+            let (sites, owned): (Vec<_>, Vec<_>) = package.sites.into_iter().partition(|site| !own.contains(&site.net));
+            package.unsited.extend(owned.into_iter().map(|site| (site.pad, REASON.to_owned())));
+            package.sites = sites
+                .into_iter()
+                .map(|mut site| {
+                    site.track_range = tracks_before[site.track_range.start]..tracks_before[site.track_range.end];
+                    site.via_occurrence = vias_before[site.via_occurrence];
+                    site
+                })
+                .collect();
+            for ball in &mut package.coverage {
+                if own.contains(&ball.net) && ball.status == crate::via_lattice::BallSiteStatus::Allocated {
+                    ball.status = crate::via_lattice::BallSiteStatus::Pending(REASON.to_owned());
+                }
+            }
+            package
+        })
+        .collect();
+    Ok(Lattice {
+        tracks: plan.tracks.iter().filter(|track| !own.contains(&track.net)).cloned().collect(),
+        vias: plan.vias.iter().filter(|via| !own.contains(&via.net)).cloned().collect(),
+        keepouts: plan
+            .keepouts
+            .iter()
+            .filter(|keepout| !lattice_keepout_net(plan, keepout).is_some_and(|net| own.contains(net)))
+            .cloned()
+            .collect(),
+        packages,
+    })
+}
+
+/// The net of the lattice copper a `lattice-reserve` keepout reserves.
+fn lattice_keepout_net<'a>(plan: &'a Lattice, keepout: &copper_physical::CopperKeepout) -> Option<&'a str> {
+    let index = |prefix: &str| keepout.id.strip_prefix(prefix).and_then(|rest| rest.parse::<usize>().ok());
+    if let Some(index) = index("lattice-reserve-track-") {
+        plan.tracks.get(index).map(|track| track.net.as_str())
+    } else {
+        index("lattice-reserve-via-").and_then(|index| plan.vias.get(index)).map(|via| via.net.as_str())
+    }
 }
 
 /// `_copper_keepouts`: keepouts covering planned copper plus clearance.

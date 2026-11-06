@@ -113,6 +113,162 @@ fn retained_flow_frame_is_the_critical_input_and_is_not_joined_twice() {
 }
 
 #[test]
+fn a_critical_inner_ball_routes_from_its_own_lattice_dogbone() {
+    // Without retained escapes the lattice is reserved as keepouts while
+    // critical nets route. The clock net's own dogbone stub covers its ball,
+    // so it is not reserved (the net could not reach its pad) and not joined
+    // afterwards (it would be a via stub on the routed net).
+    let mut source = recognized_inner_scene();
+    source.net_routing_rules = vec![copper_pcb::board::NetRoutingRule {
+        kind: copper_pcb::board::RouteKind::Clock,
+        ..crate::test_support_planes::support_planes::rule("N15")
+    }];
+    let lattice =
+        plan_lattice(&source, Some(&EscapePlanOptions { via_lattice: true, ..Default::default() }), None, &mut None)
+            .expect("real ball-grid planner")
+            .expect("recognized connected inner ball");
+    assert_eq!(lattice.packages[0].coverage[0].status, crate::via_lattice::BallSiteStatus::Allocated);
+    let (track, site) = (lattice.tracks[0].clone(), lattice.vias[0].clone());
+    let global_route = crate::route_global(&source, &GlobalRouterOptions::default(), None, None, None).expect("guides");
+    let placement = PlacementRoutingResult {
+        status: crate::routeflow::FeedbackStatus::Pass,
+        board: source.clone(),
+        global_route,
+        placement_candidate: "test".to_owned(),
+        iterations: Vec::new(),
+        accepted_moves: 0,
+        full_route_certified: false,
+    };
+    let options = UnifiedRouterOptions { bga_fanout: false, ..Default::default() };
+    let mut seen = false;
+    let mut callback = |stage: Stage<'_>| {
+        if let Stage::CriticalInputs { board, fixed_prefix, .. } = stage {
+            assert!(fixed_prefix.is_none());
+            assert!(
+                !board.copper_keepouts.iter().any(|keepout| keepout.id.starts_with("lattice-reserve")),
+                "{:?}",
+                board.copper_keepouts
+            );
+            seen = true;
+        }
+    };
+    let (critical, reserved, held, held_as_copper, sites_as_copper, _) = route_critical_stage(
+        &placement,
+        &options,
+        None,
+        None,
+        None,
+        Some(&lattice),
+        &mut None,
+        &mut Some(&mut callback),
+    )
+    .expect("actual flow stage");
+    assert!(seen && !sites_as_copper);
+    let routed = critical.nets.iter().find(|item| item.nets.iter().any(|net| net == "N15")).expect("N15 routed");
+    assert!(routed.connected, "{:?}", routed.diagnostics);
+    let (completed, _) = complete_critical_stage(
+        &source,
+        critical,
+        reserved.as_ref(),
+        held.as_ref(),
+        held_as_copper,
+        sites_as_copper,
+        &options,
+        None,
+        &mut None,
+        None,
+        Some(&lattice),
+        None,
+        None,
+    )
+    .expect("completion");
+    assert!(!completed.board.tracks.contains(&track) && !completed.board.vias.contains(&site));
+}
+
+/// Two inner balls of one package: N15 a clock net, N16 a general net.
+fn clock_and_general_inner_scene() -> (PhysicalBoard, Lattice) {
+    let mut source = crate::test_support_planes::support_planes::ball_grid(6, 0.45, &[]);
+    source.nets.retain(|net| net.name == "N15" || net.name == "N16");
+    source.placements.iter_mut().find(|pose| pose.reference == "J").unwrap().position =
+        Point::new(30_000_000, 30_000_000);
+    source.net_routing_rules = vec![copper_pcb::board::NetRoutingRule {
+        kind: copper_pcb::board::RouteKind::Clock,
+        ..crate::test_support_planes::support_planes::rule("N15")
+    }];
+    let lattice =
+        plan_lattice(&source, Some(&EscapePlanOptions { via_lattice: true, ..Default::default() }), None, &mut None)
+            .expect("real ball-grid planner")
+            .expect("recognized connected inner balls");
+    (source, lattice)
+}
+
+#[test]
+fn the_staged_lattice_drops_critical_dogbones_and_renumbers_the_rest() {
+    let (source, lattice) = clock_and_general_inner_scene();
+    let net_of =
+        |plan: &Lattice| -> Vec<String> { plan.packages[0].sites.iter().map(|site| site.net.clone()).collect() };
+    let mut nets = net_of(&lattice);
+    nets.sort();
+    assert_eq!(nets, ["N15", "N16"], "both inner balls get a site");
+    let staged = staged_lattice(&source, &lattice).unwrap();
+    assert!(staged.tracks.iter().chain(&lattice.tracks).any(|track| track.net == "N16"));
+    assert!(staged.tracks.iter().all(|track| track.net == "N16") && staged.vias.iter().all(|via| via.net == "N16"));
+    assert!(staged.keepouts.len() < lattice.keepouts.len());
+    assert!(staged.keepouts.iter().all(|keepout| lattice.keepouts.contains(keepout)));
+    // The general site still names its own copper in the shorter lists.
+    let site = &staged.packages[0].sites[0];
+    assert_eq!(site.net, "N16");
+    assert!(staged.tracks[site.track_range.clone()].iter().all(|track| track.net == "N16"));
+    assert_eq!(staged.vias[site.via_occurrence].net, "N16");
+    // The clock ball is reported pending, not allocated.
+    let clock = staged.packages[0].coverage.iter().find(|ball| ball.net == "N15").unwrap();
+    assert!(
+        matches!(&clock.status, crate::via_lattice::BallSiteStatus::Pending(reason) if reason.contains("critical router"))
+    );
+    assert!(staged.packages[0].unsited.iter().any(|(pad, _)| pad.pad == "15"));
+}
+
+#[test]
+fn the_direct_pipeline_keeps_every_lattice_dogbone() {
+    // No critical stage runs, so the unified router gets the clock net's
+    // dogbone too.
+    let (source, lattice) = clock_and_general_inner_scene();
+    let global_route = crate::route_global(&source, &GlobalRouterOptions::default(), None, None, None).expect("guides");
+    let placement = PlacementRoutingResult {
+        status: crate::routeflow::FeedbackStatus::Pass,
+        board: source.clone(),
+        global_route,
+        placement_candidate: "test".to_owned(),
+        iterations: Vec::new(),
+        accepted_moves: 0,
+        full_route_certified: false,
+    };
+    let options = UnifiedRouterOptions { direct: true, bga_fanout: false, ..Default::default() };
+    let (completed, _) = complete_critical_stage(
+        &source,
+        direct_critical(&placement).unwrap(),
+        None,
+        None,
+        false,
+        false,
+        &options,
+        None,
+        &mut None,
+        None,
+        Some(&lattice),
+        None,
+        None,
+    )
+    .expect("completion");
+    for track in &lattice.tracks {
+        assert!(completed.board.tracks.contains(track), "{track:?}");
+    }
+    for via in &lattice.vias {
+        assert!(completed.board.vias.contains(via), "{via:?}");
+    }
+}
+
+#[test]
 fn retention_scope_non_bga_keeps_legacy_pipeline_geometry_and_reports_not_applicable() {
     let (source, _) = crate::test_support_planes::support_planes::decoupling::crosslayer(false, true);
     let global_route = crate::route_global(&source, &GlobalRouterOptions::default(), None, None, None).unwrap();
