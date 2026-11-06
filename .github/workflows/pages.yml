@@ -6,6 +6,7 @@ on:
     paths:
       - 'site/**'
       - 'scripts/check_site.cjs'
+      - 'examples/antenna_synthesis/board.copper'
       - 'scripts/build_demo.cjs'
       - 'scripts/check_demo.cjs'
       - 'scripts/check_routing_demo.cjs'
@@ -33,6 +34,7 @@ on:
     paths:
       - 'site/**'
       - 'scripts/check_site.cjs'
+      - 'examples/antenna_synthesis/board.copper'
       - 'scripts/build_demo.cjs'
       - 'scripts/check_demo.cjs'
       - 'scripts/check_routing_demo.cjs'

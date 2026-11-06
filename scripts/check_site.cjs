@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /* Check the public static site without installing packages or building boards:
    local URLs and anchors, page metadata, the sitemap, JSON and SVG syntax, the
-   recorded showcase hashes and the shared logo copies. */
+   recorded showcase hashes, the antenna figure's match with its example and
+   the shared logo copies. */
 "use strict";
 const crypto = require("node:crypto"), fs = require("node:fs"), path = require("node:path");
 
@@ -128,6 +129,16 @@ function checkSite(site = SITE) {
     }
     const html = fs.readFileSync(index, "utf8");
     for (const match of html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)) JSON.parse(match[1]);
+    // The antenna figure must show the geometry the example declares, tuned
+    // for the same site digest, and both recorded designs must carry curves.
+    const antenna = JSON.parse(fs.readFileSync(path.join(assets, "antenna-synthesis.json"), "utf8"));
+    const declared = fs.readFileSync(path.join(ROOT, antenna.example), "utf8");
+    const synthesized = antenna.designs.synthesized;
+    if (!declared.includes(`geometry = "${synthesized.geometry}";`) || !declared.includes(`tuned_for = "${synthesized.site_digest}";`))
+      errors.push("antenna-synthesis.json: synthesized geometry or digest differs from the example's declaration");
+    for (const [name, design] of Object.entries(antenna.designs))
+      if (!(design.curve.length > 10) || design.final_fidelity !== "fine" || !design.board.tracks.some(t => t.locked))
+        errors.push(`antenna-synthesis.json: ${name} lacks a fine-mesh curve or locked antenna copper`);
     const png = fs.readFileSync(path.join(assets, "social-preview.png"));
     if (!png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) errors.push("Social preview is not a PNG");
   } catch (error) {
