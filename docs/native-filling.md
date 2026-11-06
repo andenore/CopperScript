@@ -111,11 +111,10 @@ Known differences:
   group to the rest of the pour, so native plane verification there reports
   one more D18 open than KiCad (see [native DRC](native-drc.md)).
 
-## Finding: zone connection codes
+## Zone connection codes
 
-KiCad numbers pad `zone_connect` as 0 none, 1 thermal, 2 solid, 3
-through-hole thermal. CopperScript's footprint importer and KiCad exporter
-use 1 none, 2 thermal, 3 solid, 4 through-hole thermal. The shift cancels
-when a footprint round-trips into KiCad. But CopperScript's own model reads a
-solid pad (2) as thermal, a thermal pad (1) as none, and rejects
-`zone_connect 0`. The native filler follows KiCad's numbering.
+KiCad numbers pad `zone_connect` as -1 inherited, 0 none, 1 thermal, 2 solid
+and 3 through-hole thermal. The footprint importer, the KiCad exporter and the
+native filler all use this numbering. (Earlier releases shifted it by one in
+the importer and exporter; the shift cancelled on a round trip into KiCad but
+read a solid pad as thermal in CopperScript's own model.)

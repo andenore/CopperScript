@@ -1046,10 +1046,10 @@ fn pad_lines(
     }
     if let Some(connection) = pad.zone_connection {
         let code = match connection {
-            ZoneConnection::None => "1",
-            ZoneConnection::Thermal => "2",
-            ZoneConnection::Solid => "3",
-            ZoneConnection::ThtThermal => "4",
+            ZoneConnection::None => "0",
+            ZoneConnection::Thermal => "1",
+            ZoneConnection::Solid => "2",
+            ZoneConnection::ThtThermal => "3",
         };
         lines.push(format!("      (zone_connect {code})"));
     }
