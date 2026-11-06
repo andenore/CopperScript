@@ -12,10 +12,14 @@
 //! ([`plan_arched_copper`], [`planned_length_nm`]); the stage
 //! ([`arch_board`]) adds the clearance decisions and emits the copper.
 
+use std::collections::BTreeMap;
 use std::f64::consts::PI;
 
 use indexmap::{IndexMap, IndexSet};
 
+use copper_drc::connectivity::{
+    Candidate, CopperContact, copper_contact_roots, copper_contacts_overlap, explicit_copper_contacts,
+};
 use copper_drc::legality::shape_in_board;
 use copper_json::Value;
 use copper_pcb::board::{CornerStyle, PhysicalBoard, TrackArc, TrackSegment};
@@ -634,17 +638,12 @@ pub fn arch_board(board: &PhysicalBoard) -> Result<Option<(PhysicalBoard, ArcCor
             None => accepted.push(arc),
         }
     }
-    // Connectivity: copper that was connected (vias, lands and untouched
-    // tracks of the net) must stay connected once the legs are trimmed;
-    // otherwise the arcs that cut it off stay sharp, with their groups.
-    let contacts: Vec<&crate::routing_clearance::CopperObject> = clearance
-        .objects()
-        .into_iter()
-        .filter(|object| policies.contains_key(&object.net) && (object.is_pad || object.occurrence.starts_with("via:")))
-        .collect();
+    // Connectivity: copper of the net that was connected (lands, vias,
+    // polygons and untouched tracks) must stay connected once the legs are
+    // trimmed; otherwise the arcs that cut it off stay sharp, with their groups.
     let mut copper = emit_arched_copper(&board.tracks, &accepted);
     loop {
-        let groups = disconnecting_groups(&board.tracks, &copper, &accepted, &contacts);
+        let groups = disconnecting_groups(board, &copper, &accepted)?;
         if groups.is_empty() {
             break;
         }
@@ -669,131 +668,39 @@ pub fn arch_board(board: &PhysicalBoard) -> Result<Option<(PhysicalBoard, ArcCor
     Ok(Some((arched, outcome)))
 }
 
-fn track_copper(track: &TrackSegment) -> Option<RoundedConvexShape> {
-    RoundedConvexShape::new(vec![track.start, track.end], track.width_nm.div_euclid(2)).ok()
-}
-
-/// Whether `track` touches `shape` on `layer`.
-fn track_touches(track: &TrackSegment, layer: CopperLayer, shape: &RoundedConvexShape) -> bool {
-    let half = track.width_nm.div_euclid(2);
-    let bounds = &shape.bounds;
-    let near = track.start.x_nm.min(track.end.x_nm) - half <= bounds.max_x
-        && track.start.x_nm.max(track.end.x_nm) + half >= bounds.min_x
-        && track.start.y_nm.min(track.end.y_nm) - half <= bounds.max_y
-        && track.start.y_nm.max(track.end.y_nm) + half >= bounds.min_y;
-    track.layer == layer && near && track_copper(track).is_some_and(|copper| shapes_touch_or_overlap(&copper, shape))
-}
-
-/// Whether `arc` touches `shape` on `layer`.
-fn arc_touches(arc: &TrackArc, layer: CopperLayer, shape: &RoundedConvexShape) -> bool {
-    arc.layer == layer
-        && arc.geometry().is_ok_and(|geometry| shape_distance(&geometry, shape) <= arc.width_nm.div_euclid(2) as f64)
-}
-
-/// Union-find over node indices.
-struct Components(Vec<usize>);
-
-impl Components {
-    fn new(count: usize) -> Self {
-        Components((0..count).collect())
-    }
-
-    fn find(&mut self, node: usize) -> usize {
-        let mut root = node;
-        while self.0[root] != root {
-            root = self.0[root];
-        }
-        let mut current = node;
-        while self.0[current] != root {
-            let next = self.0[current];
-            self.0[current] = root;
-            current = next;
-        }
-        root
-    }
-
-    fn join(&mut self, a: usize, b: usize) {
-        let (a, b) = (self.find(a), self.find(b));
-        if a != b {
-            self.0[a.max(b)] = a.min(b);
-        }
-    }
-}
-
-/// One net's copper as connectivity nodes: `contacts` (vias and lands, on
-/// their layers), then `tracks`, then `arcs`. Contacts join copper they touch
-/// on a shared layer, so a via joins its layers.
-fn copper_components(
-    contacts: &[&crate::routing_clearance::CopperObject],
-    tracks: &[&TrackSegment],
-    arcs: &[&TrackArc],
-) -> Components {
-    let (t0, a0) = (contacts.len(), contacts.len() + tracks.len());
-    let mut components = Components::new(a0 + arcs.len());
-    let track_shapes: Vec<Option<RoundedConvexShape>> = tracks.iter().map(|track| track_copper(track)).collect();
-    let geometries: Vec<Option<ArcGeometry>> = arcs.iter().map(|arc| arc.geometry().ok()).collect();
-    for (ci, contact) in contacts.iter().enumerate() {
-        for (cj, other) in contacts.iter().enumerate().skip(ci + 1) {
-            if contact.layers.iter().any(|layer| other.layers.contains(layer))
-                && shapes_touch_or_overlap(&contact.shape, &other.shape)
-            {
-                components.join(ci, cj);
-            }
-        }
-        for (ti, track) in tracks.iter().enumerate() {
-            if contact.layers.contains(&track.layer) && track_touches(track, track.layer, &contact.shape) {
-                components.join(ci, t0 + ti);
-            }
-        }
-        for (ai, arc) in arcs.iter().enumerate() {
-            if contact.layers.contains(&arc.layer) && arc_touches(arc, arc.layer, &contact.shape) {
-                components.join(ci, a0 + ai);
-            }
-        }
-    }
-    for (ti, track) in tracks.iter().enumerate() {
-        let Some(shape) = &track_shapes[ti] else { continue };
-        for (tj, other) in tracks.iter().enumerate().skip(ti + 1) {
-            if other.layer == track.layer && track_touches(other, track.layer, shape) {
-                components.join(t0 + ti, t0 + tj);
-            }
-        }
-        for (ai, arc) in arcs.iter().enumerate() {
-            if arc_touches(arc, track.layer, shape) {
-                components.join(t0 + ti, a0 + ai);
-            }
-        }
-    }
-    for (ai, arc) in arcs.iter().enumerate() {
-        let Some(first) = &geometries[ai] else { continue };
-        for (aj, other) in arcs.iter().enumerate().skip(ai + 1) {
-            let Some(second) = &geometries[aj] else { continue };
-            let reach = (arc.width_nm.div_euclid(2) + other.width_nm.div_euclid(2)) as f64;
-            if other.layer == arc.layer && copper_physical::arcs::arc_distance(first, second) <= reach {
-                components.join(a0 + ai, a0 + aj);
-            }
-        }
-    }
-    components
+/// The connectivity graph of `board`'s copper on `nets`, with `tracks` and
+/// `arcs` in place of the board's: its contacts and each one's root.
+fn copper_roots(
+    board: &PhysicalBoard,
+    nets: &IndexSet<String>,
+    tracks: &[TrackSegment],
+    arcs: &[TrackArc],
+) -> Result<(Vec<CopperContact>, BTreeMap<String, String>)> {
+    let candidate = Candidate { only_nets: Some(nets), tracks: Some(tracks), arcs: Some(arcs), ..Candidate::default() };
+    let (contacts, _, internal) = explicit_copper_contacts(board, candidate)?;
+    let roots = copper_contact_roots(&contacts, &internal)?;
+    Ok((contacts, roots))
 }
 
 /// `disconnecting_groups`: the arc groups (with reasons) whose emission
-/// splits copper that was connected. Per net, the anchors are its vias and
-/// lands (`contacts`) and its tracks no accepted arc trims; any two anchors
-/// connected through the original `tracks` must stay connected through the
-/// emitted `copper`. An arc is blamed when its trimmed-away leg pieces
-/// (corner to tangent point) touched an anchor that ends up apart from the
-/// arc; a split no arc explains blames every accepted arc of the net.
+/// splits copper that was connected, on the exact explicit-copper graph
+/// (lands, vias, polygons, tracks and arcs). Anchors are the copper the
+/// stage does not change: lands, vias, polygons and every track no accepted
+/// arc trims. Any two anchors connected on the board must stay connected
+/// once `copper` replaces its tracks and arcs. An arc is blamed when its
+/// trimmed-away leg pieces (corner to tangent point) overlap an anchor on
+/// the arc's layer that ends up apart from the arc; a split no arc explains
+/// blames every accepted arc of the net.
 fn disconnecting_groups(
-    tracks: &[TrackSegment],
+    board: &PhysicalBoard,
     copper: &ArchedCopper,
     accepted: &[PlannedArc],
-    contacts: &[&crate::routing_clearance::CopperObject],
-) -> IndexMap<usize, String> {
+) -> Result<IndexMap<usize, String>> {
+    let tracks = &board.tracks;
     let legs: IndexSet<usize> = accepted.iter().flat_map(|arc| [arc.incoming, arc.outgoing]).collect();
     // Each untrimmed original track's copy in the emitted copper: the
     // emission keeps them, unchanged and in order.
-    let mut copies: IndexMap<usize, usize> = IndexMap::new();
+    let mut copies: IndexMap<String, String> = IndexMap::new();
     let mut next = 0;
     for (index, track) in tracks.iter().enumerate() {
         if legs.contains(&index) {
@@ -803,44 +710,37 @@ fn disconnecting_groups(
             next += 1;
         }
         if next < copper.tracks.len() {
-            copies.insert(index, next);
+            copies.insert(format!("track:{index}"), format!("track:{next}"));
             next += 1;
         }
     }
-    let mut nets: Vec<&str> = accepted.iter().map(|arc| arc.net.as_str()).collect();
-    nets.sort_unstable();
-    nets.dedup();
+    let mut nets: IndexSet<String> = accepted.iter().map(|arc| arc.net.clone()).collect();
+    nets.sort();
+    let (before_contacts, before) = copper_roots(board, &nets, tracks, &board.arcs)?;
+    let (_, after) = copper_roots(board, &nets, &copper.tracks, &copper.arcs)?;
+    // Anchors: (contact on the board, its identity after emission).
+    let anchors: Vec<(&CopperContact, &str)> = before_contacts
+        .iter()
+        .filter_map(|contact| {
+            let id = contact.identity.as_str();
+            if id.starts_with("track:") {
+                copies.get(id).map(|copy| (contact, copy.as_str()))
+            } else if id.starts_with("arc:") {
+                None
+            } else {
+                Some((contact, id))
+            }
+        })
+        .collect();
     let mut blamed: IndexMap<usize, String> = IndexMap::new();
-    for net in nets {
-        let net_contacts: Vec<&crate::routing_clearance::CopperObject> =
-            contacts.iter().copied().filter(|contact| contact.net == net).collect();
-        let before_indices: Vec<usize> = (0..tracks.len()).filter(|&i| tracks[i].net == net).collect();
-        let before_tracks: Vec<&TrackSegment> = before_indices.iter().map(|&i| &tracks[i]).collect();
-        let after_indices: Vec<usize> = (0..copper.tracks.len()).filter(|&i| copper.tracks[i].net == net).collect();
-        let after_tracks: Vec<&TrackSegment> = after_indices.iter().map(|&i| &copper.tracks[i]).collect();
-        let arc_indices: Vec<usize> = (0..copper.arcs.len()).filter(|&i| copper.arcs[i].net == net).collect();
-        let after_arcs: Vec<&TrackArc> = arc_indices.iter().map(|&i| &copper.arcs[i]).collect();
-        let mut before = copper_components(&net_contacts, &before_tracks, &[]);
-        let mut after = copper_components(&net_contacts, &after_tracks, &after_arcs);
-        let c = net_contacts.len();
-        // Anchors: (name, before node, after node, original track index for
-        // track anchors). Contacts come first, at the same node on both sides.
-        let mut anchors: Vec<(String, usize, usize, Option<usize>)> = Vec::new();
-        for (ci, contact) in net_contacts.iter().enumerate() {
-            let name = if contact.occurrence.is_empty() { contact.net.clone() } else { contact.occurrence.clone() };
-            anchors.push((name, ci, ci, None));
-        }
-        for (bi, &index) in before_indices.iter().enumerate() {
-            let Some(copy) = copies.get(&index) else { continue };
-            let Some(ai) = after_indices.iter().position(|i| i == copy) else { continue };
-            anchors.push((format!("track:{index}"), c + bi, c + ai, Some(index)));
-        }
-        let before_roots: Vec<usize> = anchors.iter().map(|anchor| before.find(anchor.1)).collect();
-        let after_roots: Vec<usize> = anchors.iter().map(|anchor| after.find(anchor.2)).collect();
-        let mut seen: IndexMap<usize, usize> = IndexMap::new();
+    for net in &nets {
+        let net_anchors: Vec<&(&CopperContact, &str)> =
+            anchors.iter().filter(|(contact, _)| contact.net == *net).collect();
+        let mut seen: IndexMap<&str, &str> = IndexMap::new();
         let mut split = false;
-        for (root, after_root) in before_roots.iter().zip(&after_roots) {
-            if *seen.entry(*root).or_insert(*after_root) != *after_root {
+        for (contact, after_id) in &net_anchors {
+            let (root, after_root) = (before[&contact.identity].as_str(), after[*after_id].as_str());
+            if *seen.entry(root).or_insert(after_root) != after_root {
                 split = true;
             }
         }
@@ -848,51 +748,48 @@ fn disconnecting_groups(
             continue;
         }
         let mut explained = false;
-        for arc in accepted.iter().filter(|arc| arc.net == net) {
+        for arc in accepted.iter().filter(|arc| arc.net == *net) {
             let emitted = arc.arc();
-            let Some(position) = after_arcs.iter().position(|candidate| {
-                candidate.layer == emitted.layer
+            let Some(position) = copper.arcs.iter().position(|candidate| {
+                candidate.net == emitted.net
+                    && candidate.layer == emitted.layer
                     && candidate.mid == emitted.mid
                     && candidate.width_nm == emitted.width_nm
             }) else {
                 continue;
             };
-            let arc_root = after.find(c + after_tracks.len() + position);
-            let removed = [
-                TrackSegment { start: arc.start, end: arc.corner, ..tracks[arc.incoming].clone() },
-                TrackSegment { start: arc.corner, end: arc.end, ..tracks[arc.outgoing].clone() },
-            ];
-            let mut culprit: Option<String> = None;
-            for (anchor, (name, _, _, track)) in anchors.iter().enumerate() {
-                if after_roots[anchor] == arc_root {
-                    continue;
-                }
-                let touched = match track {
-                    None => {
-                        let contact = net_contacts[anchor];
-                        contact.layers.contains(&arc.layer)
-                            && removed.iter().any(|piece| track_touches(piece, arc.layer, &contact.shape))
-                    }
-                    Some(index) => track_copper(&tracks[*index])
-                        .is_some_and(|shape| removed.iter().any(|piece| track_touches(piece, arc.layer, &shape))),
-                };
-                if touched {
-                    culprit = Some(name.clone());
-                    break;
-                }
-            }
-            if let Some(name) = culprit {
+            let Some(arc_root) = after.get(&format!("arc:{position}:0")) else { continue };
+            let removed: Vec<CopperContact> =
+                [(arc.start, arc.corner, &tracks[arc.incoming]), (arc.corner, arc.end, &tracks[arc.outgoing])]
+                    .into_iter()
+                    .filter_map(|(start, end, leg)| {
+                        let shape = RoundedConvexShape::new(vec![start, end], leg.width_nm.div_euclid(2)).ok()?;
+                        Some(CopperContact {
+                            identity: "removed".to_owned(),
+                            net: leg.net.clone(),
+                            layers: vec![leg.layer],
+                            shape,
+                            drill: None,
+                            capped_layers: Vec::new(),
+                        })
+                    })
+                    .collect();
+            let culprit = net_anchors.iter().find(|(contact, after_id)| {
+                after[*after_id] != *arc_root && removed.iter().any(|piece| copper_contacts_overlap(contact, piece))
+            });
+            if let Some((contact, _)) = culprit {
                 explained = true;
+                let name = contact.identity.clone();
                 blamed.entry(arc.group).or_insert_with(|| format!("connectivity of {name} through a trimmed leg"));
             }
         }
         if !explained {
-            for arc in accepted.iter().filter(|arc| arc.net == net) {
+            for arc in accepted.iter().filter(|arc| arc.net == *net) {
                 blamed.entry(arc.group).or_insert_with(|| "arching would split the net's copper".to_owned());
             }
         }
     }
-    blamed
+    Ok(blamed)
 }
 
 /// `arc_obstruction`: why the planned arc may not be emitted, if anything
@@ -1142,10 +1039,88 @@ inner {inner:?} {g_inner:?}"
         assert_eq!(outcome.arcs, 1, "{:?}", outcome.retained);
         let kept = outcome.retained.iter().find(|item| item.corner == Point::new(10 * MM, 6 * MM)).expect("kept");
         assert!(kept.reason.starts_with("connectivity of "), "{}", kept.reason);
-        let refs: Vec<&TrackSegment> = arched.tracks.iter().collect();
-        let arcs: Vec<&TrackArc> = arched.arcs.iter().collect();
-        let mut components = copper_components(&[], &refs, &arcs);
-        let roots: IndexSet<usize> = (0..refs.len() + arcs.len()).map(|node| components.find(node)).collect();
-        assert_eq!(roots.len(), 1, "the arched copper stays one component");
+        assert_eq!(components(&arched), 1, "the arched copper stays one component");
+    }
+
+    /// The number of connected components of net `S`'s routed copper
+    /// (tracks, arcs, vias and polygons; the test board's lands need not be
+    /// routed).
+    fn components(board: &PhysicalBoard) -> usize {
+        let nets: IndexSet<String> = IndexSet::from(["S".to_owned()]);
+        let (_, roots) = copper_roots(board, &nets, &board.tracks, &board.arcs).unwrap();
+        roots.iter().filter(|(id, _)| !id.starts_with("pad:")).map(|(_, root)| root).collect::<IndexSet<_>>().len()
+    }
+
+    fn arc_board() -> PhysicalBoard {
+        let mut board = board();
+        let rule = NetRoutingRule {
+            corner_style: CornerStyle::Arc,
+            corner_radius_nm: Some(MM),
+            ..crate::routing_acceptance::general_rule("S")
+        };
+        board.net_routing_rules.push(rule);
+        board.tracks = vec![
+            track("S", (3 * MM, 6 * MM), (10 * MM, 6 * MM), 200_000),
+            track("S", (10 * MM, 6 * MM), (10 * MM, 9 * MM), 200_000),
+            track("S", (10 * MM, 9 * MM), (17 * MM, 9 * MM), 200_000),
+        ];
+        board
+    }
+
+    fn via(x: i64, y: i64) -> copper_pcb::board::Via {
+        copper_pcb::board::Via {
+            net: "S".to_owned(),
+            position: Point::new(x, y),
+            size_nm: 600_000,
+            drill_nm: 300_000,
+            from_layer: CopperLayer::Front,
+            to_layer: CopperLayer::Back,
+            technology: None,
+            finish: "standard".to_owned(),
+        }
+    }
+
+    #[test]
+    fn copper_joined_through_a_polygon_keeps_its_corner_sharp() {
+        let mut board = arc_board();
+        // A fixed polygon overlaps only the first leg's trimmed-away piece
+        // near the corner and carries a via, which no track touches.
+        board.polygons = vec![copper_pcb::board::CopperPolygon {
+            id: "pour".to_owned(),
+            net: "S".to_owned(),
+            layer: CopperLayer::Front,
+            vertices: vec![
+                Point::new(9_850_000, 5_000_000),
+                Point::new(9_980_000, 5_000_000),
+                Point::new(9_980_000, 5_950_000),
+                Point::new(9_850_000, 5_950_000),
+            ],
+        }];
+        board.vias = vec![via(9_915_000, 5_300_000)];
+        assert_eq!(components(&board), 1);
+        let (arched, outcome) = arch_board(&board).unwrap().expect("arc-style net");
+        assert_eq!(outcome.arcs, 1, "{:?}", outcome.retained);
+        let kept = outcome.retained.iter().find(|item| item.corner == Point::new(10 * MM, 6 * MM)).expect("kept");
+        assert!(kept.reason.starts_with("connectivity of polygon:pour"), "{}", kept.reason);
+        assert_eq!(components(&arched), 1, "the arched copper stays one component");
+    }
+
+    #[test]
+    fn copper_on_another_layer_does_not_hold_a_corner_back() {
+        let mut board = arc_board();
+        // The first corner would cut off this via: it stays sharp.
+        board.vias = vec![via(9_950_000, 5_900_000)];
+        // An unconnected B.Cu track of the net crosses under the second
+        // corner's trimmed-away piece: it is on another layer, so that
+        // corner still arcs.
+        board.tracks.push(TrackSegment {
+            layer: CopperLayer::Back,
+            ..track("S", (10_500_000, 8_500_000), (10_500_000, 9_500_000), 200_000)
+        });
+        let (arched, outcome) = arch_board(&board).unwrap().expect("arc-style net");
+        assert_eq!(outcome.arcs, 1, "{:?}", outcome.retained);
+        assert_eq!(outcome.retained.len(), 1, "{:?}", outcome.retained);
+        assert_eq!(outcome.retained[0].corner, Point::new(10 * MM, 6 * MM));
+        assert_eq!(arched.arcs.len(), 1);
     }
 }
