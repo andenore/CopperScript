@@ -1,9 +1,9 @@
 {
   "schema": "copperassettracker-showcase/v3",
   "candidate": "native-showcase-20261106",
-  "created_utc": "20261106T202058Z",
+  "created_utc": "20261106T203049Z",
   "source": {
-    "git_commit": "dd5d8839b19c50dc6690587eaca051c2b865cfe8",
+    "git_commit": "8ed9a07364df4087a09c4aeb9ca421beb2d157c5",
     "tracked_changes": "",
     "input_sha256": {
       "board.copper": "9a4c6f94ff83fcd44103eb11e0c3f5c1df1ab469936e47a0f331e657250623cb",
@@ -15,14 +15,14 @@
     }
   },
   "compiler": {
-    "copperscript_commit": "77ad3829a5d14a9b722d04df9d4dc81efcca1092",
+    "copperscript_commit": "7d01db169d99c90fafff526d621a025a4957e56f",
     "tracked_changes": "",
     "executable_sha256": "6c8eac0e63fc8ec1ffd20d1e43fa9f6bcb09a782e1e00bb347701737dd11d94f"
   },
   "route": {
     "options": "--layers 6 --fab-profile jlcpcb-six-layer --candidates 1 --feedback-iterations 1 --router-iterations 5 --progress --fanout --plane-contact-radius-mm 5 --unified-set fine_regions=dense --fanout-maze --package-initial-pair-states 0 --no-early-plane-stitch --plane-stitch-step-mm 0.1 --plane-maze-step-mm 0.025 --plane-maze-budget 50000 --plane-contact-radius-mm 3 --plane-stitch-detour-mm 1.5",
     "status": "pass",
-    "report_sha256": "6ec2706b98ae65bff29fded07ccefa6fd967e5426ba44d65471bb762e3213094",
+    "report_sha256": "7daf42f7472c30f61e22cd0b2307df9d6e43271223eb451b1dac55d63793cae8",
     "unfilled_pcb_sha256": "91f7ffc9bfabce60688c616a7ad88614f622ca76b77b449134855c03236b6091",
     "ordinary_nets_routed": 60,
     "unrouted_ordinary_nets": [],
@@ -37,6 +37,11 @@
   },
   "pcb_sha256": "77ee4738e735c1bdbe489a563ad65b88efe6898780e71f491cefd2d184d2f3a0",
   "component_count": 87,
+  "track_count": 1173,
+  "via_count": 262,
+  "native_drc_violation_count": 0,
+  "native_unconnected_item_count": 0,
+  "blocked_requirement_count": 12,
   "copper_layers": [
     "F.Cu",
     "In1.Cu",
@@ -46,7 +51,7 @@
     "B.Cu"
   ],
   "native_drc": {
-    "report_sha256": "6faf3e37257653cf077c7517a87441e33555f4435d4ba19037c6767490482859",
+    "report_sha256": "21cb400831cc743e61657a5236898cea57c04a96bdc11895799ac240993369a7",
     "passed": true,
     "violations": 0,
     "unconnected": 0,
