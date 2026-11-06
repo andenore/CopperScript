@@ -3,6 +3,11 @@
 //! in-repo sources, seeded truncations, deletions and insertions of each, and
 //! targeted snippets.
 //!
+//! The recordings cannot be regenerated, so a source edited after it was
+//! recorded keeps its recorded text in `fixtures/sources/` (`.copper.txt`);
+//! the case's `snapshot` names that copy, and `source` stays the filename the
+//! recording reports.
+//!
 //! A parse is compared through Python's state encoding of the tree (field and
 //! class names included); errors by code, message, location, hint and
 //! replacement. On a mismatch the Rust encoding is written to
@@ -63,7 +68,8 @@ fn check_fixture(fixture: &str) {
     for (index, case) in cases.iter().enumerate() {
         let (source, filename) = match case.get("source").and_then(Json::as_str) {
             Some(path) => {
-                let text = std::fs::read_to_string(repository().join(path)).unwrap().replace("\r\n", "\n");
+                let read = case.get("snapshot").and_then(Json::as_str).unwrap_or(path);
+                let text = std::fs::read_to_string(repository().join(read)).unwrap().replace("\r\n", "\n");
                 (mutate(&text, field(case, "mutation")), path.to_owned())
             }
             None => {

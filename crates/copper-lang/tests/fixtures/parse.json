@@ -3,6 +3,7 @@
   {
    "digest": "sha256:6fe396378832ff3f835d86f9adfaadefd25fc65c7eb238997f3faa87f9c18f38",
    "mutation": null,
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -21,6 +22,7 @@
     "truncate",
     4467
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -39,6 +41,7 @@
     "truncate",
     1800
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -57,6 +60,7 @@
     "truncate",
     2734
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -75,6 +79,7 @@
     "truncate",
     3373
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -93,6 +98,7 @@
     "truncate",
     306
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -111,6 +117,7 @@
     "truncate",
     4234
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -129,6 +136,7 @@
     "truncate",
     2145
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -147,6 +155,7 @@
     "truncate",
     2212
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -155,6 +164,7 @@
     "delete",
     1011
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -163,6 +173,7 @@
     "delete",
     2779
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -171,6 +182,7 @@
     "delete",
     2367
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -179,6 +191,7 @@
     "delete",
     3379
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -187,6 +200,7 @@
     "delete",
     1161
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -205,6 +219,7 @@
     "delete",
     1213
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -223,6 +238,7 @@
     "delete",
     1313
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -231,6 +247,7 @@
     "delete",
     679
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -250,6 +267,7 @@
     205,
     "\\"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -259,6 +277,7 @@
     1156,
     "-"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -278,6 +297,7 @@
     3614,
     ")"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -297,6 +317,7 @@
     2654,
     ";"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/cm4_baseboard/board.copper.txt",
    "source": "examples/cm4_baseboard/board.copper"
   },
   {
@@ -870,6 +891,7 @@
   {
    "digest": "sha256:599ad6507d8cc5fd0c505b70fb852a8ed2847de45a54fac2238b3b37cf7f2d28",
    "mutation": null,
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -888,6 +910,7 @@
     "truncate",
     6848
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -906,6 +929,7 @@
     "truncate",
     14221
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -924,6 +948,7 @@
     "truncate",
     20143
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -942,6 +967,7 @@
     "truncate",
     8816
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -960,6 +986,7 @@
     "truncate",
     7286
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -978,6 +1005,7 @@
     "truncate",
     10302
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -996,6 +1024,7 @@
     "truncate",
     3168
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1014,6 +1043,7 @@
     "truncate",
     8954
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1022,6 +1052,7 @@
     "delete",
     19414
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1030,6 +1061,7 @@
     "delete",
     8373
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1038,6 +1070,7 @@
     "delete",
     17090
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1046,6 +1079,7 @@
     "delete",
     8881
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1054,6 +1088,7 @@
     "delete",
     6595
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1062,6 +1097,7 @@
     "delete",
     17136
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1070,6 +1106,7 @@
     "delete",
     17643
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1078,6 +1115,7 @@
     "delete",
     1468
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1087,6 +1125,7 @@
     8703,
     "-"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1106,6 +1145,7 @@
     4698,
     ";"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1115,6 +1155,7 @@
     1300,
     "-"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
@@ -1134,11 +1175,13 @@
     15431,
     ","
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/full_vertical/board.copper.txt",
    "source": "examples/full_vertical/board.copper"
   },
   {
    "digest": "sha256:47f663fc9ccc1d807f9cb5814559c98162f0b8d989ffd51c66e65177750f9208",
    "mutation": null,
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1157,6 +1200,7 @@
     "truncate",
     2467
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1175,6 +1219,7 @@
     "truncate",
     5378
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1193,6 +1238,7 @@
     "truncate",
     13490
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1211,6 +1257,7 @@
     "truncate",
     224
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1229,6 +1276,7 @@
     "truncate",
     685
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1247,6 +1295,7 @@
     "truncate",
     6158
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1265,6 +1314,7 @@
     "truncate",
     13676
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1283,6 +1333,7 @@
     "truncate",
     4775
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1291,6 +1342,7 @@
     "delete",
     11504
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1309,6 +1361,7 @@
     "delete",
     13613
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1317,6 +1370,7 @@
     "delete",
     5941
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1325,6 +1379,7 @@
     "delete",
     11728
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1343,6 +1398,7 @@
     "delete",
     13148
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1351,6 +1407,7 @@
     "delete",
     6955
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1359,6 +1416,7 @@
     "delete",
     15877
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1377,6 +1435,7 @@
     "delete",
     1440
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1396,6 +1455,7 @@
     14778,
     "-"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1415,6 +1475,7 @@
     12723,
     "/"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1434,6 +1495,7 @@
     2173,
     "@"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -1453,6 +1515,7 @@
     6202,
     "\""
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/fx10_bridge/board.copper.txt",
    "source": "examples/fx10_bridge/board.copper"
   },
   {
@@ -5893,6 +5956,7 @@
   {
    "digest": "sha256:374a501f44286a4aca985c8e94d3512da037ca5e359e5aabc1032e8d1b9c670c",
    "mutation": null,
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -5911,6 +5975,7 @@
     "truncate",
     755
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -5929,6 +5994,7 @@
     "truncate",
     2890
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -5947,6 +6013,7 @@
     "truncate",
     7733
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -5965,6 +6032,7 @@
     "truncate",
     8301
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -5983,6 +6051,7 @@
     "truncate",
     6324
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6001,6 +6070,7 @@
     "truncate",
     3389
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6019,6 +6089,7 @@
     "truncate",
     4242
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6037,6 +6108,7 @@
     "truncate",
     2246
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6045,6 +6117,7 @@
     "delete",
     2627
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6053,6 +6126,7 @@
     "delete",
     7987
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6061,6 +6135,7 @@
     "delete",
     29
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6069,6 +6144,7 @@
     "delete",
     1524
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6077,6 +6153,7 @@
     "delete",
     1716
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6085,6 +6162,7 @@
     "delete",
     8097
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6093,6 +6171,7 @@
     "delete",
     2148
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6111,6 +6190,7 @@
     "delete",
     4677
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6130,6 +6210,7 @@
     7358,
     "/"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6139,6 +6220,7 @@
     2719,
     "."
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6158,6 +6240,7 @@
     5948,
     "/"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
@@ -6167,11 +6250,13 @@
     2323,
     "/"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/board.copper.txt",
    "source": "examples/nrf52_coin_cell/board.copper"
   },
   {
    "digest": "sha256:393846cfdb9f4bddfa8cd8899649591999b7d21d4967cbbe9e3e019cce23f2bd",
    "mutation": null,
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6190,6 +6275,7 @@
     "truncate",
     747
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6208,6 +6294,7 @@
     "truncate",
     3065
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6226,6 +6313,7 @@
     "truncate",
     5067
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6244,6 +6332,7 @@
     "truncate",
     5114
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6262,6 +6351,7 @@
     "truncate",
     6868
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6280,6 +6370,7 @@
     "truncate",
     1572
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6298,6 +6389,7 @@
     "truncate",
     1967
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6316,6 +6408,7 @@
     "truncate",
     3030
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6324,6 +6417,7 @@
     "delete",
     4421
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6332,6 +6426,7 @@
     "delete",
     2084
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6340,6 +6435,7 @@
     "delete",
     5698
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6358,6 +6454,7 @@
     "delete",
     4345
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6366,6 +6463,7 @@
     "delete",
     9137
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6374,6 +6472,7 @@
     "delete",
     550
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6392,6 +6491,7 @@
     "delete",
     8860
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6400,6 +6500,7 @@
     "delete",
     6424
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6419,6 +6520,7 @@
     7339,
     "("
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6438,6 +6540,7 @@
     7085,
     "]"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6447,6 +6550,7 @@
     5419,
     "-"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
@@ -6456,11 +6560,13 @@
     685,
     "]"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/plane_pins.copper.txt",
    "source": "examples/nrf52_coin_cell/plane_pins.copper"
   },
   {
    "digest": "sha256:31f9922c54bb6e7c70f8e88e6a04b7072dd74b026e13f8ce02306be49dbe89cb",
    "mutation": null,
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6479,6 +6585,7 @@
     "truncate",
     2853
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6497,6 +6604,7 @@
     "truncate",
     4890
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6515,6 +6623,7 @@
     "truncate",
     389
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6533,6 +6642,7 @@
     "truncate",
     4207
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6551,6 +6661,7 @@
     "truncate",
     2796
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6569,6 +6680,7 @@
     "truncate",
     4920
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6587,6 +6699,7 @@
     "truncate",
     7682
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6605,6 +6718,7 @@
     "truncate",
     3945
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6613,6 +6727,7 @@
     "delete",
     2524
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6621,6 +6736,7 @@
     "delete",
     5924
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6629,6 +6745,7 @@
     "delete",
     2469
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6647,6 +6764,7 @@
     "delete",
     2347
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6655,6 +6773,7 @@
     "delete",
     1150
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6663,6 +6782,7 @@
     "delete",
     4157
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6671,6 +6791,7 @@
     "delete",
     451
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6679,6 +6800,7 @@
     "delete",
     4118
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6698,6 +6820,7 @@
     5651,
     ";"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6717,6 +6840,7 @@
     1966,
     "]"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6736,6 +6860,7 @@
     3558,
     ")"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -6755,6 +6880,7 @@
     6474,
     "\""
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/nrf52_coin_cell/via_array.copper.txt",
    "source": "examples/nrf52_coin_cell/via_array.copper"
   },
   {
@@ -15310,6 +15436,7 @@
   {
    "digest": "sha256:5a6b70d928c7b922e35c64441b1d72a8c792d40b8fc98835cb2970a277886031",
    "mutation": null,
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15328,6 +15455,7 @@
     "truncate",
     3635
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15346,6 +15474,7 @@
     "truncate",
     3653
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15364,6 +15493,7 @@
     "truncate",
     9287
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15382,6 +15512,7 @@
     "truncate",
     9335
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15400,6 +15531,7 @@
     "truncate",
     3282
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15418,6 +15550,7 @@
     "truncate",
     2301
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15436,6 +15569,7 @@
     "truncate",
     1394
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15454,6 +15588,7 @@
     "truncate",
     5522
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15472,6 +15607,7 @@
     "delete",
     8378
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15490,6 +15626,7 @@
     "delete",
     5208
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15498,6 +15635,7 @@
     "delete",
     8438
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15506,6 +15644,7 @@
     "delete",
     3725
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15514,6 +15653,7 @@
     "delete",
     6933
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15522,6 +15662,7 @@
     "delete",
     5104
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15530,6 +15671,7 @@
     "delete",
     6867
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15538,6 +15680,7 @@
     "delete",
     6350
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15557,6 +15700,7 @@
     5542,
     ";"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15576,6 +15720,7 @@
     2936,
     ")"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15595,6 +15740,7 @@
     4132,
     "\""
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -15604,6 +15750,7 @@
     5394,
     ";"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/round_led_ring/board.copper.txt",
    "source": "examples/round_led_ring/board.copper"
   },
   {
@@ -16426,6 +16573,7 @@
   {
    "digest": "sha256:244ebe628cff3e2c462482993c54da1a2a02c7a62db74326c300ed3e375cdc49",
    "mutation": null,
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16444,6 +16592,7 @@
     "truncate",
     535
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16462,6 +16611,7 @@
     "truncate",
     1649
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16480,6 +16630,7 @@
     "truncate",
     306
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16498,6 +16649,7 @@
     "truncate",
     309
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16516,6 +16668,7 @@
     "truncate",
     750
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16534,6 +16687,7 @@
     "truncate",
     363
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16552,6 +16706,7 @@
     "truncate",
     1742
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16570,6 +16725,7 @@
     "truncate",
     677
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16578,6 +16734,7 @@
     "delete",
     1558
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16586,6 +16743,7 @@
     "delete",
     950
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16594,6 +16752,7 @@
     "delete",
     1482
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16602,6 +16761,7 @@
     "delete",
     147
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16620,6 +16780,7 @@
     "delete",
     88
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16628,6 +16789,7 @@
     "delete",
     362
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16636,6 +16798,7 @@
     "delete",
     1655
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16654,6 +16817,7 @@
     "delete",
     1506
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16673,6 +16837,7 @@
     1457,
     "{"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16692,6 +16857,7 @@
     1700,
     "a"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16701,6 +16867,7 @@
     33,
     "}"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
@@ -16720,6 +16887,7 @@
     563,
     "]"
    ],
+   "snapshot": "crates/copper-lang/tests/fixtures/sources/examples/tps62130a_macro/board.copper.txt",
    "source": "examples/tps62130a_macro/board.copper"
   },
   {
