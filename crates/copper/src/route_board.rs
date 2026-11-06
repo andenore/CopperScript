@@ -1069,13 +1069,21 @@ fn route(
                     "Placement checkpoint",
                     "Placement checkpoint not saved",
                 ),
-                Stage::CriticalInputs { name, board, global_route, reserved_accesses, plane_stitch_options } => (
+                Stage::CriticalInputs {
                     name,
-                    copper_route::state_codec::critical_inputs_state_text(
+                    board,
+                    global_route,
+                    reserved_accesses,
+                    plane_stitch_options,
+                    fixed_prefix,
+                } => (
+                    name,
+                    copper_route::state_codec::critical_inputs_state_text_with_prefix(
                         board,
                         global_route,
                         reserved_accesses,
                         plane_stitch_options,
+                        fixed_prefix,
                     ),
                     "Critical inputs checkpoint",
                     "Critical checkpoint not saved",
@@ -1366,6 +1374,12 @@ fn finish(
                 }
             }
         }
+        if let Some(prefix) = &result.retained_prefix {
+            // A local dogbone remains owned even when onward routing joined
+            // its net elsewhere. Preserve exact admitted occurrences, without
+            // granting ownership from a net name or a routing option.
+            copper_route::route_cleanup::protect_fixed_prefix(prefix, &mut kept_tracks, &mut kept_vias);
+        }
         let (swept, changed) = copper_route::route_cleanup::remove_single_layer_vias(board, &kept_vias, &kept_tracks)?;
         if changed {
             let removed = board.vias.len() - swept.vias.len();
@@ -1494,6 +1508,13 @@ fn finish(
                 *entry = (*entry).max(count);
             }
             let mut diagnostics = Vec::new();
+            let cleanup_census = copper_route::native_stub_cleanup::native_cleanup_census(
+                &output_board,
+                &verification,
+                &protected,
+                &protected_vias,
+                result.retained_prefix.as_ref(),
+            )?;
             let cleanup = copper_route::plane_verify::remove_native_dangling_tracks(
                 &output_board,
                 &verification,
@@ -1537,6 +1558,7 @@ fn finish(
                 ("added_track_occurrences", Value::from(removed(&cleaned.tracks, &output_board.tracks))),
                 ("removed_via_occurrences", Value::from(removed_vias)),
                 ("diagnostics", Value::Array(diagnostics)),
+                ("census", cleanup_census),
                 ("protected_tracks", Value::from(protected.values().sum::<i64>())),
                 ("protected_vias", Value::from(protected_vias.values().sum::<i64>())),
             ]));
@@ -1578,11 +1600,14 @@ fn finish(
         plane_verification.as_ref(),
     )?;
     let verified = plane_verification.as_ref().is_some_and(|v| v.passed);
+    let retained_missing =
+        result.retained_prefix.as_ref().map(|prefix| prefix.missing_copper_occurrences(&output_board));
     let closure_status = if !stopped
         && complete_with_fill
         && (arguments.text("--verify-plane-fill").is_none() || verified)
         && duplicate_pending.is_empty()
         && plane_pending.is_empty()
+        && retained_missing.is_none_or(|missing| missing == (0, 0))
     {
         PhysicalFlowStatus::Pass
     } else {
@@ -1603,6 +1628,27 @@ fn finish(
     };
     put("schema", Value::from("copperscript-route-board/v0.1"));
     put("status", Value::from(closure_status.value()));
+    if let Some(policy) = &result.retained_escape_policy {
+        put(
+            "retained_escape_policy",
+            policy.report(result.retained_prefix.is_some(), retained_missing.is_some_and(|missing| missing == (0, 0))),
+        );
+    }
+    if let Some(prefix) = &result.retained_prefix {
+        let (missing_tracks, missing_vias) = retained_missing.expect("admitted prefix audited");
+        put(
+            "retained_escape_copper",
+            object_of(vec![
+                ("scope", Value::from("local_dogbones_and_sites")),
+                ("boundary_channel_verification", Value::from("not_performed")),
+                ("required_track_occurrences", Value::from(prefix.board().tracks.len() as i64)),
+                ("required_via_occurrences", Value::from(prefix.board().vias.len() as i64)),
+                ("missing_track_occurrences", Value::from(missing_tracks)),
+                ("missing_via_occurrences", Value::from(missing_vias)),
+                ("final_occurrences_preserved", Value::Bool(missing_tracks == 0 && missing_vias == 0)),
+            ]),
+        );
+    }
     put("erc_pass", Value::Bool(!copper_lang::erc::has_errors(context.diagnostics)));
     put("routing_profile", Value::from(arguments.text("--routing-profile").unwrap_or("custom_defaults")));
     put("work_limits", work_limits(arguments, &fresh));

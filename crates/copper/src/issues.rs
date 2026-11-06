@@ -4,14 +4,14 @@
 use std::io::Write;
 
 use copper_json::text;
-use copper_report::issues::{filter_issues, issues_document, load_run, render_issues, run_issues};
+use copper_report::issues::{filter_issues, find_issue, issues_document, load_run, render_issues, run_issues};
 use copper_report::py::PyErr;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::pypath;
 use crate::report_args::{self, flag, python_float, python_int, valued};
 
-const USAGE: &str = "usage: copper issues [-h] [--net NET] \
+const USAGE: &str = "usage: copper issues [-h] [--issue ID] [--net NET] \
 [--stage {global,access,critical,native,physical,routing,layout,placement,review,error}] [--code CODE] \
 [--limit LIMIT] [--cluster-mm CLUSTER_MM] [--json] target";
 
@@ -43,6 +43,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         2
     };
     let options = [
+        valued("--issue"),
         valued("--net"),
         valued("--stage"),
         valued("--code"),
@@ -88,6 +89,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     let result = (|| {
         let mut run = load_run(&target)?;
         let issues = run_issues(&mut run, cluster_mm)?;
+        let issues = match parsed.last("--issue") {
+            Some(id) => vec![find_issue(&issues, id)?.clone()],
+            None => issues,
+        };
         let issues = filter_issues(issues, parsed.last("--net"), stage, parsed.last("--code"))?;
         let document = issues_document(&mut run, &issues, (limit != 0).then_some(limit))?;
         if json { document.json() } else { render_issues(&document) }

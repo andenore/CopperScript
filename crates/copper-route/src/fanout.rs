@@ -128,7 +128,7 @@ use crate::bypass_links::verified_bypass_links;
 use crate::decoupling::DecouplingRouteResult;
 use crate::decoupling_paths::{DecouplingCrossLayerWitness, refresh_crosslayer_witnesses};
 use crate::escape_assignment::{EscapeAssignmentReport, EscapeCandidate, improve_escape_assignment};
-use crate::pin_escape::{RoutingAccess, checked_access_path, checked_access_paths};
+use crate::pin_escape::{RoutingAccess, checked_access_path, checked_access_paths, verified_via_launch};
 use crate::return_paths::existing_returns_permit;
 use crate::route_quality::escape_paths_cross;
 use crate::routing_clearance::RoutingClearanceIndex;
@@ -563,6 +563,7 @@ pub fn route_fanout(
         distribution_zone_nets(board).into_iter().filter(|n| !regional.contains(n.as_str())).collect();
     let owned = crate::pair_terminals::macro_owned_pads(board);
     let mut pads: Vec<Pin<'_>> = Vec::new();
+    let mut existing_accesses = IndexMap::new();
     for placement in &board.placements {
         let footprint = &board.footprints[&placement.footprint];
         let electrical: IndexSet<&str> = footprint
@@ -613,6 +614,17 @@ pub fn route_fanout(
                 .min()
                 .unwrap_or(1_000_000_000_000_000_000);
             if neighbor > options.maximum_neighbor_distance_nm {
+                continue;
+            }
+            // A physical, rule-qualified launch takes precedence over an
+            // abstract surface hint. Keep its exact input copper and expose
+            // the existing access without creating a second escape branch.
+            let rule = rules.get(net.as_str()).copied();
+            let destinations = routing_layers(board, net, rule);
+            if let Some(launch) =
+                verified_via_launch(board, &clearance, placement, pad, net, side_of(placement), rule, &destinations)?
+            {
+                existing_accesses.insert(reference, board.vias[launch.via_occurrence].position);
                 continue;
             }
             pads.push((neighbor, reference, position, placement, pad));
@@ -945,6 +957,7 @@ pub fn route_fanout(
     if failed_gate(&after, &routed)? {
         let all: Vec<PadReference> = pads.iter().map(|item| item.1.clone()).collect();
         let mut result = FanoutResult::bypass(&bypass, all);
+        result.accesses.extend(existing_accesses);
         result.assignment = assignment;
         return Ok(result);
     }
@@ -966,6 +979,7 @@ pub fn route_fanout(
         return Err(Error::Value(format!("fanout lost an original admitted bypass path: {reason}")));
     }
     let mut plain = bypass.accesses.clone();
+    plain.extend(existing_accesses);
     for (reference, anchor) in &accesses {
         if !escapes.contains_key(reference) {
             plain.insert(reference.clone(), *anchor);
@@ -993,6 +1007,38 @@ pub fn route_fanout(
 mod tests {
     use super::*;
     use crate::test_support_routers::*;
+
+    fn existing_inner_launch() -> (PhysicalBoard, PadReference, Point) {
+        let mut board = crate::test_support_planes::support_planes::ball_grid(6, 0.45, &[]);
+        board.nets.retain(|net| net.name == "N15");
+        board.footprints.get_mut("far").unwrap().pads.retain(|pad| pad.number == "15");
+        let plan = crate::via_lattice::plan_via_lattices(&board, None, 2, 1).expect("legal inner dogbone");
+        assert_eq!((plan.tracks.len(), plan.vias.len()), (1, 1));
+        let position = plan.vias[0].position;
+        (plan.board, PadReference::new("U", "15"), position)
+    }
+
+    #[test]
+    fn existing_inner_dogbone_wins_over_abstract_surface_preference() {
+        let (board, pad, position) = existing_inner_launch();
+        let options = FanoutOptions { surface_pads: [pad.clone()].into_iter().collect(), ..Default::default() };
+        let result = route_fanout(&board, Some(&options), None).expect("reuse the verified input launch");
+        assert!(result.board == board, "do not materialize a competing surface channel");
+        assert!(result.created_tracks.is_empty() && result.created_vias.is_empty());
+        assert_eq!(result.accesses.get(&pad), Some(&position));
+        assert!(!result.pending_pads.contains(&pad));
+    }
+
+    #[test]
+    fn disconnected_same_net_via_does_not_suppress_surface_escape() {
+        let (mut board, pad, _) = existing_inner_launch();
+        board.tracks.clear();
+        let options = FanoutOptions { surface_pads: [pad.clone()].into_iter().collect(), ..Default::default() };
+        let result = route_fanout(&board, Some(&options), None).expect("a via label alone is not a launch");
+        assert!(!result.created_tracks.is_empty());
+        assert!(!result.pending_pads.contains(&pad));
+        assert!(result.surface_accesses.as_ref().is_some_and(|accesses| accesses.contains_key(&pad)));
+    }
 
     fn wire(a: (f64, f64), b: (f64, f64)) -> TrackSegment {
         track("P", a, b, 0.2, CopperLayer::Front)

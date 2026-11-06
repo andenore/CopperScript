@@ -102,6 +102,7 @@ fn a_failed_loose_pair_records_the_rip_up_it_tried() {
     assert!(repair.failed == lane_b.nets && repair.ripped_up == lane_a.nets && !repair.accepted);
     assert_eq!(repair.reason, "failed group still has no accepted candidate without the ripped-up copper");
     assert!(!repair.pair_budget_exhausted && (0..2000).contains(&repair.search_states));
+    assert!(repair.restoration.is_none(), "the failed target never reached neighbour restoration");
     // LANE_A's copper is exactly what it was before the attempt.
     assert_eq!(result.locked_tracks.iter().filter(|t| t.net.starts_with("LANE_A")).count() as i64, lane_a.track_count);
     assert!(result.locked_tracks.iter().all(|t| !t.net.starts_with("LANE_B")));
@@ -117,7 +118,7 @@ fn a_failed_loose_pair_records_the_rip_up_it_tried() {
     let entry = |failed: bool| {
         let mut text = String::from("{");
         if failed {
-            text += r#""failed": ["LANE_B_N", "LANE_B_P"], "#;
+            text += r#""failed": ["LANE_B_N", "LANE_B_P"], "restoration": null, "#;
         }
         text += &format!(
             r#""ripped_up": ["LANE_A_N", "LANE_A_P"], "accepted": false, "reason": "{}", "search_states": {}, "pair_budget_exhausted": false}}"#,

@@ -10,8 +10,8 @@ use copper_pcb::{Error, Result};
 use indexmap::{IndexMap, IndexSet};
 
 use crate::critical::{
-    CriticalNetResult, board_with, budget_diagnostics, budget_warnings, coupled_length, is_pair_kind, rejection_gate,
-    track_length, validate_candidate,
+    CriticalNetResult, board_with, budget_diagnostics, complete_net_budget_warnings, coupled_length, is_pair_kind,
+    rejection_gate, track_length, validate_candidate,
 };
 use crate::critical_group_tuning::GroupTuner;
 use crate::critical_tuning::{
@@ -294,6 +294,32 @@ pub(crate) fn tune_match_groups(
         });
     }
     Ok(outcomes)
+}
+
+/// Forget tuning history invalidated by accepted rerouted copper. Joint
+/// tuning peers are invalidated together; their current copper stays intact.
+pub(crate) fn invalidate_rerouted_tuning(entries: &[Vec<String>], tuning: &mut RoutingTuning) {
+    let mut nets: IndexSet<String> = entries.iter().flatten().cloned().collect();
+    let mut groups: IndexSet<String> = IndexSet::new();
+    loop {
+        let before = (nets.len(), groups.len());
+        for step in &tuning.early {
+            if step.nets.iter().any(|net| nets.contains(net)) || groups.contains(&step.group) {
+                nets.extend(step.nets.iter().cloned());
+                if !step.group.is_empty() {
+                    groups.insert(step.group.clone());
+                }
+            }
+        }
+        if before == (nets.len(), groups.len()) {
+            break;
+        }
+    }
+    tuning.early.retain(|step| !groups.contains(&step.group) && step.nets.iter().all(|net| !nets.contains(net)));
+    tuning.routed.retain(|net, _| !nets.contains(net));
+    tuning.as_routed.retain(|unit, _| unit.iter().all(|net| !nets.contains(net)));
+    tuning.failed_targets.retain(|unit, _| unit.iter().all(|net| !nets.contains(net)));
+    tuning.group_failures.retain(|group, _| !groups.contains(group));
 }
 
 /// `_drop_group_steps`: undo the tuning-group steps made while routing that
@@ -744,7 +770,7 @@ fn tune_unit(
         reason = plan.reason.clone();
         let Some(proposed) = plan.tracks.clone() else { continue };
         let proposed = split_by_rule(board, rules, breakout, proposed);
-        let mut candidate = retuned_result(board, rules, result, &proposed, unit_vias);
+        let mut candidate = retuned_result(board, rules, result, &proposed, unit_vias, &other_tracks);
         let mut proposed = proposed;
         if candidate.diagnostics.is_empty() {
             (candidate, proposed, _) =
@@ -872,7 +898,7 @@ fn tune_group(
             let original = &results[result_index[unit]];
             candidates.insert(
                 unit.clone(),
-                retuned_result(board, rules, original, &proposed[position], &committed[*position].2),
+                retuned_result(board, rules, original, &proposed[position], &committed[*position].2, &other_tracks),
             );
         }
         let mut rejected = candidates.values().find(|item| !item.diagnostics.is_empty()).cloned();
@@ -901,6 +927,7 @@ fn retuned_result(
     original: &CriticalNetResult,
     tracks: &[TrackSegment],
     vias: &[Via],
+    budget_prefix: &[TrackSegment],
 ) -> CriticalNetResult {
     let per_net: Vec<Vec<&TrackSegment>> =
         original.nets.iter().map(|net| tracks.iter().filter(|t| t.net == *net).collect()).collect();
@@ -910,7 +937,7 @@ fn retuned_result(
     for (net, items) in original.nets.iter().zip(&per_net) {
         let net_vias: Vec<&Via> = vias.iter().filter(|v| v.net == *net).collect();
         diagnostics.extend(budget_diagnostics(rules[net.as_str()], &net_vias));
-        warnings.extend(budget_warnings(rules[net.as_str()], items));
+        warnings.extend(complete_net_budget_warnings(rules[net.as_str()], items, budget_prefix));
     }
     let mut result = original.clone();
     result.track_count = tracks.len() as i64;
@@ -948,4 +975,130 @@ fn retuned_result(
     result.diagnostics = diagnostics;
     result.warnings = warnings;
     result
+}
+
+#[cfg(test)]
+mod rerouted_tuning_tests {
+    use super::*;
+    use copper_physical::{CopperLayer, Point};
+
+    fn names(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
+    }
+
+    fn tuning_step(nets: &[&str], group: &str) -> MatchTuningUnit {
+        MatchTuningUnit {
+            nets: names(nets),
+            stage: "routing".to_owned(),
+            style: "bumps".to_owned(),
+            added_length_nm: 100,
+            bumps: 1,
+            legs: 2,
+            amplitudes_nm: vec![50],
+            group: group.to_owned(),
+            lanes: names(nets),
+        }
+    }
+
+    fn track(net: &str, length: i64) -> TrackSegment {
+        TrackSegment {
+            net: net.to_owned(),
+            start: Point::new(0, 0),
+            end: Point::new(length, 0),
+            width_nm: 100_000,
+            layer: CopperLayer::Front,
+        }
+    }
+
+    fn cached(nets: &[&str]) -> RoutingTuning {
+        let mut tuning = RoutingTuning::default();
+        for net in nets {
+            let unit = names(&[net]);
+            tuning.routed.insert((*net).to_owned(), 100);
+            tuning.failed_targets.insert(unit.clone(), 200);
+            tuning.as_routed.insert(
+                unit.clone(),
+                (vec![track(net, 100)], CriticalNetResult::new(unit, true, 1, 0, vec![100], 0, Vec::new())),
+            );
+        }
+        tuning
+    }
+
+    #[test]
+    fn rerouted_tuning_invalidates_joint_peers_and_preserves_unrelated_history() {
+        let mut tuning = cached(&["A", "B", "C", "D", "Q", "Z"]);
+        // Reverse order forces propagation through both named groups, not
+        // merely the first step that directly mentions the rerouted net.
+        tuning.early = vec![
+            tuning_step(&["D"], "second"),
+            tuning_step(&["B", "C"], "second"),
+            tuning_step(&["B"], "first"),
+            tuning_step(&["A"], "first"),
+            tuning_step(&["Q"], ""),
+            tuning_step(&["Z"], "unrelated"),
+        ];
+        for group in ["first", "second", "unrelated"] {
+            tuning.group_failures.insert(group.to_owned(), format!("failure for {group}"));
+        }
+        let retained_steps = tuning.early[4..].to_vec();
+        let retained_copper = tuning.as_routed[&names(&["Z"])].0.clone();
+
+        invalidate_rerouted_tuning(&[names(&["A"])], &mut tuning);
+
+        assert_eq!(tuning.early, retained_steps);
+        assert_eq!(tuning.routed.keys().cloned().collect::<Vec<_>>(), names(&["Q", "Z"]));
+        assert_eq!(tuning.failed_targets.keys().cloned().collect::<Vec<_>>(), vec![names(&["Q"]), names(&["Z"])]);
+        assert_eq!(tuning.as_routed.keys().cloned().collect::<Vec<_>>(), vec![names(&["Q"]), names(&["Z"])]);
+        assert_eq!(tuning.as_routed[&names(&["Z"])].0, retained_copper);
+        assert_eq!(tuning.group_failures.len(), 1);
+        assert_eq!(tuning.group_failures["unrelated"], "failure for unrelated");
+    }
+
+    #[test]
+    fn invalidating_accepted_repair_prevents_restoring_old_joint_copper() {
+        let mut tuning = cached(&["target", "blocker", "peer"]);
+        tuning.early = vec![tuning_step(&["target", "peer"], "joint")];
+        tuning.group_failures.insert("joint".to_owned(), "old failure".to_owned());
+        let entries = vec![names(&["target"]), names(&["blocker"])];
+        let mut committed: Committed = ["target", "blocker", "peer"]
+            .iter()
+            .map(|net| (names(&[net]), vec![track(net, 300)], Vec::new()))
+            .collect();
+        let mut results: Vec<_> = committed
+            .iter()
+            .map(|(unit, _, _)| CriticalNetResult::new(unit.clone(), true, 1, 0, vec![300], 0, Vec::new()))
+            .collect();
+        let result_index = committed.iter().enumerate().map(|(index, (unit, _, _))| (unit.clone(), index)).collect();
+        let accepted_copper = committed.clone();
+
+        invalidate_rerouted_tuning(&entries, &mut tuning);
+
+        assert!(tuning.early.is_empty());
+        assert!(tuning.routed.is_empty());
+        assert!(tuning.as_routed.is_empty());
+        assert!(tuning.failed_targets.is_empty());
+        assert!(tuning.group_failures.is_empty());
+        assert!(!drop_group_steps(&entries, &mut committed, &mut results, &result_index, &mut tuning));
+        assert_eq!(committed, accepted_copper);
+        assert!(results.iter().all(|result| result.connected && result.lengths_nm == vec![300]));
+    }
+
+    #[test]
+    fn retuned_result_keeps_full_net_length_warning_and_generated_metrics() {
+        let mut board = crate::test_support_critical::usb_pair_board();
+        for rule in &mut board.net_routing_rules {
+            rule.max_length_nm = Some(4_500_000);
+            rule.max_skew_nm = None;
+            rule.maximum_uncoupled_length_nm = None;
+        }
+        let rules: Rules = board.net_routing_rules.iter().map(|rule| (rule.net.as_str(), rule)).collect();
+        let original =
+            CriticalNetResult::new(names(&["USB_DM", "USB_DP"]), true, 2, 0, vec![4_000_000, 4_000_000], 0, Vec::new());
+        let generated = vec![track("USB_DM", 4_000_000), track("USB_DP", 4_000_000)];
+        let prefix = vec![track("USB_DM", 1_000_000), track("USB_DP", 1_000_000)];
+        let result = retuned_result(&board, &rules, &original, &generated, &[], &prefix);
+        assert_eq!(result.lengths_nm, original.lengths_nm);
+        assert_eq!(result.track_count, 2);
+        assert_eq!(result.warnings, vec!["route length 5000000 nm exceeds 4500000 nm"; 2]);
+    }
 }

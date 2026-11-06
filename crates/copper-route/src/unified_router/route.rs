@@ -393,6 +393,58 @@ struct RepairAttempt {
     used: i64,
 }
 
+/// Report-only evidence from the selected router instance. A pour trial may
+/// use a different lattice; never copy its node indexes into the main router.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct RouteDiagnostics {
+    pub reason: String,
+    pub search: Vec<String>,
+    pub search_budget_exhausted: bool,
+    pub rejection: Option<String>,
+}
+
+pub(crate) fn route_diagnostics(
+    router: &Router<'_, '_>,
+    routes: &IndexMap<String, super::router::NetRoute>,
+    rejected: &IndexMap<String, Vec<Point>>,
+) -> IndexMap<String, RouteDiagnostics> {
+    routes
+        .iter()
+        .map(|(name, route)| {
+            (
+                name.clone(),
+                RouteDiagnostics {
+                    reason: route.reason.clone(),
+                    search: if route.connected {
+                        Vec::new()
+                    } else {
+                        route
+                            .required_search_failures
+                            .iter()
+                            .flat_map(|failure| {
+                                std::iter::once(format!("unified: {}", failure.diagnostic()))
+                                    .chain(failure.access_diagnostics())
+                            })
+                            .collect()
+                    },
+                    search_budget_exhausted: route.search_budget_exhausted(),
+                    rejection: rejected.contains_key(name).then(|| rejection_text(router, name)),
+                },
+            )
+        })
+        .collect()
+}
+
+pub(crate) fn adopt_route_diagnostics(
+    selected: &mut IndexMap<String, RouteDiagnostics>,
+    candidate: IndexMap<String, RouteDiagnostics>,
+    kept: bool,
+) {
+    if kept {
+        selected.extend(candidate);
+    }
+}
+
 /// `Counter(after) - Counter(before)`, elements in `after`'s first-seen order.
 fn added_items<T: Clone + Eq + std::hash::Hash>(after: &[T], before: &[T]) -> Vec<T> {
     let mut counts: IndexMap<&T, i64> = IndexMap::new();
@@ -672,14 +724,10 @@ pub fn route_unified(
     let mut index = RoutingClearanceIndex::new(board)?;
     let bus_board;
     let mut board: &PhysicalBoard = original_board;
-    if options.buses_first && !bus_names.is_empty() && bus_names.len() < nets.len() {
-        let mut bus_options = options.clone();
-        if options.bus_length_budget {
-            bus_options.length_priority = true;
-        }
+    if options.buses_first && !options.bus_length_budget && !bus_names.is_empty() && bus_names.len() < nets.len() {
         let bus_nets: Vec<&PhysicalNet> =
             nets.iter().copied().filter(|n| bus_names.contains(n.name.as_str())).collect();
-        let mut bus_router = Router::new(board, &bus_options, &bus_nets, IndexSet::new(), required_accesses, index)?;
+        let mut bus_router = Router::new(board, options, &bus_nets, IndexSet::new(), required_accesses, index)?;
         bus_router.set_guides(shared.guides);
         let (bus_routes, bus_conflicts, used) = bus_router.negotiate(deadline, None, &mut on_progress)?;
         let (accepted_bus, _, complete_bus) = bus_router.commit(&bus_routes, &bus_conflicts)?;
@@ -688,20 +736,6 @@ pub fn route_unified(
         bus_accepted = accepted_bus;
         bus_complete = complete_bus;
         shared.added(&bus_accepted);
-        let mut over_length: IndexSet<String> = IndexSet::new();
-        if options.bus_length_budget {
-            for name in &bus_complete {
-                if let Some(rule) = rules.get(name.as_str())
-                    && let Some(max_length) = rule.max_length_nm
-                {
-                    let tracks = bus_accepted.get(name).map_or(&[][..], |c| c.0.as_slice());
-                    if net_track_length(board, name, tracks) > max_length {
-                        over_length.insert(name.clone());
-                    }
-                }
-            }
-            bus_complete.retain(|name| !over_length.contains(name));
-        }
         bus_accepted.retain(|name, _| bus_complete.contains(name));
         let mut skew_notes: Vec<String> = Vec::new();
         if options.bus_skew_tuning && !bus_accepted.is_empty() {
@@ -719,7 +753,7 @@ pub fn route_unified(
             vec![
                 ("nets", int(bus_names.len() as i64)),
                 ("complete", int(bus_complete.len() as i64)),
-                ("over_length", int(over_length.len() as i64)),
+                ("over_length", int(0)),
                 ("iterations", int(used)),
                 ("skew_notes", Value::Array(skew_notes.iter().map(|n| Value::from(n.as_str())).collect())),
             ],
@@ -733,7 +767,11 @@ pub fn route_unified(
     }
     emit(&mut on_progress, "unified_setup", "started", vec![("nets", int(nets.len() as i64))]);
     let index = if shared.enabled { index } else { RoutingClearanceIndex::new(board)? };
-    let mut router = Router::new(board, options, &nets, IndexSet::new(), required_accesses, index)?;
+    let mut routing_options = options.clone();
+    if options.buses_first && options.bus_length_budget && !bus_names.is_empty() {
+        routing_options.length_priority = true;
+    }
+    let mut router = Router::new(board, &routing_options, &nets, IndexSet::new(), required_accesses, index)?;
     router.set_guides(shared.guides);
     if options.export_congestion && options.congestion_tile_nm < router.pitch {
         return fail("congestion_tile_nm must be at least the router pitch");
@@ -765,7 +803,59 @@ pub fn route_unified(
     }
     setup.push(("seconds", Value::Float(0.0)));
     emit(&mut on_progress, "unified_setup", "finished", setup);
-    let (routes, conflicts, mut iterations) = router.negotiate(deadline, None, &mut on_progress)?;
+    let mut seeded_iterations = 0;
+    let mut remaining = None;
+    if options.buses_first
+        && options.bus_length_budget
+        && !bus_names.is_empty()
+        && bus_names.len() < nets.len()
+        && options.maximum_iterations > 1
+    {
+        let selected: IndexSet<String> = bus_names.iter().map(|name| (*name).to_owned()).collect();
+        let seed_budget = (options.maximum_iterations / 4).clamp(1, 20);
+        let (_, _, used) =
+            router.negotiate_bounded(deadline, Some(&selected), Some(seed_budget), true, &mut on_progress)?;
+        seeded_iterations = used;
+        remaining = Some(options.maximum_iterations - used);
+        let over_length: IndexSet<String> = router
+            .routes
+            .iter()
+            .filter(|(name, route)| {
+                options.bus_length_budget
+                    && rules.get(name.as_str()).and_then(|rule| rule.max_length_nm).is_some_and(|maximum| {
+                        net_track_length(board, name, &[]) as f64 + router.route_length_nm(route) > maximum as f64
+                    })
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        let mut seeds = router.routes.clone();
+        seeds.retain(|name, _| !over_length.contains(name));
+        router.restore_routes(seeds);
+        let mutable = router.routes.values().filter(|route| route.connected).count();
+        emit(
+            &mut on_progress,
+            "unified_buses",
+            "seeded",
+            vec![
+                ("nets", int(selected.len() as i64)),
+                ("mutable_incumbents", int(mutable as i64)),
+                ("complete", int(mutable as i64)),
+                ("over_length", int(over_length.len() as i64)),
+                ("iterations", int(used)),
+                ("frozen", int(0)),
+            ],
+        );
+    }
+    let rest: IndexSet<String> =
+        nets.iter().filter(|net| !bus_names.contains(net.name.as_str())).map(|net| net.name.clone()).collect();
+    let (routes, conflicts, mut iterations) = router.negotiate_bounded(
+        deadline,
+        (seeded_iterations > 0).then_some(&rest),
+        remaining,
+        false,
+        &mut on_progress,
+    )?;
+    iterations += seeded_iterations;
     let (mut accepted, mut rejected, mut complete) = router.commit(&routes, &conflicts)?;
     shared.added(&accepted);
     emit(
@@ -861,9 +951,10 @@ pub fn route_unified(
             break;
         }
     }
+    let mut selected_diagnostics = route_diagnostics(&router, &router.routes, &rejected);
     if options.pour_recheck && !plane_nets.is_empty() && deadline.is_none_or(|d| Instant::now() <= d) {
         let mut slot = router.clearance.take();
-        let (adopted, adopted_complete, report) = recheck_pours(
+        let (adopted, adopted_complete, diagnostics, report) = recheck_pours(
             board,
             &nets,
             &plane_nets,
@@ -879,6 +970,7 @@ pub fn route_unified(
         router.clearance = slot;
         accepted = adopted;
         complete = adopted_complete;
+        selected_diagnostics.extend(diagnostics);
         iterations += report.0;
         emit(&mut on_progress, "unified_pour_recheck", "finished", report.1);
     }
@@ -903,6 +995,9 @@ pub fn route_unified(
             merged.insert(name, copper);
         }
         accepted = merged;
+    }
+    if options.buses_first && options.bus_length_budget && options.bus_skew_tuning && !accepted.is_empty() {
+        (accepted, bus_skew_notes) = tune_bus_skew(board, &accepted, &rules)?;
     }
     let mut budget_errors: IndexMap<String, String> = IndexMap::new();
     let mut budget_warnings: IndexMap<String, String> = IndexMap::new();
@@ -982,9 +1077,9 @@ pub fn route_unified(
         let diagnostics = if let Some(error) = budget_errors.get(&net.name) {
             vec![error.clone()]
         } else if !routed_net {
-            let last = router.routes.get(&net.name);
-            if rejected.contains_key(&net.name) {
-                vec![rejection_text(&router, &net.name)]
+            let last = selected_diagnostics.get(&net.name);
+            if let Some(rejection) = last.and_then(|last| last.rejection.as_ref()) {
+                vec![rejection.clone()]
             } else if !spec_names.contains(&net.name) {
                 vec!["unified: no routable layer".to_owned()]
             } else {
@@ -996,6 +1091,11 @@ pub fn route_unified(
         } else {
             Vec::new()
         };
+        let mut diagnostics = diagnostics;
+        let last = selected_diagnostics.get(&net.name).filter(|_| !routed_net);
+        if let Some(last) = last {
+            diagnostics.extend(last.search.iter().cloned());
+        }
         let length = copper_physical::pyfloat::sum(
             tracks.iter().map(|t| hypot((t.end.x_nm - t.start.x_nm) as f64, (t.end.y_nm - t.start.y_nm) as f64)),
         );
@@ -1011,7 +1111,7 @@ pub fn route_unified(
             diagnostics,
             orthogonal_mode_used: false,
             resumed_branch_count: 0,
-            search_budget_exhausted: false,
+            search_budget_exhausted: last.is_some_and(|route| route.search_budget_exhausted),
             retry_heuristic_weight_percent: None,
             warnings,
         });
@@ -1091,7 +1191,7 @@ fn strings(values: &[String]) -> Value {
 }
 
 /// `_recheck_pours`: reconnect plane pads committed signal copper walled off
-/// from their pour. Returns (accepted, complete, (iterations, report)).
+/// from their pour. Returns (accepted, complete, selected diagnostics, (iterations, report)).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn recheck_pours<'b>(
     board: &PhysicalBoard,
@@ -1105,7 +1205,7 @@ fn recheck_pours<'b>(
     slot: &mut Option<RoutingClearanceIndex<'b>>,
     deadline: Option<Instant>,
     events: &mut dyn EventSink,
-) -> Result<(Accepted, IndexSet<String>, (i64, Vec<(&'static str, Value)>))> {
+) -> Result<(Accepted, IndexSet<String>, IndexMap<String, RouteDiagnostics>, (i64, Vec<(&'static str, Value)>))> {
     let before = pour_estimate(board, accepted)?;
     let routed_planes: IndexSet<&str> =
         nets.iter().filter(|n| plane_nets.contains(&n.name)).map(|n| n.name.as_str()).collect();
@@ -1116,11 +1216,13 @@ fn recheck_pours<'b>(
     cut_pads.truncate(12);
     let mut iterations = 0;
     let mut steps: Vec<String> = Vec::new();
+    let mut selected_diagnostics = IndexMap::new();
     let cut_off = cut.values().map(|p| p.len() as i64).sum::<i64>();
     if cut.is_empty() {
         return Ok((
             accepted.clone(),
             complete,
+            selected_diagnostics,
             (0, vec![("cut_off", int(cut_off)), ("pads", strings(&cut_pads)), ("steps", strings(&steps))]),
         ));
     }
@@ -1133,11 +1235,12 @@ fn recheck_pours<'b>(
         shared.hold(slot.as_mut().expect("index"), &current.0)?;
     }
     let partial = with_copper(board, &current.0);
-    let (more, used) =
+    let (more, used, diagnostics) =
         with_router!(shared, slot, &partial, options, &plane_list, IndexSet::new(), required_accesses, |step| {
             let (routes, conflicts, used) = step.negotiate(deadline, None, events)?;
-            let (more, _, _) = step.commit(&routes, &conflicts)?;
-            (more, used)
+            let (more, rejected, _) = step.commit(&routes, &conflicts)?;
+            let diagnostics = route_diagnostics(&step, &routes, &rejected);
+            (more, used, diagnostics)
         });
     iterations += used;
     shared.added(&more);
@@ -1155,6 +1258,7 @@ fn recheck_pours<'b>(
         current = (candidate, estimate);
         adopted = true;
     }
+    adopt_route_diagnostics(&mut selected_diagnostics, diagnostics, ok);
     let still: IndexMap<String, Vec<String>> = current
         .1
         .open_pads
@@ -1187,7 +1291,7 @@ fn recheck_pours<'b>(
             shared.hold(slot.as_mut().expect("index"), &ripped)?;
         }
         let partial = with_copper(board, &ripped);
-        let (plane_more, used, explicit) =
+        let (plane_more, used, explicit, plane_diagnostics) =
             with_router!(shared, slot, &partial, options, &still_nets, pads, required_accesses, |first| {
                 let (routes, conflicts, used) = first.negotiate(deadline, None, events)?;
                 let (plane_more, plane_rejected, _) = first.commit(&routes, &conflicts)?;
@@ -1206,7 +1310,8 @@ fn recheck_pours<'b>(
                         ])),
                     );
                 }
-                (plane_more, used, explicit)
+                let diagnostics = route_diagnostics(&first, &routes, &plane_rejected);
+                (plane_more, used, explicit, diagnostics)
             });
         iterations += used;
         explicit_report = Some(Value::Object(explicit));
@@ -1217,11 +1322,12 @@ fn recheck_pours<'b>(
             shared.hold(slot.as_mut().expect("index"), &candidate)?;
         }
         let partial = with_copper(board, &candidate);
-        let (signal_more, signal_complete, used) =
+        let (signal_more, signal_complete, used, signal_diagnostics) =
             with_router!(shared, slot, &partial, options, &crowd_nets, IndexSet::new(), required_accesses, |second| {
                 let (routes, conflicts, used) = second.negotiate(deadline, None, events)?;
-                let (signal_more, _, signal_complete) = second.commit(&routes, &conflicts)?;
-                (signal_more, signal_complete, used)
+                let (signal_more, rejected, signal_complete) = second.commit(&routes, &conflicts)?;
+                let diagnostics = route_diagnostics(&second, &routes, &rejected);
+                (signal_more, signal_complete, used, diagnostics)
             });
         iterations += used;
         shared.added(&signal_more);
@@ -1244,6 +1350,8 @@ fn recheck_pours<'b>(
             complete = candidate_complete;
             adopted = true;
         }
+        adopt_route_diagnostics(&mut selected_diagnostics, plane_diagnostics, ok);
+        adopt_route_diagnostics(&mut selected_diagnostics, signal_diagnostics, ok);
     }
     if shared.enabled {
         shared.hold(slot.as_mut().expect("index"), &current.0)?;
@@ -1263,7 +1371,7 @@ fn recheck_pours<'b>(
     }
     report.push(("adopted", Value::Bool(adopted)));
     report.push(("still_cut_off", strings(&still_cut)));
-    Ok((current.0, complete, (iterations, report)))
+    Ok((current.0, complete, selected_diagnostics, (iterations, report)))
 }
 
 /// `_tune_bus_skew`: lengthen short bus members so each length-match group
@@ -1282,7 +1390,7 @@ pub(crate) fn tune_bus_skew(
     let mut notes = Vec::new();
     for group in &board.match_groups {
         let max_skew = group.max_skew_nm;
-        let lengths: IndexMap<&str, i64> = group
+        let track_lengths: IndexMap<&str, i64> = group
             .nets
             .iter()
             .map(|name| {
@@ -1290,9 +1398,26 @@ pub(crate) fn tune_bus_skew(
                 (name.as_str(), net_track_length(board, name, tracks))
             })
             .collect();
-        if lengths.values().any(|length| *length == 0) {
+        if track_lengths.values().any(|length| *length == 0) {
             continue;
         }
+        // Match DRC counts the path through each via, including transitions
+        // between input-prefix copper and this router's additions. Tuning
+        // preserves via contacts, so these depths are constant for the trial.
+        let lengths: IndexMap<&str, i64> = {
+            let tracks: Vec<&TrackSegment> =
+                board.tracks.iter().chain(accepted.values().flat_map(|(tracks, _)| tracks.iter())).collect();
+            let vias: Vec<&Via> =
+                board.vias.iter().chain(accepted.values().flat_map(|(_, vias)| vias.iter())).collect();
+            group
+                .nets
+                .iter()
+                .map(|name| {
+                    let depth = copper_drc::signal_integrity::via_path_length_nm(&board.stackup, &tracks, &vias, name)?;
+                    Ok((name.as_str(), track_lengths[name.as_str()] + depth))
+                })
+                .collect::<Result<_>>()?
+        };
         let longest = *lengths.values().max().expect("members");
         let mut members: Vec<&str> = group.nets.iter().map(String::as_str).collect();
         members.sort_by_key(|name| (lengths[name], name.to_string()));
@@ -1340,7 +1465,8 @@ pub(crate) fn tune_bus_skew(
                     ..Default::default()
                 },
             )?;
-            let room = rule.max_length_nm.map(|limit| limit - lengths[name]);
+            // max_length is a track budget; via depth belongs only to matching.
+            let room = rule.max_length_nm.map(|limit| limit - track_lengths[name]);
             let (full, least) = (longest - lengths[name], need + need.rem_euclid(2));
             let mut targets: Vec<i64> = Vec::new();
             for target in if full == least { vec![full] } else { vec![full, least] } {

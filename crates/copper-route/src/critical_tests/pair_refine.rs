@@ -50,6 +50,7 @@ fn fixture() -> (PhysicalBoard, PairSearchCandidate) {
             first: a,
             second: b,
             component,
+            second_component: component,
             width,
             offset,
             clearance: board.rules.minimum_clearance_nm,
@@ -214,7 +215,8 @@ fn owner_preserves_complete_accepted_incumbent_on_bad_shortcut() {
         let routes = guides_by_net(&global_route(&board, crate::routing::GlobalRouterOptions::default().tile_size_nm));
         let owner = |lanes: &Lanes| {
             let (proposed, tracks, vias) =
-                route_pair_exact(&board, &rules[0], &rules[1], &routes, lanes, &board, (&[], &[])).expect("pair");
+                route_pair_exact(&board, &rules[0], &rules[1], &routes, lanes, &board, (&[], &[]), &board.tracks)
+                    .expect("pair");
             validate_candidate(&board, proposed, tracks, vias, &[], &[], None).expect("validated")
         };
         let incumbent = owner(&(candidate.first.clone(), candidate.second.clone()));
@@ -244,9 +246,18 @@ fn owner_preserves_complete_accepted_incumbent_on_bad_shortcut() {
                 );
                 // Over its skew budget the shortcut is only a warned fallback,
                 // never better than an incumbent within it.
-                let rejected = route_pair_exact(&board, &rules[0], &rules[1], &routes, &proposal, &board, (&[], &[]))
-                    .expect("pair")
-                    .0;
+                let rejected = route_pair_exact(
+                    &board,
+                    &rules[0],
+                    &rules[1],
+                    &routes,
+                    &proposal,
+                    &board,
+                    (&[], &[]),
+                    &board.tracks,
+                )
+                .expect("pair")
+                .0;
                 assert!(rejected.warnings.iter().any(|w| w.contains("skew")), "{rejected:?}");
             }
             "width" => {

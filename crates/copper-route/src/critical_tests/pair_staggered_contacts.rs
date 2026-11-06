@@ -60,6 +60,7 @@ fn staggered_rows_get_checked_collars() {
                     first: a,
                     second: b,
                     component: reference,
+                    second_component: reference,
                     width: 180_000,
                     offset: 190_000,
                     clearance: 150_000,

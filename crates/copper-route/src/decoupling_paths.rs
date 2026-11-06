@@ -669,6 +669,40 @@ pub fn refresh_crosslayer_witnesses(
     ))
 }
 
+/// Re-prove an original path after removal of explicitly owned temporary
+/// keepouts. The original producer and the new frame must have exactly the
+/// same non-copper intent after that removal. No path search or association
+/// replacement can discard the geometry that originally justified ownership.
+pub(crate) fn revalidate_after_temporary_keepout_removal(
+    canonical_baseline: &PhysicalBoard,
+    producer: &PhysicalBoard,
+    frame: &PhysicalBoard,
+    witness: &DecouplingCrossLayerWitness,
+    temporary: &[copper_physical::CopperKeepout],
+    index: &RoutingClearanceIndex<'_>,
+) -> Result<DecouplingCrossLayerWitness> {
+    let reason = validate_crosslayer_witness(producer, witness, None)?;
+    if !reason.is_empty() {
+        return Err(Error::Value(format!("invalid original Held producer witness: {reason}")));
+    }
+    let mut intent = crate::fixed_prefix::strip_declared_temporary_keepouts(canonical_baseline, producer, temporary)?;
+    intent.tracks = frame.tracks.clone();
+    intent.vias = frame.vias.clone();
+    if intent != *frame {
+        return Err(Error::Value("Held witness target changed non-copper source intent".to_owned()));
+    }
+    let current = DecouplingCrossLayerWitness {
+        context_digest: context(frame)?,
+        board_digest: board_digest(frame),
+        ..witness.clone()
+    };
+    let reason = validate_crosslayer_witness(frame, &current, Some(index))?;
+    if !reason.is_empty() {
+        return Err(Error::Value(format!("invalid retained original Held path: {reason}")));
+    }
+    Ok(current)
+}
+
 /// The bounds of `propose_crosslayer_decoupling`, with Python's defaults.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProposalBounds {

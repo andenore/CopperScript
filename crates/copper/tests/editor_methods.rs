@@ -7,6 +7,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+struct EditorChild(std::process::Child);
+
+impl Drop for EditorChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// A board of built-in parts in a module of its own, so nothing is fetched.
 fn project() -> PathBuf {
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("editor-methods");
@@ -33,15 +42,17 @@ fn status_line(port: u16, request: &str) -> String {
 
 #[test]
 fn unsupported_methods_get_501_and_the_editor_keeps_serving() {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_copper"))
-        .args(["edit-mechanical", "board.copper", "--allow-proxy-footprints", "--offline", "--no-browser"])
-        .current_dir(project())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("the copper binary runs");
+    let mut child = EditorChild(
+        Command::new(env!("CARGO_BIN_EXE_copper"))
+            .args(["edit-mechanical", "board.copper", "--allow-proxy-footprints", "--offline", "--no-browser"])
+            .current_dir(project())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the copper binary runs"),
+    );
     let mut port = None;
-    for line in BufReader::new(child.stdout.take().unwrap()).lines() {
+    for line in BufReader::new(child.0.stdout.take().unwrap()).lines() {
         let line = line.expect("editor output");
         if let Some(url) = line.split("http://127.0.0.1:").nth(1) {
             port = url.split('/').next().and_then(|text| text.parse::<u16>().ok());
@@ -49,7 +60,6 @@ fn unsupported_methods_get_501_and_the_editor_keeps_serving() {
         }
     }
     let Some(port) = port else {
-        let _ = child.kill();
         panic!("the editor printed no URL");
     };
     let host = format!("Host: 127.0.0.1:{port}\r\n");
@@ -57,9 +67,7 @@ fn unsupported_methods_get_501_and_the_editor_keeps_serving() {
     let options = status_line(port, &format!("OPTIONS /api/scene HTTP/1.0\r\n{host}\r\n"));
     let foreign = status_line(port, "OPTIONS / HTTP/1.0\r\nHost: example.com\r\n\r\n");
     let get = status_line(port, &format!("GET / HTTP/1.0\r\n{host}\r\n"));
-    let exited = child.try_wait().expect("child status");
-    let _ = child.kill();
-    let _ = child.wait();
+    let exited = child.0.try_wait().expect("child status");
     assert_eq!(head, "HTTP/1.0 501 Not Implemented");
     assert_eq!(options, "HTTP/1.0 501 Not Implemented");
     assert_eq!(foreign, "HTTP/1.0 403 Forbidden");

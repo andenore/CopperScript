@@ -36,3 +36,9 @@ pub fn fine_region_plan(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod search_diagnostics_tests;
+
+#[cfg(test)]
+mod partial_forest_tests;

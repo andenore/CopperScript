@@ -14,7 +14,7 @@ use copper_state::StateValue;
 use crate::Result;
 use crate::routing::{
     GlobalNetRoute, GlobalRouteSegment, GlobalRoutingMetrics, GlobalRoutingResult, GlobalRoutingStatus,
-    GlobalViaProposal, GridNode, PinAccess, RoutingHotspot,
+    GlobalTerminalAccess, GlobalViaProposal, GridNode, PinAccess, RoutingHotspot,
 };
 
 fn grid_node(value: &StateValue) -> Result<GridNode> {
@@ -165,6 +165,7 @@ pub fn global_routing_result(value: &StateValue) -> Result<GlobalRoutingResult> 
     fields.allow(&[
         "status",
         "routes",
+        "terminal_accesses",
         "hotspots",
         "metrics",
         "placement_fingerprint",
@@ -174,10 +175,27 @@ pub fn global_routing_result(value: &StateValue) -> Result<GlobalRoutingResult> 
     Ok(GlobalRoutingResult {
         status: enumeration(fields.required("status")?, "GlobalRoutingStatus", status)?,
         routes: sequence(Some(fields.required("routes")?), net_route)?,
+        terminal_accesses: sequence(fields.get("terminal_accesses"), terminal_access)?,
         hotspots: sequence(Some(fields.required("hotspots")?), hotspot)?,
         metrics: metrics(fields.required("metrics")?)?,
         placement_fingerprint: text(fields.required("placement_fingerprint")?)?,
         routing_fingerprint: text(fields.required("routing_fingerprint")?)?,
         fixed_prefix_digest: optional_text(fields.get("fixed_prefix_digest"))?,
+    })
+}
+
+pub(crate) fn terminal_access(value: &StateValue) -> Result<GlobalTerminalAccess> {
+    let fields = Fields::of(value, "pcbir.routing:GlobalTerminalAccess")?;
+    fields.allow(&["net", "pad", "registered_candidates", "concrete_candidates"])?;
+    let registered_candidates = integer(fields.required("registered_candidates")?)?;
+    let concrete_candidates = integer(fields.required("concrete_candidates")?)?;
+    if concrete_candidates < 0 || registered_candidates < concrete_candidates {
+        return Err(crate::Error::Value("invalid global terminal access candidate counts".to_owned()));
+    }
+    Ok(GlobalTerminalAccess {
+        net: text(fields.required("net")?)?,
+        pad: pad_reference(fields.required("pad")?)?,
+        registered_candidates,
+        concrete_candidates,
     })
 }

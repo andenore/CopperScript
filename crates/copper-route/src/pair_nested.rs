@@ -75,6 +75,7 @@ pub fn nested_exit_candidates(
             first: access.pad_position,
             second: partners[&format!("pad:{}", access.pad)].pad_position,
             component: &access.pad.component,
+            second_component: &partners[&format!("pad:{}", access.pad)].pad.component,
             width,
             offset,
             clearance,

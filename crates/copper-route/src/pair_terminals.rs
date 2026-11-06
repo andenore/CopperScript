@@ -102,6 +102,10 @@ pub fn blocker_document(item: &RoutingBlocker) -> Value {
     document.insert("reason".to_owned(), Value::from(item.reason.as_str()));
     document.insert("net".to_owned(), item.net.as_deref().map_or(Value::Null, Value::from));
     document.insert("immutable".to_owned(), Value::from(item.immutable));
+    // `immutable` is legacy snapshot evidence: RoutingClearanceIndex::new
+    // locks supplied copper regardless of its authored placement/route intent.
+    document.insert("immutability_scope".to_owned(), Value::from("routing_snapshot"));
+    document.insert("authored_ownership".to_owned(), Value::from("not_determined"));
     document.insert("layers".to_owned(), texts(&item.layers));
     document.insert(
         "positions_nm".to_owned(),
@@ -1261,6 +1265,7 @@ fn admit_local_candidate(
         &exact,
         board,
         (&candidate.via_pairs, &candidate.return_vias),
+        &board.tracks,
     )?;
     if !metrics.connected {
         report.profile_rejections += 1;

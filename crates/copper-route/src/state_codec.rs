@@ -1344,33 +1344,7 @@ fn attachment(value: &StateValue) -> Result<PhysicalAttachment> {
 }
 
 fn body_overhang(value: &StateValue) -> Result<BodyOverhang> {
-    dataclass!(reader, value, "pcbir.physical:BodyOverhang", {
-        "id" => id = text;
-        "reference" => reference = text;
-        "edge" => edge = text;
-        "start_nm" => start = int;
-        "end_nm" => end = int;
-        "distance_nm" => distance = int;
-        "reason" => reason = text;
-    });
-    reader.required(&[
-        ("id", id.is_none()),
-        ("reference", reference.is_none()),
-        ("edge", edge.is_none()),
-        ("start_nm", start.is_none()),
-        ("end_nm", end.is_none()),
-        ("distance_nm", distance.is_none()),
-        ("reason", reason.is_none()),
-    ])?;
-    Ok(BodyOverhang {
-        id: id.expect("required"),
-        reference: reference.expect("required"),
-        edge: edge.expect("required"),
-        start_nm: start.expect("required"),
-        end_nm: end.expect("required"),
-        distance_nm: distance.expect("required"),
-        reason: reason.expect("required"),
-    })
+    Ok(copper_pcb::state_codec::body_overhang(value)?)
 }
 
 fn component_height(value: &StateValue) -> Result<ComponentHeight> {
@@ -1793,7 +1767,7 @@ pub fn physical_board(value: &StateValue) -> Result<PhysicalBoard> {
 
 /// The checks of `PhysicalBoard.__post_init__` and `_validate_references`
 /// that a saved board can fail; a board whose remaining checks Python would
-/// run (datum chains, overhang geometry, via-in-pad arrays) is handled by
+/// run (datum chains, attachment bindings, via-in-pad arrays) is handled by
 /// this implementation only in its common cases.
 fn validate_board(board: &PhysicalBoard) -> Result<()> {
     let capacitors: IndexSet<&str> = board.decoupling_links.iter().map(|l| l.capacitor.component.as_str()).collect();
@@ -1836,13 +1810,12 @@ fn validate_board(board: &PhysicalBoard) -> Result<()> {
     if references.iter().collect::<IndexSet<_>>().len() != references.len() {
         return fail("physical placement references must be unique");
     }
-    if !board.datums.is_empty()
-        || !board.boundary_edges.is_empty()
-        || !board.attachments.is_empty()
-        || !board.body_overhangs.is_empty()
-    {
-        return not_implemented("a board with datums, named edges, attachments or body overhangs");
+    // These require validating datum chains and attachment-to-fixed-pose
+    // bindings, which physicalize::revalidate does not currently cover.
+    if !board.datums.is_empty() || !board.attachments.is_empty() {
+        return not_implemented("a board with datums or attachments");
     }
+    copper_pcb::state_codec::validate_body_overhangs(board)?;
     for feature in board
         .component_heights
         .iter()
@@ -2255,6 +2228,7 @@ pub fn global_routing_result(value: &StateValue) -> Result<GlobalRoutingResult> 
             _ => None,
         });
         "routes" => routes = |v| list(v, net_route);
+        "terminal_accesses" => terminal_accesses = |v| list(v, |item| Ok(crate::routing_state::terminal_access(item)?));
         "hotspots" => hotspots = |v| list(v, hotspot);
         "metrics" => metrics = routing_metrics;
         "placement_fingerprint" => placement = text;
@@ -2272,6 +2246,7 @@ pub fn global_routing_result(value: &StateValue) -> Result<GlobalRoutingResult> 
     Ok(GlobalRoutingResult {
         status: status.expect("required"),
         routes: routes.expect("required"),
+        terminal_accesses: terminal_accesses.unwrap_or_default(),
         hotspots: hotspots.expect("required"),
         metrics: metrics.expect("required"),
         placement_fingerprint: placement.expect("required"),
@@ -3819,36 +3794,51 @@ fn e_hotspot(hotspot: &RoutingHotspot) -> StateValue {
 /// `encode(global_route)`: the `GlobalRoutingResult` dataclass.
 pub fn encode_global_route(route: &GlobalRoutingResult) -> StateValue {
     let metrics = &route.metrics;
-    dc(
-        "pcbir.routing:GlobalRoutingResult",
-        vec![
-            ("status", en("pcbir.routing:GlobalRoutingStatus", route.status.value())),
-            ("routes", tuple(&route.routes, e_net_route)),
-            ("hotspots", tuple(&route.hotspots, e_hotspot)),
-            (
-                "metrics",
-                dc(
-                    "pcbir.routing:GlobalRoutingMetrics",
-                    vec![
-                        ("routed_net_count", i(metrics.routed_net_count)),
-                        ("unrouted_net_count", i(metrics.unrouted_net_count)),
-                        ("total_overflow", i(metrics.total_overflow)),
-                        ("maximum_overflow", i(metrics.maximum_overflow)),
-                        ("overfull_resource_count", i(metrics.overfull_resource_count)),
-                        ("maximum_utilization_ppm", i(metrics.maximum_utilization_ppm)),
-                        ("total_length_nm", i(metrics.total_length_nm)),
-                        ("proposed_via_count", i(metrics.proposed_via_count)),
-                        ("iterations", i(metrics.iterations)),
-                        ("region_only_access_count", i(metrics.region_only_access_count)),
-                        ("deferred_net_count", i(metrics.deferred_net_count)),
-                    ],
-                ),
+    let mut fields = vec![
+        ("status", en("pcbir.routing:GlobalRoutingStatus", route.status.value())),
+        ("routes", tuple(&route.routes, e_net_route)),
+        ("hotspots", tuple(&route.hotspots, e_hotspot)),
+        (
+            "metrics",
+            dc(
+                "pcbir.routing:GlobalRoutingMetrics",
+                vec![
+                    ("routed_net_count", i(metrics.routed_net_count)),
+                    ("unrouted_net_count", i(metrics.unrouted_net_count)),
+                    ("total_overflow", i(metrics.total_overflow)),
+                    ("maximum_overflow", i(metrics.maximum_overflow)),
+                    ("overfull_resource_count", i(metrics.overfull_resource_count)),
+                    ("maximum_utilization_ppm", i(metrics.maximum_utilization_ppm)),
+                    ("total_length_nm", i(metrics.total_length_nm)),
+                    ("proposed_via_count", i(metrics.proposed_via_count)),
+                    ("iterations", i(metrics.iterations)),
+                    ("region_only_access_count", i(metrics.region_only_access_count)),
+                    ("deferred_net_count", i(metrics.deferred_net_count)),
+                ],
             ),
-            ("placement_fingerprint", s(&route.placement_fingerprint)),
-            ("routing_fingerprint", s(&route.routing_fingerprint)),
-            ("fixed_prefix_digest", opt_text(&route.fixed_prefix_digest)),
-        ],
-    )
+        ),
+        ("placement_fingerprint", s(&route.placement_fingerprint)),
+        ("routing_fingerprint", s(&route.routing_fingerprint)),
+        ("fixed_prefix_digest", opt_text(&route.fixed_prefix_digest)),
+    ];
+    // Preserve exact legacy checkpoint values when this metadata was absent.
+    if !route.terminal_accesses.is_empty() {
+        fields.push((
+            "terminal_accesses",
+            tuple(&route.terminal_accesses, |access| {
+                dc(
+                    "pcbir.routing:GlobalTerminalAccess",
+                    vec![
+                        ("net", s(&access.net)),
+                        ("pad", e_pad_reference(&access.pad)),
+                        ("registered_candidates", i(access.registered_candidates)),
+                        ("concrete_candidates", i(access.concrete_candidates)),
+                    ],
+                )
+            }),
+        ));
+    }
+    dc("pcbir.routing:GlobalRoutingResult", fields)
 }
 
 fn e_bounds(bounds: &Bounds) -> StateValue {
@@ -4286,11 +4276,95 @@ pub fn critical_inputs_state_text(
     reserved_accesses: Option<&crate::bypass_reservations::BypassReservation>,
     plane_stitch_options: Option<&crate::plane::PlaneStitchOptions>,
 ) -> String {
-    let entries = vec![
+    critical_inputs_state_text_with_prefix(board, global_route, reserved_accesses, plane_stitch_options, None)
+}
+
+/// A declared local-site prefix is reconstructed through fresh admission on
+/// replay. No serialized admission flag or cached digest is a credential.
+pub fn critical_inputs_state_text_with_prefix(
+    board: &PhysicalBoard,
+    global_route: &GlobalRoutingResult,
+    reserved_accesses: Option<&crate::bypass_reservations::BypassReservation>,
+    plane_stitch_options: Option<&crate::plane::PlaneStitchOptions>,
+    fixed_prefix: Option<&crate::fixed_prefix::AdmittedFixedPrefix>,
+) -> String {
+    let mut entries = vec![
         (s("board"), encode_board(board)),
         (s("global_route"), encode_global_route(global_route)),
         (s("reserved_accesses"), reserved_accesses.map_or(StateValue::Null, encode_bypass_reservation)),
         (s("plane_stitch_options"), plane_stitch_options.map_or(StateValue::Null, encode_plane_stitch_options)),
     ];
+    if let Some(prefix) = fixed_prefix {
+        entries.push((s("fixed_prefix"), encode_fixed_prefix(prefix)));
+    }
     StateDocument::new("builtins:dict", Object::new(), StateValue::Map { entries, proxy: false }).to_text()
 }
+
+fn encode_fixed_prefix(prefix: &crate::fixed_prefix::AdmittedFixedPrefix) -> StateValue {
+    use crate::fixed_prefix::FixedPrefixRole;
+    let contributions = prefix
+        .contributions()
+        .iter()
+        .map(|part| {
+            dc(
+                "pcbir.fixed_prefix:Contribution",
+                vec![
+                    ("id", s(&part.id)),
+                    (
+                        "role",
+                        s(match part.role {
+                            FixedPrefixRole::OrdinaryEscape => "ordinary_escape",
+                            FixedPrefixRole::ViaLattice => "via_lattice",
+                        }),
+                    ),
+                    ("tracks", StateValue::Tuple(part.tracks.iter().map(e_track).collect())),
+                    ("vias", StateValue::Tuple(part.vias.iter().map(e_via).collect())),
+                ],
+            )
+        })
+        .collect();
+    dc(
+        "pcbir.fixed_prefix:Input",
+        vec![("source", encode_board(prefix.source())), ("contributions", StateValue::Tuple(contributions))],
+    )
+}
+
+fn fixed_contribution(value: &StateValue) -> Result<crate::fixed_prefix::FixedContribution> {
+    use crate::fixed_prefix::{FixedContribution, FixedPrefixRole};
+    dataclass!(reader, value, "pcbir.fixed_prefix:Contribution", {
+        "id" => id = text;
+        "role" => role = text;
+        "tracks" => tracks = |value| copper_pcb::state_codec::items(value)?.iter().map(track_segment).collect::<Result<Vec<_>>>();
+        "vias" => vias = |value| copper_pcb::state_codec::items(value)?.iter().map(via).collect::<Result<Vec<_>>>();
+    });
+    reader.required(&[
+        ("id", id.is_none()),
+        ("role", role.is_none()),
+        ("tracks", tracks.is_none()),
+        ("vias", vias.is_none()),
+    ])?;
+    let role = match role.expect("required").as_str() {
+        "ordinary_escape" => FixedPrefixRole::OrdinaryEscape,
+        "via_lattice" => FixedPrefixRole::ViaLattice,
+        other => return fail(format!("unknown fixed-prefix role {}", python_str_repr(other))),
+    };
+    Ok(FixedContribution {
+        id: id.expect("required"),
+        role,
+        tracks: tracks.expect("required"),
+        vias: vias.expect("required"),
+    })
+}
+
+pub(crate) fn fixed_prefix_input(value: &StateValue) -> Result<crate::fixed_prefix::AdmittedFixedPrefix> {
+    dataclass!(reader, value, "pcbir.fixed_prefix:Input", {
+        "source" => source = copper_pcb::state_codec::board;
+        "contributions" => parts = |value| copper_pcb::state_codec::items(value)?.iter().map(fixed_contribution).collect::<Result<Vec<_>>>();
+    });
+    reader.required(&[("source", source.is_none()), ("contributions", parts.is_none())])?;
+    Ok(crate::fixed_prefix::AdmittedFixedPrefix::admit(&source.expect("required"), &parts.expect("required"))?)
+}
+
+#[cfg(test)]
+#[path = "fixed_prefix_state_tests.rs"]
+mod fixed_prefix_state_tests;

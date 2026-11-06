@@ -209,10 +209,22 @@ impl GlobalRoutingMetrics {
     }
 }
 
+/// Available terminal launches after shared-capacity registration, including
+/// terminals with no launch. This is independent of the selected net routes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GlobalTerminalAccess {
+    pub net: String,
+    pub pad: PadReference,
+    pub registered_candidates: i64,
+    pub concrete_candidates: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GlobalRoutingResult {
     pub status: GlobalRoutingStatus,
     pub routes: Vec<GlobalNetRoute>,
+    /// Empty for legacy inputs or when no terminals require global access.
+    pub terminal_accesses: Vec<GlobalTerminalAccess>,
     pub hotspots: Vec<RoutingHotspot>,
     pub metrics: GlobalRoutingMetrics,
     pub placement_fingerprint: String,
@@ -240,6 +252,25 @@ impl GlobalRoutingResult {
         ];
         if let Some(digest) = self.fixed_prefix_digest.as_deref().filter(|d| !d.is_empty()) {
             document.push(("fixed_prefix_digest", text(digest)));
+        }
+        if !self.terminal_accesses.is_empty() {
+            document.push((
+                "terminal_accesses",
+                Json::Array(
+                    self.terminal_accesses
+                        .iter()
+                        .map(|access| {
+                            j_object(vec![
+                                ("net", text(&access.net)),
+                                ("component", text(&access.pad.component)),
+                                ("pad", text(&access.pad.pad)),
+                                ("registered_candidates", int(access.registered_candidates)),
+                                ("concrete_candidates", int(access.concrete_candidates)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ));
         }
         document.push((
             "metrics",
@@ -807,6 +838,15 @@ pub fn route_global(
     let result = GlobalRoutingResult {
         status,
         routes: reported_routes,
+        terminal_accesses: access_options
+            .iter()
+            .map(|((net, pad), choices)| GlobalTerminalAccess {
+                net: net.clone(),
+                pad: pad.clone(),
+                registered_candidates: choices.len() as i64,
+                concrete_candidates: choices.iter().filter(|access| !access.region_only).count() as i64,
+            })
+            .collect(),
         hotspots,
         metrics,
         placement_fingerprint,

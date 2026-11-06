@@ -23,6 +23,25 @@ fn a_board() -> PhysicalBoard {
 }
 
 #[test]
+fn selected_seed_keeps_one_mutable_occupancy_frame_for_later_nets() {
+    let board = pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)]), ("B", &[(10.0, 3.0), (10.0, 17.0)])], 2, vec![]);
+    let options = UnifiedRouterOptions { maximum_iterations: 8, ..opts() };
+    let mut router = router_all(&board, &options);
+    let selected = ["A".to_owned()].into_iter().collect();
+    let (_, _, first) = router.negotiate_bounded(None, Some(&selected), Some(2), true, &mut Vec::new()).unwrap();
+    assert!(router.routes["A"].connected);
+    assert!(!router.routes.contains_key("B"), "seeding does not manufacture failed routes for other nets");
+    assert_eq!(router.board, &board, "no incumbent copper was frozen into source intent");
+    let rest = ["B".to_owned()].into_iter().collect();
+    let (routes, conflicts, next) =
+        router.negotiate_bounded(None, Some(&rest), Some(8 - first), false, &mut Vec::new()).unwrap();
+    assert!(first + next <= 8);
+    let (_, rejected, complete) = router.commit(&routes, &conflicts).unwrap();
+    assert!(rejected.is_empty() && complete.contains("A") && complete.contains("B"));
+    assert_eq!(router.board, &board);
+}
+
+#[test]
 fn rejection_diagnostic_names_the_blocker() {
     let board = a_board();
     let mut router = router_all(&board, &opts());
@@ -576,4 +595,90 @@ fn via_proposals_avoid_mutable_tracks_on_unvisited_inner_layers() {
             assert!(clear, "via proposal ignored a mutable track on its internal barrel span");
         }
     }
+}
+
+/// A is 8 mm of track plus two 1.6 mm layer transitions; B is 14 mm
+/// on F.Cu. Matching uses 11.2 vs 14 mm, while max_length remains a
+/// track-only budget (A may tune up to 11 mm of track).
+fn via_depth_bus(kind: copper_pcb::board::RouteKind) -> (PhysicalBoard, Accepted) {
+    let mut board = pad_board(&[("A", &[(3.0, 10.0), (11.0, 10.0)]), ("B", &[(3.0, 14.0), (17.0, 14.0)])], 2, vec![]);
+    board.stackup.thickness_nm = mm(1.6);
+    board.stackup.physical_layers.clear();
+    board.net_routing_rules = ["A", "B"]
+        .iter()
+        .map(|name| NetRoutingRule {
+            kind: if *name == "A" { kind } else { copper_pcb::board::RouteKind::General },
+            width_nm: Some(mm(0.2)),
+            max_vias: Some(2),
+            max_length_nm: Some(mm(if *name == "A" { 11.0 } else { 14.0 })),
+            allowed_layers: vec![F, CopperLayer::Back],
+            tuning_amplitude_limit_nm: Some(mm(1.0)),
+            ..rule(name)
+        })
+        .collect();
+    board.match_groups =
+        vec![NetMatchGroup { id: "bus".to_owned(), nets: vec!["A".to_owned(), "B".to_owned()], max_skew_nm: mm(2.0) }];
+    let accepted = IndexMap::from([
+        (
+            "A".to_owned(),
+            (
+                vec![
+                    track("A", (6.0, 13.0), (8.0, 13.0), 0.2, F),
+                    track("A", (8.0, 13.0), (12.0, 13.0), 0.2, CopperLayer::Back),
+                    track("A", (12.0, 13.0), (14.0, 13.0), 0.2, F),
+                ],
+                vec![
+                    via("A", (8.0, 13.0), 0.6, 0.3, F, CopperLayer::Back),
+                    via("A", (12.0, 13.0), 0.6, 0.3, F, CopperLayer::Back),
+                ],
+            ),
+        ),
+        ("B".to_owned(), (vec![track("B", (6.0, 17.0), (20.0, 17.0), 0.2, F)], vec![])),
+    ]);
+    (board, accepted)
+}
+
+#[test]
+fn bus_skew_targets_include_via_depth_for_owned_general_and_clock_copper() {
+    for kind in [copper_pcb::board::RouteKind::General, copper_pcb::board::RouteKind::Clock] {
+        for split_prefix in [false, true] {
+            let (mut board, mut before) = via_depth_bus(kind);
+            if split_prefix {
+                let owned = before.get_mut("A").expect("A");
+                board.tracks.push(owned.0.remove(0));
+                board.vias.push(owned.1.remove(0));
+            }
+            let source = board.clone();
+            let (tuned, notes) = tune_bus_skew(&board, &before, &rules(&board)).expect("tune");
+            assert!(notes.is_empty(), "{kind:?}: {notes:?}");
+            assert_eq!(tuned["A"].1, before["A"].1, "never move or replace vias");
+            assert_eq!(tuned["B"], before["B"], "long member is untouched");
+            let mut result = board.clone();
+            for (tracks, vias) in tuned.values() {
+                result.tracks.extend(tracks.iter().cloned());
+                result.vias.extend(vias.iter().cloned());
+            }
+            let check = copper_drc::signal_integrity::verify_match_groups(&result).expect("match check");
+            assert_eq!(check[0].status, "pass", "{kind:?}: {:?}", check[0].members);
+            assert!(net_length(&result.tracks, "A") <= mm(11.0) as f64);
+            assert_eq!(board, source, "fixed source tracks and vias are immutable");
+            assert!(result.tracks.starts_with(&source.tracks) && result.vias.starts_with(&source.vias));
+            assert_eq!(result.net_routing_rules, board.net_routing_rules);
+            let drc = copper_drc::run_physical_drc(&result, copper_drc::Policy::default()).expect("DRC");
+            assert!(routes::errors_except_opens(&drc).is_empty(), "{:?}", routes::errors_except_opens(&drc));
+        }
+    }
+}
+
+#[test]
+fn bus_skew_read_only_clock_deficit_includes_source_via_depth() {
+    let (mut board, mut before) = via_depth_bus(copper_pcb::board::RouteKind::Clock);
+    let (tracks, vias) = before.shift_remove("A").expect("clock");
+    board.tracks = tracks;
+    board.vias = vias;
+    let saved = board.clone();
+    let (tuned, notes) = tune_bus_skew(&board, &before, &rules(&board)).expect("tune");
+    assert_eq!(tuned, before);
+    assert_eq!(notes, vec!["bus: A is 800000 nm short; its copper is not the bus router's"]);
+    assert_eq!(board, saved, "input Clock copper remains read-only");
 }

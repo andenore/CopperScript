@@ -17,6 +17,10 @@ use std::f64::consts::SQRT_2;
 const STEP: [f64; 8] = [1.0, 1.0, 1.0, 1.0, SQRT_2, SQRT_2, SQRT_2, SQRT_2];
 const INF: f64 = 1e30;
 
+#[cfg(test)]
+#[path = "astar_tests.rs"]
+mod tests;
+
 #[derive(Clone, Copy, Debug)]
 struct Entry {
     key: f64,
@@ -194,19 +198,40 @@ impl Scratch {
     }
 }
 
-/// `pcbir_astar` on a uniform lattice: the path (source first), or `None`
-/// when no target was reached.
+/// Why a uniform or nested kernel stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchStop {
+    Found,
+    FrontierExhausted,
+    ExpansionLimit,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SearchOutcome {
+    pub path: Option<Vec<i64>>,
+    pub stop: SearchStop,
+    /// Nodes whose successors were expanded; excludes stale entries, target
+    /// sentinels and the node at which the expansion limit stopped the search.
+    pub expanded: i64,
+}
+
+/// Path-only compatibility wrapper (source first).
 pub fn search(input: &SearchInput<'_>, scratch: &mut Scratch) -> Option<Vec<i64>> {
-    let path = run(input, scratch);
+    search_outcome(input, scratch).path
+}
+
+/// Search with a truthful stop reason, clearing scratch on every outcome.
+pub fn search_outcome(input: &SearchInput<'_>, scratch: &mut Scratch) -> SearchOutcome {
+    let outcome = run(input, scratch);
     for &node in &scratch.touched {
         scratch.best[node] = INF;
     }
     scratch.touched.clear();
     scratch.heap.clear();
-    path
+    outcome
 }
 
-fn run(input: &SearchInput<'_>, scratch: &mut Scratch) -> Option<Vec<i64>> {
+fn run(input: &SearchInput<'_>, scratch: &mut Scratch) -> SearchOutcome {
     if let Some(tables) = &input.nested {
         return run_nested(input, tables, scratch);
     }
@@ -254,10 +279,10 @@ fn run(input: &SearchInput<'_>, scratch: &mut Scratch) -> Option<Vec<i64>> {
             let total = cost + extra[index];
             heap_push(heap, Entry { key: total, g: total, node: (-node - 1) as i32 });
         }
-        expansions += 1;
-        if expansions > input.max_expansions {
-            break;
+        if expansions >= input.max_expansions {
+            return SearchOutcome { path: None, stop: SearchStop::ExpansionLimit, expanded: expansions };
         }
+        expansions += 1;
         let (layer, rest) = (node / plane, node % plane);
         let (y, x) = (rest / nx, rest % nx);
         let target_only = allowed[layer as usize] == 2;
@@ -365,7 +390,7 @@ fn run(input: &SearchInput<'_>, scratch: &mut Scratch) -> Option<Vec<i64>> {
         }
     }
     if found < 0 {
-        return None;
+        return SearchOutcome { path: None, stop: SearchStop::FrontierExhausted, expanded: expansions };
     }
     let mut path = Vec::new();
     let mut node = found;
@@ -374,13 +399,13 @@ fn run(input: &SearchInput<'_>, scratch: &mut Scratch) -> Option<Vec<i64>> {
         node = parent[node as usize] as i64;
     }
     path.reverse();
-    Some(path)
+    SearchOutcome { path: Some(path), stop: SearchStop::Found, expanded: expansions }
 }
 
 /// The kernel's nested specialisation (`_astar_nested`'s semantics): moves
 /// stay in a node's block, a portal twin is reached at cost 0 on the same
 /// layer, and the heuristic is in base pitches.
-fn run_nested(input: &SearchInput<'_>, tables: &NestedTables<'_>, scratch: &mut Scratch) -> Option<Vec<i64>> {
+fn run_nested(input: &SearchInput<'_>, tables: &NestedTables<'_>, scratch: &mut Scratch) -> SearchOutcome {
     let nl = input.nl;
     let blocks = tables.blocks;
     let last = blocks.len() - 3;
@@ -431,10 +456,10 @@ fn run_nested(input: &SearchInput<'_>, tables: &NestedTables<'_>, scratch: &mut 
             let total = cost + extra[index];
             heap_push(heap, Entry { key: total, g: total, node: (-node - 1) as i32 });
         }
-        expansions += 1;
-        if expansions > input.max_expansions {
-            break;
+        if expansions >= input.max_expansions {
+            return SearchOutcome { path: None, stop: SearchStop::ExpansionLimit, expanded: expansions };
         }
+        expansions += 1;
         let (layer, rest) = (node / plane, node % plane);
         let b = tables.block_of[rest as usize] as usize;
         let local = rest - blocks[3 * b] as i64;
@@ -574,7 +599,7 @@ fn run_nested(input: &SearchInput<'_>, tables: &NestedTables<'_>, scratch: &mut 
         }
     }
     if found < 0 {
-        return None;
+        return SearchOutcome { path: None, stop: SearchStop::FrontierExhausted, expanded: expansions };
     }
     let mut path = Vec::new();
     let mut node = found;
@@ -583,5 +608,5 @@ fn run_nested(input: &SearchInput<'_>, tables: &NestedTables<'_>, scratch: &mut 
         node = parent[node as usize] as i64;
     }
     path.reverse();
-    Some(path)
+    SearchOutcome { path: Some(path), stop: SearchStop::Found, expanded: expansions }
 }

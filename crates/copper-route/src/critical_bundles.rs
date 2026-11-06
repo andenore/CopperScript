@@ -9,7 +9,10 @@ use copper_pcb::board::{NetRoutingRule, PhysicalBoard, PhysicalNet, Placement, R
 use copper_pcb::{Error, Result};
 use copper_physical::{BoardSide, CopperLayer, Point};
 
-use crate::pair_search::nested_turn_minimum;
+use crate::pair_search::{
+    PairCollarInventory, PairSearchAttempt, PairTransitionInventory, attempt_document, collar_inventory_document,
+    nested_turn_minimum, transition_inventory_document,
+};
 use crate::routing_layers::{routing_layers, signal_layer_preferences};
 use crate::routing_vias::physical_via_span;
 
@@ -27,6 +30,21 @@ pub struct BundleRepair {
     /// and whether it ran out of its bound.
     pub search_states: i64,
     pub pair_budget_exhausted: bool,
+    /// None means the target failed before the blocker restoration was run.
+    pub restoration: Option<BundleRepairRestoration>,
+}
+
+/// Observed outcome of restoring the ripped-up group, never retained-board DRC.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BundleRepairRestoration {
+    pub connected: bool,
+    pub search_states: i64,
+    pub pair_budget_exhausted: bool,
+    pub diagnostics: Vec<String>,
+    pub rejection_examples: Vec<String>,
+    pub pair_collars: Vec<PairCollarInventory>,
+    pub pair_transitions: Vec<PairTransitionInventory>,
+    pub pair_attempts: Vec<PairSearchAttempt>,
 }
 
 /// `CrossingTransition`: one routed paired transition of a planned crossing.
@@ -128,6 +146,27 @@ pub fn repair_document(item: &BundleRepair) -> Value {
         ("reason", Value::from(item.reason.as_str())),
         ("search_states", Value::from(item.search_states)),
         ("pair_budget_exhausted", Value::from(item.pair_budget_exhausted)),
+        (
+            "restoration",
+            item.restoration.as_ref().map_or(Value::Null, |restored| {
+                object(vec![
+                    ("connected", Value::from(restored.connected)),
+                    ("search_states", Value::from(restored.search_states)),
+                    ("pair_budget_exhausted", Value::from(restored.pair_budget_exhausted)),
+                    ("diagnostics", texts(&restored.diagnostics)),
+                    ("rejection_examples", texts(&restored.rejection_examples)),
+                    (
+                        "pair_collars",
+                        Value::Array(restored.pair_collars.iter().map(collar_inventory_document).collect()),
+                    ),
+                    (
+                        "pair_transitions",
+                        Value::Array(restored.pair_transitions.iter().map(transition_inventory_document).collect()),
+                    ),
+                    ("pair_attempts", Value::Array(restored.pair_attempts.iter().map(attempt_document).collect())),
+                ])
+            }),
+        ),
     ])
 }
 

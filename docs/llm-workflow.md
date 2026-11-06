@@ -24,6 +24,7 @@ design instead of re-reading source. See [CLI workflow](cli-workflow.md).
 
 ```console
 copper issues build/BOARD/runs/STAMP                  # grouped causes with ids and windows
+copper issues build/BOARD/runs/STAMP --issue R1 --json # solver details and evidence scope
 copper view build/BOARD/runs/STAMP --issue R1         # one picture per relevant copper layer
 copper view build/BOARD/runs/STAMP --issue N3 --filled
 copper view build/BOARD/runs/STAMP --issue R1 --reference REF.kicad_pcb --align U1:U1
@@ -41,18 +42,46 @@ pass the same value to `view`. Lists are balanced across stages; use
 refilled board; CopperReview's **Load issues** draws those issues on the
 matching board so review notes can cite their ids.
 
-`view` draws pads, tracks, vias and copper areas in a millimetre window, one
-panel per copper layer (`--layers auto` keeps layers with highlighted copper),
-rings issue positions and labels parts and pads in small windows. It prints a
+Use `--issue ID --json` for bounded diagnostic records with their source-report
+path and an explicit truncation flag. Critical candidate rejections describe
+discarded geometry; the normal view shows the retained board. Native issue
+details include bridge search history with each trial's input digest and explain
+when a net has no declared distribution zone and is outside that repair scope.
+Placement `PF` issues identify trials rejected by the global-success gate,
+including failed-net and overflow deltas; their views show the retained pose.
+
+Fresh ordinary-route and `replay-unified` reports distinguish expansion limits,
+exhausted frontiers, outer deadlines and missing terminal access. Diagnostics
+name remaining pads and their access counts; `view --issue` focuses those pads.
+Bounded access-preparation records include candidate coordinates/layers, nominal
+and neck widths, node flags, and the actual open-space probe/local-escape decision.
+A flood cutoff assumed open is distinct from reaching an open region. Candidate
+node flags do not establish onward connectivity through the search graph.
+These are observations about the attempted search and its bounds, not proofs
+that no legal layout exists. A successful wider retry clears earlier failures;
+the selected route's diagnostics survive accepted reroutes and snapshot restore.
+Older reports without these records cannot establish that a budget was sufficient.
+
+`view` writes SVG with pads, tracks, vias and copper areas in a millimetre window, one
+framed panel per copper layer (`--layers auto` keeps layers with highlighted copper),
+rings issue positions and clips geometry to each independent SVG viewport.
+Shaded gaps separate the panels; a trace ending at a frame does not continue
+onto the neighbouring layer. Use `--layers F.Cu` or `--layers B.Cu` to write
+a single-layer image. Regenerate old views to apply renderer fixes. It prints a
 legend (pads, vias and tracks of the highlighted nets, marker positions) that
 often answers the question without opening the image. `--reference` overlays a
 second `.kicad_pcb` as magenta outlines, aligned on the pads of `--align
 OURS:THEIRS` with mirroring tried automatically; the legend reports matched
-pads, rotation and fit RMS. Targets may be a run directory, a report, a
+pads, rotation and fit RMS. Reference layers match by KiCad layer name; stackup
+roles and side swaps are not inferred from the 2D fit. Targets may be a run directory, a report, a
 `.kicad_pcb` or a `copperscript.state/v1` file holding a `PhysicalBoard`.
 Native issues are drawn on the run's refilled board when present. When an
 issue's markers spread wider than 40 mm, the densest group is framed and the
 legend says so. Trapezoid and custom pads are drawn as their anchor rectangle.
+Saved fill polygons are translucent, with holes preserved; unfilled zones are
+dashed outlines. `--filled` selects a run's saved native board and does not
+perform a refill. Rule-area keepouts are not shown. The view is a reading aid,
+not a clearance check.
 
 ### Shorter reruns
 
@@ -79,6 +108,14 @@ checkpoint from a different `copper` build is allowed (that is the point of
 holding placement fixed), and the report records it as `placement_reuse.code_changed`. Rerun placement
 before signoff whenever placement code or inputs changed. A checkpoint
 written by the removed Python implementation always counts as a different build.
+
+The Rust placement and unified replay readers preserve named boundary edges and
+audited body-overhang allowances, including their owner, interval, depth and
+reason. They validate actual boundary membership and overhang geometry instead
+of dropping these constraints. Unsupported saved constraints still fail explicitly:
+placement decoding does not support populated assembly envelopes, mechanical
+references or derived zone fills; unified replay also rejects populated datums
+and attachment bindings pending their semantic validation.
 
 The same directory also receives `critical-inputs.state.json` (and
 `critical-retry-inputs.state.json` when the critical stage retries) with the

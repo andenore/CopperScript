@@ -1,4 +1,4 @@
-//! `copper summarize REPORT [--json] [--issues N]`.
+//! `copper summarize REPORT [--net NET] [--json] [--issues N]`.
 
 use std::io::Write;
 use std::path::Path;
@@ -6,12 +6,12 @@ use std::path::Path;
 use copper_json::oserror::{Call, python_os_error};
 use copper_json::{Dumps, text};
 use copper_report::py::PyErr;
-use copper_report::summary::{read_summary, summary_lines};
+use copper_report::summary::{net_summary_lines, read_net_summary, read_summary, summary_lines};
 
 use crate::pypath;
 use crate::report_args::{self, flag, python_int, valued};
 
-const USAGE: &str = "usage: copper summarize [-h] [--json] [--issues {0,1,...,100}] report";
+const USAGE: &str = "usage: copper summarize [-h] [--json] [--issues {0,1,...,100}] [--net NET] report";
 
 /// The exceptions the Python command reports as `SUMMARY ERROR`.
 fn caught(error: &PyErr) -> bool {
@@ -23,10 +23,13 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(err, "{USAGE}\ncopper summarize: error: {message}");
         2
     };
-    let parsed = match report_args::parse(arguments, &[flag("--json"), valued("--issues")]) {
+    let parsed = match report_args::parse(arguments, &[flag("--json"), valued("--issues"), valued("--net")]) {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
-            let _ = writeln!(out, "{USAGE}\n\nread a compact engineering summary of a retained route/layout report");
+            let _ = writeln!(
+                out,
+                "{USAGE}\n\nread a compact engineering summary of a retained route/layout report\n--net selects saved per-net copper metrics, including partial stubs; it does not reroute or verify"
+            );
             return 0;
         }
         Err(message) => return usage_error(err, &message),
@@ -47,10 +50,15 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     let shown = pypath::display(report);
     let result = std::fs::read(Path::new(report))
         .map_err(|failure| PyErr::new("OSError", python_os_error(&failure, Some(&shown), Call::Open)))
-        .and_then(|bytes| read_summary(&bytes, &shown, issue_limit))
+        .and_then(|bytes| match parsed.last("--net") {
+            Some(net) => read_net_summary(&bytes, &shown, net),
+            None => read_summary(&bytes, &shown, issue_limit),
+        })
         .and_then(|summary| {
             if parsed.has("--json") {
                 Ok(Dumps::new().indent(2).sort_keys(true).dumps(&summary))
+            } else if parsed.has("--net") {
+                net_summary_lines(&summary).map(|lines| lines.join("\n"))
             } else {
                 summary_lines(&summary).map(|lines| lines.join("\n"))
             }

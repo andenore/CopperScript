@@ -27,18 +27,23 @@ use copper_state::StateValue;
 use copper_units::Decimal;
 
 use crate::critical_bundles::{
-    BundleRepair, CriticalBundle, NestedExit, PlannedCrossing, bundle_document, repair_document,
+    BundleRepair, BundleRepairRestoration, CriticalBundle, NestedExit, PlannedCrossing, bundle_document,
+    repair_document,
 };
 use crate::critical_tuning::match_tuning_document;
 use crate::pair_search::{
-    PairPortInventory, PairSearchAttempt, PairTransitionInventory, attempt_document, port_inventory_document,
-    transition_inventory_document,
+    PairCollarInventory, PairPortInventory, PairSearchAttempt, PairTransitionInventory, attempt_document,
+    collar_inventory_document, port_inventory_document, transition_inventory_document,
 };
 use crate::pair_terminals::{PairTerminalPreparation, preparation_document};
 use crate::plane::PlaneStitchOptions;
 use crate::progress::{ProgressCallback, emit};
 use crate::routing::{GlobalNetRoute, GlobalRoutingResult, placement_fingerprint};
 use crate::{Error, Result};
+
+#[path = "critical_fallback.rs"]
+mod fallback_selection;
+pub use fallback_selection::PairFallbackSelection;
 
 /// `CriticalRoutingStatus`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +86,12 @@ pub struct CriticalNetResult {
     pub strategy: String,
     pub candidate_rejected: bool,
     pub search_states: i64,
+    /// False when the producer does not export a numeric expansion count.
+    pub search_states_known: bool,
+    /// Unified's existing typed budget status; None means unavailable, not false.
+    pub unified_search_budget_exhausted: Option<bool>,
+    /// Unselected failed retry evidence; never substitutes for selected copper.
+    pub failed_exact_retry: Option<CriticalRetryDiagnostics>,
     pub candidate_attempts: i64,
     pub pair_searches: i64,
     pub local_candidate_attempts: i64,
@@ -89,6 +100,8 @@ pub struct CriticalNetResult {
     pub pair_refinement_candidates: i64,
     pub pair_search_order: Option<String>,
     pub pair_state_limit: Option<i64>,
+    /// The aggregate bound was reached without a within-budget result. A
+    /// connected draft fallback can still have exhausted this search.
     pub pair_budget_exhausted: bool,
     pub shared_reference_transition_count: i64,
     /// First-failing gate of every rejected exact candidate, counted per
@@ -99,10 +112,16 @@ pub struct CriticalNetResult {
     pub pair_resumed_states: i64,
     pub pair_resumed_portals: i64,
     pub pair_ports: Vec<PairPortInventory>,
+    pub pair_collars: Vec<PairCollarInventory>,
+    pub pair_compatible_collar_pairs: i64,
+    pub pair_incompatible_collar_pairs: i64,
     pub pair_transitions: Vec<PairTransitionInventory>,
     pub pair_attempts: Vec<PairSearchAttempt>,
-    /// Declared length/skew budgets the connected copper misses: review
-    /// warnings, never a reason to leave the group open.
+    /// Bounded observations of already validated connected fallback offers.
+    /// Runtime telemetry only; never changes routing identity or selection.
+    pub pair_fallback_selection: Option<PairFallbackSelection>,
+    /// Declared length/skew budgets the connected draft copper misses. Keep
+    /// that fallback, but treat it as unresolved during bounded pair repair.
     pub warnings: Vec<String>,
     /// Rip-up attempts made for this group outside a planned bundle.
     pub repairs: Vec<BundleRepair>,
@@ -137,6 +156,9 @@ impl CriticalNetResult {
             strategy: "global_guide".to_owned(),
             candidate_rejected: false,
             search_states: 0,
+            search_states_known: true,
+            unified_search_budget_exhausted: None,
+            failed_exact_retry: None,
             candidate_attempts: 0,
             pair_searches: 0,
             local_candidate_attempts: 0,
@@ -153,8 +175,12 @@ impl CriticalNetResult {
             pair_resumed_states: 0,
             pair_resumed_portals: 0,
             pair_ports: Vec::new(),
+            pair_collars: Vec::new(),
+            pair_compatible_collar_pairs: 0,
+            pair_incompatible_collar_pairs: 0,
             pair_transitions: Vec::new(),
             pair_attempts: Vec::new(),
+            pair_fallback_selection: None,
             warnings: Vec::new(),
             repairs: Vec::new(),
         }
@@ -175,6 +201,51 @@ fn ints(items: &[i64]) -> Value {
 
 fn optional_int(value: Option<i64>) -> Value {
     value.map_or(Value::Null, Value::from)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CriticalRetryDiagnostics {
+    pub strategy: String,
+    pub search_states: Option<i64>,
+    pub unified_search_budget_exhausted: Option<bool>,
+    pub diagnostics: Vec<String>,
+}
+
+fn reported_search_states(item: &CriticalNetResult) -> Value {
+    optional_int(item.search_states_known.then_some(item.search_states))
+}
+
+/// Bounded report-only copy. Counts describe omitted text, never omitted blockers.
+fn bounded_failure_diagnostics(diagnostics: &[String]) -> Value {
+    let shown: Vec<String> = diagnostics.iter().take(8).map(|text| text.chars().take(1024).collect()).collect();
+    let truncated =
+        shown.len() != diagnostics.len() || diagnostics.iter().take(8).any(|text| text.chars().count() > 1024);
+    object(vec![
+        ("records", texts(&shown)),
+        ("record_count", Value::from(diagnostics.len() as i64)),
+        ("truncated", Value::Bool(truncated)),
+    ])
+}
+
+fn retry_diagnostics_document(retry: &CriticalRetryDiagnostics) -> Value {
+    object(vec![
+        ("scope", Value::from("failed_exact_retry_not_selected_copper")),
+        ("connected", Value::Bool(false)),
+        ("strategy", Value::from(retry.strategy.as_str())),
+        ("search_states", optional_int(retry.search_states)),
+        ("unified_search_budget_exhausted", retry.unified_search_budget_exhausted.map_or(Value::Null, Value::Bool)),
+        ("failure_diagnostics", bounded_failure_diagnostics(&retry.diagnostics)),
+    ])
+}
+
+fn retain_failed_exact_retry(incumbent: &mut CriticalNetResult, retry: &CriticalNetResult) {
+    debug_assert!(!retry.connected);
+    incumbent.failed_exact_retry = Some(CriticalRetryDiagnostics {
+        strategy: retry.strategy.clone(),
+        search_states: retry.search_states_known.then_some(retry.search_states),
+        unified_search_budget_exhausted: retry.unified_search_budget_exhausted,
+        diagnostics: retry.diagnostics.clone(),
+    });
 }
 
 fn optional_text(value: Option<&str>) -> Value {
@@ -207,7 +278,10 @@ pub fn critical_net_document(item: &CriticalNetResult) -> Value {
         ("evidence_digests", texts(&item.evidence_digests)),
         ("strategy", Value::from(item.strategy.as_str())),
         ("candidate_rejected", Value::from(item.candidate_rejected)),
-        ("search_states", Value::from(item.search_states)),
+        ("search_states", reported_search_states(item)),
+        ("search_states_known", Value::Bool(item.search_states_known)),
+        ("unified_search_budget_exhausted", item.unified_search_budget_exhausted.map_or(Value::Null, Value::Bool)),
+        ("failed_exact_retry", item.failed_exact_retry.as_ref().map_or(Value::Null, retry_diagnostics_document)),
         ("candidate_attempts", Value::from(item.candidate_attempts)),
         ("pair_search_order", optional_text(item.pair_search_order.as_deref())),
         ("pair_state_limit", optional_int(item.pair_state_limit)),
@@ -216,8 +290,15 @@ pub fn critical_net_document(item: &CriticalNetResult) -> Value {
         ("pair_resumed_states", Value::from(item.pair_resumed_states)),
         ("pair_resumed_portals", Value::from(item.pair_resumed_portals)),
         ("pair_ports", Value::Array(item.pair_ports.iter().map(port_inventory_document).collect())),
+        ("pair_collars", Value::Array(item.pair_collars.iter().map(collar_inventory_document).collect())),
+        ("pair_compatible_collar_pairs", Value::from(item.pair_compatible_collar_pairs)),
+        ("pair_incompatible_collar_pairs", Value::from(item.pair_incompatible_collar_pairs)),
         ("pair_transitions", Value::Array(item.pair_transitions.iter().map(transition_inventory_document).collect())),
         ("pair_attempts", Value::Array(item.pair_attempts.iter().map(attempt_document).collect())),
+        (
+            "pair_fallback_selection",
+            item.pair_fallback_selection.as_ref().map_or(Value::Null, PairFallbackSelection::document),
+        ),
         ("local_candidate_attempts", Value::from(item.local_candidate_attempts)),
         ("guide_length_nm", optional_int(item.guide_length_nm)),
         ("pair_refinement_attempts", Value::from(item.pair_refinement_attempts)),
@@ -521,6 +602,19 @@ pub(crate) fn budget_warnings(rule: &NetRoutingRule, tracks: &[&TrackSegment]) -
     }
 }
 
+/// Max-length warnings for the exact copper occurrences that will be committed.
+/// The prefix is retained copper, not a search board that may already contain
+/// generated preparation branches. Candidate ownership and metrics stay local.
+pub(crate) fn complete_net_budget_warnings(
+    rule: &NetRoutingRule,
+    candidate: &[&TrackSegment],
+    retained: &[TrackSegment],
+) -> Vec<String> {
+    let tracks: Vec<&TrackSegment> =
+        retained.iter().chain(candidate.iter().copied()).filter(|track| track.net == rule.net).collect();
+    budget_warnings(rule, &tracks)
+}
+
 /// Python's `str(int)` of an optional ohm target (`{rule.target_impedance_ohms}`).
 fn external_assumptions(rule: &NetRoutingRule) -> Vec<String> {
     let mut assumptions = Vec::new();
@@ -695,6 +789,10 @@ pub struct CriticalOptions<'a> {
     /// PENDING: owned by rust-m4-critical (the admission only; a reservation
     /// that fails physical DRC exits 3).
     pub reserved_accesses: Option<&'a crate::bypass_reservations::BypassReservation>,
+    /// Explicit retained local dogbones/via sites on the exact clean source.
+    /// Freshly admitted on every use. This is not a complete channel/escape
+    /// claim and does not turn generated mutable channels into hard macros.
+    pub fixed_prefix: Option<&'a crate::fixed_prefix::AdmittedFixedPrefix>,
 }
 
 impl Default for CriticalOptions<'_> {
@@ -707,6 +805,7 @@ impl Default for CriticalOptions<'_> {
             unified_options: None,
             pair_state_escalation: None,
             reserved_accesses: None,
+            fixed_prefix: None,
         }
     }
 }
@@ -811,7 +910,17 @@ pub(crate) fn critical_progress(
     if let Some(result) = result {
         details.push(("connected", Value::Bool(result.connected)));
         details.push(("strategy", Value::from(result.strategy.as_str())));
-        details.push(("search_states", Value::from(result.search_states)));
+        details.push(("search_states", reported_search_states(result)));
+        if !result.search_states_known {
+            details.push(("search_states_known", Value::Bool(false)));
+            details.push((
+                "unified_search_budget_exhausted",
+                result.unified_search_budget_exhausted.map_or(Value::Null, Value::Bool),
+            ));
+        }
+        if !result.connected {
+            details.push(("failure_diagnostics", bounded_failure_diagnostics(&result.diagnostics)));
+        }
         if let Some(order) = &result.pair_search_order {
             details.push(("pair_search_order", Value::from(order.as_str())));
         }
@@ -874,13 +983,23 @@ pub fn route_critical_nets(
     if options.bundle_repair_limit < 0 {
         return Err(Error::Value("critical bundle repair limit cannot be negative".to_owned()));
     }
-    let board = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board)?)?;
+    let board = match options.fixed_prefix {
+        None => copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(board)?)?,
+        Some(prefix) => prefix.revalidate_for(&board)?.board().clone(),
+    };
     if !board.hard_macros.is_empty() && global_route.placement_fingerprint != placement_fingerprint(&board) {
         return Err(Error::Value("critical global guides are stale".to_owned()));
     }
     let mut tracks: Vec<TrackSegment> = board.tracks.clone();
     let mut vias: Vec<Via> = board.vias.clone();
     if let Some(reserved) = options.reserved_accesses {
+        if options.fixed_prefix.is_some() {
+            // An explicit physical prefix owns all retained site occurrences.
+            // Only Held's exact new bypass contribution may be generated here.
+            if let Err(reason) = crate::bypass_reservations::restore_bypass_reservation_edges(reserved, false) {
+                return Err(Error::Value(format!("fixed-prefix critical bypass ownership rejected: {reason}")));
+            }
+        }
         let fatal = admit_reserved_accesses(&board, global_route, reserved)?;
         if !fatal.is_empty() {
             // A structurally valid but physically failed preflight is a
@@ -1155,7 +1274,7 @@ pub fn route_critical_nets(
                     }
                 }
             }
-            let loose = !result.connected && bundle_index.is_none();
+            let loose = !within_budget(&result) && bundle_index.is_none();
             let mut suspects: Vec<Vec<String>> = Vec::new();
             if loose {
                 // Pairs leaving the same package were not planned as a bundle,
@@ -1182,7 +1301,7 @@ pub fn route_critical_nets(
                     .collect();
                 suspects.sort_by_key(|entry| (!entry.iter().any(|net| blockers.contains(net)), entry.clone()));
                 loose_repairs.entry(group.clone()).or_default();
-            } else if !result.connected {
+            } else if !within_budget(&result) {
                 let routed_bundle: Vec<Vec<String>> = committed
                     .iter()
                     .filter(|(entry, entry_tracks, entry_vias)| {
@@ -1199,7 +1318,11 @@ pub fn route_critical_nets(
                     suspects = bundle_neighbours(&stage_board, group, &routed_bundle)?;
                 }
             }
-            if !result.connected {
+            if !within_budget(&result) {
+                // Preserve connectivity only for an open incumbent. A connected
+                // target may not move its warning to another connected group.
+                let allow_connected_fallback = !result.connected;
+                let mut selected_repair: Option<(usize, RepairTrial)> = None;
                 for blocker in &suspects {
                     let ledger = match bundle_index {
                         Some(index) if !loose => &mut repairs[index],
@@ -1218,22 +1341,49 @@ pub fn route_critical_nets(
                         (rule, partner_rule),
                         group,
                         blocker,
-                        (&crossings, &nested, &mut turns),
+                        (&crossings, &nested, &turns),
                         escalation,
+                        allow_connected_fallback,
                     )?;
                     let ledger = match bundle_index {
                         Some(index) if !loose => &mut repairs[index],
                         _ => loose_repairs.get_mut(group).expect("a loose ledger"),
                     };
+                    let record_index = ledger.len();
                     ledger.push(record);
-                    if let Some((failed, (blocker_result, blocker_tracks, blocker_vias))) = repaired {
-                        (result, pair_tracks, pair_vias) = failed;
-                        committed.retain(|entry| entry.0 != *blocker);
-                        results[result_index[blocker]] = blocker_result.clone();
-                        (tracks, vias) = current(&committed);
-                        rerouted = Some((blocker.clone(), blocker_result, blocker_tracks, blocker_vias));
+                    if let Some(trial) = repaired
+                        && consider_repair_trial(
+                            &mut selected_repair,
+                            record_index,
+                            trial,
+                            allow_connected_fallback,
+                            results[result_index[blocker]].warnings.len(),
+                        )
+                    {
                         break;
                     }
+                }
+                if let Some((record_index, trial)) = selected_repair {
+                    let ledger = match bundle_index {
+                        Some(index) if !loose => &mut repairs[index],
+                        _ => loose_repairs.get_mut(group).expect("a loose ledger"),
+                    };
+                    let record = &mut ledger[record_index];
+                    record.accepted = true;
+                    if !trial.within_budget() {
+                        let warning = record.reason.strip_suffix("; deferred draft").unwrap_or(&record.reason);
+                        record.reason = format!("connected fallback selected after bounded repair trials; {warning}");
+                    }
+                    // Copper and nested-exit hints are published together only
+                    // for the selected transaction. Unselected trials are inert.
+                    turns = trial.turns;
+                    (result, pair_tracks, pair_vias) = trial.target;
+                    let (blocker_result, blocker_tracks, blocker_vias) = trial.blocker;
+                    let blocker = blocker_result.nets.clone();
+                    committed.retain(|entry| entry.0 != blocker);
+                    results[result_index[&blocker]] = blocker_result.clone();
+                    (tracks, vias) = current(&committed);
+                    rerouted = Some((blocker, blocker_result, blocker_tracks, blocker_vias));
                 }
                 if loose && let Some(ledger) = loose_repairs.get(group).filter(|ledger| !ledger.is_empty()) {
                     // Attempts outside a bundle have no bundle record: the
@@ -1295,6 +1445,7 @@ pub fn route_critical_nets(
             vias.extend(blocker_vias.iter().cloned());
             critical_progress(&mut on_progress, "started", blocker, None);
             critical_progress(&mut on_progress, "finished", blocker, Some(blocker_result));
+            crate::critical_match::invalidate_rerouted_tuning(&[group.clone(), blocker.clone()], &mut tuning);
         }
         let match_group = group.iter().find_map(|net| match_of.get(net.as_str()).copied());
         if let Some(match_group) = match_group
@@ -1372,6 +1523,8 @@ pub fn route_critical_nets(
             vias.extend(extra_vias.iter().cloned());
             *entry = (group.clone(), extra_tracks, extra_vias);
             results[index] = candidate.clone();
+        } else {
+            retain_failed_exact_retry(&mut results[index], &candidate);
         }
         critical_progress(&mut on_progress, "retry_finished", &group, Some(&candidate));
     }
@@ -1453,6 +1606,8 @@ enum Saved {
     Board(Box<PhysicalBoard>),
     GlobalRoute(Box<GlobalRoutingResult>),
     PlaneOptions(Box<PlaneStitchOptions>),
+    /// Declared local-site source/contributions, freshly admitted on decode.
+    FixedPrefix(Box<crate::fixed_prefix::AdmittedFixedPrefix>),
     /// Package-access reservations, or why their restoration fails.
     Reserved(Box<std::result::Result<crate::bypass_reservations::BypassReservation, String>>),
     /// `None`, or another value the replay never uses as a board or route.
@@ -1473,6 +1628,9 @@ fn decode_value(value: &StateValue) -> Result<Saved> {
                 Ok(Saved::Reserved(Box::new(crate::bypass_reservations::saved_reservation(value)?)))
             }
             "pcbir.plane:PlaneStitchOptions" => Ok(Saved::PlaneOptions(Box::new(plane_stitch_options(value)?))),
+            "pcbir.fixed_prefix:Input" => {
+                Ok(Saved::FixedPrefix(Box::new(crate::state_codec::fixed_prefix_input(value).map_err(unified_error)?)))
+            }
             _ => copper_pcb::not_implemented(&format!("a saved {name} value")),
         },
         StateValue::Null | StateValue::Bool(_) | StateValue::Int(_) | StateValue::Float(_) | StateValue::Str(_) => {
@@ -1612,13 +1770,14 @@ pub fn replay_critical(
     let (Some(board), Some(global_route)) = (board, global_route) else {
         return Err(Error::Value(NEEDS_INPUTS.to_owned()));
     };
-    for key in ["reserved_accesses", "plane_stitch_options"] {
+    for key in ["reserved_accesses", "plane_stitch_options", "fixed_prefix"] {
         let raw = entries.iter().rev().find(|(name, _)| matches!(name, StateValue::Str(name) if name == key));
         match (raw, decoded.get(key)) {
             (None, _) | (Some((_, StateValue::Null)), _) => {}
             (_, Some(Saved::Pending(what))) => pending = pending.or(Some(*what)),
             (_, Some(Saved::PlaneOptions(_))) if key == "plane_stitch_options" => {}
             (_, Some(Saved::Reserved(_))) if key == "reserved_accesses" => {}
+            (_, Some(Saved::FixedPrefix(_))) if key == "fixed_prefix" => {}
             _ => pending = pending.or(Some("critical replay inputs of an unexpected kind")),
         }
     }
@@ -1633,6 +1792,10 @@ pub fn replay_critical(
         Some(Saved::PlaneOptions(options)) => Some(*options),
         _ => None,
     };
+    let fixed_prefix = match decoded.remove("fixed_prefix") {
+        Some(Saved::FixedPrefix(prefix)) => Some(*prefix),
+        _ => None,
+    };
     route_critical_nets(
         board,
         &global_route,
@@ -1641,6 +1804,7 @@ pub fn replay_critical(
             pair_state_limit: Some(pair_state_limit),
             plane_stitch_options: plane_options.as_ref(),
             reserved_accesses: reserved.as_ref(),
+            fixed_prefix: fixed_prefix.as_ref(),
             ..Default::default()
         },
         None,
@@ -1696,7 +1860,7 @@ pub(crate) fn rejection_gate(diagnostics: &[String]) -> (String, String) {
     }
 }
 
-/// `_within_budget`: connected and within every length/skew budget.
+/// `_within_budget`: connected without a reported length/skew warning.
 fn within_budget(result: &CriticalNetResult) -> bool {
     result.connected && result.warnings.is_empty()
 }
@@ -2061,6 +2225,7 @@ pub(crate) fn route_pair(
     routes: &IndexMap<String, GlobalNetRoute>,
     prefer_access_tracks: bool,
     tuning_board: &PhysicalBoard,
+    budget_prefix: &[TrackSegment],
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
     let (first, second) =
         if first_rule.net <= second_rule.net { (first_rule, second_rule) } else { (second_rule, first_rule) };
@@ -2163,12 +2328,14 @@ pub(crate) fn route_pair(
         (&[], &[]),
         (guide, partner_guide),
         Some(offset),
+        budget_prefix,
     )
 }
 
 /// `_route_pair(..., exact_tracks=...)` for a joint search candidate without
 /// layer transitions: the candidate's lanes, measured and gated like the
 /// coarse candidate (connected guides are not required).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn route_pair_exact(
     board: &PhysicalBoard,
     first_rule: &NetRoutingRule,
@@ -2177,6 +2344,7 @@ pub(crate) fn route_pair_exact(
     exact: &(Vec<TrackSegment>, Vec<TrackSegment>),
     tuning_board: &PhysicalBoard,
     transitions: (&[(Via, Via)], &[Via]),
+    budget_prefix: &[TrackSegment],
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
     let (first, second) =
         if first_rule.net <= second_rule.net { (first_rule, second_rule) } else { (second_rule, first_rule) };
@@ -2209,6 +2377,7 @@ pub(crate) fn route_pair_exact(
         transitions,
         (guide, partner_guide),
         None,
+        budget_prefix,
     )
 }
 
@@ -2226,6 +2395,7 @@ fn finish_pair(
     (via_pairs, return_vias): (&[(Via, Via)], &[Via]),
     guides: (&GlobalNetRoute, &GlobalNetRoute),
     coarse: Option<i64>,
+    budget_prefix: &[TrackSegment],
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
     let nets = vec![first.net.clone(), second.net.clone()];
     let first_width = first.width_nm.filter(|width| *width != 0).unwrap_or(board.rules.default_track_width_nm);
@@ -2321,8 +2491,8 @@ fn finish_pair(
     let mut paired_transitions = paired_via_transitions(&first_pair_vias, &second_pair_vias, center_spacing);
     let mut diagnostics = budget_diagnostics(first, &first_pair_vias);
     diagnostics.extend(budget_diagnostics(second, &second_pair_vias));
-    let mut warnings = budget_warnings(first, &first_refs);
-    warnings.extend(budget_warnings(second, &second_refs));
+    let mut warnings = complete_net_budget_warnings(first, &first_refs, budget_prefix);
+    warnings.extend(complete_net_budget_warnings(second, &second_refs, budget_prefix));
     let mut shared_references: Vec<CopperLayer> = Vec::new();
     if !via_pairs.is_empty() {
         // Require explicit matched transition provenance; never infer a pair
@@ -2528,7 +2698,11 @@ pub(crate) fn route_pair_group(
     // `reported`: a blocked or unsupported preparation explains a failed
     // pair; a completed support plan is joint; preparation evidence only
     // when it prepared something.
+    let fallback_selection = std::cell::RefCell::new(PairFallbackSelection::default());
     let reported = |mut outcome: Routed, preparation: PairTerminalPreparation, blockers: &mut IndexSet<String>| {
+        if let Some(selection) = fallback_selection.borrow().clone().finish(&outcome.0) {
+            outcome.0.pair_fallback_selection = Some(selection);
+        }
         let mut preparation = match completion {
             Some(completion) => completion.borrow().report.clone(),
             None => preparation,
@@ -2568,7 +2742,8 @@ pub(crate) fn route_pair_group(
     let (result, pair_tracks, pair_vias) = match crossing {
         None => {
             let mut found: IndexSet<String> = IndexSet::new();
-            let (result, pair_tracks, pair_vias) = route_pair(board, rule, partner_rule, &routes, false, &held)?;
+            let (result, pair_tracks, pair_vias) =
+                route_pair(board, rule, partner_rule, &routes, false, &held, tracks)?;
             let (result, pair_tracks, pair_vias) =
                 reject_reserved_plane_tracks(board, result, pair_tracks, pair_vias, rules);
             let outcome = validate_candidate(board, result, pair_tracks, pair_vias, tracks, vias, Some(&mut found))?;
@@ -2600,11 +2775,19 @@ pub(crate) fn route_pair_group(
     // A candidate over its length/skew budget is kept only as a fallback.
     let mut fallback = (result.connected && !result.warnings.is_empty())
         .then(|| (result.clone(), pair_tracks.clone(), pair_vias.clone()));
+    if fallback.is_some() {
+        fallback_selection.borrow_mut().observe("validated_coarse_guide", &result, None, true);
+    }
     let keep = |fallback: &mut Option<Routed>,
+                producer: &str,
                 attempt: &CriticalNetResult,
                 attempt_tracks: &[TrackSegment],
                 attempt_vias: &[Via]| {
-        if attempt.connected && fallback.as_ref().is_none_or(|(kept, _, _)| within_or_shorter(attempt, kept)) {
+        let kept = attempt.connected && fallback.as_ref().is_none_or(|(kept, _, _)| within_or_shorter(attempt, kept));
+        if attempt.connected {
+            fallback_selection.borrow_mut().observe(producer, attempt, fallback.as_ref().map(|item| &item.0), kept);
+        }
+        if kept {
             *fallback = Some((attempt.clone(), attempt_tracks.to_vec(), attempt_vias.to_vec()));
         }
     };
@@ -2619,7 +2802,7 @@ pub(crate) fn route_pair_group(
     {
         // A coarse guide may already carry a checked multi-leg package exit:
         // one whole-pair proposal retains those actual lead-ins.
-        let (attempt, proposed_tracks, proposed_vias) = route_pair(board, first, second, &routes, true, &held)?;
+        let (attempt, proposed_tracks, proposed_vias) = route_pair(board, first, second, &routes, true, &held, tracks)?;
         let (attempt, proposed_tracks, proposed_vias) =
             reject_reserved_plane_tracks(board, attempt, proposed_tracks, proposed_vias, rules);
         let (attempt, proposed_tracks, proposed_vias) =
@@ -2627,7 +2810,7 @@ pub(crate) fn route_pair_group(
         if within_budget(&attempt) {
             return reported((attempt, proposed_tracks, proposed_vias), preparation, blockers);
         }
-        keep(&mut fallback, &attempt, &proposed_tracks, &proposed_vias);
+        keep(&mut fallback, "validated_complete_guide", &attempt, &proposed_tracks, &proposed_vias);
     }
     let (mut result, mut pair_tracks, mut pair_vias) = (result, pair_tracks, pair_vias);
     if crossing.is_some() && !guided {
@@ -2712,7 +2895,7 @@ pub(crate) fn route_pair_group(
                 let exact = (proposal.first.clone(), proposal.second.clone());
                 let transitions = (proposal.via_pairs.as_slice(), proposal.return_vias.as_slice());
                 let (attempt, proposed_tracks, proposed_vias) =
-                    route_pair_exact(board, first, second, &routes, &exact, &search_board, transitions)?;
+                    route_pair_exact(board, first, second, &routes, &exact, &search_board, transitions, tracks)?;
                 let (attempt, proposed_tracks, proposed_vias) =
                     reject_reserved_plane_tracks(board, attempt, proposed_tracks, proposed_vias, rules);
                 validate_candidate(
@@ -2771,7 +2954,7 @@ pub(crate) fn route_pair_group(
                 return Ok(true);
             }
             if attempt.connected {
-                keep(fallback, &attempt, &proposed_tracks, &proposed_vias);
+                keep(fallback, "validated_exact_search", &attempt, &proposed_tracks, &proposed_vias);
                 rejected.push(rejection_gate(&attempt.warnings));
                 return Ok(false);
             }
@@ -2882,11 +3065,22 @@ pub(crate) fn route_pair_group(
         result.pair_resumed_states = stats.resumed_states;
         result.pair_resumed_portals = stats.resumed_portals;
         result.pair_ports = stats.port_inventory.clone();
+        result.pair_collars = stats.collar_inventory.clone();
+        result.pair_compatible_collar_pairs = stats.port_pairs;
+        result.pair_incompatible_collar_pairs = stats.incompatible_port_pairs;
         result.pair_transitions = stats.transition_inventory.clone();
         result.pair_attempts = crate::pair_search::pair_search_attempts(&stats);
         result.pair_search_order = Some(order.to_owned());
         result.pair_state_limit = limit;
-        result.pair_budget_exhausted = limit.is_some_and(|value| stats.expanded_states >= value) && !result.connected;
+        result.pair_budget_exhausted =
+            limit.is_some_and(|value| stats.expanded_states >= value) && !within_budget(&result);
+        if result.pair_budget_exhausted {
+            for attempt in &mut result.pair_attempts {
+                if attempt.goal.stop_reason == "state_slice_exhausted" {
+                    attempt.goal.stop_reason = "aggregate_state_limit".to_owned();
+                }
+            }
+        }
         result.rejections = rejections.clone();
         result.rejection_examples = examples;
         if !result.connected {
@@ -2896,8 +3090,12 @@ pub(crate) fn route_pair_group(
                 None => "joint pair search".to_owned(),
             };
             let mut message = format!(
-                "{label}: {} searches, {} states, {} candidates; none accepted",
-                stats.searches, stats.expanded_states, stats.candidates
+                "{label}: {} searches, {} states, {} candidates; none accepted; collar pairs compatible={}, incompatible={}",
+                stats.searches,
+                stats.expanded_states,
+                stats.candidates,
+                stats.port_pairs,
+                stats.incompatible_port_pairs
             );
             if !reasons.is_empty() {
                 message.push_str(&format!(" (first-failing gates: {})", reasons.join(", ")));
@@ -2905,6 +3103,28 @@ pub(crate) fn route_pair_group(
             result.diagnostics.push(message);
             result.diagnostics.extend(stats.terminal_port_rejections.iter().take(2).cloned());
             result.diagnostics.extend(stats.launch_rejections.iter().take(3).cloned());
+            if let Some(attempt) = result
+                .pair_attempts
+                .iter()
+                .filter(|item| item.minimum_goal_distance_nm.is_some())
+                .min_by_key(|item| item.minimum_goal_distance_nm)
+            {
+                let reasons = attempt
+                    .goal
+                    .rejection_counts
+                    .iter()
+                    .map(|(reason, count)| format!("{reason}={count}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                result.diagnostics.push(format!(
+                    "closest pair frontier search {} on {}: goal distance {} nm; stop={}; goal-tail rejections: {}",
+                    attempt.search_index,
+                    attempt.layer.value(),
+                    attempt.minimum_goal_distance_nm.unwrap(),
+                    attempt.goal.stop_reason,
+                    if reasons.is_empty() { "none" } else { &reasons },
+                ));
+            }
         }
     }
     reported((result, pair_tracks, pair_vias), preparation, blockers)
@@ -2949,7 +3169,7 @@ fn route_nested_exit(
         offered += 1;
         let exact = (candidate.first.clone(), candidate.second.clone());
         let (mut attempt, mut pair_tracks, mut pair_vias) =
-            route_pair_exact(board, first, second, routes, &exact, &search_board, (&[], &[]))?;
+            route_pair_exact(board, first, second, routes, &exact, &search_board, (&[], &[]), tracks)?;
         let stop = |offered: usize| offered >= NESTED_CANDIDATE_LIMIT;
         if attempt.connected && attempt.tuned_length_nm != 0 {
             let own: Vec<TrackSegment> = pair_tracks.iter().filter(|t| t.net == first.net).cloned().collect();
@@ -3249,10 +3469,51 @@ fn unrouted_lanes(
     Ok(keepouts)
 }
 
+/// Two exact-validated connected groups and their private nested-exit hints.
+/// A transaction is never published by the search that creates it.
+#[derive(Clone)]
+pub(crate) struct RepairTrial {
+    pub(crate) target: Routed,
+    pub(crate) blocker: Routed,
+    pub(crate) turns: IndexMap<Vec<String>, (i64, i64)>,
+    rank: (i64, i64),
+}
+
+impl RepairTrial {
+    fn within_budget(&self) -> bool {
+        within_budget(&self.target.0) && within_budget(&self.blocker.0)
+    }
+}
+
+/// Keep a connected draft only for an originally open target. Return true
+/// only for a compliant transaction, so warned drafts never end the search.
+pub(crate) fn consider_repair_trial(
+    selected: &mut Option<(usize, RepairTrial)>,
+    record_index: usize,
+    mut trial: RepairTrial,
+    allow_connected_fallback: bool,
+    incumbent_blocker_warnings: usize,
+) -> bool {
+    // Other incumbent warnings remain unchanged; the open target's baseline
+    // is constant across trials. Subtract the replaced blocker's old warnings
+    // to compare the whole board's warning delta, not just each changed pair.
+    trial.rank.0 -= incumbent_blocker_warnings as i64;
+    if trial.within_budget() {
+        *selected = Some((record_index, trial));
+        return true;
+    }
+    if allow_connected_fallback
+        && selected.as_ref().is_none_or(|(_, kept)| !kept.within_budget() && trial.rank < kept.rank)
+    {
+        *selected = Some((record_index, trial));
+    }
+    false
+}
+
 /// `_bundle_repair`: rip up `blocker`, route `failed` first, then route
-/// `blocker` again, both under the main pass's bound and escalation against
-/// all other committed copper. Nothing is changed here: the caller commits
-/// both results only when both are accepted.
+/// `blocker` again under the same two-group trial bounds and exact checks.
+/// A warned target is restored once only when the caller permits a deferred
+/// connected fallback. No trial publishes copper or nested-exit hints here.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn bundle_repair(
     board: &PhysicalBoard,
@@ -3267,24 +3528,39 @@ pub(crate) fn bundle_repair(
     (crossings, nested, turns): (
         &IndexMap<Vec<String>, PlannedCrossing>,
         &IndexMap<Vec<String>, NestedExit>,
-        &mut IndexMap<Vec<String>, (i64, i64)>,
+        &IndexMap<Vec<String>, (i64, i64)>,
     ),
     pair_state_escalation: i64,
-) -> Result<(BundleRepair, Option<(Routed, Routed)>)> {
+    allow_connected_fallback: bool,
+) -> Result<(BundleRepair, Option<RepairTrial>)> {
+    // Nested-exit hints belong to the same transaction as its copper. A
+    // rejected target or restoration must not change the incumbent's hints.
+    let mut trial_turns = turns.clone();
     let others: Vec<&(Vec<String>, Vec<TrackSegment>, Vec<Via>)> =
         committed.iter().filter(|entry| entry.0 != blocker).collect();
     let mut reduced_tracks: Vec<TrackSegment> =
         base_tracks.iter().cloned().chain(others.iter().flat_map(|(_, items, _)| items.iter().cloned())).collect();
     let mut reduced_vias: Vec<Via> =
         base_vias.iter().cloned().chain(others.iter().flat_map(|(_, _, items)| items.iter().cloned())).collect();
-    let record = |accepted: bool, reason: &str, first: &CriticalNetResult| BundleRepair {
-        failed: failed.to_vec(),
-        ripped_up: blocker.to_vec(),
-        accepted,
-        reason: reason.to_owned(),
-        search_states: first.search_states,
-        pair_budget_exhausted: first.pair_budget_exhausted,
-    };
+    let record =
+        |accepted: bool, reason: &str, first: &CriticalNetResult, restored: Option<&CriticalNetResult>| BundleRepair {
+            failed: failed.to_vec(),
+            ripped_up: blocker.to_vec(),
+            accepted,
+            reason: reason.to_owned(),
+            search_states: first.search_states,
+            pair_budget_exhausted: first.pair_budget_exhausted,
+            restoration: restored.map(|restored| BundleRepairRestoration {
+                connected: restored.connected,
+                search_states: restored.search_states,
+                pair_budget_exhausted: restored.pair_budget_exhausted,
+                diagnostics: restored.diagnostics.clone(),
+                rejection_examples: restored.rejection_examples.clone(),
+                pair_collars: restored.pair_collars.clone(),
+                pair_transitions: restored.pair_transitions.clone(),
+                pair_attempts: restored.pair_attempts.clone(),
+            }),
+        };
     let first = route_pair_group(
         board,
         rule,
@@ -3298,11 +3574,15 @@ pub(crate) fn bundle_repair(
         &mut IndexSet::new(),
         crossings.get(failed),
         nested.get(failed),
-        Some(turns),
+        Some(&mut trial_turns),
     )?;
     if !first.0.connected {
         let reason = "failed group still has no accepted candidate without the ripped-up copper";
-        return Ok((record(false, reason, &first.0), None));
+        return Ok((record(false, reason, &first.0, None), None));
+    }
+    if !within_budget(&first.0) && !allow_connected_fallback {
+        let reason = format!("failed group still exceeds its length/skew budget: {}", first.0.warnings.join("; "));
+        return Ok((record(false, &reason, &first.0, None), None));
     }
     reduced_tracks.extend(first.1.iter().cloned());
     reduced_vias.extend(first.2.iter().cloned());
@@ -3319,14 +3599,33 @@ pub(crate) fn bundle_repair(
         &mut IndexSet::new(),
         crossings.get(blocker),
         nested.get(blocker),
-        Some(turns),
+        Some(&mut trial_turns),
     )?;
     if !second.0.connected {
         let reason = "ripped-up group has no accepted candidate after the failed group";
-        return Ok((record(false, reason, &first.0), None));
+        return Ok((record(false, reason, &first.0, Some(&second.0)), None));
     }
-    let accepted = record(true, "both groups accepted", &first.0);
-    Ok((accepted, Some((first, second))))
+    if !within_budget(&second.0) && !allow_connected_fallback {
+        let reason = format!("ripped-up group exceeds its length/skew budget: {}", second.0.warnings.join("; "));
+        return Ok((record(false, &reason, &first.0, Some(&second.0)), None));
+    }
+    let compliant = within_budget(&first.0) && within_budget(&second.0);
+    let reason = if compliant {
+        "both groups accepted".to_owned()
+    } else {
+        format!(
+            "both groups connected with unresolved length/skew budgets (target: {}; restored: {}); deferred draft",
+            first.0.warnings.join("; "),
+            second.0.warnings.join("; ")
+        )
+    };
+    let record = record(compliant, &reason, &first.0, Some(&second.0));
+    // reduced_tracks already contains the target exactly once. Comparing
+    // whole resulting copper avoids favoring a short blocker over a longer
+    // unrelated blocker solely because their original lengths differ.
+    let complete_tracks: Vec<_> = reduced_tracks.iter().chain(&second.1).collect();
+    let rank = ((first.0.warnings.len() + second.0.warnings.len()) as i64, track_length(&complete_tracks));
+    Ok((record, Some(RepairTrial { target: first, blocker: second, turns: trial_turns, rank })))
 }
 
 /// `_pair_prefers_via_escape`: matched via portals first for an internally
@@ -3700,7 +3999,7 @@ pub(crate) fn improve_pair_spine(
             continue;
         }
         let (proposed, tracks, vias) =
-            route_pair_exact(board, first, second, routes, &lanes, search_board, (&[], &[]))?;
+            route_pair_exact(board, first, second, routes, &lanes, search_board, (&[], &[]), committed_tracks)?;
         let (proposed, tracks, vias) = reject_reserved_plane_tracks(board, proposed, tracks, vias, &pair_rules);
         let (proposed, tracks, vias) =
             validate_candidate(board, proposed, tracks, vias, committed_tracks, committed_vias, None)?;
@@ -3776,6 +4075,8 @@ fn unified_result(
     result.assumptions = external_assumptions(rule);
     result.evidence_digests = external_evidence(rule);
     result.warnings = budget_warnings(rule, &track_refs);
+    result.search_states_known = false;
+    result.unified_search_budget_exhausted = net.map(|net| net.search_budget_exhausted);
     result
 }
 
@@ -3964,10 +4265,11 @@ fn within_or_shorter(candidate: &CriticalNetResult, incumbent: &CriticalNetResul
     if incumbent.warnings.is_empty() {
         return false;
     }
-    let rank = |item: &CriticalNetResult| {
-        (!item.warnings.is_empty(), item.warnings.len(), item.skew_nm, item.lengths_nm.iter().sum::<i64>())
-    };
-    rank(candidate) < rank(incumbent)
+    fallback_rank(candidate) < fallback_rank(incumbent)
+}
+
+fn fallback_rank(item: &CriticalNetResult) -> (bool, usize, i64, i64) {
+    (!item.warnings.is_empty(), item.warnings.len(), item.skew_nm, item.lengths_nm.iter().sum::<i64>())
 }
 
 /// `_rejection_summary`: counted first-failing gates (most frequent first)
@@ -3995,4 +4297,122 @@ pub(crate) fn rejection_summary(rejected: &[(String, String)]) -> (Vec<(String, 
         }
     }
     (summary, examples)
+}
+
+#[cfg(test)]
+mod unified_diagnostic_tests {
+    use super::*;
+    use crate::unified_router::router::{ConnectionFailure, SearchFailureReason};
+
+    fn failed_unified(reason: SearchFailureReason, exhausted: bool) -> CriticalNetResult {
+        let failure = ConnectionFailure {
+            source_groups: Vec::new(),
+            reason,
+            expanded: if exhausted { 17 } else { 0 },
+            searches: if exhausted { 1 } else { 0 },
+            deadline_reached: false,
+            source_access_count: if exhausted { 2 } else { 0 },
+            target_access_count: 2,
+            groups: Vec::new(),
+        };
+        let detailed = crate::detailed::DetailedNetResult {
+            net: "CLK".to_owned(),
+            connected: false,
+            track_count: 0,
+            via_count: 0,
+            length_nm: 0,
+            guide_deviation_count: 0,
+            diagnostics: vec![format!("unified: {}", failure.diagnostic())],
+            orthogonal_mode_used: false,
+            resumed_branch_count: 0,
+            search_budget_exhausted: exhausted,
+            retry_heuristic_weight_percent: None,
+            warnings: Vec::new(),
+        };
+        let rule = crate::test_support_critical::rule("CLK", RouteKind::Clock);
+        let mut result = unified_result(&rule, Some(&detailed), &[], &[], "missing attempt");
+        result.strategy = "unified_clock".to_owned();
+        result
+    }
+
+    #[derive(Default)]
+    struct Capture(Vec<Value>);
+    impl crate::progress::Progress for Capture {
+        fn observe(&mut self, _: &str, _: &str, details: Vec<(&'static str, Value)>) {
+            self.0.push(object(details));
+        }
+    }
+
+    #[test]
+    fn unified_failure_status_is_forwarded_without_inventing_numeric_states() {
+        for (reason, exhausted, diagnostic) in [
+            (SearchFailureReason::MissingSourceAccess, false, "missing source access"),
+            (SearchFailureReason::ExpansionLimit, true, "search expansion limit exhausted"),
+        ] {
+            let result = failed_unified(reason, exhausted);
+            let document = critical_net_document(&result);
+            assert_eq!(document.get("search_states"), Some(&Value::Null));
+            assert_eq!(document.get("search_states_known"), Some(&Value::Bool(false)));
+            assert_eq!(document.get("unified_search_budget_exhausted"), Some(&Value::Bool(exhausted)));
+            assert!(result.diagnostics[0].contains(diagnostic));
+            let mut capture = Capture::default();
+            critical_progress(&mut Some(&mut capture), "finished", &result.nets, Some(&result));
+            let event = &capture.0[0];
+            assert_eq!(event.get("search_states"), Some(&Value::Null));
+            assert_eq!(event.get("unified_search_budget_exhausted"), Some(&Value::Bool(exhausted)));
+            let evidence = event.get("failure_diagnostics").unwrap();
+            assert_eq!(evidence.get("records"), Some(&texts(&result.diagnostics)));
+            assert_eq!(evidence.get("truncated"), Some(&Value::Bool(false)));
+        }
+        let rule = crate::test_support_critical::rule("CLK", RouteKind::Clock);
+        let absent = unified_result(&rule, None, &[], &[], "no exact critical-net attempt");
+        let document = critical_net_document(&absent);
+        assert_eq!(document.get("search_states"), Some(&Value::Null));
+        assert_eq!(document.get("unified_search_budget_exhausted"), Some(&Value::Null));
+    }
+
+    #[test]
+    fn failed_exact_retry_is_separate_and_does_not_replace_selected_result() {
+        let mut incumbent = failed_unified(SearchFailureReason::MissingSourceAccess, false);
+        incumbent.strategy = "unified_critical_cohort".to_owned();
+        incumbent.track_count = 3;
+        incumbent.lengths_nm = vec![123];
+        let before = critical_net_document(&incumbent);
+        let retry = failed_unified(SearchFailureReason::ExpansionLimit, true);
+        retain_failed_exact_retry(&mut incumbent, &retry);
+        let after = critical_net_document(&incumbent);
+        let Value::Object(before_fields) = &before else { panic!("object") };
+        for (key, value) in before_fields {
+            if key != "failed_exact_retry" {
+                assert_eq!(after.get(key), Some(value), "selected field {key} changed");
+            }
+        }
+        let retained = after.get("failed_exact_retry").unwrap();
+        assert_eq!(retained.get("scope"), Some(&Value::from("failed_exact_retry_not_selected_copper")));
+        assert_eq!(retained.get("unified_search_budget_exhausted"), Some(&Value::Bool(true)));
+        assert_eq!(retained.get("search_states"), Some(&Value::Null));
+        assert_eq!(retained.get("failure_diagnostics").unwrap().get("records"), Some(&texts(&retry.diagnostics)));
+    }
+
+    #[test]
+    fn bounded_failure_text_preserves_pair_state_telemetry() {
+        let mut result =
+            CriticalNetResult::new(vec!["A".to_owned()], false, 0, 0, vec![], 0, vec!["x".repeat(2048); 12]);
+        result.search_states = 42;
+        result.pair_state_limit = Some(42);
+        result.pair_budget_exhausted = true;
+        let mut capture = Capture::default();
+        critical_progress(&mut Some(&mut capture), "finished", &result.nets, Some(&result));
+        let event = &capture.0[0];
+        assert_eq!(event.get("search_states"), Some(&Value::from(42i64)));
+        assert_eq!(event.get("pair_budget_exhausted"), Some(&Value::Bool(true)));
+        let evidence = event.get("failure_diagnostics").unwrap();
+        assert_eq!(evidence.get("record_count"), Some(&Value::from(12i64)));
+        assert_eq!(evidence.get("truncated"), Some(&Value::Bool(true)));
+        let Value::Array(records) = evidence.get("records").unwrap() else { panic!("array") };
+        assert_eq!(records.len(), 8);
+        assert!(records.iter().all(|record| record.as_str().unwrap().len() == 1024));
+        result.search_states = 0;
+        assert_eq!(critical_net_document(&result).get("search_states"), Some(&Value::from(0i64)));
+    }
 }

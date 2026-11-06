@@ -91,7 +91,9 @@ fn every_candidate_gate_has_a_named_first_failing_reason() {
     );
     let guides = guides_by_net(&coarse(&board));
     let exact = |first: &NetRoutingRule, second: &NetRoutingRule, pairs: &[(Via, Via)]| {
-        route_pair_exact(&board, first, second, &guides, &lanes, &board, (pairs, &[])).expect("exact pair").0
+        route_pair_exact(&board, first, second, &guides, &lanes, &board, (pairs, &[]), &board.tracks)
+            .expect("exact pair")
+            .0
     };
     let skewed = exact(&tight[0], &tight[1], &[]);
     // Skew is a review warning; the uncoupled length stays a hard gate.
@@ -235,7 +237,7 @@ fn with_guide_via(mut global: GlobalRoutingResult, net: &str, position: copper_p
 
 fn coarse_attempt(board: &PhysicalBoard, global: &GlobalRoutingResult) -> crate::critical::Proposal {
     let rules = &board.net_routing_rules;
-    route_pair(board, &rules[0], &rules[1], &guides_by_net(global), false, board).expect("coarse pair")
+    route_pair(board, &rules[0], &rules[1], &guides_by_net(global), false, board, &board.tracks).expect("coarse pair")
 }
 
 #[test]
@@ -416,4 +418,155 @@ fn lane_table_estimates_screening_delay_from_the_declared_stackup() {
     let Value::Object(lane) = &table[1] else { panic!("lane") };
     assert_eq!(lane["estimated_delay_ps"], Value::Null);
     assert_eq!(lane["delay_reason"], Value::from("dielectric P1 declares no relative permittivity"));
+}
+
+#[test]
+fn connected_overlength_fallback_reports_consumed_pair_budget() {
+    // The terminals are many millimetres apart, so every connected route
+    // exceeds this deliberately impossible length budget. Keep skew loose
+    // to isolate the connected-but-overlength fallback from skew rejection.
+    let board = bent_pair_board(|rule| NetRoutingRule { max_length_nm: Some(MM), max_skew_nm: Some(10 * MM), ..rule });
+    let guides = global_route(&board, crate::routing::GlobalRouterOptions::default().tile_size_nm);
+    let mut events = Events::default();
+    let options =
+        CriticalOptions { pair_state_limit: Some(2000), pair_state_escalation: Some(1), ..CriticalOptions::default() };
+    let result = route_critical_nets(board, &guides, &options, Some(&mut events)).expect("critical routing");
+    let pair = &result.nets[0];
+    assert!(pair.connected && pair.diagnostics.is_empty(), "{pair:?}");
+    assert!(pair.lengths_nm.iter().all(|length| *length > MM), "{pair:?}");
+    assert!(pair.warnings.iter().any(|warning| warning.starts_with("route length ")), "{pair:?}");
+    assert!(free_of(&result.board, &["DRC-SHORT", "DRC-CLEARANCE", "DRC-HOLE-CLEARANCE"]));
+    assert_eq!(pair.pair_state_limit, Some(2000));
+    assert_eq!(pair.search_states, 2000);
+    assert!(pair.pair_budget_exhausted, "{pair:?}");
+    assert!(pair.pair_attempts.iter().any(|attempt| attempt.goal.stop_reason == "aggregate_state_limit"));
+    assert!(pair.pair_attempts.iter().all(|attempt| attempt.goal.stop_reason != "state_slice_exhausted"));
+
+    let Ok(Value::Object(document)) = copper_json::parse(&result.to_json().unwrap()) else { panic!("document") };
+    let Value::Array(nets) = &document["nets"] else { panic!("nets") };
+    let Value::Object(net) = &nets[0] else { panic!("net") };
+    assert_eq!(net["connected"], Value::Bool(true));
+    assert_eq!(net["pair_budget_exhausted"], Value::Bool(true));
+    assert_eq!(net["search_states"], Value::from(2000i64));
+    let finished = &events
+        .0
+        .iter()
+        .rfind(|(phase, event, _)| phase == "critical_group" && event == "finished")
+        .expect("finished")
+        .2;
+    assert_eq!(finished.iter().find(|(key, _)| *key == "connected").expect("connected").1, Value::Bool(true));
+    assert_eq!(
+        finished.iter().find(|(key, _)| *key == "pair_budget_exhausted").expect("budget exhausted").1,
+        Value::Bool(true)
+    );
+}
+
+#[test]
+fn connected_compliant_pair_does_not_report_budget_exhaustion() {
+    let board =
+        bent_pair_board(|rule| NetRoutingRule { max_length_nm: Some(100 * MM), max_skew_nm: Some(10 * MM), ..rule });
+    let guides = global_route(&board, crate::routing::GlobalRouterOptions::default().tile_size_nm);
+    let result = routed(&board, &guides, Some(2000));
+    let pair = &result.nets[0];
+    assert!(pair.connected && pair.warnings.is_empty() && pair.diagnostics.is_empty(), "{pair:?}");
+    assert!(pair.lengths_nm.iter().all(|length| *length <= 100 * MM));
+    assert!(!pair.pair_budget_exhausted, "{pair:?}");
+    assert!(pair.pair_attempts.iter().all(|attempt| attempt.goal.stop_reason != "aggregate_state_limit"));
+    assert!(free_of(&result.board, &["DRC-SHORT", "DRC-CLEARANCE", "DRC-HOLE-CLEARANCE"]));
+}
+
+fn complete_pair_budget_fixture() -> (
+    PhysicalBoard,
+    (Vec<copper_pcb::board::TrackSegment>, Vec<copper_pcb::board::TrackSegment>),
+    Vec<copper_pcb::board::TrackSegment>,
+) {
+    let mut board = usb_pair_board();
+    for rule in &mut board.net_routing_rules {
+        rule.max_length_nm = Some(4_500_000);
+        rule.max_skew_nm = None;
+        rule.maximum_uncoupled_length_nm = None;
+    }
+    let lane = |net: &str, y| {
+        vec![
+            track(net, at(5 * MM, y), at(6 * MM, y), 250_000, FRONT),
+            track(net, at(6 * MM, y), at(9 * MM, y), 250_000, FRONT),
+        ]
+    };
+    let lanes = (lane("USB_DM", 12_500_000), lane("USB_DP", 12_050_000));
+    let retained = vec![
+        track("USB_DM", at(4 * MM, 12_500_000), at(5 * MM, 12_500_000), 250_000, FRONT),
+        track("USB_DP", at(4 * MM, 12_050_000), at(5 * MM, 12_050_000), 250_000, FRONT),
+    ];
+    (board, lanes, retained)
+}
+
+#[test]
+fn pair_max_length_counts_retained_prefix_without_claiming_its_ownership() {
+    let (board, lanes, mut retained) = complete_pair_budget_fixture();
+    // Foreign copper must not consume either member's max-length budget.
+    retained.push(track("foreign", mm(1, 1), mm(30, 1), 250_000, FRONT));
+    let guides = guides_by_net(&coarse(&board));
+    let mut obstacles = board.clone();
+    obstacles.tracks = retained.clone();
+    let rules = &board.net_routing_rules;
+    let (result, generated, _) =
+        route_pair_exact(&board, &rules[0], &rules[1], &guides, &lanes, &obstacles, (&[], &[]), &retained)
+            .expect("pair");
+    assert!(result.connected);
+    assert_eq!(result.lengths_nm, vec![4 * MM, 4 * MM]);
+    assert_eq!(result.track_count, 4);
+    assert_eq!(generated.len(), 4);
+    assert_eq!(result.warnings, vec!["route length 5000000 nm exceeds 4500000 nm"; 2]);
+    let mut final_board = board.clone();
+    final_board.tracks = retained.into_iter().chain(generated).collect();
+    let drc = copper_drc::run_physical_drc(&final_board, copper_drc::Policy::default()).expect("DRC");
+    let measured: Vec<_> = drc.findings.iter().filter(|f| f.code == "DRC-MAX-LENGTH").map(|f| f.measured_nm).collect();
+    assert_eq!(measured, vec![Some(5 * MM), Some(5 * MM)]);
+}
+
+#[test]
+fn prepared_branches_in_search_obstacles_are_counted_once_in_pair_budget() {
+    let (mut board, lanes, retained) = complete_pair_budget_fixture();
+    for rule in &mut board.net_routing_rules {
+        rule.max_length_nm = Some(5 * MM);
+    }
+    let guides = guides_by_net(&coarse(&board));
+    let mut search_board = board.clone();
+    search_board.tracks = retained.clone();
+    // These branches are obstacles during search and part of its complete
+    // generated proposal, but are not part of the committed budget prefix.
+    search_board.tracks.extend([lanes.0[0].clone(), lanes.1[0].clone()]);
+    let rules = &board.net_routing_rules;
+    let (result, generated, _) =
+        route_pair_exact(&board, &rules[0], &rules[1], &guides, &lanes, &search_board, (&[], &[]), &retained)
+            .expect("pair");
+    assert!(result.connected);
+    assert!(result.warnings.is_empty());
+    assert_eq!(result.lengths_nm, vec![4 * MM, 4 * MM]);
+    assert_eq!(generated.len(), 4);
+}
+
+#[test]
+fn pair_without_retained_copper_keeps_candidate_length_budget() {
+    let (board, lanes, _) = complete_pair_budget_fixture();
+    let guides = guides_by_net(&coarse(&board));
+    let rules = &board.net_routing_rules;
+    let (result, generated, _) =
+        route_pair_exact(&board, &rules[0], &rules[1], &guides, &lanes, &board, (&[], &[]), &[]).expect("pair");
+    assert!(result.connected);
+    assert!(result.warnings.is_empty());
+    assert_eq!(result.lengths_nm, vec![4 * MM, 4 * MM]);
+    assert_eq!(generated, lanes.0.into_iter().chain(lanes.1).collect::<Vec<_>>());
+}
+
+#[test]
+fn complete_net_budget_preserves_duplicate_track_occurrences() {
+    let (board, lanes, retained) = complete_pair_budget_fixture();
+    let rule = board.net_routing_rules.iter().find(|r| r.net == "USB_DM").unwrap();
+    let prefix = vec![retained[0].clone(), retained[0].clone()];
+    let refs = lanes.0.iter().collect::<Vec<_>>();
+    assert_eq!(
+        crate::critical::complete_net_budget_warnings(rule, &refs, &prefix),
+        vec!["route length 6000000 nm exceeds 4500000 nm"]
+    );
 }

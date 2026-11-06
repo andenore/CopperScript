@@ -23,6 +23,106 @@ use crate::dependency_reroute::{Multiset, multiset};
 use crate::plane_verify::{PlaneVerification, native_object_map};
 use crate::routing_clearance::RoutingClearanceIndex;
 
+/// Observe every native dangling occurrence, including those that prevent a
+/// cleanup transaction. Producer attribution requires exact, unique geometry
+/// in a complete admitted prefix; it never grants permission to remove copper.
+pub fn native_cleanup_census(
+    board: &PhysicalBoard,
+    evidence: &PlaneVerification,
+    protected: &Multiset<TrackSegment>,
+    protected_vias: &Multiset<Via>,
+    prefix: Option<&crate::fixed_prefix::AdmittedFixedPrefix>,
+) -> Result<Value> {
+    use crate::fixed_prefix::FixedPrefixRole;
+    let fresh = evidence.matches(board)?;
+    let objects = native_object_map(board)?;
+    let prefix_complete = prefix.is_some_and(|p| p.missing_copper_occurrences(board) == (0, 0));
+    let counts = (multiset(&board.tracks), multiset(&board.vias));
+    let mut rows = Vec::new();
+    for finding in &evidence.native_findings {
+        if finding.kind != "track_dangling" && finding.kind != "via_dangling" {
+            continue;
+        }
+        for item in &finding.items {
+            let bound = fresh && objects.get(&item.uuid) == Some(item);
+            let mut producer = "unresolved";
+            let mut contribution = None;
+            let mut guarded = None;
+            if bound && let Some(index) = item.index.and_then(|n| usize::try_from(n).ok()) {
+                let track = (item.kind == "segment").then(|| board.tracks.get(index)).flatten();
+                let via = (item.kind == "via").then(|| board.vias.get(index)).flatten();
+                guarded = track
+                    .map(|t| protected.get(t).copied().unwrap_or(0) > 0)
+                    .or_else(|| via.map(|v| protected_vias.get(v).copied().unwrap_or(0) > 0));
+                if prefix_complete && let Some(prefix) = prefix {
+                    let positions: Vec<usize> = if let Some(t) = track {
+                        if counts.0.get(t) != Some(&1) {
+                            Vec::new()
+                        } else {
+                            prefix.board().tracks.iter().enumerate().filter(|(_, p)| *p == t).map(|(i, _)| i).collect()
+                        }
+                    } else if let Some(v) = via {
+                        if counts.1.get(v) != Some(&1) {
+                            Vec::new()
+                        } else {
+                            prefix.board().vias.iter().enumerate().filter(|(_, p)| *p == v).map(|(i, _)| i).collect()
+                        }
+                    } else {
+                        Vec::new()
+                    };
+                    if let [position] = positions.as_slice() {
+                        let range = prefix.ranges().iter().find(|range| {
+                            if track.is_some() {
+                                range.tracks.contains(position)
+                            } else {
+                                range.vias.contains(position)
+                            }
+                        });
+                        if let Some(range) = range {
+                            producer = match range.role {
+                                FixedPrefixRole::OrdinaryEscape => "ordinary_escape",
+                                FixedPrefixRole::ViaLattice => "via_lattice",
+                            };
+                            contribution = Some(range.id.as_str());
+                        } else {
+                            producer = "source_or_macro";
+                        }
+                    }
+                }
+            }
+            let critical = item.net.as_deref().is_some_and(|net| {
+                board.net_routing_rules.iter().any(|rule| rule.net == net && rule.kind != RouteKind::General)
+            });
+            let zone_net = item.net.as_deref().is_some_and(|net| board.zones.iter().any(|zone| zone.net == net));
+            rows.push(Value::Object(copper_json::Object::from([
+                ("uuid".into(), Value::from(item.uuid.as_str())),
+                ("kind".into(), Value::from(finding.kind.as_str())),
+                ("net".into(), item.net.as_deref().map_or(Value::Null, Value::from)),
+                ("index".into(), item.index.map_or(Value::Null, Value::from)),
+                ("bound".into(), Value::Bool(bound)),
+                ("caller_protected".into(), guarded.map_or(Value::Null, Value::Bool)),
+                ("critical_net".into(), Value::Bool(critical)),
+                ("declared_zone_net".into(), Value::Bool(zone_net)),
+                ("producer".into(), Value::from(producer)),
+                ("contribution".into(), contribution.map_or(Value::Null, Value::from)),
+            ])));
+        }
+    }
+    Ok(Value::Object(copper_json::Object::from([
+        ("board_digest".into(), Value::from(copper_drc::digest::physical_board_digest(board))),
+        ("native_board_digest".into(), Value::from(evidence.board_digest.as_str())),
+        ("native_export_digest".into(), Value::from(evidence.export_digest.as_str())),
+        ("prefix_digest".into(), prefix.map_or(Value::Null, |p| Value::from(p.observational_digest()))),
+        ("fresh_native_binding".into(), Value::Bool(fresh)),
+        ("complete_prefix_occurrences".into(), Value::Bool(prefix_complete)),
+        (
+            "qualification".into(),
+            Value::from("Observation only; attribution does not authorize retirement or rebind dependency witnesses"),
+        ),
+        ("items".into(), Value::Array(rows)),
+    ])))
+}
+
 /// `_junctions`: exact integer centre-line contacts; None means no
 /// representable junction.
 fn junctions(a: Point, b: Point, c: Point, d: Point) -> Option<BTreeSet<Point>> {
@@ -141,10 +241,6 @@ fn shape(spine: Vec<Point>, radius_nm: i64) -> Result<RoundedConvexShape> {
     RoundedConvexShape::new(spine, radius_nm).map_err(|error| copper_pcb::Error::Value(error.to_string()))
 }
 
-fn point_text(point: Point) -> String {
-    format!("Point(x_nm={}, y_nm={})", point.x_nm, point.y_nm)
-}
-
 /// `native_stub_candidate`: an exact copper-subset trial, never acceptance or
 /// fill evidence. Each rejection appends `{"reason": ..., details}`.
 pub fn native_stub_candidate(
@@ -152,6 +248,20 @@ pub fn native_stub_candidate(
     evidence: &PlaneVerification,
     protected: &Multiset<TrackSegment>,
     protected_vias: Option<&Multiset<Via>>,
+    diagnostics: &mut Vec<Value>,
+) -> Result<Option<PhysicalBoard>> {
+    native_stub_candidate_for_items(board, evidence, protected, protected_vias, None, diagnostics)
+}
+
+/// Propose a caller-selected subset of *the original, complete* native
+/// findings. UUID selection never bypasses fresh binding or copper guards.
+/// Like the whole-batch helper this returns no acceptance certificate.
+pub(crate) fn native_stub_candidate_for_items(
+    board: &PhysicalBoard,
+    evidence: &PlaneVerification,
+    protected: &Multiset<TrackSegment>,
+    protected_vias: Option<&Multiset<Via>>,
+    selected: Option<&BTreeSet<String>>,
     diagnostics: &mut Vec<Value>,
 ) -> Result<Option<PhysicalBoard>> {
     let mut reject = |reason: &str, details: Vec<(&str, Value)>| {
@@ -176,6 +286,13 @@ pub fn native_stub_candidate(
         })
     {
         return reject("native_evidence_not_eligible", Vec::new());
+    }
+    let uuids: BTreeSet<String> = findings.iter().map(|f| f.items[0].uuid.clone()).collect();
+    if uuids.len() != findings.len() {
+        return reject("duplicate_native_item", Vec::new());
+    }
+    if selected.is_some_and(|selection| selection.is_empty() || !selection.is_subset(&uuids)) {
+        return reject("unbound_native_selection", Vec::new());
     }
     let mut fixed = protected.clone();
     // Existing track-only callers cannot implicitly authorize via removal.
@@ -212,6 +329,9 @@ pub fn native_stub_candidate(
         {
             return reject("unbound_or_critical_item", vec![("uuid", Value::from(item.uuid.as_str()))]);
         }
+        if selected.is_some_and(|selection| !selection.contains(&item.uuid)) {
+            continue;
+        }
         let index = item.index.expect("index") as usize;
         if kind == "segment" {
             indices.insert(index);
@@ -219,7 +339,7 @@ pub fn native_stub_candidate(
             via_indices.insert(index);
         }
     }
-    if indices.len() + via_indices.len() != findings.len() {
+    if indices.len() + via_indices.len() != selected.map_or(findings.len(), BTreeSet::len) {
         return reject("duplicate_native_item", Vec::new());
     }
     for &index in &via_indices {
@@ -290,10 +410,11 @@ pub fn native_stub_candidate(
                 continue;
             }
             if !point_on_segment(via.position, track.start, track.end) {
-                return reject(
-                    "off_centre_via",
-                    vec![("index", Value::from(index as i64)), ("via", Value::from(point_text(via.position)))],
-                );
+                // An annulus-edge contact supplies no safe centre-line trim
+                // point. Trial whole-segment removal under the same exact pad
+                // partition and fresh-native guards as width-only junctions.
+                whole_only = true;
+                continue;
             }
             anchors.insert(via.position);
         }

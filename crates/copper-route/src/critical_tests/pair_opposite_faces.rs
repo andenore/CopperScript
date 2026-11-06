@@ -54,6 +54,7 @@ fn owner(board: &PhysicalBoard, candidate: &PairSearchCandidate) -> crate::criti
         &exact,
         board,
         (&candidate.via_pairs, &candidate.return_vias),
+        &board.tracks,
     )
     .expect("pair");
     validate_candidate(board, proposed, tracks, vias, &[], &[], None).expect("validated")

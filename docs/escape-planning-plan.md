@@ -24,6 +24,47 @@ working copy for contributors and agents in this repository.
 | E12 | | |
 | Exact | `claude/plan-escape-e7-bga-lattice` | Analytical track. `escape_capacity` (certificate): CopperProbe FX10 73/73 signal balls escapable, no cut above 60 %; kit FX10 121/121, SIG1 cut 2 at 50/51; global route without overflow, so the open nets are a detailed-routing failure. `exact_escape` (CP-SAT, extra `exact`): all 62 (then 31 non-zone) FX10 signal balls escape on the real board state (OPTIMAL in about 1 min); `exact_escape_copper` makes 26 of 31 legal copper (lanes, exact local maze, lazy cuts). Fixed as copper they make the FX10 fast case worse (mean 17 against 12): the model does not yet carry net rules (width beyond breakout length: 0.15 mm ADC lines do not fit between lattice vias; via budgets) nor the ADC bus order at the array edge |
 
+Unmerged follow-up, 2026-11-06: lattice source-launch qualification is shared
+with ordinary fanout. A verified existing dogbone takes precedence over an
+abstract surface preference, avoiding a second generated branch before prefix
+admission. Two new regression tests, all routing unit tests (including the two
+explicit prerequisite runs), and four routing integration suites pass: 613 tests
+in total. CopperProbe retains all 43 inner sites and zero native gaps; dangling
+findings change 23 to 22, but ADC skew worsens 24.98 to 29.37 mm. This does not
+implement onward boundary access, field exclusion or optional-copper retirement,
+and the experimental board is not promoted. The fresh same-profile control
+reproduces the frozen production PCB byte-for-byte. All eight ladder exports are
+byte-identical to control, including native-clean CopperLedRing and
+CopperAssetTracker. Initial nRF52/CM4 wall-time flags do not reproduce against
+fresh serial controls; startup/export variation prevents a speedup claim.
+The PR-sized change remains separate from those next repairs.
+
+Further bounded tests, 2026-11-06 (unmerged): off-face-only starts from qualified
+inner dogbones apply to 19 components but reproduce the saved control PCB
+byte-for-byte. A routing-only inner pad-face mask leaves ADC_D10/H1 open; it is
+not adopted, and does not disprove joint boundary-channel reservation. Length
+priority and frozen bus-first trials also create signal failures. With both
+`buses_first=true` and `bus_length_budget=true`, seed only the matched cohort in
+the same mutable negotiation frame, discard over-budget seeds, and spend the
+remaining shared iteration allowance on all nets. Tune skew against all accepted
+copper after negotiation. The saved CopperProbe replay routes all 76 detailed
+nets; native checking leaves one D18 gap and 19 dangling findings (control:
+three plane-net gaps and 24 dangling findings at this pre-final-feedback stage).
+The legacy/default bus-first path remains unchanged. Length/skew limits remain
+unmet; this is an opt-in candidate, not an adopted consumer layout.
+
+Exact ownership trials on the already native-connected final board classify
+16 of 22 dangling items as ordinary-prefix copper. Whole-batch deletion would
+break ADC_D6's explicit partition. Per-net native trials find nine feasible
+subsets; their freshly checked combination removes five whole tracks and three
+vias, reducing 22 findings to 12 with zero gaps. Required local sites and original
+held path edges remain guarded. The candidate is not adopted: a replacement
+prefix and freshly admitted dependencies are still required. Detailed results
+remain in the existing `prepared-copper-study` comparison, including rejected
+trials. A fresh source-level rerun is currently blocked by its archived module's
+missing `CopperProbeParts-hybrid` replacement directory; checkpoint replays do
+not verify rebuilding that source.
+
 Update this table when a step's PR merges with the ladder table and the
 full-vertical outcome. The PCBWorld D3 benchmark was removed with the Python
 implementation; earlier rows quote its clean counts as history.

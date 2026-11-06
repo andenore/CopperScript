@@ -2,7 +2,9 @@
 //! ordering and bounded rip-up repair.
 
 use copper_json::Value;
-use copper_pcb::board::{NetRoutingRule, PhysicalBoard, RouteKind};
+use copper_pcb::board::{
+    NetRoutingRule, PhysicalBoard, PhysicalHardMacro, RigidPlacementCluster, RigidPlacementMember, RouteKind,
+};
 use copper_physical::CopperLayer;
 use indexmap::IndexMap;
 
@@ -268,6 +270,19 @@ fn bundle_repair_rips_up_a_blocking_pair_and_reroutes_both() {
     assert_eq!(document["reason"], Value::from("both groups accepted"));
     assert_eq!(document["pair_budget_exhausted"], Value::Bool(false));
     assert!(0 < repair.search_states && repair.search_states <= 4000);
+    let restoration = repair.restoration.as_ref().expect("successful repair restored the blocker");
+    let restored = result.nets.iter().find(|item| item.nets == repair.ripped_up).unwrap();
+    assert_eq!(restoration.connected, restored.connected);
+    assert_eq!(restoration.search_states, restored.search_states);
+    assert_eq!(restoration.pair_budget_exhausted, restored.pair_budget_exhausted);
+    assert_eq!(restoration.diagnostics, restored.diagnostics);
+    assert_eq!(restoration.rejection_examples, restored.rejection_examples);
+    assert_eq!(restoration.pair_collars, restored.pair_collars);
+    assert_eq!(restoration.pair_transitions, restored.pair_transitions);
+    assert_eq!(restoration.pair_attempts, restored.pair_attempts);
+    let restoration_json = document.get("restoration").unwrap();
+    assert_eq!(restoration_json.get("connected"), Some(&Value::Bool(true)));
+    assert_eq!(restoration_json.get("search_states"), Some(&Value::from(restored.search_states)));
 }
 
 #[test]
@@ -325,4 +340,363 @@ fn bundle_repair_limit_bounds_attempts() {
     let [bundle] = &disabled.bundles[..] else { panic!("one bundle") };
     assert!(bundle.repair_limit == 0 && bundle.repairs.is_empty());
     assert_eq!(disabled.status, CriticalRoutingStatus::Failed);
+}
+
+/// Measure the two legal middle-pair alternatives on the existing obstacle
+/// fixture, instead of inventing a length that happens to admit a test route.
+/// Only the measurement run changes priority; the tested board keeps its
+/// original bundle, order, geometry and copper.
+fn with_middle_detour_budget(mut board: PhysicalBoard) -> PhysicalBoard {
+    let outer_first = route(&board, Some(4000), 0);
+    let middle = outer_first.nets.iter().find(|item| item.nets == group("LANE_A")).expect("middle");
+    assert!(middle.connected, "outer-first fixture must retain a connected detour: {middle:?}");
+    let long = *middle.lengths_nm.iter().max().expect("pair lengths");
+    let mut first_board = board.clone();
+    for rule in &mut first_board.net_routing_rules {
+        if rule.net.starts_with("LANE_A_") {
+            rule.priority = 200;
+        }
+    }
+    let first = route(&first_board, Some(4000), 0);
+    let middle = first.nets.iter().find(|item| item.nets == group("LANE_A")).expect("middle first");
+    assert!(middle.connected, "middle-first fixture must provide a legal shorter route: {middle:?}");
+    let short = *middle.lengths_nm.iter().max().expect("pair lengths");
+    assert!(short < long, "fixture must expose a real order-dependent detour: short={short}, long={long}");
+    for rule in &mut board.net_routing_rules {
+        if rule.net.starts_with("LANE_A_") {
+            rule.max_length_nm = Some(short + (long - short) / 2);
+        }
+    }
+    board
+}
+
+#[test]
+fn connected_overlength_bundle_reroutes_the_blocker_and_meets_both_profiles() {
+    let mut board = blocked_middle_board();
+    // Without the upper wall the top pair has room to move above the middle
+    // pair's shorter detour. All pads and the middle obstacle are unchanged.
+    board.copper_keepouts.retain(|keepout| keepout.id != "wall-above-top-lane");
+    let board = with_middle_detour_budget(board);
+    let without = route(&board, Some(4000), 0);
+    let middle = without.nets.iter().find(|item| item.nets == group("LANE_A")).expect("middle");
+    assert!(middle.connected && !middle.warnings.is_empty(), "connected overlength incumbent: {middle:?}");
+    assert!(without.bundles.iter().all(|bundle| bundle.repairs.is_empty()));
+
+    let result = route(&board, Some(4000), 1);
+    let [bundle] = &result.bundles[..] else { panic!("one bundle") };
+    let [repair] = &bundle.repairs[..] else { panic!("one bounded repair: {:?}", bundle.repairs) };
+    assert_eq!(repair.failed, group("LANE_A"));
+    assert!(repair.accepted, "{repair:?}");
+    assert!(result.nets.iter().all(|item| item.connected && item.warnings.is_empty()), "{:?}", result.nets);
+    assert_eq!(groups(&result), groups(&without));
+    assert_ne!(result.board.tracks, without.board.tracks);
+    assert!(no_shorts(&result.board));
+    let blocker = result.nets.iter().find(|item| item.nets == repair.ripped_up).expect("restored blocker");
+    let old_blocker = without.nets.iter().find(|item| item.nets == repair.ripped_up).expect("old blocker");
+    assert_ne!(blocker.lengths_nm, old_blocker.lengths_nm, "the blocking pair must actually be rerouted");
+
+    // The same connected reroute is not a valid repair when its displaced
+    // neighbour is constrained to its original length: do not swap which
+    // pair violates its profile just to clear the target's warning.
+    let mut constrained = board.clone();
+    let original_length = *old_blocker.lengths_nm.iter().max().expect("blocker lengths");
+    assert!(*blocker.lengths_nm.iter().max().expect("rerouted lengths") > original_length);
+    for rule in &mut constrained.net_routing_rules {
+        if repair.ripped_up.contains(&rule.net) {
+            rule.max_length_nm = Some(original_length);
+        }
+    }
+    let incumbent = route(&constrained, Some(4000), 0);
+    let rejected = route(&constrained, Some(4000), 1);
+    let [bundle] = &rejected.bundles[..] else { panic!("one bundle") };
+    let [attempt] = &bundle.repairs[..] else { panic!("one bounded repair") };
+    assert!(!attempt.accepted, "{attempt:?}");
+    assert!(attempt.reason.contains("ripped-up group exceeds"), "{attempt:?}");
+    assert_eq!(rejected.board, incumbent.board);
+    assert_eq!(rejected.locked_tracks, incumbent.locked_tracks);
+    assert_eq!(rejected.locked_vias, incumbent.locked_vias);
+}
+
+#[test]
+fn rejected_overlength_bundle_repair_keeps_the_connected_fallback_and_input_copper() {
+    let mut board = blocked_middle_board();
+    // Copper outside the routing corridor is owned by the input, not either
+    // trial pair. Give it a real rigid macro owner and materialize through
+    // the normal acceptance path; arbitrary pre-routed copper is forbidden.
+    let land = footprint(
+        "test/input-macro",
+        vec![smd_pad("1", mm(0, 0), 600_000)],
+        copper_physical::footprint::Size { width_nm: MM, height_nm: MM },
+    );
+    let rotation = copper_units::Decimal::zero();
+    let member = RigidPlacementMember::new(
+        "INPUT1",
+        &land.name,
+        &copper_physical::footprint::footprint_geometry_digest(&land),
+        mm(0, 0),
+        &rotation,
+    )
+    .expect("identity-bound macro member");
+    board.placements.push(pose("INPUT1", &land.name, mm(4, 4)));
+    board.footprints.insert(land.name.clone(), land);
+    let input = net("INPUT", &[("INPUT1", "1")]);
+    let binding = (input.pads[0].clone(), input.name.clone());
+    board.nets.push(input);
+    board.rigid_clusters.push(
+        RigidPlacementCluster {
+            name: "input-copper".to_owned(),
+            anchor_reference: "INPUT1".to_owned(),
+            anchor_pad: None,
+            members: vec![member],
+            source: "critical bundle rollback fixture".to_owned(),
+            allowed_rotations: vec![rotation],
+            keepouts: Vec::new(),
+            internal_clearance_nm: None,
+            edge_openings: Vec::new(),
+        }
+        .normalized()
+        .expect("rigid macro cluster"),
+    );
+    board.hard_macros.push(PhysicalHardMacro {
+        cluster: "input-copper".to_owned(),
+        asset_sha256: "0".repeat(64),
+        tracks: vec![track("INPUT", mm(0, 0), mm(3, 0), 200_000, CopperLayer::Front)],
+        vias: vec![through_via("INPUT", mm(3, 0), 600_000, 300_000)],
+        ports: Vec::new(),
+        protected_regions: Vec::new(),
+        required_layers: vec![CopperLayer::Front, CopperLayer::Back],
+        pad_bindings: vec![binding],
+        isolated_pads: Vec::new(),
+        zones: Vec::new(),
+        plane_returns: Vec::new(),
+        polygons: Vec::new(),
+        width_contracts: Vec::new(),
+    });
+    let board = copper_drc::macros::materialize_hard_macros(board).expect("accepted immutable input copper");
+    assert_eq!((board.tracks.len(), board.vias.len()), (1, 1));
+    let board = with_middle_detour_budget(board);
+    let without = route(&board, Some(4000), 0);
+    let middle = without.nets.iter().find(|item| item.nets == group("LANE_A")).expect("middle");
+    assert!(middle.connected && !middle.warnings.is_empty(), "connected overlength incumbent: {middle:?}");
+
+    let result = route(&board, Some(4000), 1);
+    let [bundle] = &result.bundles[..] else { panic!("one bundle") };
+    let [repair] = &bundle.repairs[..] else { panic!("repair limit must allow exactly one attempt") };
+    assert_eq!(repair.failed, group("LANE_A"));
+    assert!(!repair.accepted, "the upper wall prevents restoring the displaced top pair: {repair:?}");
+    let restoration = repair.restoration.as_ref().expect("the failed restoration must expose its own outcome");
+    assert!(!restoration.connected);
+    assert!(!restoration.diagnostics.is_empty(), "do not replace the actual failure with a generic repair reason");
+    let maximum_states = 4000 * crate::unified_router::UnifiedRouterOptions::default().critical_pair_state_escalation;
+    assert!((0..=maximum_states).contains(&restoration.search_states));
+    if restoration.pair_budget_exhausted {
+        assert!(restoration.search_states >= 4000, "exhaustion must describe the restored search's actual work");
+    }
+    assert!(restoration.rejection_examples.len() <= 3);
+    let document = crate::critical_bundles::repair_document(repair);
+    let restored = document.get("restoration").unwrap();
+    assert_eq!(restored.get("connected"), Some(&Value::Bool(false)));
+    assert_eq!(restored.get("search_states"), Some(&Value::from(restoration.search_states)));
+    assert_eq!(restored.get("pair_budget_exhausted"), Some(&Value::Bool(restoration.pair_budget_exhausted)));
+    let texts = |items: &[String]| Value::Array(items.iter().map(|text| Value::from(text.as_str())).collect());
+    assert_eq!(restored.get("diagnostics"), Some(&texts(&restoration.diagnostics)));
+    assert_eq!(restored.get("rejection_examples"), Some(&texts(&restoration.rejection_examples)));
+    assert_eq!(
+        restored.get("pair_collars"),
+        Some(&Value::Array(
+            restoration.pair_collars.iter().map(crate::pair_search::collar_inventory_document).collect()
+        ))
+    );
+    assert_eq!(
+        restored.get("pair_transitions"),
+        Some(&Value::Array(
+            restoration.pair_transitions.iter().map(crate::pair_search::transition_inventory_document).collect()
+        ))
+    );
+    assert_eq!(
+        restored.get("pair_attempts"),
+        Some(&Value::Array(restoration.pair_attempts.iter().map(crate::pair_search::attempt_document).collect()))
+    );
+    assert_eq!(result.board, without.board);
+    assert_eq!(result.locked_tracks, without.locked_tracks);
+    assert_eq!(result.locked_vias, without.locked_vias);
+    assert_eq!(groups(&result), groups(&without));
+    for (actual, incumbent) in result.nets.iter().zip(&without.nets) {
+        assert_eq!(crate::critical::critical_net_document(actual), crate::critical::critical_net_document(incumbent));
+    }
+    assert!(board.tracks.iter().all(|track| result.board.tracks.contains(track)));
+    assert!(board.vias.iter().all(|via| result.board.vias.contains(via)));
+    assert!(no_shorts(&result.board));
+}
+
+#[test]
+fn open_target_retains_a_connected_warned_repair_after_the_bounded_search() {
+    let mut board = repairable();
+    // This deliberately impossible length is a warning, not an excuse to
+    // leave a geometrically connectable pair open. The obstacle, portals,
+    // ownership, order and two-group repair state limits are unchanged.
+    for rule in &mut board.net_routing_rules {
+        if rule.net.starts_with("LANE_A_") {
+            rule.max_length_nm = Some(1);
+        }
+    }
+    let original = board.clone();
+    let without = route(&board, Some(4000), 0);
+    let target = without.nets.iter().find(|item| item.nets == group("LANE_A")).unwrap();
+    assert!(!target.connected, "fixture must start with an open target: {target:?}");
+
+    let selected = route(&board, Some(4000), 1);
+    let [bundle] = &selected.bundles[..] else { panic!("one bundle") };
+    let [repair] = &bundle.repairs[..] else { panic!("one existing repair slot") };
+    assert!(repair.accepted, "{repair:?}");
+    assert!(repair.reason.starts_with("connected fallback selected after bounded repair trials;"));
+    assert!(repair.reason.contains("unresolved length/skew budgets"));
+    assert_eq!(repair.failed, group("LANE_A"));
+    assert!(selected.nets.iter().all(|result| result.connected), "{:?}", selected.nets);
+    let target = selected.nets.iter().find(|item| item.nets == group("LANE_A")).unwrap();
+    assert!(!target.warnings.is_empty(), "retaining connectivity must not erase its budget failure");
+    assert_eq!(repair.search_states, target.search_states);
+    assert_eq!(repair.pair_budget_exhausted, target.pair_budget_exhausted);
+    let maximum_states = target.pair_state_limit.expect("bounded target search");
+    let escalation = crate::unified_router::UnifiedRouterOptions::default().critical_pair_state_escalation;
+    assert!(maximum_states <= 4000 * escalation && target.search_states <= maximum_states);
+    assert!(free_of(&selected.board, &["DRC-OPEN-NET", "DRC-SHORT", "DRC-CLEARANCE", "DRC-TRACK-WIDTH"]));
+    assert!(!free_of(&selected.board, &["DRC-MAX-LENGTH"]));
+    assert_eq!(board, original, "trials must not mutate source intent");
+}
+
+fn real_repair_trial(
+    board: &PhysicalBoard,
+    committed: &crate::critical_match::Committed,
+    turns: &IndexMap<Vec<String>, (i64, i64)>,
+    allow_connected_fallback: bool,
+) -> (crate::critical_bundles::BundleRepair, Option<crate::critical::RepairTrial>) {
+    let global = global_route(board, crate::routing::GlobalRouterOptions::default().tile_size_nm);
+    let routes = guides_by_net(&global);
+    let rules = rules_of(board);
+    crate::critical::bundle_repair(
+        board,
+        &routes,
+        &rules,
+        Some(4000),
+        (&board.tracks, &board.vias),
+        committed,
+        (rules["LANE_A_N"], rules["LANE_A_P"]),
+        &group("LANE_A"),
+        &group("LANE_C"),
+        (&IndexMap::new(), &IndexMap::new(), turns),
+        1,
+        allow_connected_fallback,
+    )
+    .expect("bounded two-group trial")
+}
+
+fn repair_incumbent(board: &PhysicalBoard) -> crate::critical_match::Committed {
+    let incumbent = route(board, Some(4000), 0);
+    assert!(!incumbent.nets.iter().find(|item| item.nets == group("LANE_A")).unwrap().connected);
+    incumbent
+        .nets
+        .iter()
+        .filter(|item| item.connected)
+        .map(|item| {
+            (
+                item.nets.clone(),
+                incumbent.locked_tracks.iter().filter(|track| item.nets.contains(&track.net)).cloned().collect(),
+                incumbent.locked_vias.iter().filter(|via| item.nets.contains(&via.net)).cloned().collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_later_compliant_transaction_supersedes_the_deferred_connected_draft() {
+    let board = repairable();
+    let committed = repair_incumbent(&board);
+    let original_copper = committed.clone();
+    let turns = IndexMap::from([(group("sentinel"), (17, 29))]);
+    let original_turns = turns.clone();
+    // Obtain two real, exact-validated transactions. The tighter source
+    // profile supplies the warned case; this isolates selection policy from
+    // assuming a particular second suspect's geometry in the full router.
+    let mut tight = board.clone();
+    for rule in &mut tight.net_routing_rules {
+        if rule.net.starts_with("LANE_A_") {
+            rule.max_length_nm = Some(1);
+        }
+    }
+    let (draft_record, draft) = real_repair_trial(&tight, &committed, &turns, true);
+    assert!(!draft_record.accepted && draft_record.reason.ends_with("deferred draft"));
+    let mut draft = draft.expect("both groups connected despite the length warning");
+    assert!(draft.target.0.connected && draft.blocker.0.connected);
+    assert!(!draft.target.0.warnings.is_empty());
+    // Distinct provisional hints make accidental early publication observable.
+    draft.turns.insert(group("draft-only"), (31, 37));
+    // Selection score contract for different blockers: suppose the original
+    // board has a two-warning blocker A and a zero-warning blocker B. Both
+    // trials produce the same warned target and a compliant restored blocker.
+    // B leaves A's two old warnings in place; A removes them. Equal raw new
+    // warning counts must therefore prefer A even when B was offered first.
+    let target_warnings = draft.target.0.warnings.len();
+    assert!(draft.blocker.0.warnings.is_empty());
+    let unchanged_warnings = 5usize;
+    let after_b = unchanged_warnings + 2 + target_warnings;
+    let after_a = unchanged_warnings + target_warnings;
+    assert!(after_a < after_b);
+    let mut scored = None;
+    assert!(!crate::critical::consider_repair_trial(&mut scored, 10, draft.clone(), true, 0));
+    assert!(!crate::critical::consider_repair_trial(&mut scored, 11, draft.clone(), true, 2));
+    assert_eq!(scored.as_ref().unwrap().0, 11, "remove the old blocker's warnings from the full-board delta");
+    // A delta can be negative when the replaced blocker's old warning count
+    // exceeds the new target+blocker total; unsigned saturation would tie it.
+    assert!(!crate::critical::consider_repair_trial(&mut scored, 12, draft.clone(), true, target_warnings + 3));
+    assert_eq!(scored.as_ref().unwrap().0, 12, "negative warning deltas must remain ordered");
+    let (compliant_record, compliant) = real_repair_trial(&board, &committed, &turns, true);
+    assert!(compliant_record.accepted);
+    let mut compliant = compliant.expect("compliant transaction");
+    assert!(compliant.target.0.warnings.is_empty() && compliant.blocker.0.warnings.is_empty());
+    compliant.turns.insert(group("selected-only"), (41, 43));
+    let compliant_copper = (compliant.target.1.clone(), compliant.blocker.1.clone());
+    let mut selected = None;
+    assert!(!crate::critical::consider_repair_trial(&mut selected, 0, draft, true, 0));
+    assert_eq!(selected.as_ref().unwrap().0, 0);
+    assert_eq!(turns, original_turns, "deferral must not publish its hints");
+    assert_eq!(committed, original_copper, "deferral must not publish its copper");
+    assert!(crate::critical::consider_repair_trial(&mut selected, 1, compliant, true, 0));
+    let (record_index, selected) = selected.unwrap();
+    assert_eq!(record_index, 1);
+    assert_eq!((selected.target.1, selected.blocker.1), compliant_copper);
+    assert!(!selected.turns.contains_key(&group("draft-only")));
+    assert_eq!(selected.turns[&group("selected-only")], (41, 43));
+    assert_eq!(turns, original_turns);
+    assert_eq!(committed, original_copper);
+}
+
+#[test]
+fn warned_trials_cannot_replace_a_connected_target_or_publish_unselected_hints() {
+    let board = repairable();
+    let committed = repair_incumbent(&board);
+    let original_copper = committed.clone();
+    let turns = IndexMap::from([(group("sentinel"), (17, 29))]);
+    let original_turns = turns.clone();
+    let mut tight = board.clone();
+    for rule in &mut tight.net_routing_rules {
+        if rule.net.starts_with("LANE_A_") {
+            rule.max_length_nm = Some(1);
+        }
+    }
+    let original_board = tight.clone();
+    let (rejected, trial) = real_repair_trial(&tight, &committed, &turns, false);
+    assert!(!rejected.accepted && rejected.reason.contains("failed group still exceeds"));
+    assert!(trial.is_none(), "connected-target strict guard must still reject before restoration");
+    assert!(rejected.restoration.is_none(), "an unattempted restoration is not a zero-state failed search");
+    assert_eq!(crate::critical_bundles::repair_document(&rejected).get("restoration"), Some(&Value::Null));
+    let (_, trial) = real_repair_trial(&tight, &committed, &turns, true);
+    let mut trial = trial.expect("open-target policy may retain a connected draft");
+    trial.turns.insert(group("unselected-only"), (47, 53));
+    let mut selected = None;
+    assert!(!crate::critical::consider_repair_trial(&mut selected, 0, trial, false, 0));
+    assert!(selected.is_none(), "warned draft is never eligible for a connected target");
+    assert_eq!(turns, original_turns);
+    assert_eq!(committed, original_copper);
+    assert_eq!(tight, original_board);
 }

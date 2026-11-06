@@ -36,6 +36,29 @@ done
 cargo test --workspace --release
 ```
 
+## Experimental package retention
+
+The experimental `--unified-set retain_escape_copper=true` selects the
+`mandatory_inner_ball_grid` policy. It applies when the via-lattice planner has
+source-recognized connected inner-ball obligations, including
+pending sites and verified existing source launches. Non-applicable boards keep
+the legacy mutable fanout lifecycle. Missing lattice census and unsupported
+dense surface-land fields are reported explicitly; they do not acquire a fixed
+prefix from the option alone. A partially censused recognized field retains its
+known contacts while its uncensused contacts remain pending.
+
+`route-board` reports the requested and effective policy, applicability and
+reason, allocated/existing inner sites, and pending pads and reasons. Admitted
+copper occurrence preservation does not cover a mandatory site that was never
+allocated. The local-coverage result also requires prefix admission and no
+pending or identified unsupported fields. Package-boundary channels and
+unresolved-field protection remain unimplemented. This policy does not qualify
+electrical timing or allow ordinary alternatives to be deleted without proof.
+
+Pending or identified unsupported inner fields prevent final qualification of
+the requested policy, even when native connectivity closes through other pins.
+An absent mandatory-inner scope keeps the legacy completion result.
+
 ## Golden fixtures
 
 Some tests compare the crates against fixtures recorded from the former Python

@@ -11,6 +11,7 @@
 use indexmap::IndexMap;
 use num_traits::ToPrimitive;
 
+use copper_lang::mechanical::assembly::{BodyOverhang, body_outline};
 use copper_lang::mechanical::stackup::StackupLayer;
 use copper_lang::silkscreen::{Artwork, ArtworkMaterial, Graphic};
 use copper_physical::footprint::{
@@ -1099,6 +1100,64 @@ fn component_height(value: &StateValue) -> Result<ComponentHeight> {
     })
 }
 
+/// Decode an audited body allowance without changing its saved identities or units.
+pub fn body_overhang(value: &StateValue) -> Result<BodyOverhang> {
+    let fields = Fields::of(value, "pcbir.physical:BodyOverhang")?;
+    fields.allow(&["id", "reference", "edge", "start_nm", "end_nm", "distance_nm", "reason"])?;
+    let allowance = BodyOverhang {
+        id: text(fields.required("id")?)?,
+        reference: text(fields.required("reference")?)?,
+        edge: text(fields.required("edge")?)?,
+        start_nm: integer(fields.required("start_nm")?)?,
+        end_nm: integer(fields.required("end_nm")?)?,
+        distance_nm: integer(fields.required("distance_nm")?)?,
+        reason: text(fields.required("reason")?)?,
+    };
+    validate_body_overhang(&allowance)?;
+    Ok(allowance)
+}
+
+fn validate_body_overhang(allowance: &BodyOverhang) -> Result<()> {
+    if [&allowance.id, &allowance.reference, &allowance.edge, &allowance.reason]
+        .iter()
+        .any(|value| crate::py_strip(value).is_empty())
+    {
+        return crate::fail("body overhang requires identities and an explicit audit reason");
+    }
+    if allowance.start_nm < 0 || allowance.start_nm >= allowance.end_nm || allowance.distance_nm <= 0 {
+        return crate::fail("body overhang requires a positive depth and ordered nonnegative edge interval");
+    }
+    Ok(())
+}
+
+/// Validate named boundary segments and saved allowances against their owners and outline.
+pub fn validate_body_overhangs(board: &PhysicalBoard) -> Result<()> {
+    let pairs = copper_physical::mechanical::boundary_line_pairs(&board.outline);
+    let mut edge_ids = std::collections::BTreeSet::new();
+    for edge in &board.boundary_edges {
+        if !edge_ids.insert(&edge.id) {
+            return crate::fail("duplicate boundary_edges identity");
+        }
+        if board.outline.circular_boundary.is_some()
+            || (!pairs.contains(&(edge.start, edge.end)) && !pairs.contains(&(edge.end, edge.start)))
+        {
+            return crate::fail("named edge is not an actual outer boundary segment");
+        }
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for allowance in &board.body_overhangs {
+        validate_body_overhang(allowance)?;
+        if !ids.insert(&allowance.id) {
+            return crate::fail("duplicate body_overhangs identity");
+        }
+        if !board.placements.iter().any(|placement| placement.reference == allowance.reference) {
+            return crate::fail("body overhang requires a known component owner");
+        }
+        body_outline(&board.outline, &board.boundary_edges, allowance).map_err(Error::Value)?;
+    }
+    Ok(())
+}
+
 fn assembly_access(value: &StateValue) -> Result<AssemblyAccess> {
     let fields = Fields::of(value, "pcbir.physical:AssemblyAccess")?;
     fields.allow(&["id", "reference", "outline", "side", "purpose"])?;
@@ -1272,8 +1331,10 @@ pub fn board(value: &StateValue) -> Result<PhysicalBoard> {
         "silkscreen",
         "power_feeds",
     ])?;
-    for name in ["zone_fills", "body_overhangs", "assembly_envelopes", "mechanical_references"] {
-        if fields.get(name).is_some_and(|value| items(value).is_ok_and(|items| !items.is_empty())) {
+    for name in ["zone_fills", "assembly_envelopes", "mechanical_references"] {
+        if let Some(value) = fields.get(name)
+            && !items(value)?.is_empty()
+        {
             return not_implemented(&format!("a saved board with {name}"));
         }
     }
@@ -1314,7 +1375,7 @@ pub fn board(value: &StateValue) -> Result<PhysicalBoard> {
         boundary_edges: sequence(fields.get("boundary_edges"), board_edge)?,
         attachments: sequence(fields.get("attachments"), attachment)?,
         component_heights: sequence(fields.get("component_heights"), component_height)?,
-        body_overhangs: Vec::new(),
+        body_overhangs: sequence(fields.get("body_overhangs"), body_overhang)?,
         assembly_envelopes: Vec::new(),
         assembly_access: sequence(fields.get("assembly_access"), assembly_access)?,
         match_groups: sequence(fields.get("match_groups"), match_group)?,
@@ -1327,6 +1388,7 @@ pub fn board(value: &StateValue) -> Result<PhysicalBoard> {
     // `PhysicalBoard.__post_init__`.
     let mut board = board;
     crate::physicalize::revalidate(&mut board)?;
+    validate_body_overhangs(&board)?;
     let mut ids: Vec<&str> = board.silkscreen.iter().map(Artwork::id).collect();
     ids.sort_unstable();
     ids.dedup();
@@ -1342,3 +1404,7 @@ pub fn board(value: &StateValue) -> Result<PhysicalBoard> {
     }
     Ok(board)
 }
+
+#[cfg(test)]
+#[path = "state_codec_tests.rs"]
+mod tests;

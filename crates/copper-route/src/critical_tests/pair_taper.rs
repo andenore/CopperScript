@@ -125,7 +125,7 @@ fn tapers_at_both_ends_go_inward_and_outward_symmetrically() {
 fn taper_uncoupled_length_is_held_to_the_declared_limit() {
     let pair = |board: &PhysicalBoard| {
         let rules = &board.net_routing_rules;
-        route_pair(board, &rules[0], &rules[1], &routes(board), false, board).expect("pair").0
+        route_pair(board, &rules[0], &rules[1], &routes(board), false, board, &board.tracks).expect("pair").0
     };
     let tight = taper_board("0.5", "0.4", "0", Some("0.05"));
     let rejected = pair(&tight);

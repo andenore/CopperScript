@@ -27,6 +27,7 @@ pub struct CongestionMap {
 // the last bits; the fitted direction only feeds grid-snapped moves.
 
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 use indexmap::{IndexMap, IndexSet};
 use num_bigint::BigInt;
@@ -887,6 +888,115 @@ pub struct FeedbackTrial {
     pub step_nm: i64,
     pub outcome: String,
     pub score: Option<Vec<i64>>,
+    pub global_gate: Value,
+}
+
+fn global_failed_nets(route: &GlobalRoutingResult) -> BTreeSet<String> {
+    route.routes.iter().filter(|net| !net.connected && !net.deferred_to_zone).map(|net| net.net.clone()).collect()
+}
+
+/// Coarse guides screen regressions; unchanged failures may still improve in
+/// the bounded detailed rerun. Existing successful-guide admission is unchanged;
+/// the new coverage guards apply to the newly admitted non-successful guides.
+/// Final retention always uses the full score, for either admission path.
+fn global_trial_decision(baseline: &GlobalRoutingResult, candidate: &GlobalRoutingResult) -> (bool, &'static str) {
+    if candidate.status == GlobalRoutingStatus::Success {
+        return (true, "global_success");
+    }
+    if !global_failed_nets(candidate).is_subset(&global_failed_nets(baseline)) {
+        return (false, "new_global_failed_nets");
+    }
+    if candidate.metrics.unrouted_net_count > baseline.metrics.unrouted_net_count {
+        return (false, "global_unrouted_count_increased");
+    }
+    if candidate.metrics.total_overflow > baseline.metrics.total_overflow
+        || candidate.metrics.maximum_overflow > baseline.metrics.maximum_overflow
+        || candidate.metrics.overfull_resource_count > baseline.metrics.overfull_resource_count
+    {
+        return (false, "global_overflow_increased");
+    }
+    // A failed route can have no selected accesses after the first missing
+    // terminal. Compare the complete registration inventory, not that prefix.
+    if baseline.terminal_accesses.is_empty() || candidate.terminal_accesses.is_empty() {
+        return (false, "global_terminal_coverage_unknown");
+    }
+    for old in &baseline.terminal_accesses {
+        let Some(new) = candidate.terminal_accesses.iter().find(|entry| entry.net == old.net && entry.pad == old.pad)
+        else {
+            return (false, "global_terminal_inventory_changed");
+        };
+        if (old.registered_candidates > 0 && new.registered_candidates == 0)
+            || (old.concrete_candidates > 0 && new.concrete_candidates == 0)
+        {
+            return (false, "global_terminal_access_lost");
+        }
+    }
+    if baseline.terminal_accesses.len() != candidate.terminal_accesses.len() {
+        return (false, "global_terminal_inventory_changed");
+    }
+    for old in &baseline.routes {
+        let Some(new) = candidate.routes.iter().find(|net| net.net == old.net) else {
+            return (false, "global_net_result_missing");
+        };
+        for access in &old.accesses {
+            if !new.accesses.iter().any(|next| next.pad == access.pad && (access.region_only || !next.region_only)) {
+                return (false, "global_terminal_access_lost");
+            }
+        }
+    }
+    (true, "global_failures_not_worsened")
+}
+
+/// Record the same screening decision used by the detailed rerun.
+fn global_gate_document(baseline: &GlobalRoutingResult, candidate: &GlobalRoutingResult) -> Value {
+    let summary = |route: &GlobalRoutingResult| {
+        let failures: Vec<_> = route.routes.iter().filter(|net| !net.connected && !net.deferred_to_zone).collect();
+        object(vec![
+            ("status", text(route.status.value())),
+            ("unrouted_net_count", int(route.metrics.unrouted_net_count)),
+            ("total_overflow", int(route.metrics.total_overflow)),
+            ("maximum_overflow", int(route.metrics.maximum_overflow)),
+            ("overfull_resource_count", int(route.metrics.overfull_resource_count)),
+            ("terminal_coverage_count", int(route.terminal_accesses.len() as i64)),
+            (
+                "failed_nets",
+                Value::Array(
+                    failures
+                        .iter()
+                        .take(32)
+                        .map(|net| {
+                            object(vec![
+                                ("net", text(&net.net)),
+                                (
+                                    "diagnostics",
+                                    Value::Array(net.diagnostics.iter().take(4).map(|message| text(message)).collect()),
+                                ),
+                                ("diagnostic_count", int(net.diagnostics.len() as i64)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+            ("failed_net_count", int(failures.len() as i64)),
+        ])
+    };
+    let (old, new) = (global_failed_nets(baseline), global_failed_nets(candidate));
+    let (passed, reason) = global_trial_decision(baseline, candidate);
+    object(vec![
+        ("baseline", summary(baseline)),
+        ("candidate", summary(candidate)),
+        ("unrouted_net_count_delta", int(candidate.metrics.unrouted_net_count - baseline.metrics.unrouted_net_count)),
+        ("total_overflow_delta", int(candidate.metrics.total_overflow - baseline.metrics.total_overflow)),
+        ("maximum_overflow_delta", int(candidate.metrics.maximum_overflow - baseline.metrics.maximum_overflow)),
+        (
+            "overfull_resource_count_delta",
+            int(candidate.metrics.overfull_resource_count - baseline.metrics.overfull_resource_count),
+        ),
+        ("added_failed_nets", Value::Array(new.difference(&old).take(32).map(|net| text(net)).collect())),
+        ("resolved_failed_nets", Value::Array(old.difference(&new).take(32).map(|net| text(net)).collect())),
+        ("detailed_rerun", Value::Bool(passed)),
+        ("reason", text(reason)),
+    ])
 }
 
 /// `FeedbackOutcome` without its state.
@@ -953,12 +1063,18 @@ impl FeedbackOutcome {
                     ("step_nm", Value::from(t.step_nm)),
                     ("outcome", Value::from(t.outcome.as_str())),
                     ("score", t.score.as_ref().map_or(Value::Null, |s| ints(s))),
+                    ("global_gate", t.global_gate.clone()),
                 ])
             })
             .collect();
         object(vec![
             ("accepted_moves", Value::from(self.accepted_moves)),
             ("reruns", Value::from(self.reruns)),
+            (
+                "global_rejected_trials",
+                int(self.trials.iter().filter(|trial| trial.outcome == "global_failed").count() as i64),
+            ),
+            ("trial_count", int(self.trials.len() as i64)),
             ("rounds", Value::from(self.rounds)),
             ("stop_reason", Value::from(self.stop_reason.as_str())),
             ("score_order", Value::Array(crate::flow::SCORE_ORDER.iter().map(|s| Value::from(*s)).collect())),
@@ -1043,6 +1159,7 @@ pub fn run_placement_feedback<P>(
     tried.insert(current_signature(&incumbent.board));
     let mut last_map: Option<CongestionMap> = None;
     let mut map_is_current = false;
+    let mut refreshed_global = None;
     let texts = |items: &[String]| Value::Array(items.iter().map(|v| text(v)).collect());
     let ints = |items: &[i64]| Value::Array(items.iter().map(|v| Value::from(*v)).collect());
     emit(
@@ -1080,6 +1197,23 @@ pub fn run_placement_feedback<P>(
         last_map = Some(congestion);
         map_is_current = true;
         let kept = screen(&incumbent.board, proposals, global_options, keep, tile, on_progress)?;
+        // Legacy placement checkpoints predate terminal-coverage metadata.
+        // Recheck the unchanged placement once before comparing fresh candidates;
+        // never treat absent metadata as proof that no terminal was lost.
+        if !kept.is_empty()
+            && incumbent.global_route.status != GlobalRoutingStatus::Success
+            && incumbent.global_route.terminal_accesses.is_empty()
+            && refreshed_global.is_none()
+        {
+            refreshed_global = Some(route_global(&incumbent.board, global_options, None, None, None)?);
+            emit(
+                on_progress,
+                "placement_feedback_global_baseline",
+                "finished",
+                vec![("refreshed_legacy", Value::Bool(true))],
+            );
+        }
+        let screening_baseline = refreshed_global.as_ref().unwrap_or(&incumbent.global_route);
         let mut best: Option<(Vec<i64>, FeedbackState<P>, usize)> = None;
         for (proposal, global_route) in kept {
             if spent >= trials {
@@ -1100,7 +1234,14 @@ pub fn run_placement_feedback<P>(
                 ],
             );
             let mut result = None;
-            if global_route.status == GlobalRoutingStatus::Success {
+            let mut global_gate = global_gate_document(screening_baseline, &global_route);
+            if let Value::Object(fields) = &mut global_gate {
+                fields.insert(
+                    "baseline_source".to_owned(),
+                    text(if refreshed_global.is_some() { "fresh_legacy_recheck" } else { "incumbent_global" }),
+                );
+            }
+            if global_trial_decision(screening_baseline, &global_route).0 {
                 spent += 1;
                 result = Some(rerun(&proposal.board, &global_route, on_progress)?);
             }
@@ -1127,6 +1268,7 @@ pub fn run_placement_feedback<P>(
                 step_nm: step,
                 outcome: outcome.to_owned(),
                 score: trial_score.clone(),
+                global_gate: global_gate.clone(),
             });
             let reported = if trial_score.is_none() {
                 "global_failed"
@@ -1143,6 +1285,7 @@ pub fn run_placement_feedback<P>(
                     ("index", int(index)),
                     ("outcome", text(reported)),
                     ("score", trial_score.as_ref().map_or(Value::Null, |s| ints(s))),
+                    ("global_gate", global_gate),
                 ],
             );
         }
@@ -1151,6 +1294,7 @@ pub fn run_placement_feedback<P>(
             incumbent = best_state;
             records[position].outcome = "accepted".to_owned();
             accepted += 1;
+            refreshed_global = None;
             stale = 0;
             map_is_current = false;
         } else {
@@ -1188,3 +1332,176 @@ pub fn run_placement_feedback<P>(
     };
     Ok((incumbent, outcome))
 }
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    use crate::routing::{GlobalNetRoute, GlobalRoutingMetrics, GlobalTerminalAccess};
+
+    fn global() -> GlobalRoutingResult {
+        GlobalRoutingResult {
+            status: GlobalRoutingStatus::Unreachable,
+            terminal_accesses: vec![GlobalTerminalAccess {
+                net: "BLOCKED".to_owned(),
+                pad: copper_pcb::board::PadReference::new("U", "1"),
+                registered_candidates: 1,
+                concrete_candidates: 1,
+            }],
+            routes: vec![GlobalNetRoute {
+                net: "BLOCKED".to_owned(),
+                connected: false,
+                accesses: vec![],
+                segments: vec![],
+                vias: vec![],
+                length_nm: 0,
+                diagnostics: vec!["no pin access".to_owned()],
+                deferred_to_zone: false,
+            }],
+            hotspots: vec![],
+            metrics: GlobalRoutingMetrics {
+                routed_net_count: 0,
+                unrouted_net_count: 1,
+                total_overflow: 10,
+                maximum_overflow: 4,
+                overfull_resource_count: 3,
+                maximum_utilization_ppm: 2_000_000,
+                total_length_nm: 0,
+                proposed_via_count: 0,
+                iterations: 1,
+                region_only_access_count: 0,
+                deferred_net_count: 0,
+            },
+            placement_fingerprint: String::new(),
+            routing_fingerprint: String::new(),
+            fixed_prefix_digest: None,
+        }
+    }
+
+    #[test]
+    fn unchanged_or_improved_global_failures_allow_bounded_detailed_evaluation() {
+        let baseline = global();
+        assert_eq!(global_trial_decision(&baseline, &baseline), (true, "global_failures_not_worsened"));
+        let mut candidate = baseline.clone();
+        candidate.metrics.total_overflow = 6;
+        candidate.metrics.maximum_overflow = 3;
+        let report = global_gate_document(&baseline, &candidate);
+        assert_eq!(report.get("detailed_rerun"), Some(&Value::Bool(true)));
+        assert_eq!(report.get("total_overflow_delta"), Some(&int(-4)));
+        assert_eq!(report.get("maximum_overflow_delta"), Some(&int(-1)));
+        assert_eq!(report.get("unrouted_net_count_delta"), Some(&int(0)));
+        assert_eq!(report.get("added_failed_nets"), Some(&Value::Array(vec![])));
+        assert_eq!(report.get("reason").and_then(Value::as_str), Some("global_failures_not_worsened"));
+        assert_eq!(report.get("baseline").unwrap().get("total_overflow"), Some(&int(10)));
+        let failures = report.get("candidate").unwrap().get("failed_nets").unwrap().as_array().unwrap();
+        assert_eq!(failures[0].get("diagnostics"), Some(&Value::Array(vec![text("no pin access")])));
+    }
+
+    #[test]
+    fn global_gate_rejects_trading_failed_nets_and_preserves_success() {
+        let baseline = global();
+        let mut candidate = baseline.clone();
+        candidate.routes[0].net = "NEW_FAILURE".to_owned();
+        let report = global_gate_document(&baseline, &candidate);
+        assert_eq!(report.get("detailed_rerun"), Some(&Value::Bool(false)));
+        assert_eq!(report.get("reason").and_then(Value::as_str), Some("new_global_failed_nets"));
+        assert_eq!(report.get("added_failed_nets"), Some(&Value::Array(vec![text("NEW_FAILURE")])));
+        assert_eq!(report.get("resolved_failed_nets"), Some(&Value::Array(vec![text("BLOCKED")])));
+        candidate.status = GlobalRoutingStatus::Success;
+        candidate.routes[0].connected = true;
+        candidate.metrics.unrouted_net_count = 0;
+        candidate.metrics.total_overflow = 0;
+        candidate.metrics.maximum_overflow = 0;
+        // Preserve the existing success path, including region-only guides.
+        // Their actual routability is still decided by the detailed rerun.
+        candidate.terminal_accesses[0].concrete_candidates = 0;
+        let report = global_gate_document(&baseline, &candidate);
+        assert_eq!(report.get("detailed_rerun"), Some(&Value::Bool(true)));
+        assert_eq!(report.get("reason").and_then(Value::as_str), Some("global_success"));
+    }
+
+    #[test]
+    fn non_successful_global_candidates_must_preserve_access_and_overflow() {
+        use crate::routing::{GridNode, PinAccess};
+        use copper_pcb::board::PadReference;
+        let mut baseline = global();
+        baseline.routes[0].accesses.push(PinAccess::new(
+            PadReference::new("U", "1"),
+            Point::new(0, 0),
+            GridNode::new(0, 0, 0),
+            Point::new(0, 0),
+            CopperLayer::Front,
+        ));
+        for metric in 0..4 {
+            let mut candidate = baseline.clone();
+            match metric {
+                0 => candidate.metrics.unrouted_net_count += 1,
+                1 => candidate.metrics.total_overflow += 1,
+                2 => candidate.metrics.maximum_overflow += 1,
+                _ => candidate.metrics.overfull_resource_count += 1,
+            }
+            assert!(!global_trial_decision(&baseline, &candidate).0);
+        }
+        let mut candidate = baseline.clone();
+        candidate.terminal_accesses[0].registered_candidates = 0;
+        candidate.terminal_accesses[0].concrete_candidates = 0;
+        assert_eq!(global_trial_decision(&baseline, &candidate), (false, "global_terminal_access_lost"));
+        candidate = baseline.clone();
+        candidate.terminal_accesses[0].concrete_candidates = 0;
+        assert_eq!(global_trial_decision(&baseline, &candidate), (false, "global_terminal_access_lost"));
+        candidate = baseline.clone();
+        candidate.terminal_accesses.clear();
+        assert_eq!(global_trial_decision(&baseline, &candidate), (false, "global_terminal_coverage_unknown"));
+        candidate = baseline.clone();
+        candidate.routes[0].accesses[0].region_only = true;
+        assert_eq!(global_trial_decision(&baseline, &candidate), (false, "global_terminal_access_lost"));
+        candidate.routes[0].accesses.clear();
+        assert_eq!(global_trial_decision(&baseline, &candidate), (false, "global_terminal_access_lost"));
+        candidate.routes.clear();
+        assert_eq!(global_trial_decision(&baseline, &candidate), (false, "global_net_result_missing"));
+        // Fresh candidate access may move with the placement; identity and
+        // concrete-access coverage matter, not the old coordinates.
+        candidate = baseline.clone();
+        candidate.routes[0].accesses[0].access_position = Point::new(250_000, 0);
+        assert!(global_trial_decision(&baseline, &candidate).0);
+    }
+
+    #[test]
+    fn feedback_report_explains_zero_reruns_with_rejected_global_candidates() {
+        let global = global();
+        let mut candidate = global.clone();
+        candidate.routes[0].net = "NEW_FAILURE".to_owned();
+        let outcome = FeedbackOutcome {
+            trials: vec![FeedbackTrial {
+                index: 1,
+                round: 1,
+                reference: "U".to_owned(),
+                delta_nm: (1000, 0),
+                rotation_degrees: "0".to_owned(),
+                reason: "failed_net".to_owned(),
+                step_nm: 1000,
+                outcome: "global_failed".to_owned(),
+                score: None,
+                global_gate: global_gate_document(&global, &candidate),
+            }],
+            accepted_moves: 0,
+            reruns: 0,
+            rounds: 1,
+            stop_reason: "no_improvement".to_owned(),
+            initial_score: vec![1],
+            final_score: vec![1],
+            initial_failed_nets: vec!["BLOCKED".to_owned()],
+            final_failed_nets: vec!["BLOCKED".to_owned()],
+            congestion: None,
+        };
+        let report = outcome.report();
+        assert_eq!(report.get("reruns"), Some(&int(0)));
+        assert_eq!(report.get("trial_count"), Some(&int(1)));
+        assert_eq!(report.get("global_rejected_trials"), Some(&int(1)));
+        let trials = report.get("trials").unwrap().as_array().unwrap();
+        assert_eq!(trials[0].get("global_gate").unwrap().get("detailed_rerun"), Some(&Value::Bool(false)));
+    }
+}
+
+#[cfg(test)]
+#[path = "congestion_feedback_policy_tests.rs"]
+mod feedback_policy_tests;

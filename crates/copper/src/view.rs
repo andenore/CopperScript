@@ -70,6 +70,34 @@ fn focus(points: &[Point]) -> Py<(Vec<Point>, Option<String>)> {
     Ok((best, Some(note)))
 }
 
+/// Length/skew findings concern whole routes; their positions are diagnostic
+/// markers, not a sufficient frame for a detour or a distributed match group.
+fn budget_frame(scene: &Scene, issue: &copper_report::issues::RunIssue) -> Option<Vec<Point>> {
+    if issue.stage != "review"
+        || !["DRC-MAX-LENGTH", "DRC-DIFF-SKEW", "DRC-LENGTH-MATCH"].iter().any(|code| py::eq_str(&issue.code, code))
+    {
+        return None;
+    }
+    let wanted = |name: &str| issue.nets.iter().any(|net| py::eq_str(net, name));
+    let mut points = issue.points.clone();
+    for pad in scene.pads.iter().filter(|pad| wanted(&pad.net)) {
+        points.push(pad.center);
+        points.extend(pad.polygon.iter().copied());
+    }
+    for track in scene.tracks.iter().filter(|track| wanted(&track.net)) {
+        let radius = track.width / 2.0;
+        for (x, y) in [track.start, track.end] {
+            points.extend([(x - radius, y - radius), (x + radius, y + radius)]);
+        }
+    }
+    for via in scene.vias.iter().filter(|via| wanted(&via.net)) {
+        let (x, y) = via.center;
+        let radius = via.size / 2.0;
+        points.extend([(x - radius, y - radius), (x + radius, y + radius)]);
+    }
+    (!points.is_empty()).then_some(points)
+}
+
 /// `_nets_in_window(scene, window)`.
 fn nets_in_window(scene: &Scene, window: &Window) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
@@ -156,8 +184,8 @@ fn view(options: &Options) -> Py<(String, Vec<String>)> {
         return Err(PyErr::value_error("--margin must be zero or positive"));
     }
     let mut notes: Vec<String> = Vec::new();
-    if options.filled && run.as_ref().is_none_or(|run| run.filled_board_path.is_none()) {
-        notes.push("note: no refilled native board in this run; zones are drawn as outlines".to_owned());
+    if options.filled && run.as_ref().is_some_and(|run| run.filled_board_path.is_none()) {
+        notes.push("note: no refilled native board in this run; showing saved geometry without refill".to_owned());
     }
     let mut scene = match run.as_mut() {
         Some(run) => run.scene(options.filled)?,
@@ -181,7 +209,8 @@ fn view(options: &Options) -> Py<(String, Vec<String>)> {
             notes.push("note: native finding drawn on the run's refilled board".to_owned());
         }
         markers = issue.points.clone();
-        if markers.is_empty() {
+        let route_frame = budget_frame(&scene, issue);
+        if markers.is_empty() && route_frame.is_none() {
             if issue.nets.len() > 8 {
                 return Err(PyErr::value_error(format!(
                     "issue {} has no position and {} nets; view one with --net, e.g. --net {}",
@@ -200,13 +229,16 @@ fn view(options: &Options) -> Py<(String, Vec<String>)> {
                 .map(|p| p.center)
                 .collect();
         }
-        if markers.is_empty() {
+        if markers.is_empty() && route_frame.is_none() {
             return Err(PyErr::value_error(format!(
                 "issue {} has no position; try --net with one of its nets",
                 issue.id
             )));
         }
-        let (framed, spread) = focus(&markers)?;
+        let (framed, spread) = match route_frame {
+            Some(points) => (points, None),
+            None => focus(&markers)?,
+        };
         notes.extend(spread);
         window = window_around(&framed, options.margin)?;
         let present = nets_in_window(&scene, &window);
@@ -303,27 +335,30 @@ fn view(options: &Options) -> Py<(String, Vec<String>)> {
             layers
         }
     };
-    let mut alignment = None;
+    let mut reference_overlay = None;
     if let Some(reference) = &options.reference {
         let Some(align) = options.align.as_deref().filter(|align| !align.is_empty()) else {
             return Err(PyErr::value_error("--reference needs --align REF[:REF_IN_REFERENCE]"));
         };
         let (ours, theirs) = align.split_once(':').unwrap_or((align, ""));
         let reference_scene = scene_from_kicad_pcb(reference)?;
-        alignment =
-            Some(align_reference(&reference_scene, if theirs.is_empty() { ours } else { theirs }, &scene, ours)?);
+        let alignment = align_reference(&reference_scene, if theirs.is_empty() { ours } else { theirs }, &scene, ours)?;
+        reference_overlay = Some((reference_scene, alignment));
     }
     let output = match &options.output {
         Some(output) => output.clone(),
-        None => paths::join(&paths::join("build", "views"), &format!("{}.png", safe_label(&label))),
+        None => paths::join(&paths::join("build", "views"), &format!("{}.svg", safe_label(&label))),
     };
     let request = ViewRequest { window, layers, highlight: nets, markers };
     let colors = net_colors(&request.highlight)?;
-    let mut lines = legend(&scene, &request, &colors, alignment.as_ref());
+    let mut lines = legend(&scene, &request, &colors, reference_overlay.as_ref().map(|(_, alignment)| alignment));
     make_directories(&paths::parent(&output))?;
     let output = with_svg_suffix(&output)?;
-    copper_json::text::write_text(std::path::Path::new(&output), &svg(&scene, &request, &colors))
-        .map_err(|error| paths::os_error(&error, &output))?;
+    copper_json::text::write_text(
+        std::path::Path::new(&output),
+        &svg(&scene, &request, &colors, reference_overlay.as_ref().map(|(scene, alignment)| (scene, alignment))),
+    )
+    .map_err(|error| paths::os_error(&error, &output))?;
     lines.push(SVG_NOTE.to_owned());
     let lines = if options.issue.is_some() {
         let mut ordered: Vec<String> = notes.iter().take(1).cloned().collect();
@@ -363,7 +398,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         Ok(None) => {
             let _ = writeln!(
                 out,
-                "{USAGE}\n\nrender a board window per copper layer: an issue, net, pad, component or explicit window"
+                "{USAGE}\n\nrender a board window per copper layer: an issue, net, pad, component or explicit window\n\nWrites SVG. --filled selects the run's saved native board; it does not refill.\nSaved fills are translucent; unfilled zones are dashed outlines. Rule-area keepouts are not shown.\n--reference overlays aligned copper in magenta, matching KiCad layer names; stackup roles and side swaps are not inferred."
             );
             return 0;
         }

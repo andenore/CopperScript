@@ -6,13 +6,15 @@ use indexmap::{IndexMap, IndexSet};
 
 use copper_physical::pyfloat::hypot;
 
-use super::astar::{FLAG_NECK, FLAG_NECK_MID, FLAG_REGION, FLAG_TARGET, NestedTables, Scratch, SearchInput, search};
+use super::astar::{
+    FLAG_NECK, FLAG_NECK_MID, FLAG_REGION, FLAG_TARGET, NestedTables, Scratch, SearchInput, SearchStop, search_outcome,
+};
 use super::geometry::{disc_offsets, segment_offsets};
 use super::rasters::FOREIGN;
 
 /// A via's `(from, to, technology)`.
 pub type ViaSpan = (CopperLayer, CopperLayer, Option<String>);
-use super::router::{Attach, Lead, NetRoute, NetSpec, Router};
+use super::router::{Attach, ConnectionFailure, FailedPadGroup, Lead, NetRoute, NetSpec, Router, SearchFailureReason};
 use crate::routing_lattice::{IndexBox, MOVES, NestedLattice};
 use crate::unified_error::{Result, not_implemented};
 use copper_physical::{CopperLayer, Point};
@@ -56,7 +58,93 @@ pub struct Targets<'a> {
     pub extra: Option<&'a IndexMap<i64, f64>>,
 }
 
+#[derive(Debug)]
+pub(crate) struct SearchAttempt {
+    pub path: Option<(Vec<i64>, i64)>,
+    pub failure: Option<SearchFailureReason>,
+    pub expanded: i64,
+    pub searches: usize,
+    pub deadline_reached: bool,
+}
+
+impl SearchAttempt {
+    fn failed(reason: SearchFailureReason) -> Self {
+        Self {
+            path: None,
+            failure: Some(reason),
+            expanded: 0,
+            searches: 0,
+            deadline_reached: reason == SearchFailureReason::Deadline,
+        }
+    }
+
+    /// A retry skipped at the outer deadline is not a replacement kernel
+    /// result. Keep the last actual stop reason as well as the deadline.
+    pub(crate) fn following(mut self, previous: Self) -> Self {
+        if self.failure == Some(SearchFailureReason::Deadline) && self.searches == 0 && previous.searches > 0 {
+            self.failure = previous.failure;
+        }
+        self.expanded += previous.expanded;
+        self.searches += previous.searches;
+        self.deadline_reached |= previous.deadline_reached;
+        self
+    }
+}
+
 impl Router<'_, '_> {
+    fn connection_failure(
+        &self,
+        index: usize,
+        attempt: &SearchAttempt,
+        sources: usize,
+        targets: usize,
+        groups: &[usize],
+    ) -> ConnectionFailure {
+        ConnectionFailure {
+            reason: attempt.failure.expect("failed connection"),
+            expanded: attempt.expanded,
+            searches: attempt.searches,
+            deadline_reached: attempt.deadline_reached,
+            source_access_count: sources,
+            target_access_count: targets,
+            source_groups: Vec::new(),
+            groups: self.failed_pad_groups(index, groups),
+        }
+    }
+
+    fn failed_pad_groups(&self, index: usize, groups: &[usize]) -> Vec<FailedPadGroup> {
+        let spec = &self.specs[index];
+        groups
+            .iter()
+            .map(|&group| FailedPadGroup {
+                index: group,
+                access_count: spec.components[group].len(),
+                pads: spec.component_pads.get(group).cloned().unwrap_or_default(),
+                access_diagnostics: spec.component_access_diagnostics.get(group).cloned().unwrap_or_default(),
+                locations: spec.anchors.get(group).cloned().unwrap_or_else(|| {
+                    spec.components[group]
+                        .first()
+                        .map(|(node, _, _)| vec![self.lattice.point(*node)])
+                        .unwrap_or_default()
+                }),
+            })
+            .collect()
+    }
+
+    pub(crate) fn unsearched_route(&self, index: usize) -> NetRoute {
+        let spec = &self.specs[index];
+        let mut route = NetRoute::empty(false, "time budget exhausted");
+        let groups: Vec<usize> = (0..spec.components.len() - spec.optional).collect();
+        route.required_search_failures.push(self.connection_failure(
+            index,
+            &SearchAttempt::failed(SearchFailureReason::Deadline),
+            spec.components.first().map_or(0, Vec::len),
+            spec.components.iter().take(spec.components.len() - spec.optional).skip(1).map(Vec::len).sum(),
+            &groups,
+        ));
+        route
+    }
+
     /// `_lead_penalty`: congestion price of an off-grid lead-in.
     pub fn lead_penalty(&mut self, lead: &Lead, present: f64) -> f64 {
         if lead.is_empty() || self.ignore_soft_costs {
@@ -134,7 +222,9 @@ impl Router<'_, '_> {
             }
         }
         if !route.connected && self.expired() {
-            route.reason = "time budget exhausted".to_owned();
+            // A soft outer deadline does not change why a completed kernel
+            // failed. Keep its evidence and distinguish the later deadline.
+            route.reason.push_str("; time budget exhausted");
         } else if !route.connected
             && self.specs[index].layers.len() > 1
             && !self.board.stackup.via_technologies.is_empty()
@@ -192,70 +282,105 @@ impl Router<'_, '_> {
         if components.iter().any(Vec::is_empty) {
             let missing = components.iter().filter(|c| c.is_empty()).count();
             route.reason = format!("no legal terminal access for {missing} of {} pad groups", components.len());
-            return Ok(route);
-        }
-        let mut tree: IndexMap<i64, f64> = IndexMap::new();
-        let mut leads: IndexMap<i64, Lead> = IndexMap::new();
-        for (node, lead, cost) in &components[0] {
-            let penalty = self.lead_penalty(lead, present);
-            tree.insert(*node, cost + penalty);
-            leads.insert(*node, lead.clone());
+            for (group, _) in components.iter().enumerate().filter(|(_, component)| component.is_empty()) {
+                let reason = if group == 0 {
+                    SearchFailureReason::MissingSourceAccess
+                } else {
+                    SearchFailureReason::MissingTargetAccess
+                };
+                route.required_search_failures.push(self.connection_failure(
+                    index,
+                    &SearchAttempt::failed(reason),
+                    components[0].len(),
+                    components.iter().skip(1).map(Vec::len).sum(),
+                    &[group],
+                ));
+            }
         }
         let mut used_leads: IndexSet<Lead> = IndexSet::new();
-        let mut remaining: Vec<usize> = (1..components.len()).collect();
-        let base = self.lattice.point(*tree.keys().next().expect("first component"));
-        remaining.sort_by_key(|&ci| {
-            let here = self.lattice.point(components[ci][0].0);
-            (here.x_nm - base.x_nm).abs() + (here.y_nm - base.y_nm).abs()
-        });
-        while !remaining.is_empty() {
-            let mut targets: IndexMap<i64, (usize, Lead, f64)> = IndexMap::new();
-            for &ci in &remaining {
-                for (node, lead, cost) in &components[ci] {
-                    targets.insert(*node, (ci, lead.clone(), *cost));
+        let mut remaining: Vec<usize> = (0..components.len()).filter(|&ci| !components[ci].is_empty()).collect();
+        let mut forests = 0;
+        // A failed tree must not hide joins among the other terminal groups.
+        // Every successful join or new seed consumes one remaining group, so
+        // there are still at most N-1 connection searches, each with the same
+        // kernel/window limits. Do not restart after a budget or deadline stop.
+        'forests: while !remaining.is_empty() {
+            let seed = remaining.remove(0);
+            forests += 1;
+            let mut tree: IndexMap<i64, f64> = IndexMap::new();
+            let mut leads: IndexMap<i64, Lead> = IndexMap::new();
+            let mut tree_groups = vec![seed];
+            for (node, lead, cost) in &components[seed] {
+                let penalty = self.lead_penalty(lead, present);
+                tree.insert(*node, cost + penalty);
+                leads.insert(*node, lead.clone());
+            }
+            let base = self.lattice.point(*tree.keys().next().expect("first component"));
+            remaining.sort_by_key(|&ci| {
+                let here = self.lattice.point(components[ci][0].0);
+                (here.x_nm - base.x_nm).abs() + (here.y_nm - base.y_nm).abs()
+            });
+            while !remaining.is_empty() {
+                let mut targets: IndexMap<i64, (usize, Lead, f64)> = IndexMap::new();
+                for &ci in &remaining {
+                    for (node, lead, cost) in &components[ci] {
+                        targets.insert(*node, (ci, lead.clone(), *cost));
+                    }
                 }
-            }
-            let mut extra: IndexMap<i64, f64> = IndexMap::new();
-            let keys: Vec<i64> = targets.keys().copied().collect();
-            for node in &keys {
-                let (_, lead, cost) = targets[node].clone();
-                let penalty = self.lead_penalty(&lead, present);
-                extra.insert(*node, cost + penalty);
-            }
-            let sources: Vec<(i64, f64)> = tree.iter().map(|(n, c)| (*n, *c)).collect();
-            let found = self.search(index, &sources, Targets { nodes: &keys, extra: Some(&extra) }, present)?;
-            let Some((path, end_node)) = found else {
-                route.reason = format!("no path to {} remaining pad groups", remaining.len());
-                route.connected = false;
-                self.finish_route(&mut route, index);
-                return Ok(route);
-            };
-            let (ci, lead, _) = targets[&end_node].clone();
-            let mut copper: Lead = Vec::new();
-            let start_lead = leads.get(&path[0]).cloned().unwrap_or_default();
-            if !start_lead.is_empty() && !used_leads.contains(&start_lead) {
-                used_leads.insert(start_lead.clone());
-                copper.extend(start_lead);
-            }
-            if !lead.is_empty() && !used_leads.contains(&lead) {
-                used_leads.insert(lead.clone());
-                copper.extend(lead);
-            }
-            for &node in &path {
-                tree.insert(node, 0.0);
-            }
-            route.paths.push(path);
-            route.leads.push(copper);
-            for (node, lead2, cost) in &components[ci] {
-                if !tree.contains_key(node) {
-                    let penalty = self.lead_penalty(lead2, present);
-                    tree.insert(*node, cost + penalty);
-                    leads.insert(*node, lead2.clone());
+                let mut extra: IndexMap<i64, f64> = IndexMap::new();
+                let keys: Vec<i64> = targets.keys().copied().collect();
+                for node in &keys {
+                    let (_, lead, cost) = targets[node].clone();
+                    let penalty = self.lead_penalty(&lead, present);
+                    extra.insert(*node, cost + penalty);
                 }
+                let sources: Vec<(i64, f64)> = tree.iter().map(|(n, c)| (*n, *c)).collect();
+                let found =
+                    self.search_with_outcome(index, &sources, Targets { nodes: &keys, extra: Some(&extra) }, present)?;
+                if found.path.is_none() {
+                    let mut failure = self.connection_failure(index, &found, sources.len(), keys.len(), &remaining);
+                    failure.source_groups = self.failed_pad_groups(index, &tree_groups);
+                    route.required_search_failures.push(failure);
+                    if route.reason.is_empty() {
+                        route.reason = format!("no path to {} remaining pad groups", remaining.len());
+                    }
+                    if found.failure != Some(SearchFailureReason::FrontierExhausted) || found.deadline_reached {
+                        break 'forests;
+                    }
+                    break;
+                }
+                let (path, end_node) = found.path.expect("found path");
+                let (ci, lead, _) = targets[&end_node].clone();
+                let mut copper: Lead = Vec::new();
+                let start_lead = leads.get(&path[0]).cloned().unwrap_or_default();
+                if !start_lead.is_empty() && !used_leads.contains(&start_lead) {
+                    used_leads.insert(start_lead.clone());
+                    copper.extend(start_lead);
+                }
+                if !lead.is_empty() && !used_leads.contains(&lead) {
+                    used_leads.insert(lead.clone());
+                    copper.extend(lead);
+                }
+                for &node in &path {
+                    tree.insert(node, 0.0);
+                }
+                route.paths.push(path);
+                route.leads.push(copper);
+                for (node, lead2, cost) in &components[ci] {
+                    if !tree.contains_key(node) {
+                        let penalty = self.lead_penalty(lead2, present);
+                        tree.insert(*node, cost + penalty);
+                        leads.insert(*node, lead2.clone());
+                    }
+                }
+                remaining.retain(|&r| r != ci);
+                tree_groups.push(ci);
             }
-            remaining.retain(|&r| r != ci);
         }
-        route.connected = true;
+        route.connected = route.required_search_failures.is_empty();
+        if forests > 1 && !route.paths.is_empty() {
+            route.reason.push_str(&format!("; retained {forests} disconnected routing forests"));
+        }
         self.finish_route(&mut route, index);
         Ok(route)
     }
@@ -277,6 +402,15 @@ impl Router<'_, '_> {
             let optional = position >= first_optional;
             if component.is_empty() {
                 missing += (!optional) as usize;
+                if !optional {
+                    route.required_search_failures.push(self.connection_failure(
+                        index,
+                        &SearchAttempt::failed(SearchFailureReason::MissingSourceAccess),
+                        0,
+                        targets.len(),
+                        &[position],
+                    ));
+                }
                 continue;
             }
             let excluded = spec.explicit.get(&position);
@@ -304,14 +438,24 @@ impl Router<'_, '_> {
                     .filter(|n| !excluded.contains(&(self.lattice.layer_of(*n) as usize)))
                     .collect();
                 let found = if allowed.is_empty() {
-                    None
+                    SearchAttempt::failed(SearchFailureReason::MissingTargetAccess)
                 } else {
                     self.astar(index, &source_list, &Targets { nodes: &allowed, extra: None }, present, whole, whole)?
                 };
-                let Some((path, _)) = found else {
+                if found.path.is_none() {
                     missing += (!optional) as usize;
+                    if !optional {
+                        route.required_search_failures.push(self.connection_failure(
+                            index,
+                            &found,
+                            source_list.len(),
+                            allowed.len(),
+                            &[position],
+                        ));
+                    }
                     continue;
-                };
+                }
+                let (path, _) = found.path.expect("found path");
                 route.leads.push(leads.get(&path[0]).cloned().unwrap_or_default());
                 targets.extend(path.iter().copied());
                 route.paths.push(path);
@@ -322,12 +466,12 @@ impl Router<'_, '_> {
                 .grow_box(self.lattice.box_of(&sources.keys().copied().collect::<Vec<_>>()).expect("sources"), margin);
             let target_list: Vec<i64> = targets.iter().copied().collect();
             let mut found = if target_list.is_empty() {
-                None
+                SearchAttempt::failed(SearchFailureReason::MissingTargetAccess)
             } else {
                 self.astar(index, &source_list, &Targets { nodes: &target_list, extra: None }, present, bbox, whole)?
             };
-            if found.is_none() && !target_list.is_empty() {
-                found = self.astar(
+            if found.path.is_none() && !target_list.is_empty() {
+                let retry = self.astar(
                     index,
                     &source_list,
                     &Targets { nodes: &target_list, extra: None },
@@ -335,11 +479,22 @@ impl Router<'_, '_> {
                     whole,
                     whole,
                 )?;
+                found = retry.following(found);
             }
-            let Some((path, _)) = found else {
+            if found.path.is_none() {
                 missing += (!optional) as usize;
+                if !optional {
+                    route.required_search_failures.push(self.connection_failure(
+                        index,
+                        &found,
+                        source_list.len(),
+                        target_list.len(),
+                        &[position],
+                    ));
+                }
                 continue;
-            };
+            }
+            let (path, _) = found.path.expect("found path");
             route.leads.push(leads.get(&path[0]).cloned().unwrap_or_default());
             targets.extend(path.iter().copied());
             route.paths.push(path);
@@ -363,8 +518,24 @@ impl Router<'_, '_> {
         targets: Targets<'_>,
         present: f64,
     ) -> Result<Option<(Vec<i64>, i64)>> {
+        Ok(self.search_with_outcome(index, sources, targets, present)?.path)
+    }
+
+    pub(crate) fn search_with_outcome(
+        &mut self,
+        index: usize,
+        sources: &[(i64, f64)],
+        targets: Targets<'_>,
+        present: f64,
+    ) -> Result<SearchAttempt> {
         if self.expired() {
-            return Ok(None);
+            return Ok(SearchAttempt::failed(SearchFailureReason::Deadline));
+        }
+        if sources.is_empty() {
+            return Ok(SearchAttempt::failed(SearchFailureReason::MissingSourceAccess));
+        }
+        if targets.nodes.is_empty() {
+            return Ok(SearchAttempt::failed(SearchFailureReason::MissingTargetAccess));
         }
         let name = self.specs[index].name.clone();
         let Some((nodes, amount)) = self.escape_bias(&name) else {
@@ -419,7 +590,7 @@ impl Router<'_, '_> {
         sources: &[(i64, f64)],
         targets: Targets<'_>,
         present: f64,
-    ) -> Result<Option<(Vec<i64>, i64)>> {
+    ) -> Result<SearchAttempt> {
         let g = &self.lattice;
         let tbox = g.box_of(targets.nodes).expect("targets");
         let (sx0, sy0, sx1, sy1) = g.box_of(&sources.iter().map(|s| s.0).collect::<Vec<_>>()).expect("sources");
@@ -435,20 +606,19 @@ impl Router<'_, '_> {
                 bbox = (bbox.0.min(cx0), bbox.1.min(cy0), bbox.2.max(cx1), bbox.3.max(cy1));
             }
         }
+        let mut previous = SearchAttempt::failed(SearchFailureReason::FrontierExhausted);
         for attempt in 0..3 {
-            let result = self.astar(index, sources, &targets, present, bbox, tbox)?;
-            if result.is_some() {
+            let result = self.astar(index, sources, &targets, present, bbox, tbox)?.following(previous);
+            if result.path.is_some() || bbox == whole || attempt == 2 {
                 return Ok(result);
             }
-            if bbox == whole {
-                return Ok(None);
-            }
+            previous = result;
             bbox = self.lattice.grow_box(bbox, margin * (attempt + 2) * 2);
             if attempt == 1 {
                 bbox = whole;
             }
         }
-        Ok(None)
+        unreachable!("three search windows")
     }
 
     /// `_move_base`: heading-adjusted planar move costs `[layer][move]`.
@@ -680,9 +850,15 @@ impl Router<'_, '_> {
         present: f64,
         bbox: IndexBox,
         tbox: IndexBox,
-    ) -> Result<Option<(Vec<i64>, i64)>> {
+    ) -> Result<SearchAttempt> {
         if self.expired() {
-            return Ok(None);
+            return Ok(SearchAttempt::failed(SearchFailureReason::Deadline));
+        }
+        if sources.is_empty() {
+            return Ok(SearchAttempt::failed(SearchFailureReason::MissingSourceAccess));
+        }
+        if targets.nodes.is_empty() {
+            return Ok(SearchAttempt::failed(SearchFailureReason::MissingTargetAccess));
         }
         let (width, clearance, nid, via_factor) = {
             let spec = &self.specs[index];
@@ -791,7 +967,7 @@ impl Router<'_, '_> {
             steps,
         });
         let scratch: &mut Scratch = &mut self.scratch;
-        let path = search(&input, scratch);
+        let outcome = search_outcome(&input, scratch);
         for (nodes, _) in &marks {
             for &node in nodes {
                 self.flags[node as usize] = 0;
@@ -807,10 +983,20 @@ impl Router<'_, '_> {
                 guide[node as usize] = self.options.guide_cost;
             }
         }
-        Ok(path.map(|path| {
-            let end = *path.last().expect("path");
-            (path, end)
-        }))
+        Ok(SearchAttempt {
+            path: outcome.path.map(|path| {
+                let end = *path.last().expect("path");
+                (path, end)
+            }),
+            failure: match outcome.stop {
+                SearchStop::Found => None,
+                SearchStop::FrontierExhausted => Some(SearchFailureReason::FrontierExhausted),
+                SearchStop::ExpansionLimit => Some(SearchFailureReason::ExpansionLimit),
+            },
+            expanded: outcome.expanded,
+            searches: 1,
+            deadline_reached: false,
+        })
     }
 
     /// `_finish_route`: nodes, claims and length of a route.

@@ -8,7 +8,7 @@
 //! deterministic tie-breaks.
 
 use std::cmp::{Ordering, Reverse};
-use std::collections::{BTreeMap, BinaryHeap};
+use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 
 use indexmap::{IndexMap, IndexSet};
 use num_bigint::BigInt;
@@ -16,7 +16,7 @@ use num_integer::{Integer, Roots};
 use num_traits::{Signed, ToPrimitive};
 
 use copper_json::Value;
-use copper_pcb::board::{NetRoutingRule, PadReference, PhysicalBoard, Placement};
+use copper_pcb::board::{NetRoutingRule, PadReference, PhysicalBoard, Placement, RouteKind};
 use copper_pcb::transform::{placed_pad_shape, transformed_local_point};
 use copper_pcb::zones::{distribution_zone_nets, routing_layers};
 use copper_pcb::{Error, Result};
@@ -1250,6 +1250,59 @@ pub struct ArrayEscape {
     pub vias: Vec<PadReference>,
     /// Planned surface tracks through each tile ((column, row) in the footprint frame).
     pub tile_load: BTreeMap<(i64, i64), i64>,
+    /// Unit paths in the abstract capacity graph, not physically verified copper.
+    pub abstract_paths: Vec<AbstractArrayEscapePath>,
+    /// Selected surface pads for which abstract path reconstruction failed.
+    pub abstract_unrepresented_pads: Vec<PadReference>,
+    pub abstract_path_errors: Vec<String>,
+    /// Positive original-forward flow left after path extraction, including
+    /// circulations. Units count edge-flow units, not additional escaping pads.
+    pub remaining_flow_edges: usize,
+    pub remaining_flow_units: i64,
+}
+
+const REPORT_PATH_LIMIT: usize = 32;
+const REPORT_TILE_LIMIT: usize = 32;
+
+/// One abstract surface-flow path. No lane geometry, exact obstacle check or
+/// pad-to-boundary copper connectivity is implied by this record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AbstractArrayEscapePath {
+    pub pad: PadReference,
+    pub layer: CopperLayer,
+    /// Ordered tile crossings in the footprint frame; empty for an edge ball.
+    pub tiles: Vec<(i64, i64)>,
+    /// W, N, E or S in the footprint frame, independent of package rotation.
+    pub boundary_side: String,
+    /// Twice the row (W/E) or column (N/S); tile midpoints have odd coordinates.
+    pub boundary_coordinate: i64,
+    /// Zero-based within the side: W/E north-to-south, N/S west-to-east.
+    /// This is abstract ordering, not an allocated physical lane or port.
+    pub boundary_order: usize,
+}
+
+impl AbstractArrayEscapePath {
+    fn report(&self) -> Value {
+        object(vec![
+            ("pad", text(&self.pad.to_string())),
+            ("layer", text(self.layer.value())),
+            ("tiles_total", int(self.tiles.len() as i64)),
+            ("tiles_omitted", int(self.tiles.len().saturating_sub(REPORT_TILE_LIMIT) as i64)),
+            (
+                "tiles",
+                Value::Array(
+                    self.tiles
+                        .iter()
+                        .take(REPORT_TILE_LIMIT)
+                        .map(|(x, y)| Value::Array(vec![int(*x), int(*y)]))
+                        .collect(),
+                ),
+            ),
+            ("boundary_side", text(&self.boundary_side)),
+            ("boundary_coordinate", int(self.boundary_coordinate)),
+            ("boundary_order", int(self.boundary_order as i64)),
+        ])
+    }
 }
 
 impl ArrayEscape {
@@ -1260,6 +1313,44 @@ impl ArrayEscape {
             ("surface", int(self.surface.len() as i64)),
             ("vias", int(self.vias.len() as i64)),
             ("loaded_tiles", int(self.tile_load.values().filter(|load| **load != 0).count() as i64)),
+            ("abstract_paths_total", int(self.abstract_paths.len() as i64)),
+            ("abstract_paths_omitted", int(self.abstract_paths.len().saturating_sub(REPORT_PATH_LIMIT) as i64)),
+            (
+                "abstract_paths",
+                Value::Array(
+                    self.abstract_paths.iter().take(REPORT_PATH_LIMIT).map(AbstractArrayEscapePath::report).collect(),
+                ),
+            ),
+            ("abstract_unrepresented_pads_total", int(self.abstract_unrepresented_pads.len() as i64)),
+            (
+                "abstract_unrepresented_pads_omitted",
+                int(self.abstract_unrepresented_pads.len().saturating_sub(REPORT_PATH_LIMIT) as i64),
+            ),
+            (
+                "abstract_unrepresented_pads",
+                Value::Array(
+                    self.abstract_unrepresented_pads
+                        .iter()
+                        .take(REPORT_PATH_LIMIT)
+                        .map(|pad| text(&pad.to_string()))
+                        .collect(),
+                ),
+            ),
+            ("abstract_path_errors_total", int(self.abstract_path_errors.len() as i64)),
+            (
+                "abstract_path_errors_omitted",
+                int(self.abstract_path_errors.len().saturating_sub(REPORT_PATH_LIMIT) as i64),
+            ),
+            (
+                "abstract_path_errors",
+                Value::Array(
+                    self.abstract_path_errors.iter().take(REPORT_PATH_LIMIT).map(|error| text(error)).collect(),
+                ),
+            ),
+            ("remaining_flow_edges", int(self.remaining_flow_edges as i64)),
+            ("remaining_flow_units", int(self.remaining_flow_units)),
+            ("boundary_order_scope", text("abstract_decomposition_only")),
+            ("physical_verification", text("not_performed")),
         ])
     }
 }
@@ -1267,10 +1358,32 @@ impl ArrayEscape {
 /// A side or diagonal through a missing pin is unbounded; this many tracks stands in for it.
 const OPEN_CAPACITY: i64 = 1_000;
 
+/// Shared source roles for ball-grid flow and physical site allocation.
+/// This classifies obligations; it does not prove a plane or return connection.
+pub(crate) fn ball_grid_supply_nets(board: &PhysicalBoard) -> Result<IndexSet<String>> {
+    let mut supplies = copper_pcb::zones::deferred_zone_nets(board)?;
+    supplies.extend(distribution_zone_nets(board));
+    for rule in &board.net_routing_rules {
+        if rule.kind == RouteKind::Power {
+            supplies.insert(rule.net.clone());
+        }
+        if rule.require_return_vias
+            && let Some(net) = &rule.return_via_net
+        {
+            supplies.insert(net.clone());
+        }
+    }
+    for link in &board.decoupling_links {
+        supplies.insert(link.net.clone());
+        supplies.insert(link.return_net.clone());
+    }
+    Ok(supplies)
+}
+
 /// `plan_array_escapes`: surface escapes of every surface-mount ball grid, by
 /// integer min-cost max-flow (Yan & Wong).
 pub fn plan_array_escapes(board: &PhysicalBoard, options: &EscapePlanOptions) -> Result<Vec<ArrayEscape>> {
-    let zone_nets = distribution_zone_nets(board);
+    let zone_nets = ball_grid_supply_nets(board)?;
     let pad_nets = pad_net_map(board);
     let mut placements: Vec<&Placement> = board.placements.iter().collect();
     placements.sort_by(|a, b| a.reference.cmp(&b.reference));
@@ -1339,12 +1452,25 @@ fn array_flow(
     let tile_in: BTreeMap<(i64, i64), usize> =
         ordered_tiles.iter().enumerate().map(|(index, key)| (*key, 2 + ordered_balls.len() + 2 * index)).collect();
     let mut flow = MinCostFlow::new(2 + ordered_balls.len() + 2 * ordered_tiles.len());
+    let mut boundary_edges: BTreeMap<(usize, usize), (&str, i64)> = BTreeMap::new();
     for pad in &ordered_balls {
         let (column, row) = balls[*pad];
         let node = ball_node[pad];
         flow.add(source, node, 1, 0);
         if column == 0 || column == columns - 1 || row == 0 || row == rows - 1 {
-            flow.add(node, sink, 1, 0);
+            // The existing direct edge has no side choice. Record a stable
+            // footprint-frame tie-break without changing the flow graph.
+            let side = if column == 0 {
+                "W"
+            } else if row == 0 {
+                "N"
+            } else if column == columns - 1 {
+                "E"
+            } else {
+                "S"
+            };
+            let coordinate = if side == "W" || side == "E" { row } else { column };
+            boundary_edges.insert((node, flow.add(node, sink, 1, 0)), (side, 2 * coordinate));
         }
         for key in [(column - 1, row - 1), (column, row - 1), (column - 1, row), (column, row)] {
             if let Some(tile) = tile_in.get(&key) {
@@ -1359,11 +1485,19 @@ fn array_flow(
         through.insert(*key, flow.add(tile_in[key], tile_in[key] + 1, diagonal, 0));
         let (column, row) = *key;
         // W, N, E, S: the neighbouring tile across each side, or the outside of the field.
-        for (side, neighbour) in
-            tile.sides.iter().zip([(column - 1, row), (column, row - 1), (column + 1, row), (column, row + 1)])
+        for (index, (side, neighbour)) in tile
+            .sides
+            .iter()
+            .zip([(column - 1, row), (column, row - 1), (column + 1, row), (column, row + 1)])
+            .enumerate()
         {
             let target = tile_in.get(&neighbour).copied().unwrap_or(sink);
-            flow.add(tile_in[key] + 1, target, capacity(side), 1);
+            let start = tile_in[key] + 1;
+            let edge = flow.add(start, target, capacity(side), 1);
+            if target == sink {
+                let coordinate = if index == 0 || index == 2 { row } else { column };
+                boundary_edges.insert((start, edge), (TILE_SIDES[index], 2 * coordinate + 1));
+            }
         }
     }
     flow.run(source, sink);
@@ -1371,7 +1505,63 @@ fn array_flow(
         ordered_balls.iter().filter(|pad| flow.used(source, ball_node[**pad])).map(|pad| (*pad).clone()).collect();
     let vias = ordered_balls.iter().filter(|pad| !surface.contains(pad)).map(|pad| (*pad).clone()).collect();
     let tile_load = ordered_tiles.iter().map(|key| (*key, flow.edge_flow(tile_in[key], through[key]))).collect();
-    ArrayEscape { component: component.to_owned(), layer, surface, vias, tile_load }
+    let tile_nodes: BTreeMap<usize, (i64, i64)> = tile_in.iter().map(|(key, node)| (*node, *key)).collect();
+    let ball_pads: BTreeMap<usize, &PadReference> = ball_node.iter().map(|(pad, node)| (*node, *pad)).collect();
+    let decomposition = flow.unit_paths(source, sink);
+    let mut abstract_path_errors = Vec::new();
+    let mut abstract_paths: Vec<AbstractArrayEscapePath> = decomposition
+        .paths
+        .into_iter()
+        .filter_map(|path| {
+            let Some(first) = path.first() else {
+                abstract_path_errors.push("empty abstract flow path".to_owned());
+                return None;
+            };
+            let Some(pad) = ball_pads.get(&(flow.graph[first.0][first.1][0] as usize)) else {
+                abstract_path_errors.push("abstract flow path has no source pad".to_owned());
+                return None;
+            };
+            let tiles = path.iter().filter_map(|(node, _)| tile_nodes.get(node).copied()).collect();
+            let Some(&(side, coordinate)) = path.last().and_then(|edge| boundary_edges.get(edge)) else {
+                abstract_path_errors.push(format!("abstract flow path for {pad} has no boundary edge"));
+                return None;
+            };
+            Some(AbstractArrayEscapePath {
+                pad: (*pad).clone(),
+                layer,
+                tiles,
+                boundary_side: side.to_owned(),
+                boundary_coordinate: coordinate,
+                boundary_order: 0,
+            })
+        })
+        .collect();
+    for side in TILE_SIDES {
+        let mut order: Vec<usize> =
+            (0..abstract_paths.len()).filter(|i| abstract_paths[*i].boundary_side == side).collect();
+        order.sort_by(|a, b| {
+            (abstract_paths[*a].boundary_coordinate, &abstract_paths[*a].pad)
+                .cmp(&(abstract_paths[*b].boundary_coordinate, &abstract_paths[*b].pad))
+        });
+        for (rank, index) in order.into_iter().enumerate() {
+            abstract_paths[index].boundary_order = rank;
+        }
+    }
+    abstract_paths.sort_by(|a, b| a.pad.cmp(&b.pad));
+    let abstract_unrepresented_pads =
+        surface.iter().filter(|pad| !abstract_paths.iter().any(|path| path.pad == **pad)).cloned().collect();
+    ArrayEscape {
+        component: component.to_owned(),
+        layer,
+        surface,
+        vias,
+        tile_load,
+        abstract_paths,
+        abstract_unrepresented_pads,
+        abstract_path_errors,
+        remaining_flow_edges: decomposition.remaining_edges,
+        remaining_flow_units: decomposition.remaining_units,
+    }
 }
 
 /// An edge: (end, residual, cost, reverse index, capacity).
@@ -1382,6 +1572,12 @@ type FlowEdge = [i64; 5];
 /// to the lower node.
 pub(crate) struct MinCostFlow {
     graph: Vec<Vec<FlowEdge>>,
+}
+
+struct UnitFlowDecomposition {
+    paths: Vec<Vec<(usize, usize)>>,
+    remaining_edges: usize,
+    remaining_units: i64,
 }
 
 impl MinCostFlow {
@@ -1401,6 +1597,59 @@ impl MinCostFlow {
     pub(crate) fn edge_flow(&self, start: usize, index: usize) -> i64 {
         let edge = self.graph[start][index];
         edge[4] - edge[1]
+    }
+
+    /// Decompose positive original-forward flow into deterministic unit paths.
+    /// Edge identities preserve parallel edges and shared capacities. Work on a
+    /// copy: diagnostics must not change the selected flow. Circulations are
+    /// ignored, and visited nodes prevent following a cycle as a path.
+    fn unit_paths(&self, source: usize, sink: usize) -> UnitFlowDecomposition {
+        let mut remaining: Vec<Vec<i64>> = self
+            .graph
+            .iter()
+            .map(|edges| edges.iter().map(|edge| if edge[4] > 0 { (edge[4] - edge[1]).max(0) } else { 0 }).collect())
+            .collect();
+        let mut paths = Vec::new();
+        loop {
+            if source == sink {
+                break;
+            }
+            let mut seen = vec![false; self.graph.len()];
+            let mut parent = vec![None; self.graph.len()];
+            let mut queue = VecDeque::from([source]);
+            seen[source] = true;
+            while let Some(node) = queue.pop_front() {
+                if node == sink {
+                    break;
+                }
+                for (index, edge) in self.graph[node].iter().enumerate() {
+                    let target = edge[0] as usize;
+                    if remaining[node][index] > 0 && !seen[target] {
+                        seen[target] = true;
+                        parent[target] = Some((node, index));
+                        queue.push_back(target);
+                    }
+                }
+            }
+            if !seen[sink] {
+                break;
+            }
+            let mut path = Vec::new();
+            let mut target = sink;
+            while target != source {
+                let edge = parent[target].expect("visited flow node has a parent");
+                remaining[edge.0][edge.1] -= 1;
+                path.push(edge);
+                target = edge.0;
+            }
+            path.reverse();
+            paths.push(path);
+        }
+        UnitFlowDecomposition {
+            paths,
+            remaining_edges: remaining.iter().flatten().filter(|units| **units > 0).count(),
+            remaining_units: remaining.iter().flatten().sum(),
+        }
     }
 
     fn used(&self, start: usize, end: usize) -> bool {
@@ -1533,7 +1782,176 @@ fn layer_rank(layer: CopperLayer) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn array_flow_uses_declared_power_and_return_roles_before_islands_exist() {
+        use crate::test_support_planes::support_planes as scene;
+        let mut board = scene::ball_grid(6, 0.45, &[]);
+        board.nets.retain(|net| ["N15", "N16", "N21"].contains(&net.name.as_str()));
+        board.nets.iter_mut().find(|net| net.name == "N16").unwrap().name = "GND".to_owned();
+        board.net_routing_rules = vec![
+            NetRoutingRule {
+                require_return_vias: true,
+                return_via_net: Some("GND".to_owned()),
+                maximum_return_via_distance_nm: Some(750_000),
+                ..scene::rule("N15")
+            },
+            NetRoutingRule { kind: RouteKind::Power, ..scene::rule("N21") },
+        ];
+        let plans = plan_array_escapes(&board, &EscapePlanOptions::default()).unwrap();
+        assert!(!plans.is_empty());
+        let selected: IndexSet<PadReference> =
+            plans.iter().flat_map(|plan| plan.surface.iter().chain(&plan.vias)).cloned().collect();
+        assert!(selected.contains(&PadReference::new("U", "15")));
+        assert!(!selected.contains(&PadReference::new("U", "16")));
+        assert!(!selected.contains(&PadReference::new("U", "21")));
+    }
     use crate::test_support_routers::*;
+
+    #[test]
+    fn abstract_flow_decomposition_consumes_parallel_and_shared_capacity_without_mutation() {
+        let mut flow = MinCostFlow::new(5);
+        flow.add(0, 2, 2, 0);
+        flow.add(0, 3, 1, 0);
+        flow.add(2, 4, 2, 0);
+        flow.add(3, 4, 1, 0);
+        let first_exit = flow.add(4, 1, 2, 0);
+        let second_exit = flow.add(4, 1, 1, 0);
+        assert_eq!(flow.run(0, 1), (3, 0));
+        let original = flow.graph.clone();
+        let result = flow.unit_paths(0, 1);
+        assert_eq!(result.paths.len(), 3);
+        assert_eq!(result.paths[0], vec![(0, 0), (2, 1), (4, first_exit)]);
+        assert_eq!(result.paths[1], result.paths[0]); // two distinct units, not one duplicated claim
+        assert_eq!(result.paths[2], vec![(0, 1), (3, 1), (4, second_exit)]);
+        assert_eq!((result.remaining_edges, result.remaining_units), (0, 0));
+        let mut used = BTreeMap::new();
+        for path in &result.paths {
+            for edge in path {
+                *used.entry(*edge).or_insert(0) += 1;
+            }
+        }
+        for (start, edges) in flow.graph.iter().enumerate() {
+            for (index, edge) in edges.iter().enumerate().filter(|(_, edge)| edge[4] > 0) {
+                assert_eq!(used.get(&(start, index)).copied().unwrap_or(0), edge[4] - edge[1]);
+            }
+        }
+        assert_eq!(flow.graph, original);
+        assert_eq!(flow.unit_paths(0, 1).paths, result.paths);
+    }
+
+    fn add_flow_unit(flow: &mut MinCostFlow, start: usize, end: usize) -> usize {
+        let index = flow.add(start, end, 1, 0);
+        let reverse = flow.graph[start][index][3] as usize;
+        flow.graph[start][index][1] = 0;
+        flow.graph[end][reverse][1] = 1;
+        index
+    }
+
+    #[test]
+    fn abstract_flow_decomposition_reports_circulations_and_unreachable_units() {
+        let mut flow = MinCostFlow::new(5);
+        let first = add_flow_unit(&mut flow, 0, 2);
+        add_flow_unit(&mut flow, 2, 3);
+        add_flow_unit(&mut flow, 3, 2);
+        let exit = add_flow_unit(&mut flow, 2, 1);
+        let original = flow.graph.clone();
+        let result = flow.unit_paths(0, 1);
+        assert_eq!(result.paths, vec![vec![(0, first), (2, exit)]]);
+        assert_eq!((result.remaining_edges, result.remaining_units), (2, 2));
+        assert_eq!(flow.graph, original);
+        // A graph with no sink path must report remaining flow rather than
+        // consume a dead end or turn a reverse/cyclic arc into an escape.
+        let result = flow.unit_paths(0, 4);
+        assert!(result.paths.is_empty());
+        assert_eq!((result.remaining_edges, result.remaining_units), (4, 4));
+        assert!(flow.unit_paths(0, 0).paths.is_empty());
+    }
+
+    fn abstract_grid_plan(side: usize) -> ArrayEscape {
+        let count = side * side;
+        let bga = footprint(
+            "bga",
+            (0..count)
+                .map(|i| ball(&(i + 1).to_string(), 0.8 * (i % side) as f64, 0.8 * (i / side) as f64, 0.45))
+                .collect(),
+            8.0,
+            8.0,
+        );
+        let nets = (1..=count).map(|n| net(&format!("N{n}"), &[("U", &n.to_string())])).collect();
+        let mut board = board("bga", 60.0, 40.0, vec![bga], vec![placement("U", "bga", 10.0, 10.0)], nets);
+        board.rules.minimum_clearance_nm = 100_000;
+        board.rules.minimum_track_width_nm = 100_000;
+        board.rules.default_track_width_nm = 100_000;
+        let fields = pad_fields(&board, "U", &EscapePlanOptions::default()).expect("fields");
+        array_flow("U", &fields[0], CopperLayer::Front, &fields[0].pads, 100_000, 100_000)
+    }
+
+    #[test]
+    fn abstract_flow_paths_preserve_selection_tile_load_and_boundary_order() {
+        let plan = abstract_grid_plan(8);
+        // Existing E2 selection remains authoritative: 28 edge balls plus
+        // 28 through the boundary gaps, with eight inner balls left for vias.
+        assert_eq!((plan.surface.len(), plan.vias.len()), (56, 8));
+        assert_eq!(plan.abstract_paths.iter().map(|path| path.pad.clone()).collect::<Vec<_>>(), plan.surface);
+        assert!(plan.abstract_unrepresented_pads.is_empty());
+        assert!(plan.abstract_path_errors.is_empty());
+        assert_eq!((plan.remaining_flow_edges, plan.remaining_flow_units), (0, 0));
+        let mut loads = BTreeMap::new();
+        for path in &plan.abstract_paths {
+            assert_eq!(path.layer, CopperLayer::Front);
+            assert_eq!(path.tiles.iter().collect::<IndexSet<_>>().len(), path.tiles.len());
+            for tile in &path.tiles {
+                *loads.entry(*tile).or_insert(0) += 1;
+            }
+            if let Some(&(x, y)) = path.tiles.last() {
+                match path.boundary_side.as_str() {
+                    "W" => assert_eq!((x, path.boundary_coordinate), (0, 2 * y + 1)),
+                    "N" => assert_eq!((y, path.boundary_coordinate), (0, 2 * x + 1)),
+                    "E" => assert_eq!((x, path.boundary_coordinate), (6, 2 * y + 1)),
+                    "S" => assert_eq!((y, path.boundary_coordinate), (6, 2 * x + 1)),
+                    other => panic!("unexpected boundary side {other}"),
+                }
+            }
+        }
+        for (tile, expected) in &plan.tile_load {
+            assert_eq!(loads.get(tile).copied().unwrap_or(0), *expected);
+        }
+        for side in TILE_SIDES {
+            let mut paths: Vec<_> = plan.abstract_paths.iter().filter(|path| path.boundary_side == side).collect();
+            paths.sort_by_key(|path| path.boundary_order);
+            assert_eq!(
+                paths.iter().map(|path| path.boundary_order).collect::<Vec<_>>(),
+                (0..paths.len()).collect::<Vec<_>>()
+            );
+            assert!(paths.windows(2).all(|pair| {
+                (pair[0].boundary_coordinate, &pair[0].pad) < (pair[1].boundary_coordinate, &pair[1].pad)
+            }));
+        }
+        assert_eq!(plan, abstract_grid_plan(8));
+    }
+
+    #[test]
+    fn abstract_flow_report_bounds_paths_tiles_and_failure_details_without_losing_internal_data() {
+        let mut plan = abstract_grid_plan(8);
+        let count = plan.abstract_paths.len();
+        plan.abstract_paths[0].tiles = vec![(1, 2); REPORT_TILE_LIMIT + 3];
+        plan.abstract_unrepresented_pads = plan.surface.clone();
+        plan.abstract_path_errors = vec!["unreconstructed test path".to_owned(); REPORT_PATH_LIMIT + 2];
+        let report = plan.report();
+        let paths = report.get("abstract_paths").and_then(Value::as_array).expect("paths");
+        assert_eq!(paths.len(), REPORT_PATH_LIMIT);
+        assert_eq!(report.get("abstract_paths_total"), Some(&int(count as i64)));
+        assert_eq!(report.get("abstract_paths_omitted"), Some(&int((count - REPORT_PATH_LIMIT) as i64)));
+        assert_eq!(paths[0].get("tiles").and_then(Value::as_array).expect("tiles").len(), REPORT_TILE_LIMIT);
+        assert_eq!(paths[0].get("tiles_omitted"), Some(&int(3)));
+        assert_eq!(report.get("abstract_unrepresented_pads_omitted"), Some(&int((count - REPORT_PATH_LIMIT) as i64)));
+        assert_eq!(report.get("abstract_path_errors_omitted"), Some(&int(2)));
+        assert_eq!(report.get("physical_verification"), Some(&text("not_performed")));
+        assert_eq!(report.get("boundary_order_scope"), Some(&text("abstract_decomposition_only")));
+        assert_eq!(plan.abstract_paths.len(), count);
+        assert_eq!(plan.abstract_paths[0].tiles.len(), REPORT_TILE_LIMIT + 3);
+    }
 
     /// `tests/test_escape_plan.py::test_closed_tile_diagonals_stop_inner_balls_even_through_open_side_gaps`:
     /// a 4x4 0.8 mm grid of 0.45 mm balls on 0.1 mm rules.

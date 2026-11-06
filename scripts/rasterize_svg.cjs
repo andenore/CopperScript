@@ -7,10 +7,17 @@ const output = process.argv[3];
 (async () => {
   let svg = fs.readFileSync(input, 'utf8');
   const view = svg.match(/viewBox="([^"]+)"/)[1].trim().split(/\s+/).map(Number);
+  const viewport = process.argv[5] ? process.argv[5].split(',').map(Number) : view;
+  if (viewport.length !== 4 || !viewport.every(Number.isFinite) || viewport[2] <= 0 || viewport[3] <= 0) {
+    throw new Error('Viewport must be x,y,width,height with positive dimensions');
+  }
   // Explicit pixel viewport avoids renderer-dependent interpretation of mm
-  // dimensions/density. The native CAD viewBox and geometry remain unchanged.
-  svg = svg.replace(/width="[^"]+" height="[^"]+"/,
-    `width="3200" height="${Math.round(3200*view[3]/view[2])}"`);
+  // dimensions/density. The native CAD geometry remains unchanged.
+  // Crop the vector viewport before rasterizing so close-ups retain detail.
+  svg = svg.replace(/<svg\b[^>]*>/, root =>
+    root.replace(/\s+(?:width|height)="[^"]*"/g, '')
+      .replace(/viewBox="[^"]*"/, `viewBox="${viewport.join(' ')}"`).replace(/>$/,
+        ` width="3200" height="${Math.round(3200*viewport[3]/viewport[2])}">`));
   // Normalize native two-point stroked paths to equivalent SVG line objects.
   // Some lightweight rasterizers omit subsequent degenerate-width path boxes.
   svg = svg.replace(/<path d="M([\d.-]+) ([\d.-]+)\s+L([\d.-]+) ([\d.-]+)\s*"\s*\/>/g,
@@ -20,15 +27,6 @@ const output = process.argv[3];
     svg = svg.replace(/<\/svg>\s*$/,overlay+'</svg>');
   }
   const bytes = await sharp(Buffer.from(svg), {density: 72}).flatten({background: 'white'}).png().toBuffer();
-  const metadata = await sharp(bytes).metadata();
-  let result = sharp(bytes);
-  if (process.argv[5]) {
-    const [x,y,w,h] = process.argv[5].split(',').map(Number);
-    const left = Math.round((x-view[0])/view[2]*metadata.width);
-    const top = Math.round((y-view[1])/view[3]*metadata.height);
-    const width = Math.min(metadata.width-left, Math.round(w/view[2]*metadata.width));
-    const height = Math.min(metadata.height-top, Math.round(h/view[3]*metadata.height));
-    result = result.extract({left,top,width,height});
-  }
+  const result = sharp(bytes);
   await result.resize({width:1600}).png().toFile(output);
 })();

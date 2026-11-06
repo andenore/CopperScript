@@ -17,8 +17,8 @@ use copper_physical::{CopperLayer, Point, RoundedConvexShape};
 use crate::Result;
 use crate::pair_search::{
     Continuation, HEADS, PORT_LENGTHS_NM, PairSearchCandidate, PairSearchStats, PairTransitionExample,
-    PairTransitionInventory, Port, PortRequest, SearchBounds, SpineSearch, can_depart, legal, normal, remaining_states,
-    shift, tracks,
+    PairTransitionInventory, Port, PortRequest, SearchBounds, SpineSearch, can_depart, legal, normal,
+    paired_terminal_outward, remaining_states, shift, tracks,
 };
 use crate::pair_terminals::{contains_all, terminal_copper_layers, terminal_partners, without_copper};
 use crate::pin_access::{LocalAccessBounds, LocalAccessStats, local_access_path};
@@ -441,6 +441,7 @@ pub(crate) fn local_via_ports(
     a: Point,
     b: Point,
     component: &str,
+    second_component: &str,
     surface: CopperLayer,
     layer: CopperLayer,
     trace: &mut TransitionTrace,
@@ -451,8 +452,7 @@ pub(crate) fn local_via_ports(
     let offset = (transition_spacing(board, first, second) + 1).div_euclid(2);
     let middle = Point::new((a.x_nm + b.x_nm).div_euclid(2), (a.y_nm + b.y_nm).div_euclid(2));
     let pitch = (a.x_nm - b.x_nm).abs().max((a.y_nm - b.y_nm).abs());
-    let pose = board.placements.iter().find(|p| p.reference == component).expect("a placed component");
-    let outward = Point::new(middle.x_nm - pose.position.x_nm, middle.y_nm - pose.position.y_nm);
+    let outward = paired_terminal_outward(board, a, b, component, second_component)?;
     let mut headings = vec![0usize, 2, 4, 6];
     headings.sort_by_key(|h| (-(HEADS[*h].0 * outward.x_nm + HEADS[*h].1 * outward.y_nm), *h));
     let base = RoutingClearanceIndex::new(board)?;
@@ -608,6 +608,7 @@ fn port_request<'a>(
     second: &'a NetRoutingRule,
     positions: (Point, Point),
     component: &'a str,
+    second_component: &'a str,
     offset: i64,
     layer: CopperLayer,
     lengths: &'a [i64],
@@ -621,6 +622,7 @@ fn port_request<'a>(
         first: positions.0,
         second: positions.1,
         component,
+        second_component,
         width: width_of(board, first),
         offset,
         clearance: clearance_of(board, first, second),
@@ -664,6 +666,7 @@ pub(crate) fn transitions(
     second: &NetRoutingRule,
     positions: (Point, Point),
     component: &str,
+    second_component: &str,
     surface: CopperLayer,
     layer: CopperLayer,
     include_outer: bool,
@@ -681,8 +684,19 @@ pub(crate) fn transitions(
         for family in 0..(if include_outer { 2 } else { 1 }) {
             let (lengths, local): (&[i64], bool) =
                 if family == 1 { (&OUTER_LENGTHS_NM, false) } else { (&PORT_LENGTHS_NM, true) };
-            let request =
-                port_request(board, &index, first, second, positions, component, offset, surface, lengths, local);
+            let request = port_request(
+                board,
+                &index,
+                first,
+                second,
+                positions,
+                component,
+                second_component,
+                offset,
+                surface,
+                lengths,
+                local,
+            );
             results.extend(request.ports()?.into_iter().map(|port| Transition {
                 port,
                 vias: Vec::new(),
@@ -706,9 +720,20 @@ pub(crate) fn transitions(
     }
     let Some(span) = crate::routing_vias::physical_via_span(board, surface, layer) else { return Ok(Vec::new()) };
     let wide_offset = (transition_spacing(board, first, second) + 1).div_euclid(2);
-    let mut wide =
-        port_request(board, &index, first, second, positions, component, wide_offset, surface, &PORT_LENGTHS_NM, true)
-            .ports()?;
+    let mut wide = port_request(
+        board,
+        &index,
+        first,
+        second,
+        positions,
+        component,
+        second_component,
+        wide_offset,
+        surface,
+        &PORT_LENGTHS_NM,
+        true,
+    )
+    .ports()?;
     let mut results: Vec<Transition> = Vec::new();
     let mut rejections: IndexMap<&str, i64> = IndexMap::new();
     for family in 0..3 {
@@ -723,6 +748,7 @@ pub(crate) fn transitions(
                 second,
                 positions,
                 component,
+                second_component,
                 wide_offset,
                 surface,
                 &OUTER_LENGTHS_NM,
@@ -733,7 +759,18 @@ pub(crate) fn transitions(
             if !results.is_empty() {
                 break;
             }
-            wide = local_via_ports(board, first, second, positions.0, positions.1, component, surface, layer, trace)?;
+            wide = local_via_ports(
+                board,
+                first,
+                second,
+                positions.0,
+                positions.1,
+                component,
+                second_component,
+                surface,
+                layer,
+                trace,
+            )?;
         }
         trace.count(&format!("{}_surface_collars", ["short", "outer", "local"][family]), wide.len() as i64);
         for collar in &wide {
@@ -815,6 +852,7 @@ pub(crate) fn transitions(
                 second,
                 (pair[0].position, pair[1].position),
                 component,
+                second_component,
                 offset,
                 layer,
                 &PORT_LENGTHS_NM,
@@ -1051,6 +1089,7 @@ pub fn paired_via_candidates(
                 second,
                 (access.pad_position, partner.pad_position),
                 &access.pad.component,
+                &partner.pad.component,
                 *surface,
                 layer,
                 true,
@@ -1137,13 +1176,17 @@ pub fn paired_via_candidates(
             stats.terminal_port_rejections.truncate(4);
         }
         stats.port_pairs += total_pairs as i64;
+        let collar_inventory =
+            stats.record_collars("transition", layer, bounds.pitch_nm, groups[0].len(), groups[1].len(), total_pairs);
         let searches_at_entry = stats.searches;
         for (ordinal, (a, b)) in combinations.iter().take(128).enumerate() {
             if stats.searches - searches_at_entry >= bounds.maximum_searches {
+                stats.collar_stop(collar_inventory, "search_limit");
                 break;
             }
             let budget = remaining_states(stats, bounds.maximum_states, bounds.maximum_total_states);
             if budget == 0 {
+                stats.collar_stop(collar_inventory, "aggregate_state_limit");
                 break;
             }
             let (start, end) = (&a.port, &b.port);
@@ -1231,6 +1274,7 @@ pub fn paired_via_candidates(
                 expanded_states: 0,
                 legal_advances: 0,
                 minimum_goal_distance_nm: f64::INFINITY,
+                goal: crate::pair_search::PairGoalDiagnostics::default(),
                 board: escaped,
             };
             let found = continuation.advance(budget, stats)?;
@@ -1270,6 +1314,7 @@ pub fn paired_via_candidates(
                 return_vias,
             };
             if accept(candidate, stats)? {
+                stats.collar_stop(collar_inventory, "candidate_accepted");
                 return Ok(true);
             }
         }

@@ -193,14 +193,22 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
     }
     let seconds = copper_physical::pyfloat::round_digits(started.elapsed().as_secs_f64(), 1);
-    let summary = match copper_drc::run_physical_drc(&result.board, copper_drc::Policy::default())
-        .map_err(copper_route::unified_error::Error::from)
-        .and_then(|drc| connection_summary(&result.board, Some(&drc)))
-    {
+    let drc = match copper_route::drc_report::run_physical_drc(&result.board, copper_drc::Policy::default()) {
+        Ok(drc) => drc,
+        Err(copper_pcb::Error::NotImplemented(what)) => return not_implemented(err, &what),
+        Err(error) => return crash(err, &Error::from(error).crash_line()),
+    };
+    let mut summary = match connection_summary(&result.board, Some(&drc.report)) {
         Ok(summary) => summary,
         Err(Error::NotImplemented(what)) => return not_implemented(err, &what),
         Err(error) => return crash(err, &error.crash_line()),
     };
+    if let Some((_, Value::Object(section))) = summary.iter_mut().find(|(name, _)| name == "drc") {
+        let document = drc.document(false);
+        for key in ["findings", "coverage", "decision", "completeness"] {
+            section.insert(key.to_owned(), document.get(key).cloned().unwrap_or(Value::Null));
+        }
+    }
     let mut nets: Vec<_> = result.nets.iter().collect();
     nets.sort_by(|a, b| a.net.cmp(&b.net));
     let mut selected: Vec<Value> = result.nets.iter().map(|n| Value::from(n.net.as_str())).collect();
@@ -211,6 +219,15 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         .map(|n| (n.net.clone(), Value::Array(n.diagnostics.iter().map(|d| Value::from(d.as_str())).collect())))
         .collect();
     let mut entries: Object = Object::from([
+        (
+            "routing_quality".to_owned(),
+            match copper_route::routing_metrics::routing_quality(&result.board, None) {
+                Ok(quality) => quality,
+                Err(error) => return crash(err, &Error::from(error).crash_line()),
+            },
+        ),
+        // Preserve the same per-net diagnostics and budget flags as route-board.
+        ("detailed".to_owned(), copper_json::parse(&result.to_json()).expect("detailed result JSON")),
         ("state".to_owned(), Value::from(shown.as_str())),
         ("overrides".to_owned(), Value::Object(request.overrides.iter().cloned().collect())),
         (

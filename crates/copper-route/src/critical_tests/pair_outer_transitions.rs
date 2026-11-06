@@ -64,6 +64,7 @@ pub(super) fn front_to_back(
         &f.rules.1,
         (a, b),
         f.reference,
+        f.reference,
         FRONT,
         BACK,
         false,

@@ -68,7 +68,7 @@ impl Router<'_, '_> {
         names.sort();
         for name in names {
             let route = &routes[name];
-            if !route.connected {
+            if route.paths.is_empty() {
                 continue;
             }
             let spec_index = self.specs.iter().position(|s| &s.name == name).expect("spec");
@@ -171,11 +171,28 @@ impl Router<'_, '_> {
         only: Option<&IndexSet<String>>,
         events: &mut dyn EventSink,
     ) -> Result<(IndexMap<String, NetRoute>, IndexSet<String>, i64)> {
-        let options = self.options.clone();
+        self.negotiate_bounded(deadline, only, None, false, events)
+    }
+
+    /// Seed a selected cohort in the same occupancy/index frame. Its routes
+    /// remain mutable incumbents in subsequent whole-design negotiation.
+    pub(crate) fn negotiate_bounded(
+        &mut self,
+        deadline: Option<std::time::Instant>,
+        only: Option<&IndexSet<String>>,
+        maximum_iterations: Option<i64>,
+        selected_only: bool,
+        events: &mut dyn EventSink,
+    ) -> Result<(IndexMap<String, NetRoute>, IndexSet<String>, i64)> {
+        let mut options = self.options.clone();
+        options.maximum_iterations = maximum_iterations.unwrap_or(options.maximum_iterations);
         self.deadline = deadline;
         let planned: IndexMap<&str, usize> =
             options.escape_net_order.iter().enumerate().map(|(rank, name)| (name.as_str(), rank)).collect();
         let mut order: Vec<usize> = (0..self.specs.len()).collect();
+        if selected_only {
+            order.retain(|&i| only.is_some_and(|names| names.contains(&self.specs[i].name)));
+        }
         order.sort_by(|&a, &b| {
             let (sa, sb) = (&self.specs[a], &self.specs[b]);
             let key = |s: &super::router::NetSpec| {
@@ -238,8 +255,25 @@ impl Router<'_, '_> {
                 self.conflict_age.insert(name.clone(), age);
             }
             failed = names.iter().filter(|name| self.routes.get(*name).is_none_or(|r| !r.connected)).cloned().collect();
+            // An ordinary path joins one terminal group. Prefer more joins in
+            // a partial forest before its copper length; otherwise an empty
+            // failed net can displace a useful, longer partial incumbent.
+            let unjoined: usize = names
+                .iter()
+                .map(|name| {
+                    let spec = &self.specs[by_name[name]];
+                    match self.routes.get(name) {
+                        Some(route) if route.connected => 0,
+                        Some(route) if spec.plane.is_empty() => {
+                            spec.components.len().saturating_sub(route.paths.len() + 1).max(1)
+                        }
+                        None if spec.plane.is_empty() => spec.components.len().saturating_sub(1).max(1),
+                        _ => 1,
+                    }
+                })
+                .sum();
             let score =
-                (failed.len() + conflicts.len(), copper_physical::pyfloat::sum(self.routes.values().map(|r| r.length)));
+                (unjoined + conflicts.len(), copper_physical::pyfloat::sum(self.routes.values().map(|r| r.length)));
             if best_snapshot.as_ref().is_none_or(|best| score < best.0) {
                 best_snapshot = Some((score, self.routes.clone(), conflicts.clone()));
                 best_iteration = iteration;
@@ -305,21 +339,33 @@ impl Router<'_, '_> {
                 (routes, conflicts)
             }
         };
-        if snapshot != self.routes {
-            for route in self.routes.values().cloned().collect::<Vec<_>>() {
-                self.occupancy.add(&route, -1);
-            }
-            self.routes = snapshot;
-            for route in self.routes.values().cloned().collect::<Vec<_>>() {
-                self.occupancy.add(&route, 1);
-            }
-        }
+        self.restore_routes(snapshot);
         for name in &names {
             if !self.routes.contains_key(name) {
-                self.routes.insert(name.clone(), NetRoute::empty(false, "time budget exhausted"));
+                self.routes.insert(name.clone(), self.unsearched_route(by_name[name]));
             }
         }
         Ok((self.routes.clone(), conflicts, iteration))
+    }
+
+    /// Restore the selected route evidence even when only diagnostics differ.
+    /// Occupancy depends solely on copper claims, never on search telemetry.
+    pub(crate) fn restore_routes(&mut self, snapshot: IndexMap<String, NetRoute>) {
+        let same_claims = snapshot.len() == self.routes.len()
+            && snapshot.iter().all(|(name, route)| {
+                self.routes
+                    .get(name)
+                    .is_some_and(|current| current.claims == route.claims && current.via_claims == route.via_claims)
+            });
+        if !same_claims {
+            for route in self.routes.values().cloned().collect::<Vec<_>>() {
+                self.occupancy.add(&route, -1);
+            }
+            for route in snapshot.values() {
+                self.occupancy.add(route, 1);
+            }
+        }
+        self.routes = snapshot;
     }
 
     /// `copper`: tracks and vias of one path, with its lead-ins. `spans`

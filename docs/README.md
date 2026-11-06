@@ -14,6 +14,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Resolve or pin footprints | [Footprint dependencies](footprint-dependencies.md) |
 | Read compact reports or requirement coverage | [LLM workflow](llm-workflow.md) |
 | Iterate on routing or placement failures | [LLM workflow: iteration](llm-workflow.md#routing-and-placement-iteration); `copper agent-guide iteration` |
+| Plan closure of the measured Rust CopperProbe routing failures | [Rust placement and routing closure plan](rust-routing-closure-plan.md), subordinate to the routing refactor and escape plans |
 | Change routing or native repair | [Filled-copper feedback](filled-copper-feedback.md); follow linked specialized references only as needed |
 | Plan or implement joint escape planning (side, layer, order per package) | [Escape planning plan](escape-planning-plan.md); implemented contract: [escape planning](escape-planning.md) |
 | Investigate blocked package exits | [Required reference-layout comparison](component-integration-guidelines.md#package-escape-faults-reference-comparison-is-required) |

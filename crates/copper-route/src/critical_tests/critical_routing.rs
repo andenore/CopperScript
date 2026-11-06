@@ -45,7 +45,7 @@ fn map_rules(board: &mut PhysicalBoard, change: impl Fn(NetRoutingRule) -> NetRo
 
 fn pair_attempt(board: &PhysicalBoard, global: &GlobalRoutingResult) -> crate::critical::Proposal {
     let rules = &board.net_routing_rules;
-    route_pair(board, &rules[0], &rules[1], &guides_by_net(global), false, board).expect("pair attempt")
+    route_pair(board, &rules[0], &rules[1], &guides_by_net(global), false, board, &board.tracks).expect("pair attempt")
 }
 
 fn with_transition(mut global: GlobalRoutingResult, net: &str) -> GlobalRoutingResult {
@@ -91,6 +91,56 @@ fn critical_single_net_over_its_length_budget_is_kept_with_a_warning() {
     assert!(result.nets[0].connected && result.nets[0].diagnostics.is_empty());
     assert!(result.nets[0].warnings[0].contains("exceeds"));
     assert!(result.board.tracks.iter().any(|t| t.net == "USB_DP"));
+}
+
+#[test]
+fn fallback_selection_observes_real_validated_pair_without_changing_copper() {
+    let mut board = usb_pair_board();
+    for rule in &mut board.net_routing_rules {
+        rule.max_length_nm = Some(MM);
+    }
+    let original = board.clone();
+    let global = coarse(&board);
+    let (coarse_result, coarse_tracks, coarse_vias) = pair_attempt(&board, &global);
+    let expected =
+        validate_candidate(&board, coarse_result, coarse_tracks, coarse_vias, &board.tracks, &board.vias, None)
+            .unwrap();
+    assert!(expected.0.connected && expected.0.warnings.len() == 2);
+    // Spend one exact search state: the checked coarse copper is the known
+    // fallback. Telemetry cannot invent a different route or a passing budget.
+    let options = CriticalOptions { pair_state_limit: Some(1), ..CriticalOptions::default() };
+    let actual = route_critical_nets(board.clone(), &global, &options, None).unwrap();
+    let selected = &actual.nets[0];
+    assert_eq!(actual.locked_tracks, expected.1);
+    assert_eq!(actual.locked_vias, expected.2);
+    assert_eq!(selected.lengths_nm, expected.0.lengths_nm);
+    assert_eq!(selected.warnings, expected.0.warnings);
+    assert_eq!(board, original);
+    let ledger =
+        selected.pair_fallback_selection.as_ref().expect("actual flow must export the observed fallback").document();
+    let rows = ledger.get("records").unwrap().as_array().unwrap();
+    assert_eq!(rows[0].get("reason").and_then(copper_json::Value::as_str), Some("kept_first_connected_fallback"));
+    assert_eq!(
+        rows[0].get("candidate").unwrap().get("lengths_nm"),
+        Some(&copper_json::Value::Array(selected.lengths_nm.iter().copied().map(copper_json::Value::from).collect()))
+    );
+    assert_eq!(ledger.get("group_outcome").unwrap().get("skew_nm"), Some(&copper_json::Value::from(selected.skew_nm)));
+    let mut without_telemetry = actual.nets.clone();
+    without_telemetry[0].pair_fallback_selection = None;
+    assert_eq!(
+        crate::critical::fingerprint(
+            &actual.global_routing_fingerprint,
+            &actual.locked_tracks,
+            &actual.locked_vias,
+            &actual.nets
+        ),
+        crate::critical::fingerprint(
+            &actual.global_routing_fingerprint,
+            &actual.locked_tracks,
+            &actual.locked_vias,
+            &without_telemetry
+        ),
+    );
 }
 
 #[test]
@@ -364,6 +414,7 @@ fn joint_search_does_not_invent_copper_behind_a_tapered_port() {
             first,
             second,
             component,
+            second_component: component,
             width,
             offset,
             clearance,
@@ -406,6 +457,7 @@ fn joint_search_does_not_invent_copper_behind_a_tapered_port() {
         expanded_states: 0,
         legal_advances: 0,
         minimum_goal_distance_nm: f64::INFINITY,
+        goal: crate::pair_search::PairGoalDiagnostics::default(),
         board: escaped.clone(),
     };
     let mut stats = PairSearchStats::default();

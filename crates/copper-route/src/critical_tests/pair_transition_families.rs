@@ -54,6 +54,7 @@ fn outer_family_escapes_legal_but_isolated_short_collars() {
             &exact,
             &board,
             (&candidate.via_pairs, &candidate.return_vias),
+            &board.tracks,
         )
         .expect("pair");
         let (accepted, tracks, vias) =

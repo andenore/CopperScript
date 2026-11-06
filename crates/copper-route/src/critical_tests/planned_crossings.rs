@@ -527,7 +527,7 @@ fn bundle_repair_reroutes_a_crossing_pair_with_its_plan() {
     };
     let crossings = IndexMap::from([(group("LANE_B"), plan)]);
     let (failed, blocker) = (group("LANE_B"), group("LANE_A"));
-    let (nested, mut turns) = (IndexMap::new(), IndexMap::new());
+    let (nested, turns) = (IndexMap::new(), IndexMap::new());
     let (record, repaired) = crate::critical::bundle_repair(
         &board,
         &routes,
@@ -538,12 +538,15 @@ fn bundle_repair_reroutes_a_crossing_pair_with_its_plan() {
         (rules["LANE_B_N"], rules["LANE_B_P"]),
         &failed,
         &blocker,
-        (&crossings, &nested, &mut turns),
+        (&crossings, &nested, &turns),
         1,
+        false,
     )
     .expect("repair");
     assert!(record.accepted, "{record:?}");
-    let ((crossed, _, crossed_vias), (rerouted, _, _)) = repaired.expect("repaired pairs");
+    let trial = repaired.expect("repaired pairs");
+    let ((crossed, _, crossed_vias), (rerouted, _, _)) = (trial.target, trial.blocker);
+    assert!(turns.is_empty(), "unselected repair cannot publish nested-exit hints");
     assert!(crossed.strategy == "planned_crossing" && crossed.paired_via_transitions == 2, "{crossed:?}");
     assert_eq!(crossed_vias.iter().filter(|via| group("LANE_B").contains(&via.net)).count(), 4);
     assert!(rerouted.connected && rerouted.via_count == 0);

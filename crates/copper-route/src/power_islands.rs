@@ -11,16 +11,221 @@ use std::collections::VecDeque;
 use indexmap::{IndexMap, IndexSet};
 
 use copper_json::Value;
-use copper_pcb::board::{CopperZone, IslandPolicy, PhysicalBoard, ZoneConnection};
+use copper_pcb::board::{CopperZone, IslandPolicy, PadReference, PhysicalBoard, TrackSegment, Via, ZoneConnection};
 use copper_pcb::keepouts::placement_map;
 use copper_pcb::transform::transformed_local_point;
 use copper_pcb::zones::dedicated_plane_layers;
-use copper_physical::{CopperLayer, Point};
+use copper_physical::{BoardSide, CopperLayer, Point};
 
 use crate::package_patterns::ball_grid;
 use crate::plane_estimate::label;
 use crate::unified_error::{Result, fail};
 use crate::unified_router::geometry::{polygon_inside, segment_distance};
+use crate::via_lattice::PackageLattice;
+
+/// A supply ball without a preserved, admitted lattice dogbone. This is a
+/// planning obligation, not a statement about filled-copper connectivity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MissingPowerContact {
+    pub pad: PadReference,
+    pub net: String,
+    pub reason: String,
+}
+
+/// Islands supported by actual accepted lattice contributions. Neither these
+/// sites nor the resulting outlines certify a complete package escape or rail.
+#[derive(Clone, Debug)]
+pub struct AcceptedSitePowerPartition {
+    pub partition: PowerPartition,
+    pub accepted_power_sites: usize,
+    pub missing_contacts: Vec<MissingPowerContact>,
+}
+
+impl AcceptedSitePowerPartition {
+    /// Bounded progress projection; the typed obligations remain available.
+    pub fn report(&self) -> Vec<(&'static str, Value)> {
+        let mut report = self.partition.report();
+        report.extend([
+            ("accepted_power_sites", Value::from(self.accepted_power_sites as i64)),
+            ("missing_contact_count", Value::from(self.missing_contacts.len() as i64)),
+            ("missing_contacts", Value::Array(self.missing_contacts.iter().take(32).map(|contact| {
+                Value::from(format!("{}.{} [{}]: {}", contact.pad.component, contact.pad.pad, contact.net, contact.reason))
+            }).collect())),
+            ("missing_contacts_omitted", Value::from(self.missing_contacts.len().saturating_sub(32) as i64)),
+            ("scope", Value::from("accepted dogbones only; boundary escapes, other rail contacts and filled connectivity remain routing obligations")),
+        ]);
+        report
+    }
+}
+
+type AcceptedPowerCells = IndexMap<String, IndexMap<(i64, i64), (String, Point)>>;
+
+#[cfg(test)]
+#[path = "power_islands_tests.rs"]
+mod tests;
+
+/// Plan from a clean source and the exact accepted lattice catalogue/copper.
+/// Reconstruct ownership and freshly admit the entire contribution before
+/// using any site. Missing sites never acquire fabricated fallback cells.
+pub fn plan_ball_grid_islands_from_lattice(
+    source: &PhysicalBoard,
+    layer: CopperLayer,
+    packages: &[PackageLattice],
+    tracks: &[TrackSegment],
+    vias: &[Via],
+) -> Result<AcceptedSitePowerPartition> {
+    let base = copper_drc::macros::materialize_hard_macros(copper_pcb::hard_macros::macro_source(source.clone())?)?;
+    let mut held = base.clone();
+    held.tracks.extend_from_slice(tracks);
+    held.vias.extend_from_slice(vias);
+    crate::global_reserved_access::admit_fixed_prefix(&base, &held)?;
+    let clearance = crate::routing_clearance::RoutingClearanceIndex::new(&held)?;
+    let rails: IndexSet<String> = ball_grid_rails(&base)?.into_iter().collect();
+    let owned = crate::pair_terminals::macro_owned_pads(&base);
+    let mut cells = AcceptedPowerCells::new();
+    let mut accepted = IndexSet::new();
+    let mut unsited = IndexMap::new();
+    let mut used_tracks = vec![false; tracks.len()];
+    let mut used_vias = vec![false; vias.len()];
+    if base.stackup.copper_layers.len() < 2 {
+        return fail("accepted power lattice requires a copper stackup");
+    }
+    let mut package_names = IndexSet::new();
+    for package in packages {
+        if !package_names.insert(package.component.as_str()) {
+            return fail("duplicate accepted lattice package");
+        }
+        let Some(array) = ball_grid(&base, &package.component)? else {
+            return fail("accepted lattice package is not a ball grid");
+        };
+        if package.pitch_nm != array.pitch_nm {
+            return fail("accepted lattice pitch differs from source");
+        }
+        let pose = base.placements.iter().find(|pose| pose.reference == package.component).expect("known ball grid");
+        let side = if pose.side == BoardSide::Front { CopperLayer::Front } else { CopperLayer::Back };
+        let mut package_cells = IndexSet::new();
+        for (pad, reason) in &package.unsited {
+            if pad.component != package.component
+                || !array.balls.contains(&pad.pad)
+                || unsited.insert(pad.clone(), reason.clone()).is_some()
+            {
+                return fail("invalid or duplicate unsited lattice contact");
+            }
+        }
+        for site in &package.sites {
+            if site.pad.component != package.component
+                || !array.balls.contains(&site.pad.pad)
+                || owned.contains(&site.pad)
+                || !accepted.insert(site.pad.clone())
+                || !package_cells.insert(site.cell)
+            {
+                return fail("invalid, duplicate or macro-owned accepted lattice contact");
+            }
+            let bindings: Vec<_> = base.nets.iter().filter(|net| net.pads.contains(&site.pad)).collect();
+            if bindings.len() != 1 || bindings[0].name != site.net {
+                return fail("accepted lattice net differs from source pad binding");
+            }
+            let land = base.footprints[&pose.footprint]
+                .pads
+                .iter()
+                .find(|land| land.number == site.pad.pad)
+                .expect("known ball");
+            let (ix, iy) = array.index(land.position).expect("ball grid land");
+            let (dx, dy) = (site.cell.0 - ix as i64, site.cell.1 - iy as i64);
+            if ![-1, 0].contains(&dx) || ![-1, 0].contains(&dy) {
+                return fail("accepted lattice cell is not adjacent to its source ball");
+            }
+            let half = array.pitch_nm.div_euclid(2);
+            let expected_position = transformed_local_point(
+                pose,
+                Point::new(
+                    land.position.x_nm + if dx == -1 { -half } else { half },
+                    land.position.y_nm + if dy == -1 { -half } else { half },
+                ),
+            );
+            if site.position != expected_position {
+                return fail("accepted lattice position differs from declared source cell");
+            }
+            // Catalogue ranges locate occurrences; freshly derive the legal
+            // source-rule pieces before granting those occurrences ownership.
+            let Some(stub) = tracks.get(site.track_range.clone()).filter(|pieces| !pieces.is_empty()) else {
+                return fail("accepted lattice track range is absent or empty");
+            };
+            let Some(via) = vias.get(site.via_occurrence) else {
+                return fail("accepted lattice barrel occurrence is absent");
+            };
+            let rule = base.net_routing_rules.iter().rev().find(|rule| rule.net == site.net);
+            let width = crate::via_lattice::requested_width(&base, rule);
+            let expected = crate::via_lattice::stub_pieces(
+                &base,
+                &clearance,
+                &site.net,
+                transformed_local_point(pose, land.position),
+                site.position,
+                width,
+                side,
+            )?;
+            if expected.as_deref() != Some(stub)
+                || stub.iter().any(|piece| base.tracks.contains(piece))
+                || base.vias.contains(via)
+                || via.net != site.net
+                || via.position != site.position
+            {
+                return fail("accepted lattice does not own the exact source-qualified launch pieces and barrel");
+            }
+            let Some((from, to, technology)) =
+                crate::routing_vias::physical_via_span(&base, via.from_layer, via.to_layer)
+            else {
+                return fail("accepted lattice barrel has an unsupported physical span");
+            };
+            if via.from_layer != from
+                || via.to_layer != to
+                || via.technology != technology
+                || !crate::return_paths::existing_returns_permit(&held, rule, via)
+                || rule
+                    .and_then(|rule| rule.max_vias)
+                    .is_some_and(|limit| held.vias.iter().filter(|item| item.net == site.net).count() as i64 > limit)
+            {
+                return fail("accepted lattice barrel violates its span, return or via-budget contract");
+            }
+            if used_tracks[site.track_range.clone()].iter().any(|used| *used) || used_vias[site.via_occurrence] {
+                return fail("accepted lattice contribution has multiple owners");
+            }
+            used_tracks[site.track_range.clone()].fill(true);
+            used_vias[site.via_occurrence] = true;
+            if rails.contains(&site.net) {
+                cells
+                    .entry(package.component.clone())
+                    .or_default()
+                    .insert(site.cell, (site.net.clone(), site.position));
+            }
+        }
+    }
+    if accepted.iter().any(|pad| unsited.contains_key(pad))
+        || used_tracks.contains(&false)
+        || used_vias.contains(&false)
+    {
+        return fail("accepted lattice has contradictory contacts or unowned copper");
+    }
+    let mut missing_contacts = Vec::new();
+    for pose in &base.placements {
+        let Some(array) = ball_grid(&base, &pose.reference)? else { continue };
+        for net in base.nets.iter().filter(|net| rails.contains(&net.name)) {
+            for pad in net.pads.iter().filter(|pad| pad.component == pose.reference && array.balls.contains(&pad.pad)) {
+                if !accepted.contains(pad) {
+                    missing_contacts.push(MissingPowerContact {
+                        pad: pad.clone(),
+                        net: net.name.clone(),
+                        reason: unsited.get(pad).cloned().unwrap_or_else(|| "no preserved lattice site".to_owned()),
+                    });
+                }
+            }
+        }
+    }
+    let accepted_power_sites = cells.values().map(IndexMap::len).sum();
+    let partition = plan_ball_grid_islands_with_cells(&held, layer, Some(&cells))?;
+    Ok(AcceptedSitePowerPartition { partition, accepted_power_sites, missing_contacts })
+}
 
 /// `PowerPartition`.
 #[derive(Clone, Debug)]
@@ -109,6 +314,14 @@ pub fn ball_grid_rails(board: &PhysicalBoard) -> Result<Vec<String>> {
 /// split-plane islands under ball grids from the via-site matrix, extended
 /// to each rail's other pads by corridors.
 pub fn plan_ball_grid_islands(board: &PhysicalBoard, layer: CopperLayer) -> Result<PowerPartition> {
+    plan_ball_grid_islands_with_cells(board, layer, None)
+}
+
+fn plan_ball_grid_islands_with_cells(
+    board: &PhysicalBoard,
+    layer: CopperLayer,
+    accepted: Option<&AcceptedPowerCells>,
+) -> Result<PowerPartition> {
     let gap_nm: i64 = 300_000;
     let pitch_nm: i64 = 50_000;
     let extend_nm: i64 = 12_000_000;
@@ -179,35 +392,49 @@ pub fn plan_ball_grid_islands(board: &PhysicalBoard, layer: CopperLayer) -> Resu
             )
         };
         let mut cells: IndexMap<(i64, i64), i32> = IndexMap::new();
-        let sites: IndexMap<(i64, i64), Point> =
+        let mut sites: IndexMap<(i64, i64), Point> =
             (-1..nx).flat_map(|cx| (-1..ny).map(move |cy| (cx, cy))).map(|key| (key, centre(key.0, key.1))).collect();
-        let tolerance = array.tolerance_nm + 1;
-        for via in &board.vias {
-            let Some(&index) = rail_index.get(via.net.as_str()) else { continue };
-            for (key, point) in &sites {
-                if (via.position.x_nm - point.x_nm).abs() <= tolerance
-                    && (via.position.y_nm - point.y_nm).abs() <= tolerance
-                {
-                    cells.entry(*key).or_insert(index);
+        if let Some(accepted) = accepted {
+            if let Some(seeds) = accepted.get(&pose.reference) {
+                for (key, (net, point)) in seeds {
+                    if let Some(&index) = rail_index.get(net.as_str()) {
+                        cells.insert(*key, index);
+                        sites.insert(*key, *point);
+                    }
                 }
             }
-        }
-        let mut lands: Vec<&copper_physical::footprint::FootprintPad> =
-            board.footprints[&pose.footprint].pads.iter().filter(|p| array.balls.contains(&p.number)).collect();
-        lands.sort_by(|a, b| a.number.cmp(&b.number));
-        for land in lands {
-            let Some(net) = net_of.get(&(pose.reference.as_str(), land.number.as_str())) else { continue };
-            let Some(&index) = rail_index.get(net) else { continue };
-            let Some((ix, iy)) = array.index(land.position) else {
-                return fail("cannot unpack non-iterable NoneType object");
-            };
-            let (ix, iy) = (ix as i64, iy as i64);
-            if [(0, 0), (0, 1), (1, 0), (1, 1)].iter().any(|(dx, dy)| cells.get(&(ix - dx, iy - dy)) == Some(&index)) {
-                continue; // its via already marks a cell of the rail
+        } else {
+            let tolerance = array.tolerance_nm + 1;
+            for via in &board.vias {
+                let Some(&index) = rail_index.get(via.net.as_str()) else { continue };
+                for (key, point) in &sites {
+                    if (via.position.x_nm - point.x_nm).abs() <= tolerance
+                        && (via.position.y_nm - point.y_nm).abs() <= tolerance
+                    {
+                        cells.entry(*key).or_insert(index);
+                    }
+                }
             }
-            let sx = if 2 * ix < nx - 1 { -1 } else { 1 };
-            let sy = if 2 * iy < ny - 1 { -1 } else { 1 };
-            cells.entry((ix - (sx < 0) as i64, iy - (sy < 0) as i64)).or_insert(index);
+            let mut lands: Vec<&copper_physical::footprint::FootprintPad> =
+                board.footprints[&pose.footprint].pads.iter().filter(|p| array.balls.contains(&p.number)).collect();
+            lands.sort_by(|a, b| a.number.cmp(&b.number));
+            for land in lands {
+                let Some(net) = net_of.get(&(pose.reference.as_str(), land.number.as_str())) else { continue };
+                let Some(&index) = rail_index.get(net) else { continue };
+                let Some((ix, iy)) = array.index(land.position) else {
+                    return fail("cannot unpack non-iterable NoneType object");
+                };
+                let (ix, iy) = (ix as i64, iy as i64);
+                if [(0, 0), (0, 1), (1, 0), (1, 1)]
+                    .iter()
+                    .any(|(dx, dy)| cells.get(&(ix - dx, iy - dy)) == Some(&index))
+                {
+                    continue; // its via already marks a cell of the rail
+                }
+                let sx = if 2 * ix < nx - 1 { -1 } else { 1 };
+                let sy = if 2 * iy < ny - 1 { -1 } else { 1 };
+                cells.entry((ix - (sx < 0) as i64, iy - (sy < 0) as i64)).or_insert(index);
+            }
         }
         if cells.is_empty() {
             continue;

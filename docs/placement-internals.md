@@ -91,6 +91,13 @@ and deliberate power/reference layer planning:
 
 ## Joint support-bank patterns
 
+**Rust implementation status (checked 2026-11-05):** the current planner accepts
+zero support-pattern/package-support trials. Nonzero values return
+`not implemented`; the joint support-bank machinery described below is a design
+and legacy implementation reference, not an available Rust optimizer. Explicit
+source placement trials must still pass complete placement legality and fresh
+escape/routing checks. Do not infer preserved dogbones from a legal cap pack.
+
 `PlacementPlannerOptions.support_pattern_trials` opts into joint support
 placement after ordinary capacitor refinement and before placement candidate
 ranking. It defaults to zero. The normal `plan-layout`, `route-global` and

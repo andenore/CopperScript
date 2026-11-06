@@ -20,6 +20,7 @@ fn transition_trace_preserves_candidate_inventory_and_source() {
             &rules[1],
             positions,
             "J1",
+            "J1",
             FRONT,
             IN2,
             false,

@@ -58,6 +58,7 @@ fn projected_round_land_channel_produces_legal_onward_pair() {
             first: lands[0],
             second: lands[1],
             component: "EDGE",
+            second_component: "EDGE",
             width: 140_000,
             offset: 200_000,
             clearance: 260_000,

@@ -14,6 +14,95 @@ pub const SUMMARY_SCHEMA: &str = "copperscript-engineering-summary/v0.1";
 const SUPPORTED: [&str; 2] = ["copperscript-route-board/v0.1", "copperscript-layout-report/v0.1"];
 const SCOPE: &str = "projection of retained report; not fresh source/native verification or production approval";
 
+pub(crate) const RETAINED_POLICY_CODE: &str = "ESCAPE-RETENTION-UNRESOLVED";
+pub(crate) const RETAINED_POLICY_FIELDS: &[&str] = &[
+    "policy",
+    "requested",
+    "effective",
+    "effective_policy",
+    "applicability",
+    "reason",
+    "recognized_packages",
+    "mandatory_inner_obligations",
+    "censused_obligations",
+    "allocated_inner_sites",
+    "existing_inner_launches",
+    "pending_inner_obligations",
+    "unsupported_pattern_candidates",
+    "unsupported_pattern_components_omitted_count",
+    "retained_prefix_admitted",
+    "retained_prefix_occurrences_preserved",
+    "mandatory_inner_local_coverage_complete",
+    "requested_policy_satisfied",
+    "coverage_scope",
+    "qualification",
+    "boundary_channel_verification",
+    "field_protection",
+];
+
+/// Read the saved failure flag; missing legacy policy data is not a failure.
+pub(crate) fn unsatisfied_retained_policy(report: &Value) -> Option<&Value> {
+    let policy = report.get("retained_escape_policy")?;
+    (matches!(policy.get("requested_policy_satisfied"), Some(Value::Bool(false)))
+        && !matches!(policy.get("requested"), Some(Value::Bool(false))))
+    .then_some(policy)
+}
+
+pub(crate) fn retained_policy_title(policy: &Value) -> String {
+    let reason = policy.get("reason").and_then(Value::as_str).unwrap_or("reason unavailable");
+    let count = |name| match policy.get(name) {
+        Some(Value::Int(value)) => value.to_string().chars().take(32).collect::<String>(),
+        _ => "unknown".to_owned(),
+    };
+    format!(
+        "Mandatory inner-ball retention unresolved: {}; pending inner contacts={}, unsupported package candidates={}",
+        reason.chars().take(180).collect::<String>(),
+        count("pending_inner_obligations"),
+        count("unsupported_pattern_candidates"),
+    )
+}
+
+/// Compact saved policy only; do not turn absence into false or claim admission.
+fn retained_policy_projection(report: &Value) -> Value {
+    let Some(Value::Object(policy)) = report.get("retained_escape_policy") else { return Value::Null };
+    let scalar = |value: Option<&Value>| match value {
+        Some(Value::Str(text)) => Value::from(text.chars().take(240).collect::<String>()),
+        Some(value @ (Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Null)) => value.clone(),
+        _ => Value::Null,
+    };
+    let mut fields: Object =
+        RETAINED_POLICY_FIELDS.iter().map(|key| ((*key).to_owned(), scalar(policy.get(*key)))).collect();
+    let (pending, pending_omitted) = match policy.get("pending_inner") {
+        Some(Value::Array(rows)) => (
+            Value::Array(
+                rows.iter()
+                    .take(16)
+                    .map(|row| object(vec![("pad", scalar(row.get("pad"))), ("reason", scalar(row.get("reason")))]))
+                    .collect(),
+            ),
+            count(rows.len().saturating_sub(16)),
+        ),
+        _ => (Value::Null, Value::Null),
+    };
+    let (components, components_omitted) = match policy.get("unsupported_pattern_components") {
+        Some(Value::Array(rows)) => (
+            Value::Array(rows.iter().take(16).map(|row| scalar(Some(row))).collect()),
+            count(rows.len().saturating_sub(16)),
+        ),
+        _ => (Value::Null, Value::Null),
+    };
+    fields.insert("pending_inner".into(), pending);
+    fields.insert("pending_inner_omitted_count".into(), pending_omitted);
+    fields.insert("unsupported_pattern_components".into(), components);
+    fields.insert("additional_component_projection_omitted_count".into(), components_omitted);
+    fields.insert("source_path".into(), Value::from("retained_escape_policy"));
+    fields.insert(
+        "scope".into(),
+        Value::from("saved_local_coverage_policy; not fresh admission or boundary verification"),
+    );
+    Value::Object(fields)
+}
+
 fn empty_object() -> Value {
     Value::Object(Object::new())
 }
@@ -150,6 +239,19 @@ pub fn summarize_report(
     let empty_object = empty_object();
     let empty_list = empty_list();
     let empty_text = Value::from("");
+
+    if let Some(policy) = unsatisfied_retained_policy(report) {
+        issues.push(issue(
+            "access",
+            Value::from(RETAINED_POLICY_CODE),
+            Value::from("retained_escape_policy"),
+            &Value::from(retained_policy_title(policy)),
+            "Locate unresolved contacts with `copper issues RUN --stage access`, then `copper view RUN --issue ID`."
+                .to_owned(),
+            &empty_list,
+            &empty_list,
+        )?);
+    }
 
     let requirements = get_or(report, "requirements", &empty_object)?;
     for row in py::iterate(get_or(requirements, "requirements", &empty_list)?)? {
@@ -429,6 +531,7 @@ pub fn summarize_report(
         ("native", native_summary),
         ("quality", quality_summary),
         ("decoupling", decoupling),
+        ("retained_escape_policy", retained_policy_projection(report)),
         ("issue_count", count(issue_count)),
         (
             "issue_counts_by_stage",
@@ -527,6 +630,24 @@ pub fn summary_lines(summary: &Value) -> Py<Vec<String>> {
         field("native", "status")
     )];
     let quality = at(summary, "quality");
+    if let Value::Object(policy) = at(summary, "retained_escape_policy") {
+        let field = |name| {
+            policy.get(name).map_or_else(
+                || "unknown".to_owned(),
+                |value| {
+                    if matches!(value, Value::Null) { "unknown".to_owned() } else { py::text(value) }
+                },
+            )
+        };
+        lines.push(format!(
+            "Escape retention: requested={}; effective={}; applicability={}; satisfied={}; reason={}",
+            field("requested"),
+            field("effective"),
+            field("applicability"),
+            field("requested_policy_satisfied"),
+            field("reason"),
+        ));
+    }
     if !matches!(at(quality, "track_length_nm"), Value::Null) {
         lines.push(format!(
             "Copper: {}; {} tracks; {} vias",
@@ -587,9 +708,8 @@ pub fn summary_lines(summary: &Value) -> Py<Vec<String>> {
     Ok(lines)
 }
 
-/// `read_summary(path, issue_limit=...)`: the raw bytes are hashed and
-/// parsed strictly (no repeated keys, no non-finite numbers).
-pub fn read_summary(bytes: &[u8], shown_path: &str, issue_limit: usize) -> Py<Value> {
+/// Parse and fingerprint report bytes without changing their retained evidence.
+fn read_report(bytes: &[u8]) -> Py<(Value, String)> {
     let text = decode_json_bytes(bytes)?;
     let report = match copper_json::parse_strict(&text) {
         Ok(report) => report,
@@ -602,7 +722,95 @@ pub fn read_summary(bytes: &[u8], shown_path: &str, issue_limit: usize) -> Py<Va
         }
     };
     let digest: String = Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok((report, digest))
+}
+
+/// `read_summary(path, issue_limit=...)`: the raw bytes are hashed and
+/// parsed strictly (no repeated keys, no non-finite numbers).
+pub fn read_summary(bytes: &[u8], shown_path: &str, issue_limit: usize) -> Py<Value> {
+    let (report, digest) = read_report(bytes)?;
     summarize_report(&report, issue_limit, Some(shown_path), Some(&digest))
+}
+
+const NET_METRICS: [&str; 4] = ["track_length_nm", "track_count", "via_count", "explicit_copper_connected"];
+const NET_SCOPE: &str = "retained explicit copper from saved routing_quality; includes partial stubs; connectivity is the saved explicit-copper metric, not native fill or fresh verification";
+
+/// One net's existing retained-copper metrics, never inferred from candidate
+/// lengths or from the presence of a nonzero stub. Missing legacy data is null.
+pub fn read_net_summary(bytes: &[u8], shown_path: &str, net: &str) -> Py<Value> {
+    let (report, digest) = read_report(bytes)?;
+    let schema = at(&report, "schema");
+    if !py::in_str_set(schema, &SUPPORTED)? && schema.as_str() != Some("copperscript-route-summary/v1") {
+        return Err(PyErr::value_error("expected a supported CopperScript routing or layout report"));
+    }
+    let source_path = format!("routing_quality.nets[{}]", copper_json::Dumps::new().dumps(&Value::from(net)));
+    let quality = at(&report, "routing_quality");
+    let nets = at(quality, "nets");
+    let retained = at(nets, net);
+    for (value, path) in
+        [(quality, "routing_quality"), (nets, "routing_quality.nets"), (retained, source_path.as_str())]
+    {
+        if !matches!(value, Value::Null | Value::Object(_)) {
+            return Err(PyErr::value_error(format!("expected an object or null at {path}")));
+        }
+    }
+    let mut metrics = Object::new();
+    let mut available = 0;
+    for key in NET_METRICS {
+        let value = at(retained, key);
+        let valid = match value {
+            Value::Null => true,
+            Value::Bool(_) => key == "explicit_copper_connected",
+            Value::Int(number) => key != "explicit_copper_connected" && number >= &BigInt::from(0),
+            _ => false,
+        };
+        if !valid {
+            return Err(PyErr::value_error(format!("invalid retained-copper metric at {source_path}.{key}")));
+        }
+        available += usize::from(!matches!(value, Value::Null));
+        metrics.insert(key.to_owned(), value.clone());
+    }
+    let status = match available {
+        0 => "unavailable",
+        4 => "available",
+        _ => "partial",
+    };
+    Ok(object(vec![
+        ("schema", Value::from(SUMMARY_SCHEMA)),
+        ("report_schema", schema.clone()),
+        ("report_path", Value::from(shown_path)),
+        ("report_sha256", Value::from(digest)),
+        ("net", Value::from(net)),
+        ("status", Value::from(status)),
+        ("source_path", Value::from(source_path)),
+        ("scope", Value::from(NET_SCOPE)),
+        ("metrics", Value::Object(metrics)),
+    ]))
+}
+
+/// Human-readable retained length and counts; an unknown metric is never zero.
+pub fn net_summary_lines(summary: &Value) -> Py<Vec<String>> {
+    let metrics = at(summary, "metrics");
+    let length = match at(metrics, "track_length_nm") {
+        Value::Null => "unavailable".to_owned(),
+        value => millimetres(value)?,
+    };
+    let shown_count = |key| match at(metrics, key) {
+        Value::Null => "unavailable".to_owned(),
+        value => py::text(value),
+    };
+    let connectivity = match at(metrics, "explicit_copper_connected") {
+        Value::Bool(true) => "connected",
+        Value::Bool(false) => "not connected",
+        _ => "unknown",
+    };
+    Ok(vec![
+        format!("Retained copper for {}: {}", py::text(at(summary, "net")), py::text(at(summary, "status"))),
+        format!("Track length: {length}; tracks: {}; vias: {}", shown_count("track_count"), shown_count("via_count")),
+        format!("Explicit copper connectivity: {connectivity}"),
+        format!("Source: {} in {}", py::text(at(summary, "source_path")), py::text(at(summary, "report_path"))),
+        format!("Scope: {}", py::text(at(summary, "scope"))),
+    ])
 }
 
 #[cfg(test)]
@@ -610,10 +818,180 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retention_policy_failure_is_visible_without_other_failed_findings() {
+        let report = copper_json::parse(
+            r#"{
+            "schema":"copperscript-route-board/v0.1","status":"fail","routing_complete":false,
+            "retained_escape_policy":{"requested":true,"effective":false,
+                "applicability":"unsupported_or_uncensused","reason":"mandatory_inner_lattice_census_missing",
+                "requested_policy_satisfied":false,"mandatory_inner_obligations":2,
+                "pending_inner_obligations":2,"pending_inner":[{"pad":"U1.15","reason":"census missing"}],
+                "boundary_channel_verification":"not_performed","field_protection":"not_implemented"}
+        }"#,
+        )
+        .unwrap();
+        let summary = summarize_report(&report, 5, None, None).unwrap();
+        assert_eq!(at(&summary, "issue_count"), &count(1));
+        assert_eq!(at(at(&summary, "issue_counts_by_stage"), "access"), &count(1));
+        let issues = at(&summary, "issues").as_array().unwrap();
+        assert_eq!(at(&issues[0], "code"), &Value::from(RETAINED_POLICY_CODE));
+        let policy = at(&summary, "retained_escape_policy");
+        assert_eq!(at(policy, "requested"), &Value::Bool(true));
+        assert_eq!(at(policy, "effective"), &Value::Bool(false));
+        assert_eq!(at(policy, "requested_policy_satisfied"), &Value::Bool(false));
+        assert_eq!(at(policy, "retained_prefix_occurrences_preserved"), &Value::Null);
+        assert_eq!(at(policy, "source_path"), &Value::from("retained_escape_policy"));
+        let text = summary_lines(&summary).unwrap().join("\n");
+        assert!(text.contains("Escape retention: requested=True; effective=False;"), "{text}");
+        assert!(text.contains("satisfied=False"), "{text}");
+    }
+
+    #[test]
+    fn retention_policy_legacy_absence_and_unassessed_fields_stay_unknown() {
+        let legacy = copper_json::parse(r#"{"schema":"copperscript-route-board/v0.1"}"#).unwrap();
+        let summary = summarize_report(&legacy, 5, None, None).unwrap();
+        assert_eq!(at(&summary, "retained_escape_policy"), &Value::Null);
+        assert_eq!(at(&summary, "issue_count"), &count(0));
+        assert!(!summary_lines(&summary).unwrap().join("\n").contains("Escape retention:"));
+        for policy in [
+            r#"{"requested":true}"#,
+            r#"{"requested":false,"requested_policy_satisfied":true}"#,
+            r#"{"requested":true,"applicability":"not_applicable","requested_policy_satisfied":true}"#,
+        ] {
+            let report = copper_json::parse(&format!(
+                r#"{{"schema":"copperscript-route-board/v0.1","retained_escape_policy":{policy}}}"#
+            ))
+            .unwrap();
+            let summary = summarize_report(&report, 5, None, None).unwrap();
+            assert_eq!(at(&summary, "issue_count"), &count(0));
+            assert_eq!(at(at(&summary, "retained_escape_policy"), "retained_prefix_admitted"), &Value::Null);
+        }
+    }
+
+    #[test]
+    fn retention_policy_projection_bounds_contacts_without_claiming_zero_omissions() {
+        let mut report = copper_json::parse(
+            r#"{"schema":"copperscript-route-board/v0.1",
+            "retained_escape_policy":{"requested":true,"pending_inner_obligations":40}}"#,
+        )
+        .unwrap();
+        let Value::Object(root) = &mut report else { unreachable!() };
+        let Value::Object(policy) = root.get_mut("retained_escape_policy").unwrap() else { unreachable!() };
+        policy.insert(
+            "pending_inner".into(),
+            Value::Array(
+                (0..40)
+                    .map(|index| {
+                        object(vec![
+                            ("pad", Value::from(format!("U.{index}"))),
+                            ("reason", Value::from("x".repeat(1000))),
+                        ])
+                    })
+                    .collect(),
+            ),
+        );
+        let summary = summarize_report(&report, 5, None, None).unwrap();
+        let policy = at(&summary, "retained_escape_policy");
+        let rows = at(policy, "pending_inner").as_array().unwrap();
+        assert_eq!(rows.len(), 16);
+        assert_eq!(at(policy, "pending_inner_omitted_count"), &count(24));
+        assert_eq!(at(&rows[0], "reason").as_str().unwrap().len(), 240);
+        assert_eq!(at(policy, "unsupported_pattern_components"), &Value::Null);
+        assert_eq!(at(policy, "additional_component_projection_omitted_count"), &Value::Null);
+    }
+
+    #[test]
     fn floats_convert_exactly() {
         assert_eq!(exact_float_text(0.5), "5E-1");
         assert_eq!(exact_float_text(3.0), "3");
         assert_eq!(millimetres(&Value::Float(1.5)).unwrap(), "0.0000015 mm");
         assert_eq!(millimetres(&Value::from(77_696_893i64)).unwrap(), "77.696893 mm");
+    }
+
+    #[test]
+    fn retained_net_projection_keeps_integer_precision_and_fixed_keys() {
+        let report = br#"{"schema":"copperscript-route-board/v0.1","routing_quality":{"nets":{
+            "PWR/OUT":{"track_length_nm":9007199254740993,"track_count":2,"via_count":0,
+                "explicit_copper_connected":false,"extra":{"unbounded":"not projected"}},
+            "OTHER":{"track_length_nm":1,"track_count":1,"via_count":1,"explicit_copper_connected":true}
+        }}}"#;
+        let summary = read_net_summary(report, "retained.json", "PWR/OUT").unwrap();
+        let metrics = at(&summary, "metrics");
+        assert_eq!(at(metrics, "track_length_nm"), &Value::from(9_007_199_254_740_993i64));
+        assert_eq!(at(metrics, "explicit_copper_connected"), &Value::Bool(false));
+        assert_eq!(metrics.as_object().unwrap().len(), 4);
+        assert_eq!(at(&summary, "source_path"), &Value::from("routing_quality.nets[\"PWR/OUT\"]"));
+        assert!(!copper_json::Dumps::new().dumps(&summary).contains("unbounded"));
+        let text = net_summary_lines(&summary).unwrap().join("\n");
+        assert!(text.contains("9007199254.740993 mm"));
+        assert!(text.contains("Explicit copper connectivity: not connected"));
+    }
+
+    #[test]
+    fn retained_net_missing_or_partial_metrics_stay_unknown() {
+        let legacy = br#"{"schema":"copperscript-route-board/v0.1"}"#;
+        let summary = read_net_summary(legacy, "legacy.json", "USB").unwrap();
+        assert_eq!(at(&summary, "status"), &Value::from("unavailable"));
+        for key in NET_METRICS {
+            assert_eq!(at(at(&summary, "metrics"), key), &Value::Null);
+        }
+        let text = net_summary_lines(&summary).unwrap().join("\n");
+        assert!(text.contains("Track length: unavailable"));
+        assert!(text.contains("Explicit copper connectivity: unknown"));
+        let partial = br#"{"schema":"copperscript-route-board/v0.1","routing_quality":{"nets":{
+            "USB":{"track_length_nm":7}}}}"#;
+        let summary = read_net_summary(partial, "partial.json", "USB").unwrap();
+        assert_eq!(at(&summary, "status"), &Value::from("partial"));
+        assert_eq!(at(at(&summary, "metrics"), "explicit_copper_connected"), &Value::Null);
+        let absent = read_net_summary(partial, "partial.json", "MISSING").unwrap();
+        assert_eq!(at(&absent, "status"), &Value::from("unavailable"));
+    }
+
+    #[test]
+    fn retained_net_zero_copper_and_false_connectivity_are_available() {
+        let report = br#"{"schema":"copperscript-route-board/v0.1","routing_quality":{"nets":{
+            "OPEN":{"track_length_nm":0,"track_count":0,"via_count":0,"explicit_copper_connected":false}
+        }}}"#;
+        let summary = read_net_summary(report, "zero.json", "OPEN").unwrap();
+        assert_eq!(at(&summary, "status"), &Value::from("available"));
+        for key in ["track_length_nm", "track_count", "via_count"] {
+            assert_eq!(at(at(&summary, "metrics"), key), &Value::from(0i64));
+        }
+        assert_eq!(at(at(&summary, "metrics"), "explicit_copper_connected"), &Value::Bool(false));
+        let text = net_summary_lines(&summary).unwrap().join("\n");
+        assert!(text.contains("Track length: 0 mm; tracks: 0; vias: 0"), "{text}");
+        assert!(text.contains("Explicit copper connectivity: not connected"), "{text}");
+    }
+
+    #[test]
+    fn replay_net_metrics_are_available_without_becoming_an_engineering_report() {
+        let report = br#"{"schema":"copperscript-route-summary/v1","routing_quality":{"nets":{
+            "A":{"track_length_nm":123,"track_count":1,"via_count":0,"explicit_copper_connected":false}
+        }}}"#;
+        let net = read_net_summary(report, "replay.json", "A").unwrap();
+        assert_eq!(at(&net, "status"), &Value::from("available"));
+        assert_eq!(at(at(&net, "metrics"), "track_length_nm"), &Value::from(123i64));
+        assert!(
+            summarize_report(&copper_json::parse(std::str::from_utf8(report).unwrap()).unwrap(), 5, None, None)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn retained_net_rejects_malformed_metric_types() {
+        for metric in [
+            r#""track_length_nm":1.5"#,
+            r#""track_length_nm":-1"#,
+            r#""track_count":true"#,
+            r#""via_count":{}"#,
+            r#""explicit_copper_connected":1"#,
+        ] {
+            let report = format!(
+                r#"{{"schema":"copperscript-route-board/v0.1","routing_quality":{{"nets":{{"USB":{{{metric}}}}}}}}}"#
+            );
+            let error = read_net_summary(report.as_bytes(), "bad.json", "USB").unwrap_err();
+            assert!(error.is("ValueError"), "{error}");
+            assert!(error.message.contains("invalid retained-copper metric"), "{error}");
+        }
     }
 }

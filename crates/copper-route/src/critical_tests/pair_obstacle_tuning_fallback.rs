@@ -95,7 +95,8 @@ fn run(scene: &Scene, retry: bool) -> (CriticalNetResult, PhysicalBoard) {
     let admit = |proposal: &PairSearchCandidate| {
         let exact = (proposal.first.clone(), proposal.second.clone());
         let (proposed, tracks, vias) =
-            route_pair_exact(board, &rules[0], &rules[1], &scene.routes, &exact, board, (&[], &[])).expect("pair");
+            route_pair_exact(board, &rules[0], &rules[1], &scene.routes, &exact, board, (&[], &[]), &board.tracks)
+                .expect("pair");
         validate_candidate(board, proposed, tracks, vias, &board.tracks, &board.vias, None).expect("validated")
     };
     let complete = PairSearchCandidate {

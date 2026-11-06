@@ -135,6 +135,11 @@ fn port_inventory_is_bounded_and_outside_routing_identity() {
     };
     let mut reported = original.clone();
     reported.pair_ports = vec![diagnostic];
+    assert!(!stats.collar_inventory.is_empty());
+    assert_eq!(stats.port_pairs, stats.collar_inventory.iter().map(|item| item.compatible_pairs).sum::<i64>());
+    reported.pair_collars = stats.collar_inventory;
+    reported.pair_compatible_collar_pairs = stats.port_pairs;
+    reported.pair_incompatible_collar_pairs = stats.incompatible_port_pairs;
     // Python's dataclass equality ignored the telemetry; the report document
     // carries it, the routing fingerprint does not.
     assert_ne!(critical_net_document(&reported), critical_net_document(&original));

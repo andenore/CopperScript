@@ -522,7 +522,14 @@ mod escape {
             let arrays = arrays
                 .iter()
                 .map(|item| {
-                    let Value::Object(mut report) = item.report() else { unreachable!() };
+                    let Value::Object(current) = item.report() else { unreachable!() };
+                    // Python snapshots cover the original array-planning contract.
+                    // Rust abstract-decomposition diagnostics have their own
+                    // escape_plan unit tests and are not legacy parity fields.
+                    let mut report: Object = ["component", "layer", "loaded_tiles", "surface", "vias"]
+                        .into_iter()
+                        .map(|key| (key.to_owned(), current.get(key).expect("legacy array field").clone()))
+                        .collect();
                     report.insert("surface_pads".to_owned(), list(item.surface.iter().map(pad).collect()));
                     report.insert("via_pads".to_owned(), list(item.vias.iter().map(pad).collect()));
                     let loads =

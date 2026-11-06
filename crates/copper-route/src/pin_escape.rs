@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 
 use indexmap::IndexMap;
 
-use copper_pcb::board::{PadReference, PhysicalBoard, Placement, TrackSegment, Via};
+use copper_pcb::board::{NetRoutingRule, PadReference, PhysicalBoard, Placement, RouteKind, TrackSegment, Via};
 use copper_pcb::transform::transformed_local_point;
 use copper_pcb::zones::routing_layers;
 use copper_pcb::{Error, Result};
@@ -16,7 +16,91 @@ use copper_physical::footprint::{FootprintPad, PadKind};
 use copper_physical::{BoardSide, CopperLayer, Point};
 
 use crate::routing_clearance::RoutingClearanceIndex;
-use crate::surface_path::track_inside_board;
+use crate::surface_path::{track_inside_board, via_inside_board};
+
+/// Exact input occurrences of a rule-qualified local transition. This is not
+/// evidence of an onward channel or complete package escape.
+pub(crate) struct VerifiedViaLaunch {
+    pub via_occurrence: usize,
+    pub track_occurrences: Vec<usize>,
+}
+
+/// Reuse only actual legal copper, never a net label or an abstract preference.
+/// Shared by lattice coverage and ordinary fanout so they agree on an existing
+/// launch. Duplicate barrels at one coordinate remain ambiguous.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verified_via_launch(
+    board: &PhysicalBoard,
+    index: &RoutingClearanceIndex<'_>,
+    pose: &Placement,
+    land: &FootprintPad,
+    net: &str,
+    side: CopperLayer,
+    rule: Option<&NetRoutingRule>,
+    destinations: &[CopperLayer],
+) -> Result<Option<VerifiedViaLaunch>> {
+    let allowed = routing_layers(board, net, rule);
+    if rule.is_some_and(|rule| rule.kind == RouteKind::Differential || rule.differential_partner.is_some())
+        || !allowed.contains(&side)
+        || rule.is_some_and(|rule| rule.maximum_stub_length_nm.is_some() || rule.maximum_uncoupled_length_nm.is_some())
+        || rule
+            .and_then(|rule| rule.max_vias)
+            .is_some_and(|maximum| board.vias.iter().filter(|via| via.net == net).count() as i64 > maximum)
+    {
+        return Ok(None);
+    }
+    let width = rule
+        .and_then(|rule| rule.width_nm)
+        .filter(|width| *width != 0)
+        .unwrap_or(board.rules.default_track_width_nm)
+        .max(board.rules.minimum_track_width_nm);
+    let stack = &board.stackup.copper_layers;
+    for (via_occurrence, via) in board.vias.iter().enumerate().filter(|(_, via)| via.net == net) {
+        if board.vias.iter().filter(|other| other.position == via.position).count() != 1 {
+            continue;
+        }
+        let (Some(first), Some(last)) = (
+            stack.iter().position(|layer| *layer == via.from_layer),
+            stack.iter().position(|layer| *layer == via.to_layer),
+        ) else {
+            continue;
+        };
+        let span = &stack[first.min(last)..=first.max(last)];
+        if !span.contains(&side)
+            || !destinations.iter().any(|layer| *layer != side && span.contains(layer))
+            || crate::routing_vias::select_via_technology(
+                &board.stackup,
+                via.from_layer,
+                via.to_layer,
+                via.size_nm,
+                via.drill_nm,
+            )
+            .map_or(true, |technology| technology != via.technology)
+            || !crate::return_paths::existing_returns_permit(board, rule, via)
+            || !via_inside_board(board, via.position, via.size_nm)?
+        {
+            continue;
+        }
+        let Some(path) = verified_land_path(board, land, pose, net, via.position, index, true, None, Some(width))?
+        else {
+            continue;
+        };
+        if let Some(maximum) = rule.and_then(|rule| rule.max_length_nm) {
+            let tracks: Vec<_> = board.tracks.iter().filter(|track| track.net == net).collect();
+            if crate::critical::track_length(&tracks) > maximum {
+                continue;
+            }
+        }
+        let mut remaining: Vec<_> = board.tracks.iter().enumerate().collect();
+        let mut track_occurrences = Vec::new();
+        for track in &path {
+            let Some(position) = remaining.iter().position(|(_, other)| **other == *track) else { return Ok(None) };
+            track_occurrences.push(remaining.remove(position).0);
+        }
+        return Ok(Some(VerifiedViaLaunch { via_occurrence, track_occurrences }));
+    }
+    Ok(None)
+}
 
 /// `RoutingAccess`: an owned, layer-specific port reached from an existing pad launch.
 ///

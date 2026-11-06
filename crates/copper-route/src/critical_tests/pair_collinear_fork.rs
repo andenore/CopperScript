@@ -38,6 +38,7 @@ fn ports(board: &PhysicalBoard, a: Point, z: Point, length: i64) -> Vec<Port> {
         first: a,
         second: z,
         component: "J1",
+        second_component: "J1",
         width: 250_000,
         offset: 225_000,
         clearance: 100_000,

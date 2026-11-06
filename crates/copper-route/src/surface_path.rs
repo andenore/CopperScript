@@ -506,6 +506,18 @@ pub fn surface_path_between_counted(
     Ok((search.path, search.expanded_states))
 }
 
+/// Observations only: counts do not alter search ordering, legality or budgets.
+#[derive(Clone, Debug, Default)]
+pub struct SurfaceBridgeDiagnostics {
+    pub initial_legal_steps: i64,
+    pub final_connection_attempts: i64,
+    pub final_connection_rejections: i64,
+    pub reconstructed_path_rejections: i64,
+    pub boundary_rejections: i64,
+    pub clearance_rejections: i64,
+    pub detour_rejections: i64,
+}
+
 /// One `surface_path_between` search as its finished progress event reports it.
 #[derive(Clone, Debug)]
 pub struct SurfaceBridgeSearch {
@@ -515,6 +527,7 @@ pub struct SurfaceBridgeSearch {
     pub outcome: &'static str,
     /// The first 32 sampled rejection blockers by identity (with an observer).
     pub blocker_records: Vec<crate::routing_clearance::RoutingBlocker>,
+    pub diagnostics: SurfaceBridgeDiagnostics,
 }
 
 /// `surface_path_between` with an observer installed when `observed`: up to
@@ -557,6 +570,7 @@ pub fn surface_path_between_observed(
     let mut expanded = 0;
     let mut failure_blockers = std::collections::BTreeSet::new();
     let mut rejection_samples = 0;
+    let mut diagnostics = SurfaceBridgeDiagnostics::default();
     while expanded < state_budget {
         let Some(Reverse((_, cost, x, y, heading))) = queue.pop() else { break };
         let state = (x, y, heading);
@@ -566,6 +580,7 @@ pub fn surface_path_between_observed(
         expanded += 1;
         let point = at(x, y);
         if (point.x_nm - end.x_nm).abs().max((point.y_nm - end.y_nm).abs()) <= 2 * step_nm {
+            diagnostics.final_connection_attempts += 1;
             let tail = crate::pin_escape::checked_access_paths(
                 board, clearance, net, point, end, width_nm, layer, false, true, None, true,
             )?
@@ -611,8 +626,12 @@ pub fn surface_path_between_observed(
                         expanded_states: expanded,
                         outcome: "found",
                         blocker_records: Vec::new(),
+                        diagnostics,
                     });
                 }
+                diagnostics.reconstructed_path_rejections += 1;
+            } else {
+                diagnostics.final_connection_rejections += 1;
             }
         }
         for (next_heading, (dx, dy)) in DIRECTIONS.iter().enumerate() {
@@ -624,11 +643,17 @@ pub fn surface_path_between_observed(
                 && top - maximum_detour_nm <= neighbor.y_nm
                 && neighbor.y_nm <= bottom + maximum_detour_nm)
             {
+                diagnostics.detour_rejections += 1;
                 continue;
             }
-            if !track_inside_board(board, point, neighbor, width_nm)?
-                || !clearance.can_route(net, point, neighbor, width_nm, layer)?
-            {
+            let inside = track_inside_board(board, point, neighbor, width_nm)?;
+            let legal = inside && clearance.can_route(net, point, neighbor, width_nm, layer)?;
+            if !legal {
+                if inside {
+                    diagnostics.clearance_rejections += 1;
+                } else {
+                    diagnostics.boundary_rejections += 1;
+                }
                 if observed && rejection_samples < 16 {
                     rejection_samples += 1;
                     for piece in clearance.route_pieces(net, point, neighbor, width_nm, layer)? {
@@ -636,6 +661,9 @@ pub fn surface_path_between_observed(
                     }
                 }
                 continue;
+            }
+            if state == initial {
+                diagnostics.initial_legal_steps += 1;
             }
             let difference = if heading >= 0 { (next_heading - heading).abs() } else { 0 };
             let turn = difference.min(8 - difference);
@@ -657,5 +685,6 @@ pub fn surface_path_between_observed(
         expanded_states: expanded,
         outcome: if queue.is_empty() { "search_exhausted" } else { "state_budget_exhausted" },
         blocker_records,
+        diagnostics,
     })
 }

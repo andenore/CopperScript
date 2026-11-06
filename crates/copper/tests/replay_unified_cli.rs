@@ -43,7 +43,20 @@ fn field<'a>(value: &'a StateValue, name: &str) -> &'a StateValue {
 #[test]
 fn replay_cli_routes_saved_inputs_with_overrides() {
     let directory = scratch("overrides");
-    let board = pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)])], 2, vec![]);
+    let mut board = pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)])], 2, vec![]);
+    board.boundary_edges.push(
+        copper_physical::BoardEdge::new("connector_edge", board.outline.vertices[0], board.outline.vertices[1])
+            .unwrap(),
+    );
+    board.body_overhangs.push(copper_lang::mechanical::assembly::BodyOverhang {
+        id: "connector_nose".into(),
+        reference: board.placements[0].reference.clone(),
+        edge: "connector_edge".into(),
+        start_nm: 1_000_000,
+        end_nm: 2_000_000,
+        distance_nm: 500_000,
+        reason: "Connector body projects beyond the board edge".into(),
+    });
     let state = directory.join("inputs.json");
     let options = UnifiedRouterOptions { save_inputs_path: Some(s(&state)), ..UnifiedRouterOptions::default() };
     route_unified(&board, &guides(&board), &options, None, None, None, None, None).expect("route");
@@ -57,11 +70,23 @@ fn replay_cli_routes_saved_inputs_with_overrides() {
     let placements = field(field(&value, "board"), "placements");
     let expected = copper_route::state_codec::encode_board(&board);
     assert_eq!(placements, field(&expected, "placements"));
+    for name in ["boundary_edges", "body_overhangs"] {
+        assert_eq!(field(field(&value, "board"), name), field(&expected, name));
+    }
     // An existing result state is preserved, not overwritten.
     let previous = std::fs::read(&result_state).expect("bytes");
     assert_eq!(copper(&["replay-unified", &s(&state), "--save-result", &s(&result_state)]), 2);
     assert_eq!(std::fs::read(&result_state).expect("bytes"), previous);
     let document = json(&report);
+    let quality = document.get("routing_quality").expect("retained per-net metrics");
+    assert!(document.get("drc").unwrap().get("findings").unwrap().as_array().is_some());
+    let metrics = quality.get("nets").unwrap().get("A").unwrap();
+    assert!(metrics.get("track_length_nm").is_some());
+    assert_eq!(metrics.get("explicit_copper_connected"), Some(&Value::Bool(true)));
+    let detailed = document.get("detailed").expect("same detailed diagnostics as route-board");
+    let net = &detailed.get("nets").unwrap().as_array().unwrap()[0];
+    assert_eq!(net.get("search_budget_exhausted"), Some(&Value::Bool(false)));
+    assert_eq!(net.get("connected"), Some(&Value::Bool(true)));
     let overrides = document.get("overrides").expect("overrides");
     assert_eq!(overrides.get("maximum_iterations"), Some(&Value::Int(3.into())));
     let signal = document.get("signal").expect("signal");

@@ -90,6 +90,7 @@ fn critical(board: &PhysicalBoard) -> CriticalRoutingResult {
 }
 
 fn release(
+    source: &PhysicalBoard,
     reserved: &Reserved,
     masked: &PhysicalBoard,
     pre: PhysicalBoard,
@@ -98,7 +99,7 @@ fn release(
 ) -> PhysicalBoard {
     let mut result = critical(masked);
     let mut observer: Option<crate::progress::ProgressCallback<'_>> = Some(events);
-    release_escape_masks(Some(reserved), &mut result, &mut None, pre, options, &mut observer).expect("released")
+    release_escape_masks(source, Some(reserved), &mut result, &mut None, pre, options, &mut observer).expect("released")
 }
 
 #[test]
@@ -109,7 +110,7 @@ fn planned_escapes_join_the_ordinary_board_exact_checked() {
     masked.copper_keepouts = reserved.2.clone();
     let options = UnifiedRouterOptions::default();
     let mut events = Events::default();
-    let pre = release(&reserved, &masked, masked.clone(), &options, &mut events);
+    let pre = release(&board, &reserved, &masked, masked.clone(), &options, &mut events);
     // The masks are gone and the promised stem and via are the net's copper.
     assert!(!pre.copper_keepouts.iter().any(|k| k.id.starts_with("escape-reserve")));
     assert!(pre.tracks.contains(&reserved.0[0]) && pre.vias.contains(&reserved.1[0]));
@@ -130,7 +131,7 @@ fn planned_escapes_join_the_ordinary_board_exact_checked() {
     let mut events = Events::default();
     let mut with_via = masked.clone();
     with_via.vias = reserved.1.clone();
-    let reused = release(&reserved, &masked, with_via, &options, &mut events);
+    let reused = release(&board, &reserved, &masked, with_via, &options, &mut events);
     assert_eq!(reused.vias.iter().filter(|v| **v == reserved.1[0]).count(), 1);
     assert!(reused.tracks.contains(&reserved.0[0]));
     let joined = events.joined()[0];
@@ -139,7 +140,7 @@ fn planned_escapes_join_the_ordinary_board_exact_checked() {
     assert_eq!(counts, [0i64, 1, 0, 1].map(Value::from).iter().collect::<Vec<_>>());
     // Off: the masks go and the copper stays out, as before.
     let off = UnifiedRouterOptions { planned_escapes_as_copper: false, ..UnifiedRouterOptions::default() };
-    let plain = release(&reserved, &masked, masked.clone(), &off, &mut Events::default());
+    let plain = release(&board, &reserved, &masked, masked.clone(), &off, &mut Events::default());
     assert!(plain.tracks == board.tracks && plain.vias == board.vias);
     // A promised via a preparation step has since made illegal is left out
     // and counted; the legal stem still joins.
@@ -147,7 +148,7 @@ fn planned_escapes_join_the_ordinary_board_exact_checked() {
     let mut crossed = masked.clone();
     crossed.tracks = vec![crossing];
     let mut events = Events::default();
-    let cut = release(&reserved, &masked, crossed, &options, &mut events);
+    let cut = release(&board, &reserved, &masked, crossed, &options, &mut events);
     assert!(!cut.vias.contains(&reserved.1[0]));
     let joined = events.joined()[0];
     assert_eq!(detail(joined, "dropped_vias"), &Value::from(1i64));
@@ -188,7 +189,8 @@ fn the_ordinary_stage_fanout_reuses_the_joined_planned_escapes() {
     let reserved = (tracks, vias, keepouts);
     let mut masked = board.clone();
     masked.copper_keepouts = reserved.2.clone();
-    let pre = release(&reserved, &masked, masked.clone(), &UnifiedRouterOptions::default(), &mut Events::default());
+    let pre =
+        release(&board, &reserved, &masked, masked.clone(), &UnifiedRouterOptions::default(), &mut Events::default());
     // The ordinary stage's fanout, with the same options, finds its exits
     // already there: the same accesses, no new copper.
     let again = route_fanout(&pre, Some(&options), Some(&only)).expect("fanout");

@@ -55,6 +55,7 @@ fn stagger_cannot_cross_a_front_keepout() {
         mm(5, 5),
         mm(5, 6),
         f.reference,
+        f.reference,
         FRONT,
         BACK,
         &mut TransitionTrace::default(),

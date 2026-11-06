@@ -22,7 +22,7 @@ use super::lattice::RouterLattice;
 use super::options::UnifiedRouterOptions;
 use super::rasters::{FOREIGN, FREE, Obstacle, Rasters};
 use crate::package_patterns::{ball_grid, circular_array};
-use crate::pin_access::{LocalAccessBounds, SegmentCache, local_access_path};
+use crate::pin_access::{LocalAccessBounds, LocalAccessStats, SegmentCache, local_access_path};
 use crate::pin_escape::{RoutingAccess, checked_access_path, verified_routing_access};
 use crate::plane_estimate::label;
 use crate::routing_clearance::RoutingClearanceIndex;
@@ -61,6 +61,177 @@ pub struct NetSpec {
     pub joined: IndexMap<usize, IndexSet<i64>>,
     pub explicit: IndexMap<usize, IndexSet<usize>>,
     pub anchors: Vec<Vec<Point>>,
+    pub component_pads: Vec<Vec<PadReference>>,
+    /// Bounded, report-only evidence captured while preparing each component.
+    pub component_access_diagnostics: Vec<Vec<String>>,
+}
+
+const ACCESS_CANDIDATE_LIMIT: usize = 12;
+const ACCESS_EVENT_LIMIT: usize = 4;
+const LOCAL_ATTEMPT_DIAGNOSTIC_LIMIT: usize = 4;
+
+struct PreparedAccess {
+    candidates: Vec<Attach>,
+    events: Vec<String>,
+    omitted_events: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OpenReachStop {
+    NoSources,
+    OpenRegion,
+    FloodLimit,
+    FrontierExhausted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OpenReachOutcome {
+    pub stop: OpenReachStop,
+    pub visited: usize,
+    pub limit: usize,
+}
+
+impl OpenReachOutcome {
+    pub(crate) fn reaches_open(self) -> bool {
+        matches!(self.stop, OpenReachStop::OpenRegion | OpenReachStop::FloodLimit)
+    }
+    fn label(self) -> &'static str {
+        match self.stop {
+            OpenReachStop::NoSources => "no_sources",
+            OpenReachStop::OpenRegion => "open_region",
+            OpenReachStop::FloodLimit => "flood_cutoff_assumed_open",
+            OpenReachStop::FrontierExhausted => "frontier_exhausted",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalEscapeOutcome {
+    pub stop: &'static str,
+    pub tries: i64,
+    pub found: i64,
+    pub attempts: Vec<(Point, LocalAccessStats)>,
+    /// Untried eligible endpoints inside the radius; None when this pass was skipped.
+    pub remaining_in_radius_eligible: Option<usize>,
+}
+
+impl LocalEscapeOutcome {
+    fn skipped(stop: &'static str) -> Self {
+        Self { stop, tries: 0, found: 0, attempts: Vec::new(), remaining_in_radius_eligible: None }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SearchFailureReason {
+    FrontierExhausted,
+    ExpansionLimit,
+    Deadline,
+    MissingSourceAccess,
+    MissingTargetAccess,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FailedPadGroup {
+    /// Zero-based index in this net's terminal components.
+    pub index: usize,
+    pub access_count: usize,
+    pub locations: Vec<Point>,
+    pub pads: Vec<PadReference>,
+    pub access_diagnostics: Vec<String>,
+}
+
+/// A required connection that remains unresolved on this selected route.
+/// Optional contacts and failed attempts superseded by success are not retained.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConnectionFailure {
+    pub reason: SearchFailureReason,
+    /// Total successor expansions across this connection's attempted windows.
+    pub expanded: i64,
+    pub searches: usize,
+    /// A later window could not start because the outer deadline had passed.
+    pub deadline_reached: bool,
+    pub source_access_count: usize,
+    pub target_access_count: usize,
+    /// Terminal groups in the tree that could not reach the remaining targets.
+    /// Empty for plane contacts and attempts that did not select a source tree.
+    pub source_groups: Vec<FailedPadGroup>,
+    pub groups: Vec<FailedPadGroup>,
+}
+
+impl ConnectionFailure {
+    pub(crate) fn access_diagnostics(&self) -> impl Iterator<Item = String> + '_ {
+        self.groups.iter().flat_map(|group| {
+            group
+                .access_diagnostics
+                .iter()
+                .map(move |record| format!("unified: access_preparation group={} {record}", group.index))
+        })
+    }
+
+    pub fn diagnostic(&self) -> String {
+        let reason = match self.reason {
+            SearchFailureReason::FrontierExhausted => "search frontier exhausted",
+            SearchFailureReason::ExpansionLimit => "search expansion limit exhausted",
+            SearchFailureReason::Deadline => "time budget exhausted before search",
+            SearchFailureReason::MissingSourceAccess => "missing source access",
+            SearchFailureReason::MissingTargetAccess => "missing target access",
+        };
+        let groups = self
+            .groups
+            .iter()
+            .map(|group| {
+                let locations = group
+                    .locations
+                    .iter()
+                    .take(3)
+                    .map(|point| format!("({},{}) nm", point.x_nm, point.y_nm))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let more = if group.locations.len() > 3 {
+                    format!(" (+{} more)", group.locations.len() - 3)
+                } else {
+                    String::new()
+                };
+                format!(
+                    "{}: {} accesses{}{}",
+                    group.index,
+                    group.access_count,
+                    if locations.is_empty() { String::new() } else { format!(" at {locations}") },
+                    more
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        // PadReference's Display is a dataclass repr, not the REF.PAD token
+        // consumed by issue focus. Keep this machine-readable spelling explicit.
+        let pads: IndexSet<String> = self
+            .groups
+            .iter()
+            .flat_map(|group| group.pads.iter().map(|pad| format!("{}.{}", pad.component, pad.pad)))
+            .collect();
+        let remaining = if pads.is_empty() {
+            String::new()
+        } else {
+            format!("; remaining_pads=[{}]", pads.into_iter().collect::<Vec<_>>().join(","))
+        };
+        let sources = if self.source_groups.is_empty() {
+            String::new()
+        } else {
+            let groups: Vec<_> = self.source_groups.iter().map(|group| group.index.to_string()).collect();
+            let pads: IndexSet<_> = self.source_groups.iter().flat_map(|group| &group.pads).collect();
+            let shown = pads.iter().take(8).map(|pad| format!("{}.{}", pad.component, pad.pad)).collect::<Vec<_>>();
+            format!(
+                "; source_groups=[{}]; source_pads=[{}]{}",
+                groups.join(","),
+                shown.join(","),
+                if pads.len() > shown.len() { format!(" (+{} more)", pads.len() - shown.len()) } else { String::new() }
+            )
+        };
+        format!(
+            "{reason}; expanded={} searches={} source_accesses={} target_accesses={} deadline_reached={}; unresolved pad groups (zero-based) [{groups}]{remaining}{sources}",
+            self.expanded, self.searches, self.source_access_count, self.target_access_count, self.deadline_reached
+        )
+    }
 }
 
 /// `_NetRoute`.
@@ -75,6 +246,7 @@ pub struct NetRoute {
     pub connected: bool,
     pub length: f64,
     pub reason: String,
+    pub required_search_failures: Vec<ConnectionFailure>,
     /// Nodes covered by this route's own copper beyond a default-width
     /// track, mapped to the path node or via site owning them.
     pub body: IndexMap<i64, i64>,
@@ -92,8 +264,14 @@ impl NetRoute {
             connected,
             length: 0.0,
             reason: reason.to_owned(),
+            required_search_failures: Vec::new(),
             body: IndexMap::new(),
         }
+    }
+
+    pub fn search_budget_exhausted(&self) -> bool {
+        !self.connected
+            && self.required_search_failures.iter().any(|failure| failure.reason == SearchFailureReason::ExpansionLimit)
     }
 }
 
@@ -1108,6 +1286,8 @@ impl<'p, 'b> Router<'p, 'b> {
             joined: IndexMap::new(),
             explicit: IndexMap::new(),
             anchors: Vec::new(),
+            component_pads: Vec::new(),
+            component_access_diagnostics: Vec::new(),
         };
         if let Some(rule) = &rule {
             if let Some(max_vias) = rule.max_vias {
@@ -1152,6 +1332,8 @@ impl<'p, 'b> Router<'p, 'b> {
             spec.optional = optional.len();
             for island in islands.into_iter().chain(optional) {
                 spec.components.push(island.into_iter().map(|node| (node, Vec::new(), 0.0)).collect());
+                spec.component_pads.push(Vec::new());
+                spec.component_access_diagnostics.push(Vec::new());
             }
         }
         let points: Vec<Point> =
@@ -1266,7 +1448,7 @@ impl<'p, 'b> Router<'p, 'b> {
             }
         }
         let mut components = Vec::new();
-        let mut separate: Vec<Vec<Anchor>> = Vec::new();
+        let mut separate: Vec<(Vec<Anchor>, PadReference)> = Vec::new();
         let mut ordered: Vec<(String, Vec<PadReference>)> = groups.into_iter().collect();
         ordered.sort_by_key(|(_, members)| members[0].to_string());
         let layers = self.lattice.layers.clone();
@@ -1289,7 +1471,8 @@ impl<'p, 'b> Router<'p, 'b> {
                 }
                 let mut pad_anchors = self.pad_anchors(pad)?;
                 for piece in self.separate_land_pieces(pad)? {
-                    separate.push(pad_anchors.iter().filter(|a| piece.contains(&a.0)).cloned().collect());
+                    separate
+                        .push((pad_anchors.iter().filter(|a| piece.contains(&a.0)).cloned().collect(), pad.clone()));
                     pad_anchors.retain(|a| !piece.contains(&a.0));
                 }
                 anchors.extend(pad_anchors);
@@ -1366,23 +1549,29 @@ impl<'p, 'b> Router<'p, 'b> {
             if !joined.is_empty() {
                 spec.joined.insert(components.len(), joined);
             }
-            let mut component = self.attach(&anchors, spec)?;
+            let PreparedAccess { candidates: mut component, events, omitted_events } = self.attach(&anchors, spec)?;
             let taps = self.track_taps(&host_tracks, spec);
             if !taps.is_empty() {
                 component.retain(|c| !taps.contains(&c.0));
                 component.extend(taps.iter().map(|&node| (node, Vec::new(), 0.0)));
             }
+            let diagnostics = self.access_diagnostics(&component, spec, events, omitted_events);
+            spec.component_access_diagnostics.push(diagnostics);
             components.push(component);
             spec.anchors.push(anchors.iter().map(|a| a.0).collect());
+            spec.component_pads.push(members.clone());
             if !self.explicit_pads.is_empty() && members.iter().any(|pad| self.explicit_pads.contains(pad)) {
                 let exclusion = self.explicit_exclusion(&members)?;
                 spec.explicit.insert(components.len() - 1, exclusion);
             }
         }
-        for anchors in separate {
-            let component = self.attach(&anchors, spec)?;
+        for (anchors, pad) in separate {
+            let PreparedAccess { candidates: component, events, omitted_events } = self.attach(&anchors, spec)?;
+            let diagnostics = self.access_diagnostics(&component, spec, events, omitted_events);
+            spec.component_access_diagnostics.push(diagnostics);
             components.push(component);
             spec.anchors.push(anchors.iter().map(|a| a.0).collect());
+            spec.component_pads.push(vec![pad]);
         }
         Ok(components)
     }
@@ -1665,11 +1854,71 @@ impl<'p, 'b> Router<'p, 'b> {
         Ok(taps)
     }
 
+    /// Record candidates without changing their order or querying another search policy.
+    fn access_diagnostics(
+        &mut self,
+        candidates: &[Attach],
+        spec: &NetSpec,
+        events: Vec<String>,
+        omitted_events: usize,
+    ) -> Vec<String> {
+        let owner = self.rasters.track(spec.width, spec.clearance).0;
+        let layers = spec.layers.iter().map(|&layer| self.lattice.layers[layer].value()).collect::<Vec<_>>().join(",");
+        let mut records = vec![format!(
+            "width_nm={} clearance_nm={} neck_width_nm={} neck_clearance_nm={} allowed_layers=[{layers}] candidates={} shown={} omitted_events={omitted_events}; owner/region flags describe candidate nodes, not onward connectivity",
+            spec.width,
+            spec.clearance,
+            spec.neck_width,
+            spec.neck_clearance,
+            candidates.len(),
+            candidates.len().min(ACCESS_CANDIDATE_LIMIT)
+        )];
+        for (chunk, candidates) in
+            candidates.iter().take(ACCESS_CANDIDATE_LIMIT).collect::<Vec<_>>().chunks(6).enumerate()
+        {
+            let points = candidates
+                .iter()
+                .map(|(node, lead, _)| {
+                    let at = self.lattice.point(*node);
+                    let layer = self.lattice.layer_of(*node) as usize;
+                    let widths = match (
+                        lead.iter().map(|track| track.width_nm).min(),
+                        lead.iter().map(|track| track.width_nm).max(),
+                    ) {
+                        (Some(low), Some(high)) => format!("{low}..{high}"),
+                        _ => "none".to_owned(),
+                    };
+                    format!(
+                        "({},{})nm@{} lead_width_nm={} nominal_owner_ok={} region={} neck={} target_only={}",
+                        at.x_nm,
+                        at.y_nm,
+                        self.lattice.layers[layer].value(),
+                        widths,
+                        owner[*node as usize] == FREE || owner[*node as usize] == spec.nid,
+                        spec.region.contains(node),
+                        spec.neck.contains(node),
+                        spec.target_only.contains(&layer)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            records.push(format!("candidates_chunk={chunk} [{points}]"));
+        }
+        records.extend(events);
+        records
+    }
+
     /// `_attach`: grid nodes reachable from anchors with exact, checked lead-ins.
-    fn attach(&mut self, anchors: &[Anchor], spec: &NetSpec) -> Result<Vec<Attach>> {
+    fn attach(&mut self, anchors: &[Anchor], spec: &NetSpec) -> Result<PreparedAccess> {
         let owner = self.rasters.track(spec.width, spec.clearance).0.to_vec();
         let radius = self.options.attach_radius_nm;
         let mut seen: IndexMap<i64, Attach> = IndexMap::new();
+        let mut events = Vec::new();
+        let mut omitted_events = 0;
+        // Keep bounded blocker details separate so they do not consume the
+        // existing anchor-observation allowance. Only one anchor's first local
+        // attempt is expanded into at most three <=900-byte records.
+        let mut first_step_details = Vec::new();
         for (position, layers, outward) in anchors {
             let near = nearest_first(&self.lattice, *position, radius as f64);
             for &layer in layers {
@@ -1724,19 +1973,67 @@ impl<'p, 'b> Router<'p, 'b> {
                     }
                     found += 1;
                 }
+                let before_extended = seen.len();
                 if found < 2 && outward.is_some() {
                     self.attach_extended(*position, outward.expect("outward"), layer, spec, &owner, &mut seen)?;
                 }
+                let extended_added = seen.len() - before_extended;
+                let spent_before = self.local_spent;
+                let mut probe = None;
+                let mut local = LocalEscapeOutcome::skipped("disabled");
                 if self.options.local_escape_radius_nm != 0 {
                     let on_layer: Vec<i64> =
                         seen.keys().copied().filter(|n| self.lattice.layer_of(*n) == layer as i64).collect();
-                    if !self.reaches_open(&on_layer, spec, None) {
-                        self.attach_local(*position, layer, spec, &mut seen, *outward)?;
+                    let outcome = self.reaches_open(&on_layer, spec, None);
+                    if !outcome.reaches_open() {
+                        local = self.attach_local(*position, layer, spec, &mut seen, *outward)?;
+                    } else {
+                        local.stop = "skipped_probe_assumes_open";
                     }
+                    probe = Some(outcome);
+                }
+                if events.len() < ACCESS_EVENT_LIMIT {
+                    let probe = probe.map_or_else(
+                        || "not_run".to_owned(),
+                        |outcome| format!("{} visited={} limit={}", outcome.label(), outcome.visited, outcome.limit),
+                    );
+                    let probe_width = if spec.neck_width != 0 { spec.neck_width } else { spec.width };
+                    let probe_clearance = if spec.neck_clearance != 0 { spec.neck_clearance } else { spec.clearance };
+                    let direction = outward.map_or_else(|| "none".to_owned(), |(x, y)| format!("({x},{y})"));
+                    let remaining = local
+                        .remaining_in_radius_eligible
+                        .map_or_else(|| "not_applicable".to_owned(), |count| count.to_string());
+                    let attempts = local
+                        .attempts
+                        .iter()
+                        .map(|(target, stats)| {
+                            format!(
+                                "({},{})nm:{} expanded={} discovered={}",
+                                target.x_nm, target.y_nm, stats.outcome, stats.expanded_states, stats.discovered_nodes
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    events.push(format!(
+                        "anchor=({},{})nm@{} nearby_accepted={} extended_added={} open_probe={} probe_width_nm={} probe_clearance_nm={} local_escape={} tries={} found={} global_spent_before={} global_spent_after={} global_limit={} outward={} radius_nm={} step_nm={} detour_nm={} maximum_states={} remaining_in_radius_eligible={} attempts=[{}] omitted_attempts={}",
+                        position.x_nm, position.y_nm, copper.value(), found, extended_added, probe, probe_width,
+                        probe_clearance, local.stop, local.tries, local.found, spent_before, self.local_spent, self.options.local_escape_limit,
+                        direction, self.options.local_escape_radius_nm, self.options.local_escape_step_nm,
+                        self.options.local_escape_detour_nm, self.options.local_escape_states, remaining, attempts,
+                        local.tries as usize - local.attempts.len()
+                    ));
+                    if first_step_details.is_empty()
+                        && let Some((_, stats)) = local.attempts.first()
+                    {
+                        first_step_details = stats.first_step_diagnostics(local.tries.saturating_sub(1) as usize);
+                    }
+                } else {
+                    omitted_events += 1;
                 }
             }
         }
-        Ok(seen.into_values().collect())
+        events.extend(first_step_details);
+        Ok(PreparedAccess { candidates: seen.into_values().collect(), events, omitted_events })
     }
 
     fn open_space(&mut self, spec: &NetSpec) -> &[bool] {
@@ -1790,11 +2087,11 @@ impl<'p, 'b> Router<'p, 'b> {
     }
 
     /// `_reaches_open`: a short flood from `nodes` reaches open space.
-    fn reaches_open(&mut self, nodes: &[i64], spec: &NetSpec, limit: Option<usize>) -> bool {
-        if nodes.is_empty() {
-            return false;
-        }
+    pub(crate) fn reaches_open(&mut self, nodes: &[i64], spec: &NetSpec, limit: Option<usize>) -> OpenReachOutcome {
         let limit = limit.unwrap_or(self.options.open_flood_limit as usize);
+        if nodes.is_empty() {
+            return OpenReachOutcome { stop: OpenReachStop::NoSources, visited: 0, limit };
+        }
         let open = self.open_space(spec).to_vec();
         let width = if spec.neck_width != 0 { spec.neck_width } else { spec.width };
         let clearance = if spec.neck_clearance != 0 { spec.neck_clearance } else { spec.clearance };
@@ -1804,7 +2101,7 @@ impl<'p, 'b> Router<'p, 'b> {
         while !stack.is_empty() && visited.len() < limit {
             let node = stack.pop().expect("non-empty");
             if open[node as usize] {
-                return true;
+                return OpenReachOutcome { stop: OpenReachStop::OpenRegion, visited: visited.len(), limit };
             }
             for (other, _) in self.lattice.neighbours(node, false) {
                 let o = owner[other as usize];
@@ -1814,20 +2111,24 @@ impl<'p, 'b> Router<'p, 'b> {
                 }
             }
         }
-        visited.len() >= limit
+        OpenReachOutcome {
+            stop: if visited.len() >= limit { OpenReachStop::FloodLimit } else { OpenReachStop::FrontierExhausted },
+            visited: visited.len(),
+            limit,
+        }
     }
 
     /// `_attach_local`: an exact-geometry escape for a pin in a pocket.
-    fn attach_local(
+    pub(crate) fn attach_local(
         &mut self,
         position: Point,
         layer: usize,
         spec: &NetSpec,
         seen: &mut IndexMap<i64, Attach>,
         outward: Option<(i64, i64)>,
-    ) -> Result<()> {
+    ) -> Result<LocalEscapeOutcome> {
         if self.local_spent >= self.options.local_escape_limit {
-            return Ok(());
+            return Ok(LocalEscapeOutcome::skipped("global_allowance_exhausted"));
         }
         self.local_spent += 1;
         let open = self.open_space(spec).to_vec();
@@ -1850,11 +2151,34 @@ impl<'p, 'b> Router<'p, 'b> {
                 (distance * if behind { 2.0 } else { 1.0 }, distance, column, x, y)
             })
             .collect();
+        // Raw reach is a geometric bound; the directional preference below is
+        // not monotonic in raw distance. An outside-radius point must not hide
+        // a later, in-radius endpoint behind the package.
+        near.retain(|&(_, distance, _, _, _)| distance <= reach as f64);
         near.sort_by(|a, b| (a.0, a.1).partial_cmp(&(b.0, b.1)).expect("finite"));
         let (mut found, mut tries, mut misses) = (0, 0, 0);
+        let mut stop = "candidate_list_exhausted";
+        let mut attempts = Vec::new();
+        let mut remaining_in_radius_eligible = Some(0);
         let copper = self.lattice.layers[layer];
-        for (_, distance, column, x, y) in near {
-            if distance > reach as f64 || found >= 3 || tries >= 12 || misses >= 4 {
+        for (candidate_index, &(_, distance, column, x, y)) in near.iter().enumerate() {
+            if found >= 3 || tries >= 12 || misses >= 4 {
+                remaining_in_radius_eligible = Some(
+                    near.iter()
+                        .skip(candidate_index)
+                        .filter(|&&(_, _, column, _, _)| {
+                            let node = self.lattice.layer_node(column, layer as i64) as usize;
+                            open[node] && owner[node] == FREE
+                        })
+                        .count(),
+                );
+                stop = if found >= 3 {
+                    "found_limit"
+                } else if tries >= 12 {
+                    "attempt_limit"
+                } else {
+                    "consecutive_miss_limit"
+                };
                 break;
             }
             let node = self.lattice.layer_node(column, layer as i64);
@@ -1867,6 +2191,7 @@ impl<'p, 'b> Router<'p, 'b> {
                 detour_nm: self.options.local_escape_detour_nm,
                 maximum_states: self.options.local_escape_states,
             };
+            let mut stats = LocalAccessStats::default();
             let path = local_access_path(
                 self.board,
                 self.clearance.as_ref().expect("index"),
@@ -1876,9 +2201,12 @@ impl<'p, 'b> Router<'p, 'b> {
                 copper,
                 width,
                 bounds,
-                None,
+                Some(&mut stats),
                 self.segment_cache.as_mut(),
             )?;
+            if attempts.len() < LOCAL_ATTEMPT_DIAGNOSTIC_LIMIT {
+                attempts.push((Point::new(x, y), stats));
+            }
             let Some(path) = path.filter(|p| !p.is_empty()) else {
                 misses += 1;
                 continue;
@@ -1890,7 +2218,7 @@ impl<'p, 'b> Router<'p, 'b> {
             }
             found += 1;
         }
-        Ok(())
+        Ok(LocalEscapeOutcome { stop, tries, found, attempts, remaining_in_radius_eligible })
     }
 
     /// `_attach_extended`: straight out along the pad's outward axis, then a checked lead-in.

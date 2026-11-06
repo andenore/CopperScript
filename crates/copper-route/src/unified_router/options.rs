@@ -69,6 +69,11 @@ pub struct UnifiedRouterOptions {
     pub escapes_first: bool,
     pub escape_net_order: Vec<String>,
     pub escape_layer_biases: Vec<LayerBias>,
+    /// Opt-in mandatory-inner-ball-grid policy. Applies to source-recognized
+    /// lattice obligations; pending sites and uncensused inner contacts remain
+    /// unresolved and prevent final qualification of the requested policy.
+    /// Other packages keep the legacy mutable-fanout lifecycle.
+    /// This does not certify field protection or complete boundary escapes.
     pub retain_escape_copper: bool,
     pub planned_escapes_as_copper: bool,
     pub share_commit_index: bool,

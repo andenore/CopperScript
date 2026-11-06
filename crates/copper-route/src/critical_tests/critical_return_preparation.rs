@@ -84,6 +84,7 @@ fn required_returns_are_prepared_before_critical_routing() {
                 global_route,
                 reserved_accesses,
                 plane_stitch_options,
+                ..
             } = stage
             {
                 saved = Some(crate::state_codec::critical_inputs_state_text(

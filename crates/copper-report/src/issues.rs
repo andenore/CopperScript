@@ -17,10 +17,92 @@ use crate::pysort;
 use crate::scene::{Point, Scene, fixed, round3, scene_from_kicad_text, scene_from_physical};
 
 pub const ISSUES_SCHEMA: &str = "copperscript.run-issues/v1";
+pub const FIXED_PREFIX_VIEW_SOURCE: &str = "PhysicalBoard with declared fixed prefix (view only)";
+
+fn short_diagnostics(items: &[Value]) -> String {
+    let mut shown: Vec<String> = items
+        .iter()
+        .take(3)
+        .map(|item| {
+            let text = py::text(item);
+            let mut short: String = text.chars().take(240).collect();
+            if text.chars().count() > 240 {
+                short.push('…');
+            }
+            short
+        })
+        .collect();
+    if items.len() > 3 {
+        shown.push(format!("+{} diagnostics (use --issue ID --json)", items.len() - 3));
+    }
+    shown.join("; ")
+}
+
+/// Bounded reading aid with an exact source pointer when a record is clipped.
+fn solver_details(record: &Value, scope: &str, source_path: &str, fields: &[&str]) -> Value {
+    fn bounded(value: &Value, clipped: &mut bool) -> Value {
+        match value {
+            Value::Str(text) if text.chars().count() > 2048 => {
+                *clipped = true;
+                Value::from(format!("{}…", text.chars().take(2048).collect::<String>()))
+            }
+            Value::Array(items) => {
+                *clipped |= items.len() > 16;
+                Value::Array(items.iter().take(16).map(|item| bounded(item, clipped)).collect())
+            }
+            Value::Object(items) => {
+                Value::Object(items.iter().map(|(k, v)| (k.clone(), bounded(v, clipped))).collect())
+            }
+            _ => value.clone(),
+        }
+    }
+    let mut clipped = false;
+    let records: Object = fields
+        .iter()
+        .filter_map(|name| record.get(name).map(|value| ((*name).to_owned(), bounded(value, &mut clipped))))
+        .collect();
+    Value::Object(Object::from([
+        ("scope".into(), Value::from(scope)),
+        ("source_path".into(), Value::from(source_path)),
+        ("truncated".into(), Value::Bool(clipped)),
+        ("records".into(), Value::Object(records)),
+    ]))
+}
+
+/// Explicit endpoints of unresolved terminal searches, including a boxed seed.
+fn remaining_pads(diagnostics: &[Value]) -> Vec<String> {
+    let mut pads = Vec::new();
+    for diagnostic in diagnostics {
+        let text = py::text(diagnostic);
+        for marker in ["remaining_pads=[", "source_pads=["] {
+            for tail in text.split(marker).skip(1) {
+                if let Some((items, _)) = tail.split_once(']') {
+                    for item in items.split(',').map(str::trim).filter(|item| !item.is_empty()) {
+                        if !pads.iter().any(|pad| pad == item) {
+                            pads.push(item.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    pads
+}
 
 /// A native finding group: its type and nets, and its findings.
 type FindingGroup = ((Value, Vec<Value>), Vec<Value>);
 const NM: i64 = 1_000_000;
+
+/// Exact final rows and sanitized, unclipped history for a later --net projection.
+/// This is internal context, never copied into the issues JSON wholesale.
+#[derive(Clone, Debug, PartialEq)]
+struct NativeIssueProjection {
+    kind: Value,
+    findings: Vec<Value>,
+    repair_records: Value,
+    cleanup_records: Value,
+    group_count: usize,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunIssue {
@@ -33,6 +115,9 @@ pub struct RunIssue {
     pub layers: Vec<Value>,
     pub objects: Vec<String>,
     pub points: Vec<Point>,
+    /// Observational solver records; not findings on the retained board.
+    pub details: Value,
+    native_projection: Option<NativeIssueProjection>,
 }
 
 impl RunIssue {
@@ -47,6 +132,8 @@ impl RunIssue {
             layers: Vec::new(),
             objects: Vec::new(),
             points: Vec::new(),
+            details: Value::Null,
+            native_projection: None,
         }
     }
 
@@ -72,6 +159,11 @@ impl RunIssue {
 
     fn points(mut self, points: Vec<Point>) -> Self {
         self.points = points;
+        self
+    }
+
+    fn details(mut self, details: Value) -> Self {
+        self.details = details;
         self
     }
 
@@ -108,7 +200,7 @@ impl RunIssue {
         };
         let window =
             self.window().map_or(Value::Null, |window| Value::Array(window.iter().map(|v| Value::Float(*v)).collect()));
-        Ok(Value::Object(Object::from([
+        let mut document = Object::from([
             ("id".to_owned(), Value::from(self.id.as_str())),
             ("stage".to_owned(), Value::from(self.stage)),
             ("code".to_owned(), self.code.clone()),
@@ -119,7 +211,11 @@ impl RunIssue {
             ("objects".to_owned(), capped(self.objects.iter().map(|o| Value::from(o.as_str())).collect())),
             ("window_mm".to_owned(), window),
             ("markers".to_owned(), Value::from(self.points.len() as u64)),
-        ])))
+        ]);
+        if self.details != Value::Null {
+            document.insert("details".to_owned(), self.details.clone());
+        }
+        Ok(Value::Object(document))
     }
 }
 
@@ -263,8 +359,32 @@ fn attribute<'a>(value: &'a StateValue, name: &str) -> Option<&'a StateValue> {
     }
 }
 
-/// `scene_of(path)` for a state file: the physical board it holds (a
-/// reserved-access proposal is drawn, never certified).
+/// Reconstruct the declared physical prefix for viewing only. Admission and
+/// connection proofs remain the routing replay's responsibility.
+fn declared_prefix_board(value: &StateValue) -> Py<Option<StateValue>> {
+    let Some(prefix) = map_get(value, "fixed_prefix").filter(|v| !matches!(v, StateValue::Null)) else {
+        return Ok(None);
+    };
+    let malformed = || PyErr::value_error("malformed fixed-prefix viewing declaration");
+    let source = attribute(prefix, "source").filter(|source| is_physical_board(source)).ok_or_else(malformed)?;
+    if map_get(value, "board") != Some(source) {
+        return Err(PyErr::value_error("fixed-prefix viewing source differs from checkpoint board"));
+    }
+    let Some(StateValue::Tuple(parts)) = attribute(prefix, "contributions") else { return Err(malformed()) };
+    let mut projected = source.clone();
+    let StateValue::Dataclass { fields, .. } = &mut projected else { unreachable!() };
+    for key in ["tracks", "vias"] {
+        let Some(StateValue::Tuple(copper)) = fields.get_mut(key) else { return Err(malformed()) };
+        for part in parts {
+            let Some(StateValue::Tuple(pieces)) = attribute(part, key) else { return Err(malformed()) };
+            copper.extend(pieces.iter().cloned());
+        }
+    }
+    Ok(Some(projected))
+}
+
+/// `scene_of(path)` for a state file: the physical board it holds (declared
+/// fixed copper and reserved-access proposals are drawn, never certified).
 pub fn scene_of_state(path: &str) -> Py<Scene> {
     let value = load_state(path)?;
     let is_dict = matches!(value, StateValue::Map { proxy: false, .. } | StateValue::Object(_));
@@ -279,6 +399,10 @@ pub fn scene_of_state(path: &str) -> Py<Scene> {
     let proposal = map_get(&value, "reserved_accesses").and_then(|reserved| attribute(reserved, "board"));
     if let Some(proposal) = proposal.filter(|proposal| is_dict && is_physical_board(proposal)) {
         board = Some(proposal);
+    } else if let Some(projected) = declared_prefix_board(&value)? {
+        let mut scene = scene_from_physical(&projected)?;
+        scene.source = FIXED_PREFIX_VIEW_SOURCE.to_owned();
+        return Ok(scene);
     }
     match board {
         Some(board) if is_physical_board(board) => scene_from_physical(board),
@@ -437,6 +561,66 @@ fn pad_points(scene: Option<&Scene>, ref_pad: &str) -> Vec<Point> {
     let Some(scene) = scene else { return Vec::new() };
     let Some((reference, pad)) = ref_pad.rsplit_once('.') else { return Vec::new() };
     scene.pad(reference, pad).iter().map(|item| item.center).collect()
+}
+
+fn retained_policy_issue(report: &Value, scene: Option<&Scene>) -> Py<Option<RunIssue>> {
+    let Some(policy) = crate::summary::unsatisfied_retained_policy(report) else { return Ok(None) };
+    let mut objects = Vec::new();
+    for row in list_items(get(policy, "pending_inner")?) {
+        if let Some(pad) = row.get("pad").and_then(Value::as_str)
+            && !objects.iter().any(|object| object == pad)
+        {
+            objects.push(pad.to_owned());
+        }
+    }
+    let mut components = Vec::new();
+    for item in list_items(get(policy, "unsupported_pattern_components")?) {
+        if let Some(component) = item.as_str()
+            && !components.iter().any(|seen| seen == component)
+        {
+            components.push(component.to_owned());
+            if !objects.iter().any(|object| object == component) {
+                objects.push(component.to_owned());
+            }
+        }
+    }
+    let mut points = Vec::new();
+    let mut nets = Vec::new();
+    let mut layers = Vec::new();
+    if let Some(scene) = scene {
+        for pad in &scene.pads {
+            let label = format!("{}.{}", pad.reference, pad.pad);
+            if objects.contains(&label) || components.contains(&pad.reference) {
+                points.push(pad.center);
+                if !pad.net.is_empty() {
+                    nets.push(Value::from(pad.net.as_str()));
+                }
+                layers.extend(pad.layers.iter().map(|layer| Value::from(layer.as_str())));
+            }
+        }
+        for component in &components {
+            if !scene.pads.iter().any(|pad| &pad.reference == component)
+                && let Some(footprint) = scene.footprints.get(component)
+            {
+                points.push(footprint.center);
+            }
+        }
+    }
+    let mut fields = crate::summary::RETAINED_POLICY_FIELDS.to_vec();
+    fields.extend(["pending_inner", "unsupported_pattern_components"]);
+    Ok(Some(
+        RunIssue::new(
+            "A1".to_owned(),
+            "access",
+            crate::summary::RETAINED_POLICY_CODE,
+            crate::summary::retained_policy_title(policy),
+        )
+        .objects(objects)
+        .points(points)
+        .nets(sorted_set(nets)?)
+        .layers(sorted_set(layers)?)
+        .details(solver_details(policy, "mandatory_inner_local_coverage", "retained_escape_policy", &fields)),
+    ))
 }
 
 fn net_points(scene: Option<&Scene>, nets: &[Value]) -> Py<Vec<Point>> {
@@ -728,6 +912,219 @@ fn int_of(value: &Value) -> Py<Value> {
     }
 }
 
+type NativeGeometry = (Vec<Point>, Vec<Value>, Vec<String>, Vec<Value>);
+
+fn native_geometry(findings: &[Value]) -> Py<NativeGeometry> {
+    let empty = Value::Array(Vec::new());
+    let (mut points, mut layers, mut objects, mut nets) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for finding in findings {
+        points.extend(finding_points(finding)?);
+        for item in py::iterate(get_or(finding, "items", &empty)?)? {
+            let net = get(&item, "net")?;
+            if truthy(net) {
+                nets.push(net.clone());
+            }
+            let item_layers = get(&item, "layers")?;
+            if truthy(item_layers) {
+                for layer in py::iterate(item_layers)? {
+                    py::hashable(&layer)?;
+                    if !layers.iter().any(|seen| py::eq(seen, &layer)) {
+                        layers.push(layer);
+                    }
+                }
+            }
+            let label = if truthy(get(&item, "component")?) && truthy(get(&item, "pad")?) {
+                format!("{}.{}", py::text(py::item(&item, "component")?), py::text(py::item(&item, "pad")?))
+            } else {
+                format!(
+                    "{}@{}",
+                    py::text(get_or(&item, "kind", &Value::from("item"))?),
+                    first_position(get(&item, "positions_nm")?)?
+                )
+            };
+            if !objects.contains(&label) {
+                objects.push(label);
+            }
+        }
+    }
+    Ok((points, sorted(layers)?, objects, sorted_set(nets)?))
+}
+
+/// Preserve source-global census counters while selecting diagnostic rows only
+/// for the requested net(s). Trials retain their other-net blocker context.
+fn native_repair_records(feedback: &Value, nets: &[Value]) -> Py<Value> {
+    let relevant = |item: &&Value| item.get("net").is_some_and(|net| nets.contains(net));
+    let scopes: Vec<Value> = list_items(get(feedback, "native_open_scope")?).iter().filter(relevant).cloned().collect();
+    let trials: Vec<Value> = list_items(get(feedback, "trials")?)
+        .iter()
+        .filter(relevant)
+        .map(|trial| {
+            Value::Object(
+                [
+                    "index",
+                    "net",
+                    "input_digest",
+                    "native_item_uuids",
+                    "layer",
+                    "outcome",
+                    "blockers",
+                    "displaced_nets",
+                    "expanded_states",
+                    "searches",
+                    "dependency_expansions",
+                    "dependency_searches",
+                    "candidate_digest",
+                    "cleanup_removed_tracks",
+                    "cleanup_removed_vias",
+                ]
+                .iter()
+                .filter_map(|name| trial.get(name).map(|value| ((*name).to_owned(), value.clone())))
+                .collect(),
+            )
+        })
+        .collect();
+    let proposal_census = match feedback.get("proposal_census") {
+        Some(Value::Object(source)) => {
+            let mut census = source.clone();
+            census.insert("issue_projection_array_limit".into(), Value::from(16i64));
+            for name in ["findings", "finding_layers"] {
+                if let Some(rows) = source.get(name) {
+                    let matched: Vec<Value> = list_items(rows).iter().filter(relevant).cloned().collect();
+                    census.insert(format!("issue_projection_matched_{name}_count"), Value::from(matched.len() as u64));
+                    census.insert(
+                        format!("issue_projection_clipped_{name}_count"),
+                        Value::from(matched.len().saturating_sub(16) as u64),
+                    );
+                    census.insert(name.into(), Value::Array(matched));
+                }
+            }
+            if let Some(rows) = source.get("layers") {
+                census.insert(
+                    "issue_projection_clipped_global_layer_count".into(),
+                    Value::from(list_items(rows).len().saturating_sub(16) as u64),
+                );
+            }
+            census.insert(
+                "issue_filter_scope".into(),
+                Value::from(
+                    "finding rows matched by net; aggregate counts/layers remain global to the initial input digest",
+                ),
+            );
+            Value::Object(census)
+        }
+        _ => Value::Null,
+    };
+    Ok(Value::Object(Object::from([
+        ("stop_reason".into(), get(feedback, "stop_reason")?.clone()),
+        ("diagnostic".into(), get(feedback, "diagnostic")?.clone()),
+        ("board_digest".into(), get(feedback, "board_digest")?.clone()),
+        ("native_open_scope".into(), Value::Array(scopes)),
+        ("trials".into(), Value::Array(trials)),
+        ("proposal_census".into(), proposal_census),
+    ])))
+}
+
+fn native_repair_title(title: &mut String, records: &Value) -> Py<()> {
+    for scope in list_items(get(records, "native_open_scope")?) {
+        if scope.get("scope").and_then(Value::as_str) == Some("no_declared_distribution_zone") {
+            *title += "; no declared distribution zone: outside native bridge repair scope";
+        }
+    }
+    Ok(())
+}
+
+fn native_cleanup_records(cleanup: &Value, nets: &[Value]) -> Value {
+    let Some(mut result) = cleanup.as_object().cloned() else { return Value::Null };
+    if let Some(Value::Object(census)) = result.get_mut("census") {
+        if let Some(Value::Array(items)) = census.get_mut("items") {
+            items.retain(|item| item.get("net").is_some_and(|net| nets.iter().any(|selected| py::eq(net, selected))));
+        }
+        census.insert("issue_filter_scope".into(), Value::from("item rows matched by net; cleanup status, digests and occurrence counts remain global; producer attribution grants no removal authority"));
+    }
+    Value::Object(result)
+}
+
+fn native_details(records: &Value) -> Py<Value> {
+    if list_items(get(records, "native_open_scope")?).is_empty()
+        && list_items(get(records, "trials")?).is_empty()
+        && get(records, "proposal_census")? == &Value::Null
+        && get(records, "native_projection")? == &Value::Null
+        && get(records, "stop_reason")? == &Value::Null
+        && get(records, "diagnostic")? == &Value::Null
+        && get(records, "native_cleanup")? == &Value::Null
+    {
+        return Ok(Value::Null);
+    }
+    Ok(solver_details(
+        records,
+        "native_repair_history; stop reason and board digest are feedback-global, not net-specific; census covers only the initial input; trials name their input digest; view shows retained board",
+        "filled_copper_feedback (matched by net)",
+        &[
+            "stop_reason",
+            "diagnostic",
+            "board_digest",
+            "native_open_scope",
+            "trials",
+            "proposal_census",
+            "native_projection",
+            "native_cleanup",
+        ],
+    ))
+}
+
+impl RunIssue {
+    fn project_native_net(mut self, net: &str) -> Py<Self> {
+        let Some(mut source) = self.native_projection.take() else {
+            return Ok(self);
+        };
+        let mut findings = Vec::new();
+        for finding in &source.findings {
+            // A multi-net finding is selected once, with all its items intact.
+            if list_items(get(finding, "items")?).iter().any(|item| item.get("net").is_some_and(|n| py::eq_str(n, net)))
+            {
+                findings.push(finding.clone());
+            }
+        }
+        let (points, layers, objects, nets) = native_geometry(&findings)?;
+        let mut records = native_repair_records(&source.repair_records, &[Value::from(net)])?;
+        if let Value::Object(entries) = &mut records {
+            entries
+                .insert("native_cleanup".into(), native_cleanup_records(&source.cleanup_records, &[Value::from(net)]));
+        }
+        let description = findings
+            .first()
+            .and_then(|finding| finding.get("description"))
+            .filter(|description| truthy(description))
+            .unwrap_or(&source.kind);
+        let mut title = format!("{} x {} on {net}", findings.len(), py::text(description));
+        native_repair_title(&mut title, &records)?;
+        let Value::Object(entries) = &mut records else {
+            unreachable!("repair records are an object");
+        };
+        entries.insert("native_projection".into(), Value::Object(Object::from([
+            ("scope".into(), Value::from("final_native_findings_matching_net; whole finding rows, not exclusive causal attribution")),
+            ("source_path".into(), Value::from("plane_verification.native_findings")),
+            ("group_id".into(), Value::from(self.id.as_str())),
+            ("original_group_count".into(), Value::from(source.group_count as u64)),
+            ("selected_finding_count".into(), Value::from(findings.len() as u64)),
+            ("filter_net".into(), Value::from(net)),
+            ("item_scope".into(), Value::from("all items of each matching finding retained, including other-net blocker context; cross-net findings can appear in multiple net projections")),
+            ("view_scope".into(), Value::from("group_id still selects the unfiltered group; use this projection's window_mm with copper view --window --highlight NET --filled for a focused geometry view")),
+        ])));
+        self.count = Value::from(findings.len() as u64);
+        self.title = Value::from(title);
+        self.points = points;
+        self.layers = layers;
+        self.objects = objects;
+        self.nets = nets;
+        self.details = native_details(&records)?;
+        source.findings = findings;
+        source.repair_records = records;
+        self.native_projection = Some(source);
+        Ok(self)
+    }
+}
+
 /// `run_issues(run, cluster_mm=...)`.
 pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
     let report = run.report()?.clone();
@@ -765,6 +1162,10 @@ pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
         ]);
     }
     let mut issues: Vec<RunIssue> = Vec::new();
+
+    if let Some(issue) = retained_policy_issue(report, scene)? {
+        issues.push(issue);
+    }
 
     // Nets the global router left unconnected, grouped by reason.
     let mut unrouted_global: Vec<(String, Vec<String>)> = Vec::new();
@@ -867,62 +1268,35 @@ pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
         .collect();
     pysort::sort_by_keys(&mut clustered, keys, |a, b| py::less(a, b, "<"))?;
     for (index, ((kind, nets), findings)) in clustered.into_iter().enumerate() {
-        let mut points = Vec::new();
-        let mut layers: Vec<Value> = Vec::new();
-        let mut objects: Vec<String> = Vec::new();
-        for finding in &findings {
-            points.extend(finding_points(finding)?);
-            for item in py::iterate(get_or(finding, "items", &empty)?)? {
-                let item_layers = get(&item, "layers")?;
-                if truthy(item_layers) {
-                    for layer in py::iterate(item_layers)? {
-                        py::hashable(&layer)?;
-                        if !layers.iter().any(|seen| py::eq(seen, &layer)) {
-                            layers.push(layer);
-                        }
-                    }
-                }
-                let label = if truthy(get(&item, "component")?) && truthy(get(&item, "pad")?) {
-                    format!("{}.{}", py::text(py::item(&item, "component")?), py::text(py::item(&item, "pad")?))
-                } else {
-                    format!(
-                        "{}@{}",
-                        py::text(get_or(&item, "kind", &Value::from("item"))?),
-                        first_position(get(&item, "positions_nm")?)?
-                    )
-                };
-                if !objects.contains(&label) {
-                    objects.push(label);
-                }
-            }
-        }
+        let (points, layers, objects, found_nets) = native_geometry(&findings)?;
         let description = get(&findings[0], "description")?;
         let description = if truthy(description) { description.clone() } else { kind.clone() };
-        let all_nets = if !nets.is_empty() {
-            nets.clone()
-        } else {
-            let mut found = Vec::new();
-            for finding in &findings {
-                for item in py::iterate(get_or(finding, "items", &empty)?)? {
-                    let net = get(&item, "net")?;
-                    if truthy(net) {
-                        found.push(net.clone());
-                    }
-                }
-            }
-            sorted_set(found)?
-        };
+        let all_nets = if !nets.is_empty() { nets.clone() } else { found_nets };
         let code = upper(&kind)?;
         let on = if nets.is_empty() { String::new() } else { format!(" on {}", join_texts(", ", &nets)?) };
-        let title = format!("{} x {}{on}", findings.len(), py::text(&description));
-        issues.push(
-            RunIssue::new(format!("N{}", index + 1), "native", code, title)
-                .count(findings.len() as u64)
-                .nets(all_nets)
-                .layers(sorted(layers)?)
-                .objects(objects)
-                .points(points),
-        );
+        let mut title = format!("{} x {}{on}", findings.len(), py::text(&description));
+        let mut records = native_repair_records(section(report, "filled_copper_feedback")?, &all_nets)?;
+        let cleanup_records = section(report, "native_cleanup")?.clone();
+        if let Value::Object(entries) = &mut records {
+            entries.insert("native_cleanup".into(), native_cleanup_records(&cleanup_records, &all_nets));
+        }
+        native_repair_title(&mut title, &records)?;
+        let details = native_details(&records)?;
+        let mut issue = RunIssue::new(format!("N{}", index + 1), "native", code, title)
+            .count(findings.len() as u64)
+            .nets(all_nets)
+            .layers(layers)
+            .objects(objects)
+            .points(points)
+            .details(details);
+        issue.native_projection = Some(NativeIssueProjection {
+            kind,
+            group_count: findings.len(),
+            findings,
+            repair_records: records,
+            cleanup_records,
+        });
+        issues.push(issue);
     }
 
     let drc: Vec<Value> = list_items(get(section(report, "drc")?, "findings")?)
@@ -1011,10 +1385,77 @@ pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
         let code = get_or(finding, "code", &Value::from("DRC"))?.clone();
         let title = concat(get_or(finding, "message", &Value::from(""))?, &detail)?;
         let points = if nets.len() <= 6 { net_points(scene, &nets)? } else { Vec::new() };
-        issues.push(RunIssue::new(format!("B{}", index + 1), "review", code, title).nets(nets).points(points));
+        let selected: Vec<_> = list_items(get(section(report, "critical")?, "nets")?)
+            .iter()
+            .enumerate()
+            .filter(|(_, result)| {
+                result.get("connected") == Some(&Value::Bool(true))
+                    && result
+                        .get("nets")
+                        .and_then(Value::as_array)
+                        .is_some_and(|members| members.iter().any(|net| nets.contains(net)))
+            })
+            .collect();
+        let details = if selected.is_empty() {
+            Value::Null
+        } else {
+            let records: Vec<_> = selected
+                .iter()
+                .take(16)
+                .map(|(result_index, result)| {
+                    solver_details(
+                        result,
+                        "selected_route",
+                        &format!("critical.nets[{result_index}]"),
+                        &[
+                            "nets",
+                            "connected",
+                            "warnings",
+                            "lengths_nm",
+                            "skew_nm",
+                            "strategy",
+                            "candidate_rejected",
+                            "diagnostics",
+                            "search_states",
+                            "search_states_known",
+                            "unified_search_budget_exhausted",
+                            "failed_exact_retry",
+                            "pair_searches",
+                            "pair_state_limit",
+                            "pair_budget_exhausted",
+                            "pair_collars",
+                            "pair_compatible_collar_pairs",
+                            "pair_incompatible_collar_pairs",
+                            "pair_attempts",
+                            "pair_fallback_selection",
+                            "pair_transitions",
+                            "rejections",
+                            "rejection_examples",
+                            "repairs",
+                        ],
+                    )
+                })
+                .collect();
+            let truncated = selected.len() > records.len()
+                || records.iter().any(|record| record.get("truncated") == Some(&Value::Bool(true)));
+            Value::Object(Object::from([
+                ("scope".into(), Value::from("selected_routes")),
+                ("source_path".into(), Value::from("critical.nets (connected records matched by net)")),
+                (
+                    "search_history_scope".into(),
+                    Value::from("candidate attempts and repair trials; rejected candidates are not retained-board DRC"),
+                ),
+                ("truncated".into(), Value::Bool(truncated)),
+                ("record_count".into(), Value::from(selected.len() as u64)),
+                ("records".into(), Value::Array(records)),
+            ]))
+        };
+        issues.push(
+            RunIssue::new(format!("B{}", index + 1), "review", code, title).nets(nets).points(points).details(details),
+        );
     }
 
-    for result in list_items(get(section(report, "critical")?, "nets")?) {
+    for (result_index, result) in list_items(get(section(report, "critical")?, "nets")?).iter().enumerate() {
         if !matches!(result, Value::Object(_)) || !matches!(get(result, "connected")?, Value::Bool(false)) {
             continue;
         }
@@ -1023,8 +1464,35 @@ pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
             if truthy(value) { py::iterate(value) } else { Ok(Vec::new()) }
         };
         let nets: Vec<Value> = listed("nets")?.iter().map(|net| Value::from(py::text(net))).collect();
-        let reason = listed("diagnostics")?.iter().map(py::text).collect::<Vec<_>>().join("; ");
+        let reason = short_diagnostics(&listed("diagnostics")?);
         let mut reason = if reason.is_empty() { "not connected".to_owned() } else { reason };
+        let rejected = truthy(get(result, "candidate_rejected")?);
+        if rejected {
+            reason = format!("no route accepted; rejected candidate (not retained-board DRC): {reason}");
+        }
+        let unified = get(result, "strategy")?.as_str().is_some_and(|strategy| strategy.starts_with("unified_"));
+        let unknown_text =
+            |value: &Value| if matches!(value, Value::Null) { "unknown".to_owned() } else { py::text(value) };
+        if unified {
+            // Older unified results wrote constructor-default zero: no numeric
+            // expansion count was exported. Honor an explicitly known count.
+            let states = if get(result, "search_states_known")? == &Value::Bool(true) {
+                unknown_text(get(result, "search_states")?)
+            } else {
+                "unknown".to_owned()
+            };
+            reason += &format!(
+                "; unified states={states}, bound_exhausted={}",
+                unknown_text(get(result, "unified_search_budget_exhausted")?)
+            );
+        } else {
+            reason += &format!(
+                "; pair searches={}, states={}, bound_exhausted={}",
+                py::text(get_or(result, "pair_searches", &Value::from(0i64))?),
+                unknown_text(get(result, "search_states")?),
+                py::text(get_or(result, "pair_budget_exhausted", &Value::Bool(false))?)
+            );
+        }
         let preparation = get(result, "local_preparation")?;
         let preparation = if truthy(preparation) { preparation.clone() } else { Value::Object(Object::new()) };
         if py::in_str_set(get(&preparation, "status")?, &["blocked", "unsupported"])? {
@@ -1046,7 +1514,36 @@ pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
         }
         let id = format!("C{}", 1 + issues.iter().filter(|issue| issue.stage == "critical").count());
         let points = net_points(scene, &nets)?;
-        issues.push(RunIssue::new(id, "critical", "CRITICAL-UNROUTED", reason).nets(nets).points(points));
+        let details = solver_details(
+            result,
+            if rejected { "rejected_candidate" } else { "failed_search" },
+            &format!("critical.nets[{result_index}]"),
+            &[
+                "diagnostics",
+                "candidate_rejected",
+                "search_states",
+                "search_states_known",
+                "unified_search_budget_exhausted",
+                "failed_exact_retry",
+                "pair_searches",
+                "pair_state_limit",
+                "pair_budget_exhausted",
+                "rejections",
+                "rejection_examples",
+                "local_preparation",
+                "pair_ports",
+                "pair_transitions",
+                "pair_attempts",
+                "pair_fallback_selection",
+                "repairs",
+                "pair_collars",
+                "pair_compatible_collar_pairs",
+                "pair_incompatible_collar_pairs",
+            ],
+        );
+        issues.push(
+            RunIssue::new(id, "critical", "CRITICAL-UNROUTED", reason).nets(nets).points(points).details(details),
+        );
     }
 
     let mut detailed: Vec<Value> = list_items(get(section(report, "detailed")?, "nets")?)
@@ -1054,6 +1551,7 @@ pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
         .filter(|net| matches!(net, Value::Object(_)))
         .cloned()
         .collect();
+    let mut detailed_source_path = "detailed.nets (matched by net)";
     if detailed.is_empty()
         && py::eq_str(get(report, "schema")?, "copperscript-route-summary/v1")
         && truthy(get(report, "state")?)
@@ -1061,6 +1559,7 @@ pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
         // replay-unified records only attempted failures here. The summary's
         // other open nets may deliberately be outside the selected replay.
         if let Value::Object(unrouted) = section(report, "unrouted")? {
+            detailed_source_path = "unrouted (matched by net; legacy replay diagnostics)";
             for (name, diagnostics) in unrouted {
                 let diagnostics =
                     if matches!(diagnostics, Value::Array(_)) { diagnostics.clone() } else { empty.clone() };
@@ -1087,17 +1586,58 @@ pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
     }
     reasons.sort_by_key(|(_, nets)| std::cmp::Reverse(nets.len()));
     for (index, (reason, nets)) in reasons.into_iter().enumerate() {
-        let points = if nets.len() <= 6 { net_points(scene, &nets)? } else { Vec::new() };
+        let selected: Vec<&Value> =
+            detailed.iter().filter(|entry| entry.get("net").is_some_and(|name| nets.contains(name))).collect();
+        let diagnostics: Vec<Value> = selected
+            .iter()
+            .flat_map(|entry| entry.get("diagnostics").and_then(Value::as_array).into_iter().flatten().cloned())
+            .collect();
+        let objects = remaining_pads(&diagnostics);
+        let located: Vec<Point> = objects.iter().flat_map(|pad| pad_points(scene, pad)).collect();
+        let points = if !located.is_empty() {
+            located
+        } else if nets.len() <= 6 {
+            net_points(scene, &nets)?
+        } else {
+            Vec::new()
+        };
+        let records: Vec<Value> = selected
+            .iter()
+            .take(16)
+            .map(|entry| {
+                solver_details(
+                    entry,
+                    "selected_route",
+                    detailed_source_path,
+                    &["net", "connected", "search_budget_exhausted", "diagnostics"],
+                )
+            })
+            .collect();
+        let truncated = selected.len() > records.len()
+            || records.iter().any(|record| record.get("truncated") == Some(&Value::Bool(true)));
+        let details = Value::Object(Object::from([
+            ("scope".into(), Value::from("selected_routes")),
+            ("source_path".into(), Value::from(detailed_source_path)),
+            ("truncated".into(), Value::Bool(truncated)),
+            ("record_count".into(), Value::from(selected.len() as u64)),
+            ("records".into(), Value::Array(records)),
+        ]));
         issues.push(
             RunIssue::new(
                 format!("R{}", index + 1),
                 "routing",
                 "NET-UNROUTED",
-                format!("{} net(s): {reason}", nets.len()),
+                format!(
+                    "{} net(s): {}",
+                    nets.len(),
+                    if diagnostics.is_empty() { reason } else { short_diagnostics(&diagnostics) }
+                ),
             )
             .count(nets.len() as u64)
             .nets(nets)
-            .points(points),
+            .objects(objects)
+            .points(points)
+            .details(details),
         );
     }
     if !truthy(get(native, "native_findings")?) {
@@ -1244,6 +1784,39 @@ fn escape_issues(report: &Value, scene: Option<&Scene>, unrouted: &[Value]) -> P
 /// that likely caused routing issues above.
 fn placement_issues(report: &Value, scene: Option<&Scene>) -> Py<Vec<RunIssue>> {
     let mut issues: Vec<RunIssue> = Vec::new();
+    for (index, trial) in list_items(get(section(report, "placement_feedback")?, "trials")?).iter().enumerate() {
+        if trial.get("outcome").and_then(Value::as_str) != Some("global_failed") {
+            continue;
+        }
+        let reference = py::text(get_or(trial, "reference", &Value::from("?"))?);
+        let gate = section(trial, "global_gate")?;
+        let delta = |key: &str| {
+            get(gate, key).map(|value| if value == &Value::Null { "unrecorded".to_owned() } else { py::text(value) })
+        };
+        let title = format!(
+            "{reference}: trial rejected before detailed routing; global opens delta={}, overflow delta={} (view shows retained pose)",
+            delta("unrouted_net_count_delta")?,
+            delta("total_overflow_delta")?
+        );
+        let points = scene
+            .into_iter()
+            .flat_map(|scene| &scene.pads)
+            .filter(|pad| pad.reference == reference)
+            .map(|pad| pad.center)
+            .collect();
+        let details = solver_details(
+            trial,
+            "rejected_placement_trial",
+            &format!("placement_feedback.trials[{index}]"),
+            &["index", "reference", "delta_nm", "delta_mm", "rotation_degrees", "reason", "outcome", "global_gate"],
+        );
+        issues.push(
+            RunIssue::new(format!("PF{}", index + 1), "placement", "PLACEMENT-TRIAL-GLOBAL-REJECTED", title)
+                .objects(vec![reference])
+                .points(points)
+                .details(details),
+        );
+    }
     for finding in list_items(get(report, "placement_findings")?) {
         if !matches!(finding, Value::Object(_)) || py::in_str_set(get(finding, "status")?, &["pass", "passed", "ok"])? {
             continue;
@@ -1316,7 +1889,13 @@ pub fn filter_issues(
 ) -> Py<Vec<RunIssue>> {
     let mut result = issues;
     if let Some(net) = net.filter(|net| !net.is_empty()) {
-        result.retain(|issue| issue.nets.iter().any(|value| py::eq_str(value, net)));
+        let mut selected = Vec::new();
+        for issue in result {
+            if issue.nets.iter().any(|value| py::eq_str(value, net)) {
+                selected.push(issue.project_native_net(net)?);
+            }
+        }
+        result = selected;
     }
     if let Some(stage) = stage.filter(|stage| !stage.is_empty()) {
         result.retain(|issue| issue.stage == stage);
@@ -1551,9 +2130,899 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fixed_prefix_view_keeps_source_and_each_declared_copper_occurrence() {
+        let dc = |name: &str, fields: Vec<(&str, StateValue)>| StateValue::Dataclass {
+            name: name.to_owned(),
+            fields: fields.into_iter().map(|(key, value)| (key.to_owned(), value)).collect(),
+        };
+        let edge = StateValue::Str("same physical edge occurrence".to_owned());
+        let source = dc(
+            "pcbir.physical:PhysicalBoard",
+            vec![("tracks", StateValue::Tuple(vec![edge.clone(), edge.clone()])), ("vias", StateValue::Tuple(vec![]))],
+        );
+        let part = dc(
+            "pcbir.fixed_prefix:Contribution",
+            vec![
+                ("tracks", StateValue::Tuple(vec![edge.clone()])),
+                ("vias", StateValue::Tuple(vec![StateValue::Str("barrel".to_owned())])),
+            ],
+        );
+        let prefix = dc(
+            "pcbir.fixed_prefix:Input",
+            vec![("source", source.clone()), ("contributions", StateValue::Tuple(vec![part.clone(), part]))],
+        );
+        let mut state = StateValue::Object(
+            [
+                ("board".to_owned(), source.clone()),
+                ("fixed_prefix".to_owned(), prefix),
+                ("reserved_accesses".to_owned(), StateValue::Null),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let projected = declared_prefix_board(&state).unwrap().unwrap();
+        assert_eq!(attribute(&projected, "tracks"), Some(&StateValue::Tuple(vec![edge; 4])));
+        assert_eq!(
+            attribute(&projected, "vias"),
+            Some(&StateValue::Tuple(vec![StateValue::Str("barrel".to_owned()); 2]))
+        );
+        assert_eq!(map_get(&state, "board"), Some(&source));
+        let StateValue::Object(fields) = &mut state else { unreachable!() };
+        fields.insert("board".to_owned(), StateValue::Null);
+        assert!(declared_prefix_board(&state).is_err(), "a changed source must not be silently displayed");
+        let StateValue::Object(fields) = &mut state else { unreachable!() };
+        fields.shift_remove("fixed_prefix");
+        assert!(declared_prefix_board(&state).unwrap().is_none());
+    }
+
+    #[test]
+    fn saved_checkpoint_view_shows_prefix_when_held_proposal_is_absent() {
+        let dc = |name: &str, fields: Vec<(&str, StateValue)>| StateValue::Dataclass {
+            name: name.to_owned(),
+            fields: fields.into_iter().map(|(key, value)| (key.to_owned(), value)).collect(),
+        };
+        let point = |x: i64| {
+            dc(
+                "pcbir.geometry:Point",
+                vec![("x_nm", StateValue::Int(x.into())), ("y_nm", StateValue::Int(1_000_000.into()))],
+            )
+        };
+        let stem = dc(
+            "pcbir.physical:TrackSegment",
+            vec![
+                ("net", StateValue::Str("ESCAPE".to_owned())),
+                ("layer", StateValue::Str("F.Cu".to_owned())),
+                ("start", point(1_000_000)),
+                ("end", point(2_000_000)),
+                ("width_nm", StateValue::Int(100_000.into())),
+            ],
+        );
+        let empty = StateValue::Tuple(vec![]);
+        let mut source = dc(
+            "pcbir.physical:PhysicalBoard",
+            vec![
+                ("name", StateValue::Str("prefix-view".to_owned())),
+                (
+                    "stackup",
+                    dc(
+                        "pcbir.physical:Stackup",
+                        vec![(
+                            "copper_layers",
+                            StateValue::Tuple(vec![
+                                StateValue::Str("F.Cu".to_owned()),
+                                StateValue::Str("B.Cu".to_owned()),
+                            ]),
+                        )],
+                    ),
+                ),
+                ("footprints", StateValue::Map { entries: vec![], proxy: false }),
+            ],
+        );
+        let StateValue::Dataclass { fields, .. } = &mut source else { unreachable!() };
+        for key in ["nets", "placements", "tracks", "vias", "zones", "zone_fills", "polygons", "outline"] {
+            fields.insert(key.to_owned(), empty.clone());
+        }
+        fields.insert("outline".to_owned(), dc("pcbir.geometry:Polygon", vec![("vertices", empty.clone())]));
+        let prefix = dc(
+            "pcbir.fixed_prefix:Input",
+            vec![
+                ("source", source.clone()),
+                (
+                    "contributions",
+                    StateValue::Tuple(vec![dc(
+                        "pcbir.fixed_prefix:Contribution",
+                        vec![("tracks", StateValue::Tuple(vec![stem])), ("vias", empty)],
+                    )]),
+                ),
+            ],
+        );
+        let state = StateValue::Object(
+            [
+                ("board".to_owned(), source),
+                ("fixed_prefix".to_owned(), prefix),
+                ("reserved_accesses".to_owned(), StateValue::Null),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let path = std::env::temp_dir().join(format!("copper-prefix-view-{}.state.json", std::process::id()));
+        std::fs::write(&path, StateDocument::new("builtins:dict", Object::new(), state).to_text()).unwrap();
+        let scene = scene_of_state(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(scene.source, FIXED_PREFIX_VIEW_SOURCE);
+        assert_eq!(scene.tracks.len(), 1, "the declared escape must survive an absent Held proposal");
+        assert_eq!(scene.tracks[0].net, "ESCAPE");
+        assert_eq!(scene.tracks[0].layer, "F.Cu");
+        assert_eq!(scene.tracks[0].start, (1.0, 1.0));
+        assert_eq!(scene.tracks[0].end, (2.0, 1.0));
+        let request = crate::view::ViewRequest {
+            window: [0.0, 0.0, 3.0, 3.0],
+            layers: vec!["F.Cu".to_owned(), "B.Cu".to_owned()],
+            highlight: vec![],
+            markers: vec![],
+        };
+        assert!(crate::view::legend(&scene, &request, &[], None).iter().any(|line| line.contains("does not certify")));
+    }
+
+    #[test]
+    fn unified_failure_details_keep_retry_and_unknown_state_scope() {
+        let report = copper_json::parse(
+            r#"{"critical":{"nets":[{
+            "nets":["CLK"],"connected":false,"strategy":"unified_critical_cohort",
+            "diagnostics":["unified: missing source access"],"search_states":null,
+            "search_states_known":false,"unified_search_budget_exhausted":false,
+            "failed_exact_retry":{"scope":"failed_exact_retry_not_selected_copper",
+              "connected":false,"strategy":"unified_clock","search_states":null,
+              "unified_search_budget_exhausted":true,
+              "failure_diagnostics":{"records":["unified: search expansion limit exhausted"],
+                "record_count":1,"truncated":false}}
+        }]}}"#,
+        )
+        .unwrap();
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let issue = find_issue(&issues, "C1").unwrap();
+        let title = py::text(&issue.title);
+        assert!(title.contains("unified states=unknown, bound_exhausted=False"), "{title}");
+        assert!(!title.contains("pair searches"));
+        let records = issue.details.get("records").unwrap();
+        assert_eq!(records.get("search_states"), Some(&Value::Null));
+        assert_eq!(records.get("unified_search_budget_exhausted"), Some(&Value::Bool(false)));
+        let retry = records.get("failed_exact_retry").unwrap();
+        assert_eq!(retry.get("scope"), Some(&Value::from("failed_exact_retry_not_selected_copper")));
+        assert_eq!(retry.get("unified_search_budget_exhausted"), Some(&Value::Bool(true)));
+        assert!(!issues.iter().any(|issue| issue.stage == "physical"));
+    }
+
+    #[test]
+    fn legacy_unified_zero_is_not_claimed_as_a_measured_state_count() {
+        let report = copper_json::parse(
+            r#"{"critical":{"nets":[{
+            "nets":["CLK"],"connected":false,"strategy":"unified_clock","search_states":0
+        }]}}"#,
+        )
+        .unwrap();
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let title = py::text(&find_issue(&issues, "C1").unwrap().title);
+        assert!(title.contains("unified states=unknown, bound_exhausted=unknown"), "{title}");
+    }
+
+    #[test]
+    fn explicitly_known_unified_state_count_is_reported() {
+        for count in [0, 42] {
+            let report = copper_json::parse(&format!(
+                r#"{{"critical":{{"nets":[{{"nets":["CLK"],"connected":false,
+                "strategy":"unified_clock","search_states":{count},
+                "search_states_known":true,"unified_search_budget_exhausted":false}}]}}}}"#
+            ))
+            .unwrap();
+            let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+            let title = py::text(&find_issue(&issues, "C1").unwrap().title);
+            assert!(title.contains(&format!("unified states={count}, bound_exhausted=False")), "{title}");
+        }
+    }
+
+    fn report_run(report: Value, scene: Scene) -> Run {
+        Run {
+            directory: String::new(),
+            report_path: None,
+            board_path: None,
+            filled_board_path: None,
+            report: Some(report),
+            scene: Some(scene),
+            filled: None,
+        }
+    }
+
+    #[test]
+    fn unresolved_retention_policy_alone_is_an_access_issue_located_at_contacts_and_packages() {
+        let report = copper_json::parse(
+            r#"{
+            "schema":"copperscript-route-board/v0.1","status":"fail",
+            "retained_escape_policy":{"requested":true,"effective":true,
+                "requested_policy_satisfied":false,"reason":"mandatory_inner_lattice_census_partial",
+                "mandatory_inner_obligations":2,"pending_inner_obligations":1,
+                "pending_inner":[{"pad":"U1.15","reason":"site unavailable"}],
+                "unsupported_pattern_candidates":1,"unsupported_pattern_components":["U2"],
+                "retained_prefix_admitted":true,"retained_prefix_occurrences_preserved":true,
+                "mandatory_inner_local_coverage_complete":false,
+                "boundary_channel_verification":"not_performed","field_protection":"not_implemented"}
+        }"#,
+        )
+        .unwrap();
+        let pad = |reference: &str, number: &str, net: &str, center| crate::scene::ScenePad {
+            reference: reference.to_owned(),
+            pad: number.to_owned(),
+            net: net.to_owned(),
+            layers: vec!["F.Cu".to_owned()],
+            polygon: Vec::new(),
+            center,
+            drill: 0.0,
+        };
+        let scene = Scene {
+            pads: vec![pad("U1", "15", "DATA", (10.0, 20.0)), pad("U2", "13", "POWER", (30.0, 40.0))],
+            ..Scene::default()
+        };
+        let issues = run_issues(&mut report_run(report, scene), 3.0).unwrap();
+        assert_eq!(issues.len(), 1, "the saved policy must explain failure without an unrelated DRC finding");
+        let issue = find_issue(&issues, "A1").unwrap();
+        assert_eq!(issue.stage, "access");
+        assert_eq!(issue.code, Value::from(crate::summary::RETAINED_POLICY_CODE));
+        assert_eq!(issue.objects, vec!["U1.15", "U2"]);
+        assert_eq!(issue.points, vec![(10.0, 20.0), (30.0, 40.0)]);
+        assert!(issue.window().is_some());
+        assert_eq!(issue.details.get("source_path"), Some(&Value::from("retained_escape_policy")));
+        assert_eq!(issue.details.get("scope"), Some(&Value::from("mandatory_inner_local_coverage")));
+        assert_eq!(
+            issue.details.get("records").unwrap().get("boundary_channel_verification"),
+            Some(&Value::from("not_performed"))
+        );
+        assert!(py::text(&issue.title).contains("mandatory_inner_lattice_census_partial"));
+        let filtered =
+            filter_issues(issues, Some("DATA"), Some("access"), Some(crate::summary::RETAINED_POLICY_CODE)).unwrap();
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn retained_policy_absent_not_requested_or_satisfied_does_not_invent_an_issue() {
+        for policy in [
+            "null",
+            "{}",
+            r#"{"requested":true}"#,
+            r#"{"requested":false,"requested_policy_satisfied":false}"#,
+            r#"{"requested":false,"requested_policy_satisfied":true}"#,
+            r#"{"requested":true,"applicability":"not_applicable","requested_policy_satisfied":true}"#,
+        ] {
+            let report = copper_json::parse(&format!(r#"{{"retained_escape_policy":{policy}}}"#)).unwrap();
+            assert!(run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap().is_empty());
+        }
+        assert!(run_issues(&mut report_run(Value::Object(Object::new()), Scene::default()), 3.0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn unresolved_retained_policy_details_are_bounded_and_missing_locations_stay_unavailable() {
+        let mut policy = Object::from([
+            ("requested".into(), Value::Bool(true)),
+            ("requested_policy_satisfied".into(), Value::Bool(false)),
+            ("pending_inner_obligations".into(), Value::from(40i64)),
+        ]);
+        policy.insert(
+            "pending_inner".into(),
+            Value::Array(
+                (0..40)
+                    .map(|index| {
+                        Value::Object(Object::from([
+                            ("pad".into(), Value::from(format!("MISSING.{index}"))),
+                            ("reason".into(), Value::from("x".repeat(3000))),
+                        ]))
+                    })
+                    .collect(),
+            ),
+        );
+        let report = Value::Object(Object::from([("retained_escape_policy".into(), Value::Object(policy))]));
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let issue = find_issue(&issues, "A1").unwrap();
+        assert!(issue.window().is_none(), "do not fabricate contact locations from labels alone");
+        assert_eq!(issue.details.get("truncated"), Some(&Value::Bool(true)));
+        let records = issue.details.get("records").unwrap();
+        assert_eq!(records.get("pending_inner").unwrap().as_array().unwrap().len(), 16);
+        assert_eq!(records.get("pending_inner_obligations"), Some(&Value::from(40i64)));
+    }
+
+    #[test]
+    fn rejected_candidate_diagnostics_are_bounded_and_have_provenance() {
+        let mut report = copper_json::parse(
+            r#"{"critical":{"nets":[{"nets":["USB"],"connected":false,
+            "candidate_rejected":true,"pair_searches":0,"search_states":42,"pair_budget_exhausted":false}]}}"#,
+        )
+        .unwrap();
+        let Value::Object(root) = &mut report else { unreachable!() };
+        let Value::Object(critical) = root.get_mut("critical").unwrap() else { unreachable!() };
+        let Value::Array(nets) = critical.get_mut("nets").unwrap() else { unreachable!() };
+        let Value::Object(net) = &mut nets[0] else { unreachable!() };
+        net.insert("diagnostics".into(), Value::Array(vec![Value::from("rejected clearance α".repeat(3000))]));
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let issue = find_issue(&issues, "C1").unwrap();
+        let title = py::text(&issue.title);
+        assert!(title.contains("rejected candidate (not retained-board DRC)"));
+        assert!(title.chars().count() < 1000);
+        assert_eq!(issue.details.get("scope").and_then(Value::as_str), Some("rejected_candidate"));
+        assert_eq!(issue.details.get("truncated"), Some(&Value::Bool(true)));
+        assert!(!issues.iter().any(|issue| issue.stage == "physical"));
+    }
+
+    #[test]
+    fn repair_restoration_details_are_bounded_and_legacy_absence_stays_unknown() {
+        let mut report = copper_json::parse(
+            r#"{"critical":{"nets":[{
+            "nets":["TARGET"],"connected":false,"diagnostics":["target remains open"],
+            "repairs":[{"ripped_up":["BLOCKER"],"accepted":false,"search_states":17,
+            "pair_budget_exhausted":false,
+            "reason":"ripped-up group has no accepted candidate after the failed group"}]}]}}"#,
+        )
+        .unwrap();
+        let legacy = report.clone();
+        let Value::Object(root) = &mut report else { unreachable!() };
+        let Value::Object(critical) = root.get_mut("critical").unwrap() else { unreachable!() };
+        let Value::Array(nets) = critical.get_mut("nets").unwrap() else { unreachable!() };
+        let Value::Object(net) = &mut nets[0] else { unreachable!() };
+        let Value::Array(repairs) = net.get_mut("repairs").unwrap() else { unreachable!() };
+        let Value::Object(repair) = &mut repairs[0] else { unreachable!() };
+        let blocker = copper_json::parse(
+            r#"{
+            "identity":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "net":"TX1P_IC","occurrence":"track:7","reason":"copper_clearance",
+            "immutable":true,"immutability_scope":"routing_snapshot","authored_ownership":"not_determined",
+            "layers":["F.Cu"],"positions_nm":[[87000000,19950000],[88000000,19950000]]
+        }"#,
+        )
+        .unwrap();
+        let collar = copper_json::parse(
+            r#"{
+            "family":"surface","layer":"F.Cu","pitch_nm":250000,
+            "first_ports":2,"second_ports":2,"compatible_pairs":1,
+            "incompatible_pairs":3,"stop_reason":"aggregate_state_limit"
+        }"#,
+        )
+        .unwrap();
+        let transition = Value::Object(Object::from([
+            ("component".into(), Value::from("U_USB")),
+            (
+                "examples".into(),
+                Value::Array(vec![Value::Object(Object::from([
+                    ("stage".into(), Value::from("return_via")),
+                    ("blockers".into(), Value::Array(vec![blocker.clone(); 20])),
+                ]))]),
+            ),
+        ]));
+        let attempt = Value::Object(Object::from([
+            ("search_index".into(), Value::from(2i64)),
+            (
+                "goal".into(),
+                Value::Object(Object::from([(
+                    "rejection_examples".into(),
+                    Value::Array(vec![Value::Object(Object::from([
+                        ("reason".into(), Value::from("copper_clearance")),
+                        ("blockers".into(), Value::Array(vec![blocker.clone()])),
+                    ]))]),
+                )])),
+            ),
+        ]));
+        repair.insert(
+            "restoration".into(),
+            Value::Object(Object::from([
+                ("connected".into(), Value::Bool(false)),
+                ("search_states".into(), Value::from(4000i64)),
+                ("pair_budget_exhausted".into(), Value::Bool(true)),
+                ("diagnostics".into(), Value::Array(vec![Value::from("restoration clearance failure")])),
+                ("rejection_examples".into(), Value::Array(vec![Value::from("x".repeat(3000)); 20])),
+                ("pair_collars".into(), Value::Array(vec![collar; 20])),
+                ("pair_transitions".into(), Value::Array(vec![transition])),
+                ("pair_attempts".into(), Value::Array(vec![attempt])),
+            ])),
+        );
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let issue = find_issue(&issues, "C1").unwrap();
+        assert_eq!(issue.details.get("truncated"), Some(&Value::Bool(true)));
+        assert_eq!(issue.details.get("source_path"), Some(&Value::from("critical.nets[0]")));
+        let repairs = issue.details.get("records").unwrap().get("repairs").unwrap().as_array().unwrap();
+        assert_eq!(repairs[0].get("search_states"), Some(&Value::from(17i64)), "target work remains separate");
+        let restored = repairs[0].get("restoration").unwrap();
+        assert_eq!(restored.get("search_states"), Some(&Value::from(4000i64)));
+        assert_eq!(restored.get("pair_budget_exhausted"), Some(&Value::Bool(true)));
+        assert_eq!(restored.get("connected"), Some(&Value::Bool(false)));
+        let examples = restored.get("rejection_examples").unwrap().as_array().unwrap();
+        assert_eq!(examples.len(), 16);
+        assert_eq!(examples[0].as_str().unwrap().chars().count(), 2049);
+        assert_eq!(restored.get("pair_collars").unwrap().as_array().unwrap().len(), 16);
+        let transitions = restored.get("pair_transitions").unwrap().as_array().unwrap();
+        let transition_examples = transitions[0].get("examples").unwrap().as_array().unwrap();
+        let blockers = transition_examples[0].get("blockers").unwrap().as_array().unwrap();
+        assert_eq!(blockers.len(), 16);
+        assert_eq!(blockers[0], blocker, "retain net, geometry identity, occurrence and snapshot ownership scope");
+        let attempts = restored.get("pair_attempts").unwrap().as_array().unwrap();
+        let goals = attempts[0].get("goal").unwrap().get("rejection_examples").unwrap().as_array().unwrap();
+        assert_eq!(goals[0].get("blockers").unwrap().as_array().unwrap()[0], blocker);
+        let old_issues = run_issues(&mut report_run(legacy, Scene::default()), 3.0).unwrap();
+        let old = find_issue(&old_issues, "C1").unwrap();
+        let repairs = old.details.get("records").unwrap().get("repairs").unwrap().as_array().unwrap();
+        assert!(repairs[0].get("restoration").is_none(), "legacy absence must not fabricate a restoration outcome");
+    }
+
+    #[test]
+    fn connected_pair_budget_issue_exposes_selected_search_and_repair_history_by_net() {
+        let report = copper_json::parse(
+            r#"{
+          "drc":{"findings":[{"code":"DRC-MAX-LENGTH","severity":"warning","nets":["PAIR_P"],
+            "message":"net exceeds maximum routed length","measured_nm":112000000,"required_nm":63000000},
+            {"code":"DRC-MAX-LENGTH","severity":"warning","nets":["ORDINARY"],
+            "message":"ordinary route too long","measured_nm":9000000,"required_nm":4000000}]},
+          "critical":{"nets":[{"nets":["UNRELATED_M","UNRELATED_P"],"connected":true},
+            {"nets":["PAIR_M","PAIR_P"],"connected":true,"warnings":["route length exceeds budget"],
+             "lengths_nm":[109000000,109050000],"skew_nm":50000,"candidate_rejected":false,
+             "search_states":60000,"pair_state_limit":60000,"pair_budget_exhausted":true,
+             "pair_collars":[{"component":"U1"}],"pair_compatible_collar_pairs":2,
+             "pair_incompatible_collar_pairs":4,
+             "pair_attempts":[{"goal":{"stop_reason":"aggregate_state_limit"}}],
+             "rejections":[["length_budget",1]],"rejection_examples":["rejected candidate length"],
+             "repairs":[{"accepted":false,"ripped_up":["OTHER"],
+               "reason":"ripped-up group has no accepted candidate after the failed group"}]}]}
+        }"#,
+        )
+        .unwrap();
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let issue = find_issue(&issues, "B1").unwrap();
+        assert_eq!(issue.stage, "review");
+        assert_eq!(issue.nets, [Value::from("PAIR_P")]);
+        assert_eq!(issue.details.get("scope").and_then(Value::as_str), Some("selected_routes"));
+        assert_eq!(issue.details.get("record_count"), Some(&Value::from(1u64)));
+        assert_eq!(issue.details.get("truncated"), Some(&Value::Bool(false)));
+        assert!(
+            issue.details.get("search_history_scope").unwrap().as_str().unwrap().contains("not retained-board DRC")
+        );
+        let records = issue.details.get("records").unwrap().as_array().unwrap();
+        assert_eq!(records[0].get("scope").and_then(Value::as_str), Some("selected_route"));
+        assert_eq!(records[0].get("source_path").and_then(Value::as_str), Some("critical.nets[1]"));
+        let selected = records[0].get("records").unwrap();
+        assert_eq!(selected.get("connected"), Some(&Value::Bool(true)));
+        assert_eq!(selected.get("pair_budget_exhausted"), Some(&Value::Bool(true)));
+        assert_eq!(selected.get("search_states"), Some(&Value::from(60000i64)));
+        assert_eq!(selected.get("pair_state_limit"), Some(&Value::from(60000i64)));
+        assert_eq!(selected.get("lengths_nm").unwrap().as_array().unwrap()[0], Value::from(109000000i64));
+        assert_eq!(
+            selected.get("warnings").unwrap().as_array().unwrap()[0],
+            Value::from("route length exceeds budget")
+        );
+        let repairs = selected.get("repairs").unwrap().as_array().unwrap();
+        assert_eq!(repairs[0].get("accepted"), Some(&Value::Bool(false)));
+        assert_eq!(
+            repairs[0].get("reason").and_then(Value::as_str),
+            Some("ripped-up group has no accepted candidate after the failed group")
+        );
+        assert_eq!(find_issue(&issues, "B2").unwrap().details, Value::Null);
+        assert!(!issues.iter().any(|issue| issue.stage == "critical" || issue.stage == "physical"));
+    }
+
+    #[test]
+    fn ordinary_budget_issue_without_critical_records_keeps_null_details() {
+        let report = copper_json::parse(
+            r#"{"drc":{"findings":[{"code":"DRC-MAX-LENGTH",
+          "severity":"warning","nets":["A"],"message":"too long","measured_nm":9000000,
+          "required_nm":4000000}]}}"#,
+        )
+        .unwrap();
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].id, "B1");
+        assert_eq!(issues[0].details, Value::Null);
+    }
+
+    #[test]
+    fn unresolved_pad_labels_focus_the_issue_and_keep_the_budget_flag() {
+        let report = copper_json::parse(
+            r#"{"detailed":{"nets":[{"net":"A","connected":false,
+            "search_budget_exhausted":true,"diagnostics":["expansion_limit; remaining_pads=[U2.1]"]}]}}"#,
+        )
+        .unwrap();
+        let mut scene = Scene::default();
+        for (reference, center) in [("U1", (1.0, 2.0)), ("U2", (100.0, 20.0))] {
+            scene.pads.push(crate::scene::ScenePad {
+                reference: reference.into(),
+                pad: "1".into(),
+                net: "A".into(),
+                layers: vec!["F.Cu".into()],
+                polygon: vec![],
+                center,
+                drill: 0.0,
+            });
+        }
+        let issues = run_issues(&mut report_run(report, scene), 3.0).unwrap();
+        let issue = find_issue(&issues, "R1").unwrap();
+        assert_eq!(issue.objects, ["U2.1"]);
+        assert_eq!(issue.points, [(100.0, 20.0)]);
+        assert_eq!(issue.details.get("scope").and_then(Value::as_str), Some("selected_routes"));
+        assert_eq!(issue.details.get("record_count"), Some(&Value::from(1u64)));
+        assert_eq!(issue.details.get("truncated"), Some(&Value::Bool(false)));
+        let records = &issue.details.get("records").unwrap().as_array().unwrap()[0];
+        assert_eq!(records.get("records").unwrap().get("search_budget_exhausted"), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn blocked_source_pad_is_located_alongside_the_remaining_target() {
+        let report = copper_json::parse(
+            r#"{"detailed":{"nets":[{"net":"A","connected":false,
+            "diagnostics":["frontier exhausted; remaining_pads=[U2.1]; source_pads=[U1.1,U2.1]"]}]}}"#,
+        )
+        .unwrap();
+        let mut scene = Scene::default();
+        for (reference, center) in [("U1", (1.0, 2.0)), ("U2", (100.0, 20.0))] {
+            scene.pads.push(crate::scene::ScenePad {
+                reference: reference.into(),
+                pad: "1".into(),
+                net: "A".into(),
+                layers: vec!["F.Cu".into()],
+                polygon: vec![],
+                center,
+                drill: 0.0,
+            });
+        }
+        let issues = run_issues(&mut report_run(report, scene), 3.0).unwrap();
+        let issue = find_issue(&issues, "R1").unwrap();
+        assert_eq!(issue.objects, ["U2.1", "U1.1"]);
+        assert_eq!(issue.points, [(100.0, 20.0), (1.0, 2.0)]);
+    }
+
+    #[test]
+    fn legacy_replay_diagnostics_keep_their_actual_source_path() {
+        let report = copper_json::parse(
+            r#"{"schema":"copperscript-route-summary/v1","state":"inputs.state.json",
+            "unrouted":{"A":["search frontier exhausted"]}}"#,
+        )
+        .unwrap();
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let issue = find_issue(&issues, "R1").unwrap();
+        let details = &issue.details.get("records").unwrap().as_array().unwrap()[0];
+        assert_eq!(
+            details.get("source_path").and_then(Value::as_str),
+            Some("unrouted (matched by net; legacy replay diagnostics)")
+        );
+        assert_eq!(issue.details.get("source_path"), details.get("source_path"));
+    }
+
+    #[test]
+    fn grouped_routing_details_are_bounded_with_full_count_and_source() {
+        let nets = (0..25)
+            .map(|index| {
+                Value::Object(Object::from([
+                    ("net".into(), Value::from(format!("SIGNAL_{index}"))),
+                    ("connected".into(), Value::Bool(false)),
+                    ("diagnostics".into(), Value::Array(vec![Value::from("search frontier exhausted")])),
+                ]))
+            })
+            .collect();
+        let report = Value::Object(Object::from([(
+            "detailed".into(),
+            Value::Object(Object::from([("nets".into(), Value::Array(nets))])),
+        )]));
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let issue = find_issue(&issues, "R1").unwrap();
+        assert_eq!(issue.count, Value::from(25u64));
+        let details = &issue.details;
+        assert_eq!(details.get("scope").and_then(Value::as_str), Some("selected_routes"));
+        assert_eq!(details.get("source_path").and_then(Value::as_str), Some("detailed.nets (matched by net)"));
+        assert_eq!(details.get("record_count"), Some(&Value::from(25u64)));
+        assert_eq!(details.get("truncated"), Some(&Value::Bool(true)));
+        let records = details.get("records").unwrap().as_array().unwrap();
+        assert_eq!(records.len(), 16);
+        assert_eq!(records[0].get("records").unwrap().get("net").and_then(Value::as_str), Some("SIGNAL_0"));
+        assert_eq!(records[15].get("records").unwrap().get("net").and_then(Value::as_str), Some("SIGNAL_15"));
+    }
+
+    #[test]
+    fn placement_trial_gate_is_distinct_from_retained_board_geometry() {
+        let report = copper_json::parse(
+            r#"{"placement_feedback":{"trials":[{"reference":"U1","delta_nm":[250000,0],
+            "outcome":"global_failed","global_gate":{"unrouted_net_count_delta":0,"total_overflow_delta":-2,
+            "detailed_rerun":false,"reason":"candidate_global_status_not_success"}}]}}"#,
+        )
+        .unwrap();
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let issue = find_issue(&issues, "PF1").unwrap();
+        assert!(py::text(&issue.title).contains("opens delta=0, overflow delta=-2"));
+        assert_eq!(issue.details.get("scope").and_then(Value::as_str), Some("rejected_placement_trial"));
+        assert_eq!(
+            issue.details.get("records").unwrap().get("delta_nm"),
+            Some(&Value::Array(vec![Value::from(250000i64), Value::from(0i64)]))
+        );
+        assert_eq!(issue.stage, "placement");
+    }
+
+    #[test]
+    fn native_issue_explains_unsearched_scope_without_copying_native_artifacts() {
+        let report = copper_json::parse(r#"{
+          "plane_verification":{"native_findings":[{"type":"unconnected_items","description":"Unconnected",
+            "items":[{"net":"FX","kind":"pad","component":"U1","pad":"1",
+              "positions_nm":[[1000000,2000000]],"layers":["F.Cu"]}]}]},
+          "filled_copper_feedback":{"native_open_scope":[{"net":"FX","scope":"no_declared_distribution_zone","trial_count":0}],
+            "trials":[{"net":"FX","input_digest":"before","outcome":"rejected","searches":[],
+              "verification":{"large_unrelated_native_artifact":"must not copy"}}]}
+        }"#).unwrap();
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let issue = find_issue(&issues, "N1").unwrap();
+        assert!(py::text(&issue.title).contains("outside native bridge repair scope"));
+        let trials = issue.details.get("records").unwrap().get("trials").unwrap().as_array().unwrap();
+        assert_eq!(trials[0].get("input_digest").and_then(Value::as_str), Some("before"));
+        assert!(trials[0].get("verification").is_none());
+    }
+
+    #[test]
+    fn native_net_projection_retains_global_repair_stop_and_digest() {
+        let report = copper_json::parse(
+            r#"{
+          "plane_verification":{"native_findings":[{"type":"unconnected_items","items":[
+            {"net":"A","positions_nm":[[1000000,2000000]]},
+            {"net":"A","positions_nm":[[3000000,4000000]]}]}]},
+          "filled_copper_feedback":{"stop_reason":"no_eligible_surface_bridge",
+            "diagnostic":"Known native zone opens have no supported same-surface terminal/fragment pair",
+            "board_digest":"retained-input",
+            "native_open_scope":[{"net":"A","scope":"eligible_general_zone"}],
+            "trials":[{"net":"B","index":1,"outcome":"accepted"}]}}
+        "#,
+        )
+        .unwrap();
+        let original = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let selected = filter_issues(original, Some("A"), Some("native"), None).unwrap();
+        let records = selected[0].details.get("records").unwrap();
+        assert_eq!(records.get("stop_reason").and_then(Value::as_str), Some("no_eligible_surface_bridge"));
+        assert_eq!(records.get("board_digest").and_then(Value::as_str), Some("retained-input"));
+        assert!(records.get("diagnostic").unwrap().as_str().unwrap().contains("no supported same-surface"));
+        assert!(records.get("trials").unwrap().as_array().unwrap().is_empty());
+        assert!(selected[0].details.get("scope").unwrap().as_str().unwrap().contains("feedback-global"));
+    }
+
+    #[test]
+    fn native_issue_exposes_initial_proposal_census_with_net_filter_and_global_scope() {
+        let report = copper_json::parse(
+            r#"{
+          "plane_verification":{"native_findings":[{"type":"unconnected_items","description":"Unconnected",
+            "items":[{"net":"V33","kind":"pad","component":"U1","pad":"1",
+              "positions_nm":[[1000000,2000000]],"layers":["F.Cu"]}]}]},
+          "filled_copper_feedback":{"proposal_census":{"input_digest":"initial",
+            "generated_count":31,"queued_unique_geometry_count":20,"duplicate_geometry_count":11,
+            "omitted_finding_identity_count":2,"omitted_finding_layer_row_count":3,
+            "omitted_first_geometry_sample_count":4,
+            "layers":[{"layer":"F.Cu","attempted_trial_count":4}],
+            "findings":[{"net":"D18","native_finding_ordinal":1},{"net":"V33","native_finding_ordinal":2}],
+            "finding_layers":[{"net":"D18","layer":"F.Cu","first_queue_rank":1},
+              {"net":"V33","layer":"B.Cu","first_queue_rank":17,"trial_budget_prefix_geometry_count":0,
+                "attempted_trial_count":0,"samples":[{"queue_rank":17,"attempted_geometry":false}]}]}}
+        }"#,
+        )
+        .unwrap();
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let issue = find_issue(&issues, "N1").unwrap();
+        let census = issue.details.get("records").unwrap().get("proposal_census").unwrap();
+        assert_eq!(census.get("input_digest").and_then(Value::as_str), Some("initial"));
+        assert_eq!(census.get("generated_count"), Some(&Value::from(31i64)));
+        assert_eq!(census.get("omitted_first_geometry_sample_count"), Some(&Value::from(4i64)));
+        assert!(census.get("issue_filter_scope").and_then(Value::as_str).unwrap().contains("remain global"));
+        assert_eq!(census.get("findings").unwrap().as_array().unwrap().len(), 1);
+        let rows = census.get("finding_layers").unwrap().as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get("layer").and_then(Value::as_str), Some("B.Cu"));
+        assert_eq!(rows[0].get("first_queue_rank"), Some(&Value::from(17i64)));
+        assert_eq!(rows[0].get("attempted_trial_count"), Some(&Value::from(0i64)));
+        assert_eq!(issue.details.get("truncated"), Some(&Value::Bool(false)));
+    }
+
+    #[test]
+    fn native_cleanup_projection_keeps_protection_and_filters_only_census_rows() {
+        let raw = copper_json::parse(
+            r#"{"status":"unchanged","protected_tracks":12,
+            "census":{"fresh_native_binding":true,"items":[
+                {"net":"A","producer":"ordinary_escape","caller_protected":true},
+                {"net":"B","producer":"via_lattice","caller_protected":true}
+            ]}}"#,
+        )
+        .unwrap();
+        let selected = native_cleanup_records(&raw, &[Value::from("A")]);
+        assert_eq!(selected.get("protected_tracks"), Some(&Value::from(12i64)));
+        let census = selected.get("census").unwrap();
+        assert_eq!(census.get("fresh_native_binding"), Some(&Value::Bool(true)));
+        let items = census.get("items").unwrap().as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].get("producer"), Some(&Value::from("ordinary_escape")));
+        assert_eq!(items[0].get("caller_protected"), Some(&Value::Bool(true)));
+        assert!(census.get("issue_filter_scope").unwrap().as_str().unwrap().contains("remain global"));
+        assert_eq!(raw.get("census").unwrap().get("items").unwrap().as_array().unwrap().len(), 2);
+        assert_eq!(native_cleanup_records(&Value::Null, &[]), Value::Null);
+    }
+
+    #[test]
+    fn native_net_projection_narrows_final_count_locations_and_repair_history_without_regrouping() {
+        let report = copper_json::parse(r#"{
+          "plane_verification":{"native_findings":[
+            {"type":"track_dangling","description":"Track has unconnected end","items":[
+              {"net":"A","kind":"pad","component":"RA","pad":"1","positions_nm":[[1000000,2000000]],"layers":["F.Cu"]}]},
+            {"type":"track_dangling","description":"Track has unconnected end","items":[
+              {"net":"B","kind":"pad","component":"RB","pad":"1","positions_nm":[[101000000,202000000]],"layers":["B.Cu"]}]}]},
+          "filled_copper_feedback":{
+            "native_open_scope":[{"net":"B","scope":"no_declared_distribution_zone","trial_count":0}],
+            "trials":[{"net":"A","input_digest":"before","blockers":["B"],"displaced_nets":["B"],
+              "verification":{"must_not_copy":"raw native artifact"}}, {"net":"B","input_digest":"other"}],
+            "proposal_census":{"input_digest":"initial","generated_count":8,
+              "findings":[{"net":"A","native_finding_ordinal":1},{"net":"B","native_finding_ordinal":2}],
+              "finding_layers":[{"net":"A","layer":"F.Cu"},{"net":"B","layer":"B.Cu"}]}}}
+        "#).unwrap();
+        let mut run = report_run(report, Scene::default());
+        let original = run_issues(&mut run, 3.0).unwrap();
+        let group = find_issue(&original, "N1").unwrap();
+        assert_eq!(group.count, Value::from(2i64));
+        assert_eq!(group.points, [(1.0, 2.0), (101.0, 202.0)]);
+        assert_eq!(group.objects, ["RA.1", "RB.1"]);
+        assert!(py::text(&group.title).contains("outside native bridge repair scope"));
+        let original_document = group.document().unwrap();
+        let selected = filter_issues(original.clone(), Some("A"), Some("native"), Some("TRACK_DANGLING")).unwrap();
+        assert_eq!(selected.len(), 1);
+        let issue = &selected[0];
+        assert_eq!(issue.id, "N1", "filtering must preserve original group identity");
+        assert_eq!(issue.count, Value::from(1i64));
+        assert_eq!(issue.points, [(1.0, 2.0)]);
+        assert_eq!(issue.layers, [Value::from("F.Cu")]);
+        assert_eq!(issue.objects, ["RA.1"]);
+        assert_eq!(issue.nets, [Value::from("A")]);
+        assert_eq!(issue.window(), Some([-1.0, 0.0, 3.0, 4.0]));
+        assert!(!py::text(&issue.title).contains("outside native bridge repair scope"));
+        let records = issue.details.get("records").unwrap();
+        assert!(records.get("native_open_scope").unwrap().as_array().unwrap().is_empty());
+        let trials = records.get("trials").unwrap().as_array().unwrap();
+        assert_eq!(trials.len(), 1);
+        assert_eq!(trials[0].get("net"), Some(&Value::from("A")));
+        assert_eq!(trials[0].get("blockers"), Some(&Value::Array(vec![Value::from("B")])));
+        assert_eq!(trials[0].get("displaced_nets"), Some(&Value::Array(vec![Value::from("B")])));
+        assert!(trials[0].get("verification").is_none());
+        let census = records.get("proposal_census").unwrap();
+        assert_eq!(census.get("generated_count"), Some(&Value::from(8i64)));
+        assert_eq!(census.get("issue_projection_matched_findings_count"), Some(&Value::from(1i64)));
+        assert_eq!(census.get("findings").unwrap().as_array().unwrap().len(), 1);
+        let projection = records.get("native_projection").unwrap();
+        assert_eq!(projection.get("original_group_count"), Some(&Value::from(2i64)));
+        assert_eq!(projection.get("selected_finding_count"), Some(&Value::from(1i64)));
+        assert!(projection.get("view_scope").unwrap().as_str().unwrap().contains("unfiltered group"));
+        let document = issues_document(&mut run, &selected, None).unwrap();
+        assert_eq!(document.finding_counts.object(false).unwrap().get("TRACK_DANGLING"), Some(&Value::from(1i64)));
+        assert_eq!(
+            filter_issues(original.clone(), None, None, None).unwrap()[0].document().unwrap(),
+            original_document
+        );
+        assert!(filter_issues(original, Some("ABSENT"), None, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn native_net_projection_counts_cross_net_finding_once_and_keeps_all_blocker_items() {
+        let report = copper_json::parse(r#"{"plane_verification":{"native_findings":[
+          {"type":"clearance","description":"Clearance violation","items":[
+            {"net":"A","kind":"pad","component":"RA","pad":"1","positions_nm":[[1000000,2000000]],"layers":["F.Cu"]},
+            {"net":"B","kind":"pad","component":"RB","pad":"2","positions_nm":[[1100000,2000000]],"layers":["B.Cu"]}]},
+          {"type":"clearance","description":"Clearance violation","items":[
+            {"net":"B","kind":"pad","component":"RB","pad":"3","positions_nm":[[50000000,60000000]],"layers":["B.Cu"]}]}]}}"#).unwrap();
+        let original = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let selected = filter_issues(original.clone(), Some("A"), None, None).unwrap();
+        assert_eq!(selected.len(), 1);
+        let issue = &selected[0];
+        assert_eq!(issue.id, "N1");
+        assert_eq!(issue.count, Value::from(1i64));
+        assert_eq!(issue.nets, [Value::from("A"), Value::from("B")]);
+        assert_eq!(issue.points, [(1.0, 2.0), (1.1, 2.0)]);
+        assert_eq!(issue.objects, ["RA.1", "RB.2"]);
+        assert_eq!(issue.layers, [Value::from("B.Cu"), Value::from("F.Cu")]);
+        assert!(
+            issue
+                .details
+                .get("records")
+                .unwrap()
+                .get("native_projection")
+                .unwrap()
+                .get("scope")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("not exclusive causal attribution")
+        );
+        let selected_b = filter_issues(original, Some("B"), None, None).unwrap();
+        assert_eq!(selected_b[0].count, Value::from(2i64));
+        assert_eq!(selected_b[0].objects, ["RA.1", "RB.2", "RB.3"]);
+    }
+
+    #[test]
+    fn native_net_projection_uses_unclipped_history_not_first_sixteen_exported_rows() {
+        let mut report = copper_json::parse(
+            r#"{"plane_verification":{"native_findings":[
+          {"type":"track_dangling","items":[{"net":"A","positions_nm":[[1000000,2000000]]}]},
+          {"type":"track_dangling","items":[{"net":"B","positions_nm":[[3000000,4000000]]}]}]},
+          "filled_copper_feedback":{"trials":[]}}"#,
+        )
+        .unwrap();
+        let Value::Object(root) = &mut report else { unreachable!() };
+        let Value::Object(feedback) = root.get_mut("filled_copper_feedback").unwrap() else { unreachable!() };
+        let trials: Vec<Value> = (0..18)
+            .map(|index| {
+                Value::Object(Object::from([
+                    ("net".into(), Value::from(if index == 17 { "B" } else { "A" })),
+                    ("index".into(), Value::from(index as i64)),
+                ]))
+            })
+            .collect();
+        feedback.insert("trials".into(), Value::Array(trials));
+        let original = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        assert_eq!(original[0].details.get("truncated"), Some(&Value::Bool(true)));
+        let selected = filter_issues(original, Some("B"), None, None).unwrap();
+        let details = &selected[0].details;
+        assert_eq!(details.get("truncated"), Some(&Value::Bool(false)));
+        let trials = details.get("records").unwrap().get("trials").unwrap().as_array().unwrap();
+        assert_eq!(trials.len(), 1);
+        assert_eq!(trials[0].get("index"), Some(&Value::from(17i64)));
+    }
+
+    #[test]
     fn global_pad_names() {
         assert_eq!(global_pads("no access for U3.12; for R1.2x and for C1.1é, before U9.1"), ["U3.12", "R1.2x"]);
         assert_eq!(global_pads("xfor U1.1"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn selected_pair_fallback_ledger_preserves_both_members_and_decisions() {
+        let report = copper_json::parse(
+            r#"{
+          "drc":{"findings":[{"code":"DRC-DIFF-SKEW","severity":"warning",
+            "nets":["M","P"],"message":"pair skew exceeds budget","measured_nm":2157550,"required_nm":63500}]},
+          "critical":{"nets":[{"nets":["M","P"],"connected":true,
+            "lengths_nm":[18057070,15899520],"skew_nm":2157550,
+            "pair_fallback_selection":{"scope":"fresh-validated connected fallback offers only",
+              "observed_candidate_count":19,"trace_rows_omitted_count":3,"truncated":true,
+              "kept_fallback_sequence":19,"last_kept_offer":{"sequence":19,
+                "reason":"kept_strictly_better_existing_rank",
+                "candidate":{"lengths_nm":[18057070,15899520],"skew_nm":2157550,
+                  "warnings":["M length","pair skew"],"rank":[true,2,2157550,33956590]},
+                "incumbent_before":{"rank":[true,3,2300000,36000000]}},
+              "records":[{"sequence":1,
+                "candidate":{"nets":["M","P"],"lengths_nm":[18057070,15899520],
+                  "skew_nm":2157550,"warnings":["M length","pair skew"],
+                  "rank":[true,2,2157550,33956590]},
+                "kept":true,"reason":"kept_first_connected_fallback"}]}}]}}
+        "#,
+        )
+        .unwrap();
+        let issues = run_issues(&mut report_run(report, Scene::default()), 3.0).unwrap();
+        let issue = find_issue(&issues, "B1").unwrap();
+        let selected = &issue.details.get("records").unwrap().as_array().unwrap()[0];
+        let ledger = selected
+            .get("records")
+            .unwrap()
+            .get("pair_fallback_selection")
+            .expect("public issue retains bounded selection telemetry");
+        assert_eq!(ledger.get("trace_rows_omitted_count"), Some(&Value::from(3i64)));
+        assert_eq!(ledger.get("truncated"), Some(&Value::Bool(true)));
+        assert_eq!(ledger.get("kept_fallback_sequence"), Some(&Value::from(19i64)));
+        let last = ledger.get("last_kept_offer").unwrap();
+        assert_eq!(last.get("sequence"), Some(&Value::from(19i64)));
+        assert_eq!(last.get("reason").and_then(Value::as_str), Some("kept_strictly_better_existing_rank"));
+        assert_eq!(last.get("candidate").unwrap().get("lengths_nm").unwrap().as_array().unwrap().len(), 2);
+        assert_eq!(
+            last.get("incumbent_before").unwrap().get("rank").unwrap().as_array().unwrap()[1],
+            Value::from(3i64)
+        );
+        let row = &ledger.get("records").unwrap().as_array().unwrap()[0];
+        assert_eq!(row.get("reason").and_then(Value::as_str), Some("kept_first_connected_fallback"));
+        let candidate = row.get("candidate").unwrap();
+        assert_eq!(
+            candidate.get("lengths_nm").unwrap().as_array().unwrap(),
+            &[Value::from(18057070i64), Value::from(15899520i64)]
+        );
+        assert_eq!(candidate.get("warnings").unwrap().as_array().unwrap().len(), 2);
+        assert_eq!(
+            candidate.get("rank").unwrap().as_array().unwrap(),
+            &[Value::Bool(true), Value::from(2i64), Value::from(2157550i64), Value::from(33956590i64)]
+        );
     }
 
     #[test]

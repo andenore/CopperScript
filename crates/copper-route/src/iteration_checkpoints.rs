@@ -398,4 +398,87 @@ mod tests {
         tracker.observe("a", "finished", Vec::new());
         assert_eq!(tracker.state.open_stages(), ["b"]);
     }
+
+    #[test]
+    fn mechanical_placement_reuse_preserves_intent_and_checks_keys() {
+        use crate::test_support_routers::{pad_board, routes::guides};
+        use copper_lang::mechanical::assembly::BodyOverhang;
+        use copper_physical::BoardEdge;
+
+        let mut board = pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)])], 2, vec![]);
+        board
+            .boundary_edges
+            .push(BoardEdge::new("connector_edge", board.outline.vertices[0], board.outline.vertices[1]).unwrap());
+        board.body_overhangs.push(BodyOverhang {
+            id: "connector_nose".into(),
+            reference: board.placements[0].reference.clone(),
+            edge: "connector_edge".into(),
+            start_nm: 1_000_000,
+            end_nm: 2_000_000,
+            distance_nm: 500_000,
+            reason: "Connector body projects beyond the board edge".into(),
+        });
+        let placement = PlacementRoutingResult {
+            global_route: guides(&board),
+            board,
+            status: FeedbackStatus::Warning,
+            placement_candidate: "mechanical-checkpoint".into(),
+            iterations: vec![],
+            accepted_moves: 0,
+            full_route_certified: false,
+        };
+        let key = placement_key(
+            &placement.board,
+            &PlannerOptions::default(),
+            &GlobalRouterOptions::default(),
+            &PlacementRoutingFeedbackOptions::default(),
+            "writer-build",
+        );
+        let directory = std::env::temp_dir().join(format!("copper-mechanical-checkpoint-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("placement.state.json");
+        let saved = placement_checkpoint_text(&placement, &key, "2026-10-30T00:00:00Z");
+        std::fs::write(&path, &saved).unwrap();
+        let mut current = key.clone();
+        current.insert("code".into(), Value::from("reader-build"));
+        let (loaded, reuse) = load_placement_checkpoint(&path, "placement.state.json", &current).unwrap().unwrap();
+        assert!(reuse.code_changed);
+        assert_eq!(loaded.board, placement.board);
+        assert_eq!(
+            crate::state_codec::encode_placement_result(&loaded),
+            crate::state_codec::encode_placement_result(&placement)
+        );
+        assert_eq!(
+            copper_drc::digest::physical_board_digest(&loaded.board),
+            copper_drc::digest::physical_board_digest(&placement.board)
+        );
+        for field in ["board", "options"] {
+            let mut changed = current.clone();
+            changed.insert(field.into(), Value::from("changed"));
+            assert!(load_placement_checkpoint(&path, "placement.state.json", &changed).unwrap().is_err());
+        }
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires COPPER_PLACEMENT_CHECKPOINT from a real route-board run"]
+    fn saved_consumer_placement_reuses_without_losing_fields() {
+        let path = PathBuf::from(std::env::var_os("COPPER_PLACEMENT_CHECKPOINT").expect("checkpoint path"));
+        let original = std::fs::read_to_string(&path).unwrap();
+        let saved = StateDocument::read(&original).unwrap();
+        let mut key = saved.metadata["key"].as_object().unwrap().clone();
+        key.insert("code".into(), Value::from("mechanical-decoder-regression-test"));
+        let (loaded, reuse) = load_placement_checkpoint(&path, &path.to_string_lossy(), &key).unwrap().unwrap();
+        assert!(reuse.code_changed);
+        assert!(!loaded.board.body_overhangs.is_empty(), "fixture must exercise the missing overhang support");
+        let encoded = crate::state_codec::encode_placement_result(&loaded);
+        assert_eq!(encoded, saved.value, "all checkpoint fields must survive decoding");
+        assert_eq!(
+            copper_state::content_digest(&encoded.encode()),
+            copper_state::content_digest(&saved.value.encode())
+        );
+        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    }
 }

@@ -151,6 +151,9 @@ pub fn routing_complete_with_fill(
     evidence: Option<&PlaneVerification>,
 ) -> Result<bool> {
     use copper_pcb::board::RouteKind;
+    if !pipeline.requested_escape_policy_satisfied(board) {
+        return Ok(false);
+    }
     if let Some(evidence) = evidence
         && !(evidence.passed
             && evidence.matches(board)?

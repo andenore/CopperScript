@@ -168,9 +168,18 @@ fn guides(board: &PhysicalBoard) -> IndexMap<String, GlobalNetRoute> {
 
 fn exact_pair(board: &PhysicalBoard, lanes: &Lanes) -> crate::critical::CriticalNetResult {
     let rules = &board.net_routing_rules;
-    crate::critical::route_pair_exact(board, &rules[0], &rules[1], &guides(board), lanes, board, (&[], &[]))
-        .expect("exact pair")
-        .0
+    crate::critical::route_pair_exact(
+        board,
+        &rules[0],
+        &rules[1],
+        &guides(board),
+        lanes,
+        board,
+        (&[], &[]),
+        &board.tracks,
+    )
+    .expect("exact pair")
+    .0
 }
 
 #[test]

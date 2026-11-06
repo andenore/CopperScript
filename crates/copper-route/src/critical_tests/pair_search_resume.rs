@@ -45,6 +45,7 @@ fn search_into(
         expanded_states: 0,
         legal_advances: 0,
         minimum_goal_distance_nm: f64::INFINITY,
+        goal: Default::default(),
         board: board.clone(),
     };
     let result = continuation.advance(budget, stats).expect("search");
@@ -155,9 +156,17 @@ fn resumed_transition_ownership_passes_exact_gates_and_corruption_rolls_back() {
     let rules = &board.net_routing_rules;
     let exact = (candidate.first.clone(), candidate.second.clone());
     let owner = |pairs: &[(copper_pcb::board::Via, copper_pcb::board::Via)]| {
-        let (proposed, tracks, vias) =
-            route_pair_exact(&board, &rules[0], &rules[1], &routes, &exact, &board, (pairs, &candidate.return_vias))
-                .expect("pair");
+        let (proposed, tracks, vias) = route_pair_exact(
+            &board,
+            &rules[0],
+            &rules[1],
+            &routes,
+            &exact,
+            &board,
+            (pairs, &candidate.return_vias),
+            &board.tracks,
+        )
+        .expect("pair");
         validate_candidate(&board, proposed, tracks, vias, &[], &[], None).expect("validated")
     };
     let (accepted, _, _) = owner(&candidate.via_pairs);

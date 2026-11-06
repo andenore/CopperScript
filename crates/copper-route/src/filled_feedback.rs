@@ -42,6 +42,11 @@ pub struct FilledCopperFeedbackOptions {
 const STEP_NM: i64 = 250_000;
 const MAXIMUM_DETOUR_NM: i64 = 2_000_000;
 const MAXIMUM_FRAGMENT_ANCHORS: usize = 64;
+const MAXIMUM_CENSUS_FINDINGS: usize = 16;
+const MAXIMUM_CENSUS_LAYER_ROWS: usize = 64;
+const MAXIMUM_CENSUS_GLOBAL_LAYERS: usize = 32;
+const MAXIMUM_CENSUS_SAMPLES: usize = 48;
+const MAXIMUM_CENSUS_SAMPLES_PER_ROW: usize = 3;
 
 impl FilledCopperFeedbackOptions {
     /// `__post_init__` for the fields set here (the others keep Python's defaults).
@@ -59,6 +64,69 @@ impl FilledCopperFeedbackOptions {
 
 /// `FilledCopperTrial`.
 #[derive(Clone, Debug)]
+pub struct SurfaceBridgeAttempt {
+    pub snapshot: &'static str,
+    pub start: Point,
+    pub end: Point,
+    pub width_nm: i64,
+    pub state_budget: i64,
+    pub search: crate::surface_path::SurfaceBridgeSearch,
+}
+
+impl SurfaceBridgeAttempt {
+    fn document(&self) -> Value {
+        let d = &self.search.diagnostics;
+        let point = |p: Point| Value::Array(vec![int(p.x_nm), int(p.y_nm)]);
+        let failure_stage = if self.search.path.is_some() {
+            "none"
+        } else if d.initial_legal_steps == 0 {
+            "no_legal_initial_grid_step"
+        } else if d.reconstructed_path_rejections > 0 {
+            "reconstructed_path_rejected"
+        } else if d.final_connection_attempts > 0 {
+            "final_connection_rejected"
+        } else {
+            "target_connection_not_reached"
+        };
+        Value::Object(
+            [
+                ("snapshot", text(self.snapshot)),
+                ("start_nm", point(self.start)),
+                ("end_nm", point(self.end)),
+                ("width_nm", int(self.width_nm)),
+                ("step_nm", int(STEP_NM)),
+                ("maximum_detour_nm", int(MAXIMUM_DETOUR_NM)),
+                ("state_budget", int(self.state_budget)),
+                ("expanded_states", int(self.search.expanded_states)),
+                ("outcome", text(self.search.outcome)),
+                ("failure_stage", text(failure_stage)),
+                ("initial_legal_steps", int(d.initial_legal_steps)),
+                ("final_connection_attempts", int(d.final_connection_attempts)),
+                ("final_connection_rejections", int(d.final_connection_rejections)),
+                ("reconstructed_path_rejections", int(d.reconstructed_path_rejections)),
+                ("boundary_rejections", int(d.boundary_rejections)),
+                ("clearance_rejections", int(d.clearance_rejections)),
+                ("detour_rejections", int(d.detour_rejections)),
+                (
+                    "blocker_sample_scope",
+                    text("first_16_boundary_or_clearance_rejected_grid_steps; excludes_detour_rejections; samples_discarded_on_success; at_most_32_objects; immutable_means_snapshot_locked"),
+                ),
+                (
+                    "blockers",
+                    Value::Array(
+                        self.search.blocker_records.iter().map(crate::pair_terminals::blocker_document).collect(),
+                    ),
+                ),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+        )
+    }
+}
+
+/// A native bridge trial, including each bounded surface search it attempted.
+#[derive(Clone, Debug)]
 pub struct FilledCopperTrial {
     pub index: i64,
     pub input_digest: String,
@@ -70,6 +138,7 @@ pub struct FilledCopperTrial {
     pub displaced_nets: Vec<String>,
     pub dependency_expansions: i64,
     pub expanded_states: i64,
+    pub searches: Vec<SurfaceBridgeAttempt>,
     pub dependency_searches: i64,
     pub candidate_digest: Option<String>,
     pub verification: Option<PlaneVerification>,
@@ -93,6 +162,7 @@ impl FilledCopperTrial {
         put("displaced_nets", Value::Array(self.displaced_nets.iter().map(|net| text(net)).collect()));
         put("dependency_expansions", int(self.dependency_expansions));
         put("expanded_states", int(self.expanded_states));
+        put("searches", Value::Array(self.searches.iter().map(SurfaceBridgeAttempt::document).collect()));
         put("dependency_searches", int(self.dependency_searches));
         put("candidate_digest", self.candidate_digest.as_deref().map_or(Value::Null, text));
         put("verification", self.verification.as_ref().map_or(Value::Null, PlaneVerification::document));
@@ -111,6 +181,7 @@ pub struct FilledCopperFeedbackResult {
     pub stop_reason: String,
     pub trials: Vec<FilledCopperTrial>,
     pub diagnostic: Option<String>,
+    pub proposal_census: Option<NativeProposalCensus>,
 }
 
 impl FilledCopperFeedbackResult {
@@ -126,25 +197,159 @@ impl FilledCopperFeedbackResult {
         );
         document
             .insert("trials".to_owned(), Value::Array(self.trials.iter().map(FilledCopperTrial::document).collect()));
+        document.insert(
+            "native_open_scope".to_owned(),
+            native_open_scope(&self.board, self.verification.as_ref(), &self.trials),
+        );
+        document.insert(
+            "proposal_census".to_owned(),
+            self.proposal_census.as_ref().map_or(Value::Null, |census| census.document(&self.trials)),
+        );
         Dumps::new().indent(2).sort_keys(true).dumps(&Value::Object(document)) + "\n"
     }
 }
 
-/// `_hard_violations`: native violations other than library-copy findings,
-/// keyed by type and exact objects.
-fn hard_violations(evidence: &PlaneVerification) -> Multiset<(String, Vec<String>)> {
+fn native_open_scope(
+    board: &PhysicalBoard,
+    evidence: Option<&PlaneVerification>,
+    trials: &[FilledCopperTrial],
+) -> Value {
+    let zones = copper_pcb::zones::distribution_zone_nets(board);
+    let specialized: IndexSet<&str> =
+        board.net_routing_rules.iter().filter(|r| r.kind != RouteKind::General).map(|r| r.net.as_str()).collect();
+    let Some(nets) = evidence.and_then(mapped_open_nets) else { return Value::Null };
+    Value::Array(
+        nets.iter()
+            .map(|net| {
+                let scope = if !zones.contains(net) {
+                    "no_declared_distribution_zone"
+                } else if specialized.contains(net.as_str()) {
+                    "specialized_route"
+                } else {
+                    "eligible_general_zone"
+                };
+                Value::Object(
+                    [
+                        ("net".to_owned(), text(net)),
+                        ("scope".to_owned(), text(scope)),
+                        ("trial_count".to_owned(), int(trials.iter().filter(|trial| &trial.net == net).count() as i64)),
+                    ]
+                    .into_iter()
+                    .collect(),
+                )
+            })
+            .collect(),
+    )
+}
+
+/// Export UUIDs for tracks/vias contain their vector index, not their identity.
+/// Retain complete geometry, duplicate occurrence and total multiplicity. A
+/// changed duplicate population cannot prove which original occurrence survives.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ViolationObject {
+    Track(TrackSegment, (i64, i64)),
+    Via(Via, (i64, i64)),
+    // Pad and zone identities stay fixed under this transaction's source-intent
+    // invariant. Include the mapped record, not just the UUID.
+    Fixed(String),
+}
+
+fn hard_violations(
+    board: &PhysicalBoard,
+    evidence: &PlaneVerification,
+    identities: &mut IndexSet<ViolationObject>,
+) -> copper_pcb::Result<Option<Multiset<(String, Vec<usize>)>>> {
+    let objects = native_object_map(board)?;
+    fn occurrences<T: Clone + Eq + std::hash::Hash>(items: &[T]) -> Vec<(i64, i64)> {
+        let totals = multiset(items);
+        let mut counts = Multiset::new();
+        items
+            .iter()
+            .map(|item| {
+                let count = counts.entry(item.clone()).or_insert(0);
+                *count += 1;
+                (*count, totals[item])
+            })
+            .collect()
+    }
+    let tracks = occurrences(&board.tracks);
+    let vias = occurrences(&board.vias);
     let mut counts = Multiset::new();
     for finding in &evidence.native_findings {
         if finding.category == "violation"
             && finding.kind != "lib_footprint_issues"
             && finding.kind != "lib_footprint_mismatch"
         {
-            let mut uuids: Vec<String> = finding.items.iter().map(|item| item.uuid.clone()).collect();
-            uuids.sort();
-            *counts.entry((finding.kind.clone(), uuids)).or_insert(0) += 1;
+            // Unmapped or object-less findings cannot prove that a violation is
+            // unchanged. Fail closed rather than equating them by kind/count.
+            if finding.items.is_empty() {
+                return Ok(None);
+            }
+            let mut keys = Vec::new();
+            for item in &finding.items {
+                if objects.get(&item.uuid) != Some(item) {
+                    return Ok(None);
+                }
+                let index = item.index.and_then(|index| usize::try_from(index).ok());
+                let identity = match item.kind.as_str() {
+                    "segment" => {
+                        let Some(index) = index.filter(|index| *index < tracks.len()) else { return Ok(None) };
+                        ViolationObject::Track(board.tracks[index].clone(), tracks[index])
+                    }
+                    "via" => {
+                        let Some(index) = index.filter(|index| *index < vias.len()) else { return Ok(None) };
+                        ViolationObject::Via(board.vias[index].clone(), vias[index])
+                    }
+                    "pad" | "zone" => ViolationObject::Fixed(Dumps::new().sort_keys(true).dumps(&item.document())),
+                    _ => return Ok(None),
+                };
+                keys.push(identities.insert_full(identity).0);
+            }
+            keys.sort_unstable();
+            *counts.entry((finding.kind.clone(), keys)).or_insert(0) += 1;
         }
     }
-    counts
+    Ok(Some(counts))
+}
+
+/// Same acceptance invariant as the native repair transaction, with explicit
+/// rejection reasons and geometry-bound violation identities across exports.
+fn native_trial_outcome(
+    before_board: &PhysicalBoard,
+    before: &PlaneVerification,
+    after_board: &PhysicalBoard,
+    after: &PlaneVerification,
+) -> copper_pcb::Result<&'static str> {
+    if !before.matches(before_board)? || !after.matches(after_board)? {
+        return Ok("native_evidence_mismatch");
+    }
+    let mut intent = after_board.clone();
+    intent.tracks = before_board.tracks.clone();
+    intent.vias = before_board.vias.clone();
+    intent.metadata = before_board.metadata.clone();
+    if intent != *before_board {
+        return Ok("native_source_intent_changed");
+    }
+    let mut identities = IndexSet::new();
+    let Some(old) = hard_violations(before_board, before, &mut identities)? else {
+        return Ok("native_unsupported_violation");
+    };
+    let Some(new) = hard_violations(after_board, after, &mut identities)? else {
+        return Ok("native_unsupported_violation");
+    };
+    if !subtract(&new, &old).is_empty() {
+        return Ok("native_new_violations");
+    }
+    if after.island_count != 0 {
+        return Ok("native_islands");
+    }
+    let (Some(old_nets), Some(new_nets)) = (mapped_open_nets(before), mapped_open_nets(after)) else {
+        return Ok("native_unmapped_opens");
+    };
+    if !new_nets.is_subset(&old_nets) {
+        return Ok("native_new_open_nets");
+    }
+    Ok(if after.unconnected_count < before.unconnected_count { "accepted" } else { "native_not_improved" })
 }
 
 /// `_hard_findings`: physical DRC errors other than opens.
@@ -221,6 +426,38 @@ fn squared(a: (i64, i64), b: (i64, i64)) -> i128 {
 
 /// One proposal: net, native item UUIDs, layer, start, end.
 type Proposal = (String, (String, String), CopperLayer, Point, Point);
+
+/// A native open can contradict the approximate grouping of extracted fill.
+/// In that case follow only actual bare-copper contacts for this finding.
+/// This supplies candidate anchors, never a connectivity/acceptance claim.
+fn bridge_components<'a>(
+    board: &PhysicalBoard,
+    finding: &crate::plane_verify::NativeFinding,
+    inferred: &'a std::collections::BTreeMap<String, String>,
+) -> copper_pcb::Result<std::borrow::Cow<'a, std::collections::BTreeMap<String, String>>> {
+    let [first, second] = finding.items.as_slice() else { return Ok(std::borrow::Cow::Borrowed(inferred)) };
+    if first.kind == "zone" || second.kind == "zone" || first.net != second.net {
+        return Ok(std::borrow::Cow::Borrowed(inferred));
+    }
+    let (Some(first_id), Some(second_id), Some(net)) =
+        (native_item_identity(first), native_item_identity(second), first.net.as_ref())
+    else {
+        return Ok(std::borrow::Cow::Borrowed(inferred));
+    };
+    if inferred.get(&first_id).is_none_or(|root| inferred.get(&second_id) != Some(root)) {
+        return Ok(std::borrow::Cow::Borrowed(inferred));
+    }
+    use copper_drc::connectivity::{Candidate, copper_contact_roots, explicit_copper_contacts};
+    let nets = IndexSet::from([net.clone()]);
+    let candidate = Candidate { only_nets: Some(&nets), exclude_internal_connections: true, ..Candidate::default() };
+    let (contacts, _, groups) = explicit_copper_contacts(board, candidate)?;
+    let bare = copper_contact_roots(&contacts, &groups)?;
+    if bare.get(&first_id).is_some_and(|root| bare.get(&second_id).is_some_and(|other| root != other)) {
+        Ok(std::borrow::Cow::Owned(bare))
+    } else {
+        Ok(std::borrow::Cow::Borrowed(inferred))
+    }
+}
 
 /// `_finding_proposals` for one exact two-item unconnected finding.
 fn finding_proposals(
@@ -365,6 +602,295 @@ fn finding_proposals(
 
 type ProposalKey = (String, CopperLayer, [(i64, i64); 2]);
 
+#[derive(Clone, Debug)]
+struct ProposalSample {
+    proposal: Proposal,
+    queue_rank: Option<usize>,
+    retained_payload: bool,
+    queued_proposal: Option<Proposal>,
+}
+
+#[derive(Clone, Debug)]
+struct ProposalLayerCensus {
+    finding_ordinal: Option<usize>,
+    net: Option<String>,
+    layer: CopperLayer,
+    generated: usize,
+    // At most anchor_limit squared geometries per finding/layer. Kept only
+    // for exact trial attribution; these keys are never serialized.
+    keys: IndexSet<ProposalKey>,
+    queued: usize,
+    prefix: usize,
+    first_queue_rank: Option<usize>,
+    samples: Vec<ProposalSample>,
+}
+
+/// Observes only the first queue generated by the existing repair loop.
+/// This is a proposal census, never a claim that an untried bridge is legal.
+#[derive(Clone, Debug)]
+pub struct NativeProposalCensus {
+    input_digest: String,
+    options: FilledCopperFeedbackOptions,
+    anchor_limit: usize,
+    finding_count: usize,
+    finding_identities: Vec<Value>,
+    finding_layer_count: usize,
+    generated: usize,
+    queued: usize,
+    sample_opportunities: usize,
+    sample_count: usize,
+    observed_layers: IndexSet<CopperLayer>,
+    layers: Vec<ProposalLayerCensus>,
+    finding_layers: Vec<ProposalLayerCensus>,
+}
+
+impl NativeProposalCensus {
+    fn new(evidence: &PlaneVerification, options: &FilledCopperFeedbackOptions, anchor_limit: usize) -> Self {
+        Self {
+            input_digest: evidence.board_digest.clone(),
+            options: options.clone(),
+            anchor_limit,
+            finding_count: 0,
+            finding_identities: Vec::new(),
+            finding_layer_count: 0,
+            generated: 0,
+            queued: 0,
+            sample_opportunities: 0,
+            sample_count: 0,
+            observed_layers: IndexSet::new(),
+            layers: Vec::new(),
+            finding_layers: Vec::new(),
+        }
+    }
+
+    fn observe_finding(&mut self, ordinal: usize, finding: &crate::plane_verify::NativeFinding, found: &[Proposal]) {
+        self.finding_count += 1;
+        let retained_finding = self.finding_identities.len() < MAXIMUM_CENSUS_FINDINGS;
+        if retained_finding {
+            self.finding_identities.push(Value::Object(Object::from([
+                ("native_finding_ordinal".into(), int(ordinal as i64)),
+                ("net".into(), finding.items[0].net.as_deref().map_or(Value::Null, text)),
+                (
+                    "native_item_uuids".into(),
+                    Value::Array(finding.items.iter().take(2).map(|item| text(&item.uuid)).collect()),
+                ),
+                ("generated_count".into(), int(found.len() as i64)),
+            ])));
+        }
+        self.generated += found.len();
+        let mut groups: IndexMap<CopperLayer, Vec<&Proposal>> = IndexMap::new();
+        for proposal in found {
+            groups.entry(proposal.2).or_default().push(proposal);
+        }
+        self.finding_layer_count += groups.len();
+        for (layer, proposals) in groups {
+            self.observed_layers.insert(layer);
+            if let Some(row) = self.layers.iter_mut().find(|row| row.layer == layer) {
+                row.generated += proposals.len();
+            } else if self.layers.len() < MAXIMUM_CENSUS_GLOBAL_LAYERS {
+                self.layers.push(ProposalLayerCensus {
+                    finding_ordinal: None,
+                    net: None,
+                    layer,
+                    generated: proposals.len(),
+                    keys: IndexSet::new(),
+                    queued: 0,
+                    prefix: 0,
+                    first_queue_rank: None,
+                    samples: Vec::new(),
+                });
+            }
+            let keys: IndexSet<_> = proposals.iter().map(|p| proposal_key(&p.0, p.2, p.3, p.4)).collect();
+            self.sample_opportunities += keys.len().min(MAXIMUM_CENSUS_SAMPLES_PER_ROW);
+            if !retained_finding || self.finding_layers.len() >= MAXIMUM_CENSUS_LAYER_ROWS {
+                continue;
+            }
+            let mut sampled = IndexSet::new();
+            let mut samples = Vec::new();
+            for proposal in proposals {
+                if samples.len() >= MAXIMUM_CENSUS_SAMPLES_PER_ROW || self.sample_count >= MAXIMUM_CENSUS_SAMPLES {
+                    break;
+                }
+                if sampled.insert(proposal_key(&proposal.0, proposal.2, proposal.3, proposal.4)) {
+                    samples.push(ProposalSample {
+                        proposal: proposal.clone(),
+                        queue_rank: None,
+                        retained_payload: false,
+                        queued_proposal: None,
+                    });
+                    self.sample_count += 1;
+                }
+            }
+            self.finding_layers.push(ProposalLayerCensus {
+                finding_ordinal: Some(ordinal),
+                net: finding.items[0].net.clone(),
+                layer,
+                generated: found.iter().filter(|p| p.2 == layer).count(),
+                keys,
+                queued: 0,
+                prefix: 0,
+                first_queue_rank: None,
+                samples,
+            });
+        }
+    }
+
+    fn observe_queue(&mut self, queue: &[Proposal]) {
+        self.queued = queue.len();
+        let positions: IndexMap<_, _> =
+            queue.iter().enumerate().map(|(index, p)| (proposal_key(&p.0, p.2, p.3, p.4), (index + 1, p))).collect();
+        for row in self.layers.iter_mut().chain(self.finding_layers.iter_mut()) {
+            for (key, (rank, _)) in &positions {
+                if key.1 == row.layer && (row.finding_ordinal.is_none() || row.keys.contains(key)) {
+                    row.queued += 1;
+                    row.first_queue_rank.get_or_insert(*rank);
+                    row.prefix += usize::from(*rank <= self.options.maximum_trials as usize);
+                }
+            }
+            for sample in &mut row.samples {
+                let p = &sample.proposal;
+                if let Some((rank, retained)) = positions.get(&proposal_key(&p.0, p.2, p.3, p.4)) {
+                    sample.queue_rank = Some(*rank);
+                    sample.retained_payload = *retained == p;
+                    sample.queued_proposal = Some((*retained).clone());
+                }
+            }
+        }
+    }
+
+    fn document(&self, trials: &[FilledCopperTrial]) -> Value {
+        let initial_trials: Vec<_> = trials.iter().filter(|trial| trial.input_digest == self.input_digest).collect();
+        let trial_key = |trial: &FilledCopperTrial| {
+            let layer = CopperLayer::parse(&trial.layer)?;
+            let search = trial.searches.first()?;
+            Some(proposal_key(&trial.net, layer, search.start, search.end))
+        };
+        let row_document = |row: &ProposalLayerCensus| {
+            let matching: Vec<_> = initial_trials
+                .iter()
+                .copied()
+                .filter(|trial| {
+                    trial.layer == row.layer.value()
+                        && (row.finding_ordinal.is_none()
+                            || trial_key(trial).is_some_and(|key| row.keys.contains(&key)))
+                })
+                .collect();
+            let sample_document = |sample: &ProposalSample| {
+                let p = &sample.proposal;
+                let key = proposal_key(&p.0, p.2, p.3, p.4);
+                let attempted: Vec<_> =
+                    matching.iter().copied().filter(|trial| trial_key(trial).as_ref() == Some(&key)).collect();
+                let point = |p: Point| Value::Array(vec![int(p.x_nm), int(p.y_nm)]);
+                Value::Object(Object::from([
+                    ("net".into(), text(&p.0)),
+                    ("native_anchor_uuids".into(), Value::Array(vec![text(&p.1.0), text(&p.1.1)])),
+                    ("start_nm".into(), point(p.3)),
+                    ("end_nm".into(), point(p.4)),
+                    ("queue_rank".into(), sample.queue_rank.map_or(Value::Null, |rank| int(rank as i64))),
+                    ("retained_original_payload".into(), Value::Bool(sample.retained_payload)),
+                    (
+                        "queued_native_anchor_uuids".into(),
+                        sample
+                            .queued_proposal
+                            .as_ref()
+                            .map_or(Value::Null, |queued| Value::Array(vec![text(&queued.1.0), text(&queued.1.1)])),
+                    ),
+                    (
+                        "queued_start_nm".into(),
+                        sample.queued_proposal.as_ref().map_or(Value::Null, |queued| point(queued.3)),
+                    ),
+                    (
+                        "queued_end_nm".into(),
+                        sample.queued_proposal.as_ref().map_or(Value::Null, |queued| point(queued.4)),
+                    ),
+                    ("attempted_geometry".into(), Value::Bool(!attempted.is_empty())),
+                    (
+                        "attempted_original_payload".into(),
+                        Value::Bool(attempted.iter().any(|trial| {
+                            trial.native_item_uuids == p.1
+                                && trial.searches.first().is_some_and(|search| search.start == p.3 && search.end == p.4)
+                        })),
+                    ),
+                    ("first_attempt_index".into(), attempted.first().map_or(Value::Null, |trial| int(trial.index))),
+                ]))
+            };
+            Value::Object(Object::from([
+                ("native_finding_ordinal".into(), row.finding_ordinal.map_or(Value::Null, |n| int(n as i64))),
+                ("net".into(), row.net.as_deref().map_or(Value::Null, text)),
+                ("layer".into(), text(row.layer.value())),
+                ("generated_count".into(), int(row.generated as i64)),
+                ("queued_unique_geometry_count".into(), int(row.queued as i64)),
+                ("duplicate_geometry_count".into(), int((row.generated - row.queued) as i64)),
+                ("first_queue_rank".into(), row.first_queue_rank.map_or(Value::Null, |n| int(n as i64))),
+                ("trial_budget_prefix_geometry_count".into(), int(row.prefix as i64)),
+                ("attempted_trial_count".into(), int(matching.len() as i64)),
+                ("samples".into(), Value::Array(row.samples.iter().map(sample_document).collect())),
+            ]))
+        };
+        let limits = Value::Object(Object::from([
+            ("fragment_anchor_limit_per_side".into(), int(self.anchor_limit as i64)),
+            (
+                "maximum_geometry_keys_per_finding_layer".into(),
+                int(self.anchor_limit.saturating_mul(self.anchor_limit) as i64),
+            ),
+            ("maximum_trials".into(), int(self.options.maximum_trials)),
+            ("maximum_search_states".into(), int(self.options.maximum_search_states)),
+            ("maximum_blockers".into(), int(self.options.maximum_blockers)),
+            ("maximum_dependency_expansions".into(), int(self.options.maximum_dependency_expansions)),
+            ("step_nm".into(), int(STEP_NM)),
+            ("maximum_detour_nm".into(), int(MAXIMUM_DETOUR_NM)),
+            ("finding_identity_cap".into(), int(MAXIMUM_CENSUS_FINDINGS as i64)),
+            ("finding_layer_row_cap".into(), int(MAXIMUM_CENSUS_LAYER_ROWS as i64)),
+            ("global_layer_row_cap".into(), int(MAXIMUM_CENSUS_GLOBAL_LAYERS as i64)),
+            ("global_geometry_sample_cap".into(), int(MAXIMUM_CENSUS_SAMPLES as i64)),
+            ("samples_per_finding_layer_cap".into(), int(MAXIMUM_CENSUS_SAMPLES_PER_ROW as i64)),
+        ]));
+        Value::Object(Object::from([
+            (
+                "scope".into(),
+                text(
+                    "initial_repair_input_only; observes_existing_queue_before_trial_scheduling; generated_after_fragment_anchor_limit; later_inputs_not_covered; generated_is_not_route_or_native_validated",
+                ),
+            ),
+            (
+                "identity_scope".into(),
+                text(
+                    "native_findings_of_input_digest; ordinal_is_1_based_in_verification.native_findings; not_grouped_issue_id_or_manufacturer_reference; per_finding_geometry_counts_may_overlap_after_global_dedup",
+                ),
+            ),
+            (
+                "prefix_scope".into(),
+                text(
+                    "queue_rank_within_initial_maximum_trials; not_a_claim_of_actual_attempt_after_acceptance_or_rejection_context_skips",
+                ),
+            ),
+            (
+                "attempt_scope".into(),
+                text(
+                    "exact_initial_input_digest_net_layer_and_undirected_search_geometry; per_finding_counts_may_overlap_and_do_not_assign_exclusive_trial_ownership; sample_payload_flags_also_check_direction_and_native_anchor_uuids",
+                ),
+            ),
+            ("input_digest".into(), text(&self.input_digest)),
+            ("limits".into(), limits),
+            ("generated_count".into(), int(self.generated as i64)),
+            ("queued_unique_geometry_count".into(), int(self.queued as i64)),
+            ("duplicate_geometry_count".into(), int((self.generated - self.queued) as i64)),
+            ("attempted_initial_input_trial_count".into(), int(initial_trials.len() as i64)),
+            ("later_input_trial_count_not_covered".into(), int((trials.len() - initial_trials.len()) as i64)),
+            ("omitted_finding_identity_count".into(), int((self.finding_count - self.finding_identities.len()) as i64)),
+            (
+                "omitted_finding_layer_row_count".into(),
+                int((self.finding_layer_count - self.finding_layers.len()) as i64),
+            ),
+            ("omitted_global_layer_row_count".into(), int((self.observed_layers.len() - self.layers.len()) as i64)),
+            ("omitted_first_geometry_sample_count".into(), int((self.sample_opportunities - self.sample_count) as i64)),
+            ("findings".into(), Value::Array(self.finding_identities.clone())),
+            ("layers".into(), Value::Array(self.layers.iter().map(row_document).collect())),
+            ("finding_layers".into(), Value::Array(self.finding_layers.iter().map(row_document).collect())),
+        ]))
+    }
+}
+
 /// `_proposal_key`.
 fn proposal_key(net: &str, layer: CopperLayer, start: Point, end: Point) -> ProposalKey {
     let mut ends = [(start.x_nm, start.y_nm), (end.x_nm, end.y_nm)];
@@ -372,36 +898,31 @@ fn proposal_key(net: &str, layer: CopperLayer, start: Point, end: Point) -> Prop
     (net.to_owned(), layer, ends)
 }
 
-/// `_proposals`: share trials across open nets (round-robin, first unseen
-/// proposal of each net's findings in turn).
-fn proposals(
-    board: &PhysicalBoard,
-    evidence: &PlaneVerification,
-    anchor_limit: usize,
-) -> copper_pcb::Result<Vec<Proposal>> {
-    if !evidence.matches(board)? {
-        return Ok(Vec::new());
-    }
-    let eligible = copper_pcb::zones::distribution_zone_nets(board);
-    let objects: Vec<NativeCopperItem> = native_object_map(board)?.into_values().collect();
-    let components = filled_component_roots(board, evidence, &eligible)?;
-    let mut grouped: IndexMap<Option<&str>, Vec<Proposal>> = IndexMap::new();
-    for finding in &evidence.native_findings {
-        if finding.category == "unconnected" && finding.items.len() == 2 {
-            let net = finding.items[0].net.as_deref();
-            let found = finding_proposals(board, evidence, finding, &objects, &components, &eligible, anchor_limit);
-            grouped.entry(net).or_default().extend(found);
+/// Deterministically take the first unseen geometry from each queue in turn.
+/// Used for net, finding and layer queues so target variants share the trial
+/// allowance while each outer queue keeps its turn.
+/// Retain the original-first direction and item identities for each geometry:
+/// reversing a proposal also changes the bounded search's source lattice.
+fn interleave_proposals(groups: Vec<Vec<Proposal>>) -> Vec<Proposal> {
+    let mut representatives: IndexMap<ProposalKey, Proposal> = IndexMap::new();
+    let mut queues = Vec::new();
+    for group in groups {
+        let mut keys = Vec::new();
+        for proposal in group {
+            let key = proposal_key(&proposal.0, proposal.2, proposal.3, proposal.4);
+            representatives.entry(key.clone()).or_insert(proposal);
+            keys.push(key);
         }
+        queues.push(keys.into_iter());
     }
-    let mut queues: Vec<std::vec::IntoIter<Proposal>> = grouped.into_values().map(Vec::into_iter).collect();
-    let mut seen: IndexSet<ProposalKey> = IndexSet::new();
     let mut ordered = Vec::new();
     while !queues.is_empty() {
         let mut active = Vec::new();
         for mut queue in queues {
-            for proposal in queue.by_ref() {
-                let key = proposal_key(&proposal.0, proposal.2, proposal.3, proposal.4);
-                if seen.insert(key) {
+            for key in queue.by_ref() {
+                // Queue order alone determines scheduling; the lookup's order
+                // is irrelevant, so removal need not shift remaining entries.
+                if let Some(proposal) = representatives.swap_remove(&key) {
                     ordered.push(proposal);
                     active.push(queue);
                     break;
@@ -410,7 +931,63 @@ fn proposals(
         }
         queues = active;
     }
-    Ok(ordered)
+    ordered
+}
+
+/// Give each actual shared layer one geometry before returning to its next
+/// distance-ordered candidate. Layer queues follow first occurrence, keeping
+/// the original closest candidate first. Reuse the existing first-payload
+/// deduplication so search direction and native identities remain unchanged.
+fn layer_fair_proposals(found: Vec<Proposal>) -> Vec<Proposal> {
+    let mut layers: IndexMap<CopperLayer, Vec<Proposal>> = IndexMap::new();
+    for proposal in found {
+        layers.entry(proposal.2).or_default().push(proposal);
+    }
+    interleave_proposals(layers.into_values().collect())
+}
+
+/// Share trials across nets and, within each net, distinct native findings.
+/// Each finding retains distance order within a layer and the same geometry
+/// checks; its layer queues also share the unchanged trial allowance.
+#[cfg(test)]
+fn proposals(
+    board: &PhysicalBoard,
+    evidence: &PlaneVerification,
+    anchor_limit: usize,
+) -> copper_pcb::Result<Vec<Proposal>> {
+    proposal_queue(board, evidence, anchor_limit, None).map(|(queue, _)| queue)
+}
+
+fn proposal_queue(
+    board: &PhysicalBoard,
+    evidence: &PlaneVerification,
+    anchor_limit: usize,
+    census_options: Option<&FilledCopperFeedbackOptions>,
+) -> copper_pcb::Result<(Vec<Proposal>, Option<NativeProposalCensus>)> {
+    if !evidence.matches(board)? {
+        return Ok((Vec::new(), None));
+    }
+    let mut census = census_options.map(|options| NativeProposalCensus::new(evidence, options, anchor_limit));
+    let eligible = copper_pcb::zones::distribution_zone_nets(board);
+    let objects: Vec<NativeCopperItem> = native_object_map(board)?.into_values().collect();
+    let components = filled_component_roots(board, evidence, &eligible)?;
+    let mut grouped: IndexMap<Option<&str>, Vec<Vec<Proposal>>> = IndexMap::new();
+    for (index, finding) in evidence.native_findings.iter().enumerate() {
+        if finding.category == "unconnected" && finding.items.len() == 2 {
+            let net = finding.items[0].net.as_deref();
+            let roots = bridge_components(board, finding, &components)?;
+            let found = finding_proposals(board, evidence, finding, &objects, &roots, &eligible, anchor_limit);
+            if let Some(census) = &mut census {
+                census.observe_finding(index + 1, finding, &found);
+            }
+            grouped.entry(net).or_default().push(layer_fair_proposals(found));
+        }
+    }
+    let queue = interleave_proposals(grouped.into_values().map(interleave_proposals).collect());
+    if let Some(census) = &mut census {
+        census.observe_queue(&queue);
+    }
+    Ok((queue, census))
 }
 
 /// `_rejection_context`: ignore only unrelated copper on OTHER layers when
@@ -533,6 +1110,7 @@ pub fn improve_filled_copper(
             stop_reason: reason.to_owned(),
             trials,
             diagnostic,
+            proposal_census: None,
         })
     };
     let mut evidence = match verify(board) {
@@ -614,10 +1192,22 @@ pub fn improve_filled_copper(
     let mut rejected: IndexMap<ProposalKey, (BTreeSet<String>, RejectionContext)> = IndexMap::new();
     let mut reason = "stagnation";
     let mut diagnostic: Option<String> = None;
+    let mut proposal_census = None;
+    let mut observe_initial_queue = true;
     let maximum_trials = options.maximum_trials as usize;
     while evidence.unconnected_count != 0 && records.len() < maximum_trials {
         let (mut improved, mut proposed) = (false, false);
-        for (net, uuids, layer, start, end) in proposals(&board, &evidence, MAXIMUM_FRAGMENT_ANCHORS).map_err(pcb)? {
+        let (queue, census) =
+            proposal_queue(&board, &evidence, MAXIMUM_FRAGMENT_ANCHORS, observe_initial_queue.then_some(options))
+                .map_err(pcb)?;
+        if observe_initial_queue {
+            proposal_census = census;
+            if let Some(census) = &proposal_census {
+                emit(&mut on_progress, "filled_copper_proposals", "generated", vec![("census", census.document(&[]))]);
+            }
+            observe_initial_queue = false;
+        }
+        for (net, uuids, layer, start, end) in queue {
             proposed = true;
             let key = proposal_key(&net, layer, start, end);
             if let Some((displaced, context)) = rejected.get(&key)
@@ -645,6 +1235,7 @@ pub fn improve_filled_copper(
                 full.add_via(item.clone(), false, None).map_err(pcb)?;
             }
             let mut states = 0;
+            let mut searches = Vec::new();
             let mut failure_blockers: Vec<RoutingBlocker> = Vec::new();
             let width = board
                 .net_routing_rules
@@ -652,12 +1243,13 @@ pub fn improve_filled_copper(
                 .find(|rule| rule.net == net && rule.width_nm.is_some())
                 .and_then(|rule| rule.width_nm)
                 .unwrap_or(board.rules.default_track_width_nm);
-            let search = |surface: &PhysicalBoard,
-                          index: &RoutingClearanceIndex<'_>,
-                          budget: i64,
-                          states: &mut i64,
-                          failure_blockers: &mut Vec<RoutingBlocker>,
-                          progress: &mut Option<ProgressCallback<'_>>|
+            let mut search = |snapshot: &'static str,
+                              surface: &PhysicalBoard,
+                              index: &RoutingClearanceIndex<'_>,
+                              budget: i64,
+                              states: &mut i64,
+                              failure_blockers: &mut Vec<RoutingBlocker>,
+                              progress: &mut Option<ProgressCallback<'_>>|
              -> Result<Option<Vec<TrackSegment>>, NativeError> {
                 let found = crate::surface_path::surface_path_between_observed(
                     surface,
@@ -689,8 +1281,13 @@ pub fn improve_filled_copper(
                     ));
                 }
                 details.push(("outcome", text(found.outcome)));
+                let path = found.path.clone();
+                let attempt =
+                    SurfaceBridgeAttempt { snapshot, start, end, width_nm: width, state_budget: budget, search: found };
+                details.push(("search", attempt.document()));
                 emit(progress, "surface_bridge_search", "finished", details);
-                Ok(found.path)
+                searches.push(attempt);
+                Ok(path)
             };
             // Prefer the empty blocker set. Spend at most a quarter of the
             // shared per-trial state budget against ALL copper before proposing
@@ -699,6 +1296,7 @@ pub fn improve_filled_copper(
             let mut bridge = None;
             if !mutable_tracks.is_empty() || !mutable_vias.is_empty() {
                 bridge = search(
+                    "all_copper",
                     &board,
                     &full,
                     (options.maximum_search_states / 4).max(1),
@@ -709,8 +1307,15 @@ pub fn improve_filled_copper(
             }
             let remaining_states = options.maximum_search_states - states;
             if bridge.is_none() && remaining_states > 0 {
-                bridge =
-                    search(&fixed, &clearance, remaining_states, &mut states, &mut failure_blockers, &mut on_progress)?;
+                bridge = search(
+                    "protected_copper",
+                    &fixed,
+                    &clearance,
+                    remaining_states,
+                    &mut states,
+                    &mut failure_blockers,
+                    &mut on_progress,
+                )?;
             }
             let mut blockers = failure_blockers;
             let mut displaced: BTreeSet<String> = BTreeSet::new();
@@ -800,6 +1405,7 @@ pub fn improve_filled_copper(
                                         displaced_nets: displaced.iter().cloned().collect(),
                                         dependency_expansions: expansions,
                                         expanded_states: states,
+                                        searches,
                                         dependency_searches,
                                         candidate_digest,
                                         verification: None,
@@ -813,29 +1419,18 @@ pub fn improve_filled_copper(
                                         stop_reason: tool_reason(&error).to_owned(),
                                         trials: records,
                                         diagnostic: Some(error.to_string()),
+                                        proposal_census,
                                     });
                                 }
                             };
                             current = cleaned;
                             candidate_digest = Some(digest(&current));
                             seen.insert(candidate_digest.clone().expect("digest"));
-                            let (old_nets, new_nets) = (mapped_open_nets(&evidence), mapped_open_nets(&after));
                             // A trial may not add a violation. One the board already
                             // had (footprint artwork, say) is the same finding on
                             // the same objects and does not block a trial that only
                             // removes opens; library-copy findings never block.
-                            let hard_native = subtract(&hard_violations(&after), &hard_violations(&evidence));
-                            outcome = "native_not_improved";
-                            if after.matches(&current).map_err(pcb)?
-                                && hard_native.is_empty()
-                                && after.island_count == 0
-                                && new_nets
-                                    .as_ref()
-                                    .is_some_and(|new| old_nets.as_ref().is_some_and(|old| new.is_subset(old)))
-                                && after.unconnected_count < evidence.unconnected_count
-                            {
-                                outcome = "accepted";
-                            }
+                            outcome = native_trial_outcome(&board, &evidence, &current, &after).map_err(pcb)?;
                             checked = Some(after);
                         }
                         candidate = Some((current, reroute));
@@ -853,6 +1448,7 @@ pub fn improve_filled_copper(
                 displaced_nets: displaced.iter().cloned().collect(),
                 dependency_expansions: expansions,
                 expanded_states: states,
+                searches,
                 dependency_searches,
                 candidate_digest,
                 verification: checked.clone(),
@@ -862,7 +1458,7 @@ pub fn improve_filled_copper(
             records.push(record);
             // Failed native trials have unchanged input geometry. Do not repeat
             // them merely because another rail accepted an unrelated bridge.
-            if outcome == "native_not_improved" {
+            if checked.is_some() && outcome != "accepted" {
                 let context = RejectionContext::new(&board, &evidence, &net, &displaced);
                 rejected.insert(key, (displaced.clone(), context));
             }
@@ -930,5 +1526,10 @@ pub fn improve_filled_copper(
         stop_reason: reason.to_owned(),
         trials: records,
         diagnostic,
+        proposal_census,
     })
 }
+
+#[cfg(test)]
+#[path = "filled_feedback_tests.rs"]
+mod tests;

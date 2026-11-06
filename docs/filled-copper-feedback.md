@@ -116,6 +116,16 @@ a caller-supplied connected flag or a stale native certificate.
 
 ## Final native dead-end cleanup
 
+Ordinary fanout first reuses a rule-qualified pad-to-via launch already present
+in its input, ahead of abstract surface preferences. Lattice coverage and fanout
+share the same exact check: actual track occurrences, width/breakout rules,
+clearance, via technology/span, return requirements and applicable budgets.
+A same-net via without its legal pad path does not suppress escape generation.
+Reuse preserves the input copper and avoids generating a competing branch
+before prefix admission; it never authorizes deleting an admitted occurrence.
+This proves a local transition only. It does not certify a package-boundary
+channel, force onward routing onto an inner layer, or implement field exclusion.
+
 The final CLI pass can trim a mixed set of ordinary dangling tracks and vias.
 The source, prepared prefix, macros, critical nets and required via arrays stay
 protected. Existing track-only API callers cannot authorize
@@ -126,11 +136,29 @@ Every proposal preserves exact explicit pad partitions. Off-centre land entries
 may anchor a trim only when the complete existing endpoint disk lies inside the
 pad. Grazing or width-only contacts permit a whole-segment removal trial, never
 an invented cut point; any lost pad connection rejects that trial.
+The same rule applies when a track touches a via annulus off its centre line:
+the annulus is not an inferred trim anchor. A removal proposal still needs the
+unchanged pad partitions and the caller's fresh native refill.
 Removing a one-layer via may expose its old launch leg. At most four fresh native
 rounds form one transaction, and only a completely clean matched refill commits.
 Stale evidence, protected exposed legs, unsupported findings or an exhausted bound
 restore the original board and evidence. The route report records cleanup
 digests, removed/replaced occurrence counts, artifact paths and rejection reasons.
+
+`native_cleanup.census` observes every dangling item even when the first protected
+item rejects the batch. It binds each row to the exact native object and reports
+caller protection, critical/zone status and the uniquely matching admitted-prefix
+contribution, where known. Missing, duplicate, stale or unbound geometry remains
+unresolved. The census includes board/export/prefix context and confers no
+retirement authority. `copper issues --net` filters its item rows while retaining
+the explicitly global cleanup counters and digests.
+
+A selected-item trial consumes the complete original native evidence and exact
+UUID selection; it does not manufacture a filtered verification record. This is
+currently a diagnostic feasibility API. The production cleanup retains its
+whole-transaction guards and cannot retire an admitted ordinary escape simply
+because its net is connected or its producer is known. Prefix replacement and
+fresh dependency admission are separate requirements.
 
 ## Repair transaction
 
@@ -151,9 +179,14 @@ boundary-only contact, drilled voids and unsupported/disconnected polygon walks
 do not establish a join. Without that dependency, native-fill component grouping
 is unavailable; non-zone explicit-copper anchor expansion remains available and
 unresolved searches still cannot claim native closure.
-Repair proposals also share the trial allowance round-robin across distinct
-open nets. Equivalent net/layer/endpoint proposals are deduplicated before
-spending a trial; source names do not select the repair policy.
+Repair proposals share the trial allowance round-robin across distinct open
+nets, then findings on each net, then the actual shared layers of each finding.
+Each layer retains distance ordering, and its first occurrence determines its
+turn; the closest original candidate still goes first. Equivalent
+net/layer/endpoint proposals are deduplicated before spending a trial, retaining
+the original native identities and search direction. This changes scheduling
+within the existing allowance, not candidate geometry, acceptance or bounds;
+source names do not select the repair policy.
 For a zone or non-zone native item, anchors may also come from its actual connected
 bare-copper/native-fill component. Existing plated transitions can therefore supply a
 same-layer bridge endpoint even when KiCad names two opposite-layer tracks.
@@ -182,7 +215,7 @@ increase the configured trial or search budgets.
    exactly or the transaction fails. A dependency transaction cannot overwrite
    the main run's saved replay inputs.
 5. Refill independently. Accept only a strict reduction in native opens, no newly
-   open net, no island and no native non-library violation. Unknown new objects
+   open net, no island and no new native non-library violation. Unknown new objects
    fail closed. Geometry-changing closure after verification rejects the trial.
 
 Inside a trial, up to 64 exact native dangling tracks/vias on displaced ordinary
@@ -246,6 +279,21 @@ remains unrouted; it does not promote generated bypasses into immutable macros.
 `filled_copper_feedback` records input/candidate hashes, bridge expanded-state
 counts, dependency searches, displaced nets and fresh native evidence per trial.
 Failed bridge searches retain at most 32 blockers sampled from 16 rejected edges.
+
+Native trial comparisons bind both reports to their exact boards and exports.
+Track/via export UUIDs depend on vector indices, so unchanged hard violations
+are compared using complete copper geometry, duplicate occurrence numbers and
+total geometry multiplicity (a changed duplicate population is ambiguous),
+with violation multiplicity retained. Moving or resizing copper, changing its
+net/layers/process, or adding a duplicate occurrence cannot borrow an old
+violation's identity. Pad/zone identities require unchanged source intent.
+Unmapped, inconsistent or object-less non-library findings fail closed.
+Trial outcomes distinguish `native_evidence_mismatch`,
+`native_source_intent_changed`, `native_unsupported_violation`,
+`native_new_violations`, `native_islands`, `native_unmapped_opens`,
+`native_new_open_nets`, and `native_not_improved` (no strict reduction in opens).
+Library-copy findings retain their existing exemption. Rejected native trials
+retain the same bounded rejection-cache behavior and do not alter the incumbent.
 
 Native stop reasons distinguish `verified`, `disabled`, `trial_budget_exhausted`,
 `stagnation`, `physical_violations`, `native_violations`,

@@ -57,6 +57,7 @@ fn recessed_lands_offer_exact_source_connected_octilinear_collars() {
         first: a,
         second: b,
         component: "U",
+        second_component: "U",
         width: 250_000,
         offset: 200_000,
         clearance: 150_000,

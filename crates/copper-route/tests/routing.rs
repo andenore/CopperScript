@@ -76,6 +76,63 @@ fn global_router_reports_an_impossible_keepout_cut() {
 }
 
 #[test]
+fn global_terminal_inventory_survives_early_missing_access_failure() {
+    let mut board = two_terminal_board();
+    // Keep the lands off grid centers so every launch needs checked copper.
+    board.placements[0].position = pt(5.25, 15.0);
+    board.placements[1].position = pt(35.25, 15.0);
+    board.copper_keepouts = vec![copper_keepout("blocked-terminal", &[F, B], rect(3.0, 13.0, 7.0, 17.0))];
+    let result = global_with(&board, 2.5, Some(1));
+    assert_eq!(result.status, GlobalRoutingStatus::Unreachable);
+    assert!(result.routes[0].accesses.is_empty(), "early failure has no selected accesses");
+    assert!(result.routes[0].diagnostics[0].contains("access"));
+    assert_eq!(result.terminal_accesses.len(), 2);
+    let blocked = result.terminal_accesses.iter().find(|a| a.pad.component == "J1").unwrap();
+    let available = result.terminal_accesses.iter().find(|a| a.pad.component == "J2").unwrap();
+    assert_eq!(blocked.net, "SIGNAL");
+    assert_eq!((blocked.registered_candidates, blocked.concrete_candidates), (0, 0));
+    assert!(available.registered_candidates > 0 && available.concrete_candidates > 0);
+    assert!(available.concrete_candidates <= available.registered_candidates);
+    let document = copper_json::parse(&result.to_json()).unwrap();
+    assert_eq!(document.get("terminal_accesses").unwrap().as_array().unwrap().len(), 2);
+
+    let saved = copper_route::state_codec::encode_global_route(&result);
+    assert_eq!(copper_route::state_codec::global_routing_result(&saved).unwrap(), result);
+    assert_eq!(copper_route::routing_state::global_routing_result(&saved).unwrap(), result);
+    // Old checkpoints stay metadata-free and round-trip without changing
+    // their saved representation. Missing coverage is not an empty proof.
+    let mut legacy = result.clone();
+    legacy.terminal_accesses.clear();
+    let saved = copper_route::state_codec::encode_global_route(&legacy);
+    let copper_state::StateValue::Dataclass { fields, .. } = &saved else { panic!("dataclass") };
+    assert!(!fields.contains_key("terminal_accesses"));
+    assert_eq!(copper_route::state_codec::global_routing_result(&saved).unwrap(), legacy);
+    assert_eq!(copper_route::routing_state::global_routing_result(&saved).unwrap(), legacy);
+    assert_eq!(result.routing_fingerprint, legacy.routing_fingerprint);
+
+    // Losing another terminal remains visible although both selected route
+    // lists are empty and both coarse results fail the same net.
+    board.copper_keepouts.push(copper_keepout("second-blocked-terminal", &[F, B], rect(33.0, 13.0, 37.0, 17.0)));
+    let worsened = global_with(&board, 2.5, Some(1));
+    assert!(worsened.routes[0].accesses.is_empty());
+    assert_eq!(worsened.metrics.unrouted_net_count, result.metrics.unrouted_net_count);
+    assert!(worsened.terminal_accesses.iter().all(|access| access.registered_candidates == 0));
+}
+
+#[test]
+fn global_terminal_inventory_decoders_reject_invalid_counts() {
+    let result = global_with(&two_terminal_board(), 2.5, Some(1));
+    for (registered, concrete) in [(-1, 0), (1, -1), (1, 2)] {
+        let mut invalid = result.clone();
+        invalid.terminal_accesses[0].registered_candidates = registered;
+        invalid.terminal_accesses[0].concrete_candidates = concrete;
+        let saved = copper_route::state_codec::encode_global_route(&invalid);
+        assert!(copper_route::state_codec::global_routing_result(&saved).is_err());
+        assert!(copper_route::routing_state::global_routing_result(&saved).is_err());
+    }
+}
+
+#[test]
 fn global_router_obeys_layer_specific_copper_keepout() {
     let mut board = two_terminal_board();
     board.copper_keepouts = vec![copper_keepout("front-wall", &[F], wall())];

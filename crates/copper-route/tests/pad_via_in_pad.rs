@@ -108,6 +108,30 @@ fn source_constraint_lowers_semantic_pin_to_typed_physical_permission() {
 }
 
 #[test]
+fn concurrent_source_lowering_isolates_the_same_basename() {
+    const THREADS: usize = 8;
+    const ITERATIONS: usize = 4;
+    let start = std::sync::Barrier::new(THREADS);
+    std::thread::scope(|scope| {
+        for worker in 0..THREADS {
+            let valid = worker % 2 == 0;
+            let start = &start;
+            scope.spawn(move || {
+                start.wait();
+                for iteration in 0..ITERATIONS {
+                    let target = if valid { "BT1.2" } else { "NOPE.2" };
+                    let result = lower(target, "filled-capped", "").map(|board| board.via_in_pad_rules);
+                    assert_eq!(result.is_ok(), valid, "worker {worker}, iteration {iteration}: {result:?}");
+                    if valid {
+                        assert_eq!(result.unwrap(), [permission("BT1", "2")]);
+                    }
+                }
+            });
+        }
+    });
+}
+
+#[test]
 fn invalid_source_permission_fails_closed() {
     for (target, process, extra) in [
         ("BT1", "filled-capped", ""),

@@ -362,11 +362,16 @@ pub fn scratch(name: &str) -> std::path::PathBuf {
 }
 
 /// `compile_source(source)` (written to `name` in a fresh scratch directory).
+/// Each invocation has its own namespace, including across test processes.
 pub fn load_source(
     name: &str,
     source: &str,
 ) -> Result<copper_lang::compiler::Design, copper_lang::compiler::LoadError> {
-    let directory = scratch(&format!("source-{}", name.replace(['/', '.'], "-")));
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_SOURCE: AtomicU64 = AtomicU64::new(0);
+    let sequence = NEXT_SOURCE.fetch_add(1, Ordering::Relaxed);
+    let directory = scratch(&format!("source-{}-{sequence}", std::process::id()));
     let path = directory.join(name);
     std::fs::create_dir_all(path.parent().expect("parent")).expect("source directory");
     std::fs::write(&path, source).expect("source");

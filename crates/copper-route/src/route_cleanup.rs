@@ -362,6 +362,23 @@ fn net_connected(board: &PhysicalBoard, name: &str, net: &PhysicalNet) -> Result
         .net_connected(net))
 }
 
+/// Extend cleanup protection with exact freshly admitted copper occurrences.
+/// Overlapping source declarations set a floor rather than summing ownership.
+pub fn protect_fixed_prefix(
+    prefix: &crate::fixed_prefix::AdmittedFixedPrefix,
+    tracks: &mut TrackCounter,
+    vias: &mut ViaCounter,
+) {
+    for (track, count) in counter(&prefix.board().tracks) {
+        let kept = tracks.entry(track).or_insert(0);
+        *kept = (*kept).max(count);
+    }
+    for (via, count) in via_counter(&prefix.board().vias) {
+        let kept = vias.entry(via).or_insert(0);
+        *kept = (*kept).max(count);
+    }
+}
+
 /// `remove_single_layer_vias`: delete ordinary vias whose copper meets only
 /// one layer, and their dead stubs. A via goes when its tracks and lands
 /// touch fewer than two layers and the net stays connected without it; the
@@ -718,6 +735,52 @@ mod tests {
         assert!(swept.vias.is_empty() && swept.tracks == vec![route]);
         let (kept, _) = remove_single_layer_vias(&board, &ViaCounter::new(), &counter([&stub])).unwrap();
         assert_eq!(counter(&kept.tracks), counter(&board.tracks));
+    }
+
+    #[test]
+    fn admitted_unused_dogbones_remain_when_a_complete_net_joins_elsewhere() {
+        use crate::fixed_prefix::{AdmittedFixedPrefix, FixedContribution, FixedPrefixRole};
+        let source = board();
+        let stub = track((3.0, 6.0), (3.0, 8.0), CopperLayer::Front);
+        let barrel = via(3.0, 8.0);
+        let other_stub = track((17.0, 6.0), (17.0, 8.0), CopperLayer::Front);
+        let other_barrel = via(17.0, 8.0);
+        let prefix = AdmittedFixedPrefix::admit(
+            &source,
+            &[FixedContribution {
+                id: "inner-dogbones".to_owned(),
+                role: FixedPrefixRole::ViaLattice,
+                tracks: vec![stub.clone(), stub.clone(), other_stub],
+                vias: vec![barrel.clone(), other_barrel.clone()],
+            }],
+        )
+        .expect("legal owned local copper");
+        let mut completed = prefix.board().clone();
+        completed.tracks.push(track((3.0, 6.0), (17.0, 6.0), CopperLayer::Front));
+        let disposable = via(11.0, 6.0);
+        completed.vias.push(disposable.clone());
+        assert!(connected(&completed));
+        let (unprotected, _) = remove_single_layer_vias(&completed, &ViaCounter::new(), &TrackCounter::new()).unwrap();
+        assert!(unprotected.vias.is_empty(), "the fixture must reproduce destructive unprotected cleanup");
+        let mut tracks = counter([&stub]);
+        let mut vias = via_counter([&barrel]);
+        protect_fixed_prefix(&prefix, &mut tracks, &mut vias);
+        assert_eq!(vias[&barrel], 1, "overlapping declarations must not invent a second barrel");
+        let (kept, changed) = remove_single_layer_vias(&completed, &vias, &tracks).unwrap();
+        assert!(changed && connected(&kept));
+        assert_eq!(via_counter(&kept.vias), via_counter([&barrel, &other_barrel]));
+        assert_eq!(counter(&kept.tracks)[&stub], 2);
+        assert!(!kept.vias.contains(&disposable), "ordinary unused copper remains eligible for cleanup");
+        assert_eq!(prefix.missing_copper_occurrences(&kept), (0, 0));
+        let mut damaged = kept.clone();
+        damaged.vias.remove(0);
+        let stub_index = damaged.tracks.iter().position(|track| track == &stub).unwrap();
+        damaged.tracks.remove(stub_index);
+        assert_eq!(
+            prefix.missing_copper_occurrences(&damaged),
+            (1, 1),
+            "a missing barrel and a missing duplicate track occurrence remain visible"
+        );
     }
 
     #[test]

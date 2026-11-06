@@ -20,6 +20,7 @@ fn ports(f: &Fixture, board: &PhysicalBoard) -> Vec<Port> {
         first: mm(5, 5),
         second: mm(5, 6),
         component: f.reference,
+        second_component: f.reference,
         width: 200_000,
         offset: 500_000,
         clearance: 100_000,

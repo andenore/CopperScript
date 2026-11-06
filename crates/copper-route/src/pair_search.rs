@@ -32,6 +32,47 @@ pub struct PairPortInventory {
     pub examples: Vec<PairPortExample>,
 }
 
+/// Compatibility counts before bounded portal selection; never a routing decision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairCollarInventory {
+    pub family: String,
+    pub layer: CopperLayer,
+    pub pitch_nm: i64,
+    pub first_ports: i64,
+    pub second_ports: i64,
+    pub compatible_pairs: i64,
+    pub incompatible_pairs: i64,
+    pub stop_reason: String,
+}
+
+/// One rejected full spine-plus-tail proposal. The frontier/tail locate the
+/// attachment attempt; tracks locate the actual failing geometry, which can
+/// lie earlier on the spine. Blockers belong to that search snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairGoalRejection {
+    pub reason: String,
+    pub distance_to_goal_nm: i64,
+    pub position: Point,
+    pub heading: i64,
+    pub tail: Vec<Point>,
+    pub tracks: Vec<TrackSegment>,
+    pub blockers: Vec<RoutingBlocker>,
+    pub blocker_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PairGoalDiagnostics {
+    pub nearest_position: Option<Point>,
+    pub nearest_heading: Option<i64>,
+    pub stop_reason: String,
+    pub tail_candidates: i64,
+    pub rejection_counts: Vec<(String, i64)>,
+    pub rejection_examples: Vec<PairGoalRejection>,
+    /// Geometry only during search; exact blockers are resolved once for each
+    /// reported frontier, keeping extra observation queries bounded.
+    pub closest_rejection: Option<PairGoalRejection>,
+}
+
 /// `PairTransitionExample`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairTransitionExample {
@@ -58,6 +99,7 @@ pub struct PairTransitionInventory {
 /// `PairSearchAttempt`: one bounded continuation of the coupled search.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairSearchAttempt {
+    pub search_index: i64,
     pub layer: CopperLayer,
     pub pitch_nm: i64,
     pub start: Point,
@@ -69,6 +111,7 @@ pub struct PairSearchAttempt {
     pub expanded_states: i64,
     pub legal_advances: i64,
     pub minimum_goal_distance_nm: Option<i64>,
+    pub goal: PairGoalDiagnostics,
 }
 
 fn object(entries: Vec<(&str, Value)>) -> Value {
@@ -78,6 +121,73 @@ fn object(entries: Vec<(&str, Value)>) -> Value {
 /// `asdict(Point)`.
 pub fn point_document(point: Point) -> Value {
     object(vec![("x_nm", Value::from(point.x_nm)), ("y_nm", Value::from(point.y_nm))])
+}
+
+pub fn collar_inventory_document(item: &PairCollarInventory) -> Value {
+    object(vec![
+        ("family", Value::from(item.family.as_str())),
+        ("layer", Value::from(item.layer.value())),
+        ("pitch_nm", Value::from(item.pitch_nm)),
+        ("first_ports", Value::from(item.first_ports)),
+        ("second_ports", Value::from(item.second_ports)),
+        ("compatible_pairs", Value::from(item.compatible_pairs)),
+        ("incompatible_pairs", Value::from(item.incompatible_pairs)),
+        ("stop_reason", Value::from(item.stop_reason.as_str())),
+    ])
+}
+
+fn goal_document(item: &PairGoalDiagnostics) -> Value {
+    object(vec![
+        ("nearest_position", item.nearest_position.map_or(Value::Null, point_document)),
+        ("nearest_heading", item.nearest_heading.map_or(Value::Null, Value::from)),
+        ("stop_reason", Value::from(item.stop_reason.as_str())),
+        ("tail_candidates", Value::from(item.tail_candidates)),
+        ("rejection_example_policy", Value::from("first_per_reason_max_7_plus_closest_rejection")),
+        (
+            "rejection_counts",
+            Value::Object(
+                item.rejection_counts.iter().map(|(reason, count)| (reason.clone(), Value::from(*count))).collect(),
+            ),
+        ),
+        (
+            "rejection_examples",
+            Value::Array(
+                item.rejection_examples
+                    .iter()
+                    .map(|example| {
+                        object(vec![
+                            ("reason", Value::from(example.reason.as_str())),
+                            ("distance_to_goal_nm", Value::from(example.distance_to_goal_nm)),
+                            ("position", point_document(example.position)),
+                            ("heading", Value::from(example.heading)),
+                            ("tail", Value::Array(example.tail.iter().map(|point| point_document(*point)).collect())),
+                            ("validation_scope", Value::from("full_spine_and_tail")),
+                            (
+                                "tracks",
+                                Value::Array(
+                                    example
+                                        .tracks
+                                        .iter()
+                                        .map(|track| {
+                                            object(vec![
+                                                ("net", Value::from(track.net.as_str())),
+                                                ("layer", Value::from(track.layer.value())),
+                                                ("start", point_document(track.start)),
+                                                ("end", point_document(track.end)),
+                                                ("width_nm", Value::from(track.width_nm)),
+                                            ])
+                                        })
+                                        .collect(),
+                                ),
+                            ),
+                            ("blockers", Value::Array(example.blockers.iter().map(blocker_document).collect())),
+                            ("blocker_error", example.blocker_error.as_deref().map_or(Value::Null, Value::from)),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+    ])
 }
 
 /// `asdict(PairPortInventory)`.
@@ -148,6 +258,7 @@ pub fn transition_inventory_document(item: &PairTransitionInventory) -> Value {
 /// `asdict(PairSearchAttempt)`.
 pub fn attempt_document(item: &PairSearchAttempt) -> Value {
     object(vec![
+        ("search_index", Value::from(item.search_index)),
         ("layer", Value::from(item.layer.value())),
         ("pitch_nm", Value::from(item.pitch_nm)),
         ("start", point_document(item.start)),
@@ -159,6 +270,7 @@ pub fn attempt_document(item: &PairSearchAttempt) -> Value {
         ("expanded_states", Value::from(item.expanded_states)),
         ("legal_advances", Value::from(item.legal_advances)),
         ("minimum_goal_distance_nm", item.minimum_goal_distance_nm.map_or(Value::Null, Value::from)),
+        ("goal", goal_document(&item.goal)),
     ])
 }
 
@@ -361,18 +473,48 @@ pub fn legal(
     second: &[TrackSegment],
     clearance: i64,
 ) -> Result<bool> {
-    for track in first.iter().chain(second) {
-        if heading(track.start, track.end).is_none()
-            || !track_inside_board(board, track.start, track.end, track.width_nm)?
-            || !index.can_track(&track.net, track.start, track.end, track.width_nm, track.layer)?
-        {
-            return Ok(false);
+    Ok(legality_failure(board, index, first, second, clearance)?.is_none())
+}
+
+struct PairLegalityFailure {
+    reason: &'static str,
+    first: Option<usize>,
+    second: Option<usize>,
+}
+
+/// The same ordered predicates used by `legal`; the failing indices add no
+/// clearance queries or change to early-return behavior.
+fn legality_failure(
+    board: &PhysicalBoard,
+    index: &RoutingClearanceIndex<'_>,
+    first: &[TrackSegment],
+    second: &[TrackSegment],
+    clearance: i64,
+) -> Result<Option<PairLegalityFailure>> {
+    for (lane, tracks) in [first, second].iter().enumerate() {
+        for (segment, track) in tracks.iter().enumerate() {
+            let reason = if heading(track.start, track.end).is_none() {
+                Some("non_octilinear")
+            } else if !track_inside_board(board, track.start, track.end, track.width_nm)? {
+                Some("board_boundary")
+            } else if !index.can_track(&track.net, track.start, track.end, track.width_nm, track.layer)? {
+                Some("copper_clearance")
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                return Ok(Some(PairLegalityFailure {
+                    reason,
+                    first: (lane == 0).then_some(segment),
+                    second: (lane == 1).then_some(segment),
+                }));
+            }
         }
     }
     let breakout = &index.breakout;
     let pair = !first.is_empty() && !second.is_empty() && breakout.pair(&first[0].net, &second[0].net);
-    for a in first {
-        for b in second {
+    for (first_index, a) in first.iter().enumerate() {
+        for (second_index, b) in second.iter().enumerate() {
             if a.layer != b.layer {
                 continue;
             }
@@ -384,11 +526,15 @@ pub fn legal(
                 clearance
             };
             if !shapes_clear(&capsule(a)?, &capsule(b)?, spacing) {
-                return Ok(false);
+                return Ok(Some(PairLegalityFailure {
+                    reason: "pair_spacing",
+                    first: Some(first_index),
+                    second: Some(second_index),
+                }));
             }
         }
     }
-    Ok(true)
+    Ok(None)
 }
 
 /// Python's `ceil(x)` of a finite float.
@@ -460,7 +606,10 @@ pub struct PortRequest<'a> {
     pub second_name: &'a str,
     pub first: Point,
     pub second: Point,
+    /// Exact owner of the first selected terminal, also its diagnostic label.
     pub component: &'a str,
+    /// Exact owner of the second selected terminal; it may be a separate part.
+    pub second_component: &'a str,
     pub width: i64,
     pub offset: i64,
     pub clearance: i64,
@@ -468,6 +617,36 @@ pub struct PortRequest<'a> {
     /// Port lengths from the land midpoint, shortest first (`lengths`).
     pub lengths: &'a [i64],
     pub allow_local_fallback: bool,
+}
+
+/// Average the selected terminal offsets from their own placement origins.
+/// A pair spanning two parts has no authority to use the first part's centre
+/// as the origin of both lands. Same-part results retain the old midpoint's
+/// floor-to-nanometre convention exactly, including negative odd coordinates.
+pub(crate) fn paired_terminal_outward(
+    board: &PhysicalBoard,
+    first: Point,
+    second: Point,
+    first_component: &str,
+    second_component: &str,
+) -> Result<Point> {
+    let origin = |component: &str| -> Result<Point> {
+        let mut owners = board.placements.iter().filter(|pose| pose.reference == component);
+        let pose = owners
+            .next()
+            .ok_or_else(|| crate::Error::Value(format!("paired terminal owner {component} has no placement")))?;
+        if owners.next().is_some() {
+            return Err(crate::Error::Value(format!("paired terminal owner {component} has multiple placements")));
+        }
+        Ok(pose.position)
+    };
+    let (a, b) = (origin(first_component)?, origin(second_component)?);
+    let average = |first: i64, a: i64, second: i64, b: i64| -> Result<i64> {
+        let offset = (i128::from(first) - i128::from(a) + i128::from(second) - i128::from(b)).div_euclid(2);
+        i64::try_from(offset)
+            .map_err(|_| crate::Error::Value("paired terminal outward offset is unrepresentable".to_owned()))
+    };
+    Ok(pt(average(first.x_nm, a.x_nm, second.x_nm, b.x_nm)?, average(first.y_nm, a.y_nm, second.y_nm, b.y_nm)?))
 }
 
 impl PortRequest<'_> {
@@ -780,9 +959,7 @@ impl PortRequest<'_> {
             }
         };
         let middle = pt((first.x_nm + second.x_nm).div_euclid(2), (first.y_nm + second.y_nm).div_euclid(2));
-        let placement =
-            self.board.placements.iter().find(|item| item.reference == self.component).expect("a placed component");
-        let outward = pt(middle.x_nm - placement.position.x_nm, middle.y_nm - placement.position.y_nm);
+        let outward = paired_terminal_outward(self.board, first, second, self.component, self.second_component)?;
         let preferred = [(separation + 6) % 8, (separation + 2) % 8];
         let mut headings: Vec<usize> = (0..8).collect();
         headings
@@ -1047,12 +1224,14 @@ pub fn lane_paths(
 #[derive(Default)]
 pub struct PairSearchStats {
     pub port_pairs: i64,
+    pub incompatible_port_pairs: i64,
     pub searches: i64,
     pub expanded_states: i64,
     pub candidates: i64,
     pub resumed_states: i64,
     pub resumed_portals: i64,
     pub port_inventory: Vec<PairPortInventory>,
+    pub collar_inventory: Vec<PairCollarInventory>,
     pub transition_inventory: Vec<PairTransitionInventory>,
     pub blocked_launches: i64,
     pub launch_rejections: Vec<String>,
@@ -1068,6 +1247,51 @@ fn add_unique(items: &mut Vec<String>, message: String) {
 }
 
 impl PairSearchStats {
+    /// Record all compatibility counts, retaining at most 24 family/layer/pitch
+    /// examples. These counts describe generated collars before search limits.
+    pub fn record_collars(
+        &mut self,
+        family: &str,
+        layer: CopperLayer,
+        pitch_nm: i64,
+        first_ports: usize,
+        second_ports: usize,
+        compatible_pairs: usize,
+    ) -> Option<usize> {
+        let incompatible_pairs = first_ports * second_ports - compatible_pairs;
+        self.incompatible_port_pairs += incompatible_pairs as i64;
+        if self.collar_inventory.len() >= 24 {
+            return None;
+        }
+        let index = self.collar_inventory.len();
+        self.collar_inventory.push(PairCollarInventory {
+            family: family.to_owned(),
+            layer,
+            pitch_nm,
+            first_ports: first_ports as i64,
+            second_ports: second_ports as i64,
+            compatible_pairs: compatible_pairs as i64,
+            incompatible_pairs: incompatible_pairs as i64,
+            stop_reason: if first_ports == 0 || second_ports == 0 {
+                "missing_terminal_collars"
+            } else if compatible_pairs == 0 {
+                "incompatible_lane_order"
+            } else if compatible_pairs > 128 {
+                "portal_limit"
+            } else {
+                "portal_enumeration_complete"
+            }
+            .to_owned(),
+        });
+        Some(index)
+    }
+
+    pub fn collar_stop(&mut self, index: Option<usize>, reason: &str) {
+        if let Some(index) = index {
+            self.collar_inventory[index].stop_reason = reason.to_owned();
+        }
+    }
+
     /// `reject_launch`: bounded exact blocker evidence of a blocked launch.
     pub fn reject_launch(&mut self, index: &RoutingClearanceIndex<'_>, tracks: &[TrackSegment]) -> Result<()> {
         self.blocked_launches += 1;
@@ -1117,8 +1341,106 @@ pub struct Continuation {
     pub expanded_states: i64,
     pub legal_advances: i64,
     pub minimum_goal_distance_nm: f64,
+    pub goal: PairGoalDiagnostics,
     /// The escaped board the frontier searches.
     pub board: PhysicalBoard,
+}
+
+impl PairGoalDiagnostics {
+    /// Count every rejection, retain at most seven first-per-reason examples
+    /// and one closest rejection. At equal distances prefer exact geometry
+    /// failures to heading/lane construction failures. This ranking is solely
+    /// for observation and never changes the tail candidate order.
+    fn reject(
+        &mut self,
+        reason: &str,
+        distance_to_goal_nm: i64,
+        (position, heading): (Point, usize),
+        tail: &[Point],
+        tracks: &[&TrackSegment],
+        index: &RoutingClearanceIndex<'_>,
+    ) {
+        if let Some((_, count)) = self.rejection_counts.iter_mut().find(|(key, _)| key == reason) {
+            *count += 1;
+        } else {
+            self.rejection_counts.push((reason.to_owned(), 1));
+        }
+        let priority = |reason: &str| match reason {
+            "copper_clearance" => 0,
+            "pair_spacing" => 1,
+            "board_boundary" => 2,
+            "non_octilinear" => 3,
+            "lane_geometry" => 4,
+            _ => 5,
+        };
+        let closest = self.closest_rejection.as_ref().is_none_or(|old| {
+            (distance_to_goal_nm, priority(reason)) < (old.distance_to_goal_nm, priority(&old.reason))
+        });
+        let example =
+            self.rejection_examples.len() < 7 && !self.rejection_examples.iter().any(|item| item.reason == reason);
+        if !closest && !example {
+            return;
+        }
+        let mut record = PairGoalRejection {
+            reason: reason.to_owned(),
+            distance_to_goal_nm,
+            position,
+            heading: heading as i64,
+            tail: tail.to_vec(),
+            tracks: tracks.iter().map(|track| (**track).clone()).collect(),
+            blockers: Vec::new(),
+            blocker_error: None,
+        };
+        if example {
+            record.resolve_blockers(index);
+            self.rejection_examples.push(record.clone());
+        }
+        if closest {
+            self.closest_rejection = Some(record);
+        }
+    }
+
+    fn reported(&self, board: &PhysicalBoard) -> Self {
+        let mut result = self.clone();
+        if let Some(mut closest) = result.closest_rejection.take()
+            && !result.rejection_examples.iter().any(|sample| {
+                sample.reason == closest.reason
+                    && sample.position == closest.position
+                    && sample.heading == closest.heading
+                    && sample.tracks == closest.tracks
+                    && sample.tail == closest.tail
+            })
+        {
+            if closest.reason == "copper_clearance" {
+                match RoutingClearanceIndex::new(board) {
+                    Ok(index) => closest.resolve_blockers(&index),
+                    Err(error) => closest.blocker_error = Some(error.to_string()),
+                }
+            }
+            result.rejection_examples.push(closest);
+        }
+        result
+    }
+}
+
+impl PairGoalRejection {
+    fn resolve_blockers(&mut self, index: &RoutingClearanceIndex<'_>) {
+        if self.reason != "copper_clearance" {
+            return;
+        }
+        for track in &self.tracks {
+            match index.track_blocker_records(track) {
+                Ok(found) => self.blockers.extend(found.into_iter().take(8 - self.blockers.len())),
+                Err(error) => {
+                    self.blocker_error = Some(error.to_string());
+                    break;
+                }
+            }
+            if self.blockers.len() == 8 {
+                break;
+            }
+        }
+    }
 }
 
 /// `_SpineSearchResult`.
@@ -1241,7 +1563,56 @@ impl SpineSearch {
     }
 }
 
-/// `_goal_paths`: bounded terminal collars, cheap bridges first.
+/// Two bounded four-leg bridges for a 135-degree heading change. A full-pitch
+/// approach can lie behind a nearby frontier, making the one-corner tails
+/// reverse direction. Three successive 45-degree turns can instead reach the
+/// terminal's inward tangent. Solve the outer legs exactly after choosing the
+/// two short interior legs; lane construction and exact clearance remain the
+/// authority on whether the resulting proposal is usable.
+fn goal_turn_paths(point: Point, end: Point, heading_index: usize, inward: usize, pitch: i64) -> Vec<Vec<Point>> {
+    let turn_by = match (inward + 8 - heading_index) % 8 {
+        3 => 1,
+        5 => 7,
+        _ => return Vec::new(),
+    };
+    let first_turn = (heading_index + turn_by) % 8;
+    let second_turn = (heading_index + 2 * turn_by) % 8;
+    let (ax, ay) = HEADS[heading_index];
+    let (dx, dy) = HEADS[inward];
+    // Cardinal/diagonal tangents separated by 135 degrees have determinant ±1.
+    let determinant = i128::from(ax * dy - ay * dx);
+    let advance = |p: Point, heading: usize, length: i64| {
+        let (x, y) = HEADS[heading];
+        pt(p.x_nm + x * length, p.y_nm + y * length)
+    };
+    let mut result = Vec::new();
+    for interior in [(pitch / 4).max(1), (pitch / 8).max(1)] {
+        let remaining_x = i128::from(end.x_nm)
+            - i128::from(point.x_nm)
+            - i128::from(HEADS[first_turn].0 + HEADS[second_turn].0) * i128::from(interior);
+        let remaining_y = i128::from(end.y_nm)
+            - i128::from(point.y_nm)
+            - i128::from(HEADS[first_turn].1 + HEADS[second_turn].1) * i128::from(interior);
+        let first = (remaining_x * i128::from(dy) - remaining_y * i128::from(dx)) / determinant;
+        let last = (i128::from(ax) * remaining_y - i128::from(ay) * remaining_x) / determinant;
+        if first <= 0 || last <= 0 || first > 4 * i128::from(pitch) || last > 4 * i128::from(pitch) {
+            continue;
+        }
+        let (Ok(first), Ok(_last)) = (i64::try_from(first), i64::try_from(last)) else { continue };
+        let a = advance(point, heading_index, first);
+        let b = advance(a, first_turn, interior);
+        let c = advance(b, second_turn, interior);
+        let path = vec![point, a, b, c, end];
+        if !result.contains(&path) {
+            result.push(path);
+        }
+    }
+    result
+}
+
+/// `_goal_paths`: bounded terminal collars, cheap bridges first. New families
+/// append after the existing proposals so every previously accepted tail keeps
+/// its precedence.
 fn goal_paths(point: Point, end: Point, heading_index: usize, inward: usize, pitch: i64) -> Vec<Vec<Point>> {
     let (dx, dy) = HEADS[inward];
     let approach = pt(end.x_nm - dx * pitch, end.y_nm - dy * pitch);
@@ -1277,6 +1648,7 @@ fn goal_paths(point: Point, end: Point, heading_index: usize, inward: usize, pit
             }
         }
     }
+    result.extend(goal_turn_paths(point, end, heading_index, inward, pitch));
     result
 }
 
@@ -1300,9 +1672,12 @@ impl Continuation {
                 hypot((point.x_nm - self.end.center.x_nm) as f64, (point.y_nm - self.end.center.y_nm) as f64);
             if distance < self.minimum_goal_distance_nm {
                 self.minimum_goal_distance_nm = distance;
+                self.goal.nearest_position = Some(point);
+                self.goal.nearest_heading = Some(heading_index as i64);
             }
             if distance <= (4 * search.pitch) as f64 {
                 for tail in goal_paths(point, self.end.center, heading_index, search.inward, search.pitch) {
+                    self.goal.tail_candidates += 1;
                     let mut spine = Vec::new();
                     let mut cursor = Some(state);
                     while let Some(current) = cursor {
@@ -1316,19 +1691,47 @@ impl Continuation {
                         || heading(points[0], points[1]) != Some(self.start.heading)
                         || heading(points[points.len() - 2], points[points.len() - 1]) != Some(search.inward)
                     {
+                        self.goal.reject(
+                            "endpoint_heading",
+                            round_int(distance),
+                            (point, heading_index),
+                            &tail,
+                            &[],
+                            index,
+                        );
                         continue;
                     }
                     let Some((first_lane, second_lane)) =
                         lane_paths(&points, self.start.heading, search.inward, search.offset, self.start.sign)
                     else {
+                        self.goal.reject(
+                            "lane_geometry",
+                            round_int(distance),
+                            (point, heading_index),
+                            &tail,
+                            &[],
+                            index,
+                        );
                         continue;
                     };
                     let breakout = Some(&index.breakout);
                     let a = tracks(&search.first_name, &first_lane, search.width, self.layer, breakout);
                     let b = tracks(&search.second_name, &second_lane, search.width, self.layer, breakout);
-                    if legal(&self.board, index, &a, &b, search.clearance)? {
+                    if let Some(failure) = legality_failure(&self.board, index, &a, &b, search.clearance)? {
+                        let tracks: Vec<&TrackSegment> =
+                            failure.first.map(|i| &a[i]).into_iter().chain(failure.second.map(|i| &b[i])).collect();
+                        self.goal.reject(
+                            failure.reason,
+                            round_int(distance),
+                            (point, heading_index),
+                            &tail,
+                            &tracks,
+                            index,
+                        );
+                    } else {
                         self.active = false;
                         search.finished = true;
+                        self.goal.stop_reason = "candidate_found".to_owned();
                         return Ok(Step::Found(SpineResult {
                             first: a,
                             second: b,
@@ -1383,6 +1786,7 @@ impl Continuation {
         }
         self.active = false;
         search.finished = true;
+        self.goal.stop_reason = "frontier_exhausted".to_owned();
         Ok(Step::Exhausted)
     }
 
@@ -1403,6 +1807,7 @@ impl Continuation {
                 }
             }
         }
+        self.goal.stop_reason = "state_slice_exhausted".to_owned();
         Ok(None)
     }
 }
@@ -1552,6 +1957,7 @@ pub fn paired_candidates(
             first: access.pad_position,
             second: partners[&format!("pad:{}", access.pad)].pad_position,
             component: &access.pad.component,
+            second_component: &partners[&format!("pad:{}", access.pad)].pad.component,
             width,
             offset,
             clearance,
@@ -1659,6 +2065,8 @@ pub fn paired_candidates(
         key(i, j).partial_cmp(&key(k, l)).expect("finite keys")
     });
     stats.port_pairs += combinations.len() as i64;
+    let collar_inventory =
+        stats.record_collars("surface", layer, bounds.pitch_nm, groups[0].len(), groups[1].len(), combinations.len());
     if groups.iter().all(|group| !group.is_empty()) && combinations.is_empty() {
         add_unique(&mut stats.terminal_port_rejections, "paired collars have no compatible lane order".to_owned());
         let excess = stats.terminal_port_rejections.len().saturating_sub(4);
@@ -1668,10 +2076,12 @@ pub fn paired_candidates(
     for (search_index, &(i, j)) in combinations.iter().take(128).enumerate() {
         let search_index = search_index as i64 + 1;
         if stats.searches - searches_at_entry >= bounds.maximum_searches {
+            stats.collar_stop(collar_inventory, "search_limit");
             break;
         }
         let budget = remaining_states(stats, bounds.maximum_states, bounds.maximum_total_states);
         if budget == 0 {
+            stats.collar_stop(collar_inventory, "aggregate_state_limit");
             break;
         }
         let (start, end) = (&groups[0][i], &groups[1][j]);
@@ -1734,6 +2144,7 @@ pub fn paired_candidates(
             expanded_states: 0,
             legal_advances: 0,
             minimum_goal_distance_nm: f64::INFINITY,
+            goal: PairGoalDiagnostics::default(),
             board: escaped_board,
         };
         let candidate = continuation.advance(budget, stats)?;
@@ -1762,6 +2173,7 @@ pub fn paired_candidates(
                 return_vias: Vec::new(),
             };
             if accept(candidate, stats)? {
+                stats.collar_stop(collar_inventory, "candidate_accepted");
                 return Ok(true);
             }
         }
@@ -1769,13 +2181,24 @@ pub fn paired_candidates(
     Ok(false)
 }
 
-/// `pair_search_attempts`: the first sixteen frontiers' telemetry.
+/// At most sixteen frontiers: the first fifteen plus the closest approach if
+/// it would otherwise be omitted. This changes reporting only, never search order.
 pub fn pair_search_attempts(stats: &PairSearchStats) -> Vec<PairSearchAttempt> {
-    stats
+    let mut selected: Vec<usize> = (0..stats.continuations.len().min(16)).collect();
+    if let Some((nearest, _)) = stats
         .continuations
         .iter()
-        .take(16)
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.minimum_goal_distance_nm.total_cmp(&b.minimum_goal_distance_nm))
+        && nearest >= 16
+    {
+        selected[15] = nearest;
+    }
+    selected
+        .into_iter()
+        .map(|i| &stats.continuations[i])
         .map(|c| PairSearchAttempt {
+            search_index: c.search_index,
             layer: c.layer,
             pitch_nm: c.pitch,
             start: c.start.center,
@@ -1790,6 +2213,7 @@ pub fn pair_search_attempts(stats: &PairSearchStats) -> Vec<PairSearchAttempt> {
                 .minimum_goal_distance_nm
                 .is_finite()
                 .then(|| round_int(c.minimum_goal_distance_nm)),
+            goal: c.goal.reported(&c.board),
         })
         .collect()
 }
@@ -1859,3 +2283,11 @@ pub fn resume_pair_candidates(
     stats.continuations = continuations;
     Ok(done)
 }
+
+#[cfg(test)]
+#[path = "pair_search_diagnostics_tests.rs"]
+mod diagnostics_tests;
+
+#[cfg(test)]
+#[path = "pair_terminal_orientation_tests.rs"]
+mod terminal_orientation_tests;
