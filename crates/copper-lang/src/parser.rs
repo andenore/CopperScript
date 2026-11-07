@@ -169,10 +169,8 @@ impl Parser {
         let Some(kind) = DocumentKind::from_keyword(&root.text) else {
             return Err(self.error_at(
                 "PAR008",
-                format!(
-                    "expected board, module, part, device, board_profile, macro, or panel, found {}",
-                    repr(&root.text)
-                ),
+                // Recorded wording (tests/golden.rs keeps parity with the retired Python parser).
+                format!("expected board, module, part, device, board_profile, or macro, found {}", repr(&root.text)),
                 &root,
             ));
         };
