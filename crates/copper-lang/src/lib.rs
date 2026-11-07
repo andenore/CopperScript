@@ -29,6 +29,7 @@ pub mod paths;
 pub mod power;
 pub mod pyvalue;
 pub mod query;
+pub mod remote_models;
 pub mod serializer;
 pub mod silkscreen;
 pub mod snapshot;
