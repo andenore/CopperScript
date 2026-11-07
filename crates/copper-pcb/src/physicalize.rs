@@ -807,7 +807,7 @@ pub fn physicalize(
             );
         }
         if !item.part.assembled {
-            footprint.name = format!("{}__unassembled", footprint.name);
+            footprint.name = format!("{}{}", footprint.name, crate::hard_macros::UNASSEMBLED_SUFFIX);
             footprint.internal_pad_groups = Vec::new();
             footprint.exclude_from_bom = true;
             footprint.exclude_from_pos_files = true;

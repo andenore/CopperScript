@@ -23,8 +23,12 @@ use copper_physical::{BoardSide, CopperKeepout, CopperLayer, Point, RoundedConve
 use copper_units::Decimal;
 
 use crate::board::*;
+
 use crate::transform::{placed_pad_shape, transformed_local_point};
 use crate::{Error, Result, fail};
+
+/// The footprint-name suffix of a part that is not fitted (`assembled = false`).
+pub const UNASSEMBLED_SUFFIX: &str = "__unassembled";
 
 fn hex(data: &[u8]) -> String {
     Sha256::digest(data).iter().map(|byte| format!("{byte:02x}")).collect()
@@ -128,6 +132,26 @@ fn pad_pair(value: &Json) -> Result<(String, String)> {
         return Err(invalid("pad pairs require two items".to_owned()));
     }
     Ok((text(&items[0])?.to_owned(), text(&items[1])?.to_owned()))
+}
+
+/// The footprint a not-fitted member would have if it were fitted. Population
+/// is not geometry: physicalization renames an unassembled part's footprint
+/// (`__unassembled`) and excludes it from the BOM and position files, which a
+/// macro's footprint digest would otherwise read as a different land. The
+/// library footprint's own exclusion flags are not recorded, so every
+/// combination is offered; pads, graphics and every other field must match.
+fn populated_variants(footprint: &PhysicalFootprint) -> Vec<PhysicalFootprint> {
+    let Some(name) = footprint.name.strip_suffix(UNASSEMBLED_SUFFIX) else { return Vec::new() };
+    [(false, false), (true, true), (true, false), (false, true)]
+        .into_iter()
+        .map(|(bom, pos)| {
+            let mut copy = footprint.clone();
+            copy.name = name.to_owned();
+            copy.exclude_from_bom = bom;
+            copy.exclude_from_pos_files = pos;
+            copy
+        })
+        .collect()
 }
 
 /// `_macro_footprint_digest`: the footprint identity a macro row binds.
@@ -297,10 +321,14 @@ pub fn bind_hard_macro(
         let target = binding(reference)?;
         let pose = poses.get(target).ok_or_else(|| invalid(repr(target)))?;
         let footprint = &board.footprints[&pose.footprint];
-        let digest = macro_footprint_digest(footprint, text(field(row, "footprint")?)?, asset);
-        let legacy = digest.as_ref().map(|_| legacy_footprint_geometry_digest(footprint));
+        let reference_name = text(field(row, "footprint")?)?;
         let expected = field(row, "footprint_digest")?.as_str();
-        if digest.as_deref() != expected && legacy.as_deref() != expected {
+        let matches = |candidate: &PhysicalFootprint| {
+            let digest = macro_footprint_digest(candidate, reference_name, asset);
+            let legacy = digest.as_ref().map(|_| legacy_footprint_geometry_digest(candidate));
+            digest.as_deref() == expected || legacy.as_deref() == expected
+        };
+        if !matches(footprint) && !populated_variants(footprint).iter().any(matches) {
             return Err(Error::Value(format!("hard-macro footprint identity mismatch: {}", pose.reference)));
         }
         let position = point(field(row, "center_nm")?)?;
