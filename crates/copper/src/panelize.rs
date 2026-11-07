@@ -1,6 +1,8 @@
 //! `copper panelize PANEL -o OUTPUT [--report REPORT]`: compose a `panel`
 //! document's routed boards into one panel `.kicad_pcb` (with its
-//! `.kicad_pro` and `.kicad_dru`) for the native fill, DRC and plot.
+//! `.kicad_pro` and `.kicad_dru`) for the native fill, DRC and plot, and
+//! check it against the panel's fab preset. `--dump-config` prints the
+//! effective panel values with their origins and the preset's rules.
 
 use std::io::Write;
 use std::path::Path;
@@ -93,22 +95,62 @@ fn board_intent(source: &Path, locked: bool, offline: bool) -> Result<BoardInten
     Ok(intent)
 }
 
-const USAGE: &str = "usage: copper panelize [-h] -o OUTPUT [--report REPORT] [--locked] [--offline] panel";
+const USAGE: &str =
+    "usage: copper panelize [-h] (-o OUTPUT | --dump-config) [--report REPORT] [--strict] [--locked] [--offline] panel";
 
 const ABOUT: &str = "compose a panel document's routed boards into one panel .kicad_pcb with rails, \
 mouse-bite tabs, fiducials and tooling holes; nets and references are prefixed per board, zone fills \
 are dropped (refill the panel with copper fill), and the .kicad_pro and .kicad_dru are written beside it. \
 Each board's .copper source is compiled for its edge intent: tabs may not touch an antenna region opened \
 to the perimeter or a body overhang, and an overhanging body may not reach a rail or another board unless \
-the panel lists it in assemble_after_depanel. Run copper fill, then copper drc --expected-open-ends REPORT \
+the panel lists it in assemble_after_depanel. With preset = NAME (jlcpcb, jlcpcb-smt, pcbway, \
+eurocircuits) the preset fills the properties the panel leaves out and the panel is checked against \
+the fab's documented rules: each warn or fail is printed with its source and kept in the report; \
+--strict exits 1 on a fail. --dump-config prints the effective values with their origins and the \
+preset's rules without composing. Run copper fill, then copper drc --expected-open-ends REPORT \
 (the radiators' open ends from this report) on the result before plotting.";
+
+/// The effective panel values with origins, and the preset's rules.
+fn dump_config(spec: &copper_lang::panel::PanelSpec, out: &mut dyn Write) {
+    let preset = spec.preset.as_deref().and_then(copper_lang::panel_presets::preset);
+    let _ = writeln!(
+        out,
+        "panel {} ({})",
+        spec.name,
+        preset.map_or_else(|| "no preset".to_owned(), |p| format!("preset {}: {}", p.name, p.summary))
+    );
+    for (key, value, origin) in copper_panel::checks::config(spec) {
+        let _ = writeln!(out, "  {key} = {value};  // {origin}");
+    }
+    if let Some(preset) = preset {
+        let _ = writeln!(out, "rules:");
+        for rule in preset.rules {
+            let _ = writeln!(
+                out,
+                "  {} {} {}: {} ({})",
+                rule.level.as_str(),
+                rule.kind.name(),
+                copper_panel::checks::limit(rule.kind),
+                rule.note,
+                rule.source
+            );
+        }
+    }
+}
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let usage_error = |err: &mut dyn Write, message: &str| {
         let _ = writeln!(err, "{USAGE}\ncopper panelize: error: {message}");
         2
     };
-    let specs = [short_value("--output", "-o"), value("--report"), flag("--locked"), flag("--offline")];
+    let specs = [
+        short_value("--output", "-o"),
+        value("--report"),
+        flag("--dump-config"),
+        flag("--strict"),
+        flag("--locked"),
+        flag("--offline"),
+    ];
     let parsed = match option_parser::parse(arguments, &specs) {
         Ok(parsed) => parsed,
         Err(message) => return usage_error(err, &message),
@@ -120,13 +162,6 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     let [panel] = parsed.positionals.as_slice() else {
         return usage_error(err, "exactly one panel file is required");
     };
-    let Some(output) = parsed.value("--output") else {
-        return usage_error(err, "the following arguments are required: -o/--output");
-    };
-    let output = Path::new(output);
-    if output.extension().and_then(|e| e.to_str()) != Some("kicad_pcb") {
-        return usage_error(err, "the output must be a .kicad_pcb file");
-    }
     let spec = match copper_lang::panel::load_panel(Path::new(panel)) {
         Ok(spec) => spec,
         Err(error) => {
@@ -134,6 +169,17 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return 1;
         }
     };
+    if parsed.flag("--dump-config") {
+        dump_config(&spec, out);
+        return 0;
+    }
+    let Some(output) = parsed.value("--output") else {
+        return usage_error(err, "the following arguments are required: -o/--output");
+    };
+    let output = Path::new(output);
+    if output.extension().and_then(|e| e.to_str()) != Some("kicad_pcb") {
+        return usage_error(err, "the output must be a .kicad_pcb file");
+    }
     let base = Path::new(panel).parent().unwrap_or(Path::new("."));
     let stem = output.file_stem().and_then(|s| s.to_str()).unwrap_or("panel");
     let (locked, offline) = (parsed.flag("--locked"), parsed.flag("--offline"));
@@ -186,5 +232,36 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         report_path.display(),
         output.display()
     );
+    if let Some(preset) = &spec.preset {
+        use copper_panel::checks::Status;
+        let count = |status: Status| panel_files.checks.iter().filter(|c| c.status == status).count();
+        let _ = writeln!(
+            out,
+            "Checks against preset {preset}: {} rule(s), {} fail, {} warn",
+            panel_files.checks.len(),
+            count(Status::Fail),
+            count(Status::Warn)
+        );
+        for check in panel_files.checks.iter().filter(|c| c.status != Status::Pass) {
+            let _ = writeln!(
+                out,
+                "  {} {}: {}, limit {} ({}; {})",
+                check.status.as_str(),
+                check.rule,
+                check.value,
+                check.limit,
+                check.note,
+                check.source
+            );
+        }
+        if parsed.flag("--strict") && count(Status::Fail) > 0 {
+            let _ = writeln!(
+                err,
+                "PANEL ERROR: the panel fails {} rule(s) of preset {preset} (--strict)",
+                count(Status::Fail)
+            );
+            return 1;
+        }
+    }
     0
 }

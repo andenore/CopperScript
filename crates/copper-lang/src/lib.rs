@@ -24,6 +24,7 @@ pub mod model;
 pub mod modes;
 pub mod packages;
 pub mod panel;
+pub mod panel_presets;
 mod parser;
 pub mod paths;
 pub mod power;

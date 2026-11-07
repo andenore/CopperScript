@@ -14,6 +14,20 @@ use crate::sexpr::{Node, quote};
 /// How far a tab may reach across its gap before it is an error.
 pub const MAX_TAB_LENGTH: i64 = 20_000_000;
 
+/// A fiducial's mask opening radius: 1 mm copper with a 0.5 mm mask margin.
+pub const FIDUCIAL_OPENING_RADIUS: i64 = 1_000_000;
+
+/// Mouse-bite holes along one end of a tab `width` wide.
+pub fn holes_per_tab(width: i64, mouse_bite: &copper_lang::panel::MouseBite) -> i64 {
+    ((width - mouse_bite.drill) / mouse_bite.pitch + 1).max(1)
+}
+
+/// Fiducial centres' distance from the panel's outer edge on the top and
+/// bottom rails: `fiducial_offset`, or the rail's centre.
+pub fn fiducial_offsets(spec: &PanelSpec) -> [i64; 2] {
+    [spec.fiducial_offset.unwrap_or(spec.rails.top / 2), spec.fiducial_offset.unwrap_or(spec.rails.bottom / 2)]
+}
+
 /// A tab as built.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BuiltTab {
@@ -198,7 +212,7 @@ pub fn build(
         shapes.extend(ring_shapes(&corners));
         // Mouse bites `inset` inside each board the tab touches.
         let width = built.width;
-        let count = ((width - spec.mouse_bite.drill) / spec.mouse_bite.pitch + 1).max(1);
+        let count = holes_per_tab(width, &spec.mouse_bite);
         let span = (count - 1) * spec.mouse_bite.pitch;
         let direction = ((b.0 - a.0).signum(), (b.1 - a.1).signum());
         let centre = ((a.0 + b.0) / 2, (a.1 + b.1) / 2);
@@ -232,11 +246,25 @@ pub fn build(
     {
         return Err("fiducials and tooling holes need top and bottom rails of at least 3 mm".to_owned());
     }
+    let [top_offset, bottom_offset] = fiducial_offsets(spec);
+    if spec.fiducials > 0
+        && let Some(offset) = spec.fiducial_offset
+        && (offset < FIDUCIAL_OPENING_RADIUS
+            || offset + FIDUCIAL_OPENING_RADIUS > spec.rails.top.min(spec.rails.bottom))
+    {
+        return Err(format!(
+            "fiducial_offset {} mm puts the fiducials' {} mm mask openings off the {} mm and {} mm rails",
+            mm(offset),
+            mm(2 * FIDUCIAL_OPENING_RADIUS),
+            mm(spec.rails.top),
+            mm(spec.rails.bottom)
+        ));
+    }
     let fiducial_spots = [
-        (outer[0] + 8_000_000, rail_centre(true)),
-        (outer[2] - 8_000_000, rail_centre(true)),
-        (outer[0] + 8_000_000, rail_centre(false)),
-        (outer[2] - 8_000_000, rail_centre(false)),
+        (outer[0] + 8_000_000, outer[1] + top_offset),
+        (outer[2] - 8_000_000, outer[1] + top_offset),
+        (outer[0] + 8_000_000, outer[3] - bottom_offset),
+        (outer[2] - 8_000_000, outer[3] - bottom_offset),
     ];
     for (k, at) in fiducial_spots.iter().take(spec.fiducials as usize).enumerate() {
         let pad = "(pad \"1\" smd circle (at 0 0) (size 1 1) (layers \"F.Cu\" \"F.Mask\") (solder_mask_margin 0.5))"

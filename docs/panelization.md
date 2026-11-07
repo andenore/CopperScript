@@ -28,6 +28,12 @@ panel ExamplePanel {
 }
 ```
 
+- `preset = "NAME"` takes every property the panel leaves out from a fab
+  preset and checks the composed panel against that fab's rules (see
+  [Presets and fab checks](#presets-and-fab-checks)).
+- `fiducial_offset` puts the fiducial centres that far from the panel's
+  outer edge (default: the middle of their rail); the 2 mm mask opening must
+  stay on the rail.
 - `source` is the board's `.copper` and `pcb` its routed `.kicad_pcb` (the
   `.kicad_pro` and `.kicad_dru` beside it are read too), relative to the
   panel file.
@@ -62,7 +68,9 @@ panel ExamplePanel {
    - boards closer than `spacing`, overlapping tabs, tabs off their side.
 5. Writes `copperscript-panel/v0.1` beside the board (`OUT.panel.json`, or
    `--report`): boards, tabs (what each bridges, its gap and hole count),
-   keep-clear intervals, overhangs and the radiators' open ends.
+   keep-clear intervals, overhangs and the radiators' open ends, the
+   effective configuration with each value's origin (`config`) and the
+   preset's fab checks (`checks`).
 
 ## Workflow
 
@@ -77,11 +85,37 @@ copper plot -o build/panel/plot build/panel/filled.kicad_pcb
 lists (synthesized radiators' open tips), at that point on that net, as
 `route-board`'s native verification does for one board.
 
+## Presets and fab checks
+
+`preset = "jlcpcb";` fills every property the panel does not set, then
+`copper panelize` checks the composed panel against the rules the fab
+documents for customer panels. Each result has the value found, the limit,
+a note and the page it comes from; values were read on 2026-11-07.
+
+| Preset | Defaults | Rules |
+|---|---|---|
+| `jlcpcb` | 2 mm gap, 5 mm top and bottom rails, 5 mm tabs, 0.6 mm mouse bites at 0.95 mm pitch, 3 fiducials 3.85 mm from the edge, 2 mm tooling holes | gap >= 1.6 mm, rails >= 3 mm, tabs >= 5 mm, drill 0.5-0.8 mm, web >= 0.3 mm, >= 5 holes per tab (warn), 2 mm tooling (warn), fiducial offset (warn), <= 10 designs, <= 5 free designs (warn) |
+| `jlcpcb-smt` | as `jlcpcb` | as `jlcpcb`, plus rails >= 5 mm top and bottom, fiducials and 2 mm tooling holes required, panel 70 x 70 mm minimum and 250 x 250 mm recommended maximum (warn) |
+| `pcbway` | 1.6 mm gap, 5 mm top and bottom rails, 5 mm tabs, 0.6 mm mouse bites at 0.95 mm pitch, 3 fiducials, 2 mm tooling holes | gap >= 1.6 mm, rails >= 3 mm, tabs >= 2 mm, drill >= 0.45 mm, web >= 0.35 mm, >= 5 holes per tab, 2 mm tooling, assembly panel 50 x 50 to 330 x 530 mm (warns) |
+| `eurocircuits` | 2 mm gap, 5 mm rails on four sides, no fiducials or tooling (Eurocircuits adds them and places the tabs) | gap >= 2 mm, 7 mm from every board to the panel edge, border on four sides >= 5 mm and assembly panel 36 x 46 to 326 x 426 mm (warns) |
+
+A `fail` is outside a documented limit, a `warn` a recommendation or a cost.
+Checks never refuse a panel: they are printed after the summary and kept in
+the report's `checks` block; `--strict` makes any `fail` exit 1. Where a
+fab's pages disagree, the rule's note says so: JLCPCB's mouse-bite web
+(0.3 mm floor in its panel guide, 0.2-0.3 mm on its capabilities page) and
+its design fee (past the fifth design in its panelization help, past the
+first on its extra-charges page). Identical boards count as one design.
+
+`copper panelize PANEL --dump-config` prints the effective values, each
+with its origin (`explicit`, `preset NAME` or `default`), and the preset's
+rules with their limits and sources, without composing anything.
+
 ## Limits
 
 Rectangular board outlines for side tabs (named edges are parsed but not
 placed yet); no cutouts, arcs or circles in board outlines; no zones inside
 footprints; no net-class assignments; no V-scoring or automatic tab
 placement. A panel is fabrication geometry: it qualifies nothing about the
-boards on it, and the fab's own panel rules (size, rails, tab and drill
-conventions) still apply.
+boards on it. Presets cover the rules the fabs publish; the fab's order
+form and engineering review still decide.

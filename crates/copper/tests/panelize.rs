@@ -89,6 +89,20 @@ fn routed_example_boards_panelize_refill_and_pass_native_drc() {
     ]);
     assert_eq!(status, 0, "{output}");
     assert!(output.contains("Excused 2 expected open end(s)") && output.contains("DRC PASSED"), "{output}");
+    // Under the jlcpcb preset, explicit 3 mm tabs break JLCPCB's 5 mm rule: reported, and fatal with --strict.
+    let fab = directory.join("panel-fab.copper");
+    let text = std::fs::read_to_string(&panel).expect("the panel source");
+    std::fs::write(&fab, text.replacen("spacing = 2 mm;", "spacing = 2 mm; preset = \"jlcpcb\"; tab_width = 3 mm;", 1))
+        .expect("the preset panel");
+    let fab_out = slash(&directory.join("fab/panel.kicad_pcb"));
+    let (status, output) = copper(&["panelize", &slash(&fab), "-o", &fab_out, "--locked", "--offline"]);
+    assert_eq!(status, 0, "{output}");
+    assert!(output.contains("Checks against preset jlcpcb: 11 rule(s), 1 fail"), "{output}");
+    assert!(output.contains("fail min_tab_width: 3 mm (tab mono_top and 4 more), limit >= 5 mm"), "{output}");
+    assert!(output.contains("warn tooling_hole: 1.152 mm, limit 2 mm"), "{output}");
+    let (status, output) = copper(&["panelize", &slash(&fab), "-o", &fab_out, "--strict", "--locked", "--offline"]);
+    assert_eq!(status, 1, "{output}");
+    assert!(output.contains("the panel fails 1 rule(s) of preset jlcpcb (--strict)"), "{output}");
     // The same tab on the monopole's radiator edge is refused.
     let bad = panel_source(&directory, "25 mm");
     let (status, output) = copper(&[
@@ -104,4 +118,31 @@ fn routed_example_boards_panelize_refill_and_pass_native_drc() {
         output.contains("tab mono_top on board MONO's top side") && output.contains("antenna bt's region"),
         "{output}"
     );
+}
+
+#[test]
+fn dump_config_shows_each_value_with_its_origin_and_the_preset_rules() {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panelize-config");
+    std::fs::create_dir_all(&directory).expect("a scratch directory");
+    let panel = directory.join("panel.copper");
+    std::fs::write(
+        &panel,
+        r#"panel Config {
+    preset = "jlcpcb-smt";
+    tab_width = 6 mm;
+    board A { source = "a.copper"; pcb = "a.kicad_pcb"; at = (0 mm, 0 mm); }
+}
+"#,
+    )
+    .expect("the panel source");
+    let (status, output) = copper(&["panelize", &slash(&panel), "--dump-config"]);
+    assert_eq!(status, 0, "{output}");
+    assert!(
+        output.contains("panel Config (preset jlcpcb-smt: JLCPCB customer panel for Standard PCBA assembly)"),
+        "{output}"
+    );
+    assert!(output.contains("  tab_width = 6 mm;  // explicit"), "{output}");
+    assert!(output.contains("  tooling_hole = 2 mm;  // preset jlcpcb-smt"), "{output}");
+    assert!(output.contains("  fail min_panel_size >= 70 x 70 mm:"), "{output}");
+    assert!(output.contains("(https://jlcpcb.com/capabilities/pcb-assembly-capabilities)"), "{output}");
 }

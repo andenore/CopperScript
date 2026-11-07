@@ -2,6 +2,7 @@
 //! board with rails, mouse-bite tabs, fiducials and tooling holes, checked
 //! against each board's own intent (see docs/panelization-plan.md).
 
+pub mod checks;
 pub mod compose;
 pub mod frame;
 pub mod intent;
@@ -32,6 +33,8 @@ pub struct Panel {
     pub pro: String,
     pub dru: String,
     pub report: Json,
+    /// The preset's fab checks (empty without a preset).
+    pub checks: Vec<checks::Check>,
 }
 
 fn json_point(p: Point) -> Json {
@@ -149,10 +152,13 @@ pub fn panelize(
     let dru = rules::merge_dru(&named(|f| &f.dru))?;
     let pro = rules::merge_pro(&named(|f| &f.pro), &format!("{file_stem}.kicad_pro"))?;
     let (x0, y0, x1, y1) = frame.bounds;
+    let fab_checks = checks::run(spec, frame.bounds, &frame.tabs);
     let report = object(vec![
         ("schema", Json::from("copperscript-panel/v0.1")),
         ("panel", Json::from(spec.name.as_str())),
         ("size_mm", json_point((x1 - x0, y1 - y0))),
+        ("config", checks::config_json(spec)),
+        ("checks", checks::checks_json(spec, &fab_checks)),
         (
             "boards",
             Json::Array(
@@ -212,7 +218,7 @@ pub fn panelize(
             ),
         ),
     ]);
-    Ok(Panel { pcb: print(&tree), pro, dru, report })
+    Ok(Panel { pcb: print(&tree), pro, dru, report, checks: fab_checks })
 }
 
 #[cfg(test)]
@@ -359,6 +365,46 @@ mod tests {
         };
         let error = panelize(&spec(""), &files(), &[wrong, BoardIntent::default()], "demo").err().expect("refused");
         assert!(error.contains("outline differs"), "{error}");
+    }
+
+    #[test]
+    fn a_preset_checks_the_panel_against_the_fab_rules() {
+        use crate::checks::Status;
+        let plain = panelize(&spec(""), &files(), &none(), "demo").expect("a panel");
+        assert!(plain.checks.is_empty(), "no preset, no checks");
+        let mut fab = spec("");
+        fab.preset = Some("jlcpcb".into());
+        let panel = panelize(&fab, &files(), &none(), "demo").expect("checks never refuse a panel");
+        let status = |rule: &str| {
+            let check = panel.checks.iter().find(|c| c.rule == rule).unwrap_or_else(|| panic!("{rule}"));
+            (check.status, check.value.clone())
+        };
+        assert_eq!(status("min_tab_width"), (Status::Fail, "2 mm (tab a_right)".to_owned()));
+        assert_eq!(status("min_mouse_bite_web"), (Status::Pass, "0.3 mm".to_owned()));
+        assert_eq!(status("min_mouse_bites_per_tab").0, Status::Warn);
+        assert_eq!(status("tooling_hole"), (Status::Warn, "1.152 mm".to_owned()));
+        assert_eq!(status("fiducial_offset"), (Status::Warn, "2.5 mm".to_owned()));
+        assert_eq!(status("max_designs"), (Status::Pass, "2".to_owned()));
+        assert_eq!(status("min_spacing").0, Status::Pass);
+        let text = copper_json::Dumps::compact().dumps(&panel.report);
+        assert!(text.contains(r#""checks":{"preset":"jlcpcb","designs":2,"fail":1,"warn":3"#), "{text}");
+        assert!(text.contains(r#""spacing":{"value":"2 mm","origin":"explicit"}"#), "{text}");
+        // Copies of one routed board are one design.
+        fab.boards[1].pcb = "./a.kicad_pcb".into();
+        fab.boards[0].pcb = "./a.kicad_pcb".into();
+        assert_eq!(crate::checks::designs(&fab), 1);
+    }
+
+    #[test]
+    fn fiducials_follow_the_offset_and_must_fit_their_rail() {
+        let mut offset = spec("");
+        offset.fiducial_offset = Some(3_850_000);
+        let panel = panelize(&offset, &files(), &none(), "demo").expect("a panel");
+        // The top rail spans y -7 to -2 mm; 3.85 mm in from the edge is y -3.15 mm.
+        assert!(panel.pcb.contains("(at 8 -3.15 0)"), "the first fiducial at 3.85 mm from the top edge");
+        offset.fiducial_offset = Some(4_500_000);
+        let error = panelize(&offset, &files(), &none(), "demo").err().expect("refused");
+        assert!(error.contains("mask openings off"), "{error}");
     }
 
     #[test]

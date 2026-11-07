@@ -1,7 +1,8 @@
 //! `panel` documents: already-routed boards placed on a fabrication panel,
 //! with rails, mouse-bite tabs, fiducials and tooling holes. Lowering checks
 //! the declaration and resolves units; `copper panelize` composes the boards
-//! (see docs/panelization-plan.md).
+//! (see docs/panelization-plan.md). `preset = "jlcpcb";` fills the
+//! properties a panel leaves out from a fab preset (see `panel_presets`).
 //!
 //! ```copper
 //! panel AntennaPanel {
@@ -22,6 +23,7 @@ use num_traits::ToPrimitive;
 use copper_units::{Decimal, Dimension, Quantity, Rounding};
 
 use crate::error::CopperScriptError;
+use crate::panel_presets::{self, Defaults};
 use crate::syntax::{Declaration, Document, DocumentKind, Location, MacroItemDecl, Scalar, Value};
 
 pub type Result<T> = std::result::Result<T, CopperScriptError>;
@@ -122,12 +124,31 @@ pub struct PanelSpec {
     pub mouse_bite: MouseBite,
     pub fiducials: u32,
     pub tooling_hole: Option<i64>,
+    /// Fiducial centres' distance from the panel's outer edge; `None` centres
+    /// them on their rail.
+    pub fiducial_offset: Option<i64>,
+    /// The fab preset named by the panel, if any.
+    pub preset: Option<String>,
+    /// Where each panel value came from: `explicit`, `preset NAME` or
+    /// `default`, keyed by property (`mouse_bite.drill` for record fields).
+    pub origins: IndexMap<String, String>,
     /// `BOARD.REFERENCE` components fitted after depanelization: their body
     /// overhangs may reach rails or neighbours on the panel.
     pub assemble_after_depanel: Vec<String>,
     pub boards: Vec<PanelBoard>,
     pub tabs: Vec<PanelTab>,
 }
+
+/// Panel values without a preset.
+const BUILTIN: Defaults = Defaults {
+    spacing: 2_000_000,
+    rails: Rails { top: 0, bottom: 0, left: 0, right: 0 },
+    tab_width: 3_000_000,
+    mouse_bite: MouseBite { drill: 500_000, pitch: 750_000, inset: 250_000 },
+    fiducials: 0,
+    fiducial_offset: None,
+    tooling_hole: None,
+};
 
 fn length(value: &Value, location: &Location, positive: bool) -> Result<i64> {
     let Value::Scalar(Scalar::Quantity { value, unit }) = value else {
@@ -268,30 +289,62 @@ pub fn lower_panel(document: &Document) -> Result<PanelSpec> {
             _ => return fail("panels hold properties, board blocks and tab blocks only", &document.location),
         }
     }
-    let allowed =
-        ["spacing", "rails", "tab_width", "mouse_bite", "fiducials", "tooling_hole", "assemble_after_depanel"];
+    let allowed = [
+        "preset",
+        "spacing",
+        "rails",
+        "tab_width",
+        "mouse_bite",
+        "fiducials",
+        "fiducial_offset",
+        "tooling_hole",
+        "assemble_after_depanel",
+    ];
     for (name, (_, location)) in &properties {
         if !allowed.contains(&name.as_str()) {
             return fail(format!("unknown panel property {name:?}; expected one of {}", allowed.join(", ")), location);
         }
     }
     let get = |name: &str| properties.get(name).copied();
+    let preset = match get("preset") {
+        Some((value, location)) => {
+            let name = text(value, location)?;
+            Some(panel_presets::preset(name).ok_or_else(|| {
+                CopperScriptError::new(
+                    "PNL001",
+                    format!("unknown panel preset {name:?}; expected one of {}", panel_presets::names().join(", ")),
+                    location.clone(),
+                )
+            })?)
+        }
+        None => None,
+    };
+    let base = preset.map_or(BUILTIN, |p| p.defaults);
+    let fallback = preset.map_or_else(|| "default".to_owned(), |p| format!("preset {}", p.name));
+    let mut origins: IndexMap<String, String> = IndexMap::new();
+    let mut origin = |key: &str, explicit: bool| {
+        origins.insert(key.to_owned(), if explicit { "explicit".to_owned() } else { fallback.clone() });
+    };
     let spacing = match get("spacing") {
         Some((value, location)) => length(value, location, true)?,
-        None => 2_000_000,
+        None => base.spacing,
     };
+    origin("spacing", get("spacing").is_some());
     let tab_width = match get("tab_width") {
         Some((value, location)) => length(value, location, true)?,
-        None => 3_000_000,
+        None => base.tab_width,
     };
-    let mut rails = Rails::default();
+    origin("tab_width", get("tab_width").is_some());
+    let mut rails = base.rails;
     if let Some((value, location)) = get("rails") {
         let Value::Map(map) = value else { return fail("rails is a record { top = ...; bottom = ...; }", location) };
         check_keys(map, &["top", "bottom", "left", "right"], "rails", location)?;
         let side = |key: &str| map.get(key).map_or(Ok(0), |v| length(v, location, false));
         rails = Rails { top: side("top")?, bottom: side("bottom")?, left: side("left")?, right: side("right")? };
     }
-    let mut mouse_bite = MouseBite { drill: 500_000, pitch: 750_000, inset: 250_000 };
+    origin("rails", get("rails").is_some());
+    let mut mouse_bite = base.mouse_bite;
+    let mut given: Vec<&str> = Vec::new();
     if let Some((value, location)) = get("mouse_bite") {
         let Value::Map(map) = value else {
             return fail("mouse_bite is a record { drill = ...; pitch = ...; }", location);
@@ -306,9 +359,13 @@ pub fn lower_panel(document: &Document) -> Result<PanelSpec> {
         if let Some(v) = map.get("inset") {
             mouse_bite.inset = length(v, location, false)?;
         }
+        given = map.keys().map(String::as_str).collect();
         if mouse_bite.pitch <= mouse_bite.drill {
             return fail("mouse_bite pitch must exceed its drill, or the holes merge into a slot", location);
         }
+    }
+    for field in ["drill", "pitch", "inset"] {
+        origin(&format!("mouse_bite.{field}"), given.contains(&field));
     }
     let fiducials = match get("fiducials") {
         Some((Value::Scalar(Scalar::Int(number)), location)) => match number.to_u32() {
@@ -316,9 +373,19 @@ pub fn lower_panel(document: &Document) -> Result<PanelSpec> {
             _ => return fail("fiducials is a count from 0 to 4", location),
         },
         Some((_, location)) => return fail("fiducials is a count from 0 to 4", location),
-        None => 0,
+        None => base.fiducials,
     };
-    let tooling_hole = get("tooling_hole").map(|(value, location)| length(value, location, true)).transpose()?;
+    origin("fiducials", get("fiducials").is_some());
+    let fiducial_offset = match get("fiducial_offset") {
+        Some((value, location)) => Some(length(value, location, true)?),
+        None => base.fiducial_offset,
+    };
+    origin("fiducial_offset", get("fiducial_offset").is_some());
+    let tooling_hole = match get("tooling_hole") {
+        Some((value, location)) => Some(length(value, location, true)?),
+        None => base.tooling_hole,
+    };
+    origin("tooling_hole", get("tooling_hole").is_some());
     let assemble_after_depanel = match get("assemble_after_depanel") {
         Some((Value::List(values), location)) => {
             values.iter().map(|v| text(v, location).map(str::to_owned)).collect::<Result<Vec<_>>>()?
@@ -368,6 +435,9 @@ pub fn lower_panel(document: &Document) -> Result<PanelSpec> {
         mouse_bite,
         fiducials,
         tooling_hole,
+        fiducial_offset,
+        preset: preset.map(|p| p.name.to_owned()),
+        origins,
         assemble_after_depanel,
         boards,
         tabs,
@@ -432,11 +502,42 @@ mod tests {
             (("side = right;", "side = right; edge = \"R\";"), "exactly one of side or edge"),
             (("fiducials = 3;", "fiducials = 7;"), "count from 0 to 4"),
             (("spacing = 2 mm;", "spacing = 2 mm; spacing_x = 1 mm;"), "unknown panel property"),
+            (
+                ("spacing = 2 mm;", "spacing = 2 mm; preset = \"acme\";"),
+                "unknown panel preset \"acme\"; expected one of jlcpcb",
+            ),
         ] {
             let source = PANEL.replacen(edit.0, edit.1, 1);
             assert_ne!(source, PANEL, "{edit:?}");
             let error = lowered(&source).expect_err(message).to_string();
             assert!(error.contains(message), "{error}");
         }
+    }
+
+    #[test]
+    fn a_preset_fills_what_the_panel_leaves_out_and_records_origins() {
+        let source = r#"panel Fab {
+            preset = "jlcpcb";
+            tab_width = 6 mm;
+            mouse_bite = { inset = 0.3 mm; };
+            board A1 { source = "a1.copper"; pcb = "a1.kicad_pcb"; at = (0 mm, 0 mm); }
+        }"#;
+        let spec = lowered(source).expect("a valid panel");
+        assert_eq!(spec.preset.as_deref(), Some("jlcpcb"));
+        assert_eq!((spec.spacing, spec.tab_width), (2_000_000, 6_000_000));
+        assert_eq!(spec.rails, Rails { top: 5_000_000, bottom: 5_000_000, left: 0, right: 0 });
+        assert_eq!(spec.mouse_bite, MouseBite { drill: 600_000, pitch: 950_000, inset: 300_000 });
+        assert_eq!((spec.fiducials, spec.fiducial_offset, spec.tooling_hole), (3, Some(3_850_000), Some(2_000_000)));
+        assert_eq!(spec.origins["tab_width"], "explicit");
+        assert_eq!(spec.origins["spacing"], "preset jlcpcb");
+        assert_eq!(spec.origins["mouse_bite.inset"], "explicit");
+        assert_eq!(spec.origins["mouse_bite.drill"], "preset jlcpcb");
+        // Without a preset the built-in values apply.
+        let plain = lowered(&source.replace("preset = \"jlcpcb\";", "")).expect("a valid panel");
+        assert_eq!((plain.preset, plain.tab_width, plain.fiducials, plain.tooling_hole), (None, 6_000_000, 0, None));
+        assert_eq!(plain.origins["spacing"], "default");
+        // A merged mouse bite still needs its pitch above its drill.
+        let error = lowered(&source.replace("inset = 0.3 mm;", "pitch = 0.5 mm;")).expect_err("merged").to_string();
+        assert!(error.contains("pitch must exceed its drill"), "{error}");
     }
 }

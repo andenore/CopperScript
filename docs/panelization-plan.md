@@ -1,6 +1,7 @@
 # Panelization plan
 
-Status (7 November 2026, branch `panelization`): steps 1-6 implemented
+Status (7 November 2026): steps 1-6 implemented, and fab presets with
+checks (the first step of [automatic layout and tabs](#automatic-layout-and-tabs))
 (usage: [panelization](panelization.md)). CopperAntennaLab's 18 coupons
 panelize into one 222 x 184 mm board that refills and passes native DRC
 with only the five radiator tips excused. Not yet done from the steps below: placing tabs on named
@@ -116,6 +117,32 @@ Each step is one reviewable change with tests.
    test through `copper fill` and `copper drc`.
 6. **CopperAntennaLab** (done): the coupon panel(s), tabs on ground-side edges,
    native fill, DRC and plot, and a CAM comparison against KiCad's plot.
+
+## Automatic layout and tabs
+
+Every board position and tab is written by hand so far. The next steps,
+from a survey of KiKit, CAM panel optimizers, fab rules and the packing
+literature (2026-11-07), each one change with tests:
+
+1. **Presets and fab checks** (done): `preset`, `fiducial_offset`,
+   `--dump-config`, `--strict`, the report's `config` and `checks`.
+2. **Automatic tabs** on hand layouts: for each board side, the stretches
+   that face a rail or another board's real outline across the gap, minus
+   the forbidden intervals (antenna regions plus margin, overhangs, a
+   `no_tab` list, copper near the edge, stress-sensitive parts); tabs spread
+   evenly by the preset's spacing, at least a minimum per board, and every
+   side that cannot take one reported, never dropped silently.
+3. **Automatic layout**: each board as an envelope (outline, overhangs not
+   assembled after depanelization, half the gap) with the rotations its
+   intent allows; columns or rows of mixed heights first (longest first into
+   the shortest column), MaxRects for mixed sizes; candidate panel sizes
+   scored with their tabs placed, by a fixed order of integer criteria and a
+   total tie-break, so the output is the same on every run and platform.
+4. **Design limits and families**: split boards over panels within the
+   preset's design limit, keeping declared families together; a lock file
+   freezes a chosen layout.
+5. **Irregular outlines**: rectilinear envelopes and notches.
+6. **V-score** on guillotine cut lines that pass the preset's rules.
 
 ## Questions for the first consumer
 
