@@ -28,7 +28,8 @@ part Widget {
 }
 ```
 
-Both are optional. They are stored on `PartDefinition.metadata` as `model_3d`
+A `model` may also be an `https://` URL with `model_sha256` (see *Models
+from a URL*). Both fields are optional. They are stored on `PartDefinition.metadata` as `model_3d`
 (the path as written), `model_3d_source` (the declaring file) and `height_nm`
 (exact nanometres). A bad `height` is `CMP209` and a non-string `model` is
 `CMP208`.
@@ -103,6 +104,46 @@ generated body stands in. A lock mismatch is always an error. The export copies
 resolved files into `CopperScript.3dshapes`, so the project opens in KiCad
 without a KiCad install. Part `model` URLs need resolved footprints; with
 `--allow-proxy-footprints` they warn and fall back to the generated body.
+
+## Models from a URL
+
+A part may name a vendor or aggregator model by URL. Those files are usually
+licensed for use in your own designs but not for redistribution, so the
+compiler never downloads them during a build, and never ships them unless the
+part says it may:
+
+```text
+part Widget {
+    model = "https://vendor.example/models/Widget.step";
+    model_sha256 = "<the file's 64-digit SHA-256>";      // required
+    model_license = "Vendor terms: use in own designs, no redistribution";
+    model_redistributable = false;                        // the default
+    ...
+}
+```
+
+- `model_sha256` is required with an `https://` model (`http://` is refused),
+  and the URL's path must end in `.step`, `.stp`, `.wrl` or `.vrml`; the three
+  `model_*` fields are refused without one (`CMP210`).
+- `copper models list BOARD` shows each URL model, its licence note and
+  whether it is cached. `copper models fetch BOARD` downloads the missing ones
+  with `curl` (HTTPS only, redirects included) into the project's
+  `.copper-cache/models/<sha256>/<file name>`, beside the nearest `copper.mod`.
+  A file whose SHA-256 differs is not stored. Fetching is your own download
+  under the vendor's terms; aggregators that require an account cannot be
+  fetched this way and must be downloaded by hand into that path.
+- Builds only read the cache: an unfetched model warns and the generated body
+  stands in; a cached file that no longer matches `model_sha256` is an error.
+- The KiCad export copies a cached URL model into
+  `CopperScript-local.3dshapes/` (with a README saying not to share it) unless
+  `model_redistributable = true`, in which case it goes into
+  `CopperScript.3dshapes/` like any other model. Local KiCad and CopperReview
+  draw it. `export-manufacturing` copies only `CopperScript.3dshapes/` and
+  removes the references to the local folder from the packaged board,
+  counting them in the manifest's `local_only_3d_models_omitted`.
+
+Keep `.copper-cache/` and export directories out of version control; never
+commit or zip a `CopperScript-local.3dshapes/` folder.
 
 ## KiCad export
 

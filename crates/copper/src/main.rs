@@ -26,6 +26,7 @@ mod issues;
 mod library;
 mod lock;
 mod lsp;
+mod models;
 mod option_parser;
 mod panelize;
 mod plan_layout;

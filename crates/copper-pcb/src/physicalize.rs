@@ -605,6 +605,7 @@ fn with_part_3d(
             warnings.push(text);
         }
     };
+    let mut local_only = false;
     let model = match part.metadata.get(PART_MODEL_KEY) {
         // A module URL (for example KiCad's 3D library) resolves through the lock.
         Some(path) if path.starts_with("github.com/") || path.starts_with("gitlab.com/") => match source {
@@ -632,6 +633,30 @@ fn with_part_3d(
                 None
             }
         },
+        // A vendor URL: only ever read from the cache `copper models fetch` fills.
+        Some(path) if copper_lang::remote_models::is_url(path) => {
+            let remote = copper_lang::remote_models::part_model(&part.metadata).ok_or_else(|| {
+                Error::Value(format!("{}: 3D model URL {} lacks model_sha256", part.name, repr(path)))
+            })?;
+            let cache = match source {
+                Footprints::Resolved(resolver) => Some(resolver.model_cache()),
+                Footprints::Proxy => None,
+            };
+            match cache.map(|cache| remote.cached(&cache)).transpose().map_err(Error::Value)?.flatten() {
+                Some(file) => {
+                    local_only = !remote.redistributable;
+                    Some(copper_lang::paths::display(&file))
+                }
+                None => {
+                    note(format!(
+                        "{}: 3D model {} is not fetched; run `copper models fetch` to use it (generated body for now)",
+                        part.name,
+                        repr(path)
+                    ));
+                    None
+                }
+            }
+        }
         Some(path) => {
             let base = part.metadata.get(PART_MODEL_SOURCE_KEY).map(String::as_str).unwrap_or_default();
             let directory = std::path::Path::new(base).parent().unwrap_or(std::path::Path::new(""));
@@ -666,8 +691,19 @@ fn with_part_3d(
     }
     if let Some(path) = &model {
         footprint.metadata.insert(MODELS_KEY.to_owned(), encode_models(&[FootprintModel::new(path.clone())]));
+        if local_only {
+            footprint.metadata.insert(copper_physical::model3d::LOCAL_ONLY_MODEL_KEY.to_owned(), "true".to_owned());
+        }
     }
-    let suffix = &hex_digest(format!("{height:?}|{model:?}").as_bytes())[..12];
+    // A cached URL model is named by its URL and hash, not by this machine's cache path.
+    let named = match part.metadata.get(PART_MODEL_KEY) {
+        Some(url) if model.is_some() && copper_lang::remote_models::is_url(url) => Some(format!(
+            "{url}#{}",
+            part.metadata.get(copper_lang::lower::PART_MODEL_SHA256_KEY).cloned().unwrap_or_default()
+        )),
+        _ => model.clone(),
+    };
+    let suffix = &hex_digest(format!("{height:?}|{named:?}").as_bytes())[..12];
     footprint.name = format!("{}__3d_{suffix}", footprint.name);
     Ok(footprint.validated()?)
 }

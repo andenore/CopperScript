@@ -69,6 +69,11 @@ impl FootprintResolver {
         }
     }
 
+    /// Where `copper models fetch` keeps URL models for this board.
+    pub fn model_cache(&self) -> PathBuf {
+        crate::remote_models::cache_directory(&self.base_directory)
+    }
+
     fn location(&self) -> Location {
         Location { filename: paths::display(&self.base_directory).into(), offset: 0, line: 1, column: 1 }
     }

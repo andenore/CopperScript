@@ -1012,6 +1012,9 @@ pub fn compile_part(
             "internal_pad_groups",
             "dc_power_path",
             "model",
+            "model_sha256",
+            "model_license",
+            "model_redistributable",
             "height",
         ],
         location,
@@ -1129,6 +1132,7 @@ pub fn compile_part(
         }
         Some(_) => return Err(error("CMP208", "part model must be a one-line file path string", location)),
     }
+    url_model_fields(&mut part.metadata, &properties, location)?;
     if let Some(height) = properties.get("height") {
         let nm = height_nm(height).map_err(|reason| error("CMP209", format!("part height {reason}"), location))?;
         part.metadata.insert(PART_HEIGHT_KEY.to_owned(), nm.to_string());
@@ -1136,8 +1140,64 @@ pub fn compile_part(
     Ok(part)
 }
 
+/// `model_sha256`, `model_license` and `model_redistributable`: required and
+/// allowed only with an `https://` model (see `remote_models`).
+fn url_model_fields(
+    metadata: &mut IndexMap<String, String>,
+    properties: &IndexMap<String, Scalar>,
+    location: &Location,
+) -> Result<()> {
+    let url = metadata.get(PART_MODEL_KEY).filter(|path| crate::remote_models::is_url(path)).cloned();
+    let fields = ["model_sha256", "model_license", "model_redistributable"];
+    let Some(url) = url else {
+        if let Some(field) = fields.iter().find(|field| properties.contains_key(**field)) {
+            return Err(error("CMP210", format!("part {field} applies only to an https:// model URL"), location));
+        }
+        return Ok(());
+    };
+    if !url.starts_with("https://") {
+        return Err(error("CMP210", "part model URL must use https://", location));
+    }
+    if crate::remote_models::url_extension(&url).is_none() {
+        return Err(error("CMP210", "part model URL must name a .step, .stp, .wrl or .vrml file", location));
+    }
+    let sha256 = match properties.get("model_sha256") {
+        Some(Scalar::Str(text)) => crate::remote_models::normalized_sha256(text),
+        _ => None,
+    };
+    let Some(sha256) = sha256 else {
+        return Err(error(
+            "CMP210",
+            "a part model URL needs model_sha256 = \"<64 hex digits>\" (the file's SHA-256)",
+            location,
+        ));
+    };
+    metadata.insert(PART_MODEL_SHA256_KEY.to_owned(), sha256);
+    match properties.get("model_license") {
+        None => {}
+        Some(Scalar::Str(text)) if !text.trim().is_empty() && !text.contains(['\n', '\r']) => {
+            metadata.insert(PART_MODEL_LICENSE_KEY.to_owned(), text.clone());
+        }
+        Some(_) => return Err(error("CMP210", "part model_license must be a one-line string", location)),
+    }
+    match properties.get("model_redistributable") {
+        None => {}
+        Some(Scalar::Bool(value)) => {
+            metadata.insert(PART_MODEL_REDISTRIBUTABLE_KEY.to_owned(), value.to_string());
+        }
+        Some(_) => return Err(error("CMP210", "part model_redistributable must be true or false", location)),
+    }
+    Ok(())
+}
+
 /// `PartDefinition.metadata` key holding the part's `model` path.
 pub const PART_MODEL_KEY: &str = "model_3d";
+/// `PartDefinition.metadata` key holding a model URL's `model_sha256`.
+pub const PART_MODEL_SHA256_KEY: &str = "model_3d_sha256";
+/// `PartDefinition.metadata` key holding a model URL's `model_license` note.
+pub const PART_MODEL_LICENSE_KEY: &str = "model_3d_license";
+/// `PartDefinition.metadata` key: `true` when the URL model may be redistributed.
+pub const PART_MODEL_REDISTRIBUTABLE_KEY: &str = "model_3d_redistributable";
 /// `PartDefinition.metadata` key holding the file that declared the part, which `model` is relative to.
 pub const PART_MODEL_SOURCE_KEY: &str = "model_3d_source";
 /// `PartDefinition.metadata` key holding the part's `height` in nanometres.

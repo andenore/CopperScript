@@ -264,6 +264,37 @@ fn copy(from: &Path, to: &Path) -> Result<()> {
     std::fs::copy(from, to).map(|_| ()).map_err(|failure| Error::Os(open_error(&failure, &paths::display(from))))
 }
 
+/// `text` without the `(model ...)` blocks that reference
+/// [`copper_pcb::kicad_pcb::LOCAL_MODEL_DIRECTORY`], and how many there were.
+pub fn strip_local_models(text: &str) -> (String, usize) {
+    let marker = format!("(model \"${{KIPRJMOD}}/{}/", copper_pcb::kicad_pcb::LOCAL_MODEL_DIRECTORY);
+    let mut kept = String::with_capacity(text.len());
+    let (mut depth, mut removed) = (0i64, 0usize);
+    for line in text.split_inclusive('\n') {
+        if depth == 0 && line.trim_start().starts_with(&marker) {
+            removed += 1;
+        } else if depth == 0 {
+            kept.push_str(line);
+            continue;
+        }
+        // Inside a removed block: track parentheses outside strings.
+        let mut quoted = false;
+        let mut escaped = false;
+        for c in line.chars() {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' if quoted => escaped = true,
+                '"' => quoted = !quoted,
+                '(' if !quoted => depth += 1,
+                ')' if !quoted => depth -= 1,
+                _ => {}
+            }
+        }
+        depth = depth.max(0);
+    }
+    (kept, removed)
+}
+
 /// `shutil.copytree(source, destination)`.
 fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     std::fs::create_dir(destination).map_err(|failure| Error::Os(os_error(&failure, &paths::display(destination))))?;
@@ -524,6 +555,13 @@ fn stage_and_publish(
 ) -> Result<PathBuf> {
     let native = stage.join(pcb.file_name().expect("a board file name"));
     copy(pcb, &native)?;
+    // Models fetched from vendor URLs stay on the machine that fetched them:
+    // the package carries neither their folder nor references to it.
+    let staged = read(&native, &paths::display(&native))?;
+    let (kept, local_models_omitted) = strip_local_models(&String::from_utf8_lossy(&staged));
+    if local_models_omitted > 0 {
+        std::fs::write(&native, kept).map_err(|failure| Error::Os(os_error(&failure, &paths::display(&native))))?;
+    }
     let project = with_suffix(pcb, ".kicad_pro");
     if !project.is_file() {
         return refuse("matching .kicad_pro required to retain design rules");
@@ -729,6 +767,7 @@ fn stage_and_publish(
         ("qualified_release", Value::Bool(false)),
         ("supplier_availability", Value::from("not_checked")),
         ("assembly_bom_included", Value::Bool(request.bom.is_some())),
+        ("local_only_3d_models_omitted", Value::from(local_models_omitted as i64)),
         ("copper_layers", Value::Array(copper.iter().map(|layer| Value::from(layer.as_str())).collect())),
         (
             "placement_convention",
@@ -784,4 +823,24 @@ fn stage_and_publish(
 /// `str(OSError)` of `Path.rename`, which names both paths.
 fn rename_error(error: &std::io::Error, from: &Path, to: &Path) -> String {
     format!("{} -> {}", os_error(error, &paths::display(from)), copper_json::python_str_repr(&paths::display(to)))
+}
+
+#[cfg(test)]
+mod local_model_tests {
+    use super::strip_local_models;
+
+    #[test]
+    fn local_only_models_are_removed_and_counted() {
+        let board = "  (footprint \"CopperScript:W\"\n    (layer \"F.Cu\")\n    (model \"${KIPRJMOD}/CopperScript-local.3dshapes/ab12_W.step\"\n      (offset (xyz 0 0 0))\n      (scale (xyz 1 1 1))\n      (rotate (xyz 0 0 0))\n    )\n    (model \"${KIPRJMOD}/CopperScript.3dshapes/W.wrl\"\n      (offset (xyz 0 0 0))\n    )\n  )\n";
+        let (kept, removed) = strip_local_models(board);
+        assert_eq!(removed, 1);
+        assert!(!kept.contains("CopperScript-local.3dshapes"), "{kept}");
+        assert!(
+            kept.contains(
+                "(model \"${KIPRJMOD}/CopperScript.3dshapes/W.wrl\"\n      (offset (xyz 0 0 0))\n    )\n  )\n"
+            ),
+            "{kept}"
+        );
+        assert_eq!(strip_local_models(&kept), (kept.clone(), 0));
+    }
 }

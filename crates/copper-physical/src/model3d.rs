@@ -9,6 +9,9 @@ use crate::footprint::PhysicalFootprint;
 
 /// The metadata key holding the encoded references.
 pub const MODELS_KEY: &str = "models_3d";
+/// Footprint metadata key set (to `true`) when its model came from a part's
+/// URL and may not be redistributed: exports keep it out of shared packages.
+pub const LOCAL_ONLY_MODEL_KEY: &str = "models_3d_local_only";
 
 /// One `(model ...)`: a file and its placement in the footprint frame
 /// (millimetres and degrees, KiCad's model-frame axes).
