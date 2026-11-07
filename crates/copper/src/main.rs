@@ -47,7 +47,26 @@ mod view;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
+/// Stack for the thread that runs the command. The routing pipeline's
+/// unoptimized frames alone exceed Windows' 1 MiB main-thread stack (Linux
+/// gives 8 MiB), so a debug `route-board` overflowed there. The reservation
+/// is virtual; pages are committed only as they are touched.
+const COMMAND_STACK_BYTES: usize = 64 * 1024 * 1024;
+
 fn main() -> ExitCode {
+    let command = std::thread::Builder::new()
+        .name("main".to_owned())
+        .stack_size(COMMAND_STACK_BYTES)
+        .spawn(run_command)
+        .expect("the command thread starts");
+    match command.join() {
+        Ok(code) => code,
+        // The panic hook has already reported it; keep the panic exit status.
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+fn run_command() -> ExitCode {
     let mut args = Vec::new();
     for arg in std::env::args_os().skip(1) {
         match arg.into_string() {
