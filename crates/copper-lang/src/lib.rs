@@ -23,6 +23,7 @@ pub mod mechanical;
 pub mod model;
 pub mod modes;
 pub mod packages;
+pub mod panel;
 mod parser;
 pub mod paths;
 pub mod power;

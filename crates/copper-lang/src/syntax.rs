@@ -67,6 +67,7 @@ pub enum DocumentKind {
     Device,
     BoardProfile,
     Macro,
+    Panel,
 }
 
 impl DocumentKind {
@@ -78,6 +79,7 @@ impl DocumentKind {
             "device" => DocumentKind::Device,
             "board_profile" => DocumentKind::BoardProfile,
             "macro" => DocumentKind::Macro,
+            "panel" => DocumentKind::Panel,
             _ => return None,
         })
     }
@@ -90,6 +92,7 @@ impl DocumentKind {
             DocumentKind::Device => "device",
             DocumentKind::BoardProfile => "board_profile",
             DocumentKind::Macro => "macro",
+            DocumentKind::Panel => "panel",
         }
     }
 }

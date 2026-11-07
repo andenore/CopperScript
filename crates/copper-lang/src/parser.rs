@@ -169,7 +169,10 @@ impl Parser {
         let Some(kind) = DocumentKind::from_keyword(&root.text) else {
             return Err(self.error_at(
                 "PAR008",
-                format!("expected board, module, part, device, board_profile, or macro, found {}", repr(&root.text)),
+                format!(
+                    "expected board, module, part, device, board_profile, macro, or panel, found {}",
+                    repr(&root.text)
+                ),
                 &root,
             ));
         };
@@ -189,7 +192,8 @@ impl Parser {
                 let path = self.expect(TokenKind::String, "package import path")?.text;
                 imports.push(ImportDecl { location: keyword_location, alias, path });
                 self.expect_symbol(";")?;
-            } else if kind == DocumentKind::Macro {
+            } else if matches!(kind, DocumentKind::Macro | DocumentKind::Panel) {
+                // Panels use the macro grammar: root properties and `KIND NAME { ... }`.
                 declarations.push(self.macro_declaration(&keyword, keyword_location)?);
             } else if keyword == "silkscreen" {
                 if kind != DocumentKind::Board {

@@ -1063,6 +1063,13 @@ pub fn resolve_board_imports_with(
     resolver: Option<&mut PackageResolver>,
 ) -> Result<PackageContents> {
     let filename = &*document.location.filename;
+    if document.kind == DocumentKind::Panel {
+        return Err(error(
+            "CMP019",
+            "compiler entry source must declare a board; panels are composed by `copper panelize`",
+            &document.location,
+        ));
+    }
     if document.kind != DocumentKind::Board {
         return Err(error("CMP019", "compiler entry source must declare a board", &document.location));
     }
