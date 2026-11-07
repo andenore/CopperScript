@@ -166,6 +166,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "copper-panel"
+version = "0.1.0"
+dependencies = [
+ "copper-cam",
+ "copper-json",
+ "copper-lang",
+ "indexmap",
+ "sha2",
+]
+
+[[package]]
 name = "copper-pcb"
 version = "0.1.0"
 dependencies = [

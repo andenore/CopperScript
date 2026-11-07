@@ -1,0 +1,18 @@
+[package]
+name = "copper-panel"
+description = "Fabrication panels: already-routed KiCad boards composed with rails, tabs, mouse bites, fiducials and tooling holes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+copper-cam.workspace = true
+copper-json.workspace = true
+copper-lang.workspace = true
+indexmap.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true
