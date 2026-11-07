@@ -99,6 +99,44 @@ fn rect_shapes(corners: [Point; 4]) -> poly::Shapes {
     poly::polygon(&corners.iter().map(|(x, y)| (*x as f64, *y as f64)).collect::<Vec<_>>())
 }
 
+/// A tab touching `board`'s `side` over `[lo, hi]` must keep off its
+/// keep-clear stretches and body overhangs.
+fn contact_clear(
+    intents: &IndexMap<String, BoardIntent>,
+    tab: &str,
+    board: &str,
+    side: Side,
+    lo: i64,
+    hi: i64,
+) -> Result<(), String> {
+    let Some(intent) = intents.get(board) else { return Ok(()) };
+    for keep in intent.keep_clear.iter().filter(|k| k.side == side) {
+        if lo < keep.end && hi > keep.start {
+            return Err(format!(
+                "tab {tab} on board {board}'s {} side ({}-{} mm) overlaps {} ({}-{} mm)",
+                side.as_str(),
+                mm(lo),
+                mm(hi),
+                keep.reason,
+                mm(keep.start),
+                mm(keep.end)
+            ));
+        }
+    }
+    for overhang in intent.overhangs.iter().filter(|o| o.side == side) {
+        if lo < overhang.end && hi > overhang.start {
+            return Err(format!(
+                "tab {tab} on board {board}'s {} side overlaps {}'s body overhang ({}-{} mm)",
+                side.as_str(),
+                overhang.reference,
+                mm(overhang.start),
+                mm(overhang.end)
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Check the panel against every board's intent; returns the panel's open
 /// ends (panel coordinates, prefixed nets) for the DRC waiver.
 pub fn check(
@@ -118,34 +156,27 @@ pub fn check(
         }
     }
     for tab in tabs {
-        let Some(intent) = intents.get(&tab.board) else { continue };
         let (lo, hi) = (tab.at - tab.width / 2, tab.at + tab.width / 2);
-        for keep in intent.keep_clear.iter().filter(|k| k.side == tab.side) {
-            if lo < keep.end && hi > keep.start {
-                return Err(format!(
-                    "tab {} on board {}'s {} side ({}-{} mm) overlaps {} ({}-{} mm)",
-                    tab.name,
-                    tab.board,
-                    tab.side.as_str(),
-                    mm(lo),
-                    mm(hi),
-                    keep.reason,
-                    mm(keep.start),
-                    mm(keep.end)
-                ));
-            }
-        }
-        for overhang in intent.overhangs.iter().filter(|o| o.side == tab.side) {
-            if lo < overhang.end && hi > overhang.start {
-                return Err(format!(
-                    "tab {} on board {}'s {} side overlaps {}'s body overhang ({}-{} mm)",
-                    tab.name,
-                    tab.board,
-                    tab.side.as_str(),
-                    overhang.reference,
-                    mm(overhang.start),
-                    mm(overhang.end)
-                ));
+        contact_clear(intents, &tab.name, &tab.board, tab.side, lo, hi)?;
+        // A tab joining two boards lands on the neighbour's side too.
+        if tab.across != "rail" {
+            let normal = poses[&tab.board].rotate(match tab.side {
+                Side::Top => (0, -1),
+                Side::Bottom => (0, 1),
+                Side::Left => (-1, 0),
+                Side::Right => (1, 0),
+            });
+            let far = |p: Point| (p.0 + normal.0 * tab.length, p.1 + normal.1 * tab.length);
+            let neighbour = &poses[&tab.across];
+            let (a, b) = (neighbour.invert(far(tab.edge.0)), neighbour.invert(far(tab.edge.1)));
+            match side_of(bounds(&local[&tab.across]), a, b) {
+                Some((side, lo, hi)) => contact_clear(intents, &tab.name, &tab.across, side, lo, hi)?,
+                None => {
+                    return Err(format!(
+                        "tab {} lands on board {} away from a straight side of its outline",
+                        tab.name, tab.across
+                    ));
+                }
             }
         }
     }
@@ -219,6 +250,14 @@ pub fn check(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pose_inverts() {
+        for turns in 0..4 {
+            let pose = Pose { quarter_turns: turns, offset: (7, -3) };
+            assert_eq!(pose.invert(pose.apply((5, 11))), (5, 11));
+        }
+    }
 
     #[test]
     fn segments_map_to_sides_and_intervals() {

@@ -53,6 +53,12 @@ impl Pose {
         (x + self.offset.0, y + self.offset.1)
     }
 
+    /// The board point that [`Pose::apply`] maps to `q`.
+    pub fn invert(&self, q: Point) -> Point {
+        let back = Pose { quarter_turns: (4 - self.quarter_turns % 4) % 4, offset: (0, 0) };
+        back.rotate((q.0 - self.offset.0, q.1 - self.offset.1))
+    }
+
     pub fn degrees(&self) -> f64 {
         90.0 * f64::from(self.quarter_turns % 4)
     }

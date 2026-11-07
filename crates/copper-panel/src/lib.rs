@@ -340,6 +340,18 @@ mod tests {
             text.contains(r#""expected_open_ends":[{"at_mm":["21","1"],"net":"B/FEED","layer":"F.Cu"}]"#),
             "{text}"
         );
+        // A's tab to B lands on B's left side at 1.5-4.5 mm: refused when B keeps that stretch clear.
+        let left = BoardIntent {
+            keep_clear: vec![KeepClear {
+                side: Side::Left,
+                start: 2_000_000,
+                end: 5_000_000,
+                reason: "B's launch".into(),
+            }],
+            ..BoardIntent::default()
+        };
+        let error = panelize(&spec(""), &files(), &[BoardIntent::default(), left], "demo").err().expect("refused");
+        assert!(error.contains("tab a_right on board B's left side") && error.contains("B's launch"), "{error}");
         // A pcb whose outline differs from its source is refused.
         let wrong = BoardIntent {
             outline: vec![vec![(0, 0), (9_000_000, 0), (9_000_000, 6_000_000), (0, 6_000_000)]],
