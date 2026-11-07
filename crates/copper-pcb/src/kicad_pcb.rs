@@ -711,12 +711,14 @@ pub fn generate(board: &PhysicalBoard) -> Result<Manifest> {
         ));
     }
     artifacts.extend(model_files);
+    // Every footprint names its generated body in BODY_PROPERTY, so every one
+    // gets the file: viewers that cannot read a footprint's own (STEP) model
+    // fall back to it. Only footprints without a model of their own use it in KiCad.
     let mut generated_bodies: Vec<&str> = Vec::new();
     for (reference, name) in &names {
         let footprint = &board.footprints[reference];
+        artifacts.push(artifact(format!("{GENERATED_MODEL_DIRECTORY}/{name}.wrl"), generate_body(footprint).to_wrl()));
         if footprint_models(footprint).is_empty() {
-            artifacts
-                .push(artifact(format!("{GENERATED_MODEL_DIRECTORY}/{name}.wrl"), generate_body(footprint).to_wrl()));
             generated_bodies.push(reference);
         }
     }

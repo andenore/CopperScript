@@ -3,14 +3,14 @@
 // The links still open the native illustrations when JavaScript is unavailable.
 const views = {
   all: { image: "assets/routing-all.svg", alt: "All six copper layers of CopperAssetTracker with tracks, vias and gold exposed copper, drawn without zone fills", caption: "All 6 copper layers · tracks, vias and exposed copper in gold, from a plot made before zone fill. Viewed from above." },
-  top: { image: "assets/routing-top.svg", alt: "F.Cu top copper and silkscreen of CopperAssetTracker rendered from the native plot, exposed copper gold", caption: "F.Cu · top copper, zone fill and silkscreen from the native plot; exposed copper in gold. native-showcase-20261106; unapproved routing review." },
+  top: { image: "assets/routing-top.svg", alt: "F.Cu top copper and silkscreen of CopperAssetTracker rendered from the native plot, exposed copper gold", caption: "F.Cu · top copper, zone fill and silkscreen from the native plot; exposed copper in gold. native-showcase-20261107; unapproved routing review." },
   inner: { image: "assets/routing-inner.svg", alt: "In2.Cu inner supply and signal routing of CopperAssetTracker from the native plot, viewed from above", caption: "In2.Cu · supply and signal routing from the same route. Viewed from above without mirroring; return-path qualification remains open." },
   bottom: { image: "assets/routing-bottom.svg", alt: "B.Cu bottom copper of CopperAssetTracker from the native plot, exposed copper gold, viewed from above", caption: "B.Cu · bottom copper from the same route, exposed copper in gold. Viewed from above without mirroring. A single layer does not show every connection." },
   placement: { image: "assets/placement.svg", alt: "Front silkscreen and gold solder-mask openings of the 87 CopperAssetTracker footprints at their routed poses", caption: "Placement · front silkscreen and solder-mask openings (gold) of 87 footprints at their routed poses, from the native plot." }
 };
 
 // Keep browser caches from mixing previous artwork with a new snapshot.
-for (const view of Object.values(views)) view.image += "?v=20261106-native";
+for (const view of Object.values(views)) view.image += "?v=20261107-native";
 
 const image = document.getElementById("board-view");
 const caption = document.getElementById("board-caption");
@@ -219,7 +219,7 @@ if (navigator.clipboard && window.isSecureContext) {
     root.querySelectorAll("[data-design]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.design === key)));
   }
 
-  fetch("assets/antenna-synthesis.json?v=20261106-antenna").then(r => r.ok ? r.json() : Promise.reject(r.status)).then(data => {
+  fetch("assets/antenna-synthesis.json?v=20261107-rev3").then(r => r.ok ? r.json() : Promise.reject(r.status)).then(data => {
     const controls = document.getElementById("antenna-controls");
     controls.hidden = false;
     controls.querySelectorAll("[data-design]").forEach(button => button.addEventListener("click", () => show(data, button.dataset.design)));

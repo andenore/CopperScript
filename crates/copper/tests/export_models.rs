@@ -102,6 +102,14 @@ fn a_part_model_file_is_copied_and_its_height_reaches_the_footprint() {
     assert!(board.contains("(scale (xyz 1 1 1))"), "a user model is not rescaled");
     assert!(board.contains("\"CopperScriptHeightMM\" \"3\""), "part height reaches the footprint");
     assert!(!stdout.contains("generated approximate bodies"), "{stdout}");
+    // The body the footprint names for viewers that cannot read its own model is written too.
+    let body = board
+        .split("(property \"CopperScriptBody\" \"${KIPRJMOD}/CopperScript.3dshapes/")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("a CopperScriptBody property");
+    let text = std::fs::read_to_string(out.join("CopperScript.3dshapes").join(body)).expect("the named body file");
+    assert!(text.starts_with("#VRML V2.0 utf8\n# copper-body/"), "{text}");
 }
 
 #[test]

@@ -17,8 +17,8 @@
   <meta property="og:image:alt" content="CopperScript: PCB design as code. Hardware intent, written in code.">
   <meta name="twitter:card" content="summary_large_image">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="assets/style.css?v=20261106-native">
-  <script src="assets/site.js?v=20261106-native" defer></script>
+  <link rel="stylesheet" href="assets/style.css?v=20261107-native">
+  <script src="assets/site.js?v=20261107-native" defer></script>
   <script type="application/ld+json">
   {"@context":"https://schema.org","@type":"SoftwareSourceCode","name":"CopperScript","description":"A strongly typed PCB language and compiler for circuit intent, native .copper hard macros, trace-antenna synthesis, mechanical constraints, native manufacturing files and KiCad export.","url":"https://andenore.github.io/CopperScript/","codeRepository":"https://github.com/andenore/CopperScript","programmingLanguage":"Rust"}
   </script>
@@ -46,9 +46,9 @@
         <div class="figure-label"><span>01 / SOURCE → COPPER</span><span>3 OF 6 COPPER LAYERS</span></div>
         <div class="stack">
           <div class="stack-scene">
-            <div class="plate plate-bottom"><img src="assets/routing-bottom.svg?v=20261106-native" width="1000" height="800" alt="B.Cu bottom copper of CopperAssetTracker, rendered from its native plot"><span class="plate-label">B.Cu</span></div>
-            <div class="plate plate-inner"><img src="assets/routing-inner.svg?v=20261106-native" width="1000" height="800" alt="In2.Cu inner copper of CopperAssetTracker, rendered from its native plot"><span class="plate-label">In2.Cu</span></div>
-            <div class="plate plate-top"><img src="assets/routing-top.svg?v=20261106-native" width="1000" height="800" alt="Top copper and silkscreen of CopperAssetTracker rendered from its native plot, with exposed copper in gold" fetchpriority="high"><span class="plate-label">F.Cu</span></div>
+            <div class="plate plate-bottom"><img src="assets/routing-bottom.svg?v=20261107-native" width="1000" height="800" alt="B.Cu bottom copper of CopperAssetTracker, rendered from its native plot"><span class="plate-label">B.Cu</span></div>
+            <div class="plate plate-inner"><img src="assets/routing-inner.svg?v=20261107-native" width="1000" height="800" alt="In2.Cu inner copper of CopperAssetTracker, rendered from its native plot"><span class="plate-label">In2.Cu</span></div>
+            <div class="plate plate-top"><img src="assets/routing-top.svg?v=20261107-native" width="1000" height="800" alt="Top copper and silkscreen of CopperAssetTracker rendered from its native plot, with exposed copper in gold" fetchpriority="high"><span class="plate-label">F.Cu</span></div>
           </div>
         </div>
         <figcaption><strong>CopperAssetTracker</strong><span>Top, In2 and bottom copper · rendered from native Gerbers</span></figcaption>
@@ -111,8 +111,8 @@
     bands = <span class="syntax-string">"2400 MHz-2483.5 MHz"</span>;
     track_width = <span class="syntax-value">1mm</span>;
     <span class="syntax-comment">// pasted from copper synthesize-antenna</span>
-    geometry = <span class="syntax-string">"monopole height=5.3mm length=22.66mm"</span>;
-    tuned_for = <span class="syntax-string">"sha256:0198a990…1ad8"</span>;
+    geometry = <span class="syntax-string">"monopole height=5.3mm length=22.73mm"</span>;
+    tuned_for = <span class="syntax-string">"sha256:a8a788b9…fa9c"</span>;
 }</code></pre>
           <div class="code-annotation"><span class="annotation-arrow" aria-hidden="true">↳</span><p><strong>The geometry is bound to the board it was tuned on.</strong><br>The digest covers the outline, stack-up, ground zone, region, track rules, feed and band. Change one and the board stops compiling until synthesis is re-run.</p></div>
           <p class="code-footnote">From the <a href="https://github.com/andenore/CopperScript/blob/main/examples/antenna_synthesis/README.md">antenna synthesis example</a>, a synthetic two-component probe board. The digest is shortened here.</p>
@@ -122,14 +122,14 @@
             <button type="button" data-design="template">First-order template</button><button type="button" data-design="synthesized" aria-pressed="true">Full-wave synthesis</button>
           </div></div>
           <div class="antenna-panels">
-            <figure class="antenna-board"><div class="panel-label"><span>F.Cu · antenna corner</span><span id="antenna-geometry">monopole height=5.3mm length=22.66mm</span></div><div id="antenna-board-svg" class="antenna-board-svg"><p class="small">The figure draws the recorded copper and curves with JavaScript. The numbers are below and in <a href="assets/antenna-synthesis.json">antenna-synthesis.json</a>.</p></div></figure>
+            <figure class="antenna-board"><div class="panel-label"><span>F.Cu · antenna corner</span><span id="antenna-geometry">monopole height=5.3mm length=22.73mm</span></div><div id="antenna-board-svg" class="antenna-board-svg"><p class="small">The figure draws the recorded copper and curves with JavaScript. The numbers are below and in <a href="assets/antenna-synthesis.json">antenna-synthesis.json</a>.</p></div></figure>
             <figure class="antenna-chart"><div class="panel-label"><span>Return loss at the feed, dB</span><span class="chart-legend"><span class="key key-matched">Matched</span><span class="key key-bare">Bare antenna</span></span></div><div id="antenna-chart-svg" class="antenna-chart-svg"></div></figure>
           </div>
           <div class="board-stats antenna-stats" aria-live="polite">
-            <div><strong id="antenna-resonance">2.39 GHz</strong><span>resonance</span></div>
-            <div><strong id="antenna-worst">−12.1 dB</strong><span>worst in band, matched</span></div>
-            <div><strong id="antenna-match">0.94 nH · 2.61 pF</strong><span id="antenna-match-label">series L, then shunt C</span></div>
-            <div><strong id="antenna-efficiency">85 %</strong><span>radiation efficiency</span></div>
+            <div><strong id="antenna-resonance">2.38 GHz</strong><span>resonance</span></div>
+            <div><strong id="antenna-worst">−12.2 dB</strong><span>worst in band, matched</span></div>
+            <div><strong id="antenna-match">0.88 nH · 2.57 pF</strong><span id="antenna-match-label">series L, then shunt C</span></div>
+            <div><strong id="antenna-efficiency">86 %</strong><span>radiation efficiency</span></div>
           </div>
           <details class="antenna-table"><summary>Show the curve as a table</summary><div id="antenna-table"></div></details>
         </div>
@@ -156,12 +156,12 @@
       <div class="section-heading"><div><p class="eyebrow">06 / A REAL DESIGN</p><h2 id="showcase-title">From source to<br>a cellular asset tracker.</h2></div><p>STM32 host. LTE Cat-1 bis. GNSS.<br>Bluetooth and motion sensing.<br>A rechargeable, six-layer routing review.</p></div>
       <div class="board-explorer">
         <div class="view-bar"><span class="view-title">COPPERASSETTRACKER / REVIEW VIEWS</span><div class="view-controls" aria-label="Choose a board view">
-          <a href="assets/routing-all.svg?v=20261106-native" data-view="all" aria-current="true">All layers · no fills</a><a href="assets/routing-top.svg?v=20261106-native" data-view="top">Top copper</a><a href="assets/routing-inner.svg?v=20261106-native" data-view="inner">Inner copper</a><a href="assets/routing-bottom.svg?v=20261106-native" data-view="bottom">Bottom copper</a><a href="assets/placement.svg?v=20261106-native" data-view="placement">Placement</a>
+          <a href="assets/routing-all.svg?v=20261107-native" data-view="all" aria-current="true">All layers · no fills</a><a href="assets/routing-top.svg?v=20261107-native" data-view="top">Top copper</a><a href="assets/routing-inner.svg?v=20261107-native" data-view="inner">Inner copper</a><a href="assets/routing-bottom.svg?v=20261107-native" data-view="bottom">Bottom copper</a><a href="assets/placement.svg?v=20261107-native" data-view="placement">Placement</a>
         </div></div>
-        <figure class="explorer-figure"><div class="explorer-surface"><img id="board-view" src="assets/routing-all.svg?v=20261106-native" width="1000" height="800" loading="lazy" alt="All six copper layers of CopperAssetTracker with tracks, vias and gold exposed copper, drawn without zone fills"></div><figcaption><span id="board-caption" aria-live="polite">All 6 copper layers · tracks, vias and exposed copper in gold, from a plot made before zone fill. Viewed from above.</span> <a id="board-fullsize" href="assets/routing-all.svg?v=20261106-native" target="_blank" rel="noopener">Open full-size SVG ↗</a></figcaption></figure>
-        <div class="board-stats"><div><strong>87</strong><span>board footprints</span></div><div><strong>1173</strong><span>routed track segments</span></div><div><strong>6</strong><span>copper layers</span></div><div><strong>100 × 80</strong><span>board dimensions, mm</span></div></div>
+        <figure class="explorer-figure"><div class="explorer-surface"><img id="board-view" src="assets/routing-all.svg?v=20261107-native" width="1000" height="800" loading="lazy" alt="All six copper layers of CopperAssetTracker with tracks, vias and gold exposed copper, drawn without zone fills"></div><figcaption><span id="board-caption" aria-live="polite">All 6 copper layers · tracks, vias and exposed copper in gold, from a plot made before zone fill. Viewed from above.</span> <a id="board-fullsize" href="assets/routing-all.svg?v=20261107-native" target="_blank" rel="noopener">Open full-size SVG ↗</a></figcaption></figure>
+        <div class="board-stats"><div><strong>87</strong><span>board footprints</span></div><div><strong>1191</strong><span>routed track segments</span></div><div><strong>6</strong><span>copper layers</span></div><div><strong>100 × 80</strong><span>board dimensions, mm</span></div></div>
       </div>
-      <div class="evidence-row"><div><h3>Routed, filled, checked and plotted without KiCad.</h3><p>The 6 November 2026 showcase routes the current source, with its named .copper macro definitions, using native plane verification: all 60 ordinary nets connected, 262 vias. The native DRC of the filled board reports zero violations and zero unconnected items, and reading the plotted Gerbers and drills back against the netlist finds no shorts or opens. The native DRC does not check courtyards, silkscreen, solder-mask bridges or length rules; 12 electrical-requirement checks remain blocked. No independent CAM or manufacturing export was made.</p><p class="small">Every view is drawn by <code>copper render</code> from the native Gerber plot, viewed from above without mirroring. Gold is exposed copper, inside the solder-mask openings; in placement it is the openings themselves. The combined view is plotted before zone fill. The showcase has not been approved for production or ordering.</p></div><div class="qualification-note"><span class="eyebrow">QUALIFICATION OPEN</span><p>RF/USB requirement verification, supplier availability, assembly-placement review and prototype validation remain incomplete. A clean native DRC is not release approval.</p><a href="https://github.com/andenore/CopperAssetTracker/blob/main/docs/validation.md">Read current board status ↗</a></div></div>
+      <div class="evidence-row"><div><h3>Routed, filled, checked and plotted without KiCad.</h3><p>The 7 November 2026 showcase routes the current source, with its named .copper macro definitions, using native plane verification: all 60 ordinary nets connected, 259 vias. The native DRC of the filled board reports zero violations and zero unconnected items, and reading the plotted Gerbers and drills back against the netlist finds no shorts or opens. The native DRC does not check courtyards, silkscreen, solder-mask bridges or length rules; 12 electrical-requirement checks remain blocked. No independent CAM or manufacturing export was made.</p><p class="small">Every view is drawn by <code>copper render</code> from the native Gerber plot, viewed from above without mirroring. Gold is exposed copper, inside the solder-mask openings; in placement it is the openings themselves. The combined view is plotted before zone fill. The showcase has not been approved for production or ordering.</p></div><div class="qualification-note"><span class="eyebrow">QUALIFICATION OPEN</span><p>RF/USB requirement verification, supplier availability, assembly-placement review and prototype validation remain incomplete. A clean native DRC is not release approval.</p><a href="https://github.com/andenore/CopperAssetTracker/blob/main/docs/validation.md">Read current board status ↗</a></div></div>
       <div class="showcase-links"><a class="text-link" href="https://github.com/andenore/CopperAssetTracker">Explore the tracker source ↗</a><a class="text-link" href="assets/snapshot.json">Inspect snapshot provenance ↗</a><a class="text-link" href="https://github.com/andenore/CopperAssetTracker/blob/main/docs/showcase.md">Reproduce with make showcase ↗</a></div>
     </section>
 
@@ -169,9 +169,9 @@
       <div class="section-heading"><div><p class="eyebrow">07 / REVIEW IN THE BROWSER</p><h2 id="review-title">Inspect the design.<br>Tell the next run what to fix.</h2></div><p>CopperReview opens a board, its schematic and its assembly lock in the browser. It runs the same Rust compiler as WebAssembly, so nothing is installed and sources stay on your computer.</p></div>
       <div class="board-explorer review-explorer">
         <div class="view-bar"><span class="view-title">COPPERREVIEW / COPPERASSETTRACKER</span><div class="view-controls" aria-label="Choose a CopperReview view">
-          <a href="assets/review/review-layout.jpg" data-shot="layout" aria-current="true">Layout</a><a href="assets/review/review-schematic.jpg" data-shot="schematic">Schematic</a><a href="assets/review/review-3d.jpg" data-shot="3d">3D</a><a href="assets/review/review-assembly.jpg?v=20261106-pads" data-shot="assembly">Assembly</a>
+          <a href="assets/review/review-layout.jpg?v=20261107-step" data-shot="layout" aria-current="true">Layout</a><a href="assets/review/review-schematic.jpg?v=20261107-step" data-shot="schematic">Schematic</a><a href="assets/review/review-3d.jpg?v=20261107-step" data-shot="3d">3D</a><a href="assets/review/review-assembly.jpg?v=20261107-step" data-shot="assembly">Assembly</a>
         </div></div>
-        <figure class="review-figure"><div class="review-window"><img id="review-shot" src="assets/review/review-layout.jpg" width="1600" height="1000" loading="lazy" alt="CopperReview layout mode showing all copper layers of CopperAssetTracker, the component list and the note form"></div><figcaption id="review-caption" aria-live="polite">Layout · select components, nets or a region of the routed board, write what you observe and what should improve, and export the notes for the next solver iteration.</figcaption></figure>
+        <figure class="review-figure"><div class="review-window"><img id="review-shot" src="assets/review/review-layout.jpg?v=20261107-step" width="1600" height="1000" loading="lazy" alt="CopperReview layout mode showing all copper layers of CopperAssetTracker, the component list and the note form"></div><figcaption id="review-caption" aria-live="polite">Layout · select components, nets or a region of the routed board, write what you observe and what should improve, and export the notes for the next solver iteration.</figcaption></figure>
       </div>
       <ul class="review-points">
         <li><strong>Schematic, power and buses</strong><span>Generated from the compiled electrical IR. Side by side with the board, selecting a part or net on one side selects it on the other.</span></li>

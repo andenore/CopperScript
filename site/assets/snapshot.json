@@ -1,44 +1,44 @@
 {
   "schema": "copperassettracker-showcase/v3",
-  "candidate": "native-showcase-20261106",
-  "created_utc": "20261106T203049Z",
+  "candidate": "native-showcase-20261107",
+  "created_utc": "20261107T132215Z",
   "source": {
-    "git_commit": "8ed9a07364df4087a09c4aeb9ca421beb2d157c5",
+    "git_commit": "b7b526e395cc7a205dcb3684f1870310939888ab",
     "tracked_changes": "",
     "input_sha256": {
       "board.copper": "9a4c6f94ff83fcd44103eb11e0c3f5c1df1ab469936e47a0f331e657250623cb",
-      "copper.mod": "63d856fc4c41e32f13abeec5e76beb97dd065950f62a503670ba7dfd5a81a507",
-      "copper.lock": "d6cb72c04cd9db64a8d5750c9c78255363d27736e67f582ad6792cb119a1d4d2",
+      "copper.mod": "80866300ba81b88a3c36c024271d1687a587754bb397185cb459279b67f23609",
+      "copper.lock": "c8bd8356107909c9f1cf844f0de8cd2b020e6e5097081dbacb8830daddd79845",
       "assembly.lock": "011f2c304b975925c8f5d5cc458eb04215d05991c51026fdc780889239424e22",
       "Makefile": "50a6ec8e02fc504deeecbfecefb0cbb82617e49a61de77a77acd805d031caeea",
       "src/tracker/power_tree.copper": "952cbe99f737065ce3c960f3241c6117b25ce19fd50e54f7f2cdb01fa73f5282"
     }
   },
   "compiler": {
-    "copperscript_commit": "7d01db169d99c90fafff526d621a025a4957e56f",
+    "copperscript_commit": "bcfb49c0a28e5c5ce530c66e4751894c4697bf2f",
     "tracked_changes": "",
-    "executable_sha256": "6c8eac0e63fc8ec1ffd20d1e43fa9f6bcb09a782e1e00bb347701737dd11d94f"
+    "executable_sha256": "4d4da77fb273609027961f6a305f879888739957de3e5469c976bef7efba6c93"
   },
   "route": {
     "options": "--layers 6 --fab-profile jlcpcb-six-layer --candidates 1 --feedback-iterations 1 --router-iterations 5 --progress --fanout --plane-contact-radius-mm 5 --unified-set fine_regions=dense --fanout-maze --package-initial-pair-states 0 --no-early-plane-stitch --plane-stitch-step-mm 0.1 --plane-maze-step-mm 0.025 --plane-maze-budget 50000 --plane-contact-radius-mm 3 --plane-stitch-detour-mm 1.5",
     "status": "pass",
-    "report_sha256": "7daf42f7472c30f61e22cd0b2307df9d6e43271223eb451b1dac55d63793cae8",
-    "unfilled_pcb_sha256": "91f7ffc9bfabce60688c616a7ad88614f622ca76b77b449134855c03236b6091",
+    "report_sha256": "2ce83a300ed8e9873ca8ede20076abebc18fed0d0513a8f96510b9d1ed3d4a77",
+    "unfilled_pcb_sha256": "fe0cd48c57fc79e893880b875ff11e2c6152c7785e04ef3f93d7acdde5f3384e",
     "ordinary_nets_routed": 60,
     "unrouted_ordinary_nets": [],
-    "tracks": 1173,
-    "vias": 262,
-    "track_length_mm": 1817.912,
+    "tracks": 1191,
+    "vias": 259,
+    "track_length_mm": 1827.1,
     "plane_fill": "native",
     "requirements": {
       "blocked": 12,
       "pass": 90
     }
   },
-  "pcb_sha256": "77ee4738e735c1bdbe489a563ad65b88efe6898780e71f491cefd2d184d2f3a0",
+  "pcb_sha256": "8469c934ef19dc38569e410c1bcebc8d1fda39076d9d1ee69f6ea65948160d7e",
   "component_count": 87,
-  "track_count": 1173,
-  "via_count": 262,
+  "track_count": 1191,
+  "via_count": 259,
   "native_drc_violation_count": 0,
   "native_unconnected_item_count": 0,
   "blocked_requirement_count": 12,
@@ -51,7 +51,7 @@
     "B.Cu"
   ],
   "native_drc": {
-    "report_sha256": "21cb400831cc743e61657a5236898cea57c04a96bdc11895799ac240993369a7",
+    "report_sha256": "6e0e945686821c56e21355c8741a311c2af098b182df406c7e5f081cdcc13182",
     "passed": true,
     "violations": 0,
     "unconnected": 0,
@@ -67,20 +67,20 @@
       "custom rule \"Source additional courtyard gap 2\": courtyard_clearance",
       "custom rule \"Source additional courtyard gap 3\": courtyard_clearance"
     ],
-    "cam_readback": "CAM read-back PASSED: 0 short(s), 0 open(s), 0 test point(s) without copper; 6 copper layer(s), 1241 region(s), 667 test point(s), 272 plated hole(s)"
+    "cam_readback": "CAM read-back PASSED: 0 short(s), 0 open(s), 0 test point(s) without copper; 6 copper layer(s), 1220 region(s), 664 test point(s), 269 plated hole(s)"
   },
   "kicad": "not run: fill, DRC, plot and rendering are native",
   "independent_cam": "not run",
   "manufacturing_export": "not generated",
   "qualified_release": false,
   "rendered_assets": {
-    "routing-top.svg": "601e97c7cb4e86e99dc6302c059bea235b9ca13c9e365d2aee6f4b1076658637",
-    "routing-inner.svg": "f91ef3d9143963701787f9ec146a70c60e798e10aa1f79f76eba51d3c1947fb5",
-    "routing-bottom.svg": "e74d634b10c466fb470e0f3832892d31c4d8fde2fd5c31cf33f771d01720326b",
-    "routing-all.svg": "82ac3ae78d45d84f6c2a4f5d5a6553021a849c937e0ac06a5a29d29a5852871d",
+    "routing-top.svg": "ded734b507c7c408e2f2affb8bfd883409e2c6331296da245a1e91ab6f3c20d5",
+    "routing-inner.svg": "e4875d30133abf106018b3f6bdfd4d059be00792d45adaf2eb8a43613d582e36",
+    "routing-bottom.svg": "d3f22c8015891f3f95076145607ed45d372e8619580e6050756d2369f7f7d705",
+    "routing-all.svg": "38d413cd0dc46401b988744db7f49f0947b94b279322699313e4f8f7a7e34260",
     "placement.svg": "2891b43fe1f8fd40f6d42477fa3522acf8af80312d5a24a7922d4d0a41c58463",
     "rendering.json": "9d797399222779309581375fe4639f5a306d8e2788c65393e303aeaeade0607b",
     "electrical-ir.excerpt.json": "129b7753cd21db3ea73e5ec85324cf0762093950bc293c0b3602bb8bc17ca1b8",
-    "physical-ir.excerpt.json": "d5c44fcfc12a7dbf2c2739550ac7c5ddc6de1539eb02c4ac50b92c201c62dc82"
+    "physical-ir.excerpt.json": "ec58dbf4559df8c495396b4e33b74b9204c90cc6008cc6ae2a4604e88f7a7d5b"
   }
 }

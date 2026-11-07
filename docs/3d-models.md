@@ -129,14 +129,15 @@ the scale they sit inside their pads.
 
 - Locking a part's *local* model file. It is read at export time and is not part
   of `copper.lock` unless it sits in a locked module.
-- Drawing KiCad's STEP models outside KiCad. CopperReview reads VRML only, and the
-  KiCad library ships STEP only, so it shows the generated body for those parts.
 - STEP output for generated bodies (VRML only).
 - Non-zero model rotation, model offsets and back-side parts in the CopperReview
   view are placed best-effort and have not been compared with KiCad.
 
 ## Viewing
 
-CopperReview draws the exported `.wrl` files (`copper-review BOARD.kicad_pcb`,
-then the **3D** button); see its README. The viewer reads the compiler's own
+CopperReview draws the exported files (`copper-review BOARD.kicad_pcb`, then the
+**3D** button): KiCad's STEP models through its OpenCascade reader, and the
+generated `.wrl` body that `CopperScriptBody` names for every footprint where a
+STEP model cannot be read (the hosted viewer, or without the reader); see its
+README. The viewer reads the compiler's own
 bodies rather than regenerating them, so KiCad and the viewer agree.

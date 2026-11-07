@@ -439,7 +439,7 @@ joined through the refilled zone.
   ground under the trace; an antenna region has none. On the example board
   the lowered template (`monopole height=3mm length=17.46mm`) resonates at
   2.73 GHz on the fine mesh, 12 % high, and misses -10 dB even matched
-  (-8.7 dB); the same length at full height, where synthesis starts,
+  (-8.8 dB, model revision 3); the same length at full height, where synthesis starts,
   resonates at 2.93 GHz on the coarse mesh. That gap is why synthesis matters.
 
 ## Risks

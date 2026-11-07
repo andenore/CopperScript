@@ -3,7 +3,7 @@
   "placements": [
     {
       "reference": "C_MCU",
-      "footprint": "CopperScript:C_0402_1005Metric__c194d71d44bfbdf13a07",
+      "footprint": "CopperScript:C_0402_1005Metric__143a421d485a988c3cd2",
       "position_mm": {
         "x": "56.3",
         "y": "21"
