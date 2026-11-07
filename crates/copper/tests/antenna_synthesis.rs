@@ -52,9 +52,9 @@ fn the_tuned_example_binds_its_synthesized_monopole_as_locked_copper() {
     assert_eq!(status, 0, "{output}");
     let exported = std::fs::read_to_string(&pcb).expect("the exported board");
     // The tuned monopole: from the feed pad (19, 6.65) through the ground
-    // edge (y = 6) to height 5.3 mm (y = 0.7), then 17.36 mm along the edge.
+    // edge (y = 6) to height 5.3 mm (y = 0.7), then 17.43 mm along the edge.
     assert!(exported.contains("(start 19 6.65)") && exported.contains("(end 19 0.7)"), "{exported}");
-    assert!(exported.contains("(start 19 0.7)") && exported.contains("(end 36.36 0.7)"), "{exported}");
+    assert!(exported.contains("(start 19 0.7)") && exported.contains("(end 36.43 0.7)"), "{exported}");
     assert!(exported.contains("(width 1)"), "{exported}");
     assert!(exported.matches("(locked yes)").count() >= 3, "{exported}");
     // The zone keepout opened to the perimeter exports on both copper layers;

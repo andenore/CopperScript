@@ -51,7 +51,11 @@ pub const GENERATOR: &str = "copper antenna/v0.2";
 /// every change to what the model simulates for given inputs, so geometry
 /// tuned under an earlier model reads as stale and must be resynthesized.
 /// Revision 2: the sweep covers every band and stitching follows its top.
-pub const MODEL_REVISION: i64 = 2;
+/// Revision 3: the model chooses every mesh line itself (no lines detected
+/// from primitives, finer cells around the feed and an inverted-F's short,
+/// stitching vias as wires on mesh lines) and keeps an eighth of a
+/// wavelength of air before the PML.
+pub const MODEL_REVISION: i64 = 3;
 /// The `members[].reference` and `net` role names inside the generated asset.
 const MEMBER: &str = "ANT";
 const SHORT_MEMBER: &str = "SHORT";

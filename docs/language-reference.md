@@ -1244,7 +1244,9 @@ is scored on its bare return loss, since the short spacing is its own
 impedance knob and the matching network is only reported for it. Every candidate is scored by its worst return loss over every band
 with the best two-element L-section matching network synthesized from its
 simulated feed impedance, unless it already meets the target bare.
-`--budget` caps coarse evaluations (default 12); `--no-fine` skips
+`--budget` caps coarse evaluations (default 12); `--threads` sets the
+solver threads (default one per physical core: the time loop is
+memory-bound, so SMT siblings only slow it); `--no-fine` skips
 verification; `--verify` evaluates the declared geometry without searching.
 The report (`copperscript-antenna-synthesis/v0.1`) holds the search history,
 the final curve, the matching values, efficiency, assumptions and the

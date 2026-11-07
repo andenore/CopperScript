@@ -337,7 +337,12 @@ CopperLib's contract schema:
 
 ## Validation results
 
-All runs on the pinned `ems` 0.0.5 with 12 threads on a laptop CPU.
+All runs on the pinned `ems` 0.0.5 with 12 threads on a laptop CPU, on model
+revision 2. Revision 3 (the model's own mesher, November 2026) changes the
+cost and the feed's discretization; its profile, convergence references and
+accuracy against them are in
+[antenna synthesis performance](antenna-synthesis-performance.md). The AN043
+rebuild below has not been re-run on revision 3.
 
 **Free-space strip dipole** (58 mm, 1 mm wide, 1 mm gap, 0.5 mm cells): the
 input impedance at resonance is 73.3 - 0.1j ohm at 2.405 GHz, the textbook

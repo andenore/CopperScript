@@ -279,6 +279,7 @@ pub struct Options {
     pub budget: usize,
     /// Run fine verification (and its correction) after the search.
     pub fine: bool,
+    /// Solver threads; 0 picks one per physical core ([`crate::model::auto_threads`]).
     pub threads: usize,
     /// Pixel cell size, defaulting to the larger of the track width and 1 mm.
     pub pixel_cell: Option<i64>,
@@ -291,8 +292,18 @@ struct Search<'a, 'b> {
     budget: usize,
     used: usize,
     trials: Vec<Trial>,
+    /// Evaluations by realized copper and fidelity: geometries that build the
+    /// same copper (pixel tiles not 4-connected to the feed, say) share one.
     cache: IndexMap<(String, &'static str), (Evaluation, Score)>,
+    /// Calls answered from the cache, and whether the last one was.
+    duplicates: usize,
+    last_cached: bool,
     log: &'a mut dyn FnMut(&str),
+}
+
+/// The cache key of `realized` copper at fidelity `name`.
+fn cache_key(realized: &Layout, name: &'static str) -> (String, &'static str) {
+    (format!("{realized:?}"), name)
 }
 
 impl Search<'_, '_> {
@@ -305,8 +316,11 @@ impl Search<'_, '_> {
         let site = self.problem.site;
         let Ok(realized) = layout(site, geometry) else { return Ok(None) };
         let fidelity = if fine { self.fine.clone() } else { self.coarse.clone() };
-        let key = (geometry.to_source(), fidelity.name);
+        let key = cache_key(&realized, fidelity.name);
+        self.last_cached = false;
         if let Some(hit) = self.cache.get(&key) {
+            self.duplicates += 1;
+            self.last_cached = true;
             return Ok(Some(hit.clone()));
         }
         if !fine {
@@ -347,6 +361,12 @@ impl Search<'_, '_> {
 
     fn exhausted(&self) -> bool {
         self.used >= self.budget
+    }
+
+    /// The cached coarse evaluation of `geometry`, which must have been run.
+    fn coarse_of(&self, geometry: &Geometry) -> (Evaluation, Score) {
+        let realized = layout(self.problem.site, geometry).expect("a realizable geometry");
+        self.cache[&cache_key(&realized, "coarse")].clone()
     }
 }
 
@@ -435,6 +455,9 @@ fn nelder_mead(
 }
 
 const BUDGET_SPENT: &str = "budget spent";
+/// Pixel children in a row whose copper was already evaluated before the
+/// search gives up (they cost no budget, so only this bounds the loop).
+const MAX_STALE_CHILDREN: usize = 10_000;
 
 /// Synthesize a parametric (monopole or meander) antenna for `problem`.
 pub fn synthesize(problem: &Problem, options: &Options, log: &mut dyn FnMut(&str)) -> Result<Outcome, String> {
@@ -456,6 +479,8 @@ pub fn synthesize(problem: &Problem, options: &Options, log: &mut dyn FnMut(&str
         used: 0,
         trials: Vec::new(),
         cache: IndexMap::new(),
+        duplicates: 0,
+        last_cached: false,
         log,
     };
     let f0 = site.centre_hz();
@@ -521,7 +546,7 @@ pub fn synthesize(problem: &Problem, options: &Options, log: &mut dyn FnMut(&str
         return Err("no candidate geometry could be evaluated; raise the budget or enlarge the region".to_owned());
     };
     coords = coordinates(site, &geometry).expect("parametric");
-    let (mut evaluation, _) = search.cache[&(geometry.to_source(), "coarse")].clone();
+    let (mut evaluation, _) = search.coarse_of(&geometry);
 
     // 3. Fine verification, with one length correction if the resonance moved.
     if options.fine {
@@ -590,6 +615,8 @@ fn synthesize_pixel(problem: &Problem, options: &Options, log: &mut dyn FnMut(&s
         used: 0,
         trials: Vec::new(),
         cache: IndexMap::new(),
+        duplicates: 0,
+        last_cached: false,
         log,
     };
     // Seed: the first-order monopole rasterized, up the feed column then
@@ -627,6 +654,7 @@ fn synthesize_pixel(problem: &Problem, options: &Options, log: &mut dyn FnMut(&s
     }
     for bits in members {
         match search.run(&geometry(&bits), false, "seed")? {
+            Some(_) if search.last_cached => {}
             Some((_, score)) => population.push((bits, score.worst_db)),
             None if search.exhausted() => break,
             None => {}
@@ -635,6 +663,7 @@ fn synthesize_pixel(problem: &Problem, options: &Options, log: &mut dyn FnMut(&s
     if population.is_empty() {
         return Err("no pixel candidate could be evaluated".to_owned());
     }
+    let mut stale = 0usize;
     while !search.exhausted() {
         population.sort_by(|a, b| a.1.total_cmp(&b.1));
         let pick = |rng: &mut Rng, population: &[(Vec<bool>, f64)]| {
@@ -645,15 +674,34 @@ fn synthesize_pixel(problem: &Problem, options: &Options, log: &mut dyn FnMut(&s
         let mut child: Vec<bool> =
             mother.iter().zip(&father).map(|(m, f)| if rng.next() & 1 == 0 { *m } else { *f }).collect();
         mutate(&mut child, &mut rng);
-        if let Some((_, score)) = search.run(&geometry(&child), false, "evolve")? {
-            population.push((child, score.worst_db));
-            population.sort_by(|a, b| a.1.total_cmp(&b.1));
-            population.truncate(population_size);
+        match search.run(&geometry(&child), false, "evolve")? {
+            // Copper already evaluated: no new information, and a second
+            // copy in the population would only crowd out diversity.
+            Some(_) if search.last_cached => {
+                stale += 1;
+                if stale >= MAX_STALE_CHILDREN {
+                    (search.log)(&format!(
+                        "  pixel search stopped: {MAX_STALE_CHILDREN} children in a row rebuilt copper already evaluated"
+                    ));
+                    break;
+                }
+            }
+            Some((_, score)) => {
+                stale = 0;
+                population.push((child, score.worst_db));
+                population.sort_by(|a, b| a.1.total_cmp(&b.1));
+                population.truncate(population_size);
+            }
+            None => {}
         }
     }
+    (search.log)(&format!(
+        "  pixel search: {} evaluations, {} candidates skipped as copper already evaluated",
+        search.used, search.duplicates
+    ));
     population.sort_by(|a, b| a.1.total_cmp(&b.1));
     let best = geometry(&population[0].0);
-    let (mut evaluation, mut score) = search.cache[&(best.to_source(), "coarse")].clone();
+    let (mut evaluation, mut score) = search.coarse_of(&best);
     if options.fine {
         (evaluation, score) = search.run(&best, true, "verify")?.expect("a realizable geometry");
     }
@@ -679,6 +727,25 @@ pub fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_cache_keys_on_realized_copper_not_on_the_geometry_source() {
+        // Two pixel bit strings that differ only in a tile not connected to
+        // the feed realize the same layout (see the CLI test
+        // `a_manual_pixel_grid_keeps_only_tiles_connected_to_the_feed`) and
+        // must share one evaluation; different copper must not.
+        let tile = |u: i64| [u, 0, u + 1_000_000, 1_000_000];
+        let copper = |tiles: Vec<[i64; 4]>| Layout {
+            path: vec![(0, 0), (0, 2_000_000)],
+            tiles,
+            length_nm: 2_000_000,
+            short: None,
+        };
+        let a = copper(vec![tile(0), tile(1_000_000)]);
+        assert_eq!(cache_key(&a, "coarse"), cache_key(&a.clone(), "coarse"));
+        assert_ne!(cache_key(&a, "coarse"), cache_key(&a, "fine"));
+        assert_ne!(cache_key(&a, "coarse"), cache_key(&copper(vec![tile(0)]), "coarse"));
+    }
 
     #[test]
     fn nelder_mead_finds_a_bowl_minimum() {

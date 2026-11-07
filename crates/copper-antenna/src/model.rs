@@ -19,7 +19,6 @@
 
 use std::time::Instant;
 
-use ems::csx::mesh::{MeshBuilder, MeshOptions};
 use ems::csx::primitives::{BoxShape, LinPoly, Polygon};
 use ems::csx::{ContinuousStructure, Material, Primitive, Property, PropertyId};
 use ems::engine::StopReason;
@@ -35,8 +34,6 @@ pub const SOLVER: &str = "ems 0.0.5 (pure-Rust FDTD, openEMS-compatible)";
 const C0_MM_PER_S: f64 = 299_792_458_000.0;
 const EPS0: f64 = 8.854_187_812_8e-12;
 const PML_CELLS: usize = 8;
-/// The modelled stitching via's square side, in millimetres.
-const STITCH_SIZE: f64 = 0.4;
 
 fn mm(nm: i64) -> f64 {
     nm as f64 * 1e-6
@@ -109,7 +106,28 @@ pub struct Fidelity {
     pub max_time_ns: f64,
     /// Record a near-to-far-field box for radiation efficiency.
     pub efficiency: bool,
+    /// Solver threads; 0 picks [`auto_threads`] for each mesh.
     pub threads: usize,
+}
+
+/// The solver thread count for a mesh of `nodes` lines per axis: one per
+/// physical core, at most one per five x-planes and per 4096 cells (the
+/// solver's own rule). The time loop is memory-bandwidth bound, so a second
+/// hardware thread per core only adds synchronisation: on the 6-core,
+/// 12-thread laptop of `docs/antenna-synthesis-performance.md`, 6 threads
+/// ran 1.74x faster than 12. The solver counts cores itself on Linux; on
+/// Windows, where it cannot, half the logical processors is assumed (SMT
+/// is near universal on current x86 parts, and a bandwidth-bound loop loses
+/// little if a part without it gets fewer threads); Apple silicon has no
+/// SMT. `--threads` overrides it.
+pub fn auto_threads(nodes: [usize; 3]) -> usize {
+    let solver = ems::engine::default_threads_for(nodes);
+    if cfg!(windows) {
+        let logical = std::thread::available_parallelism().map_or(1, |n| n.get());
+        solver.min((logical / 2).max(1))
+    } else {
+        solver
+    }
 }
 
 impl Fidelity {
@@ -370,34 +388,127 @@ pub struct Evaluation {
     pub warnings: Vec<String>,
 }
 
-/// Merge edges closer than `cell / 2`, then split every gap wider than `cell`.
-/// The smallest cell sets the FDTD timestep, so slivers cost far more than
-/// the accuracy they add.
-/// Always keeps `keep` (the port's terminals): other edges within `cell / 2`
-/// of a kept line are dropped instead.
-fn region_lines_keeping(mut edges: Vec<f64>, keep: &[f64], cell: f64) -> Vec<f64> {
-    edges.retain(|e| keep.iter().all(|k| (e - k).abs() >= cell / 2.0));
-    edges.extend_from_slice(keep);
-    edges.sort_by(f64::total_cmp);
-    let mut kept: Vec<f64> = Vec::new();
-    for edge in edges {
-        let forced = keep.contains(&edge);
-        match kept.last() {
-            Some(last) if edge - last < cell / 2.0 && !forced => {}
-            Some(last) if edge - last < cell / 2.0 && forced && !keep.contains(last) => {
-                kept.pop();
-                kept.push(edge);
+/// How a candidate mesh line ranks when two lie closer than the snap distance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum LineRank {
+    /// Ground vertices and the board outline: their sheets snap onto a nearby line.
+    Anchor,
+    /// Edges of the slot, region and the region's padding.
+    Edge,
+    /// Edges of the radiator, feed land, short and via: what the search
+    /// moves, so a sub-cell change of a parameter never moves them a cell.
+    Copper,
+    /// The port's terminals and the line between them: never moved.
+    Port,
+}
+
+/// One axis of an evaluation's mesh, from which [`axis_lines`] builds every line.
+#[derive(Clone, Debug)]
+struct AxisPlan {
+    lines: Vec<(f64, LineRank)>,
+    /// `(lo, hi, limit)`: no cell between `lo` and `hi` wider than `limit`.
+    zones: Vec<(f64, f64, f64)>,
+    /// Lines closer than this merge into the higher-ranked one (port lines never merge).
+    snap: f64,
+    /// The domain's ends (air margin and PML included).
+    lo: f64,
+    hi: f64,
+    /// The largest cell anywhere, and the growth ratio of neighbouring cells.
+    max_cell: f64,
+    ratio: f64,
+}
+
+/// The mesh lines of one axis: every line is chosen here, none is detected
+/// from the model's primitives.
+///
+/// 1. Candidate lines merge when closer than `snap`, or half the limit of a
+///    finer zone they lie in (the lower rank moves onto the higher; port
+///    lines all stay), so no incidental pair of edges
+///    leaves a sliver: the smallest cell sets the FDTD time step.
+/// 2. Between the outermost zone bounds, each gap is split into the fewest
+///    equal cells no wider than the tightest zone limit over it.
+/// 3. Outside, `smooth_lines` grades from the outer zone cells to the domain
+///    ends. It runs only there: inside the zones its ratio rule would split
+///    a 0.3 mm cell next to a 0.5 mm one into slivers, which is how the
+///    csx-built mesh lost half its time step.
+fn axis_lines(plan: &AxisPlan) -> Result<Vec<f64>, String> {
+    let mut candidates = plan.lines.clone();
+    for (lo, hi, _) in &plan.zones {
+        candidates.extend([(*lo, LineRank::Anchor), (*hi, LineRank::Anchor)]);
+    }
+    candidates.retain(|(v, _)| v.is_finite() && *v > plan.lo && *v < plan.hi);
+    candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
+    // Inside a zone finer than the default, edges keep half its limit apart.
+    let snap_at = |x: f64| {
+        plan.zones
+            .iter()
+            .filter(|(lo, hi, _)| x > *lo && x < *hi)
+            .map(|(_, _, limit)| limit / 2.0)
+            .fold(plan.snap, f64::min)
+    };
+    let mut kept: Vec<(f64, LineRank)> = Vec::new();
+    for (v, rank) in candidates {
+        match kept.last().copied() {
+            Some((last, _)) if v - last < 1e-9 => {
+                let top = kept.last_mut().expect("a line");
+                top.1 = top.1.max(rank);
             }
-            _ => kept.push(edge),
+            Some((last, last_rank)) if v - last < snap_at((last + v) / 2.0) => match (last_rank, rank) {
+                (LineRank::Port, LineRank::Port) => kept.push((v, rank)),
+                (_, r) if r > last_rank => {
+                    kept.pop();
+                    kept.push((v, rank));
+                }
+                _ => {}
+            },
+            _ => kept.push((v, rank)),
         }
     }
-    kept.dedup();
-    let mut lines = vec![kept[0]];
-    for pair in kept.windows(2) {
-        let n = ((pair[1] - pair[0]) / cell).ceil().max(1.0) as usize;
-        lines.extend((1..=n).map(|i| pair[0] + (pair[1] - pair[0]) * i as f64 / n as f64));
+    let kept: Vec<f64> = kept.into_iter().map(|(v, _)| v).collect();
+    let zone_lo = plan.zones.iter().map(|z| z.0).fold(f64::INFINITY, f64::min);
+    let zone_hi = plan.zones.iter().map(|z| z.1).fold(f64::NEG_INFINITY, f64::max);
+    let inner_lines: Vec<f64> =
+        kept.iter().copied().filter(|v| *v >= zone_lo - plan.snap && *v <= zone_hi + plan.snap).collect();
+    if inner_lines.len() < 2 {
+        let mut all = vec![plan.lo];
+        all.extend(kept);
+        all.push(plan.hi);
+        return ems::csx::grid::smooth_lines(&all, plan.max_cell, plan.ratio).map_err(|e| e.to_string());
     }
-    lines
+    let coarsest = plan.zones.iter().map(|z| z.2).fold(0.0, f64::max);
+    let mut inner = vec![inner_lines[0]];
+    for pair in inner_lines.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let middle = (a + b) / 2.0;
+        let limit = plan
+            .zones
+            .iter()
+            .filter(|(lo, hi, _)| middle > *lo && middle < *hi)
+            .map(|(_, _, limit)| *limit)
+            .fold(coarsest, f64::min);
+        let n = ((b - a) / limit - 1e-9).ceil().max(1.0) as usize;
+        inner.extend((1..=n).map(|i| a + (b - a) * i as f64 / n as f64));
+    }
+    let (first, last) = (inner[0], inner[inner.len() - 1]);
+    let (c_first, c_last) = (inner[1] - inner[0], inner[inner.len() - 1] - inner[inner.len() - 2]);
+    // Each side is graded from a copy of the zone's outer cell, unless an
+    // anchor already stands within one and a half of it.
+    let side = |anchors: Vec<f64>, end: f64, edge: f64, cell: f64| -> Result<Vec<f64>, String> {
+        let mut fixed = anchors;
+        let helper = if end < edge { edge - cell } else { edge + cell };
+        if fixed.iter().all(|v| (v - edge).abs() > 1.5 * cell) && (helper - end).abs() > cell {
+            fixed.push(helper);
+        }
+        fixed.extend([end, edge]);
+        fixed.sort_by(f64::total_cmp);
+        ems::csx::grid::smooth_lines(&fixed, plan.max_cell, plan.ratio).map_err(|e| e.to_string())
+    };
+    let below = side(kept.iter().copied().filter(|v| *v < first).collect(), plan.lo, first, c_first)?;
+    let above = side(kept.iter().copied().filter(|v| *v > last).collect(), plan.hi, last, c_last)?;
+    let mut lines: Vec<f64> = below.into_iter().filter(|v| *v < first).collect();
+    lines.extend(inner);
+    lines.extend(above.into_iter().filter(|v| *v > last));
+    Ok(lines)
 }
 
 /// The radiator's copper as board rectangles: each track segment widened to
@@ -472,16 +583,6 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
             .add_primitive(ground, Primitive::new(Polygon::new(2, *z, ring.clone())).with_priority(10))
             .map_err(err)?;
     }
-    let half = STITCH_SIZE / 2.0;
-    for (x, y, top, bottom) in &problem.stitching {
-        model
-            .add_primitive(
-                ground,
-                Primitive::new(BoxShape::new([x - half, y - half, *bottom], [x + half, y + half, *top]))
-                    .with_priority(10),
-            )
-            .map_err(err)?;
-    }
     let antenna = model.add_property(Property::metal("antenna"));
     let copper = copper_rects(site, layout);
     for rect in &copper {
@@ -490,10 +591,12 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
     // The short's ground via is a barrel over the span the board gets, F.Cu
     // to `via_to`, stub below the last ground plane included: a flat square
     // alone leaves the short open when ground is zoned only below F.Cu.
+    let mut via_rect = None;
     if let (Some(link), Some(short)) = (&site.short, &layout.short) {
         let (vu, vv) = short.via;
         let r = link.via_size / 2;
         let via = board_rect(site, vu - r, vv - r, vu + r, vv + r);
+        via_rect = Some(via);
         if let Some(bottom) = via_bottom(stack, link.via_to) {
             model
                 .add_primitive(
@@ -533,26 +636,18 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
         .add_to(&mut model)
         .map_err(|e| e.to_string())?;
 
-    // Mesh: our own lines over the antenna and feed, graded outward by csx.
-    let cell = fidelity.cell;
+    // Mesh: every line is chosen by `axis_lines`; csx detects none from the
+    // primitives, so no stitching via or polygon vertex adds a sliver.
+    // COPPER_ANTENNA_FINE_CELL overrides the fine fidelity's cell, for
+    // convergence references (docs/antenna-synthesis-performance.md).
+    let cell = std::env::var("COPPER_ANTENNA_FINE_CELL")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|c| fidelity.name == "fine" && *c > 0.0)
+        .unwrap_or(fidelity.cell);
     let region = [mm(site.area.min_x), mm(site.area.min_y), mm(site.area.max_x), mm(site.area.max_y)];
     let pad = 2.0 * cell;
-    let (mut xs, mut ys) = (vec![region[0] - pad, region[2] + pad], vec![region[1] - pad, region[3] + pad]);
     let port_rect = [port_box.0[0], port_box.0[1], port_box.1[0], port_box.1[1]];
-    for r in copper.iter().chain([&problem.slot, &region, &port_rect]) {
-        xs.extend([r[0], r[2]]);
-        ys.extend([r[1], r[3]]);
-    }
-    let (x0, x1) =
-        (xs.iter().copied().fold(f64::INFINITY, f64::min), xs.iter().copied().fold(f64::NEG_INFINITY, f64::max));
-    let (y0, y1) =
-        (ys.iter().copied().fold(f64::INFINITY, f64::min), ys.iter().copied().fold(f64::NEG_INFINITY, f64::max));
-    xs.retain(|x| (x0..=x1).contains(x));
-    ys.retain(|y| (y0..=y1).contains(y));
-    let z_cell = cell.max(0.15);
-    let mut zs: Vec<f64> = stack.copper.iter().map(|(_, z)| *z).collect();
-    zs.extend(stack.slabs.iter().flat_map(|s| [s.top, s.bottom]));
-    zs.push(4.0 * cell);
     // The port's terminals must stay on distinct lines however close they
     // are, with a line between them along the port: a one-cell gap whose two
     // nodes both touch metal discretizes as a PEC short.
@@ -562,26 +657,89 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
         let (a, b) = (port_box.0[k], port_box.1[k]);
         if along_port(k) { vec![a, mid(a, b), b] } else { vec![a, b] }
     };
-    let (keep_x, keep_y) = (keep(0), keep(1));
+    let mut planned: [Vec<(f64, LineRank)>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    for (k, lines) in planned.iter_mut().enumerate().take(2) {
+        lines.extend(keep(k).into_iter().map(|v| (v, LineRank::Port)));
+        lines.extend([(region[k] - pad, LineRank::Edge), (region[k + 2] + pad, LineRank::Edge)]);
+        for r in [&problem.slot, &region, &port_rect] {
+            lines.extend([(r[k], LineRank::Edge), (r[k + 2], LineRank::Edge)]);
+        }
+        for r in copper.iter().chain(via_rect.as_ref()) {
+            lines.extend([(r[k], LineRank::Copper), (r[k + 2], LineRank::Copper)]);
+        }
+    }
+    // The antenna's own cells span every feature line; around the port, a
+    // finer limit resolves the feed gap at every fidelity (at two coarse
+    // cells across the gap, the result depended on incidental lines).
+    let feature_span = |k: usize| {
+        let v = planned[k].iter().map(|(v, _)| *v);
+        (v.clone().fold(f64::INFINITY, f64::min), v.fold(f64::NEG_INFINITY, f64::max))
+    };
+    let feed_zone = |k: usize| (port_rect[k] - 1.0, port_rect[k + 2] + 1.0, 0.75 * cell);
+    // An inverted-F's short (leg, link and ground via) sets its impedance as
+    // the feed gap does, and gets the same resolution.
+    let short_box = layout.short.as_ref().map(|short| {
+        let points: Vec<Point> = short
+            .leg
+            .iter()
+            .chain([&short.centre, &short.feed_pad, &short.ground_pad, &short.via])
+            .map(|(u, v)| site.frame.to_board(*u, *v))
+            .collect();
+        let (xs, ys) = (points.iter().map(|p| mm(p.x_nm)), points.iter().map(|p| mm(p.y_nm)));
+        [
+            xs.clone().fold(f64::INFINITY, f64::min) - 1.0,
+            ys.clone().fold(f64::INFINITY, f64::min) - 1.0,
+            xs.fold(f64::NEG_INFINITY, f64::max) + 1.0,
+            ys.fold(f64::NEG_INFINITY, f64::max) + 1.0,
+        ]
+    });
+    let zones_xy: [Vec<(f64, f64, f64)>; 2] = [0, 1].map(|k| {
+        let (a, b) = feature_span(k);
+        let mut zones = vec![(a, b, cell), feed_zone(k)];
+        zones.extend(short_box.map(|r| (r[k], r[k + 2], 0.75 * cell)));
+        zones
+    });
+    for (x, y) in outline.iter().chain(problem.ground.iter().flat_map(|(_, ring)| ring.iter())) {
+        planned[0].push((*x, LineRank::Anchor));
+        planned[1].push((*y, LineRank::Anchor));
+    }
+    let z_cell = cell.max(0.15);
     let keep_z: Vec<f64> = if port_box.0[2] == port_box.1[2] { vec![] } else { keep(2) };
-    zs.extend(&keep_z);
-    let fine = [
-        region_lines_keeping(xs, &keep_x, cell),
-        region_lines_keeping(ys, &keep_y, cell),
-        region_lines_keeping(zs, &keep_z, z_cell),
-    ];
+    planned[2].extend(stack.copper.iter().map(|(_, z)| (*z, LineRank::Edge)));
+    planned[2].extend(stack.slabs.iter().flat_map(|s| [(s.top, LineRank::Edge), (s.bottom, LineRank::Edge)]));
+    planned[2].extend(keep_z.iter().map(|z| (*z, LineRank::Port)));
+    let z_bottom = planned[2].iter().map(|(z, _)| *z).fold(0.0, f64::min);
+    let zone_z = (z_bottom, 4.0 * cell, z_cell);
     let f_high = problem.freqs.last().copied().unwrap_or(centre);
     let max_cell = (C0_MM_PER_S / f_high / stack.max_er().sqrt() / 15.0).min(3.0);
-    let margin = C0_MM_PER_S / centre / 4.0 + PML_CELLS as f64 * max_cell;
-    let mut builder = MeshBuilder::new(MeshOptions::new(max_cell).with_ratio(1.3).with_margin(margin).with_min_res([
-        cell * 0.45,
-        cell * 0.45,
-        z_cell * 0.45,
-    ]));
-    for (dir, lines) in fine.into_iter().enumerate() {
-        builder = builder.with_lines(dir, lines);
+    // An eighth of a wavelength of air before the PML: S11 and the far-field
+    // box are unchanged from a quarter (docs/antenna-synthesis-performance.md).
+    let margin = C0_MM_PER_S / centre / 8.0 + PML_CELLS as f64 * max_cell;
+    let span = |k: usize, extra: &[f64]| {
+        let v = planned[k].iter().map(|(v, _)| *v).chain(extra.iter().copied());
+        (v.clone().fold(f64::INFINITY, f64::min) - margin, v.fold(f64::NEG_INFINITY, f64::max) + margin)
+    };
+    for k in 0..3 {
+        let (zones, snap, extra) = if k < 2 {
+            (zones_xy[k].clone(), cell / 2.0, vec![])
+        } else {
+            (vec![zone_z], z_cell / 2.0, vec![zone_z.0, zone_z.1])
+        };
+        let (lo, hi) = span(k, &extra);
+        let plan = AxisPlan { lines: planned[k].clone(), zones, snap, lo, hi, max_cell, ratio: 1.3 };
+        model.grid.set_lines(k, axis_lines(&plan)?).map_err(err)?;
     }
-    builder.apply(&mut model).map_err(err)?;
+    // Stitching vias as PEC wires on the nearest mesh lines: they add none.
+    let nearest = |k: usize, v: f64| {
+        model.grid.lines(k).iter().copied().min_by(|a, b| (a - v).abs().total_cmp(&(b - v).abs())).unwrap_or(v)
+    };
+    let stitches: Vec<[f64; 4]> =
+        problem.stitching.iter().map(|(x, y, top, bottom)| [nearest(0, *x), nearest(1, *y), *top, *bottom]).collect();
+    for [x, y, top, bottom] in stitches {
+        model
+            .add_primitive(ground, Primitive::new(BoxShape::new([x, y, bottom], [x, y, top])).with_priority(10))
+            .map_err(err)?;
+    }
     if std::env::var_os("COPPER_ANTENNA_DEBUG").is_some() {
         for k in 0..3 {
             let (a, b) = (port_box.0[k].min(port_box.1[k]) - 1.0, port_box.0[k].max(port_box.1[k]) + 1.0);
@@ -592,6 +750,12 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
     }
     let n = model.grid.num_lines();
     let cells = n[0].saturating_sub(1) * n[1].saturating_sub(1) * n[2].saturating_sub(1);
+    let threads = if fidelity.threads == 0 { auto_threads(n) } else { fidelity.threads };
+    let profile = std::env::var_os("COPPER_ANTENNA_PROFILE").is_some();
+    let meshed = started.elapsed().as_secs_f64();
+    if profile {
+        mesh_census(&model, problem, &outline, stack, cell, max_cell, margin);
+    }
 
     let fdtd = Fdtd::new()
         .waveform({
@@ -601,7 +765,7 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
         .boundaries(Boundaries::all(Boundary::pml(PML_CELLS)))
         .end_criteria(EndCriteria::energy_decay_db(fidelity.decay_db))
         .max_time(fidelity.max_time_ns * 1e-9)
-        .threads(fidelity.threads.max(1));
+        .threads(threads);
     let mut sim = Simulation::new(&model, &fdtd).map_err(|e| e.to_string())?;
     let dt_ps = sim.engine().dt() * 1e12;
     let centres: Vec<f64> = site
@@ -627,10 +791,30 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
         None
     };
     let warnings: Vec<String> = sim.warnings().to_vec();
+    let compiled = started.elapsed().as_secs_f64();
+    if std::env::var("COPPER_ANTENNA_PROFILE").is_ok_and(|v| v.contains("mesh")) {
+        eprintln!("profile {}: cells {cells} dt {dt_ps:.4} ps (mesh-only run)", fidelity.name);
+        return Err("COPPER_ANTENNA_PROFILE=mesh: stopped after compiling".to_owned());
+    }
     let results = sim.run().map_err(|e| e.to_string())?;
+    let ran = started.elapsed().as_secs_f64();
     let outcome = results.outcome().cloned();
     let converged = matches!(outcome.as_ref().map(|o| &o.reason), Some(StopReason::EnergyDecay { .. }));
     let steps = outcome.as_ref().map_or(0, |o| o.steps);
+    if profile {
+        let run = ran - compiled;
+        let updates = cells as f64 * steps as f64;
+        eprintln!(
+            "profile {}: threads {} cells {cells} steps {steps} dt {dt_ps:.4} ps simulated {:.2} ns converged {converged}; \
+             mesh {meshed:.1} s, compile {:.1} s, run {run:.1} s; {:.0} Mcell-updates/s, {:.0} us/step",
+            fidelity.name,
+            threads,
+            steps as f64 * dt_ps * 1e-3,
+            compiled - meshed,
+            updates / run / 1e6,
+            run / steps.max(1) as f64 * 1e6,
+        );
+    }
     let analysed = port
         .analyze(&results, &problem.freqs)
         .map_err(|e| format!("{e}; solver setup warnings: {}", warnings.join(" | ")))?;
@@ -662,6 +846,80 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
     })
 }
 
+/// `COPPER_ANTENNA_PROFILE`: where the mesh's cells go. Per axis: the line
+/// count, the smallest and largest cell (and where the smallest is) and the
+/// cells over the board; then the
+/// cells over the board's footprint and slab range against the air around it,
+/// and a histogram of in-plane cell widths.
+fn mesh_census(
+    model: &ContinuousStructure,
+    problem: &Problem,
+    outline: &Ring,
+    stack: &Stack,
+    cell: f64,
+    max_cell: f64,
+    margin: f64,
+) {
+    let lo = |v: &mut dyn Iterator<Item = f64>| v.fold(f64::INFINITY, f64::min);
+    let hi = |v: &mut dyn Iterator<Item = f64>| v.fold(f64::NEG_INFINITY, f64::max);
+    let z_lo = stack.slabs.iter().map(|s| s.bottom).fold(0.0, f64::min);
+    let range = [
+        (lo(&mut outline.iter().map(|p| p.0)), hi(&mut outline.iter().map(|p| p.0))),
+        (lo(&mut outline.iter().map(|p| p.1)), hi(&mut outline.iter().map(|p| p.1))),
+        (z_lo, 0.0),
+    ];
+    eprintln!(
+        "profile mesh: cell {cell:.3} mm, max cell {max_cell:.3} mm, air margin {margin:.1} mm, {} stitching vias at {:.2} mm pitch",
+        problem.stitching.len(),
+        problem.stitch_pitch
+    );
+    let mut inside = [0usize; 3];
+    let mut histogram = [0usize; 6];
+    let bins = [0.3, 0.6, 1.2, 2.5, 5.0];
+    for (k, inside) in inside.iter_mut().enumerate() {
+        let lines: Vec<f64> = model.grid.lines(k).to_vec();
+        let widths: Vec<(f64, f64)> = lines.windows(2).map(|w| (w[1] - w[0], (w[0] + w[1]) / 2.0)).collect();
+        let (min, at) = widths.iter().copied().fold((f64::INFINITY, 0.0), |a, w| if w.0 < a.0 { w } else { a });
+        let max = widths.iter().map(|w| w.0).fold(0.0, f64::max);
+        let (a, b) = range[k];
+        *inside = widths.iter().filter(|w| w.1 > a && w.1 < b).count();
+        if k < 2 {
+            for w in &widths {
+                histogram[bins.iter().take_while(|edge| w.0 >= **edge).count()] += 1;
+            }
+        }
+        eprintln!(
+            "profile axis {k}: {} lines, cells {min:.3} mm (at {at:.2}) to {max:.3} mm, {} cells over the board",
+            lines.len(),
+            *inside
+        );
+        if std::env::var("COPPER_ANTENNA_PROFILE").is_ok_and(|v| v.contains("lines")) {
+            let small: Vec<String> = widths
+                .iter()
+                .zip(&lines)
+                .filter(|(w, _)| w.0 < 0.45 * cell)
+                .map(|(w, l)| format!("{l:.3}+{:.3}", w.0))
+                .collect();
+            eprintln!("profile axis {k} cells below 0.45 x fine cell: {}", small.join(" "));
+        }
+    }
+    let n = model.grid.num_lines();
+    let total = n[0].saturating_sub(1) * n[1].saturating_sub(1) * n[2].saturating_sub(1);
+    let board = inside[0] * inside[1] * inside[2];
+    eprintln!(
+        "profile cells: {total} total, {board} over the board footprint and slabs ({:.0} %), {} elsewhere; x/y widths <0.3 {} 0.3-0.6 {} 0.6-1.2 {} 1.2-2.5 {} 2.5-5 {} >=5 {} mm; field+coefficient memory about {:.0} MB",
+        100.0 * board as f64 / total.max(1) as f64,
+        total - board,
+        histogram[0],
+        histogram[1],
+        histogram[2],
+        histogram[3],
+        histogram[4],
+        histogram[5],
+        total as f64 * 72.0 / 1e6
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -688,19 +946,54 @@ mod tests {
         assert!((f0 - centre).abs() < 1.0 && (fc - 0.4 * centre).abs() < 1.0);
     }
 
-    #[test]
-    fn kept_lines_survive_merging() {
-        let lines = region_lines_keeping(vec![0.0, 1.0, 1.1, 3.0], &[1.0, 1.2], 0.5);
-        assert!(lines.contains(&1.0) && lines.contains(&1.2), "{lines:?}");
-        assert!(!lines.contains(&1.1), "{lines:?}");
+    fn plan(lines: &[(f64, LineRank)], zones: &[(f64, f64, f64)]) -> AxisPlan {
+        AxisPlan {
+            lines: lines.to_vec(),
+            zones: zones.to_vec(),
+            snap: 0.25,
+            lo: -20.0,
+            hi: 20.0,
+            max_cell: 3.0,
+            ratio: 1.3,
+        }
+    }
+
+    fn cells(lines: &[f64]) -> Vec<f64> {
+        lines.windows(2).map(|w| w[1] - w[0]).collect()
     }
 
     #[test]
-    fn region_lines_merge_slivers_and_fill_gaps() {
-        let lines = region_lines_keeping(vec![0.0, 0.05, 1.0, 1.02, 2.5], &[], 0.5);
-        assert_eq!(lines.first(), Some(&0.0));
-        assert!(lines.windows(2).all(|p| p[1] - p[0] >= 0.25 - 1e-12 && p[1] - p[0] <= 0.5 + 1e-12), "{lines:?}");
-        assert_eq!(lines.last(), Some(&2.5));
+    fn port_lines_survive_and_lower_ranks_snap_onto_higher_ones() {
+        let lines = axis_lines(&plan(
+            &[
+                (0.0, LineRank::Port),
+                (0.1, LineRank::Port),
+                (0.2, LineRank::Edge),
+                (2.0, LineRank::Anchor),
+                (2.1, LineRank::Edge),
+            ],
+            &[(-1.0, 3.0, 0.5)],
+        ))
+        .expect("lines");
+        assert!(lines.contains(&0.0) && lines.contains(&0.1), "{lines:?}");
+        assert!(!lines.contains(&0.2) && !lines.contains(&2.0) && lines.contains(&2.1), "{lines:?}");
+    }
+
+    #[test]
+    fn zones_bound_the_cells_without_leaving_slivers() {
+        let lines = axis_lines(&plan(
+            &[(0.0, LineRank::Edge), (0.3, LineRank::Edge), (1.3, LineRank::Edge)],
+            &[(-1.0, 3.0, 0.5), (0.0, 1.3, 0.375)],
+        ))
+        .expect("lines");
+        let inside: Vec<f64> = lines.iter().copied().filter(|v| (-1.0..=3.0).contains(v)).collect();
+        for c in cells(&inside) {
+            assert!((0.25 - 1e-9..=0.5 + 1e-9).contains(&c), "{inside:?}");
+        }
+        for c in cells(&lines) {
+            assert!(c <= 3.0 + 1e-9, "{lines:?}");
+        }
+        assert_eq!((lines[0], *lines.last().expect("lines")), (-20.0, 20.0));
     }
 
     #[test]

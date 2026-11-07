@@ -43,9 +43,10 @@ Synthesis starts from the same quarter-wave length at the region's full
 height (5.3 mm), which resonates at 2.93 GHz on the coarse mesh, and tunes it
 from there.
 `board.copper` carries the synthesized geometry and its `tuned_for` digest: a
-22.66 mm monopole at 2.39 GHz that meets -10 dB over the band with 0.94 nH
-series then 2.61 pF shunt from the antenna side, at 85 % radiation efficiency
-on the fine mesh. Changing an input of the model (outline, stack-up, ground
+22.73 mm monopole at 2.38 GHz that meets -10 dB over the band with 0.88 nH
+series then 2.57 pF shunt from the antenna side, at 86 % radiation efficiency
+on the fine mesh (model revision 3; the synthesis takes about three and a
+half minutes on a 6-core laptop). Changing an input of the model (outline, stack-up, ground
 zone, region, track rules, feed or band) makes lowering fail until the
 synthesis is re-run.
 See [the language reference](../../docs/language-reference.md#trace-antenna-synthesis)

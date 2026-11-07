@@ -84,8 +84,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             Some(text) => text.trim().parse().map_err(|_| format!("argument {name}: invalid int value: '{text}'")),
         }
     };
-    let threads_default = std::thread::available_parallelism().map_or(4, |n| n.get());
-    let (budget, threads) = match (integer("--budget", 12), integer("--threads", threads_default)) {
+    // 0: one solver thread per physical core (`copper_antenna::model::auto_threads`).
+    let (budget, threads) = match (integer("--budget", 12), integer("--threads", 0)) {
         (Ok(budget), Ok(threads)) => (budget, threads),
         (Err(message), _) | (_, Err(message)) => return usage_error(err, &message),
     };
