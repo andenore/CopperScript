@@ -47,6 +47,7 @@ dependencies = [
  "copper-json",
  "copper-lang",
  "copper-lsp",
+ "copper-panel",
  "copper-pcb",
  "copper-physical",
  "copper-place",

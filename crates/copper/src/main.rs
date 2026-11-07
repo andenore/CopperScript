@@ -27,6 +27,7 @@ mod library;
 mod lock;
 mod lsp;
 mod option_parser;
+mod panelize;
 mod plan_layout;
 mod plot;
 mod power_check;

@@ -22,6 +22,7 @@ copper-cam.workspace = true
 copper-drc.workspace = true
 copper-editor.workspace = true
 copper-pcb.workspace = true
+copper-panel.workspace = true
 copper-place.workspace = true
 copper-report.workspace = true
 copper-route.workspace = true

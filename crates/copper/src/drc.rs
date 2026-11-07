@@ -10,13 +10,46 @@ use copper_lang::paths;
 use crate::option_parser::{self, value};
 use crate::pypath;
 
-const USAGE: &str = "usage: copper drc [-h] [--project PROJECT] [--rules RULES] [--report REPORT] [--cam CAM_DIR] pcb";
+const USAGE: &str = "usage: copper drc [-h] [--project PROJECT] [--rules RULES] [--report REPORT] [--cam CAM_DIR] [--expected-open-ends REPORT] pcb";
 
 fn read(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|failure| format!("cannot read {}: {failure}", paths::display(path)))?;
     let body = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes);
     let text = String::from_utf8(body.to_vec()).map_err(|_| format!("{} is not UTF-8", paths::display(path)))?;
     Ok(text.replace("\r\n", "\n"))
+}
+
+/// The track ends that are open by design, from a `copper panelize` report's
+/// `expected_open_ends`: `(x_nm, y_nm, net)`.
+fn expected_open_ends(path: &Path) -> Result<Vec<(f64, f64, String)>, String> {
+    let report = copper_json::parse(&read(path)?).map_err(|e| format!("{}: {e:?}", paths::display(path)))?;
+    let copper_json::Value::Object(object) = report else {
+        return Err(format!("{} is not a report", paths::display(path)));
+    };
+    let Some(copper_json::Value::Array(ends)) = object.get("expected_open_ends") else {
+        return Err(format!("{} has no expected_open_ends", paths::display(path)));
+    };
+    let mut result = Vec::new();
+    for end in ends {
+        let copper_json::Value::Object(end) = end else { continue };
+        let coordinate = |k: usize| -> Option<f64> {
+            match end.get("at_mm") {
+                Some(copper_json::Value::Array(at)) => match at.get(k) {
+                    Some(copper_json::Value::Str(text)) => text.parse::<f64>().ok().map(|mm| mm * 1e6),
+                    _ => None,
+                },
+                _ => None,
+            }
+        };
+        let net = match end.get("net") {
+            Some(copper_json::Value::Str(net)) => net.clone(),
+            _ => continue,
+        };
+        if let (Some(x), Some(y)) = (coordinate(0), coordinate(1)) {
+            result.push((x, y, net));
+        }
+    }
+    Ok(result)
 }
 
 fn walk(root: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -39,7 +72,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(err, "{USAGE}\ncopper drc: error: {message}");
         2
     };
-    let specs = [value("--project"), value("--rules"), value("--report"), value("--cam")];
+    let specs =
+        [value("--project"), value("--rules"), value("--report"), value("--cam"), value("--expected-open-ends")];
     let parsed = match option_parser::parse(arguments, &specs) {
         Ok(parsed) => parsed,
         Err(message) => return usage_error(err, &message),
@@ -47,7 +81,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     if parsed.flag("--help") {
         let _ = writeln!(
             out,
-            "{USAGE}\n\ncheck a filled .kicad_pcb natively against the design rules of its .kicad_pro and .kicad_dru\n(same stem by default): clearances, holes, board edge, sizes, keepouts, opens and dangling\ncopper; with --cam, also read back the Gerbers and drills under CAM_DIR for shorts and opens\nagainst the board netlist; exit 0 when clean, 1 with findings, 2 on error. No KiCad is run."
+            "{USAGE}\n\ncheck a filled .kicad_pcb natively against the design rules of its .kicad_pro and .kicad_dru\n(same stem by default): clearances, holes, board edge, sizes, keepouts, opens and dangling\ncopper; with --cam, also read back the Gerbers and drills under CAM_DIR for shorts and opens\nagainst the board netlist; --expected-open-ends excuses the dangling track ends a copper panelize\nreport lists (synthesized radiators' open tips), at that exact point on that net only;\nexit 0 when clean, 1 with findings, 2 on error. No KiCad is run."
         );
         return 0;
     }
@@ -65,6 +99,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     let report_path = parsed.value("--report").map(|path| PathBuf::from(pypath::display(path)));
     let cam = parsed.value("--cam").map(|path| PathBuf::from(pypath::display(path)));
+    let open_ends_path = parsed.value("--expected-open-ends").map(|path| PathBuf::from(pypath::display(path)));
+    let mut waived = 0usize;
     let mut readback = None;
     let result = (|| -> Result<copper_cam::drc::Report, String> {
         let source = read(&pcb)?;
@@ -72,7 +108,19 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let custom_text = custom.as_deref().map(read).transpose()?;
         let rules = copper_cam::rules::Rules::load(&read(&project)?, custom_text.as_deref())
             .map_err(|failure| format!("{}: {failure}", paths::display(&project)))?;
-        let report = copper_cam::drc::check(&board, &rules)?;
+        let mut report = copper_cam::drc::check(&board, &rules)?;
+        if let Some(path) = &open_ends_path {
+            let ends = expected_open_ends(path)?;
+            let before = report.violations.len();
+            report.violations.retain(|v| {
+                !(v.kind == "track_dangling"
+                    && ends.iter().any(|(x, y, net)| {
+                        (v.at.0 - x).hypot(v.at.1 - y) <= 1_000.0
+                            && v.items.iter().any(|i| i.contains(&format!("[{net}]")))
+                    }))
+            });
+            waived = before - report.violations.len();
+        }
         if let Some(directory) = &cam {
             let (mut gerbers, mut drills) = (Vec::new(), Vec::new());
             let mut found = Vec::new();
@@ -100,6 +148,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     })();
     match result {
         Ok(report) => {
+            if waived > 0 {
+                let _ = text::print(out, &format!("Excused {waived} expected open end(s) listed in the panel report"));
+            }
             let _ = text::print(out, &report.summary());
             if let Some(readback) = &readback {
                 let _ = text::print(out, &readback.summary());
