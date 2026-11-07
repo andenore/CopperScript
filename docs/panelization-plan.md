@@ -1,6 +1,10 @@
 # Panelization plan
 
-Status: plan (7 November 2026), branch `panelization`. First consumer:
+Status (7 November 2026, branch `panelization`): steps 1-5 implemented
+(usage: [panelization](panelization.md)); step 6, the CopperAntennaLab
+panel, is next. Not yet done from the steps below: placing tabs on named
+edges, and the source digest in `route-board`'s PCB (the routed outline is
+checked against the source instead). First consumer:
 CopperAntennaLab's 18 antenna coupons, which must reach a fab as one panel
 with mouse-bite tabs kept off radiators and connector launches.
 
@@ -109,7 +113,7 @@ Each step is one reviewable change with tests.
    the report, `copper issues` causes, an `examples/panel` with two small
    boards, docs (`docs/panelization.md`, the docs index), and an end-to-end
    test through `copper fill` and `copper drc`.
-6. **CopperAntennaLab**: the coupon panel(s), tabs on ground-side edges,
+6. **CopperAntennaLab** (next): the coupon panel(s), tabs on ground-side edges,
    native fill, DRC and plot, and a CAM comparison against KiCad's plot.
 
 ## Questions for the first consumer

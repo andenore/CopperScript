@@ -543,6 +543,18 @@ named fixed geometry and independently resolved footprint assets with generated
 digests. See [the full syntax reference](macro-definitions.md) and
 [the runnable example](../examples/macro_definition/README.md).
 
+## Panels
+
+`panel NAME { ... }` places already-routed boards on a fabrication panel,
+using the macro grammar: root properties (`spacing`, `rails`, `tab_width`,
+`mouse_bite`, `fiducials`, `tooling_hole`, `assemble_after_depanel`) and
+`board NAME { source; pcb; at; rotation; }` and
+`tab NAME { board; side; at; width; }` blocks. A panel is not compiled as a
+board: `copper panelize` composes it into one `.kicad_pcb` and refuses tabs
+on antenna regions opened to the perimeter or on body overhangs, and bodies
+overhanging a rail or another board. See [panelization](panelization.md) and
+[the runnable example](../examples/panel/README.md).
+
 ## Physical macro bindings
 
 Import an exact physical hard-macro JSON asset, then map its members and net

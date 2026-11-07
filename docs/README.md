@@ -30,7 +30,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Assess engineering or release evidence | [Engineering qualification](engineering-qualification.md) |
 | Generate manufacturing or assembly files | [Manufacturing files](manufacturing-files.md), [native plotting](native-plotting.md), [native zone filling](native-filling.md), [native DRC](native-drc.md), [assembly pinning](assembly-pinning.md) |
 | Share KiCad outputs | [Project export](kicad-project-export.md) |
-| Panelize routed boards for fabrication (planned) | [Panelization plan](panelization-plan.md) |
+| Panelize routed boards for fabrication | [Panelization](panelization.md); design and remaining steps: [plan](panelization-plan.md) |
 | Give parts 3D models or fallback bodies | [3D models](3d-models.md) |
 | Import placed KiCad boards for routing comparison | [KiCad board import](kicad-board-import.md) |
 | Use or change editor language features | [Language server and implementation plan](language-server.md) |

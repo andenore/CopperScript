@@ -1,0 +1,23 @@
+// Two synthetic antenna example boards on one fabrication panel: rails top
+// and bottom, mouse-bite tabs kept off both antenna regions (the compiler
+// refuses a tab on a region opened to the perimeter), three fiducials and
+// four tooling holes. Route both boards first; see README.md.
+panel ExamplePanel {
+    spacing = 2 mm;
+    rails = { top = 5 mm; bottom = 5 mm; };
+    tab_width = 3 mm;
+    mouse_bite = { drill = 0.5 mm; pitch = 0.75 mm; inset = 0.25 mm; };
+    fiducials = 3;
+    tooling_hole = 1.152 mm;
+
+    board MONO { source = "../antenna_synthesis/board.copper"; pcb = "../../build/panel-example/mono/mono.kicad_pcb"; at = (0 mm, 0 mm); }
+    board IFA { source = "../antenna_synthesis/inverted_f.copper"; pcb = "../../build/panel-example/ifa/ifa.kicad_pcb"; at = (42 mm, 0 mm); }
+
+    // The monopole's region spans x 18-40 on its top side and y 0-6 on its right.
+    tab mono_top { board = MONO; side = top; at = 8 mm; }
+    tab mono_bottom { board = MONO; side = bottom; at = 20 mm; }
+    tab mono_ifa { board = MONO; side = right; at = 18 mm; }
+    // The inverted-F's region starts at x 12 on its top side.
+    tab ifa_top { board = IFA; side = top; at = 5 mm; }
+    tab ifa_bottom { board = IFA; side = bottom; at = 20 mm; }
+}
