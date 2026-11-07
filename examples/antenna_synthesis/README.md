@@ -37,7 +37,7 @@ copper route-board examples/antenna_synthesis/board.copper -o build/antenna-synt
 On this board the template lowers to `monopole height=3mm length=17.46mm`.
 Verified on the fine mesh (`--verify` on the board without a `geometry`), it
 resonates at 2.73 GHz, 12 % above the band centre, and misses -10 dB even
-with its best L-section match (-8.7 dB worst in band, 69 % radiation
+with its best L-section match (-8.8 dB worst in band, 69 % radiation
 efficiency), because its permittivity assumes ground under the trace.
 Synthesis starts from the same quarter-wave length at the region's full
 height (5.3 mm), which resonates at 2.93 GHz on the coarse mesh, and tunes it

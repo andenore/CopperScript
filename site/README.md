@@ -163,7 +163,7 @@ viewport.
 The five tracker SVGs, two IR excerpts, `rendering.json` and `snapshot.json` are byte-for-byte copies from
 CopperAssetTracker's `docs/showcase/`, made by its `make showcase`
 (`docs/showcase.md` there). The current illustrations are the
-`native-showcase-20261106` routing review, built without KiCad: the current
+`native-showcase-20261107` routing review, built without KiCad: the current
 source routed with native plane verification, then `copper fill`, `copper drc
 --cam` (zero violations, zero unconnected, CAM read-back clean) and `copper
 plot`. The snapshot binds the tracker commit and inputs, the compiler commit and
