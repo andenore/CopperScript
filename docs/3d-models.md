@@ -54,14 +54,16 @@ geometry, the fabrication and courtyard outlines, the footprint name and
 | Kind | Rule | Body |
 |---|---|---|
 | `chip` | two SMD pads | EIA 0201-1210 envelope from the name, else estimated from the pads; end caps |
-| `leaded` | SMD pads mostly outside the fabrication outline | fabrication outline extruded 0.1 mm off the board, plus gull-wing lead blocks |
-| `no_lead` | SMD pads inside the outline (QFN, DFN) | fabrication outline extruded |
+| `leaded` | SMD pads mostly more than 0.1 mm outside the fabrication outline, unless the name says QFN, DFN, SON or LGA | fabrication outline extruded 0.1 mm off the board, plus gull-wing lead blocks |
+| `no_lead` | SMD pads inside or at the outline (QFN, DFN, SON, LGA) | fabrication outline extruded; a 0.2 mm metal terminal under every pad that reaches the body edge, 0.02 mm proud of the side so it shows; the exposed and inner pads as thin lands; a pin-1 mark on top in the corner of pad 1 |
 | `pin_header` | through-hole pads on a 1-5 mm grid | block of pitch squares, 0.25-pitch square pins from -3 mm to 6 mm above the body |
 | `block` | anything else | fabrication, else courtyard, else pad outline extruded 1 mm |
 
 Heights come from `height_nm` first, then the family named in the footprint
-(SOIC 1.75 mm, TQFP/LQFP 1.4, TSSOP/MSOP/SOT 1.1, QFN/DFN 0.9), then 1.5 mm
-leaded or 0.9 mm otherwise. The body is **always** `approximate`; it is for fit
+(SOIC 1.75 mm, TQFP/LQFP 1.4, TSSOP/MSOP/SOT 1.1; no-lead QFN/DFN/SON by
+JEDEC height prefix: X2 0.4, X 0.5, U 0.55, W 0.75, otherwise and V 0.9;
+LGA 0.9), then 1.5 mm leaded or 0.9 mm otherwise. The generator is
+`copper-body/2`. The body is **always** `approximate`; it is for fit
 and clearance review, not a manufacturer model.
 
 The mesh is millimetres in KiCad's model axes (`y = -footprint_y`, z up from the

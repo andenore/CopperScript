@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use crate::footprint::{FootprintGraphic, FootprintLayer, FootprintPad, PadKind, PhysicalFootprint};
 
 /// Bumping this changes every [`GeneratedBody::hash`].
-pub const GENERATOR_VERSION: &str = "copper-body/1";
+pub const GENERATOR_VERSION: &str = "copper-body/2";
 
 const MM: f64 = 1_000_000.0;
 
@@ -26,7 +26,8 @@ pub enum BodyKind {
     Chip,
     /// Gull-wing perimeter package (SOIC, SOT, QFP, ...): body plus leads.
     Leaded,
-    /// Pads under or at the body edge (QFN, DFN, BGA-like): body only.
+    /// Pads under or at the body edge (QFN, DFN, LGA): body, edge terminals,
+    /// exposed pad and a pin-1 mark.
     NoLead,
     /// A regular grid of through-hole pins (pin headers).
     PinHeader,
@@ -132,6 +133,7 @@ fn wrl(parts: &[MeshPart], kind: BodyKind) -> String {
 const BODY_COLOR: [f32; 3] = [0.15, 0.15, 0.17];
 const METAL_COLOR: [f32; 3] = [0.78, 0.78, 0.74];
 const CERAMIC_COLOR: [f32; 3] = [0.72, 0.62, 0.45];
+const MARK_COLOR: [f32; 3] = [0.42, 0.42, 0.44];
 
 /// An axis-aligned rectangle in model-frame millimetres.
 #[derive(Clone, Copy, Debug)]
@@ -263,16 +265,27 @@ fn height_mm(footprint: &PhysicalFootprint, fallback: f64) -> f64 {
 }
 
 /// Default body height from the package family named in the footprint.
+/// No-lead families follow JEDEC's height prefixes (X2 0.4, X 0.5, U 0.55,
+/// W 0.75 mm); plain and V-prefixed QFN/DFN/SON are 0.9 mm.
 fn family_height(name: &str, leaded: bool) -> f64 {
     let upper = name.to_ascii_uppercase();
     let has = |needle: &str| upper.contains(needle);
-    if has("TQFP") || has("LQFP") {
+    let no_lead = |prefix: &str| ["QFN", "DFN", "SON"].iter().any(|family| has(&format!("{prefix}{family}")));
+    if no_lead("X2") {
+        0.4
+    } else if no_lead("X") {
+        0.5
+    } else if no_lead("U") {
+        0.55
+    } else if no_lead("W") {
+        0.75
+    } else if has("TQFP") || has("LQFP") {
         1.4
     } else if has("SOIC") || has("SOP") || has("SO-") {
         1.75
     } else if has("TSSOP") || has("MSOP") || has("SSOP") || has("SOT") {
         1.1
-    } else if has("QFN") || has("DFN") || has("LGA") {
+    } else if has("QFN") || has("DFN") || has("SON") || has("LGA") {
         0.9
     } else if leaded {
         1.5
@@ -390,15 +403,21 @@ fn perimeter(footprint: &PhysicalFootprint, pads: &[&FootprintPad]) -> Option<Bu
     if body_rect.size().iter().any(|side| *side < 0.2) {
         return None;
     }
-    let outside = pads.iter().filter(|pad| !body_rect.contains(pad_center(pad))).count();
-    // Packages whose pads sit outside the body outline have leads; the rest do not.
-    let leaded = outside * 2 >= pads.len();
+    // Packages whose pads sit well outside the body outline have leads; the
+    // rest do not. No-lead pads often centre a hair past the outline (TI's
+    // X2QFN-12: 0.025 mm), so allow 0.1 mm, and trust a no-lead family name.
+    let margin = body_rect.grow(0.1);
+    let outside = pads.iter().filter(|pad| !margin.contains(pad_center(pad))).count();
+    let leaded = outside * 2 >= pads.len() && !no_lead_family(&footprint.name);
     let height = height_mm(footprint, family_height(&footprint.name, leaded));
     let standoff = if leaded { 0.1 } else { 0.0 };
+    if !leaded {
+        return Some((BodyKind::NoLead, no_lead(pads, body_rect, height)));
+    }
     let mut body = MeshPart::new("body", BODY_COLOR);
     body.push_box([body_rect.min[0], body_rect.min[1], standoff], [body_rect.max[0], body_rect.max[1], height]);
     let mut parts = vec![body];
-    if leaded {
+    {
         let mut leads = MeshPart::new("leads", METAL_COLOR);
         let center = body_rect.center();
         for pad in pads.iter().filter(|pad| !body_rect.contains(pad_center(pad))) {
@@ -419,7 +438,99 @@ fn perimeter(footprint: &PhysicalFootprint, pads: &[&FootprintPad]) -> Option<Bu
         }
         parts.push(leads);
     }
-    Some((if leaded { BodyKind::Leaded } else { BodyKind::NoLead }, parts))
+    Some((BodyKind::Leaded, parts))
+}
+
+/// Whether the footprint name says the package has no leads.
+fn no_lead_family(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    ["QFN", "DFN", "SON", "LGA"].iter().any(|family| upper.contains(family))
+}
+
+/// Lead-frame thickness of a no-lead terminal, millimetres.
+const TERMINAL_THICKNESS: f64 = 0.2;
+/// How far a terminal shows past the moulded body's side, millimetres.
+const TERMINAL_PROUD: f64 = 0.02;
+
+/// A QFN/DFN/LGA body in the style of KiCad's package models: the moulded
+/// body, a metal terminal at the body edge under every pad that reaches it
+/// (proud of the side by [`TERMINAL_PROUD`] so it shows), the exposed and
+/// inner pads as thin lands under the body, and a pin-1 mark on top.
+fn no_lead(pads: &[&FootprintPad], body_rect: Rect, height: f64) -> Vec<MeshPart> {
+    let thickness = TERMINAL_THICKNESS.min(height * 0.4);
+    let size = body_rect.size();
+    let mut body = MeshPart::new("body", BODY_COLOR);
+    // A hair above the board so the body's underside does not fight the lands for depth.
+    body.push_box([body_rect.min[0], body_rect.min[1], 0.005], [body_rect.max[0], body_rect.max[1], height]);
+    let mut terminals = MeshPart::new("terminals", METAL_COLOR);
+    let mut lands = MeshPart::new("lands", METAL_COLOR);
+    let reach = (size[0].min(size[1]) * 0.05).max(0.05);
+    for pad in pads {
+        let r = pad_rect(pad);
+        // Distance from each body edge to the pad's nearest side: [-x, +x, -y, +y].
+        let gaps = [
+            r.min[0] - body_rect.min[0],
+            body_rect.max[0] - r.max[0],
+            r.min[1] - body_rect.min[1],
+            body_rect.max[1] - r.max[1],
+        ];
+        let (edge, gap) = gaps
+            .iter()
+            .copied()
+            .enumerate()
+            .fold((0, f64::INFINITY), |best, (i, g)| if g < best.1 { (i, g) } else { best });
+        let clipped = Rect {
+            min: [r.min[0].max(body_rect.min[0]), r.min[1].max(body_rect.min[1])],
+            max: [r.max[0].min(body_rect.max[0]), r.max[1].min(body_rect.max[1])],
+        };
+        if clipped.size().iter().any(|side| *side <= 0.0) {
+            continue;
+        }
+        if gap > reach {
+            // Exposed pad or an inner land: flat under the body.
+            lands.push_box([clipped.min[0], clipped.min[1], 0.0], [clipped.max[0], clipped.max[1], 0.02]);
+            continue;
+        }
+        let axis = edge / 2; // 0: a left/right edge, 1: a bottom/top edge
+        let cross = 1 - axis;
+        let (mut min, mut max) = (clipped.min, clipped.max);
+        // Narrower than the land across, from the edge (and a little past it) inwards.
+        let width = (max[cross] - min[cross]) * 0.85;
+        let middle = (min[cross] + max[cross]) / 2.0;
+        min[cross] = middle - width / 2.0;
+        max[cross] = middle + width / 2.0;
+        let depth = (max[axis] - min[axis]).clamp(0.2_f64.min(size[axis] / 4.0), size[axis] / 3.0);
+        if edge % 2 == 0 {
+            min[axis] = body_rect.min[axis] - TERMINAL_PROUD;
+            max[axis] = body_rect.min[axis] + depth;
+        } else {
+            max[axis] = body_rect.max[axis] + TERMINAL_PROUD;
+            min[axis] = body_rect.max[axis] - depth;
+        }
+        terminals.push_box([min[0], min[1], 0.0], [max[0], max[1], thickness]);
+    }
+    let mut parts = vec![body];
+    if !terminals.vertices.is_empty() {
+        parts.push(terminals);
+    }
+    if !lands.vertices.is_empty() {
+        parts.push(lands);
+    }
+    // The pin-1 mark sits in the body corner nearest pad 1.
+    if let Some(first) = pads.iter().find(|pad| pad.number == "1" || pad.number.eq_ignore_ascii_case("A1"))
+        && size[0].min(size[1]) >= 1.0
+    {
+        let [x, y] = pad_center(first);
+        let center = body_rect.center();
+        let side = (size[0].min(size[1]) * 0.1).clamp(0.15, 0.6);
+        let inset = side / 2.0 + size[0].min(size[1]) * 0.08;
+        let mx = if x <= center[0] { body_rect.min[0] + inset } else { body_rect.max[0] - inset };
+        let my = if y >= center[1] { body_rect.max[1] - inset } else { body_rect.min[1] + inset };
+        let mut mark = MeshPart::new("pin1", MARK_COLOR);
+        mark.push_box([mx - side / 2.0, my - side / 2.0, height], [mx + side / 2.0, my + side / 2.0, height + 0.005]);
+        parts.push(mark);
+    }
+    parts
 }
 
 /// The catch-all: the courtyard (else fabrication, else pad) outline, extruded.
@@ -542,6 +653,85 @@ mod tests {
         assert_eq!(leads.vertices.len(), 8 * 8);
         let (lead_min, lead_max) = extent(leads, 0);
         assert!((lead_min + 3.0015).abs() < 1e-6 && (lead_max - 3.0015).abs() < 1e-6);
+    }
+
+    /// TI's VQFN-16 3 x 3 mm, 0.5 mm pitch, 1.68 mm exposed pad.
+    fn vqfn16() -> PhysicalFootprint {
+        let mut pads = Vec::new();
+        for i in 0..4 {
+            let along = -0.75 + 0.5 * f64::from(i);
+            let n = |k: u32| format!("{}", k + 1);
+            pads.push(pad(&n(i as u32), -1.475, along, 0.75, 0.3, PadKind::Smd));
+            pads.push(pad(&n(4 + i as u32), along, 1.475, 0.3, 0.75, PadKind::Smd));
+            pads.push(pad(&n(8 + i as u32), 1.475, -along, 0.75, 0.3, PadKind::Smd));
+            pads.push(pad(&n(12 + i as u32), -along, -1.475, 0.3, 0.75, PadKind::Smd));
+        }
+        pads.push(pad("17", 0.0, 0.0, 1.68, 1.68, PadKind::Smd));
+        footprint("VQFN-16-1EP_3x3mm_P0.5mm_EP1.68x1.68mm", pads, vec![fab_rect(-1.5, -1.5, 1.5, 1.5)])
+    }
+
+    #[test]
+    fn qfn_has_edge_terminals_an_exposed_pad_and_a_pin1_mark() {
+        let body = generate_body(&vqfn16());
+        assert_eq!(body.kind, BodyKind::NoLead);
+        let names: Vec<&str> = body.parts.iter().map(|p| p.name).collect();
+        assert_eq!(names, ["body", "terminals", "lands", "pin1"]);
+        let part = |name: &str| body.parts.iter().find(|p| p.name == name).unwrap();
+        // One box (8 vertices) per perimeter pad, proud of the 3 x 3 mm body by 0.02 mm, 0.2 mm thick.
+        let terminals = part("terminals");
+        assert_eq!(terminals.vertices.len(), 16 * 8);
+        let (min, max) = (
+            terminals.vertices.iter().fold([f64::INFINITY; 3], |m, v| [m[0].min(v[0]), m[1].min(v[1]), m[2].min(v[2])]),
+            terminals
+                .vertices
+                .iter()
+                .fold([f64::NEG_INFINITY; 3], |m, v| [m[0].max(v[0]), m[1].max(v[1]), m[2].max(v[2])]),
+        );
+        close(min, [-1.52, -1.52, 0.0]);
+        close(max, [1.52, 1.52, 0.2]);
+        // The exposed pad is one thin land under the body.
+        assert_eq!(part("lands").vertices.len(), 8);
+        // Pad 1 is on the left edge, top in the model frame: the mark sits in that corner, on top.
+        let mark = part("pin1");
+        assert!(mark.vertices.iter().all(|v| v[0] < -0.5 && v[1] > 0.5 && v[2] >= 0.9 - 1e-9));
+        close(body.bounds().1, [1.52, 1.52, 0.905]);
+    }
+
+    #[test]
+    fn x2qfn_pads_just_past_the_outline_are_still_no_lead() {
+        // KiCad's Texas_X2QFN-12: pad centres 0.825 mm out on a 1.6 mm body.
+        let mut pads = Vec::new();
+        for (i, along) in [-0.2, 0.2].into_iter().enumerate() {
+            pads.push(pad(&format!("{}", i + 1), -0.725, along, 0.85, 0.2, PadKind::Smd));
+            pads.push(pad(&format!("{}", 8 - i), 0.725, along, 0.85, 0.2, PadKind::Smd));
+        }
+        for (i, along) in [-0.6, -0.2, 0.2, 0.6].into_iter().enumerate() {
+            pads.push(pad(&format!("{}", 3 + i), along, 0.825, 0.2, 0.65, PadKind::Smd));
+            pads.push(pad(&format!("{}", 12 - i), along, -0.825, 0.2, 0.65, PadKind::Smd));
+        }
+        let fp = footprint("Texas_X2QFN-12_1.6x1.6mm_P0.4mm", pads, vec![fab_rect(-0.8, -0.8, 0.8, 0.8)]);
+        let body = generate_body(&fp);
+        assert_eq!(body.kind, BodyKind::NoLead);
+        assert_eq!(body.parts.iter().find(|p| p.name == "terminals").unwrap().vertices.len(), 12 * 8);
+        assert!((body.bounds().1[2] - 0.405).abs() < 1e-9, "{:?}", body.bounds());
+    }
+
+    #[test]
+    fn no_lead_heights_follow_the_family_prefix() {
+        let mut fp = vqfn16();
+        for (name, height) in [
+            ("Texas_X2QFN-12_1.6x1.6mm_P0.4mm", 0.4),
+            ("UQFN-10_1.4x1.8mm_P0.4mm", 0.55),
+            ("WQFN-16_3x3mm", 0.75),
+            ("QFN-48-1EP_6x6mm_P0.4mm_EP4.2x4.2mm", 0.9),
+            ("TI_DSJ0014_VSON-14", 0.9),
+        ] {
+            fp.name = name.to_owned();
+            let body = generate_body(&fp);
+            let top =
+                body.parts.iter().find(|p| p.name == "body").unwrap().vertices.iter().map(|v| v[2]).fold(0.0, f64::max);
+            assert!((top - height).abs() < 1e-9, "{name}: {top}");
+        }
     }
 
     #[test]
