@@ -428,13 +428,30 @@ fn component_digests(
         let document = Value::Object(Object::from_iter([
             ("component".to_owned(), component_value(component)),
             ("footprint".to_owned(), json_text(&footprint(component, part))),
-            ("part".to_owned(), part_value(part)),
+            ("part".to_owned(), part_value(&without_3d_presentation(part))),
             ("device".to_owned(), device),
             ("pins".to_owned(), Value::Array(pins)),
         ]));
         digests.insert(reference.clone(), sha256_hex(&document));
     }
     digests
+}
+
+/// Part metadata that only says how the part looks in 3D. A selection is
+/// reviewed against what is bought and fitted, so giving a part a 3D model
+/// (or changing it) must not make its reviewed selection stale.
+pub const PRESENTATION_METADATA: [&str; 5] = [
+    copper_lang::lower::PART_MODEL_KEY,
+    copper_lang::lower::PART_MODEL_SOURCE_KEY,
+    copper_lang::lower::PART_MODEL_SHA256_KEY,
+    copper_lang::lower::PART_MODEL_LICENSE_KEY,
+    copper_lang::lower::PART_MODEL_REDISTRIBUTABLE_KEY,
+];
+
+fn without_3d_presentation(part: &PartDefinition) -> PartDefinition {
+    let mut part = part.clone();
+    part.metadata.retain(|key, _| !PRESENTATION_METADATA.contains(&key.as_str()));
+    part
 }
 
 fn footprint(component: &ComponentInstance, part: &PartDefinition) -> Option<String> {
