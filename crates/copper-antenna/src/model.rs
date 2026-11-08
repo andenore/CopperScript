@@ -248,9 +248,13 @@ impl<'a> Problem<'a> {
             ));
         }
         let (along, across) = land_halves(site);
-        let reach = (site.width / 2).max(along) + site.clearance;
         let coarse_cell = (Fidelity::coarse(site, 1).cell * 1e6).round() as i64;
         let slot_gap = site.clearance.max(coarse_cell);
+        // The slot's sides stand the same modelled gap from the stub: at the
+        // bare board clearance a mesh line of the ground edge could merge with
+        // the stub's edge (lines closer than half a cell merge) and short the
+        // port.
+        let reach = (site.width / 2).max(along) + slot_gap;
         let slot = board_rect(site, site.feed_u - reach, site.feed_v - across - slot_gap, site.feed_u + reach, 0);
         let region = [mm(site.area.min_x), mm(site.area.min_y), mm(site.area.max_x), mm(site.area.max_y)];
         let covers = |layer: CopperLayer, point: Point| {
@@ -393,8 +397,14 @@ pub struct Evaluation {
 enum LineRank {
     /// Ground vertices and the board outline: their sheets snap onto a nearby line.
     Anchor,
-    /// Edges of the slot, region and the region's padding.
+    /// The region's padding.
     Edge,
+    /// Where the ground sheets end: the region and the feed slot. Not merged
+    /// with a copper line (nor copper with a port line) unless closer than a
+    /// fifth of the snap: they bound different conductors, and at the board
+    /// clearance from the stub a merged line joined ground to the radiator and
+    /// shorted the port.
+    Boundary,
     /// Edges of the radiator, feed land, short and via: what the search
     /// moves, so a sub-cell change of a parameter never moves them a cell.
     Copper,
@@ -423,7 +433,8 @@ struct AxisPlan {
 ///
 /// 1. Candidate lines merge when closer than `snap`, or half the limit of a
 ///    finer zone they lie in (the lower rank moves onto the higher; port
-///    lines all stay), so no incidental pair of edges
+///    lines all stay, as do a ground boundary and a copper edge next to
+///    each other), so no incidental pair of edges
 ///    leaves a sliver: the smallest cell sets the FDTD time step.
 /// 2. Between the outermost zone bounds, each gap is split into the fewest
 ///    equal cells no wider than the tightest zone limit over it.
@@ -455,6 +466,15 @@ fn axis_lines(plan: &AxisPlan) -> Result<Vec<f64>, String> {
             }
             Some((last, last_rank)) if v - last < snap_at((last + v) / 2.0) => match (last_rank, rank) {
                 (LineRank::Port, LineRank::Port) => kept.push((v, rank)),
+                // Distinct conductors keep distinct lines: a copper edge
+                // dropped for a nearby port line snaps onto whichever line is
+                // nearer, a ground boundary included.
+                (LineRank::Boundary | LineRank::Port, LineRank::Copper)
+                | (LineRank::Copper, LineRank::Boundary | LineRank::Port)
+                    if v - last >= plan.snap / 5.0 =>
+                {
+                    kept.push((v, rank))
+                }
                 (_, r) if r > last_rank => {
                     kept.pop();
                     kept.push((v, rank));
@@ -667,9 +687,10 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
     for (k, lines) in planned.iter_mut().enumerate().take(2) {
         lines.extend(keep(k).into_iter().map(|v| (v, LineRank::Port)));
         lines.extend([(region[k] - pad, LineRank::Edge), (region[k + 2] + pad, LineRank::Edge)]);
-        for r in [&problem.slot, &region, &port_rect] {
-            lines.extend([(r[k], LineRank::Edge), (r[k + 2], LineRank::Edge)]);
+        for r in [&problem.slot, &region] {
+            lines.extend([(r[k], LineRank::Boundary), (r[k + 2], LineRank::Boundary)]);
         }
+        lines.extend([(port_rect[k], LineRank::Edge), (port_rect[k + 2], LineRank::Edge)]);
         for r in copper.iter().chain(via_rect.as_ref()) {
             lines.extend([(r[k], LineRank::Copper), (r[k + 2], LineRank::Copper)]);
         }
@@ -710,6 +731,12 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
         planned[1].push((*y, LineRank::Anchor));
     }
     let z_cell = cell.max(0.15);
+    // Every dielectric interface keeps its own line: across a prepreg thinner
+    // than the snap distance, F.Cu's line merged into the ground layer's
+    // below it (equal ranks keep the first), and the grading around the lost
+    // line left a zero-width cell, and so a zero time step.
+    let thinnest = stack.slabs.iter().map(|s| s.top - s.bottom).fold(f64::INFINITY, f64::min);
+    let z_snap = (z_cell / 2.0).min(0.45 * thinnest);
     let keep_z: Vec<f64> = if port_box.0[2] == port_box.1[2] { vec![] } else { keep(2) };
     planned[2].extend(stack.copper.iter().map(|(_, z)| (*z, LineRank::Edge)));
     planned[2].extend(stack.slabs.iter().flat_map(|s| [(s.top, LineRank::Edge), (s.bottom, LineRank::Edge)]));
@@ -727,7 +754,7 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
         let (zones, snap, extra) = if k < 2 {
             (zones_xy[k].clone(), cell / 2.0, vec![])
         } else {
-            (vec![zone_z], z_cell / 2.0, vec![zone_z.0, zone_z.1])
+            (vec![zone_z], z_snap, vec![zone_z.0, zone_z.1])
         };
         let (lo, hi) = span(k, &extra);
         let plan = AxisPlan { lines: planned[k].clone(), zones, snap, lo, hi, max_cell, ratio: 1.3 };
@@ -984,6 +1011,27 @@ mod tests {
     }
 
     #[test]
+    fn ground_boundaries_never_merge_into_radiator_copper() {
+        // A 1.5 mm stub at the 0.1 mm clearance plus half a coarse cell from
+        // the region's start: 0.25 mm, inside a 0.28 mm snap.
+        let mut near = plan(&[(3.4, LineRank::Boundary), (3.65, LineRank::Copper)], &[(0.0, 8.0, 0.5625)]);
+        near.snap = 0.375;
+        let lines = axis_lines(&near).expect("lines");
+        assert!(lines.contains(&3.4) && lines.contains(&3.65), "{lines:?}");
+        // A stub edge between the boundary and a port line keeps its own line.
+        let mut between =
+            plan(&[(3.4, LineRank::Boundary), (3.65, LineRank::Copper), (3.9, LineRank::Port)], &[(0.0, 8.0, 0.5625)]);
+        between.snap = 0.375;
+        let lines = axis_lines(&between).expect("lines");
+        assert!([3.4, 3.65, 3.9].iter().all(|v| lines.contains(v)), "{lines:?}");
+        // Padding still snaps onto copper.
+        let mut padding = plan(&[(3.4, LineRank::Edge), (3.65, LineRank::Copper)], &[(0.0, 8.0, 0.5625)]);
+        padding.snap = 0.375;
+        let lines = axis_lines(&padding).expect("lines");
+        assert!(!lines.contains(&3.4) && lines.contains(&3.65), "{lines:?}");
+    }
+
+    #[test]
     fn no_cell_exceeds_the_frequency_limit_inside_the_zones() {
         // 24 GHz in er 4: a 0.416 mm limit under a zone asking for 0.75 mm.
         let mut coarse = plan(&[(0.0, LineRank::Edge), (2.0, LineRank::Edge)], &[(-1.0, 3.0, 0.75)]);
@@ -1008,6 +1056,30 @@ mod tests {
             assert!(c <= 3.0 + 1e-9, "{lines:?}");
         }
         assert_eq!((lines[0], *lines.last().expect("lines")), (-20.0, 20.0));
+    }
+
+    #[test]
+    fn thin_prepregs_keep_every_interface_without_zero_cells() {
+        // JLC06161H-3313: 0.0994 mm prepregs under F.Cu and over B.Cu, on the
+        // fine mesh (0.25 mm z cell, zone up to 1 mm above F.Cu).
+        let interfaces = [0.0, -0.0994, -0.6494, -0.7582, -1.3082, -1.4076];
+        let thinnest = interfaces.windows(2).map(|w| w[0] - w[1]).fold(f64::INFINITY, f64::min);
+        let lines: Vec<(f64, LineRank)> = interfaces.iter().map(|z| (*z, LineRank::Edge)).collect();
+        let z_plan = AxisPlan {
+            lines,
+            zones: vec![(-1.4076, 1.0, 0.25)],
+            snap: (0.25_f64 / 2.0).min(0.45 * thinnest),
+            lo: -1.4076 - 63.3,
+            hi: 1.0 + 63.3,
+            max_cell: 3.0,
+            ratio: 1.3,
+        };
+        let z = axis_lines(&z_plan).expect("lines");
+        for interface in interfaces {
+            assert!(z.iter().any(|v| (v - interface).abs() < 1e-9), "{interface} missing from {z:?}");
+        }
+        let smallest = cells(&z).into_iter().fold(f64::INFINITY, f64::min);
+        assert!(smallest > 0.09, "{smallest} mm cell in {z:?}");
     }
 
     #[test]

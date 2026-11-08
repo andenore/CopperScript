@@ -90,6 +90,37 @@ metric and wall time is quoted with its spread.
     unconnected tile costs a full evaluation of unchanged copper. The share
     is not yet measured.
 
+## Model revision 5
+
+Found synthesizing CopperAssetTracker's three antennas on JLCPCB's
+JLC06161H-3313 six-layer stack (0.0994 mm prepregs under F.Cu and over
+B.Cu, 0.1 mm board clearance); neither failure shows on the two-layer
+example board:
+
+- **Thin prepregs.** z lines closer than half the z cell merge, and equal
+  ranks keep the first, so F.Cu's line (z = 0) merged into In1.Cu's
+  (-0.0994 mm): the top ground and radiator moved onto the inner plane, and
+  the grading around the lost line left a 0.0000 mm cell (150 z lines, dt
+  0.0000 ps, which never finishes). The z snap is now at most 0.45 x the
+  thinnest dielectric, so every interface keeps its own line: 57 z lines and
+  dt 0.20 ps for the BLE site's fine mesh (1.32 M cells).
+- **Feed slot sides.** The modelled slot widened only its bottom to one
+  coarse cell; its sides stood the board clearance from the stub. At
+  0.1 mm, less than half the feed zone's cell, the ground edge's line merged
+  onto the stub's and shorted the port: Z = j1.8 ohm at every frequency,
+  0.0 dB at every length. The sides now stand the same modelled gap.
+- **Ground boundaries next to copper.** The feed stands just inside the
+  region's start, so the stub runs beside the ground beyond it: 0.25 mm away
+  for a 1.5 mm track on this board. Region and slot edges ranked below
+  copper, and copper below the port, so on the 0.75 mm LTE cell the stub's
+  edge was dropped for the port line and snapped onto the region line (Z =
+  j3 ohm). A ground boundary (region, slot) and a copper edge, or a copper
+  edge and a port line, now keep their own lines unless closer than a fifth
+  of the snap; only the region's padding still snaps onto copper.
+
+Both change what is simulated, so the revision moves and every `tuned_for`
+digest is renewed by a fresh synthesis.
+
 ## Model revision 4
 
 No cell is coarser than the frequency limit (a fifteenth of the guided

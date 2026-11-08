@@ -58,7 +58,15 @@ pub const GENERATOR: &str = "copper antenna/v0.2";
 /// Revision 4: no cell, the feed and short zones' included, is coarser than
 /// the frequency limit (a fifteenth of the guided wavelength at the sweep's
 /// top), which bands above about 12 GHz on FR4 reached.
-pub const MODEL_REVISION: i64 = 4;
+/// Revision 5: every dielectric interface keeps its own z line (a prepreg
+/// thinner than half a z cell merged F.Cu's line into the ground layer's
+/// below it, and the grading around the lost line left a zero-width cell,
+/// and so a zero time step); the feed slot's sides stand the modelled slot
+/// gap from the stub, not the board clearance; and the lines where ground
+/// sheets end (region and slot) never merge with radiator copper lines (below
+/// half a cell, the ground edge merged onto the stub's line and shorted the
+/// port).
+pub const MODEL_REVISION: i64 = 5;
 /// The `members[].reference` and `net` role names inside the generated asset.
 const MEMBER: &str = "ANT";
 const SHORT_MEMBER: &str = "SHORT";
