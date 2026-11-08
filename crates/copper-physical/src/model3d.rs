@@ -13,6 +13,41 @@ pub const MODELS_KEY: &str = "models_3d";
 /// URL and may not be redistributed: exports keep it out of shared packages.
 pub const LOCAL_ONLY_MODEL_KEY: &str = "models_3d_local_only";
 
+/// Footprint metadata keys recording a footprint as its source gave it, set
+/// when a part's `height`, `model` or connector body changes it: the source
+/// name, `height_nm` (absent if none) and encoded models (absent if none).
+/// Identity checks that bind a land pattern, such as hard-macro members,
+/// compare that footprint ([`without_part_3d`]), not its 3D presentation.
+pub const PART_3D_BASE_NAME_KEY: &str = "part_3d_base_name";
+pub const PART_3D_BASE_HEIGHT_KEY: &str = "part_3d_base_height_nm";
+pub const PART_3D_BASE_MODELS_KEY: &str = "part_3d_base_models";
+
+/// `footprint` as its source gave it, if a part's 3D fields changed it.
+pub fn without_part_3d(footprint: &PhysicalFootprint) -> Option<PhysicalFootprint> {
+    let name = footprint.metadata.get(PART_3D_BASE_NAME_KEY)?;
+    let mut base = footprint.clone();
+    base.name = name.clone();
+    base.height_nm = footprint.metadata.get(PART_3D_BASE_HEIGHT_KEY).and_then(|text| text.parse().ok());
+    match footprint.metadata.get(PART_3D_BASE_MODELS_KEY) {
+        Some(models) => {
+            base.metadata.insert(MODELS_KEY.to_owned(), models.clone());
+        }
+        None => {
+            base.metadata.shift_remove(MODELS_KEY);
+        }
+    }
+    for key in [
+        PART_3D_BASE_NAME_KEY,
+        PART_3D_BASE_HEIGHT_KEY,
+        PART_3D_BASE_MODELS_KEY,
+        LOCAL_ONLY_MODEL_KEY,
+        crate::body::CONNECTOR_KEY,
+    ] {
+        base.metadata.shift_remove(key);
+    }
+    Some(base)
+}
+
 /// One `(model ...)`: a file and its placement in the footprint frame
 /// (millimetres and degrees, KiCad's model-frame axes).
 #[derive(Clone, Debug, PartialEq)]

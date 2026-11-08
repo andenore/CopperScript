@@ -1156,6 +1156,18 @@ fn footprint_lines(
             true,
         ));
     }
+    if copper_physical::body::is_connector(footprint) {
+        lines.extend(property_lines(
+            board_name,
+            &placement.reference,
+            "CopperScriptBodyKind",
+            "connector",
+            0,
+            0,
+            fab,
+            true,
+        ));
+    }
     if let Some(path) = &placement.source_path
         && !path.is_empty()
     {

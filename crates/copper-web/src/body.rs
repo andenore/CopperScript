@@ -5,13 +5,15 @@
 //! millimetres with y down as in a `.kicad_mod`:
 //! `{name, height_mm?, pads: [{number, x_mm, y_mm, w_mm, h_mm, rotation_deg?,
 //! kind: "smd"|"thru_hole"|"np_thru_hole", drill_mm?: [w, h]}],
-//! fab_mm?: [x0, y0, x1, y1], courtyard_mm?: [x0, y0, x1, y1]}`.
+//! fab_mm?: [x0, y0, x1, y1], courtyard_mm?: [x0, y0, x1, y1],
+//! body_kind?: "connector"}`; `body_kind` comes from the footprint's
+//! `CopperScriptBodyKind` property.
 //! Output (`copperscript.body/v1`) is `{kind, approximate, hash, wrl}`, the VRML
 //! being millimetres in KiCad's model axes, or `{error}`.
 
 use copper_json::{Object, Value, parse};
 use copper_physical::MAX_COORDINATE;
-use copper_physical::body::generate_body;
+use copper_physical::body::{CONNECTOR_KEY, generate_body};
 use copper_physical::footprint::{
     FootprintGraphic, FootprintLayer, FootprintPad, PadKind, PadShape, PhysicalFootprint, Size,
 };
@@ -134,6 +136,14 @@ fn footprint(input: &Value) -> Result<PhysicalFootprint, String> {
         None | Some(Value::Null) => None,
         value => Some(positive(value, "height_mm")?),
     };
+    let mut metadata = IndexMap::new();
+    match input.get("body_kind") {
+        None | Some(Value::Null) => {}
+        Some(value) if value.as_str() == Some("connector") => {
+            metadata.insert(CONNECTOR_KEY.to_owned(), "true".to_owned());
+        }
+        Some(_) => return Err("body_kind must be \"connector\"".to_owned()),
+    }
     PhysicalFootprint {
         name: name.to_owned(),
         body_size: Size::new(1_000_000, 1_000_000)?,
@@ -141,7 +151,7 @@ fn footprint(input: &Value) -> Result<PhysicalFootprint, String> {
         source_library_id: None,
         graphics,
         keepouts: Vec::new(),
-        metadata: IndexMap::new(),
+        metadata,
         courtyard: Vec::new(),
         height_nm,
         clearance_nm: None,
@@ -251,6 +261,16 @@ mod tests {
             assert!(body.get("wrl").is_none());
         }
         assert!(body_document(&"x".repeat(MAX_INPUT_BYTES + 1)).get("error").is_some());
+    }
+
+    #[test]
+    fn body_kind_connector_gives_a_connector_body() {
+        let input = SOIC8.replace("\"name\"", "\"body_kind\":\"connector\",\"height_mm\":6,\"name\"");
+        let body = body_document(&input);
+        assert_eq!(text(&body, "kind"), "connector");
+        assert!(text(&body, "wrl").contains("DEF contacts"));
+        let bad = SOIC8.replace("\"name\"", "\"body_kind\":\"chip\",\"name\"");
+        assert!(body_document(&bad).get("error").is_some());
     }
 
     #[test]

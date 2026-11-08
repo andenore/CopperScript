@@ -328,7 +328,17 @@ pub fn bind_hard_macro(
             let legacy = digest.as_ref().map(|_| legacy_footprint_geometry_digest(candidate));
             digest.as_deref() == expected || legacy.as_deref() == expected
         };
-        if !matches(footprint) && !populated_variants(footprint).iter().any(matches) {
+        // Neither population (an unassembled rename) nor a part's 3D fields
+        // (height, model, connector body) change the land a member binds.
+        let binds =
+            |candidate: &PhysicalFootprint| matches(candidate) || populated_variants(candidate).iter().any(matches);
+        let as_sourced = || {
+            std::iter::once(footprint.clone())
+                .chain(populated_variants(footprint))
+                .filter_map(|candidate| copper_physical::model3d::without_part_3d(&candidate))
+                .any(|base| binds(&base))
+        };
+        if !binds(footprint) && !as_sourced() {
             return Err(Error::Value(format!("hard-macro footprint identity mismatch: {}", pose.reference)));
         }
         let position = point(field(row, "center_nm")?)?;

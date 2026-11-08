@@ -1,7 +1,8 @@
 //! Deterministic fallback 3D body for a footprint with no model file.
 //!
 //! The body is built from footprint data only: pad geometry, the fabrication
-//! and courtyard outlines, the footprint name and `height_nm`. The same input
+//! and courtyard outlines, the footprint name, `height_nm` and whether the
+//! part is a connector ([`CONNECTOR_KEY`]). The same input
 //! always gives the same bytes. The result is an *approximation* for fit and
 //! clearance review, not a manufacturer model, and says so in
 //! [`GeneratedBody::approximate`].
@@ -17,6 +18,19 @@ use crate::footprint::{FootprintGraphic, FootprintLayer, FootprintPad, PadKind, 
 /// Bumping this changes every [`GeneratedBody::hash`].
 pub const GENERATOR_VERSION: &str = "copper-body/2";
 
+/// Footprint metadata key set to `true` when the part is a connector (its
+/// category is `connector` or `connector.*`): the body is then a
+/// [`BodyKind::Connector`], not guessed from the pads.
+pub const CONNECTOR_KEY: &str = "body_connector";
+
+/// Whether `footprint` is marked as a connector's (see [`CONNECTOR_KEY`]).
+pub fn is_connector(footprint: &PhysicalFootprint) -> bool {
+    footprint.metadata.get(CONNECTOR_KEY).is_some_and(|value| value == "true")
+}
+
+/// Height of a connector body that declares none, millimetres.
+const CONNECTOR_HEIGHT: f64 = 3.0;
+
 const MM: f64 = 1_000_000.0;
 
 /// What the generator recognised the footprint as.
@@ -31,6 +45,8 @@ pub enum BodyKind {
     NoLead,
     /// A regular grid of through-hole pins (pin headers).
     PinHeader,
+    /// A part marked as a connector: an insulator block with metal contacts.
+    Connector,
     /// Anything else: an extruded outline.
     Block,
 }
@@ -42,6 +58,7 @@ impl BodyKind {
             BodyKind::Leaded => "leaded",
             BodyKind::NoLead => "no_lead",
             BodyKind::PinHeader => "pin_header",
+            BodyKind::Connector => "connector",
             BodyKind::Block => "block",
         }
     }
@@ -134,6 +151,8 @@ const BODY_COLOR: [f32; 3] = [0.15, 0.15, 0.17];
 const METAL_COLOR: [f32; 3] = [0.78, 0.78, 0.74];
 const CERAMIC_COLOR: [f32; 3] = [0.72, 0.62, 0.45];
 const MARK_COLOR: [f32; 3] = [0.42, 0.42, 0.44];
+/// Natural nylon, as most wire-to-board housings.
+const CONNECTOR_COLOR: [f32; 3] = [0.86, 0.84, 0.78];
 
 /// An axis-aligned rectangle in model-frame millimetres.
 #[derive(Clone, Copy, Debug)]
@@ -297,10 +316,14 @@ fn family_height(name: &str, leaded: bool) -> f64 {
 /// Generate the fallback body for `footprint`.
 pub fn generate_body(footprint: &PhysicalFootprint) -> GeneratedBody {
     let pads = electrical_pads(footprint);
-    let (kind, parts) = chip(footprint, &pads)
-        .or_else(|| pin_header(footprint, &pads))
-        .or_else(|| perimeter(footprint, &pads))
-        .unwrap_or_else(|| block(footprint, &pads));
+    let (kind, parts) = if is_connector(footprint) {
+        pin_header(footprint, &pads).unwrap_or_else(|| connector(footprint, &pads))
+    } else {
+        chip(footprint, &pads)
+            .or_else(|| pin_header(footprint, &pads))
+            .or_else(|| perimeter(footprint, &pads))
+            .unwrap_or_else(|| block(footprint, &pads))
+    };
     let mut body = GeneratedBody { kind, approximate: true, parts, hash: String::new() };
     let digest = Sha256::digest(format!("{GENERATOR_VERSION}\n{}", body.to_wrl()).as_bytes());
     body.hash = digest.iter().map(|byte| format!("{byte:02x}")).collect();
@@ -531,6 +554,42 @@ fn no_lead(pads: &[&FootprintPad], body_rect: Rect, height: f64) -> Vec<MeshPart
         parts.push(mark);
     }
     parts
+}
+
+/// A connector: an insulator block on the fabrication outline (else just
+/// inside the courtyard, else over the pads) at the part's height, and a
+/// metal contact on every pad: a thin plate over each SMD pad, a pin through
+/// the board at each plated hole.
+fn connector(footprint: &PhysicalFootprint, pads: &[&FootprintPad]) -> Built {
+    let usable = |r: &Rect| r.size().iter().all(|side| *side >= 0.2);
+    let rect = layer_rect(footprint, FootprintLayer::Fabrication)
+        .filter(usable)
+        .or_else(|| courtyard_rect(footprint).map(|r| r.grow(-0.25)).filter(usable))
+        .unwrap_or_else(|| {
+            let r = pads_rect(pads);
+            if r.is_empty() { Rect { min: [-0.5, -0.5], max: [0.5, 0.5] } } else { r }
+        });
+    let height = height_mm(footprint, CONNECTOR_HEIGHT);
+    let mut body = MeshPart::new("body", CONNECTOR_COLOR);
+    // A hair above the board so the body's underside does not fight the contacts for depth.
+    body.push_box([rect.min[0], rect.min[1], 0.005], [rect.max[0], rect.max[1], height]);
+    let mut contacts = MeshPart::new("contacts", METAL_COLOR);
+    for pad in pads {
+        let r = pad_rect(pad);
+        match pad.drill {
+            Some(drill) if pad.kind == PadKind::ThroughHole => {
+                let [x, y] = pad_center(pad);
+                let half = (drill.width_nm.min(drill.height_nm) as f64 / MM * 0.35).max(0.1);
+                contacts.push_box([x - half, y - half, -3.0], [x + half, y + half, height.min(1.0)]);
+            }
+            _ => contacts.push_box([r.min[0], r.min[1], 0.0], [r.max[0], r.max[1], 0.1_f64.min(height / 2.0)]),
+        }
+    }
+    let mut parts = vec![body];
+    if !contacts.vertices.is_empty() {
+        parts.push(contacts);
+    }
+    (BodyKind::Connector, parts)
 }
 
 /// The catch-all: the courtyard (else fabrication, else pad) outline, extruded.
@@ -780,5 +839,62 @@ mod tests {
         let fp = footprint("Odd", vec![pad("1", 0.0, 2.0, 1.0, 1.0, PadKind::Smd)], Vec::new());
         let (min, max) = generate_body(&fp).bounds();
         assert!(max[1] <= -1.5 + 1e-9 && min[1] >= -2.5 - 1e-9);
+    }
+
+    /// A JST-XH-like side-entry SMT header: three signal pads in front and
+    /// two large mounting pads, all at or inside the fabrication outline.
+    fn side_entry_header() -> PhysicalFootprint {
+        let pads = vec![
+            pad("1", -2.5, 2.2, 1.0, 3.5, PadKind::Smd),
+            pad("2", 0.0, 2.2, 1.0, 3.5, PadKind::Smd),
+            pad("3", 2.5, 2.2, 1.0, 3.5, PadKind::Smd),
+            pad("MP", -5.2, -2.5, 1.6, 3.0, PadKind::Smd),
+            pad("MP", 5.2, -2.5, 1.6, 3.0, PadKind::Smd),
+        ];
+        footprint("JST_S3B-XH-SM4-TB", pads, vec![fab_rect(-6.25, -4.0, 6.25, 3.0)])
+    }
+
+    #[test]
+    fn a_connector_is_a_block_at_its_height_with_contacts_on_the_pads() {
+        // Unmarked, the header looks like a no-lead package.
+        assert_eq!(generate_body(&side_entry_header()).kind, BodyKind::NoLead);
+        let mut fp = side_entry_header();
+        fp.metadata.insert(CONNECTOR_KEY.to_owned(), "true".to_owned());
+        assert!(is_connector(&fp));
+        let body = generate_body(&fp);
+        assert_eq!(body.kind, BodyKind::Connector);
+        assert_eq!(body.parts.iter().map(|part| part.name).collect::<Vec<_>>(), ["body", "contacts"]);
+        // Five pads, five contact plates; the body on the outline at the default height.
+        assert_eq!(body.parts[1].vertices.len(), 5 * 8);
+        close(
+            body.parts[0]
+                .vertices
+                .iter()
+                .fold([f64::NEG_INFINITY; 3], |m, v| [m[0].max(v[0]), m[1].max(v[1]), m[2].max(v[2])]),
+            [6.25, 4.0, CONNECTOR_HEIGHT],
+        );
+        fp.height_nm = Some(6_000_000);
+        let taller = generate_body(&fp);
+        assert!((taller.bounds().1[2] - 6.0).abs() < 1e-9);
+        assert_ne!(body.hash, taller.hash);
+        // Contacts cover each pad, so a pad past the outline still shows.
+        // (Model y is footprint -y: the outline spans -3..4, the signal pads reach -3.95.)
+        close(taller.bounds().0, [-6.25, -3.95, 0.0]);
+    }
+
+    #[test]
+    fn a_connector_on_a_header_grid_keeps_its_pins() {
+        let mut fp = footprint(
+            "PinHeader_1x03_P2.54mm",
+            (0..3)
+                .map(|i| pad(&format!("{}", i + 1), 0.0, 2.54 * f64::from(i), 1.7, 1.7, PadKind::ThroughHole))
+                .collect(),
+            Vec::new(),
+        );
+        for pad in &mut fp.pads {
+            pad.drill = Some(Size::new(1_000_000, 1_000_000).unwrap());
+        }
+        fp.metadata.insert(CONNECTOR_KEY.to_owned(), "true".to_owned());
+        assert_eq!(generate_body(&fp).kind, BodyKind::PinHeader);
     }
 }
