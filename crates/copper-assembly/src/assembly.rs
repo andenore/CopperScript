@@ -437,10 +437,12 @@ fn component_digests(
     digests
 }
 
-/// Part metadata that only says how the part looks in 3D. A selection is
-/// reviewed against what is bought and fitted, so giving a part a 3D model
-/// (or changing it) must not make its reviewed selection stale.
-pub const PRESENTATION_METADATA: [&str; 5] = [
+/// Part metadata that describes the part's 3D shape: its model and its body
+/// height. A selection is reviewed against what is bought and fitted, so
+/// giving a part a 3D model or a height (or changing either) must not make its
+/// reviewed selection stale.
+pub const PRESENTATION_METADATA: [&str; 6] = [
+    copper_lang::lower::PART_HEIGHT_KEY,
     copper_lang::lower::PART_MODEL_KEY,
     copper_lang::lower::PART_MODEL_SOURCE_KEY,
     copper_lang::lower::PART_MODEL_SHA256_KEY,

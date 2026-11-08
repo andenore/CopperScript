@@ -360,7 +360,7 @@ fn widget_board(directory: &Path, extra: &str) -> PathBuf {
 }
 
 #[test]
-fn giving_a_part_a_3d_model_leaves_its_reviewed_selection_current() {
+fn giving_a_part_a_3d_model_or_height_leaves_its_reviewed_selection_current() {
     let directory = scratch("assembly-3d-model");
     let board = widget_board(&directory, "");
     let lock = directory.join("assembly.lock");
@@ -373,11 +373,12 @@ fn giving_a_part_a_3d_model_leaves_its_reviewed_selection_current() {
     }
     std::fs::write(&lock, Dumps::new().indent(2).dumps(&document)).expect("the lock");
 
-    // A 3D model by file, then by URL with its hash and licence: how the part
-    // looks, not what is bought or fitted.
+    // A 3D model by file, then by URL with its hash and licence, then a body
+    // height: the part's 3D shape, not what is bought or fitted.
     let hash = "0".repeat(64);
     for extra in [
         "    model = \"models/widget.step\";".to_owned(),
+        "    height = 2.5 mm;".to_owned(),
         format!(
             "    model = \"https://vendor.example/W.step\";\n    model_sha256 = \"{hash}\";\n    model_license = \"Vendor terms\";\n    model_redistributable = true;"
         ),
