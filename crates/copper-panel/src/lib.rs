@@ -564,6 +564,30 @@ mod tests {
     }
 
     #[test]
+    fn a_circular_courtyard_counts_the_same_at_any_angle() {
+        // A circle centred 2 mm above A's bottom side, 2.004 mm in radius:
+        // 4 um beyond the edge over a_bottom (3.5-6.5 mm), turned or not.
+        for angle in ["0", "2.5", "45"] {
+            let jack = BOARD.replacen(
+                "(gr_line (start 0 0)",
+                &format!(
+                    "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 5 4 {angle}) \
+                     (property \"Reference\" \"J7\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+                     (fp_circle (center 0 0) (end 2.004 0) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)"
+                ),
+                1,
+            );
+            let mut marked = files();
+            marked[0].pcb = jack;
+            let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+            assert!(
+                error.contains("tab a_bottom on board A's bottom side overlaps J7's body overhang"),
+                "{angle}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn an_unnetted_copper_graphic_counts_as_unnetted_copper() {
         let line = BOARD.replacen(
             "(gr_line (start 0 0)",

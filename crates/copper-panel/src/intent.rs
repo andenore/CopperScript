@@ -256,13 +256,10 @@ pub fn routed_keep_clear(pcb: &copper_cam::board::Board, outline: &[Vec<Point>])
     found
 }
 
-/// Points along a circle, close enough for a courtyard's extent.
-fn circle_points(c: (f64, f64), r: f64) -> Vec<(f64, f64)> {
-    (0..72).map(|k| (k as f64 * 5.0).to_radians()).map(|t| (c.0 + r * t.cos(), c.1 + r * t.sin())).collect()
-}
-
-/// Points along the arc from `s` through `m` to `e`.
-fn arc_points(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Vec<(f64, f64)> {
+/// The points that bound the arc from `s` through `m` to `e`: its ends and
+/// every axis extreme it passes (exact, so a turned footprint's curve
+/// bounds the same as an upright one's).
+fn arc_extent(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Vec<(f64, f64)> {
     let d = 2.0 * (s.0 * (m.1 - e.1) + m.0 * (e.1 - s.1) + e.0 * (s.1 - m.1));
     if d.abs() < 1e-12 {
         return vec![s, m, e];
@@ -271,14 +268,20 @@ fn arc_points(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Vec<(f64, f64)> {
     let cx = (sq(s) * (m.1 - e.1) + sq(m) * (e.1 - s.1) + sq(e) * (s.1 - m.1)) / d;
     let cy = (sq(s) * (e.0 - m.0) + sq(m) * (s.0 - e.0) + sq(e) * (m.0 - s.0)) / d;
     let r = (s.0 - cx).hypot(s.1 - cy);
-    let angle = |p: (f64, f64)| (p.1 - cy).atan2(p.0 - cx);
     let tau = std::f64::consts::TAU;
+    let angle = |p: (f64, f64)| (p.1 - cy).atan2(p.0 - cx).rem_euclid(tau);
     let (a0, am, a2) = (angle(s), angle(m), angle(e));
-    // Sweep from s to e the way that passes m.
     let ccw = |from: f64, to: f64| (to - from).rem_euclid(tau);
-    let sweep = if ccw(a0, am) <= ccw(a0, a2) { ccw(a0, a2) } else { ccw(a0, a2) - tau };
-    let steps = 72;
-    (0..=steps).map(|k| a0 + sweep * k as f64 / steps as f64).map(|t| (cx + r * t.cos(), cy + r * t.sin())).collect()
+    // Counter-clockwise from s to e if that passes m, else clockwise.
+    let (from, span) = if ccw(a0, am) <= ccw(a0, a2) { (a0, ccw(a0, a2)) } else { (a2, ccw(a2, a0)) };
+    let mut points = vec![s, e];
+    for k in 0..4 {
+        let t = k as f64 * std::f64::consts::FRAC_PI_2;
+        if ccw(from, t) <= span {
+            points.push((cx + r * t.cos(), cy + r * t.sin()));
+        }
+    }
+    points
 }
 
 /// A point of a footprint's own frame on the board: KiCad turns footprints
@@ -312,23 +315,25 @@ pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Ve
                 continue;
             }
             let xy = |tag: &str| item.child(tag).and_then(|n| Some((number(n, 1)?, number(n, 2)?)));
-            // The shape's outline in the footprint's frame: a rotated
-            // rectangle by all four corners, curves by points along them.
-            let mut local: Vec<(f64, f64)> = Vec::new();
+            let on_board = |p: (f64, f64)| footprint_point(at, p.0, p.1);
+            // The shape on the board: a turned rectangle by all four corners,
+            // circles and arcs by their exact extremes after turning.
             match item.tag() {
                 Some("fp_rect") => {
                     if let (Some((sx, sy)), Some((ex, ey))) = (xy("start"), xy("end")) {
-                        local.extend([(sx, sy), (ex, sy), (ex, ey), (sx, ey)]);
+                        points.extend([(sx, sy), (ex, sy), (ex, ey), (sx, ey)].map(on_board));
                     }
                 }
                 Some("fp_circle") => {
                     if let (Some(c), Some(e)) = (xy("center"), xy("end")) {
-                        local.extend(circle_points(c, (e.0 - c.0).hypot(e.1 - c.1)));
+                        let r = (e.0 - c.0).hypot(e.1 - c.1);
+                        let c = on_board(c);
+                        points.extend([(c.0 - r, c.1), (c.0 + r, c.1), (c.0, c.1 - r), (c.0, c.1 + r)]);
                     }
                 }
                 Some("fp_arc") => {
                     if let (Some(s), Some(m), Some(e)) = (xy("start"), xy("mid"), xy("end")) {
-                        local.extend(arc_points(s, m, e));
+                        points.extend(arc_extent(on_board(s), on_board(m), on_board(e)));
                     }
                 }
                 Some("fp_poly") => {
@@ -336,10 +341,10 @@ pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Ve
                         for node in pts.items() {
                             let at = |tag: &str| node.child(tag).and_then(|n| Some((number(n, 1)?, number(n, 2)?)));
                             match node.tag() {
-                                Some("xy") => local.extend(number(node, 1).zip(number(node, 2))),
+                                Some("xy") => points.extend(number(node, 1).zip(number(node, 2)).map(on_board)),
                                 Some("arc") => {
                                     if let (Some(s), Some(m), Some(e)) = (at("start"), at("mid"), at("end")) {
-                                        local.extend(arc_points(s, m, e));
+                                        points.extend(arc_extent(on_board(s), on_board(m), on_board(e)));
                                     }
                                 }
                                 _ => {}
@@ -347,9 +352,8 @@ pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Ve
                         }
                     }
                 }
-                _ => local.extend(["start", "end"].into_iter().filter_map(xy)),
+                _ => points.extend(["start", "end"].into_iter().filter_map(xy).map(on_board)),
             }
-            points.extend(local.into_iter().map(|(x, y)| footprint_point(at, x, y)));
         }
         if points.is_empty() {
             continue;
@@ -549,6 +553,26 @@ mod tests {
         for turns in 0..4 {
             let pose = Pose { quarter_turns: turns, offset: (7, -3) };
             assert_eq!(pose.invert(pose.apply((5, 11))), (5, 11));
+        }
+    }
+
+    #[test]
+    fn curves_bound_the_same_however_the_footprint_turns() {
+        // A quarter arc from (1, 0) through 45 deg to (0, 1) about the origin:
+        // its extremes are its ends, x and y in [0, 1].
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let quarter = arc_extent((1.0, 0.0), (h, h), (0.0, 1.0));
+        let max_x = quarter.iter().map(|p| p.0).fold(f64::MIN, f64::max);
+        let min_x = quarter.iter().map(|p| p.0).fold(f64::MAX, f64::min);
+        assert!((max_x - 1.0).abs() < 1e-9 && min_x.abs() < 1e-9, "{quarter:?}");
+        // The other way round (through -135 deg) it passes all four extremes but the first quadrant's.
+        let long = arc_extent((1.0, 0.0), (-h, -h), (0.0, 1.0));
+        let min_y = long.iter().map(|p| p.1).fold(f64::MAX, f64::min);
+        assert!((min_y + 1.0).abs() < 1e-9, "{long:?}");
+        // A circle's extent does not depend on its footprint's angle.
+        for angle in [0.0, 2.5, 30.0, 45.0] {
+            let c = footprint_point((5.0, 5.0, angle), 0.0, 0.0);
+            assert!((c.0 - 5.0).abs() < 1e-12 && (c.1 - 5.0).abs() < 1e-12);
         }
     }
 

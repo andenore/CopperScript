@@ -41,7 +41,8 @@ panel ExamplePanel {
   fitted after depanelization: they may overhang a rail or a neighbour.
 - Board names use letters, digits and underscores, and differ ignoring
   case: the panel prefixes their nets (`NAME/`) and references (`NAME-`).
-  `rail` is reserved (the report names a tab's far end `rail`).
+  `rail` and `tab` are reserved (the report names a tab's far end `rail`;
+  the frame's mouse bites are footprints `TAB-NAME`).
 - `at` puts the corner of the board's outline bounding box; `rotation` is a
   multiple of 90 deg, counter-clockwise as seen in KiCad.
 - A tab names its board, a `side` of the board's rectangular outline in the
@@ -61,17 +62,20 @@ panel ExamplePanel {
    source says: its rule areas that forbid copper pours along its sides
    (antenna regions, connector launches) stay clear of tabs, plus 1 mm, and
    every footprint courtyard reaching beyond a side (by all its corners and
-   curves, however the footprint is turned) is a body overhang.
+   the exact extremes of its circles and arcs, however the footprint is
+   turned) is a body overhang.
 2. Moves every item by the board's pose, prefixes nets (`MONO/GND`) and
    references (`MONO-J1`) so boards stay electrically separate, derives
    fresh UUIDs, drops zone fills and the boards' outlines. Stack-ups, layer
-   sets, project rules and unconditional custom rules must agree;
-   conditional rules are kept per board with their `Reference` and
-   `NetName` comparisons rewritten, and limited to that board's items (its
-   nets and references), so one board's rule cannot change another's
-   clearances. The last matching rule wins, so order is kept: the
-   unconditional rules come first, once, and a board with conditional rules
-   repeats its whole list in its own order, each rule limited to its items.
+   sets, project rules and the unconditional custom rules (in the same
+   order) must agree; those rules are kept once, first, and are the only
+   ones between two boards' items, whatever order the boards are declared
+   in. A board with conditional rules repeats its whole rule list in its own
+   order (the last matching rule wins), with `Reference` and `NetName` names
+   prefixed (an empty name stays empty) and each rule limited to pairs where
+   neither item belongs to another board and at least one belongs to it: on
+   the board, against the frame, the board edge or an unnetted hole, its
+   rules apply as on the board alone.
    A board with copper on no net (tracks, vias, zones, copper graphics and
    copper text) is refused when it has conditional rules, since that copper
    carries neither prefix.
