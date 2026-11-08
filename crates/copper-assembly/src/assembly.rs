@@ -361,7 +361,35 @@ pub fn electrical_digest(board: &Board) -> String {
 pub struct Components {
     pub by_reference: IndexMap<String, (ComponentInstance, PartDefinition)>,
     pub digests: IndexMap<String, String>,
+    /// The digests earlier releases wrote for the same component (see
+    /// [`EARLIER_PRESENTATION`]): a lock reviewed then is still current.
+    pub earlier: IndexMap<String, Vec<String>>,
 }
+
+impl Components {
+    /// Whether a lock's digest for `reference` still describes the board:
+    /// the current digest, or one an earlier release wrote for the same
+    /// component (`copper assembly update` rewrites it, keeping the review).
+    pub fn is_current(&self, reference: &str, digest: Option<&String>) -> bool {
+        let Some(digest) = digest else { return false };
+        self.digests.get(reference) == Some(digest)
+            || self.earlier.get(reference).is_some_and(|earlier| earlier.contains(digest))
+    }
+}
+
+/// The presentation keys earlier releases left out of a selection's digest:
+/// none (before 3D models were left out), then the 3D model keys but not the
+/// height. Their digests for an unchanged component stay valid.
+const EARLIER_PRESENTATION: [&[&str]; 2] = [
+    &[],
+    &[
+        copper_lang::lower::PART_MODEL_KEY,
+        copper_lang::lower::PART_MODEL_SOURCE_KEY,
+        copper_lang::lower::PART_MODEL_SHA256_KEY,
+        copper_lang::lower::PART_MODEL_LICENSE_KEY,
+        copper_lang::lower::PART_MODEL_REDISTRIBUTABLE_KEY,
+    ],
+];
 
 pub fn components(board: &Board) -> Result<Components> {
     let flat = elaborate(board).map_err(AssemblyError)?;
@@ -375,8 +403,16 @@ pub fn components(board: &Board) -> Result<Components> {
         };
         by_reference.insert(component.reference.clone(), (component.clone(), part.clone()));
     }
-    let digests = component_digests(&flat, &by_reference);
-    Ok(Components { by_reference, digests })
+    let digests = component_digests(&flat, &by_reference, &PRESENTATION_METADATA);
+    let mut earlier: IndexMap<String, Vec<String>> = IndexMap::new();
+    for exclude in EARLIER_PRESENTATION {
+        for (reference, digest) in component_digests(&flat, &by_reference, exclude) {
+            if digests.get(&reference) != Some(&digest) {
+                earlier.entry(reference).or_default().push(digest);
+            }
+        }
+    }
+    Ok(Components { by_reference, digests, earlier })
 }
 
 /// What one selection was reviewed against: the component (value, footprint,
@@ -386,6 +422,7 @@ pub fn components(board: &Board) -> Result<Components> {
 fn component_digests(
     flat: &FlatElectricalView,
     by_reference: &IndexMap<String, (ComponentInstance, PartDefinition)>,
+    presentation: &[&str],
 ) -> IndexMap<String, String> {
     let mut nets: IndexMap<(&str, &str), &str> = IndexMap::new();
     for net in &flat.nets {
@@ -428,7 +465,7 @@ fn component_digests(
         let document = Value::Object(Object::from_iter([
             ("component".to_owned(), component_value(component)),
             ("footprint".to_owned(), json_text(&footprint(component, part))),
-            ("part".to_owned(), part_value(&without_3d_presentation(part))),
+            ("part".to_owned(), part_value(&without_presentation(part, presentation))),
             ("device".to_owned(), device),
             ("pins".to_owned(), Value::Array(pins)),
         ]));
@@ -450,9 +487,9 @@ pub const PRESENTATION_METADATA: [&str; 6] = [
     copper_lang::lower::PART_MODEL_REDISTRIBUTABLE_KEY,
 ];
 
-fn without_3d_presentation(part: &PartDefinition) -> PartDefinition {
+fn without_presentation(part: &PartDefinition, presentation: &[&str]) -> PartDefinition {
     let mut part = part.clone();
-    part.metadata.retain(|key, _| !PRESENTATION_METADATA.contains(&key.as_str()));
+    part.metadata.retain(|key, _| !presentation.contains(&key.as_str()));
     part
 }
 
@@ -514,6 +551,7 @@ pub fn update(board: &Board, lock: &Lock) -> Result<(Lock, Update)> {
     }
     // A legacy lock only records whether anything on the board changed.
     let legacy_changed = lock.electrical_sha256.as_ref().is_some_and(|digest| *digest != electrical_digest(board));
+    let known = components(board)?;
     let fresh = snapshot(board)?;
     let mut result = Update::default();
     let mut selections = Vec::new();
@@ -534,7 +572,9 @@ pub fn update(board: &Board, lock: &Lock) -> Result<(Lock, Update)> {
         if changes.is_empty() {
             if lock.electrical_sha256.is_some() && legacy_changed {
                 changes.push("not verifiable: the legacy whole-board digest changed".to_owned());
-            } else if lock.electrical_sha256.is_none() && entry.electrical_sha256 != current.electrical_sha256 {
+            } else if lock.electrical_sha256.is_none()
+                && !known.is_current(&reference, entry.electrical_sha256.as_ref())
+            {
                 changes.push("value, part data or connections changed".to_owned());
             }
         }
@@ -620,7 +660,7 @@ pub fn check_assembly(board: &Board, lock: &Lock) -> Result<Object> {
         if entry.footprint != footprint(component, part) {
             issue("FOOTPRINT_MISMATCH", Some(reference), "selected footprint differs from the board");
         }
-        if lock.electrical_sha256.is_none() && entry.electrical_sha256.as_ref() != components.digests.get(reference) {
+        if lock.electrical_sha256.is_none() && !components.is_current(reference, entry.electrical_sha256.as_ref()) {
             issue(
                 "STALE_SELECTION",
                 Some(reference),
@@ -1203,4 +1243,58 @@ pub fn write_candidate_bom(
          Selection flags and production BOM gates have not been changed.\n",
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A board whose one part carries a 3D model and a height.
+    fn board_with_presentation(directory: &Path) -> Board {
+        std::fs::create_dir_all(directory.join("parts")).expect("a parts directory");
+        std::fs::write(
+            directory.join("parts/widget.copper"),
+            "part Widget {\n    manufacturer = \"Example\";\n    model = \"models/widget.step\";\n    height = 2.5 mm;\n    pin A { number = \"1\"; domains = \"analog\"; directions = \"passive\"; }\n    pin B { number = \"2\"; domains = \"analog\"; directions = \"passive\"; }\n}\n",
+        )
+        .expect("the part");
+        let board = directory.join("board.copper");
+        std::fs::write(
+            &board,
+            "board B {\n    import p \"./parts\";\n    component U1: p.Widget { footprint = \"Capacitor_SMD:C_0402_1005Metric\"; }\n    net N { U1.A; }\n    net M { U1.B; }\n}\n",
+        )
+        .expect("the board");
+        copper_lang::compiler::load_design(&board, false, true).expect("the board compiles").electrical
+    }
+
+    #[test]
+    fn a_lock_reviewed_under_an_earlier_digest_stays_current_and_keeps_its_review() {
+        let directory = std::env::temp_dir().join(format!("copper-assembly-earlier-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        let board = board_with_presentation(&directory);
+        let known = components(&board).expect("the components");
+        let current = known.digests["U1"].clone();
+        let flat = elaborate(&board).expect("the flat view");
+        for exclude in EARLIER_PRESENTATION {
+            let earlier = component_digests(&flat, &known.by_reference, exclude)["U1"].clone();
+            assert_ne!(earlier, current, "the model and height change the earlier digests");
+            let mut lock = snapshot(&board).expect("a snapshot");
+            for selection in &mut lock.selections {
+                selection.reviewed = true;
+                selection.electrical_sha256 = Some(earlier.clone());
+            }
+            let report = check_assembly(&board, &lock).expect("a report");
+            let text = Dumps::compact().dumps(&Value::Object(report));
+            assert!(!text.contains("STALE_SELECTION"), "{exclude:?}: {text}");
+            let (updated, result) = update(&board, &lock).expect("an update");
+            assert_eq!((result.unchanged, result.changed.len()), (1, 0), "{exclude:?}");
+            assert!(updated.selections[0].reviewed, "{exclude:?}");
+            assert_eq!(updated.selections[0].electrical_sha256.as_deref(), Some(current.as_str()), "rewritten");
+        }
+        // A digest of anything else is still stale.
+        let mut lock = snapshot(&board).expect("a snapshot");
+        lock.selections[0].electrical_sha256 = Some("0".repeat(64));
+        let text = Dumps::compact().dumps(&Value::Object(check_assembly(&board, &lock).expect("a report")));
+        assert!(text.contains("STALE_SELECTION"), "{text}");
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 }
