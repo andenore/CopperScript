@@ -61,12 +61,15 @@ panel ExamplePanel {
    layer). What the routed board shows itself counts too, whatever the
    source says: its rule areas that forbid copper pours, where they cover a
    side (ending on the edge or crossing it: antenna regions, connector
-   launches; curved outlines followed to within a quarter micron), stay
+   launches; curved outlines followed to within a quarter micron, contours
+   inside others taken as holes), stay
    clear of tabs, plus 1 mm; and each stretch where a footprint courtyard
    reaches beyond a side is a body overhang over exactly that stretch (its
    lines, circles and arcs taken exactly, however the footprint is turned;
-   two separate crossings leave the stretch between them to tabs).
-2. Moves every item by the board's pose, prefixes nets (`MONO/GND`) and
+   two separate crossings, of one arc included, leave the stretch between
+   them to tabs).
+2. Moves every item by the board's pose, prefixes nets (`MONO/GND`; nets
+   given by name, as KiCad 10 writes them, stay named) and
    references (`MONO-J1`) so boards stay electrically separate, derives
    fresh UUIDs, drops zone fills and the boards' outlines. Stack-ups, layer
    sets, project rules and the unconditional custom rules (in the same

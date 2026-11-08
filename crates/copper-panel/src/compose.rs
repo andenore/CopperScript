@@ -170,6 +170,23 @@ pub fn pose_for(rings: &[Vec<Point>], quarter_turns: u8, at: Point) -> Pose {
     Pose { quarter_turns, offset: (at.0 - min_x, at.1 - min_y) }
 }
 
+/// Net names a board gives by name anywhere: `(net "name")` and
+/// `(net_name "name")`.
+fn net_names_given(node: &Node, names: &mut Vec<String>) {
+    match node.tag() {
+        Some("net") if node.items().len() == 2 && node.items()[1].atom_text().is_some_and(|t| t.starts_with('"')) => {
+            names.extend(node.string_value(1));
+        }
+        Some("net_name") => names.extend(node.string_value(1)),
+        _ => {}
+    }
+    for child in node.items() {
+        if matches!(child, Node::List(_)) {
+            net_names_given(child, names);
+        }
+    }
+}
+
 /// Rewrites one board's items into panel coordinates and names.
 struct Placer<'a> {
     instance: &'a str,
@@ -177,6 +194,9 @@ struct Placer<'a> {
     nets: &'a IndexMap<String, usize>,
     old_nets: &'a IndexMap<String, String>,
     source: &'a str,
+    /// The boards name their nets (`(net "GND")`, KiCad 10) instead of
+    /// numbering them against a net table; the panel keeps that form.
+    named: bool,
 }
 
 impl Placer<'_> {
@@ -213,19 +233,38 @@ impl Placer<'_> {
         }
     }
 
-    /// `(net N ["name"])` -> the panel's number and prefixed name.
-    fn renet(&self, node: &mut Node) -> Result<(), String> {
-        let items = node.items_mut().ok_or("not a list")?;
-        let old = items.get(1).and_then(Node::atom_text).unwrap_or("0").to_owned();
-        let name = if let Some(name) = items.get(2).and_then(Node::atom_text) {
-            unquote(name)
+    /// The board's net name in `(net N)`, `(net N "name")` or `(net "name")`.
+    fn old_net(&self, node: &Node) -> Result<String, String> {
+        let first = node.items().get(1).and_then(Node::atom_text).unwrap_or("0");
+        if first.starts_with('"') {
+            return Ok(unquote(first));
+        }
+        if let Some(name) = node.items().get(2).and_then(Node::atom_text) {
+            return Ok(unquote(name));
+        }
+        self.old_nets.get(first).cloned().ok_or_else(|| format!("{}: unknown net number {first}", self.source))
+    }
+
+    /// The panel's `(net ...)` for a board net: `(net "B/GND")` when the
+    /// boards name their nets, else `(net N)`, or `(net N "B/GND")` with
+    /// `with_name` (pads).
+    fn panel_net(&self, name: &str, with_name: bool) -> Node {
+        let panel = self.net_name(name);
+        if self.named {
+            return Node::list(vec![Node::atom("net"), Node::string(&panel)]);
+        }
+        let number = self.nets.get(&panel).copied().unwrap_or(0).to_string();
+        if with_name {
+            Node::list(vec![Node::atom("net"), Node::atom(number), Node::string(&panel)])
         } else {
-            self.old_nets.get(&old).cloned().ok_or_else(|| format!("{}: unknown net number {old}", self.source))?
-        };
-        let panel_name = self.net_name(&name);
-        let number = self.nets.get(&panel_name).copied().unwrap_or(0);
-        items.truncate(1);
-        items.push(Node::atom(number.to_string()));
+            Node::tagged("net", &[&number])
+        }
+    }
+
+    /// `(net ...)` of a track, via or copper graphic -> the panel's net.
+    fn renet(&self, node: &mut Node) -> Result<(), String> {
+        let name = self.old_net(node)?;
+        *node = self.panel_net(&name, false);
         Ok(())
     }
 
@@ -277,12 +316,12 @@ impl Placer<'_> {
                     if let Some(at) = item.child_mut("at") {
                         self.turn(at);
                     }
-                    if let Some(net) = item.child_mut("net") {
-                        let name = net.string_value(2).unwrap_or_default();
-                        let panel = self.net_name(&name);
-                        let number = self.nets.get(&panel).copied().unwrap_or(0);
-                        *net =
-                            Node::list(vec![Node::atom("net"), Node::atom(number.to_string()), Node::string(&panel)]);
+                    if let Some(net) = item.child("net") {
+                        let name = self.old_net(net)?;
+                        let panel = self.panel_net(&name, true);
+                        if let Some(net) = item.child_mut("net") {
+                            *net = panel;
+                        }
                     }
                 }
                 Some("zone") => {
@@ -318,14 +357,28 @@ impl Placer<'_> {
                 if let Some(list) = item.items_mut() {
                     list.retain(|n| !matches!(n.tag(), Some("filled_polygon" | "fill_segments")));
                 }
-                let net_name = item.child("net_name").and_then(|n| n.string_value(1)).unwrap_or_default();
-                let panel = self.net_name(&net_name);
-                let number = self.nets.get(&panel).copied().unwrap_or(0);
-                if let Some(net) = item.child_mut("net") {
-                    *net = Node::tagged("net", &[&number.to_string()]);
+                let name = match (item.child("net_name"), item.child("net")) {
+                    (Some(name), _) => name.string_value(1).unwrap_or_default(),
+                    (None, Some(net)) => self.old_net(net)?,
+                    (None, None) => String::new(),
+                };
+                let panel = self.net_name(&name);
+                let net = self.panel_net(&name, false);
+                if let Some(slot) = item.child_mut("net") {
+                    *slot = net;
                 }
-                if let Some(name) = item.child_mut("net_name") {
-                    *name = Node::list(vec![Node::atom("net_name"), Node::string(&panel)]);
+                let has_net = item.child("net").is_some();
+                let label = Node::list(vec![Node::atom("net_name"), Node::string(&panel)]);
+                match item.child_mut("net_name") {
+                    Some(slot) => *slot = label,
+                    // Numbered nets need the zone's name beside the number.
+                    None if !self.named && has_net => {
+                        if let Some(list) = item.items_mut() {
+                            let at = list.iter().position(|n| n.tag() == Some("net")).map_or(1, |k| k + 1);
+                            list.insert(at, label);
+                        }
+                    }
+                    None => {}
                 }
                 // Every polygon (a zone may have several, holes included).
                 self.geometry(&mut item)?;
@@ -372,21 +425,25 @@ pub fn compose(boards: &[BoardInput], poses: &[Pose]) -> Result<Composition, Str
             }
         }
     }
-    // The panel's net table: every board's nets, prefixed, in board order.
+    // The panel's nets: every board's, prefixed, in board order, from its
+    // net table and from nets given by name (KiCad 10 boards have no table).
+    let named = boards.iter().all(|board| board.tree.children("net").next().is_none());
     let mut nets: IndexMap<String, usize> = IndexMap::new();
     nets.insert(String::new(), 0);
     let mut old_tables: Vec<IndexMap<String, String>> = Vec::new();
     for board in boards {
         let mut table = IndexMap::new();
+        let mut names: Vec<String> = Vec::new();
         for net in board.tree.children("net") {
             let number = net.value(1).unwrap_or("0").to_owned();
             let name = net.string_value(2).unwrap_or_default();
-            if !name.is_empty() {
-                let panel = format!("{}/{name}", board.instance);
-                let next = nets.len();
-                nets.entry(panel).or_insert(next);
-            }
+            names.push(name.clone());
             table.insert(number, name);
+        }
+        net_names_given(&board.tree, &mut names);
+        for name in names.into_iter().filter(|n| !n.is_empty()) {
+            let next = nets.len();
+            nets.entry(format!("{}/{name}", board.instance)).or_insert(next);
         }
         old_tables.push(table);
     }
@@ -395,8 +452,10 @@ pub fn compose(boards: &[BoardInput], poses: &[Pose]) -> Result<Composition, Str
     if let Some(setup) = first.tree.child("setup") {
         items.push(setup.clone());
     }
-    for (name, number) in &nets {
-        items.push(Node::list(vec![Node::atom("net"), Node::atom(number.to_string()), Node::string(name)]));
+    if !named {
+        for (name, number) in &nets {
+            items.push(Node::list(vec![Node::atom("net"), Node::atom(number.to_string()), Node::string(name)]));
+        }
     }
     let mut outlines = IndexMap::new();
     let mut pose_map = IndexMap::new();
@@ -406,7 +465,7 @@ pub fn compose(boards: &[BoardInput], poses: &[Pose]) -> Result<Composition, Str
         outlines
             .insert(board.instance.clone(), rings.iter().map(|r| r.iter().map(|p| pose.apply(*p)).collect()).collect());
         pose_map.insert(board.instance.clone(), *pose);
-        let placer = Placer { instance: &board.instance, pose: *pose, nets: &nets, old_nets, source: &source };
+        let placer = Placer { instance: &board.instance, pose: *pose, nets: &nets, old_nets, source: &source, named };
         for item in board.tree.items().iter().skip(1) {
             let tag = item.tag().unwrap_or("");
             if HEADER.contains(&tag) || tag == "setup" || tag == "net" || tag == "title_block" {
@@ -528,6 +587,42 @@ mod tests {
             .map(|xy| (xy.value(1).unwrap_or("").to_owned(), xy.value(2).unwrap_or("").to_owned()))
             .collect();
         assert_eq!(firsts, [("32".to_owned(), "12".to_owned()), ("38".to_owned(), "14".to_owned())]);
+    }
+
+    #[test]
+    fn boards_that_name_their_nets_keep_every_net() {
+        // KiCad 10 writes nets by name with no net table.
+        let named = r#"(kicad_pcb (version 20250000) (generator "copperscript")
+  (general (thickness 1.6)) (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (footprint "lib:R" (layer "F.Cu") (uuid "11111111-1111-1111-1111-111111111111") (at 5 3 0)
+    (property "Reference" "R1" (at 0 -1 0) (layer "F.Fab"))
+    (pad "1" smd rect (at -0.5 0) (size 0.5 0.5) (layers "F.Cu") (net "SIG"))
+    (pad "2" smd rect (at 0.5 0) (size 0.5 0.5) (layers "F.Cu") (net "GND")))
+  (segment (start 1 1) (end 4.5 3) (width 0.25) (layer "F.Cu") (net "SIG") (uuid "22222222-2222-2222-2222-222222222222"))
+  (zone (net "GND") (layers "F.Cu") (uuid "44444444-4444-4444-4444-444444444444")
+    (polygon (pts (xy 0 0) (xy 10 0) (xy 10 6) (xy 0 6))))
+  (gr_line (start 0 0) (end 10 0) (layer "Edge.Cuts") (uuid "a"))
+  (gr_line (start 10 0) (end 10 6) (layer "Edge.Cuts") (uuid "b"))
+  (gr_line (start 10 6) (end 0 6) (layer "Edge.Cuts") (uuid "c"))
+  (gr_line (start 0 6) (end 0 0) (layer "Edge.Cuts") (uuid "d")))"#;
+        let boards: Vec<BoardInput> = ["A", "B"]
+            .into_iter()
+            .map(|name| BoardInput { instance: name.to_owned(), tree: parse(named, name).expect("parsed") })
+            .collect();
+        let rings = outline_rings(&boards[0].tree, "A").expect("outline");
+        let poses = [pose_for(&rings, 0, (0, 0)), pose_for(&rings, 0, (12_000_000, 0))];
+        let composed = compose(&boards, &poses).expect("composed");
+        let board = copper_cam::board::parse_board(&print(&composed.tree), "panel").expect("copper-cam reads it");
+        let pads: Vec<Option<&str>> =
+            board.footprints.iter().flat_map(|f| f.pads.iter().map(|p| p.net.as_deref())).collect();
+        assert_eq!(pads, [Some("A/SIG"), Some("A/GND"), Some("B/SIG"), Some("B/GND")]);
+        let tracks: Vec<Option<&str>> = board.tracks.iter().map(|t| t.net.as_deref()).collect();
+        assert_eq!(tracks, [Some("A/SIG"), Some("B/SIG")]);
+        let zones: Vec<Option<&str>> = board.zones.iter().map(|z| z.net.as_deref()).collect();
+        assert_eq!(zones, [Some("A/GND"), Some("B/GND")]);
+        assert!(composed.tree.children("net").next().is_none(), "named nets need no table");
     }
 
     #[test]

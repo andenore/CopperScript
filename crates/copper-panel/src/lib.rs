@@ -695,6 +695,35 @@ mod tests {
     }
 
     #[test]
+    fn a_hole_in_a_keepout_leaves_its_stretch_to_tabs() {
+        // The keep-out crosses A's top side from 1 to 9.5 mm, with a hole from
+        // 2 to 8 mm through the edge: a_top (3.5-6.5 mm) lies in the hole,
+        // clear of the 1 mm margins (keep-clear 0-3 and 7-10.5 mm).
+        let keepout = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"55555555-5555-5555-5555-555555555555\") (name \"cluster/a/a-edge\") \
+             (hatch edge 0.5) (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) \
+             (polygon (pts (xy 1 -1) (xy 9.5 -1) (xy 9.5 4) (xy 1 4))) (polygon (pts (xy 2 -0.5) (xy 8 -0.5) (xy 8 2) (xy 2 2))))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = keepout;
+        panelize(&spec(""), &marked, &none(), "demo").expect("a_top lies in the keep-out's hole");
+        let error = panelize(
+            &spec("tab a_top_l { board = A; side = top; at = 1.5 mm; width = 1 mm; }"),
+            &marked,
+            &none(),
+            "demo",
+        )
+        .err()
+        .expect("refused");
+        assert!(
+            error.contains("tab a_top_l on board A's top side") && error.contains("keep-out cluster/a/a-edge"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn an_unnetted_copper_graphic_counts_as_unnetted_copper() {
         let line = BOARD.replacen(
             "(gr_line (start 0 0)",
