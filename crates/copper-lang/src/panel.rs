@@ -225,6 +225,10 @@ fn board(item: &MacroItemDecl) -> Result<PanelBoard> {
     if item.name.is_empty() || !item.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         return fail(format!("board name {:?} must use letters, digits and underscores only", item.name), location);
     }
+    // The report names a tab's far end "rail" when it reaches one.
+    if item.name.eq_ignore_ascii_case("rail") {
+        return fail("\"rail\" is reserved for the panel's rails; name the board otherwise", location);
+    }
     check_keys(&item.parameters, &["source", "pcb", "at", "rotation"], "board", location)?;
     let what = format!("board {}", item.name);
     Ok(PanelBoard {
@@ -513,6 +517,7 @@ mod tests {
             (("spacing = 2 mm;", "spacing = 2 mm; spacing_x = 1 mm;"), "unknown panel property"),
             (("board A2 {", "board a1 {"), "duplicate board a1"),
             (("board A2 {", "board A-B {"), "letters, digits and underscores only"),
+            (("board A2 {", "board Rail {"), "reserved for the panel's rails"),
             (
                 ("spacing = 2 mm;", "spacing = 2 mm; preset = \"acme\";"),
                 "unknown panel preset \"acme\"; expected one of jlcpcb",

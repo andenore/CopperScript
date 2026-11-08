@@ -123,7 +123,17 @@ pub fn panelize(
                 .zones
                 .iter()
                 .filter(|z| z.keepout.is_none() && !z.in_footprint && z.net.as_deref().is_none_or(str::is_empty))
-                .count();
+                .count()
+            // Copper graphics (a footprint's included: the native check gives
+            // them no reference) and copper text carry no net either.
+            + routed
+                .drawings
+                .iter()
+                .filter(|d| {
+                    matches!(d.layer, copper_cam::board::Layer::Copper(_)) && d.net.as_deref().is_none_or(str::is_empty)
+                })
+                .count()
+            + routed.texts.iter().filter(|t| matches!(t.layer, copper_cam::board::Layer::Copper(_))).count();
         if unnetted > 0 && rules::has_conditional(&file.dru, &format!("board {} design rules", board.name))? {
             return Err(format!(
                 "board {}: {unnetted} copper item(s) on no net, and conditional design rules that the panel can only \
@@ -210,7 +220,7 @@ pub fn panelize(
                             ("side", Json::from(t.side.as_str())),
                             ("at_mm", Json::from(mm(t.at).as_str())),
                             ("width_mm", Json::from(mm(t.width).as_str())),
-                            ("across", Json::from(t.across.as_str())),
+                            ("across", Json::from(t.across.as_deref().unwrap_or("rail"))),
                             ("length_mm", Json::from(mm(t.length).as_str())),
                             ("mouse_bites", Json::from(t.mouse_bites as i64)),
                         ])
@@ -533,6 +543,39 @@ mod tests {
             error.contains("tab a_bottom on board A's bottom side overlaps J9's body overhang (4-6 mm)"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_rotated_courtyard_counts_by_all_its_corners() {
+        // A 2 x 0.4 mm courtyard at 45 deg, centred 0.7 mm above A's bottom
+        // side under a_bottom (3.5-6.5 mm): its corners reach about 0.15 mm
+        // below the edge, which its start and end corners alone do not show.
+        let jack = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 5 5.3 45) \
+             (property \"Reference\" \"J8\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+             (fp_rect (start -1 -0.2) (end 1 0.2) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = jack;
+        let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+        assert!(error.contains("tab a_bottom on board A's bottom side overlaps J8's body overhang"), "{error}");
+    }
+
+    #[test]
+    fn an_unnetted_copper_graphic_counts_as_unnetted_copper() {
+        let line = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(gr_line (start 1 4) (end 3 4) (stroke (width 0.2) (type solid)) (layer \"F.Cu\") (uuid \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\"))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut both = files();
+        both[0].pcb = line;
+        both[0].dru =
+            "(version 1)\n(rule \"gap\" (constraint clearance (min 1mm)) (condition \"A.NetName == 'GND'\"))\n".into();
+        let error = panelize(&spec(""), &both, &none(), "demo").err().expect("refused");
+        assert!(error.contains("board A: 1 copper item(s) on no net"), "{error}");
     }
 
     #[test]

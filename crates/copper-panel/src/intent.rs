@@ -256,6 +256,31 @@ pub fn routed_keep_clear(pcb: &copper_cam::board::Board, outline: &[Vec<Point>])
     found
 }
 
+/// Points along a circle, close enough for a courtyard's extent.
+fn circle_points(c: (f64, f64), r: f64) -> Vec<(f64, f64)> {
+    (0..72).map(|k| (k as f64 * 5.0).to_radians()).map(|t| (c.0 + r * t.cos(), c.1 + r * t.sin())).collect()
+}
+
+/// Points along the arc from `s` through `m` to `e`.
+fn arc_points(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Vec<(f64, f64)> {
+    let d = 2.0 * (s.0 * (m.1 - e.1) + m.0 * (e.1 - s.1) + e.0 * (s.1 - m.1));
+    if d.abs() < 1e-12 {
+        return vec![s, m, e];
+    }
+    let sq = |p: (f64, f64)| p.0 * p.0 + p.1 * p.1;
+    let cx = (sq(s) * (m.1 - e.1) + sq(m) * (e.1 - s.1) + sq(e) * (s.1 - m.1)) / d;
+    let cy = (sq(s) * (e.0 - m.0) + sq(m) * (s.0 - e.0) + sq(e) * (m.0 - s.0)) / d;
+    let r = (s.0 - cx).hypot(s.1 - cy);
+    let angle = |p: (f64, f64)| (p.1 - cy).atan2(p.0 - cx);
+    let tau = std::f64::consts::TAU;
+    let (a0, am, a2) = (angle(s), angle(m), angle(e));
+    // Sweep from s to e the way that passes m.
+    let ccw = |from: f64, to: f64| (to - from).rem_euclid(tau);
+    let sweep = if ccw(a0, am) <= ccw(a0, a2) { ccw(a0, a2) } else { ccw(a0, a2) - tau };
+    let steps = 72;
+    (0..=steps).map(|k| a0 + sweep * k as f64 / steps as f64).map(|t| (cx + r * t.cos(), cy + r * t.sin())).collect()
+}
+
 /// A point of a footprint's own frame on the board: KiCad turns footprints
 /// counter-clockwise on screen (Y down) by their `at` angle.
 fn footprint_point(at: (f64, f64, f64), x: f64, y: f64) -> (f64, f64) {
@@ -286,28 +311,43 @@ pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Ve
             if !layer.ends_with(".CrtYd") && !layer.ends_with(".Courtyard") {
                 continue;
             }
+            let xy = |tag: &str| item.child(tag).and_then(|n| Some((number(n, 1)?, number(n, 2)?)));
+            // The shape's outline in the footprint's frame: a rotated
+            // rectangle by all four corners, curves by points along them.
             let mut local: Vec<(f64, f64)> = Vec::new();
-            for tag in ["start", "end", "mid", "center"] {
-                if let Some(n) = item.child(tag)
-                    && let (Some(x), Some(y)) = (number(n, 1), number(n, 2))
-                {
-                    local.push((x, y));
-                }
-            }
-            if let Some(pts) = item.child("pts") {
-                for xy in pts.children("xy") {
-                    if let (Some(x), Some(y)) = (number(xy, 1), number(xy, 2)) {
-                        local.push((x, y));
+            match item.tag() {
+                Some("fp_rect") => {
+                    if let (Some((sx, sy)), Some((ex, ey))) = (xy("start"), xy("end")) {
+                        local.extend([(sx, sy), (ex, sy), (ex, ey), (sx, ey)]);
                     }
                 }
-            }
-            if item.tag() == Some("fp_circle")
-                && let (Some(c), Some(e)) = (item.child("center"), item.child("end"))
-                && let (Some(cx), Some(cy), Some(ex), Some(ey)) =
-                    (number(c, 1), number(c, 2), number(e, 1), number(e, 2))
-            {
-                let r = (ex - cx).hypot(ey - cy);
-                local.extend([(cx - r, cy - r), (cx + r, cy + r), (cx - r, cy + r), (cx + r, cy - r)]);
+                Some("fp_circle") => {
+                    if let (Some(c), Some(e)) = (xy("center"), xy("end")) {
+                        local.extend(circle_points(c, (e.0 - c.0).hypot(e.1 - c.1)));
+                    }
+                }
+                Some("fp_arc") => {
+                    if let (Some(s), Some(m), Some(e)) = (xy("start"), xy("mid"), xy("end")) {
+                        local.extend(arc_points(s, m, e));
+                    }
+                }
+                Some("fp_poly") => {
+                    if let Some(pts) = item.child("pts") {
+                        for node in pts.items() {
+                            let at = |tag: &str| node.child(tag).and_then(|n| Some((number(n, 1)?, number(n, 2)?)));
+                            match node.tag() {
+                                Some("xy") => local.extend(number(node, 1).zip(number(node, 2))),
+                                Some("arc") => {
+                                    if let (Some(s), Some(m), Some(e)) = (at("start"), at("mid"), at("end")) {
+                                        local.extend(arc_points(s, m, e));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                _ => local.extend(["start", "end"].into_iter().filter_map(xy)),
             }
             points.extend(local.into_iter().map(|(x, y)| footprint_point(at, x, y)));
         }
@@ -412,7 +452,7 @@ pub fn check(
         let (lo, hi) = (tab.at - tab.width / 2, tab.at + tab.width / 2);
         contact_clear(intents, &tab.name, &tab.board, tab.side, lo, hi)?;
         // A tab joining two boards lands on the neighbour's side too.
-        if tab.across != "rail" {
+        if let Some(across) = &tab.across {
             let normal = poses[&tab.board].rotate(match tab.side {
                 Side::Top => (0, -1),
                 Side::Bottom => (0, 1),
@@ -420,14 +460,14 @@ pub fn check(
                 Side::Right => (1, 0),
             });
             let far = |p: Point| (p.0 + normal.0 * tab.length, p.1 + normal.1 * tab.length);
-            let neighbour = &poses[&tab.across];
+            let neighbour = &poses[across];
             let (a, b) = (neighbour.invert(far(tab.edge.0)), neighbour.invert(far(tab.edge.1)));
-            match side_of(bounds(&local[&tab.across]), a, b) {
-                Some((side, lo, hi)) => contact_clear(intents, &tab.name, &tab.across, side, lo, hi)?,
+            match side_of(bounds(&local[across]), a, b) {
+                Some((side, lo, hi)) => contact_clear(intents, &tab.name, across, side, lo, hi)?,
                 None => {
                     return Err(format!(
                         "tab {} lands on board {} away from a straight side of its outline",
-                        tab.name, tab.across
+                        tab.name, across
                     ));
                 }
             }

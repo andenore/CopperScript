@@ -37,8 +37,8 @@ pub struct BuiltTab {
     /// Distance along the side from its start, and the tab width.
     pub at: i64,
     pub width: i64,
-    /// What it bridges to: "rail" or a board instance.
-    pub across: String,
+    /// The board it bridges to, or `None` for a rail.
+    pub across: Option<String>,
     /// The gap it spans.
     pub length: i64,
     pub mouse_bites: usize,
@@ -222,7 +222,7 @@ pub fn build(
         let centre = ((a.0 + b.0) / 2, (a.1 + b.1) / 2);
         let mut pads = Vec::new();
         let mut ends = vec![-spec.mouse_bite.inset];
-        if built.across != "rail" {
+        if built.across.is_some() {
             ends.push(built.length + spec.mouse_bite.inset);
         }
         for depth in ends {
@@ -393,14 +393,14 @@ fn build_tab(
         (a.0 + n.0 * MAX_TAB_LENGTH, a.1 + n.1 * MAX_TAB_LENGTH),
     ];
     let probe = ring_shapes(&probe);
-    let mut nearest: Option<(i64, String)> = None;
-    let mut consider = |shapes: poly::Shapes, name: &str| {
+    let mut nearest: Option<(i64, Option<String>)> = None;
+    let mut consider = |shapes: poly::Shapes, name: Option<&str>| {
         for shape in poly::intersection(&probe, &shapes) {
             for contour in shape {
                 for p in contour {
                     let d = (p.x - a.0) * n.0 + (p.y - a.1) * n.1;
                     if nearest.as_ref().is_none_or(|(best, _)| d < *best) {
-                        nearest = Some((d, name.to_owned()));
+                        nearest = Some((d, name.map(str::to_owned)));
                     }
                 }
             }
@@ -409,12 +409,12 @@ fn build_tab(
     for (name, rings) in outlines {
         if *name != tab.board {
             for ring in rings {
-                consider(ring_shapes(ring), name);
+                consider(ring_shapes(ring), Some(name));
             }
         }
     }
     for rail in rails {
-        consider(rect_shapes(*rail), "rail");
+        consider(rect_shapes(*rail), None);
     }
     let Some((distance, across)) = nearest else {
         return Err(format!(
@@ -427,9 +427,10 @@ fn build_tab(
     };
     if distance <= 0 {
         return Err(format!(
-            "tab {}: board {} touches or overlaps {across} across its {} side",
+            "tab {}: board {} touches or overlaps {} across its {} side",
             tab.name,
             tab.board,
+            across.as_deref().map_or_else(|| "a rail".to_owned(), |b| format!("board {b}")),
             side.as_str()
         ));
     }
