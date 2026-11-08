@@ -133,6 +133,7 @@ fn stale_native_reference_evidence_remains_incomplete() {
         findings: Vec::new(),
         dangling_track_uuids: Vec::new(),
         expected_antenna_open_ends: Vec::new(),
+        expected_open_ends: Vec::new(),
         native_findings: Vec::new(),
         artifact_directory: None,
         filled_regions: Vec::new(),

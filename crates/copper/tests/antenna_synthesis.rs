@@ -68,6 +68,48 @@ fn the_tuned_example_binds_its_synthesized_monopole_as_locked_copper() {
 }
 
 #[test]
+fn native_verification_lists_the_radiator_end_for_filled_board_drc() {
+    let directory = scratch("open-end");
+    let (pcb, report, filled) =
+        (directory.join("board.kicad_pcb"), directory.join("route.json"), directory.join("filled.kicad_pcb"));
+    let (pcb_text, report_text, filled_text) = (
+        pcb.to_string_lossy().into_owned(),
+        report.to_string_lossy().into_owned(),
+        filled.to_string_lossy().into_owned(),
+    );
+    let (status, output) = copper(&[
+        "route-board",
+        "examples/antenna_synthesis/board.copper",
+        "-o",
+        &pcb_text,
+        "--report",
+        &report_text,
+        "--locked",
+        "--offline",
+        "--verify-plane-fill",
+        "native",
+    ]);
+    assert_eq!(status, 0, "{output}");
+    // The route report lists the radiator's open end (36.25, 0.7) by point,
+    // net and layer, in the form `copper drc --expected-open-ends` reads.
+    let text = std::fs::read_to_string(&report).expect("the route report");
+    assert!(text.contains("\"expected_open_ends\""), "{text}");
+    assert!(text.contains("\"36.25\"") && text.contains("\"ANT_FEED\""), "{text}");
+    let (status, output) = copper(&["fill", &pcb_text, "-o", &filled_text]);
+    assert_eq!(status, 0, "{output}");
+    for extension in ["kicad_pro", "kicad_dru"] {
+        let _ = std::fs::copy(pcb.with_extension(extension), filled.with_extension(extension));
+    }
+    // Without the report the open end fails DRC; with it, exactly that one is excused.
+    let (status, output) = copper(&["drc", &filled_text]);
+    assert_ne!(status, 0, "{output}");
+    assert!(output.contains("track_dangling"), "{output}");
+    let (status, output) = copper(&["drc", &filled_text, "--expected-open-ends", &report_text]);
+    assert_eq!(status, 0, "{output}");
+    assert!(output.contains("Excused 1 expected open end(s)"), "{output}");
+}
+
+#[test]
 fn without_geometry_the_template_monopole_sits_on_the_region_centreline() {
     let board = with_lines("template", "");
     let pcb = board.with_file_name("board.kicad_pcb");

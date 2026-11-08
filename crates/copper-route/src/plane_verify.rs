@@ -80,6 +80,10 @@ pub struct PlaneVerification {
     /// of a synthesized antenna ending inside its region is the radiator's
     /// open end, which KiCad cannot know is deliberate.
     pub expected_antenna_open_ends: Vec<String>,
+    /// The same open ends as `(x_mm, y_mm, net, layer)` at the reported
+    /// dangling end, which `copper drc --expected-open-ends` reads from the
+    /// route report to excuse exactly these findings on the filled board.
+    pub expected_open_ends: Vec<(String, String, String, String)>,
     pub native_findings: Vec<NativeFinding>,
     pub artifact_directory: Option<String>,
     pub filled_regions: Vec<NativeFilledRegion>,
@@ -161,6 +165,18 @@ impl PlaneVerification {
         document.insert("findings".to_owned(), strings(&self.findings));
         document.insert("dangling_track_uuids".to_owned(), strings(&self.dangling_track_uuids));
         document.insert("expected_antenna_open_ends".to_owned(), strings(&self.expected_antenna_open_ends));
+        let open_ends = self
+            .expected_open_ends
+            .iter()
+            .map(|(x, y, net, layer)| {
+                let mut end = Object::new();
+                end.insert("at_mm".to_owned(), Value::Array(vec![Value::from(x.as_str()), Value::from(y.as_str())]));
+                end.insert("net".to_owned(), Value::from(net.as_str()));
+                end.insert("layer".to_owned(), Value::from(layer.as_str()));
+                Value::Object(end)
+            })
+            .collect();
+        document.insert("expected_open_ends".to_owned(), Value::Array(open_ends));
         let native_findings = self
             .native_findings
             .iter()
@@ -686,6 +702,7 @@ pub fn verify_filled_planes(
     let antennas = antenna_open_end_regions(board);
     let mut expected_uuids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut expected_antenna_open_ends = Vec::new();
+    let mut expected_open_ends = Vec::new();
     let mut islands = Vec::new();
     let mut others = Vec::new();
     for item in violations {
@@ -707,6 +724,21 @@ pub fn verify_filled_planes(
             })
         {
             expected_uuids.insert(uuid.clone());
+            // The open end: the segment endpoint no other copper of the net
+            // touches (the report carries no position).
+            let shared = |point: &(i64, i64)| {
+                objects.values().any(|other| {
+                    other.uuid != object.uuid && other.net == object.net && other.positions_nm.contains(point)
+                })
+            };
+            if let (Some((x, y)), Some(net), Some(layer)) = (
+                object.positions_nm.iter().find(|point| !shared(point)),
+                object.net.clone(),
+                object.layers.first().cloned(),
+            ) {
+                let mm = |nm: i64| format!("{}", nm as f64 / 1e6);
+                expected_open_ends.push((mm(*x), mm(*y), net, layer));
+            }
             expected_antenna_open_ends.push(format!(
                 "{}: {} (antenna {} open end)",
                 "track_dangling",
@@ -802,6 +834,7 @@ pub fn verify_filled_planes(
         findings,
         dangling_track_uuids: dangling.into_iter().collect(),
         expected_antenna_open_ends,
+        expected_open_ends,
         native_findings: mapped,
         artifact_directory: artifact_directory.map(|_| copper_lang::paths::display(&stage)),
         filled_regions: filled,

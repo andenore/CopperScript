@@ -19,15 +19,20 @@ fn read(path: &Path) -> Result<String, String> {
     Ok(text.replace("\r\n", "\n"))
 }
 
-/// The track ends that are open by design, from a `copper panelize` report's
-/// `expected_open_ends`: `(x_nm, y_nm, net)`.
-/// The panel report's open ends: point, net and layer.
+/// The track ends that are open by design, as `(x_nm, y_nm, net, layer)`:
+/// a `copper panelize` report's `expected_open_ends`, or a route report's
+/// `plane_verification.expected_open_ends` (synthesized antennas' radiator
+/// ends, found by the route's native verification).
 fn expected_open_ends(path: &Path) -> Result<Vec<(f64, f64, String, String)>, String> {
     let report = copper_json::parse(&read(path)?).map_err(|e| format!("{}: {e:?}", paths::display(path)))?;
     let copper_json::Value::Object(object) = report else {
         return Err(format!("{} is not a report", paths::display(path)));
     };
-    let Some(copper_json::Value::Array(ends)) = object.get("expected_open_ends") else {
+    let nested = match object.get("plane_verification") {
+        Some(copper_json::Value::Object(verification)) => verification.get("expected_open_ends"),
+        _ => None,
+    };
+    let Some(copper_json::Value::Array(ends)) = object.get("expected_open_ends").or(nested) else {
         return Err(format!("{} has no expected_open_ends", paths::display(path)));
     };
     let mut result = Vec::new();
@@ -157,7 +162,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     match result {
         Ok(report) => {
             if waived > 0 {
-                let _ = text::print(out, &format!("Excused {waived} expected open end(s) listed in the panel report"));
+                let _ = text::print(out, &format!("Excused {waived} expected open end(s) listed in the report"));
             }
             let _ = text::print(out, &report.summary());
             if let Some(readback) = &readback {
