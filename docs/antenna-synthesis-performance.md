@@ -118,8 +118,12 @@ example board:
   edge and a port line, now keep their own lines unless closer than a fifth
   of the snap; only the region's padding still snaps onto copper.
 
-Both change what is simulated, so the revision moves and every `tuned_for`
-digest is renewed by a fresh synthesis.
+These change what is simulated, so the revision moves and every `tuned_for`
+digest is renewed by a fresh synthesis. The example re-synthesized to a
+22.55 mm monopole (height 5.3 mm) at 2.368 GHz on the fine mesh, -12.2 dB
+matched over the band with 0.82 nH series then 2.62 pF shunt, 86 %
+efficiency, against 22.73 mm under revision 4 (-0.8 % in length, same
+return loss and efficiency).
 
 ## Model revision 4
 
