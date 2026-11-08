@@ -114,7 +114,12 @@ against: the component (value, footprint, properties), its library part and
 device, and for every pin the net it is on, that net's supplies and voltages,
 and any no-connect. A change to any of these marks that selection
 `STALE_SELECTION`; changes elsewhere on the board (placement, routing intent,
-silkscreen, other components) leave it current.
+silkscreen, other components) leave it current. So does the part's 3D shape:
+its `model` (with `model_sha256`, `model_license` and
+`model_redistributable`) and its `height` are left out of the digest, so
+adding or correcting them keeps a reviewed selection reviewed. The declared
+height still reaches the export (`CopperScriptHeightMM`); it is not reviewed
+with the selection.
 
 `copper assembly update` rebinds the lock in place. A selection whose component
 is unchanged keeps its identity and review. A changed one keeps its identity
