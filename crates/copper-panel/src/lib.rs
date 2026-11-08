@@ -111,9 +111,13 @@ pub fn panelize(
     let mut inputs = Vec::new();
     let mut local = IndexMap::new();
     let mut poses = Vec::new();
-    for (board, file) in spec.boards.iter().zip(files) {
+    let mut intents = intents.to_vec();
+    for ((board, file), intent) in spec.boards.iter().zip(files).zip(intents.iter_mut()) {
+        let routed = copper_cam::board::parse_board(&file.pcb, &board.pcb)?;
+        intent::verify_source(&board.name, intent, &routed)?;
         let tree = parse(&file.pcb, &board.pcb)?;
         let rings = outline_rings(&tree, &format!("board {}", board.name))?;
+        intent.keep_clear.extend(intent::routed_keep_clear(&routed, &rings));
         poses.push(pose_for(&rings, board.quarter_turns, (board.at[0], board.at[1])));
         local.insert(board.name.clone(), rings);
         inputs.push(BoardInput { instance: board.name.clone(), tree });
@@ -139,7 +143,7 @@ pub fn panelize(
     }
     let frame = frame::build(spec, &local, &composition.outlines, &composition.poses)?;
     let intent_map: IndexMap<String, BoardIntent> =
-        spec.boards.iter().zip(intents).map(|(b, i)| (b.name.clone(), i.clone())).collect();
+        spec.boards.iter().zip(&intents).map(|(b, i)| (b.name.clone(), i.clone())).collect();
     let open_ends =
         intent::check(spec, &intent_map, &local, &composition.outlines, &composition.poses, &frame.tabs, &frame.rails)?;
     let mut tree = composition.tree;
@@ -299,6 +303,19 @@ mod tests {
             .err()
             .expect("refused");
         assert!(error.contains("overlap"), "{error}");
+        // a_right bridges A to B at A's 2-4 mm; the same bridge declared from B is refused.
+        let error = panelize(
+            &spec("tab b_left { board = B; side = left; at = 3 mm; width = 2 mm; }"),
+            &files(),
+            &none(),
+            "demo",
+        )
+        .err()
+        .expect("refused");
+        assert!(
+            error.contains("tabs a_right and b_left overlap") && error.contains("declare each bridge once"),
+            "{error}"
+        );
         let error = panelize(&spec("tab a_off { board = A; side = top; at = 9.5 mm; }"), &files(), &none(), "demo")
             .err()
             .expect("refused");
@@ -405,6 +422,55 @@ mod tests {
         offset.fiducial_offset = Some(4_500_000);
         let error = panelize(&offset, &files(), &none(), "demo").err().expect("refused");
         assert!(error.contains("mask openings off"), "{error}");
+    }
+
+    #[test]
+    fn a_routed_board_must_match_its_source_beyond_the_outline() {
+        use crate::intent::Radiator;
+        // BOARD has no footprints and one GND via: a source naming J1 is another board.
+        let parts = BoardIntent { references: vec!["J1".into()], ..BoardIntent::default() };
+        let error = panelize(&spec(""), &files(), &[parts, BoardIntent::default()], "demo").err().expect("refused");
+        assert!(
+            error.contains("board A: its routed pcb's footprints differ") && error.contains("missing J1"),
+            "{error}"
+        );
+        // A radiator the routed board does not carry: the source belongs to another board.
+        let antenna = BoardIntent {
+            radiators: vec![Radiator {
+                name: "ant".into(),
+                net: "GND".into(),
+                layer: "F.Cu".into(),
+                path: vec![(1_000_000, 1_000_000), (9_000_000, 1_000_000)],
+            }],
+            ..BoardIntent::default()
+        };
+        let error =
+            panelize(&spec(""), &files(), &[BoardIntent::default(), antenna.clone()], "demo").err().expect("refused");
+        assert!(error.contains("board B: antenna ant's radiator from the source is not on the routed pcb"), "{error}");
+        // A pour keep-out on the routed board's edge holds tabs off, whatever the source says.
+        let keepout = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"55555555-5555-5555-5555-555555555555\") (name \"cluster/a/a-edge\") \
+             (hatch edge 0.5) (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) \
+             (polygon (pts (xy 4 0) (xy 10 0) (xy 10 3) (xy 4 3))))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = keepout;
+        let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+        assert!(
+            error.contains("tab a_top on board A's top side") && error.contains("keep-out cluster/a/a-edge"),
+            "{error}"
+        );
+        // With the radiator routed as a track it is accepted.
+        let routed = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(segment (start 1 1) (end 9 1) (width 0.5) (layer \"F.Cu\") (net 1) (uuid \"44444444-4444-4444-4444-444444444444\"))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut both = files();
+        both[1].pcb = routed;
+        panelize(&spec(""), &both, &[BoardIntent::default(), antenna], "demo").expect("the radiator is on the board");
     }
 
     #[test]

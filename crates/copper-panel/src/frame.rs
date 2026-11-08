@@ -185,19 +185,23 @@ pub fn build(
     }
     let mut items: Vec<Node> = Vec::new();
     let mut tabs: Vec<BuiltTab> = Vec::new();
+    let mut footprints: Vec<(String, Rect)> = Vec::new();
     for tab in &spec.tabs {
         let built = build_tab(spec, tab, local, outlines, poses, &rails)?;
-        for other in tabs.iter().filter(|t| t.board == built.board && t.side == built.side) {
-            if (built.at - other.at).abs() * 2 < built.width + other.width {
+        // Tabs may not share material: the same bridge declared from both
+        // boards, or two tabs on one side, would drill the bites twice.
+        let area = tab_rect(&built, poses[&built.board]);
+        for (other, rect) in &footprints {
+            if area[0] < rect[2] && rect[0] < area[2] && area[1] < rect[3] && rect[1] < area[3] {
                 return Err(format!(
-                    "tabs {} and {} overlap on board {}'s {} side",
-                    other.name,
+                    "tabs {other} and {} overlap (board {}'s {} side); declare each bridge once",
                     built.name,
                     built.board,
                     built.side.as_str()
                 ));
             }
         }
+        footprints.push((built.name.clone(), area));
         let (a, b) = built.edge;
         let pose = poses[&built.board];
         let normal = pose.rotate(side_geometry([0, 0, 0, 0], built.side).2);
@@ -417,6 +421,14 @@ fn build_tab(
         mouse_bites: 0,
         edge: (a, b),
     })
+}
+
+/// The panel rectangle a built tab occupies across its gap.
+fn tab_rect(tab: &BuiltTab, pose: Pose) -> Rect {
+    let normal = pose.rotate(side_geometry([0, 0, 0, 0], tab.side).2);
+    let (a, b) = tab.edge;
+    let far = |p: Point| (p.0 + normal.0 * tab.length, p.1 + normal.1 * tab.length);
+    bounds_of([a, b, far(a), far(b)].iter())
 }
 
 fn is_axis_aligned(ring: &[Point]) -> bool {

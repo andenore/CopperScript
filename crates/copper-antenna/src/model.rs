@@ -475,7 +475,8 @@ fn axis_lines(plan: &AxisPlan) -> Result<Vec<f64>, String> {
         all.push(plan.hi);
         return ems::csx::grid::smooth_lines(&all, plan.max_cell, plan.ratio).map_err(|e| e.to_string());
     }
-    let coarsest = plan.zones.iter().map(|z| z.2).fold(0.0, f64::max);
+    // No zone may ask for cells above the frequency limit.
+    let coarsest = plan.zones.iter().map(|z| z.2).fold(0.0, f64::max).min(plan.max_cell);
     let mut inner = vec![inner_lines[0]];
     for pair in inner_lines.windows(2) {
         let (a, b) = (pair[0], pair[1]);
@@ -484,7 +485,7 @@ fn axis_lines(plan: &AxisPlan) -> Result<Vec<f64>, String> {
             .zones
             .iter()
             .filter(|(lo, hi, _)| middle > *lo && middle < *hi)
-            .map(|(_, _, limit)| *limit)
+            .map(|(_, _, limit)| limit.min(plan.max_cell))
             .fold(coarsest, f64::min);
         let n = ((b - a) / limit - 1e-9).ceil().max(1.0) as usize;
         inner.extend((1..=n).map(|i| a + (b - a) * i as f64 / n as f64));
@@ -640,11 +641,16 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
     // primitives, so no stitching via or polygon vertex adds a sliver.
     // COPPER_ANTENNA_FINE_CELL overrides the fine fidelity's cell, for
     // convergence references (docs/antenna-synthesis-performance.md).
+    let f_high = problem.freqs.last().copied().unwrap_or(centre);
+    let max_cell = (C0_MM_PER_S / f_high / stack.max_er().sqrt() / 15.0).min(3.0);
+    // The fidelity's cell, never coarser than the frequency limit: the feed
+    // and short zones refine from it, so they stay finer than the rest.
     let cell = std::env::var("COPPER_ANTENNA_FINE_CELL")
         .ok()
         .and_then(|v| v.parse::<f64>().ok())
         .filter(|c| fidelity.name == "fine" && *c > 0.0)
-        .unwrap_or(fidelity.cell);
+        .unwrap_or(fidelity.cell)
+        .min(max_cell);
     let region = [mm(site.area.min_x), mm(site.area.min_y), mm(site.area.max_x), mm(site.area.max_y)];
     let pad = 2.0 * cell;
     let port_rect = [port_box.0[0], port_box.0[1], port_box.1[0], port_box.1[1]];
@@ -710,8 +716,6 @@ pub fn evaluate(problem: &Problem, layout: &Layout, fidelity: &Fidelity) -> Resu
     planned[2].extend(keep_z.iter().map(|z| (*z, LineRank::Port)));
     let z_bottom = planned[2].iter().map(|(z, _)| *z).fold(0.0, f64::min);
     let zone_z = (z_bottom, 4.0 * cell, z_cell);
-    let f_high = problem.freqs.last().copied().unwrap_or(centre);
-    let max_cell = (C0_MM_PER_S / f_high / stack.max_er().sqrt() / 15.0).min(3.0);
     // An eighth of a wavelength of air before the PML: S11 and the far-field
     // box are unchanged from a quarter (docs/antenna-synthesis-performance.md).
     let margin = C0_MM_PER_S / centre / 8.0 + PML_CELLS as f64 * max_cell;
@@ -977,6 +981,16 @@ mod tests {
         .expect("lines");
         assert!(lines.contains(&0.0) && lines.contains(&0.1), "{lines:?}");
         assert!(!lines.contains(&0.2) && !lines.contains(&2.0) && lines.contains(&2.1), "{lines:?}");
+    }
+
+    #[test]
+    fn no_cell_exceeds_the_frequency_limit_inside_the_zones() {
+        // 24 GHz in er 4: a 0.416 mm limit under a zone asking for 0.75 mm.
+        let mut coarse = plan(&[(0.0, LineRank::Edge), (2.0, LineRank::Edge)], &[(-1.0, 3.0, 0.75)]);
+        coarse.max_cell = 0.416;
+        let lines = axis_lines(&coarse).expect("lines");
+        let widest = cells(&lines).into_iter().fold(0.0, f64::max);
+        assert!(widest <= 0.416 + 1e-9, "{widest} mm in {lines:?}");
     }
 
     #[test]

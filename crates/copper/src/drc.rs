@@ -21,7 +21,8 @@ fn read(path: &Path) -> Result<String, String> {
 
 /// The track ends that are open by design, from a `copper panelize` report's
 /// `expected_open_ends`: `(x_nm, y_nm, net)`.
-fn expected_open_ends(path: &Path) -> Result<Vec<(f64, f64, String)>, String> {
+/// The panel report's open ends: point, net and layer.
+fn expected_open_ends(path: &Path) -> Result<Vec<(f64, f64, String, String)>, String> {
     let report = copper_json::parse(&read(path)?).map_err(|e| format!("{}: {e:?}", paths::display(path)))?;
     let copper_json::Value::Object(object) = report else {
         return Err(format!("{} is not a report", paths::display(path)));
@@ -41,12 +42,15 @@ fn expected_open_ends(path: &Path) -> Result<Vec<(f64, f64, String)>, String> {
                 _ => None,
             }
         };
-        let net = match end.get("net") {
-            Some(copper_json::Value::Str(net)) => net.clone(),
-            _ => continue,
+        let text = |key: &str| match end.get(key) {
+            Some(copper_json::Value::Str(value)) => Some(value.clone()),
+            _ => None,
+        };
+        let (Some(net), Some(layer)) = (text("net"), text("layer")) else {
+            return Err(format!("{}: an expected open end needs its net and layer", paths::display(path)));
         };
         if let (Some(x), Some(y)) = (coordinate(0), coordinate(1)) {
-            result.push((x, y, net));
+            result.push((x, y, net, layer));
         }
     }
     Ok(result)
@@ -81,7 +85,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     if parsed.flag("--help") {
         let _ = writeln!(
             out,
-            "{USAGE}\n\ncheck a filled .kicad_pcb natively against the design rules of its .kicad_pro and .kicad_dru\n(same stem by default): clearances, holes, board edge, sizes, keepouts, opens and dangling\ncopper; with --cam, also read back the Gerbers and drills under CAM_DIR for shorts and opens\nagainst the board netlist; --expected-open-ends excuses the dangling track ends a copper panelize\nreport lists (synthesized radiators' open tips), at that exact point on that net only;\nexit 0 when clean, 1 with findings, 2 on error. No KiCad is run."
+            "{USAGE}\n\ncheck a filled .kicad_pcb natively against the design rules of its .kicad_pro and .kicad_dru\n(same stem by default): clearances, holes, board edge, sizes, keepouts, opens and dangling\ncopper; with --cam, also read back the Gerbers and drills under CAM_DIR for shorts and opens\nagainst the board netlist; --expected-open-ends excuses the dangling track ends a copper panelize\nreport lists (synthesized radiators' open tips), at that exact point on that net and layer only;\nexit 0 when clean, 1 with findings, 2 on error. No KiCad is run."
         );
         return 0;
     }
@@ -114,9 +118,13 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             let before = report.violations.len();
             report.violations.retain(|v| {
                 !(v.kind == "track_dangling"
-                    && ends.iter().any(|(x, y, net)| {
+                    && ends.iter().any(|(x, y, net, layer)| {
                         (v.at.0 - x).hypot(v.at.1 - y) <= 1_000.0
-                            && v.items.iter().any(|i| i.contains(&format!("[{net}]")))
+                            && v.items.iter().any(|i| {
+                                i.starts_with("track ")
+                                    && i.contains(&format!("[{net}]"))
+                                    && i.ends_with(&format!(" on {layer}"))
+                            })
                     }))
             });
             waived = before - report.violations.len();

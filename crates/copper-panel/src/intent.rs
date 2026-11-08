@@ -31,6 +31,15 @@ pub struct Overhang {
     pub distance: i64,
 }
 
+/// A synthesized radiator's centre line as the source chose it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Radiator {
+    pub name: String,
+    pub net: String,
+    pub layer: String,
+    pub path: Vec<Point>,
+}
+
 /// A track end that is open by design (a synthesized radiator's tip).
 #[derive(Clone, Debug, PartialEq)]
 pub struct OpenEnd {
@@ -46,6 +55,10 @@ pub struct BoardIntent {
     pub keep_clear: Vec<KeepClear>,
     pub overhangs: Vec<Overhang>,
     pub open_ends: Vec<OpenEnd>,
+    /// The source's footprint references; empty skips the reference check.
+    pub references: Vec<String>,
+    /// The source's synthesized radiators, which the routed board must carry.
+    pub radiators: Vec<Radiator>,
 }
 
 /// How far beyond an antenna region's perimeter opening tabs stay away.
@@ -135,6 +148,112 @@ fn contact_clear(
         }
     }
     Ok(())
+}
+
+fn distance_to_segment(p: Point, a: Point, b: Point) -> f64 {
+    let (px, py, ax, ay, bx, by) = (p.0 as f64, p.1 as f64, a.0 as f64, a.1 as f64, b.0 as f64, b.1 as f64);
+    let (dx, dy) = (bx - ax, by - ay);
+    let length = dx * dx + dy * dy;
+    let t = if length == 0.0 { 0.0 } else { (((px - ax) * dx + (py - ay) * dy) / length).clamp(0.0, 1.0) };
+    (px - ax - t * dx).hypot(py - ay - t * dy)
+}
+
+/// The routed board must come from the source the intent was read from: the
+/// outline alone does not tell two boards apart, so the footprint references
+/// must agree and every synthesized radiator must lie on the board's copper
+/// (its segments' midpoints and its open tip on a track of the feed net and
+/// layer). Without this a source with the same outline but another antenna
+/// would move the keep-clear stretches off the real radiator.
+pub fn verify_source(board: &str, intent: &BoardIntent, pcb: &copper_cam::board::Board) -> Result<(), String> {
+    if !intent.references.is_empty() {
+        let mut routed: Vec<&str> =
+            pcb.footprints.iter().map(|f| f.reference.as_str()).filter(|r| !r.is_empty()).collect();
+        routed.sort_unstable();
+        routed.dedup();
+        let mut source: Vec<&str> = intent.references.iter().map(String::as_str).collect();
+        source.sort_unstable();
+        source.dedup();
+        if routed != source {
+            let missing: Vec<&str> = source.iter().copied().filter(|r| !routed.contains(r)).collect();
+            let extra: Vec<&str> = routed.iter().copied().filter(|r| !source.contains(r)).collect();
+            return Err(format!(
+                "board {board}: its routed pcb's footprints differ from its source's (missing {}; not in the source {}); \
+                 route the source again or fix the panel's pcb path",
+                if missing.is_empty() { "none".to_owned() } else { missing.join(", ") },
+                if extra.is_empty() { "none".to_owned() } else { extra.join(", ") }
+            ));
+        }
+    }
+    for radiator in &intent.radiators {
+        let layer = pcb.copper_layers.iter().position(|l| *l == radiator.layer);
+        let tracks: Vec<(Point, Point, i64)> = pcb
+            .tracks
+            .iter()
+            .filter(|t| Some(t.layer) == layer && t.net.as_deref() == Some(radiator.net.as_str()))
+            .flat_map(|t| match t.path {
+                copper_cam::board::TrackPath::Line { start, end } => {
+                    vec![((start.x, start.y), (end.x, end.y), t.width)]
+                }
+                copper_cam::board::TrackPath::Arc { start, mid, end } => {
+                    vec![((start.x, start.y), (mid.x, mid.y), t.width), ((mid.x, mid.y), (end.x, end.y), t.width)]
+                }
+            })
+            .collect();
+        let mut samples: Vec<Point> =
+            radiator.path.windows(2).map(|w| ((w[0].0 + w[1].0) / 2, (w[0].1 + w[1].1) / 2)).collect();
+        samples.extend(radiator.path.last().copied());
+        for p in samples {
+            if !tracks.iter().any(|(a, b, width)| distance_to_segment(p, *a, *b) <= (*width / 2 + 1_000) as f64) {
+                return Err(format!(
+                    "board {board}: antenna {}'s radiator from the source is not on the routed pcb's {} copper of \
+                     net {} near ({}, {}) mm; the pcb was routed from another source",
+                    radiator.name,
+                    radiator.layer,
+                    radiator.net,
+                    mm(p.0),
+                    mm(p.1)
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Keep-clear stretches the routed board carries itself: every rule area
+/// that forbids copper pours (an antenna region, a connector launch) along
+/// the outline's sides, plus the antenna margin. They hold whatever the
+/// source says, so a wrong source cannot open a radiator edge to tabs.
+pub fn routed_keep_clear(pcb: &copper_cam::board::Board, outline: &[Vec<Point>]) -> Vec<KeepClear> {
+    let b = bounds(outline);
+    let mut found: Vec<KeepClear> = Vec::new();
+    for zone in pcb
+        .zones
+        .iter()
+        .filter(|z| z.keepout == Some(true) && !z.in_footprint && z.not_allowed.iter().any(|kind| kind == "copperpour"))
+    {
+        for contour in &zone.outline {
+            let mut from = (contour.start.x, contour.start.y);
+            for edge in &contour.edges {
+                let end = edge.end();
+                let to = (end.x, end.y);
+                if let Some((side, start, end)) = side_of(b, from, to)
+                    && end > start
+                {
+                    let keep = KeepClear {
+                        side,
+                        start: start - ANTENNA_TAB_MARGIN,
+                        end: end + ANTENNA_TAB_MARGIN,
+                        reason: format!("the routed board's keep-out {} opened to the perimeter", zone.name),
+                    };
+                    if !found.contains(&keep) {
+                        found.push(keep);
+                    }
+                }
+                from = to;
+            }
+        }
+    }
+    found
 }
 
 /// Check the panel against every board's intent; returns the panel's open

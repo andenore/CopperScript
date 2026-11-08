@@ -4,8 +4,11 @@
 //! boards (a panel is fabricated with one rule set). Custom rules without a
 //! condition must be identical too and are kept once; rules with a condition
 //! are board-specific (CopperScript writes courtyard rules keyed on
-//! references), so each is renamed for its board and its `Reference` and
-//! `NetName` comparisons are rewritten to the panel's prefixed names.
+//! references), so each is renamed for its board, its `Reference` and
+//! `NetName` comparisons are rewritten to the panel's prefixed names, and it
+//! is limited to that board's items: a negated or wildcard comparison such
+//! as `A.NetName != 'B/GND'` would otherwise match every other board too,
+//! and the last matching rule wins.
 
 use copper_json::{Dumps, Value};
 use indexmap::IndexMap;
@@ -54,6 +57,39 @@ pub fn rewrite_condition(condition: &str, instance: &str) -> String {
     }
 }
 
+/// Whether `condition` names `item` (`A.` or `B.`) outside quoted strings.
+fn names_item(condition: &str, item: char) -> bool {
+    let bytes = condition.as_bytes();
+    let mut quote: Option<u8> = None;
+    for (k, &c) in bytes.iter().enumerate() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == b'\'' || c == b'"' => quote = Some(c),
+            None => {
+                let starts_word = k == 0 || !(bytes[k - 1].is_ascii_alphanumeric() || bytes[k - 1] == b'_');
+                if c == item as u8 && starts_word && bytes.get(k + 1) == Some(&b'.') {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// A board's rule condition on the panel: its names prefixed, and A (and B,
+/// when the condition names B) required to be one of the board's own items
+/// (a net `INSTANCE/...` or a footprint `INSTANCE-...`).
+pub fn scope_condition(condition: &str, instance: &str) -> String {
+    let own = |item: char| format!("({item}.NetName == '{instance}/*' || {item}.Reference == '{instance}-*')");
+    let rewritten = rewrite_condition(condition, instance);
+    if names_item(condition, 'B') {
+        format!("{} && {} && ({rewritten})", own('A'), own('B'))
+    } else {
+        format!("{} && ({rewritten})", own('A'))
+    }
+}
+
 fn rules_of(text: &str, source: &str) -> Result<Vec<Node>, String> {
     let body: String = text.lines().filter(|l| !l.trim_start().starts_with('#')).collect::<Vec<_>>().join("\n");
     let root = parse(&format!("(rules\n{body}\n)"), source)?;
@@ -96,7 +132,7 @@ pub fn merge_dru(boards: &[(String, String)]) -> Result<String, String> {
                         if item.tag() == Some("condition") {
                             *item = Node::list(vec![
                                 Node::atom("condition"),
-                                Node::atom(quote(&rewrite_condition(&condition, instance))),
+                                Node::atom(quote(&scope_condition(&condition, instance))),
                             ]);
                         }
                     }
@@ -180,9 +216,32 @@ mod tests {
         let merged = merge_dru(&[("A".into(), dru.into()), ("B".into(), dru.into())]).expect("merged");
         assert_eq!(merged.matches("Default gap").count(), 1, "{merged}");
         assert!(merged.contains("\"A: Gap 1\"") && merged.contains("'B-J1'"), "{merged}");
+        assert!(merged.contains("(A.NetName == 'B/*' || A.Reference == 'B-*') && (A.Reference == 'B-J1')"), "{merged}");
         let other = dru.replace("min 0.5mm", "min 0.4mm");
         let error = merge_dru(&[("A".into(), dru.into()), ("B".into(), other)]).expect_err("refused");
         assert!(error.contains("differs between boards"), "{error}");
+    }
+
+    #[test]
+    fn one_boards_rule_cannot_reach_another_boards_items() {
+        use copper_cam::rules::{Item, Rules};
+        // A raises SIG's clearance; B's rule, read on B's own names, lowers
+        // everything but its GND. Before scoping it matched board A's nets too.
+        let a = "(version 1)\n(rule \"big\" (constraint clearance (min 1mm)) (condition \"A.NetName == 'SIG'\"))\n";
+        let b = "(version 1)\n(rule \"small\" (constraint clearance (min 0.2mm)) (condition \"A.NetName != 'GND'\"))\n";
+        let merged = merge_dru(&[("A".into(), a.into()), ("B".into(), b.into())]).expect("merged");
+        let project = r#"{"board": {"design_settings": {"rules": {"min_clearance": 0.1, "min_copper_edge_clearance": 0.3, "min_hole_clearance": 0.25}}}, "net_settings": {"classes": []}}"#;
+        let rules = Rules::load(project, Some(&merged)).expect("the panel rules");
+        let item = |net| Item { net: Some(net), ..Item::default() };
+        assert_eq!(rules.clearance(&item("A/GND"), &item("A/SIG")), 1_000_000, "{merged}");
+        assert_eq!(rules.clearance(&item("B/GND"), &item("B/SIG")), 200_000, "{merged}");
+        // Both items of a two-item condition belong to the board.
+        assert_eq!(
+            scope_condition("A.NetName == 'X' && B.NetName != 'Y'", "C"),
+            "(A.NetName == 'C/*' || A.Reference == 'C-*') && (B.NetName == 'C/*' || B.Reference == 'C-*') && \
+             (A.NetName == 'C/X' && B.NetName != 'C/Y')"
+        );
+        assert!(!names_item("A.NetName == 'B.x'", 'B'));
     }
 
     #[test]

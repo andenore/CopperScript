@@ -89,6 +89,37 @@ fn routed_example_boards_panelize_refill_and_pass_native_drc() {
     ]);
     assert_eq!(status, 0, "{output}");
     assert!(output.contains("Excused 2 expected open end(s)") && output.contains("DRC PASSED"), "{output}");
+    // A waiver names its layer: the same tips listed on B.Cu excuse nothing.
+    let report_text = std::fs::read_to_string(directory.join("out/panel.panel.json")).expect("the panel report");
+    let other_layer = directory.join("out/other-layer.panel.json");
+    std::fs::write(&other_layer, report_text.replace("\"layer\": \"F.Cu\"", "\"layer\": \"B.Cu\""))
+        .expect("the edited report");
+    let (status, output) = copper(&[
+        "drc",
+        &slash(&filled),
+        "--project",
+        &slash(&out.with_extension("kicad_pro")),
+        "--rules",
+        &slash(&out.with_extension("kicad_dru")),
+        "--expected-open-ends",
+        &slash(&other_layer),
+    ]);
+    assert_eq!(status, 1, "{output}");
+    assert!(!output.contains("Excused") && output.contains("track end is not connected"), "{output}");
+    // The routed inverted-F with the monopole's source (same outline) is refused.
+    let swapped = directory.join("panel-swapped.copper");
+    let text = std::fs::read_to_string(&panel).expect("the panel source");
+    std::fs::write(&swapped, text.replace("inverted_f.copper", "board.copper")).expect("the swapped panel");
+    let (status, output) = copper(&[
+        "panelize",
+        &slash(&swapped),
+        "-o",
+        &slash(&directory.join("swapped/panel.kicad_pcb")),
+        "--locked",
+        "--offline",
+    ]);
+    assert_eq!(status, 1, "{output}");
+    assert!(output.contains("board IFA:"), "{output}");
     // Under the jlcpcb preset, explicit 3 mm tabs break JLCPCB's 5 mm rule: reported, and fatal with --strict.
     let fab = directory.join("panel-fab.copper");
     let text = std::fs::read_to_string(&panel).expect("the panel source");

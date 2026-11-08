@@ -13,7 +13,7 @@ use copper_lang::elaborate::elaborate;
 use copper_lang::footprints::FootprintResolver;
 use copper_lang::model::ConstraintKind;
 use copper_panel::compose::Point;
-use copper_panel::intent::{ANTENNA_TAB_MARGIN, BoardIntent, KeepClear, OpenEnd, Overhang, side_of};
+use copper_panel::intent::{ANTENNA_TAB_MARGIN, BoardIntent, KeepClear, OpenEnd, Overhang, Radiator, side_of};
 use copper_pcb::antenna::{chosen_geometry, layout, resolve_sites};
 use copper_pcb::physicalize::{Footprints, PhysicalOptions, physicalize};
 
@@ -45,7 +45,11 @@ fn board_intent(source: &Path, locked: bool, offline: bool) -> Result<BoardInten
     for (x, y) in &ring {
         b = [b[0].min(*x), b[1].min(*y), b[2].max(*x), b[3].max(*y)];
     }
-    let mut intent = BoardIntent { outline: vec![ring], ..BoardIntent::default() };
+    let mut intent = BoardIntent {
+        outline: vec![ring],
+        references: physical.placements.iter().map(|p| p.reference.clone()).collect(),
+        ..BoardIntent::default()
+    };
     for overhang in &physical.body_overhangs {
         let Some(edge) = physical.boundary_edges.iter().find(|e| e.id == overhang.edge) else { continue };
         let unit = ((edge.end.x_nm - edge.start.x_nm).signum(), (edge.end.y_nm - edge.start.y_nm).signum());
@@ -89,6 +93,19 @@ fn board_intent(source: &Path, locked: bool, offline: bool) -> Result<BoardInten
                 at: (end.x_nm, end.y_nm),
                 net: site.feed_net.clone(),
                 layer: "F.Cu".to_owned(),
+            });
+            intent.radiators.push(Radiator {
+                name: site.name.clone(),
+                net: site.feed_net.clone(),
+                layer: "F.Cu".to_owned(),
+                path: realized
+                    .path
+                    .iter()
+                    .map(|(u, v)| {
+                        let p = site.frame.to_board(*u, *v);
+                        (p.x_nm, p.y_nm)
+                    })
+                    .collect(),
             });
         }
     }

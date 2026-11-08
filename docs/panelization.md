@@ -50,13 +50,20 @@ panel ExamplePanel {
 ## What panelize does
 
 1. Compiles each board's source for its edge intent and reads its routed
-   board. The routed outline must match the source's.
+   board. The routed board must come from that source: the outlines and
+   the footprint references must agree, and every synthesized radiator must
+   lie on the routed board's copper (feed net and layer). The routed
+   board's own rule areas that forbid copper pours along its sides (antenna
+   regions, connector launches) are kept clear of tabs as well, plus 1 mm,
+   whatever the source says.
 2. Moves every item by the board's pose, prefixes nets (`MONO/GND`) and
    references (`MONO-J1`) so boards stay electrically separate, derives
    fresh UUIDs, drops zone fills and the boards' outlines. Stack-ups, layer
    sets, project rules and unconditional custom rules must agree;
    conditional rules are kept per board with their `Reference` and
-   `NetName` comparisons rewritten.
+   `NetName` comparisons rewritten, and limited to that board's items (its
+   nets and references), so one board's rule cannot change another's
+   clearances.
 3. Builds the frame: rails, tabs, mouse-bite holes `inset` into every board
    a tab touches (both ends when it joins two boards), fiducials and tooling
    holes, and the outline (boards, tabs and rails united) on `Edge.Cuts`.
@@ -65,7 +72,9 @@ panel ExamplePanel {
    - a tab on a body overhang;
    - an overhanging body that reaches a rail or another board, unless
      `assemble_after_depanel` lists `BOARD.REFERENCE`;
-   - boards closer than `spacing`, overlapping tabs, tabs off their side.
+   - boards closer than `spacing`, tabs off their side, and tabs that
+     overlap anywhere on the panel (the same bridge declared from both
+     boards included).
 5. Writes `copperscript-panel/v0.1` beside the board (`OUT.panel.json`, or
    `--report`): boards, tabs (what each bridges, its gap and hole count),
    keep-clear intervals, overhangs and the radiators' open ends, the
@@ -82,8 +91,8 @@ copper plot -o build/panel/plot build/panel/filled.kicad_pcb
 ```
 
 `--expected-open-ends` excuses only the dangling track ends the report
-lists (synthesized radiators' open tips), at that point on that net, as
-`route-board`'s native verification does for one board.
+lists (synthesized radiators' open tips), at that point, on that net and
+layer, as `route-board`'s native verification does for one board.
 
 ## Presets and fab checks
 
