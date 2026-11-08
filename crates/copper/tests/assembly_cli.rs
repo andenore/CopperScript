@@ -339,3 +339,62 @@ fn offers_need_provider_credentials_and_refuse_offline_runs() {
     assert!(!directory.join("build").exists(), "no report without a lookup");
     assert_eq!(std::fs::read_to_string(&lock).expect("the lock"), before);
 }
+
+/// A board whose one part, `Widget`, carries `extra` (for example a model).
+fn widget_board(directory: &Path, extra: &str) -> PathBuf {
+    std::fs::create_dir_all(directory.join("parts")).expect("a parts directory");
+    std::fs::write(
+        directory.join("parts/widget.copper"),
+        format!(
+            "part Widget {{\n    manufacturer = \"Example\";\n{extra}\n    pin A {{ number = \"1\"; domains = \"analog\"; directions = \"passive\"; }}\n    pin B {{ number = \"2\"; domains = \"analog\"; directions = \"passive\"; }}\n}}\n"
+        ),
+    )
+    .expect("the part");
+    let board = directory.join("board.copper");
+    std::fs::write(
+        &board,
+        "board B {\n    import p \"./parts\";\n    component U1: p.Widget { footprint = \"Capacitor_SMD:C_0402_1005Metric\"; }\n    net N { U1.A; }\n    net M { U1.B; }\n}\n",
+    )
+    .expect("the board");
+    board
+}
+
+#[test]
+fn giving_a_part_a_3d_model_leaves_its_reviewed_selection_current() {
+    let directory = scratch("assembly-3d-model");
+    let board = widget_board(&directory, "");
+    let lock = directory.join("assembly.lock");
+    let (status, stdout) = copper(&["assembly", "snapshot", path(&board), "--offline", "-o", path(&lock)]);
+    assert_eq!(status, 0, "{stdout}");
+    let mut document = read_lock(&lock);
+    for selection in selections(&mut document).iter_mut() {
+        let Value::Object(selection) = selection else { panic!("a selection object") };
+        selection.insert("reviewed".into(), Value::from(true));
+    }
+    std::fs::write(&lock, Dumps::new().indent(2).dumps(&document)).expect("the lock");
+
+    // A 3D model by file, then by URL with its hash and licence: how the part
+    // looks, not what is bought or fitted.
+    let hash = "0".repeat(64);
+    for extra in [
+        "    model = \"models/widget.step\";".to_owned(),
+        format!(
+            "    model = \"https://vendor.example/W.step\";\n    model_sha256 = \"{hash}\";\n    model_license = \"Vendor terms\";\n    model_redistributable = true;"
+        ),
+    ] {
+        widget_board(&directory, &extra);
+        let stdout = copper(&["assembly", "check", path(&board), "--offline", "--lock", path(&lock)]).1;
+        assert!(!stdout.contains("STALE"), "{extra}: {stdout}");
+        let stdout = copper(&["assembly", "update", path(&board), "--offline", "--lock", path(&lock)]).1;
+        assert!(stdout.contains("1 unchanged, 0 changed"), "{extra}: {stdout}");
+        assert!(reviewed(&lock).iter().all(|(_, reviewed)| *reviewed), "{extra}");
+    }
+
+    // A change to what is fitted still makes it stale.
+    widget_board(&directory, "    model = \"models/widget.step\";");
+    let part = directory.join("parts/widget.copper");
+    let text = std::fs::read_to_string(&part).expect("the part").replace("\"Example\"", "\"Other\"");
+    std::fs::write(&part, text).expect("the changed part");
+    let stdout = copper(&["assembly", "check", path(&board), "--offline", "--lock", path(&lock)]).1;
+    assert!(stdout.contains("STALE_SELECTION: U1:"), "{stdout}");
+}
