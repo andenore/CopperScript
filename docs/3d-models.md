@@ -38,7 +38,10 @@ When a board is physicalized the part's values override its footprint's: the
 footprint gets that `height_nm` (which also feeds the generated body and the
 `CopperScriptHeightMM` property) and that model. The footprint is renamed with a
 `__3d_<digest>` suffix, so two parts can share one source footprint and differ
-in 3D. A `model` that is not a file relative to the part file is reported as an
+in 3D. The footprint as its source gave it (name, height and models) is
+recorded in its `part_3d_base_*` metadata, and a hard-macro member compares
+that land, so giving a part a height, a model or a connector category does not
+break a layout that places it. A `model` that is not a file relative to the part file is reported as an
 import warning (`... 3D model ... not found; using a generated body`) and
 ignored. So is one that resolves outside the part file's directory (`../`,
 an absolute path or a symlink out): the model is copied into the
@@ -49,8 +52,8 @@ Only `.step`, `.stp`, `.wrl` and `.vrml` files are copied.
 
 `copper_physical::body::generate_body(&footprint)` returns an approximate,
 deterministic body when no model file exists. It reads only footprint data: pad
-geometry, the fabrication and courtyard outlines, the footprint name and
-`height_nm`. Recognised kinds:
+geometry, the fabrication and courtyard outlines, the footprint name,
+`height_nm` and whether the part is a connector. Recognised kinds:
 
 | Kind | Rule | Body |
 |---|---|---|
@@ -58,12 +61,18 @@ geometry, the fabrication and courtyard outlines, the footprint name and
 | `leaded` | SMD pads mostly more than 0.1 mm outside the fabrication outline, unless the name says QFN, DFN, SON or LGA | fabrication outline extruded 0.1 mm off the board, plus gull-wing lead blocks |
 | `no_lead` | SMD pads inside or at the outline (QFN, DFN, SON, LGA) | fabrication outline extruded; a 0.2 mm metal terminal under every pad that reaches the body edge, 0.02 mm proud of the side so it shows; the exposed and inner pads as thin lands; a pin-1 mark on top in the corner of pad 1 |
 | `pin_header` | through-hole pads on a 1-5 mm grid | block of pitch squares, 0.25-pitch square pins from -3 mm to 6 mm above the body |
+| `connector` | the part's category is `connector` or `connector.*` (a pin-header grid still gives `pin_header`) | fabrication outline (else just inside the courtyard, else the pads) extruded in natural nylon to `height_nm`, else 3 mm; a 0.1 mm metal plate over every SMD pad and a pin through the board at every plated hole |
 | `block` | anything else | fabrication, else courtyard, else pad outline extruded 1 mm |
 
 Heights come from `height_nm` first, then the family named in the footprint
 (SOIC 1.75 mm, TQFP/LQFP 1.4, TSSOP/MSOP/SOT 1.1; no-lead QFN/DFN/SON by
 JEDEC height prefix: X2 0.4, X 0.5, U 0.55, W 0.75, otherwise and V 0.9;
-LGA 0.9), then 1.5 mm leaded or 0.9 mm otherwise. The generator is
+LGA 0.9), then 1.5 mm leaded or 0.9 mm otherwise. A connector part marks its
+footprint (`body_connector` metadata, renamed with a `__3d_<digest>` suffix like
+a part height or model) and the KiCad export writes a hidden
+`CopperScriptBodyKind` `connector` property, which viewers pass to the browser
+generator as `body_kind: "connector"`. Declare a connector's `height` from its
+drawing: the shape cannot be guessed from its pads. The generator is
 `copper-body/2`. The body is **always** `approximate`; it is for fit
 and clearance review, not a manufacturer model.
 

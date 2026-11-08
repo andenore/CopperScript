@@ -113,6 +113,22 @@ fn a_part_model_file_is_copied_and_its_height_reaches_the_footprint() {
 }
 
 #[test]
+fn a_connector_part_gets_a_connector_body() {
+    let part = widget("    category = \"connector.wire_to_board\";\n    height = 6 mm;");
+    let (stdout, out) = export("export-connector-body", BOARD, &[("parts/widget.copper", part.as_str())]);
+    let board = std::fs::read_to_string(out.join("b.kicad_pcb")).unwrap();
+    assert!(board.contains("\"CopperScriptBodyKind\" \"connector\""), "{board}");
+    assert!(board.contains("\"CopperScriptHeightMM\" \"6\""), "{board}");
+    let body = board
+        .split("(property \"CopperScriptBody\" \"${KIPRJMOD}/CopperScript.3dshapes/")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("a CopperScriptBody property");
+    let text = std::fs::read_to_string(out.join("CopperScript.3dshapes").join(body)).expect("the named body file");
+    assert!(text.contains("approximate connector body"), "{stdout}\n{text}");
+}
+
+#[test]
 fn a_missing_part_model_warns_and_falls_back_to_a_generated_body() {
     let part = widget("    model = \"models/absent.step\";");
     let (stdout, out) = export("export-part-model-missing", BOARD, &[("parts/widget.copper", part.as_str())]);

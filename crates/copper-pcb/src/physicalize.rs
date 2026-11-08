@@ -591,8 +591,10 @@ fn apply_rule_overrides(mut rules: DesignRules, overrides: &IndexMap<String, i64
 ///
 /// `locked` and `offline` are the design's own resolution flags, which source
 /// physical macros use.
-/// A part's `height` and `model` override its footprint's. The footprint is
-/// renamed so parts sharing one source footprint can differ in 3D.
+/// A part's `height` and `model` override its footprint's, and a connector
+/// part (category `connector` or `connector.*`) marks its footprint for a
+/// connector body. The footprint is renamed so parts sharing one source
+/// footprint can differ in 3D.
 fn with_part_3d(
     part: &PartDefinition,
     mut footprint: PhysicalFootprint,
@@ -683,11 +685,19 @@ fn with_part_3d(
         }
         None => None,
     };
-    if height.is_none() && model.is_none() {
+    // A connector part's body is a connector's, whatever its pads look like.
+    let connector = part.category == "connector" || part.category.starts_with("connector.");
+    if height.is_none() && model.is_none() && !connector {
         return Ok(footprint);
     }
+    let base_name = footprint.name.clone();
+    let base_height = footprint.height_nm;
+    let base_models = footprint.metadata.get(MODELS_KEY).cloned();
     if let Some(height) = height {
         footprint.height_nm = Some(height);
+    }
+    if connector {
+        footprint.metadata.insert(copper_physical::body::CONNECTOR_KEY.to_owned(), "true".to_owned());
     }
     if let Some(path) = &model {
         footprint.metadata.insert(MODELS_KEY.to_owned(), encode_models(&[FootprintModel::new(path.clone())]));
@@ -703,8 +713,18 @@ fn with_part_3d(
         )),
         _ => model.clone(),
     };
-    let suffix = &hex_digest(format!("{height:?}|{named:?}").as_bytes())[..12];
+    let shape = if connector { "|connector" } else { "" };
+    let suffix = &hex_digest(format!("{height:?}|{named:?}{shape}").as_bytes())[..12];
     footprint.name = format!("{}__3d_{suffix}", footprint.name);
+    // The land pattern as its source gave it, for identity checks (see `without_part_3d`).
+    use copper_physical::model3d::{PART_3D_BASE_HEIGHT_KEY, PART_3D_BASE_MODELS_KEY, PART_3D_BASE_NAME_KEY};
+    footprint.metadata.insert(PART_3D_BASE_NAME_KEY.to_owned(), base_name);
+    if let Some(height) = base_height {
+        footprint.metadata.insert(PART_3D_BASE_HEIGHT_KEY.to_owned(), height.to_string());
+    }
+    if let Some(models) = base_models {
+        footprint.metadata.insert(PART_3D_BASE_MODELS_KEY.to_owned(), models);
+    }
     Ok(footprint.validated()?)
 }
 
