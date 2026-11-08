@@ -327,9 +327,8 @@ impl Placer<'_> {
                 if let Some(name) = item.child_mut("net_name") {
                     *name = Node::list(vec![Node::atom("net_name"), Node::string(&panel)]);
                 }
-                if let Some(polygon) = item.child_mut("polygon") {
-                    self.geometry(polygon)?;
-                }
+                // Every polygon (a zone may have several, holes included).
+                self.geometry(&mut item)?;
             }
             "segment" | "arc" | "via" => {
                 self.geometry(&mut item)?;
@@ -510,6 +509,25 @@ mod tests {
         let board =
             copper_cam::board::parse_board(&print(&composed.tree), "panel").expect("copper-cam reads the panel");
         assert_eq!((board.footprints.len(), board.tracks.len(), board.vias.len()), (2, 2, 2));
+    }
+
+    #[test]
+    fn every_polygon_of_a_zone_moves_with_its_board() {
+        let two = BOARD.replacen(
+            "(polygon (pts (xy 0 0) (xy 10 0) (xy 10 6) (xy 0 6)))",
+            "(polygon (pts (xy 2 2) (xy 3 2) (xy 3 3) (xy 2 3))) (polygon (pts (xy 8 4) (xy 9 4) (xy 9 5) (xy 8 5)))",
+            1,
+        );
+        let board = BoardInput { instance: "A".to_owned(), tree: parse(&two, "A").expect("parsed") };
+        let rings = outline_rings(&board.tree, "A").expect("outline");
+        let composed = compose(&[board], &[pose_for(&rings, 0, (30_000_000, 10_000_000))]).expect("composed");
+        let zone = composed.tree.children("zone").next().expect("the zone");
+        let firsts: Vec<(String, String)> = zone
+            .children("polygon")
+            .filter_map(|p| p.child("pts").and_then(|pts| pts.children("xy").next().cloned()))
+            .map(|xy| (xy.value(1).unwrap_or("").to_owned(), xy.value(2).unwrap_or("").to_owned()))
+            .collect();
+        assert_eq!(firsts, [("32".to_owned(), "12".to_owned()), ("38".to_owned(), "14".to_owned())]);
     }
 
     #[test]

@@ -282,6 +282,14 @@ fn arc_geometry(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Option<((f64, f6
     Some(((cx, cy), (s.0 - cx).hypot(s.1 - cy), a0, sweep))
 }
 
+/// Chords per arc so none strays more than a quarter micron from it (the
+/// keep-out is matched within a micron of the edge); `r` in nanometres.
+fn arc_segments(r: f64, sweep: f64) -> usize {
+    const SAGITTA: f64 = 250.0;
+    let step = if r <= SAGITTA { std::f64::consts::FRAC_PI_2 } else { 2.0 * (1.0 - SAGITTA / r).acos() };
+    ((sweep.abs() / step).ceil() as usize).clamp(8, 1_000_000)
+}
+
 /// Whether angle `t` lies on the arc starting at `a0` with signed `sweep`.
 fn on_arc(t: f64, a0: f64, sweep: f64) -> bool {
     let tau = std::f64::consts::TAU;
@@ -372,8 +380,11 @@ pub fn routed_keep_clear(pcb: &copper_cam::board::Board, outline: &[Vec<Point>])
                     && let Some((c, r, a0, sweep)) =
                         arc_geometry(*ring.last().expect("a point"), (mid.x as f64, mid.y as f64), end)
                 {
+                    let n = arc_segments(r, sweep);
                     ring.extend(
-                        (1..32).map(|k| a0 + sweep * k as f64 / 32.0).map(|t| (c.0 + r * t.cos(), c.1 + r * t.sin())),
+                        (1..n)
+                            .map(|k| a0 + sweep * k as f64 / n as f64)
+                            .map(|t| (c.0 + r * t.cos(), c.1 + r * t.sin())),
                     );
                 }
                 ring.push(end);
@@ -506,38 +517,51 @@ pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Ve
                 }
             }
         }
-        // Per side: the part of the courtyard beyond it, along it and how far.
+        // Per side: each stretch where the courtyard reaches beyond it, and
+        // how far. Curves that cross the side in one place chain through
+        // shared ends into one stretch; separate crossings stay separate.
         let mm_bounds = [b[0], b[1], b[2], b[3]].map(|v| v as f64 / 1e6);
         for side in [Side::Top, Side::Bottom, Side::Left, Side::Right] {
             let frame = SideFrame { side, bounds: mm_bounds };
-            let points: Vec<(f64, f64)> = curves.iter().flat_map(|c| beyond(*c, frame)).collect();
-            let depth = points.iter().map(|p| p.1).fold(0.0, f64::max);
-            if depth <= 1e-3 {
-                continue;
-            }
             let nm = |v: f64| (v * 1e6).round() as i64;
-            let start = nm(points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min).max(0.0));
-            let end = nm(points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max).min(frame.length()));
-            if end > start {
-                found.push(Overhang { reference: reference.clone(), side, start, end, distance: nm(depth) });
+            let mut stretches: Vec<Overhang> = Vec::new();
+            for curve in &curves {
+                let points = beyond(*curve, frame);
+                let depth = points.iter().map(|p| p.1).fold(0.0, f64::max);
+                if points.is_empty() {
+                    continue;
+                }
+                let start = nm(points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min).max(0.0));
+                let end = nm(points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max).min(frame.length()));
+                if end >= start {
+                    stretches.push(Overhang { reference: reference.clone(), side, start, end, distance: nm(depth) });
+                }
             }
+            let mut merged: Vec<Overhang> = Vec::new();
+            merge_overhangs(&mut merged, stretches);
+            found.extend(merged.into_iter().filter(|o| o.distance > 1_000 && o.end > o.start));
         }
     }
     found
 }
 
-/// Merge overhangs: one per component and side, covering both.
+/// Merge overhangs: those of one component and side that overlap or touch
+/// become one covering both; separate stretches stay separate.
 pub fn merge_overhangs(into: &mut Vec<Overhang>, more: Vec<Overhang>) {
     for o in more {
-        match into.iter_mut().find(|e| e.reference == o.reference && e.side == o.side) {
-            Some(e) => {
-                e.start = e.start.min(o.start);
-                e.end = e.end.max(o.end);
-                e.distance = e.distance.max(o.distance);
-            }
-            None => into.push(o),
+        let mut merged = o;
+        // Absorb every existing stretch it reaches, then any those reach.
+        while let Some(k) = into.iter().position(|e| {
+            e.reference == merged.reference && e.side == merged.side && e.start <= merged.end && merged.start <= e.end
+        }) {
+            let e = into.remove(k);
+            merged.start = merged.start.min(e.start);
+            merged.end = merged.end.max(e.end);
+            merged.distance = merged.distance.max(e.distance);
         }
+        into.push(merged);
     }
+    into.sort_by(|a, b| (&a.reference, a.side as u8, a.start).cmp(&(&b.reference, b.side as u8, b.start)));
 }
 
 fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {

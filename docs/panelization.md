@@ -61,10 +61,11 @@ panel ExamplePanel {
    layer). What the routed board shows itself counts too, whatever the
    source says: its rule areas that forbid copper pours, where they cover a
    side (ending on the edge or crossing it: antenna regions, connector
-   launches), stay clear of tabs, plus 1 mm; and the part of every
-   footprint courtyard that reaches beyond a side is a body overhang over
-   exactly the stretch it covers (its lines, circles and arcs taken
-   exactly, however the footprint is turned).
+   launches; curved outlines followed to within a quarter micron), stay
+   clear of tabs, plus 1 mm; and each stretch where a footprint courtyard
+   reaches beyond a side is a body overhang over exactly that stretch (its
+   lines, circles and arcs taken exactly, however the footprint is turned;
+   two separate crossings leave the stretch between them to tabs).
 2. Moves every item by the board's pose, prefixes nets (`MONO/GND`) and
    references (`MONO-J1`) so boards stay electrically separate, derives
    fresh UUIDs, drops zone fills and the boards' outlines. Stack-ups, layer

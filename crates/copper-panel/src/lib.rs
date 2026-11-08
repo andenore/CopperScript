@@ -636,6 +636,65 @@ mod tests {
     }
 
     #[test]
+    fn a_curved_keepout_reaching_the_edge_holds_tabs_off() {
+        // A 40 mm radius arc whose apex stands 20 um beyond A's top side at
+        // x = 5, between the samples of a coarse approximation.
+        let (cx, cy, r) = (5.0_f64, 39.98_f64, 40.0_f64);
+        let at = |deg: f64| {
+            let t = deg.to_radians();
+            format!("{:.6} {:.6}", cx + r * t.cos(), cy + r * t.sin())
+        };
+        let (s, m, e) = (at(185.0), at(267.5), at(350.0));
+        let x = |p: &str| p.split(' ').next().unwrap_or("").to_owned();
+        let keepout = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            &format!(
+                "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"55555555-5555-5555-5555-555555555555\") (name \"cluster/a/a-edge\") \
+                 (hatch edge 0.5) (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) \
+                 (polygon (pts (arc (start {s}) (mid {m}) (end {e})) (xy {} 50) (xy {} 50))))\n  (gr_line (start 0 0)",
+                x(&e),
+                x(&s)
+            ),
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = keepout;
+        let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+        assert!(
+            error.contains("tab a_top on board A's top side") && error.contains("keep-out cluster/a/a-edge"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn separate_overhangs_leave_the_stretch_between_them_to_tabs() {
+        // A comb courtyard crossing A's bottom side at 1-2 mm and 8-9 mm.
+        let comb = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 0 0 0) \
+             (property \"Reference\" \"J5\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+             (fp_poly (pts (xy 1 4) (xy 1 6.5) (xy 2 6.5) (xy 2 5) (xy 8 5) (xy 8 6.5) (xy 9 6.5) (xy 9 4)) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = comb;
+        let panel =
+            panelize(&spec(""), &marked, &none(), "demo").expect("a_bottom (3.5-6.5 mm) lies between the overhangs");
+        let text = copper_json::Dumps::compact().dumps(&panel.report);
+        assert!(text.contains(r#""component":"J5","side":"bottom","from_mm":"1","to_mm":"2""#), "{text}");
+        assert!(text.contains(r#""component":"J5","side":"bottom","from_mm":"8","to_mm":"9""#), "{text}");
+        let error = panelize(
+            &spec("tab a_far { board = A; side = bottom; at = 8.5 mm; width = 1 mm; }"),
+            &marked,
+            &none(),
+            "demo",
+        )
+        .err()
+        .expect("refused");
+        assert!(error.contains("overlaps J5's body overhang (8-9 mm)"), "{error}");
+    }
+
+    #[test]
     fn an_unnetted_copper_graphic_counts_as_unnetted_copper() {
         let line = BOARD.replacen(
             "(gr_line (start 0 0)",
