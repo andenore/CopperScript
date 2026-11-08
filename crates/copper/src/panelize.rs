@@ -47,7 +47,14 @@ fn board_intent(source: &Path, locked: bool, offline: bool) -> Result<BoardInten
     }
     let mut intent = BoardIntent {
         outline: vec![ring],
-        references: physical.placements.iter().map(|p| p.reference.clone()).collect(),
+        // The export adds a footprint for every mechanical hole and slot.
+        references: physical
+            .placements
+            .iter()
+            .map(|p| p.reference.clone())
+            .chain(physical.mechanical_holes.iter().map(|h| copper_pcb::kicad_pcb::mechanical_hole_reference(&h.id)))
+            .chain(physical.mechanical_slots.iter().map(|s| copper_pcb::kicad_pcb::mechanical_slot_reference(&s.id)))
+            .collect(),
         ..BoardIntent::default()
     };
     for overhang in &physical.body_overhangs {

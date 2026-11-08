@@ -76,7 +76,7 @@ fn named(names: &[&str]) -> String {
 }
 
 /// Check one rule; `bounds` is the panel outline `(x0, y0, x1, y1)`.
-fn check(rule: &Rule, spec: &PanelSpec, bounds: (i64, i64, i64, i64), tabs: &[BuiltTab]) -> Check {
+fn check(rule: &Rule, spec: &PanelSpec, bounds: (i64, i64, i64, i64), tabs: &[BuiltTab], gap: i64) -> Check {
     let rails = spec.rails;
     let present: Vec<(&str, i64)> =
         [("top", rails.top), ("bottom", rails.bottom), ("left", rails.left), ("right", rails.right)]
@@ -86,7 +86,10 @@ fn check(rule: &Rule, spec: &PanelSpec, bounds: (i64, i64, i64, i64), tabs: &[Bu
     let (w, h) = (bounds.2 - bounds.0, bounds.3 - bounds.1);
     let (short, long) = (w.min(h), w.max(h));
     let (ok, value, limit) = match rule.kind {
-        RuleKind::MinSpacing(v) => (spec.spacing >= v, length(spec.spacing), format!(">= {}", length(v))),
+        RuleKind::MinSpacing(v) => {
+            let gap = gap.min(spec.spacing);
+            (gap >= v, length(gap), format!(">= {}", length(v)))
+        }
         RuleKind::MinRail(v) => match present.iter().min_by_key(|(_, w)| *w) {
             Some((side, width)) => (*width >= v, format!("{} ({side})", length(*width)), format!(">= {}", length(v))),
             None => (true, "no rails".to_owned(), format!(">= {}", length(v))),
@@ -200,9 +203,11 @@ pub fn limit(kind: RuleKind) -> String {
 }
 
 /// Every rule of the panel's preset (none without a preset).
-pub fn run(spec: &PanelSpec, bounds: (i64, i64, i64, i64), tabs: &[BuiltTab]) -> Vec<Check> {
+/// `gap` is the smallest board-to-board distance on the panel (boards sit
+/// `spacing` from the rails by construction).
+pub fn run(spec: &PanelSpec, bounds: (i64, i64, i64, i64), tabs: &[BuiltTab], gap: i64) -> Vec<Check> {
     let Some(preset) = spec.preset.as_deref().and_then(panel_presets::preset) else { return Vec::new() };
-    preset.rules.iter().map(|rule| check(rule, spec, bounds, tabs)).collect()
+    preset.rules.iter().map(|rule| check(rule, spec, bounds, tabs, gap)).collect()
 }
 
 /// The panel's effective values as `(property, value, origin)`, in source syntax.

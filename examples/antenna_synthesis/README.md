@@ -45,7 +45,7 @@ from there.
 `board.copper` carries the synthesized geometry and its `tuned_for` digest: a
 22.73 mm monopole at 2.38 GHz that meets -10 dB over the band with 0.88 nH
 series then 2.57 pF shunt from the antenna side, at 86 % radiation efficiency
-on the fine mesh (model revision 3; the synthesis takes about three and a
+on the fine mesh (model revision 4; the synthesis takes about three and a
 half minutes on a 6-core laptop). Changing an input of the model (outline, stack-up, ground
 zone, region, track rules, feed or band) makes lowering fail until the
 synthesis is re-run.

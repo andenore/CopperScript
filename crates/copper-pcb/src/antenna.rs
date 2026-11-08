@@ -55,7 +55,10 @@ pub const GENERATOR: &str = "copper antenna/v0.2";
 /// from primitives, finer cells around the feed and an inverted-F's short,
 /// stitching vias as wires on mesh lines) and keeps an eighth of a
 /// wavelength of air before the PML.
-pub const MODEL_REVISION: i64 = 3;
+/// Revision 4: no cell, the feed and short zones' included, is coarser than
+/// the frequency limit (a fifteenth of the guided wavelength at the sweep's
+/// top), which bands above about 12 GHz on FR4 reached.
+pub const MODEL_REVISION: i64 = 4;
 /// The `members[].reference` and `net` role names inside the generated asset.
 const MEMBER: &str = "ANT";
 const SHORT_MEMBER: &str = "SHORT";

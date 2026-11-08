@@ -39,6 +39,8 @@ panel ExamplePanel {
   panel file.
 - `assemble_after_depanel = ["BOARD.REFERENCE", ...]` lists component bodies
   fitted after depanelization: they may overhang a rail or a neighbour.
+- Board names use letters, digits and underscores, and differ ignoring
+  case: the panel prefixes their nets (`NAME/`) and references (`NAME-`).
 - `at` puts the corner of the board's outline bounding box; `rotation` is a
   multiple of 90 deg, counter-clockwise as seen in KiCad.
 - A tab names its board, a `side` of the board's rectangular outline in the
@@ -51,11 +53,13 @@ panel ExamplePanel {
 
 1. Compiles each board's source for its edge intent and reads its routed
    board. The routed board must come from that source: the outlines and
-   the footprint references must agree, and every synthesized radiator must
-   lie on the routed board's copper (feed net and layer). The routed
-   board's own rule areas that forbid copper pours along its sides (antenna
-   regions, connector launches) are kept clear of tabs as well, plus 1 mm,
-   whatever the source says.
+   the footprint references must agree (with the `CS_MH_`/`CS_MS_`
+   footprints the export adds for mechanical holes and slots), and every
+   synthesized radiator must lie on the routed board's copper (feed net and
+   layer). What the routed board shows itself counts too, whatever the
+   source says: its rule areas that forbid copper pours along its sides
+   (antenna regions, connector launches) stay clear of tabs, plus 1 mm, and
+   every footprint courtyard reaching beyond a side is a body overhang.
 2. Moves every item by the board's pose, prefixes nets (`MONO/GND`) and
    references (`MONO-J1`) so boards stay electrically separate, derives
    fresh UUIDs, drops zone fills and the boards' outlines. Stack-ups, layer
@@ -63,7 +67,9 @@ panel ExamplePanel {
    conditional rules are kept per board with their `Reference` and
    `NetName` comparisons rewritten, and limited to that board's items (its
    nets and references), so one board's rule cannot change another's
-   clearances.
+   clearances. A board with copper on no net and outside footprints is
+   refused when it has conditional rules, since that copper carries
+   neither prefix.
 3. Builds the frame: rails, tabs, mouse-bite holes `inset` into every board
    a tab touches (both ends when it joins two boards), fiducials and tooling
    holes, and the outline (boards, tabs and rails united) on `Edge.Cuts`.
@@ -72,9 +78,11 @@ panel ExamplePanel {
    - a tab on a body overhang;
    - an overhanging body that reaches a rail or another board, unless
      `assemble_after_depanel` lists `BOARD.REFERENCE`;
-   - boards closer than `spacing`, tabs off their side, and tabs that
-     overlap anywhere on the panel (the same bridge declared from both
-     boards included).
+   - boards closer than `spacing`, measured edge to edge in every
+     direction (diagonal neighbours included), tabs off their side, and
+     tabs that overlap anywhere on the panel (the same bridge declared from
+     both boards included);
+   - a panel that falls apart: boards, tabs and rails must be one piece.
 5. Writes `copperscript-panel/v0.1` beside the board (`OUT.panel.json`, or
    `--report`): boards, tabs (what each bridges, its gap and hole count),
    keep-clear intervals, overhangs and the radiators' open ends, the
@@ -109,7 +117,9 @@ a note and the page it comes from; values were read on 2026-11-07.
 | `eurocircuits` | 2 mm gap, 5 mm rails on four sides, no fiducials or tooling (Eurocircuits adds them and places the tabs) | gap >= 2 mm, 7 mm from every board to the panel edge, border on four sides >= 5 mm and assembly panel 36 x 46 to 326 x 426 mm (warns) |
 
 A `fail` is outside a documented limit, a `warn` a recommendation or a cost.
-Checks never refuse a panel: they are printed after the summary and kept in
+The `min_spacing` check reads the smallest gap between boards on the panel,
+not only the configured `spacing`. Checks never refuse a panel: they are
+printed after the summary and kept in
 the report's `checks` block; `--strict` makes any `fail` exit 1. Where a
 fab's pages disagree, the rule's note says so: JLCPCB's mouse-bite web
 (0.3 mm floor in its panel guide, 0.2-0.3 mm on its capabilities page) and

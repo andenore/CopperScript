@@ -90,6 +90,16 @@ metric and wall time is quoted with its spread.
     unconnected tile costs a full evaluation of unchanged copper. The share
     is not yet measured.
 
+## Model revision 4
+
+No cell is coarser than the frequency limit (a fifteenth of the guided
+wavelength at the sweep's top): the fidelity cell, and so the feed and
+short zones that refine from it, are capped there. Before, the zones kept
+the fidelity cell, so bands above about 12 GHz on FR4 got cells coarser
+than the limit (0.75 mm against 0.416 mm at 24 GHz in er 4). Below that the
+mesh is unchanged, but the revision still moves so every `tuned_for` digest
+is renewed by a fresh synthesis.
+
 ## Model revision 3
 
 **Thread default.** `--threads` defaults to one solver thread per physical

@@ -300,8 +300,32 @@ pub fn build(
             ));
         }
     }
+    // The panel must hold together: boards, tabs and rails one piece.
+    let united = poly::union(&shapes);
+    if united.len() > 1 {
+        let mut pieces: Vec<String> = Vec::new();
+        for piece in &united {
+            let piece = vec![piece.clone()];
+            let mut members: Vec<String> = Vec::new();
+            for (name, rings) in outlines {
+                let board: poly::Shapes = rings.iter().flat_map(|ring| ring_shapes(ring)).collect();
+                if !poly::intersection(&piece, &board).is_empty() {
+                    members.push(format!("board {name}"));
+                }
+            }
+            if rails.iter().any(|rail| !poly::intersection(&piece, &rect_shapes(*rail)).is_empty()) {
+                members.push("rails".to_owned());
+            }
+            pieces.push(format!("[{}]", members.join(", ")));
+        }
+        return Err(format!(
+            "the panel falls apart into {} pieces ({}); tabs must join every board to a rail or a joined board",
+            united.len(),
+            pieces.join(" ")
+        ));
+    }
     // The outline: every contour of the union on Edge.Cuts.
-    for (k, shape) in poly::union(&shapes).iter().enumerate() {
+    for (k, shape) in united.iter().enumerate() {
         for (j, contour) in shape.iter().enumerate() {
             let points: Vec<String> = contour.iter().map(|p| format!("(xy {} {})", mm(p.x), mm(p.y))).collect();
             let text = format!(

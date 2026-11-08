@@ -102,6 +102,11 @@ fn rules_of(text: &str, source: &str) -> Result<Vec<Node>, String> {
     Ok(root.children("rule").cloned().collect())
 }
 
+/// Whether a `.kicad_dru` text has a rule with a condition.
+pub fn has_conditional(text: &str, source: &str) -> Result<bool, String> {
+    Ok(rules_of(text, source)?.iter().any(|rule| rule.child("condition").is_some()))
+}
+
 /// Merge the boards' `.kicad_dru` texts, `(instance, text)` in board order.
 pub fn merge_dru(boards: &[(String, String)]) -> Result<String, String> {
     let mut shared: IndexMap<String, (String, Node)> = IndexMap::new();
@@ -242,6 +247,8 @@ mod tests {
              (A.NetName == 'C/X' && B.NetName != 'C/Y')"
         );
         assert!(!names_item("A.NetName == 'B.x'", 'B'));
+        // Board names cannot hold `-` or `/` (the panel refuses them), so `C-*`
+        // and `C/*` match only board C's references and nets.
     }
 
     #[test]

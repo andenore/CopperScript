@@ -521,9 +521,6 @@ fn mechanical_export_board(board: &PhysicalBoard) -> Result<PhysicalBoard> {
         return Ok(board.clone());
     }
     let mut out = board.clone();
-    let hex = |text: &str| -> String {
-        Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>()[..16].to_owned()
-    };
     let npth = |size: Size, shape: PadShape| FootprintPad {
         number: String::new(),
         position: Point::new(0, 0),
@@ -558,7 +555,7 @@ fn mechanical_export_board(board: &PhysicalBoard) -> Result<PhysicalBoard> {
     let mut holes = board.mechanical_holes.clone();
     holes.sort_by(|a, b| a.id.cmp(&b.id));
     for hole in holes {
-        let reference = format!("CS_MH_{}", hex(&hole.id));
+        let reference = mechanical_hole_reference(&hole.id);
         let name = format!("__mechanical_hole_{}", hole.diameter_nm);
         if out.placements.iter().any(|p| p.reference == reference) {
             return fail("generated mechanical hole reference conflicts with a component");
@@ -583,7 +580,7 @@ fn mechanical_export_board(board: &PhysicalBoard) -> Result<PhysicalBoard> {
     let mut slots = board.mechanical_slots.clone();
     slots.sort_by(|a, b| a.id.cmp(&b.id));
     for slot in slots {
-        let reference = format!("CS_MS_{}", hex(&slot.id));
+        let reference = mechanical_slot_reference(&slot.id);
         if out.placements.iter().any(|p| p.reference == reference) {
             return fail("generated slot reference conflicts with a component");
         }
@@ -1583,4 +1580,18 @@ fn render(board: &PhysicalBoard, library_names: &IndexMap<String, String>) -> Re
     }
     lines.push(")".to_owned());
     Ok(lines.join("\n") + "\n")
+}
+
+fn generated_id(text: &str) -> String {
+    Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect::<String>()[..16].to_owned()
+}
+
+/// The footprint reference the export gives a mechanical hole.
+pub fn mechanical_hole_reference(id: &str) -> String {
+    format!("CS_MH_{}", generated_id(id))
+}
+
+/// The footprint reference the export gives a mechanical slot.
+pub fn mechanical_slot_reference(id: &str) -> String {
+    format!("CS_MS_{}", generated_id(id))
 }

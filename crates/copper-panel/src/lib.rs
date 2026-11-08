@@ -11,7 +11,6 @@ pub mod sexpr;
 
 use std::path::Path;
 
-use copper_cam::poly;
 use copper_json::Value as Json;
 use copper_lang::panel::PanelSpec;
 use indexmap::IndexMap;
@@ -115,30 +114,47 @@ pub fn panelize(
     for ((board, file), intent) in spec.boards.iter().zip(files).zip(intents.iter_mut()) {
         let routed = copper_cam::board::parse_board(&file.pcb, &board.pcb)?;
         intent::verify_source(&board.name, intent, &routed)?;
+        // Board rules are scoped by net and reference prefixes: copper on no
+        // net and in no footprint carries neither, so a conditional rule
+        // could not be kept to its board.
+        let unnetted = routed.tracks.iter().filter(|t| t.net.as_deref().is_none_or(str::is_empty)).count()
+            + routed.vias.iter().filter(|v| v.net.as_deref().is_none_or(str::is_empty)).count()
+            + routed
+                .zones
+                .iter()
+                .filter(|z| z.keepout.is_none() && !z.in_footprint && z.net.as_deref().is_none_or(str::is_empty))
+                .count();
+        if unnetted > 0 && rules::has_conditional(&file.dru, &format!("board {} design rules", board.name))? {
+            return Err(format!(
+                "board {}: {unnetted} copper item(s) on no net, and conditional design rules that the panel can only \
+                 keep to the board by net and reference; give that copper a net",
+                board.name
+            ));
+        }
         let tree = parse(&file.pcb, &board.pcb)?;
         let rings = outline_rings(&tree, &format!("board {}", board.name))?;
         intent.keep_clear.extend(intent::routed_keep_clear(&routed, &rings));
+        intent::merge_overhangs(&mut intent.overhangs, intent::routed_overhangs(&tree, &rings));
         poses.push(pose_for(&rings, board.quarter_turns, (board.at[0], board.at[1])));
         local.insert(board.name.clone(), rings);
         inputs.push(BoardInput { instance: board.name.clone(), tree });
     }
     let composition = compose(&inputs, &poses)?;
-    // Boards keep at least the milled gap between them.
+    // Boards keep at least the milled gap between them, measured edge to
+    // edge in every direction (a diagonal neighbour included).
     let names: Vec<&String> = composition.outlines.keys().collect();
+    let mut min_gap = spec.spacing;
     for (i, a) in names.iter().enumerate() {
         for b in &names[i + 1..] {
-            let grow = |name: &str| {
-                let shapes: poly::Shapes = composition.outlines[name]
-                    .iter()
-                    .flat_map(|ring| {
-                        poly::polygon(&ring.iter().map(|(x, y)| (*x as f64, *y as f64)).collect::<Vec<_>>())
-                    })
-                    .collect();
-                poly::offset(&shapes, spec.spacing / 2 - 1_000, false, 1_000.0)
-            };
-            if !poly::intersection(&grow(a), &grow(b)).is_empty() {
-                return Err(format!("boards {a} and {b} are closer than the panel spacing ({} mm)", mm(spec.spacing)));
+            let gap = intent::ring_distance(&composition.outlines[*a], &composition.outlines[*b]);
+            if gap < spec.spacing {
+                return Err(format!(
+                    "boards {a} and {b} are {} mm apart, closer than the panel spacing ({} mm)",
+                    mm(gap),
+                    mm(spec.spacing)
+                ));
             }
+            min_gap = min_gap.min(gap);
         }
     }
     let frame = frame::build(spec, &local, &composition.outlines, &composition.poses)?;
@@ -156,11 +172,12 @@ pub fn panelize(
     let dru = rules::merge_dru(&named(|f| &f.dru))?;
     let pro = rules::merge_pro(&named(|f| &f.pro), &format!("{file_stem}.kicad_pro"))?;
     let (x0, y0, x1, y1) = frame.bounds;
-    let fab_checks = checks::run(spec, frame.bounds, &frame.tabs);
+    let fab_checks = checks::run(spec, frame.bounds, &frame.tabs, min_gap);
     let report = object(vec![
         ("schema", Json::from("copperscript-panel/v0.1")),
         ("panel", Json::from(spec.name.as_str())),
         ("size_mm", json_point((x1 - x0, y1 - y0))),
+        ("min_gap_mm", Json::from(mm(min_gap).as_str())),
         ("config", checks::config_json(spec)),
         ("checks", checks::checks_json(spec, &fab_checks)),
         (
@@ -471,6 +488,67 @@ mod tests {
         let mut both = files();
         both[1].pcb = routed;
         panelize(&spec(""), &both, &[BoardIntent::default(), antenna], "demo").expect("the radiator is on the board");
+    }
+
+    #[test]
+    fn diagonal_neighbours_keep_the_spacing_too() {
+        // B 1 mm right of and 1 mm below A's corner: 1.414 mm apart, under 2 mm.
+        let mut diagonal = spec("");
+        diagonal.boards[1].at = [11_000_000, 7_000_000];
+        diagonal.tabs.retain(|t| t.name != "a_right");
+        let error = panelize(&diagonal, &files(), &none(), "demo").err().expect("refused");
+        assert!(error.contains("boards A and B are 1.414213 mm apart"), "{error}");
+        // The fab check reads the real gap, not the configured spacing.
+        let mut wide = spec("");
+        wide.boards[1].at = [13_000_000, 0];
+        wide.tabs.retain(|t| t.name != "a_right");
+        wide.preset = Some("pcbway".into());
+        let panel = panelize(&wide, &files(), &none(), "demo").expect("a panel");
+        let gap = panel.checks.iter().find(|c| c.rule == "min_spacing").expect("min_spacing");
+        assert_eq!(gap.value, "2 mm", "the rails sit 2 mm away; the boards 3 mm");
+    }
+
+    #[test]
+    fn a_panel_that_falls_apart_is_refused() {
+        let mut loose = spec("");
+        loose.tabs.retain(|t| t.name != "a_right" && t.name != "b_top");
+        let error = panelize(&loose, &files(), &none(), "demo").err().expect("refused");
+        assert!(error.contains("falls apart into 2 pieces") && error.contains("[board B]"), "{error}");
+    }
+
+    #[test]
+    fn a_courtyard_beyond_the_edge_keeps_tabs_off_whatever_the_source_says() {
+        // J9's courtyard reaches 2 mm below A's bottom side, over a_bottom (3.5-6.5 mm).
+        let jack = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 5 5 0) \
+             (property \"Reference\" \"J9\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+             (fp_rect (start -1 -0.5) (end 1 3) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = jack;
+        let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+        assert!(
+            error.contains("tab a_bottom on board A's bottom side overlaps J9's body overhang (4-6 mm)"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn unnetted_copper_cannot_keep_conditional_rules_to_its_board() {
+        let loose = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(segment (start 1 4) (end 3 4) (width 0.25) (layer \"F.Cu\") (net 0) (uuid \"99999999-9999-9999-9999-999999999999\"))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut both = files();
+        both[0].pcb = loose;
+        panelize(&spec(""), &both, &none(), "demo").expect("no conditional rules: nothing to keep");
+        both[0].dru =
+            "(version 1)\n(rule \"gap\" (constraint clearance (min 1mm)) (condition \"A.NetName == 'GND'\"))\n".into();
+        let error = panelize(&spec(""), &both, &none(), "demo").err().expect("refused");
+        assert!(error.contains("board A: 1 copper item(s) on no net"), "{error}");
     }
 
     #[test]

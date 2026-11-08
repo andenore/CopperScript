@@ -152,6 +152,45 @@ fn routed_example_boards_panelize_refill_and_pass_native_drc() {
 }
 
 #[test]
+fn a_board_with_mounting_holes_matches_its_source() {
+    // The export adds a CS_MH_ footprint per hole: the source check expects them.
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panelize-holes");
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(&directory).expect("a scratch directory");
+    let pcb = directory.join("holes/holes.kicad_pcb");
+    let (_, output) = copper(&[
+        "route-board",
+        "examples/panel/hole_board.copper",
+        "-o",
+        &slash(&pcb),
+        "--report",
+        &slash(&directory.join("holes/route.json")),
+        "--locked",
+        "--offline",
+    ]);
+    assert!(pcb.is_file(), "{output}");
+    let panel = directory.join("panel.copper");
+    std::fs::write(
+        &panel,
+        format!(
+            r#"panel Holes {{
+    rails = {{ top = 5 mm; bottom = 5 mm; }};
+    board H {{ source = "{source}"; pcb = "{pcb}"; at = (0 mm, 0 mm); }}
+    tab h_top {{ board = H; side = top; at = 20 mm; }}
+    tab h_bottom {{ board = H; side = bottom; at = 20 mm; }}
+}}
+"#,
+            source = slash(&workspace().join("examples/panel/hole_board.copper")),
+            pcb = slash(&pcb)
+        ),
+    )
+    .expect("the panel source");
+    let out = slash(&directory.join("out/panel.kicad_pcb"));
+    let (status, output) = copper(&["panelize", &slash(&panel), "-o", &out, "--locked", "--offline"]);
+    assert_eq!(status, 0, "{output}");
+}
+
+#[test]
 fn dump_config_shows_each_value_with_its_origin_and_the_preset_rules() {
     let directory = Path::new(env!("CARGO_TARGET_TMPDIR")).join("panelize-config");
     std::fs::create_dir_all(&directory).expect("a scratch directory");

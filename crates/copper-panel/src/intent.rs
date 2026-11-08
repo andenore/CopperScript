@@ -256,6 +256,140 @@ pub fn routed_keep_clear(pcb: &copper_cam::board::Board, outline: &[Vec<Point>])
     found
 }
 
+/// A point of a footprint's own frame on the board: KiCad turns footprints
+/// counter-clockwise on screen (Y down) by their `at` angle.
+fn footprint_point(at: (f64, f64, f64), x: f64, y: f64) -> (f64, f64) {
+    let (sin, cos) = at.2.to_radians().sin_cos();
+    (at.0 + x * cos + y * sin, at.1 - x * sin + y * cos)
+}
+
+/// Body overhangs the routed board shows itself: every footprint whose
+/// courtyard reaches beyond a side of the outline. With the source's own
+/// overhangs they keep tabs off the connector and its envelope off rails
+/// and boards, so a source that lost its overhang declaration cannot open
+/// the launch to tabs.
+pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Vec<Overhang> {
+    let b = bounds(outline);
+    let number = |n: &crate::sexpr::Node, k: usize| n.value(k).and_then(|v| v.parse::<f64>().ok());
+    let mut found: Vec<Overhang> = Vec::new();
+    for footprint in tree.children("footprint") {
+        let Some(at) = footprint.child("at") else { continue };
+        let at = (number(at, 1).unwrap_or(0.0), number(at, 2).unwrap_or(0.0), number(at, 3).unwrap_or(0.0));
+        let reference = footprint
+            .children("property")
+            .find(|p| p.string_value(1).as_deref() == Some("Reference"))
+            .and_then(|p| p.string_value(2))
+            .unwrap_or_default();
+        let mut points: Vec<(f64, f64)> = Vec::new();
+        for item in footprint.items() {
+            let layer = item.child("layer").and_then(|l| l.string_value(1)).unwrap_or_default();
+            if !layer.ends_with(".CrtYd") && !layer.ends_with(".Courtyard") {
+                continue;
+            }
+            let mut local: Vec<(f64, f64)> = Vec::new();
+            for tag in ["start", "end", "mid", "center"] {
+                if let Some(n) = item.child(tag)
+                    && let (Some(x), Some(y)) = (number(n, 1), number(n, 2))
+                {
+                    local.push((x, y));
+                }
+            }
+            if let Some(pts) = item.child("pts") {
+                for xy in pts.children("xy") {
+                    if let (Some(x), Some(y)) = (number(xy, 1), number(xy, 2)) {
+                        local.push((x, y));
+                    }
+                }
+            }
+            if item.tag() == Some("fp_circle")
+                && let (Some(c), Some(e)) = (item.child("center"), item.child("end"))
+                && let (Some(cx), Some(cy), Some(ex), Some(ey)) =
+                    (number(c, 1), number(c, 2), number(e, 1), number(e, 2))
+            {
+                let r = (ex - cx).hypot(ey - cy);
+                local.extend([(cx - r, cy - r), (cx + r, cy + r), (cx - r, cy + r), (cx + r, cy - r)]);
+            }
+            points.extend(local.into_iter().map(|(x, y)| footprint_point(at, x, y)));
+        }
+        if points.is_empty() {
+            continue;
+        }
+        let nm = |v: f64| (v * 1e6).round() as i64;
+        let (x0, y0) = (
+            nm(points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min)),
+            nm(points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min)),
+        );
+        let (x1, y1) = (
+            nm(points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max)),
+            nm(points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max)),
+        );
+        // Beyond the side by more than a micron, along the side clipped to it.
+        let along_x = (x0.max(b[0]) - b[0], x1.min(b[2]) - b[0]);
+        let along_y = (y0.max(b[1]) - b[1], y1.min(b[3]) - b[1]);
+        for (side, distance, (start, end)) in [
+            (Side::Top, b[1] - y0, along_x),
+            (Side::Bottom, y1 - b[3], along_x),
+            (Side::Left, b[0] - x0, along_y),
+            (Side::Right, x1 - b[2], along_y),
+        ] {
+            if distance > 1_000 && end > start {
+                found.push(Overhang { reference: reference.clone(), side, start, end, distance });
+            }
+        }
+    }
+    found
+}
+
+/// Merge overhangs: one per component and side, covering both.
+pub fn merge_overhangs(into: &mut Vec<Overhang>, more: Vec<Overhang>) {
+    for o in more {
+        match into.iter_mut().find(|e| e.reference == o.reference && e.side == o.side) {
+            Some(e) => {
+                e.start = e.start.min(o.start);
+                e.end = e.end.max(o.end);
+                e.distance = e.distance.max(o.distance);
+            }
+            None => into.push(o),
+        }
+    }
+}
+
+fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
+    [
+        distance_to_segment(a, c, d),
+        distance_to_segment(b, c, d),
+        distance_to_segment(c, a, b),
+        distance_to_segment(d, a, b),
+    ]
+    .into_iter()
+    .fold(f64::INFINITY, f64::min)
+}
+
+/// The smallest distance between two sets of outline rings (0 when they meet).
+pub fn ring_distance(a: &[Vec<Point>], b: &[Vec<Point>]) -> i64 {
+    let shapes = |rings: &[Vec<Point>]| -> poly::Shapes {
+        rings
+            .iter()
+            .flat_map(|ring| poly::polygon(&ring.iter().map(|(x, y)| (*x as f64, *y as f64)).collect::<Vec<_>>()))
+            .collect()
+    };
+    if !poly::intersection(&shapes(a), &shapes(b)).is_empty() {
+        return 0;
+    }
+    let mut best = f64::INFINITY;
+    for ra in a {
+        for rb in b {
+            for i in 0..ra.len() {
+                for j in 0..rb.len() {
+                    let d = segment_distance(ra[i], ra[(i + 1) % ra.len()], rb[j], rb[(j + 1) % rb.len()]);
+                    best = best.min(d);
+                }
+            }
+        }
+    }
+    best.floor() as i64
+}
+
 /// Check the panel against every board's intent; returns the panel's open
 /// ends (panel coordinates, prefixed nets) for the DRC waiver.
 pub fn check(

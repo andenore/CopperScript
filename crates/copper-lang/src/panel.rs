@@ -219,6 +219,12 @@ fn required<'v>(map: &'v IndexMap<String, Value>, key: &str, what: &str, locatio
 
 fn board(item: &MacroItemDecl) -> Result<PanelBoard> {
     let location = &item.location;
+    // The panel prefixes nets `NAME/` and references `NAME-`, and board rules
+    // match those prefixes case-insensitively: a name with `-` or `/` could
+    // prefix another board's names.
+    if item.name.is_empty() || !item.name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return fail(format!("board name {:?} must use letters, digits and underscores only", item.name), location);
+    }
     check_keys(&item.parameters, &["source", "pcb", "at", "rotation"], "board", location)?;
     let what = format!("board {}", item.name);
     Ok(PanelBoard {
@@ -397,8 +403,11 @@ pub fn lower_panel(document: &Document) -> Result<PanelSpec> {
     let mut tabs: Vec<PanelTab> = Vec::new();
     for item in items {
         if item.kind == "board" {
-            if boards.iter().any(|b| b.name == item.name) {
-                return fail(format!("duplicate board {}", item.name), &item.location);
+            if boards.iter().any(|b| b.name.eq_ignore_ascii_case(&item.name)) {
+                return fail(
+                    format!("duplicate board {} (board names are compared ignoring case)", item.name),
+                    &item.location,
+                );
             }
             boards.push(board(item)?);
         } else {
@@ -502,6 +511,8 @@ mod tests {
             (("side = right;", "side = right; edge = \"R\";"), "exactly one of side or edge"),
             (("fiducials = 3;", "fiducials = 7;"), "count from 0 to 4"),
             (("spacing = 2 mm;", "spacing = 2 mm; spacing_x = 1 mm;"), "unknown panel property"),
+            (("board A2 {", "board a1 {"), "duplicate board a1"),
+            (("board A2 {", "board A-B {"), "letters, digits and underscores only"),
             (
                 ("spacing = 2 mm;", "spacing = 2 mm; preset = \"acme\";"),
                 "unknown panel preset \"acme\"; expected one of jlcpcb",
