@@ -46,9 +46,12 @@ pub fn rewrite_condition(condition: &str, instance: &str) -> String {
             && let Some(end) = stripped.find('\'')
         {
             let name = &stripped[..end];
-            // An empty name means "no net" or "no reference": not the board's.
-            let renamed = if name.is_empty() {
-                String::new()
+            // An empty name means "no net" or "no reference", and a name of
+            // only `*` matches anything, empty included (the board edge, an
+            // unnetted hole): both stay as written. The rule's scope already
+            // keeps it off other boards' items.
+            let renamed = if name.is_empty() || name.chars().all(|c| c == '*') {
+                name.to_owned()
             } else if key == "Reference" {
                 format!("{instance}-{name}")
             } else {
@@ -230,6 +233,11 @@ mod tests {
             rewrite_condition("B.NetName == '' && B.Reference == ''", "A"),
             "B.NetName == '' && B.Reference == ''"
         );
+        assert_eq!(
+            rewrite_condition("B.NetName == '*' && B.Reference != '**'", "A"),
+            "B.NetName == '*' && B.Reference != '**'"
+        );
+        assert_eq!(rewrite_condition("A.NetName == 'PWR*'", "A"), "A.NetName == 'A/PWR*'");
     }
 
     #[test]
@@ -316,6 +324,18 @@ mod tests {
         assert_eq!(panel.hole_clearance(&item("A/SIG"), &hole), 800_000, "{merged}");
         // Board B's items do not get A's rules.
         assert_eq!(panel.edge_clearance(&item("B/SIG")), 300_000, "{merged}");
+        // A wildcard naming any net or reference still reaches the edge.
+        for wild in ["B.NetName == '*'", "B.Reference == '*'"] {
+            let dru = format!(
+                "(version 1)\n(rule \"edge\" (constraint edge_clearance (min 1mm)) (condition \"A.NetName == 'SIG' && {wild}\"))\n"
+            );
+            let alone = Rules::load(PROJECT, Some(&dru)).expect("the board's rules");
+            let merged = merge_dru(&[("A".into(), dru.clone()), ("B".into(), "(version 1)\n".into())]).expect("merged");
+            let panel = Rules::load(PROJECT, Some(&merged)).expect("the panel rules");
+            assert_eq!(alone.edge_clearance(&item("SIG")), 1_000_000, "{wild}");
+            assert_eq!(panel.edge_clearance(&item("A/SIG")), 1_000_000, "{wild}: {merged}");
+            assert_eq!(panel.edge_clearance(&item("B/SIG")), 300_000, "{wild}: {merged}");
+        }
     }
 
     #[test]

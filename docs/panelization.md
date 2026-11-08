@@ -59,11 +59,12 @@ panel ExamplePanel {
    footprints the export adds for mechanical holes and slots), and every
    synthesized radiator must lie on the routed board's copper (feed net and
    layer). What the routed board shows itself counts too, whatever the
-   source says: its rule areas that forbid copper pours along its sides
-   (antenna regions, connector launches) stay clear of tabs, plus 1 mm, and
-   every footprint courtyard reaching beyond a side (by all its corners and
-   the exact extremes of its circles and arcs, however the footprint is
-   turned) is a body overhang.
+   source says: its rule areas that forbid copper pours, where they cover a
+   side (ending on the edge or crossing it: antenna regions, connector
+   launches), stay clear of tabs, plus 1 mm; and the part of every
+   footprint courtyard that reaches beyond a side is a body overhang over
+   exactly the stretch it covers (its lines, circles and arcs taken
+   exactly, however the footprint is turned).
 2. Moves every item by the board's pose, prefixes nets (`MONO/GND`) and
    references (`MONO-J1`) so boards stay electrically separate, derives
    fresh UUIDs, drops zone fills and the boards' outlines. Stack-ups, layer
@@ -72,7 +73,8 @@ panel ExamplePanel {
    ones between two boards' items, whatever order the boards are declared
    in. A board with conditional rules repeats its whole rule list in its own
    order (the last matching rule wins), with `Reference` and `NetName` names
-   prefixed (an empty name stays empty) and each rule limited to pairs where
+   prefixed (an empty name, and one of only `*`, stays as written) and each
+   rule limited to pairs where
    neither item belongs to another board and at least one belongs to it: on
    the board, against the frame, the board edge or an unnetted hole, its
    rules apply as on the board alone.

@@ -219,10 +219,141 @@ pub fn verify_source(board: &str, intent: &BoardIntent, pcb: &copper_cam::board:
     Ok(())
 }
 
+/// A side of the outline's bounding box in millimetres: `v` is the distance
+/// beyond the side (outward), `u` the position along it from its start.
+#[derive(Clone, Copy)]
+struct SideFrame {
+    side: Side,
+    bounds: [f64; 4],
+}
+
+impl SideFrame {
+    fn uv(&self, p: (f64, f64)) -> (f64, f64) {
+        let [x0, y0, x1, y1] = self.bounds;
+        match self.side {
+            Side::Top => (p.0 - x0, y0 - p.1),
+            Side::Bottom => (p.0 - x0, p.1 - y1),
+            Side::Left => (p.1 - y0, x0 - p.0),
+            Side::Right => (p.1 - y0, p.0 - x1),
+        }
+    }
+
+    fn length(&self) -> f64 {
+        let [x0, y0, x1, y1] = self.bounds;
+        if matches!(self.side, Side::Top | Side::Bottom) { x1 - x0 } else { y1 - y0 }
+    }
+
+    /// The side's line as (is it `y = k`, k).
+    fn line(&self) -> (bool, f64) {
+        let [x0, y0, x1, y1] = self.bounds;
+        match self.side {
+            Side::Top => (true, y0),
+            Side::Bottom => (true, y1),
+            Side::Left => (false, x0),
+            Side::Right => (false, x1),
+        }
+    }
+}
+
+/// A courtyard curve on the board, in millimetres.
+#[derive(Clone, Copy, Debug)]
+enum Curve {
+    Segment((f64, f64), (f64, f64)),
+    /// From the first point through the second to the third.
+    Arc((f64, f64), (f64, f64), (f64, f64)),
+    Circle((f64, f64), f64),
+}
+
+/// A circle through three points and the arc from `s` through `m` to `e`
+/// as (centre, radius, start angle, signed sweep); `None` when straight.
+fn arc_geometry(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Option<((f64, f64), f64, f64, f64)> {
+    let d = 2.0 * (s.0 * (m.1 - e.1) + m.0 * (e.1 - s.1) + e.0 * (s.1 - m.1));
+    if d.abs() < 1e-12 {
+        return None;
+    }
+    let sq = |p: (f64, f64)| p.0 * p.0 + p.1 * p.1;
+    let cx = (sq(s) * (m.1 - e.1) + sq(m) * (e.1 - s.1) + sq(e) * (s.1 - m.1)) / d;
+    let cy = (sq(s) * (e.0 - m.0) + sq(m) * (s.0 - e.0) + sq(e) * (m.0 - s.0)) / d;
+    let tau = std::f64::consts::TAU;
+    let angle = |p: (f64, f64)| (p.1 - cy).atan2(p.0 - cx).rem_euclid(tau);
+    let (a0, am, a2) = (angle(s), angle(m), angle(e));
+    let ccw = |from: f64, to: f64| (to - from).rem_euclid(tau);
+    let sweep = if ccw(a0, am) <= ccw(a0, a2) { ccw(a0, a2) } else { ccw(a0, a2) - tau };
+    Some(((cx, cy), (s.0 - cx).hypot(s.1 - cy), a0, sweep))
+}
+
+/// Whether angle `t` lies on the arc starting at `a0` with signed `sweep`.
+fn on_arc(t: f64, a0: f64, sweep: f64) -> bool {
+    let tau = std::f64::consts::TAU;
+    if sweep >= 0.0 { (t - a0).rem_euclid(tau) <= sweep + 1e-12 } else { (a0 - t).rem_euclid(tau) <= -sweep + 1e-12 }
+}
+
+/// The points that bound the part of `curve` beyond `frame`'s side, in
+/// (u, v): its ends there, where it crosses the side's line, and its axis
+/// extremes beyond. Empty when no part lies beyond.
+fn beyond(curve: Curve, frame: SideFrame) -> Vec<(f64, f64)> {
+    let mut found: Vec<(f64, f64)> = Vec::new();
+    match curve {
+        Curve::Segment(a, b) => {
+            let (p, q) = (frame.uv(a), frame.uv(b));
+            if p.1 > 0.0 {
+                found.push(p);
+            }
+            if q.1 > 0.0 {
+                found.push(q);
+            }
+            if (p.1 > 0.0) != (q.1 > 0.0) && p.1 != q.1 {
+                let t = p.1 / (p.1 - q.1);
+                found.push((p.0 + t * (q.0 - p.0), 0.0));
+            }
+        }
+        Curve::Arc(..) | Curve::Circle(..) => {
+            let (c, r, a0, sweep) = match curve {
+                Curve::Arc(s, m, e) => match arc_geometry(s, m, e) {
+                    Some(geometry) => geometry,
+                    None => return beyond(Curve::Segment(s, e), frame),
+                },
+                Curve::Circle(c, r) => (c, r, 0.0, std::f64::consts::TAU),
+                Curve::Segment(..) => unreachable!(),
+            };
+            let at = |t: f64| (c.0 + r * t.cos(), c.1 + r * t.sin());
+            let mut candidates: Vec<(f64, f64)> = Vec::new();
+            if let Curve::Arc(s, _, e) = curve {
+                candidates.extend([s, e]);
+            }
+            for k in 0..4 {
+                let t = k as f64 * std::f64::consts::FRAC_PI_2;
+                if on_arc(t, a0, sweep) {
+                    candidates.push(at(t));
+                }
+            }
+            // Where the circle meets the side's line.
+            let (horizontal, k) = frame.line();
+            let offset = if horizontal { k - c.1 } else { k - c.0 };
+            if offset.abs() <= r {
+                let half = (r * r - offset * offset).sqrt();
+                for sign in [-1.0, 1.0] {
+                    let p = if horizontal { (c.0 + sign * half, k) } else { (k, c.1 + sign * half) };
+                    let t = (p.1 - c.1).atan2(p.0 - c.0);
+                    if on_arc(t, a0, sweep) {
+                        candidates.push(p);
+                    }
+                }
+            }
+            let uv: Vec<(f64, f64)> = candidates.into_iter().map(|p| frame.uv(p)).collect();
+            if uv.iter().any(|p| p.1 > 0.0) {
+                found.extend(uv.into_iter().filter(|p| p.1 >= -1e-9).map(|(u, v)| (u, v.max(0.0))));
+            }
+        }
+    }
+    found
+}
+
 /// Keep-clear stretches the routed board carries itself: every rule area
-/// that forbids copper pours (an antenna region, a connector launch) along
-/// the outline's sides, plus the antenna margin. They hold whatever the
-/// source says, so a wrong source cannot open a radiator edge to tabs.
+/// that forbids copper pours (an antenna region, a connector launch) where
+/// it covers a side of the outline, ending on the edge or crossing it, plus
+/// the antenna margin. They hold whatever the source says, so a wrong
+/// source cannot open a radiator edge to tabs.
 pub fn routed_keep_clear(pcb: &copper_cam::board::Board, outline: &[Vec<Point>]) -> Vec<KeepClear> {
     let b = bounds(outline);
     let mut found: Vec<KeepClear> = Vec::new();
@@ -231,14 +362,43 @@ pub fn routed_keep_clear(pcb: &copper_cam::board::Board, outline: &[Vec<Point>])
         .iter()
         .filter(|z| z.keepout == Some(true) && !z.in_footprint && z.not_allowed.iter().any(|kind| kind == "copperpour"))
     {
+        let mut shapes: poly::Shapes = Vec::new();
         for contour in &zone.outline {
-            let mut from = (contour.start.x, contour.start.y);
+            let mut ring: Vec<(f64, f64)> = vec![(contour.start.x as f64, contour.start.y as f64)];
             for edge in &contour.edges {
                 let end = edge.end();
-                let to = (end.x, end.y);
-                if let Some((side, start, end)) = side_of(b, from, to)
-                    && end > start
+                let end = (end.x as f64, end.y as f64);
+                if let copper_cam::geometry::Edge::Arc { mid, .. } = edge
+                    && let Some((c, r, a0, sweep)) =
+                        arc_geometry(*ring.last().expect("a point"), (mid.x as f64, mid.y as f64), end)
                 {
+                    ring.extend(
+                        (1..32).map(|k| a0 + sweep * k as f64 / 32.0).map(|t| (c.0 + r * t.cos(), c.1 + r * t.sin())),
+                    );
+                }
+                ring.push(end);
+            }
+            shapes.extend(poly::polygon(&ring));
+        }
+        // The side, a micron either way: what of the keep-out touches it.
+        let strips = [
+            (Side::Top, [b[0], b[1] - 1_000, b[2], b[1] + 1_000]),
+            (Side::Bottom, [b[0], b[3] - 1_000, b[2], b[3] + 1_000]),
+            (Side::Left, [b[0] - 1_000, b[1], b[0] + 1_000, b[3]]),
+            (Side::Right, [b[2] - 1_000, b[1], b[2] + 1_000, b[3]]),
+        ];
+        for (side, r) in strips {
+            let strip = rect_shapes([(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])]);
+            for piece in poly::intersection(&shapes, &strip) {
+                let along: Vec<i64> = piece
+                    .iter()
+                    .flatten()
+                    .map(|p| if matches!(side, Side::Top | Side::Bottom) { p.x - b[0] } else { p.y - b[1] })
+                    .collect();
+                let (Some(start), Some(end)) = (along.iter().min().copied(), along.iter().max().copied()) else {
+                    continue;
+                };
+                if end > start {
                     let keep = KeepClear {
                         side,
                         start: start - ANTENNA_TAB_MARGIN,
@@ -249,39 +409,10 @@ pub fn routed_keep_clear(pcb: &copper_cam::board::Board, outline: &[Vec<Point>])
                         found.push(keep);
                     }
                 }
-                from = to;
             }
         }
     }
     found
-}
-
-/// The points that bound the arc from `s` through `m` to `e`: its ends and
-/// every axis extreme it passes (exact, so a turned footprint's curve
-/// bounds the same as an upright one's).
-fn arc_extent(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Vec<(f64, f64)> {
-    let d = 2.0 * (s.0 * (m.1 - e.1) + m.0 * (e.1 - s.1) + e.0 * (s.1 - m.1));
-    if d.abs() < 1e-12 {
-        return vec![s, m, e];
-    }
-    let sq = |p: (f64, f64)| p.0 * p.0 + p.1 * p.1;
-    let cx = (sq(s) * (m.1 - e.1) + sq(m) * (e.1 - s.1) + sq(e) * (s.1 - m.1)) / d;
-    let cy = (sq(s) * (e.0 - m.0) + sq(m) * (s.0 - e.0) + sq(e) * (m.0 - s.0)) / d;
-    let r = (s.0 - cx).hypot(s.1 - cy);
-    let tau = std::f64::consts::TAU;
-    let angle = |p: (f64, f64)| (p.1 - cy).atan2(p.0 - cx).rem_euclid(tau);
-    let (a0, am, a2) = (angle(s), angle(m), angle(e));
-    let ccw = |from: f64, to: f64| (to - from).rem_euclid(tau);
-    // Counter-clockwise from s to e if that passes m, else clockwise.
-    let (from, span) = if ccw(a0, am) <= ccw(a0, a2) { (a0, ccw(a0, a2)) } else { (a2, ccw(a2, a0)) };
-    let mut points = vec![s, e];
-    for k in 0..4 {
-        let t = k as f64 * std::f64::consts::FRAC_PI_2;
-        if ccw(from, t) <= span {
-            points.push((cx + r * t.cos(), cy + r * t.sin()));
-        }
-    }
-    points
 }
 
 /// A point of a footprint's own frame on the board: KiCad turns footprints
@@ -308,7 +439,7 @@ pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Ve
             .find(|p| p.string_value(1).as_deref() == Some("Reference"))
             .and_then(|p| p.string_value(2))
             .unwrap_or_default();
-        let mut points: Vec<(f64, f64)> = Vec::new();
+        let mut curves: Vec<Curve> = Vec::new();
         for item in footprint.items() {
             let layer = item.child("layer").and_then(|l| l.string_value(1)).unwrap_or_default();
             if !layer.ends_with(".CrtYd") && !layer.ends_with(".Courtyard") {
@@ -316,68 +447,79 @@ pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Ve
             }
             let xy = |tag: &str| item.child(tag).and_then(|n| Some((number(n, 1)?, number(n, 2)?)));
             let on_board = |p: (f64, f64)| footprint_point(at, p.0, p.1);
-            // The shape on the board: a turned rectangle by all four corners,
-            // circles and arcs by their exact extremes after turning.
+            // The courtyard's curves on the board (a turned footprint turns them).
             match item.tag() {
                 Some("fp_rect") => {
                     if let (Some((sx, sy)), Some((ex, ey))) = (xy("start"), xy("end")) {
-                        points.extend([(sx, sy), (ex, sy), (ex, ey), (sx, ey)].map(on_board));
+                        let c = [(sx, sy), (ex, sy), (ex, ey), (sx, ey)].map(on_board);
+                        curves.extend((0..4).map(|k| Curve::Segment(c[k], c[(k + 1) % 4])));
                     }
                 }
                 Some("fp_circle") => {
                     if let (Some(c), Some(e)) = (xy("center"), xy("end")) {
-                        let r = (e.0 - c.0).hypot(e.1 - c.1);
-                        let c = on_board(c);
-                        points.extend([(c.0 - r, c.1), (c.0 + r, c.1), (c.0, c.1 - r), (c.0, c.1 + r)]);
+                        curves.push(Curve::Circle(on_board(c), (e.0 - c.0).hypot(e.1 - c.1)));
                     }
                 }
                 Some("fp_arc") => {
                     if let (Some(s), Some(m), Some(e)) = (xy("start"), xy("mid"), xy("end")) {
-                        points.extend(arc_extent(on_board(s), on_board(m), on_board(e)));
+                        curves.push(Curve::Arc(on_board(s), on_board(m), on_board(e)));
                     }
                 }
                 Some("fp_poly") => {
                     if let Some(pts) = item.child("pts") {
+                        let mut ring: Vec<Curve> = Vec::new();
+                        let mut last: Option<(f64, f64)> = None;
+                        let mut first: Option<(f64, f64)> = None;
                         for node in pts.items() {
                             let at = |tag: &str| node.child(tag).and_then(|n| Some((number(n, 1)?, number(n, 2)?)));
-                            match node.tag() {
-                                Some("xy") => points.extend(number(node, 1).zip(number(node, 2)).map(on_board)),
-                                Some("arc") => {
-                                    if let (Some(s), Some(m), Some(e)) = (at("start"), at("mid"), at("end")) {
-                                        points.extend(arc_extent(on_board(s), on_board(m), on_board(e)));
+                            let (start, end, curve) = match node.tag() {
+                                Some("xy") => match number(node, 1).zip(number(node, 2)).map(on_board) {
+                                    Some(p) => (p, p, None),
+                                    None => continue,
+                                },
+                                Some("arc") => match (at("start"), at("mid"), at("end")) {
+                                    (Some(s), Some(m), Some(e)) => {
+                                        let (s, m, e) = (on_board(s), on_board(m), on_board(e));
+                                        (s, e, Some(Curve::Arc(s, m, e)))
                                     }
-                                }
-                                _ => {}
+                                    _ => continue,
+                                },
+                                _ => continue,
+                            };
+                            if let Some(previous) = last {
+                                ring.push(Curve::Segment(previous, start));
                             }
+                            ring.extend(curve);
+                            first.get_or_insert(start);
+                            last = Some(end);
                         }
+                        if let (Some(first), Some(last)) = (first, last) {
+                            ring.push(Curve::Segment(last, first));
+                        }
+                        curves.extend(ring);
                     }
                 }
-                _ => points.extend(["start", "end"].into_iter().filter_map(xy).map(on_board)),
+                _ => {
+                    if let (Some(s), Some(e)) = (xy("start"), xy("end")) {
+                        curves.push(Curve::Segment(on_board(s), on_board(e)));
+                    }
+                }
             }
         }
-        if points.is_empty() {
-            continue;
-        }
-        let nm = |v: f64| (v * 1e6).round() as i64;
-        let (x0, y0) = (
-            nm(points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min)),
-            nm(points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min)),
-        );
-        let (x1, y1) = (
-            nm(points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max)),
-            nm(points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max)),
-        );
-        // Beyond the side by more than a micron, along the side clipped to it.
-        let along_x = (x0.max(b[0]) - b[0], x1.min(b[2]) - b[0]);
-        let along_y = (y0.max(b[1]) - b[1], y1.min(b[3]) - b[1]);
-        for (side, distance, (start, end)) in [
-            (Side::Top, b[1] - y0, along_x),
-            (Side::Bottom, y1 - b[3], along_x),
-            (Side::Left, b[0] - x0, along_y),
-            (Side::Right, x1 - b[2], along_y),
-        ] {
-            if distance > 1_000 && end > start {
-                found.push(Overhang { reference: reference.clone(), side, start, end, distance });
+        // Per side: the part of the courtyard beyond it, along it and how far.
+        let mm_bounds = [b[0], b[1], b[2], b[3]].map(|v| v as f64 / 1e6);
+        for side in [Side::Top, Side::Bottom, Side::Left, Side::Right] {
+            let frame = SideFrame { side, bounds: mm_bounds };
+            let points: Vec<(f64, f64)> = curves.iter().flat_map(|c| beyond(*c, frame)).collect();
+            let depth = points.iter().map(|p| p.1).fold(0.0, f64::max);
+            if depth <= 1e-3 {
+                continue;
+            }
+            let nm = |v: f64| (v * 1e6).round() as i64;
+            let start = nm(points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min).max(0.0));
+            let end = nm(points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max).min(frame.length()));
+            if end > start {
+                found.push(Overhang { reference: reference.clone(), side, start, end, distance: nm(depth) });
             }
         }
     }
@@ -557,23 +699,28 @@ mod tests {
     }
 
     #[test]
-    fn curves_bound_the_same_however_the_footprint_turns() {
-        // A quarter arc from (1, 0) through 45 deg to (0, 1) about the origin:
-        // its extremes are its ends, x and y in [0, 1].
+    fn only_the_part_beyond_a_side_counts() {
+        let bottom = SideFrame { side: Side::Bottom, bounds: [0.0, 0.0, 10.0, 6.0] };
+        // A segment crossing y = 6 at x = 3.6, inside up to x = 10.
+        let points = beyond(Curve::Segment((2.0, 6.5), (10.0, 4.0)), bottom);
+        let us: Vec<f64> = points.iter().map(|p| p.0).collect();
+        assert!(us.iter().any(|u| (u - 2.0).abs() < 1e-9) && us.iter().any(|u| (u - 3.6).abs() < 1e-9), "{points:?}");
+        assert!(us.iter().all(|u| *u <= 3.6 + 1e-9), "{points:?}");
+        // A circle centred 2 mm inside, 2.004 mm in radius: 4 um beyond over its chord.
+        let points = beyond(Curve::Circle((5.0, 4.0), 2.004), bottom);
+        let depth = points.iter().map(|p| p.1).fold(0.0, f64::max);
+        let width =
+            points.iter().map(|p| p.0).fold(f64::MIN, f64::max) - points.iter().map(|p| p.0).fold(f64::MAX, f64::min);
+        assert!(
+            (depth - 0.004).abs() < 1e-9 && (width - 2.0 * (2.004f64 * 2.004 - 4.0).sqrt()).abs() < 1e-9,
+            "{points:?}"
+        );
+        // An arc bulging beyond with both ends inside.
         let h = std::f64::consts::FRAC_1_SQRT_2;
-        let quarter = arc_extent((1.0, 0.0), (h, h), (0.0, 1.0));
-        let max_x = quarter.iter().map(|p| p.0).fold(f64::MIN, f64::max);
-        let min_x = quarter.iter().map(|p| p.0).fold(f64::MAX, f64::min);
-        assert!((max_x - 1.0).abs() < 1e-9 && min_x.abs() < 1e-9, "{quarter:?}");
-        // The other way round (through -135 deg) it passes all four extremes but the first quadrant's.
-        let long = arc_extent((1.0, 0.0), (-h, -h), (0.0, 1.0));
-        let min_y = long.iter().map(|p| p.1).fold(f64::MAX, f64::min);
-        assert!((min_y + 1.0).abs() < 1e-9, "{long:?}");
-        // A circle's extent does not depend on its footprint's angle.
-        for angle in [0.0, 2.5, 30.0, 45.0] {
-            let c = footprint_point((5.0, 5.0, angle), 0.0, 0.0);
-            assert!((c.0 - 5.0).abs() < 1e-12 && (c.1 - 5.0).abs() < 1e-12);
-        }
+        let points = beyond(Curve::Arc((5.0 - h, 5.0 + h), (5.0, 6.0 + 0.5), (5.0 + h, 5.0 + h)), bottom);
+        assert!(points.iter().map(|p| p.1).fold(0.0, f64::max) > 0.0, "{points:?}");
+        // Nothing beyond, nothing found.
+        assert!(beyond(Curve::Segment((1.0, 1.0), (9.0, 5.0)), bottom).is_empty());
     }
 
     #[test]

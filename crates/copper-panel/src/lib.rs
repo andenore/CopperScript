@@ -588,6 +588,54 @@ mod tests {
     }
 
     #[test]
+    fn a_keepout_crossing_the_edge_still_holds_tabs_off() {
+        // The keep-out reaches 1 mm beyond A's top side over a_top (3.5-6.5 mm).
+        let keepout = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"55555555-5555-5555-5555-555555555555\") (name \"cluster/a/a-edge\") \
+             (hatch edge 0.5) (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) \
+             (polygon (pts (xy 4 -1) (xy 9 -1) (xy 9 3) (xy 4 3))))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = keepout;
+        let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+        assert!(
+            error.contains("tab a_top on board A's top side") && error.contains("keep-out cluster/a/a-edge"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn only_the_courtyard_beyond_the_edge_holds_tabs_off() {
+        // A triangle inside A from x 0.5 to 10 crosses the bottom side only
+        // from 0.5 to 2.4 mm: a_bottom (3.5-6.5 mm) stays allowed, a tab at
+        // 1-2 mm is refused.
+        let triangle = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 0 0 0) \
+             (property \"Reference\" \"J6\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+             (fp_poly (pts (xy 0.5 6.5) (xy 10 4) (xy 0.5 4)) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = triangle;
+        panelize(&spec(""), &marked, &none(), "demo").expect("a_bottom is clear of the overhang");
+        let error = panelize(
+            &spec("tab a_low { board = A; side = bottom; at = 1.5 mm; width = 1 mm; }"),
+            &marked,
+            &none(),
+            "demo",
+        )
+        .err()
+        .expect("refused");
+        assert!(
+            error.contains("tab a_low on board A's bottom side overlaps J6's body overhang (0.5-2.4 mm)"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn an_unnetted_copper_graphic_counts_as_unnetted_copper() {
         let line = BOARD.replacen(
             "(gr_line (start 0 0)",
