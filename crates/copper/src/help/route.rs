@@ -1,0 +1,674 @@
+//! Help for the place, route and benchmark commands.
+use super::{Command, Group, Opt};
+
+/// `edit-mechanical` and its alias `edit`.
+const EDIT_MECHANICAL: &[Opt] = &[
+    Opt {
+        flag: "--project PROJECT",
+        help: "consumer project whose copper.mod pins a library definition's dependencies",
+    },
+    Opt { flag: "--locked", help: "require copper.lock to match every package byte" },
+    Opt { flag: "--offline", help: "reject remote package cache misses" },
+    Opt { flag: "--footprint-root FOOTPRINT_ROOT", help: "extra footprint root for the physical build; may repeat" },
+    Opt {
+        flag: "--layers {2,4,6}",
+        help: "explicit copper-layer count; default derives it from source stackup and layer requirements",
+    },
+    Opt {
+        flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
+        help: "fabrication-rule profile of the physical build (default: generic)",
+    },
+    Opt { flag: "--placement-templates PLACEMENT_TEMPLATES", help: "apply a placement-template JSON scene" },
+    Opt { flag: "--hard-macro HARD_MACRO", help: "apply a legacy hard-macro scene JSON; may repeat" },
+    Opt { flag: "--allow-proxy-footprints", help: "explicit inspection-only proxy geometry" },
+    Opt { flag: "--no-browser", help: "print the private loopback launch URL without opening a browser" },
+    Opt { flag: "--port PORT", help: "loopback port; zero chooses an available port (default: 0)" },
+    Opt { flag: "--scene-output SCENE_OUTPUT", help: "write a derived scene and exit without serving" },
+    Opt { flag: "--overlay OVERLAY", help: "optional content-bound routed reference JSON" },
+];
+
+pub const COMMANDS: &[Command] = &[
+    Command {
+        name: "route-board",
+        group: Group::Layout,
+        summary: "attempt complete physical routing and run native DRC",
+        options: &[
+            // Inputs and project.
+            Opt { flag: "--locked", help: "require copper.lock to match every package byte" },
+            Opt { flag: "--offline", help: "reject remote package cache misses" },
+            Opt { flag: "--no-check", help: "route even when ERC reports errors" },
+            Opt {
+                flag: "--footprint-root DIR",
+                help: "extra KiCad footprint root for footprint identifiers the source does not bind; may repeat",
+            },
+            Opt {
+                flag: "--allow-proxy-footprints",
+                help: "use generated inspection-only proxy footprints instead of resolving real ones",
+            },
+            Opt {
+                flag: "--placement-templates SCENE",
+                help: "apply a placement-template JSON scene (rigid placement clusters)",
+            },
+            Opt {
+                flag: "--hard-macro SCENE",
+                help: "apply a legacy hard-macro scene JSON; may repeat (source-bound macros apply automatically)",
+            },
+            Opt {
+                flag: "--routing-profile {quick,balanced,thorough}",
+                help: "standard work budgets: sets --filled-copper-trials, --filled-copper-search-states and \
+                       --decoupling-placement-trials (quick 2/2000/4, balanced 8/4000/16, thorough 16/12000/64) \
+                       unless they are given explicitly",
+            },
+            // Board and stack-up.
+            Opt { flag: "--layers {2,4,6}", help: "copper-layer count (default: 2)" },
+            Opt {
+                flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
+                help: "fabrication-rule profile (default: generic)",
+            },
+            Opt {
+                flag: "--width-mm MM",
+                help: "board rectangle width, used only when the source has no mechanical block (default: 100.0)",
+            },
+            Opt {
+                flag: "--height-mm MM",
+                help: "board rectangle height, used only when the source has no mechanical block (default: 80.0)",
+            },
+            // Placement.
+            Opt { flag: "--candidates N", help: "placement candidates to generate (default: 1)" },
+            Opt { flag: "--placement-grid-mm MM", help: "positive placement sampling step (default: 1)" },
+            Opt { flag: "--placement-seeds N", help: "positive placement seed budget (default: max(2, candidates))" },
+            Opt {
+                flag: "--placement-refinement-passes N",
+                help: "optional placement refinement passes; 0 keeps the legalized poses (default: 2)",
+            },
+            Opt {
+                flag: "--escape-spacing-passes N",
+                help: "optional escape-spacing improvement passes of placement (default: 2)",
+            },
+            Opt {
+                flag: "--power-domain-weight W",
+                help: "soft supply-domain attraction weight of placement; 0 disables it (default: 0.25)",
+            },
+            Opt {
+                flag: "--decoupling-placement-trials N",
+                help: "copper-access pose trials per decoupling capacitor; 0 disables the relocation heuristic \
+                       (default: 64)",
+            },
+            Opt {
+                flag: "--support-pattern-trials N",
+                help: "joint support-pattern combination checks per placement seed; nonzero is not implemented \
+                       yet (default: 0)",
+            },
+            Opt {
+                flag: "--package-support-trials N",
+                help: "package-support placement trials; nonzero is not implemented yet (default: 0)",
+            },
+            Opt {
+                flag: "--placement-candidate ID",
+                help: "use this placement candidate identity (such as candidate-01); an unavailable identity is \
+                       an error",
+            },
+            Opt {
+                flag: "--placement-feedback-trials N",
+                help: "global placement trials per feedback iteration, unrelated to --congestion-feedback-trials \
+                       (default: 24)",
+            },
+            Opt { flag: "--feedback-iterations N", help: "placement-routing feedback iterations (default: 1)" },
+            Opt {
+                flag: "--congestion-feedback-trials N",
+                help: "bound on congestion-driven placement reruns of the pipeline tail; 0 disables them \
+                       (default: 4)",
+            },
+            // Escape and fanout.
+            Opt {
+                flag: "--escape-margin-mm MM",
+                help: "margin of the soft escape-corridor estimate of placement, not a DRC clearance (default: 0.5)",
+            },
+            Opt {
+                flag: "--escape-transit-lanes N",
+                help: "transit lanes reserved by the soft escape-corridor estimate of placement (default: 1)",
+            },
+            Opt {
+                flag: "--fanout, --no-fanout",
+                help: "seed the unified router's pad escapes; --no-fanout routes without them (default: on)",
+            },
+            Opt { flag: "--fanout-step-mm MM", help: "package escape sampling step (default: 0.5)" },
+            Opt {
+                flag: "--fanout-refinement-step-mm MM",
+                help: "finer escape sampling step for empty or conflicting coarse escapes (default: 0.1)",
+            },
+            Opt {
+                flag: "--fanout-geometry-candidates N",
+                help: "experimental extra escape-site family tried when no other escape is found; 0 keeps the \
+                       established generation (default: 0)",
+            },
+            Opt { flag: "--fanout-maze", help: "try maze escapes for pins left without an escape choice" },
+            Opt {
+                flag: "--escape-plan, --no-escape-plan",
+                help: "plan two-end escape order on the placed board and add it to the report as escape_plan \
+                       (default: off)",
+            },
+            Opt {
+                flag: "--bus-layers, --no-bus-layers",
+                help: "give nets outside the planar subset further layers as largest non-crossing subsets; \
+                       implies the two-end escape plan (default: off)",
+            },
+            Opt {
+                flag: "--array-flow, --no-array-flow",
+                help: "plan ball-array escapes and fan out only the plan's via balls (default: off)",
+            },
+            Opt {
+                flag: "--via-lattice, --no-via-lattice",
+                help: "reserve package via-site lattices for ball arrays before anything else is routed \
+                       (default: off)",
+            },
+            Opt {
+                flag: "--package-initial-pair-states N",
+                help: "cap on each coupled pair's search states in the critical stage; 0 means no cap and \
+                       --unified-set critical_pair_state_limit takes precedence (default: 6000)",
+            },
+            // Global routing.
+            Opt { flag: "--tile-size-mm MM", help: "global routing tile size (default: 5)" },
+            Opt { flag: "--router-iterations N", help: "global router iterations (default: 5)" },
+            Opt { flag: "--pin-access-step-mm MM", help: "global router pin-access sampling step (default: 0.5)" },
+            Opt {
+                flag: "--critical-pin-access-step-mm MM",
+                help: "finer pin-access step retried for critical-net pins that found no access at \
+                       --pin-access-step-mm",
+            },
+            Opt {
+                flag: "--layer-preference-cost N",
+                help: "soft plane-aware global layer cost; 0 disables it (default: 4)",
+            },
+            Opt {
+                flag: "--direction-preference-cost N",
+                help: "soft alternating inner-layer direction cost of global routing; 0 disables it (default: 2)",
+            },
+            Opt {
+                flag: "--layer-assignment-passes N",
+                help: "opt-in passes, 0 to 8, moving ordinary guide runs away from same-layer crossings \
+                       (default: 0)",
+            },
+            Opt {
+                flag: "--local-demand-cost N",
+                help: "opt-in global cost moving ordinary guide runs away from full channels; 0 disables it \
+                       (default: 0)",
+            },
+            Opt {
+                flag: "--local-demand-pitch-mm MM",
+                help: "pitch of global local-demand estimation; requires --local-demand-cost greater than 0 \
+                       (default: 1)",
+            },
+            // Unified router.
+            Opt {
+                flag: "--unified-pitch-mm MM",
+                help: "base lattice pitch of the unified router; 0 uses the default (default: 0.25)",
+            },
+            Opt {
+                flag: "--unified-time-budget-s S",
+                help: "wall-time bound in seconds on unified negotiated routing, from the unified stage on \
+                       (default: no limit)",
+            },
+            Opt {
+                flag: "--unified-save-inputs PATH",
+                help: "save the unified router's replay inputs to this state file",
+            },
+            Opt {
+                flag: "--unified-set KEY=VALUE",
+                help: "override one unified router option (a JSON value, else text); may repeat; see \
+                       --list-unified-options for the keys",
+            },
+            Opt {
+                flag: "--list-unified-options",
+                help: "list every --unified-set key with its type and default, then exit",
+            },
+            // Planes.
+            Opt {
+                flag: "--early-plane-stitch, --no-early-plane-stitch",
+                help: "reserve declared plane contacts in package preflight before ordinary routing when the \
+                       board declares copper zones (default: on)",
+            },
+            Opt {
+                flag: "--early-plane-pad REF.PAD",
+                help: "reserve early plane contacts only for this zone-net pad; may repeat; requires a declared \
+                       copper zone",
+            },
+            Opt {
+                flag: "--stitch-surface-zones, --no-stitch-surface-zones",
+                help: "consider authored surface-zone contacts when stitching planes; the opt-out is diagnostic \
+                       (default: on)",
+            },
+            Opt {
+                flag: "--prefer-local-ground, --no-prefer-local-ground",
+                help: "prefer a nearby via over reusing an existing contact for every GND pad (default: on)",
+            },
+            Opt {
+                flag: "--prefer-local-ground-pad REF.PAD",
+                help: "add this GND pad to the local-contact preference; may repeat",
+            },
+            Opt {
+                flag: "--ground-via-in-pad",
+                help: "permit filled-and-capped GND vias in pads; requires a declared copper zone and \
+                       --fab-profile jlcpcb-six-layer",
+            },
+            Opt {
+                flag: "--plane-stitch-step-mm MM",
+                help: "sampling step of plane stitching-via sites (default: 0.5)",
+            },
+            Opt {
+                flag: "--plane-stitch-radius-mm MM",
+                help: "largest distance from a pad to its plane stitching via (default: 3)",
+            },
+            Opt {
+                flag: "--plane-maze-step-mm MM",
+                help: "mesh step of the local surface-path fallback for plane contacts (default: 0.1)",
+            },
+            Opt {
+                flag: "--plane-maze-budget N",
+                help: "search-state bound of the local surface-path fallback for plane contacts (default: 12000)",
+            },
+            Opt {
+                flag: "--plane-contact-radius-mm MM",
+                help: "radius within which a blocked land may reach the plane through an escaped same-net land; \
+                       0 disables it (default: 0)",
+            },
+            Opt {
+                flag: "--plane-stitch-detour-mm MM",
+                help: "largest offset of three-leg detours tried for plane-contact surface paths; 0 tries none \
+                       (default: 0)",
+            },
+            Opt {
+                flag: "--plane-escape-width-mm MM",
+                help: "track width of plane-contact escapes, not below the board's track-width and clearance \
+                       floor (default: the net rule or board default track width)",
+            },
+            Opt {
+                flag: "--verify-plane-fill {native,none,KICAD_CLI}",
+                help: "check zone fills and connectivity of the written board: `native` refills and checks \
+                       in-process (default), a kicad-cli path runs KiCad's refill and DRC, `none` skips the check \
+                       (the run then cannot pass while zone nets are deferred)",
+            },
+            // Filled-copper feedback.
+            Opt {
+                flag: "--filled-copper-trials N",
+                help: "native-driven filled-copper repair trials; 0 runs verification only (default: 8)",
+            },
+            Opt {
+                flag: "--filled-copper-search-states N",
+                help: "search-state cap of each filled-copper bridge trial (default: 4000)",
+            },
+            Opt {
+                flag: "--maximum-ripup-blockers N",
+                help: "most blocking nets one filled-copper repair trial may displace, 1 to 8 (default: 4)",
+            },
+            Opt {
+                flag: "--zone-dependency-expansions N",
+                help: "bounded blocker-cone expansions of filled-copper repair, 0 to 8; 0 disables them \
+                       (default: 2)",
+            },
+            Opt {
+                flag: "--native-evidence-directory DIR",
+                help: "new directory for native verification evidence (default: a fresh directory beside the \
+                       report)",
+            },
+            // Outputs and checkpoints.
+            Opt {
+                flag: "-o, --output OUTPUT",
+                help: "write the inspection-only KiCad PCB draft and its .editor-intent.json sidecar",
+            },
+            Opt {
+                flag: "--report REPORT",
+                help: "route report JSON, with a .summary.json beside it (default: BOARD.route-report.json)",
+            },
+            Opt { flag: "--require-verified-intent", help: "also fail unless every hard source requirement passes" },
+            Opt { flag: "--progress", help: "print flushed phase, group and trial progress events" },
+            Opt {
+                flag: "--debug",
+                help: "request the full traceback of an error; this build reports tracebacks as not implemented",
+            },
+            Opt {
+                flag: "--stop-after {placement}",
+                help: "stop after this stage and write a partial report and draft; such a run never passes",
+            },
+            Opt {
+                flag: "--checkpoint-dir DIR",
+                help: "save placement.state.json and the critical-input and final-board diagnostic states in DIR",
+            },
+            Opt {
+                flag: "--reuse-placement PATH",
+                help: "start from a saved placement checkpoint; refused when the board or options differ",
+            },
+        ],
+        actions: &[],
+    },
+    Command {
+        name: "plan-layout",
+        group: Group::Layout,
+        summary: "produce a legal placement candidate and coarse routability report",
+        options: &[
+            Opt { flag: "--locked", help: "require copper.lock to match every package byte" },
+            Opt { flag: "--offline", help: "reject remote package cache misses" },
+            Opt {
+                flag: "-o, --output OUTPUT",
+                help: "KiCad PCB of the planned placement (default: the board's generated PCB file name)",
+            },
+            Opt { flag: "--report REPORT", help: "write the layout readiness report JSON and its summary" },
+            Opt { flag: "--no-check", help: "plan even when ERC reports errors" },
+            Opt {
+                flag: "--footprint-root FOOTPRINT_ROOT",
+                help: "extra KiCad footprint root for footprint identifiers the source does not bind; may repeat",
+            },
+            Opt {
+                flag: "--allow-proxy-footprints",
+                help: "use generated inspection-only proxy footprints instead of resolving real ones",
+            },
+            Opt { flag: "--layers {2,4,6}", help: "copper-layer count (default: 2)" },
+            Opt {
+                flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
+                help: "fabrication-rule profile (default: generic)",
+            },
+            Opt { flag: "--candidates CANDIDATES", help: "placement candidates to generate (default: 3)" },
+            Opt {
+                flag: "--placement-grid-mm PLACEMENT_GRID_MM",
+                help: "positive placement sampling step in mm (default: 1)",
+            },
+            Opt {
+                flag: "--escape-margin-mm ESCAPE_MARGIN_MM",
+                help: "margin in mm of the soft escape-corridor estimate, not a DRC clearance (default: 0.5)",
+            },
+            Opt {
+                flag: "--escape-transit-lanes ESCAPE_TRANSIT_LANES",
+                help: "transit lanes reserved by the soft escape-corridor estimate (default: 1)",
+            },
+            Opt {
+                flag: "--power-domain-weight POWER_DOMAIN_WEIGHT",
+                help: "soft supply-domain attraction weight; 0 disables it (default: 0.25)",
+            },
+            Opt {
+                flag: "--support-pattern-trials SUPPORT_PATTERN_TRIALS",
+                help: "joint support-pattern combination checks per placement seed; nonzero is not implemented \
+                       yet (default: 0)",
+            },
+            Opt {
+                flag: "--package-support-trials PACKAGE_SUPPORT_TRIALS",
+                help: "package-support placement trials; nonzero is not implemented yet (default: 0)",
+            },
+            Opt {
+                flag: "--decoupling-placement-trials DECOUPLING_PLACEMENT_TRIALS",
+                help: "copper-access pose trials per decoupling capacitor; 0 disables the relocation heuristic \
+                       (default: 64)",
+            },
+            Opt {
+                flag: "--placement-seeds PLACEMENT_SEEDS",
+                help: "positive placement seed budget (default: max(2, candidates))",
+            },
+            Opt {
+                flag: "--placement-refinement-passes PLACEMENT_REFINEMENT_PASSES",
+                help: "optional placement refinement passes; 0 keeps the legalized poses (default: 2)",
+            },
+            Opt {
+                flag: "--escape-spacing-passes ESCAPE_SPACING_PASSES",
+                help: "optional escape-spacing improvement passes (default: 2)",
+            },
+            Opt {
+                flag: "--width-mm WIDTH_MM",
+                help: "board rectangle width, used only when the source has no mechanical block (default: 100.0)",
+            },
+            Opt {
+                flag: "--height-mm HEIGHT_MM",
+                help: "board rectangle height, used only when the source has no mechanical block (default: 80.0)",
+            },
+            Opt { flag: "--hard-macro HARD_MACRO", help: "apply a legacy hard-macro scene JSON; may repeat" },
+            Opt {
+                flag: "--placement-templates PLACEMENT_TEMPLATES",
+                help: "apply a placement-template JSON scene (rigid placement clusters)",
+            },
+        ],
+        actions: &[],
+    },
+    Command {
+        name: "route-global",
+        group: Group::Layout,
+        summary: "produce multilayer routing guides with negotiated congestion",
+        options: &[
+            Opt { flag: "--locked", help: "require copper.lock to match every package byte" },
+            Opt { flag: "--offline", help: "reject remote package cache misses" },
+            Opt {
+                flag: "-o, --output OUTPUT",
+                help: "routing-guide JSON (default: BOARD.global-route.json, named after the board)",
+            },
+            Opt {
+                flag: "--pcb-output PCB_OUTPUT",
+                help: "also write a KiCad PCB of the placed board with its hard macros materialized",
+            },
+            Opt { flag: "--no-check", help: "route even when ERC reports errors" },
+            Opt {
+                flag: "--footprint-root FOOTPRINT_ROOT",
+                help: "extra KiCad footprint root for footprint identifiers the source does not bind; may repeat",
+            },
+            Opt {
+                flag: "--allow-proxy-footprints",
+                help: "use generated inspection-only proxy footprints instead of resolving real ones",
+            },
+            Opt { flag: "--layers {2,4,6}", help: "copper-layer count (default: 2)" },
+            Opt {
+                flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
+                help: "fabrication-rule profile (default: generic)",
+            },
+            Opt { flag: "--candidates CANDIDATES", help: "placement candidates to generate (default: 3)" },
+            Opt {
+                flag: "--tile-size-mm TILE_SIZE_MM",
+                help: "global routing tile size in mm, also the initial placement-feedback move (default: 5)",
+            },
+            Opt { flag: "--router-iterations ROUTER_ITERATIONS", help: "global router iterations (default: 20)" },
+            Opt {
+                flag: "--feedback-iterations FEEDBACK_ITERATIONS",
+                help: "placement-routing feedback iterations (default: 4)",
+            },
+            Opt {
+                flag: "--feedback-trials FEEDBACK_TRIALS",
+                help: "placement trials per feedback iteration (default: 24)",
+            },
+            Opt {
+                flag: "--placement-grid-mm PLACEMENT_GRID_MM",
+                help: "positive placement sampling step in mm (default: 1)",
+            },
+            Opt {
+                flag: "--escape-margin-mm ESCAPE_MARGIN_MM",
+                help: "margin in mm of the soft escape-corridor estimate, not a DRC clearance (default: 0.5)",
+            },
+            Opt {
+                flag: "--escape-transit-lanes ESCAPE_TRANSIT_LANES",
+                help: "transit lanes reserved by the soft escape-corridor estimate (default: 1)",
+            },
+            Opt {
+                flag: "--power-domain-weight POWER_DOMAIN_WEIGHT",
+                help: "soft supply-domain attraction weight; 0 disables it (default: 0.25)",
+            },
+            Opt {
+                flag: "--support-pattern-trials SUPPORT_PATTERN_TRIALS",
+                help: "joint support-pattern combination checks per placement seed; nonzero is not implemented \
+                       yet (default: 0)",
+            },
+            Opt {
+                flag: "--package-support-trials PACKAGE_SUPPORT_TRIALS",
+                help: "package-support placement trials; nonzero is not implemented yet (default: 0)",
+            },
+            Opt {
+                flag: "--decoupling-placement-trials DECOUPLING_PLACEMENT_TRIALS",
+                help: "copper-access pose trials per decoupling capacitor; 0 disables the relocation heuristic \
+                       (default: 64)",
+            },
+            Opt {
+                flag: "--placement-seeds PLACEMENT_SEEDS",
+                help: "positive placement seed budget (default: max(2, candidates))",
+            },
+            Opt {
+                flag: "--placement-refinement-passes PLACEMENT_REFINEMENT_PASSES",
+                help: "optional placement refinement passes; 0 keeps the legalized poses (default: 2)",
+            },
+            Opt {
+                flag: "--escape-spacing-passes ESCAPE_SPACING_PASSES",
+                help: "optional escape-spacing improvement passes (default: 2)",
+            },
+            Opt {
+                flag: "--width-mm WIDTH_MM",
+                help: "board rectangle width, used only when the source has no mechanical block (default: 100.0)",
+            },
+            Opt {
+                flag: "--height-mm HEIGHT_MM",
+                help: "board rectangle height, used only when the source has no mechanical block (default: 80.0)",
+            },
+            Opt { flag: "--hard-macro HARD_MACRO", help: "apply a legacy hard-macro scene JSON; may repeat" },
+            Opt {
+                flag: "--placement-templates PLACEMENT_TEMPLATES",
+                help: "apply a placement-template JSON scene (rigid placement clusters)",
+            },
+            Opt {
+                flag: "--pin-access-step-mm PIN_ACCESS_STEP_MM",
+                help: "pin-access sampling step in mm (default: 0.5)",
+            },
+            Opt {
+                flag: "--critical-pin-access-step-mm CRITICAL_PIN_ACCESS_STEP_MM",
+                help: "finer pin-access step in mm retried for critical-net pins that found no access",
+            },
+        ],
+        actions: &[],
+    },
+    Command {
+        name: "edit-mechanical",
+        group: Group::Layout,
+        summary: "open the physical, mechanical and definition editor for a board",
+        options: EDIT_MECHANICAL,
+        actions: &[],
+    },
+    Command {
+        name: "edit",
+        group: Group::Layout,
+        summary: "alias of edit-mechanical",
+        options: EDIT_MECHANICAL,
+        actions: &[],
+    },
+    Command {
+        name: "editor-overlay",
+        group: Group::Layout,
+        summary: "export a routed editor reference from a generic build run",
+        options: &[
+            Opt { flag: "--kicad-python KICAD_PYTHON", help: "explicit Python interpreter with pcbnew (required)" },
+            Opt { flag: "-o, --output OUTPUT", help: "new overlay JSON; never overwritten (required)" },
+        ],
+        actions: &[],
+    },
+    Command {
+        name: "synthesize-antenna",
+        group: Group::Layout,
+        summary: "tune a constraint antenna in a full-wave (FDTD) model of the board",
+        options: &[
+            Opt {
+                flag: "--antenna NAME",
+                help: "the constraint antenna to tune; required when the board declares more than one",
+            },
+            Opt { flag: "--budget N", help: "coarse full-wave evaluations the search may spend (default: 12)" },
+            Opt {
+                flag: "--pixel-cell MM",
+                help: "pixel cell size for topology = pixel (default: the larger of the track width and 1 mm)",
+            },
+            Opt { flag: "--no-fine", help: "skip the fine-mesh verification (and its correction) after the search" },
+            Opt { flag: "--verify", help: "evaluate the declared geometry instead of searching" },
+            Opt { flag: "--threads N", help: "solver threads; 0 picks one per physical core (default: 0)" },
+            Opt { flag: "--report PATH", help: "write the synthesis report" },
+            Opt { flag: "--locked", help: "require copper.lock to match every package byte" },
+            Opt { flag: "--offline", help: "reject remote package cache misses" },
+            Opt { flag: "--layers {2,4,6}", help: "copper-layer count (default: 2)" },
+            Opt {
+                flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
+                help: "fabrication-rule profile (default: generic)",
+            },
+            Opt {
+                flag: "--footprint-root FOOTPRINT_ROOT",
+                help: "extra KiCad footprint root for footprint identifiers the source does not bind; may repeat",
+            },
+            Opt {
+                flag: "--allow-proxy-footprints",
+                help: "use generated inspection-only proxy footprints instead of resolving real ones",
+            },
+        ],
+        actions: &[],
+    },
+    Command {
+        name: "si-check",
+        group: Group::Layout,
+        summary: "screen impedance, reference planes, layer groups and length-match groups before routing",
+        options: &[
+            Opt { flag: "--locked", help: "require copper.lock to match every package byte" },
+            Opt { flag: "--offline", help: "reject remote package cache misses" },
+            Opt { flag: "--layers {2,4,6}", help: "copper-layer count (default: 2)" },
+            Opt {
+                flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
+                help: "fabrication-rule profile (default: generic)",
+            },
+            Opt {
+                flag: "--footprint-root FOOTPRINT_ROOT",
+                help: "extra KiCad footprint root for footprint identifiers the source does not bind; may repeat",
+            },
+            Opt {
+                flag: "--allow-proxy-footprints",
+                help: "use generated inspection-only proxy footprints instead of resolving real ones",
+            },
+            Opt { flag: "--json", help: "emit deterministic JSON (schema copperscript-si-check/v0.1)" },
+        ],
+        actions: &[],
+    },
+    Command {
+        name: "bench",
+        group: Group::Benchmark,
+        summary: "benchmark ladder: route a fixed set of boards and compare completion and time",
+        options: &[
+            Opt {
+                flag: "--out OUT",
+                help: "results directory: one subdirectory per board plus results.json and results.md (required)",
+            },
+            Opt { flag: "--only ONLY", help: "comma-separated board names to run; an unknown name is an error" },
+            Opt { flag: "--tags TAGS", help: "comma-separated tags; run only the boards carrying any of them" },
+            Opt { flag: "--label LABEL", help: "label recorded in results.json (default: the --out directory name)" },
+            Opt {
+                flag: "--baseline BASELINE",
+                help: "earlier results.json to compare with; lost completion, more DRC errors or native opens, or \
+                       a slowdown beyond max(1.25x, +30 s) exits 1",
+            },
+            Opt {
+                flag: "--kicad-cli KICAD_CLI",
+                help: "passed as --verify-plane-fill to the boards the ladder marks native; `native` selects the \
+                       native checker",
+            },
+            Opt {
+                flag: "--extra-arg EXTRA_ARGS",
+                help: "extra route-board argument for every board; may repeat (write --extra-arg=VALUE for a value \
+                       starting with -)",
+            },
+            Opt {
+                flag: "--placements PLACEMENTS",
+                help: "per-board placement checkpoints: reuse BOARD/placement.state.json when present, else save \
+                       it there",
+            },
+            Opt { flag: "--jobs JOBS", help: "boards routed at once in parallel processes (default: 1)" },
+        ],
+        actions: &[],
+    },
+    Command {
+        name: "benchmark-routing",
+        group: Group::Benchmark,
+        summary: "run bounded routing acceptance cases and measure final copper",
+        options: &[
+            Opt {
+                flag: "-o, --output OUTPUT",
+                help: "new directory for acceptance.json and one subdirectory per case (required)",
+            },
+            Opt {
+                flag: "--kicad-cli KICAD_CLI",
+                help: "verify each case's filled planes with this kicad-cli; `native` selects the native checker",
+            },
+        ],
+        actions: &[],
+    },
+];

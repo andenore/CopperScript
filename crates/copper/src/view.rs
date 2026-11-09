@@ -18,8 +18,8 @@ use copper_report::view::{
 };
 
 use crate::issues::report_failure;
+use crate::option_parser::{self, flag, python_float as argument_float, short_value, value};
 use crate::pypath;
-use crate::report_args::{self, Opt, flag, python_float as argument_float, valued};
 
 const USAGE: &str = "usage: copper view [-h] (--issue ISSUE | --net NET | --pad PAD | --component COMPONENT | \
 --window WINDOW) [--highlight HIGHLIGHT] [--layers LAYERS] [--margin MARGIN] [--cluster-mm CLUSTER_MM] [--filled] \
@@ -378,28 +378,29 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         2
     };
     let options = [
-        valued("--issue"),
-        valued("--net"),
-        valued("--pad"),
-        valued("--component"),
-        valued("--window"),
-        valued("--highlight"),
-        valued("--layers"),
-        valued("--margin"),
-        valued("--cluster-mm"),
+        value("--issue"),
+        value("--net"),
+        value("--pad"),
+        value("--component"),
+        value("--window"),
+        value("--highlight"),
+        value("--layers"),
+        value("--margin"),
+        value("--cluster-mm"),
         flag("--filled"),
-        valued("--reference"),
-        valued("--align"),
-        Opt { long: "--output", short: Some("-o"), valued: true },
+        value("--reference"),
+        value("--align"),
+        short_value("--output", "-o"),
         flag("--json"),
     ];
-    let parsed = match report_args::parse(arguments, &options) {
+    let parsed = match option_parser::parse_report(arguments, &options) {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
             let _ = writeln!(
                 out,
                 "{USAGE}\n\nrender a board window per copper layer: an issue, net, pad, component or explicit window\n\nWrites SVG. --filled selects the run's saved native board; it does not refill.\nSaved fills are translucent; unfilled zones are dashed outlines. Rule-area keepouts are not shown.\n--reference overlays aligned copper in magenta, matching KiCad layer names; stackup roles and side swaps are not inferred."
             );
+            crate::help::options(out, "view");
             return 0;
         }
         Err(message) => return usage_error(err, &message),
@@ -419,7 +420,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
     }
     let number = |name: &str, default: f64| -> Result<f64, String> {
-        match parsed.last(name) {
+        match parsed.value(name) {
             None => Ok(default),
             Some(value) => {
                 argument_float(value).ok_or_else(|| format!("argument {name}: invalid float value: '{value}'"))
@@ -435,26 +436,26 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         [] => return usage_error(err, "the following arguments are required: target"),
         [_, extra, ..] => return usage_error(err, &format!("unrecognized arguments: {extra}")),
     };
-    let nets = parsed.all("--net");
+    let nets = parsed.owned_values("--net");
     let options = Options {
         target,
-        issue: parsed.last("--issue").map(str::to_owned),
+        issue: parsed.value("--issue").map(str::to_owned),
         nets,
-        pad: parsed.last("--pad").map(str::to_owned),
-        component: parsed.last("--component").map(str::to_owned),
-        window: parsed.last("--window").map(str::to_owned),
-        highlight: parsed.all("--highlight"),
-        layers: parsed.last("--layers").unwrap_or("auto").to_owned(),
+        pad: parsed.value("--pad").map(str::to_owned),
+        component: parsed.value("--component").map(str::to_owned),
+        window: parsed.value("--window").map(str::to_owned),
+        highlight: parsed.owned_values("--highlight"),
+        layers: parsed.value("--layers").unwrap_or("auto").to_owned(),
         margin,
         cluster_mm,
-        filled: parsed.has("--filled"),
-        reference: parsed.last("--reference").map(pypath::display),
-        align: parsed.last("--align").map(str::to_owned),
-        output: parsed.last("--output").map(pypath::display),
+        filled: parsed.flag("--filled"),
+        reference: parsed.value("--reference").map(pypath::display),
+        align: parsed.value("--align").map(str::to_owned),
+        output: parsed.value("--output").map(pypath::display),
     };
     match view(&options) {
         Ok((image, lines)) => {
-            let rendered = if parsed.has("--json") {
+            let rendered = if parsed.flag("--json") {
                 let document = Object::from([
                     ("image".to_owned(), Value::from(image)),
                     ("legend".to_owned(), Value::Array(lines.into_iter().map(Value::from).collect())),

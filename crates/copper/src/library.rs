@@ -10,82 +10,21 @@ use copper_lang::library_context::{
 use copper_lang::packages::{find_manifest, read_manifest};
 use copper_lang::paths;
 
+use crate::option_parser::{self, Spec, flag, short_value, value};
 use crate::pypath;
 
 const USAGE: &str = "usage: copper library [-h] {index,search,inspect,diagnostics} ...";
 
 /// Parsed options of one `library` action.
-#[derive(Default)]
-struct Options {
-    positionals: Vec<String>,
-    values: Vec<(&'static str, String)>,
-    flags: Vec<&'static str>,
-}
+type Options = option_parser::Parsed;
 
-impl Options {
-    fn value(&self, name: &str) -> Option<&str> {
-        self.values.iter().rev().find(|(key, _)| *key == name).map(|(_, value)| value.as_str())
-    }
-
-    fn all(&self, name: &str) -> Vec<String> {
-        self.values.iter().filter(|(key, _)| *key == name).map(|(_, value)| value.clone()).collect()
-    }
-}
-
+/// One action's options, parsed by the shared parser (`-o` is `--output`).
 fn parse(arguments: &[String], valued: &[&'static str], flags: &[&'static str]) -> Result<Options, String> {
-    let mut options = Options::default();
-    let mut index = 0;
-    let mut only_positionals = false;
-    while index < arguments.len() {
-        let arg = &arguments[index];
-        index += 1;
-        if only_positionals || !arg.starts_with('-') || arg == "-" {
-            options.positionals.push(arg.clone());
-            continue;
-        }
-        if arg == "--" {
-            only_positionals = true;
-            continue;
-        }
-        if arg == "-h" {
-            options.flags.push("--help");
-            continue;
-        }
-        if arg == "-o" && valued.contains(&"--output") {
-            let value = arguments.get(index).ok_or("argument -o/--output: expected one argument")?;
-            options.values.push(("--output", value.clone()));
-            index += 1;
-            continue;
-        }
-        let (name, inline) = match arg.split_once('=') {
-            Some((name, value)) => (name, Some(value.to_owned())),
-            None => (arg.as_str(), None),
-        };
-        let candidates: Vec<&'static str> =
-            valued.iter().chain(flags).copied().filter(|option| option.starts_with(name)).collect();
-        let option = match candidates.as_slice() {
-            _ if valued.contains(&name) || flags.contains(&name) => {
-                valued.iter().chain(flags).copied().find(|option| *option == name).expect("known")
-            }
-            [option] => option,
-            [] => return Err(format!("unrecognized arguments: {arg}")),
-            _ => return Err(format!("ambiguous option: {name} could match {}", candidates.join(", "))),
-        };
-        if valued.contains(&option) {
-            let value = match inline {
-                Some(value) => value,
-                None => {
-                    let value = arguments.get(index).ok_or(format!("argument {option}: expected one argument"))?;
-                    index += 1;
-                    value.clone()
-                }
-            };
-            options.values.push((option, value));
-        } else {
-            options.flags.push(option);
-        }
+    let mut specs: Vec<Spec> = flags.iter().map(|name| flag(name)).collect();
+    for name in valued {
+        specs.push(if *name == "--output" { short_value(name, "-o") } else { value(name) });
     }
-    Ok(options)
+    option_parser::parse(arguments, &specs)
 }
 
 fn integer(options: &Options, name: &str, default: i64) -> Result<i64, String> {
@@ -117,6 +56,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     if action == "-h" || action == "--help" {
         let _ = writeln!(out, "{USAGE}\n\ncompact discovery and inspection across declared part libraries");
+        crate::help::options(out, "library");
         return 0;
     }
     let rest = &arguments[1..];
@@ -147,8 +87,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return 2;
         }
     };
-    if options.flags.contains(&"--help") {
+    if options.flag("--help") {
         let _ = writeln!(out, "{usage}");
+        crate::help::action_options(out, "library", action);
         return 0;
     }
     let usage_error = |err: &mut dyn Write, message: &str| {
@@ -212,7 +153,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     let current = std::env::current_dir().unwrap_or_default();
     let project = options.value("--project").map(PathBuf::from).unwrap_or(current);
     let result = (|| -> Result<(String, bool), String> {
-        let mut providers = options.all("--provider");
+        let mut providers = options.owned_values("--provider");
         if action == "inspect" {
             let selector = &options.positionals[0];
             let Some(manifest_path) = find_manifest(&paths::resolve(&project)) else {
@@ -233,13 +174,13 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             };
             providers = vec![best.clone()];
         }
-        let locked = !options.flags.contains(&"--update-lock");
-        let offline = !options.flags.contains(&"--fetch");
+        let locked = !options.flag("--update-lock");
+        let offline = !options.flag("--fetch");
         let mut catalog = project_catalog(Path::new(&project), locked, offline, &providers)?;
         let page = match action {
             "search" => search(&catalog, options.positionals.first().map_or("", String::as_str), kind, page)?,
             "inspect" => {
-                let members = options.all("--member");
+                let members = options.owned_values("--member");
                 let selector = options.positionals[0].clone();
                 inspect(&mut catalog, &selector, kind, section, page, options.value("--expect-digest"), &members)?
             }

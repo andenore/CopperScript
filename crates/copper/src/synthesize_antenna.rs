@@ -76,6 +76,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\n{ABOUT}");
+        crate::help::options(out, "synthesize-antenna");
         return 0;
     }
     let integer = |name: &str, default: usize| -> Result<usize, String> {
@@ -121,7 +122,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return not_implemented(err, &failure.message);
         }
         Err(failure) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {failure}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
             return 2;
         }
     };

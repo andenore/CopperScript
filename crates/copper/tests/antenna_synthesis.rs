@@ -262,30 +262,30 @@ fn an_inverted_f_binds_its_short_link_with_a_leg_and_a_ground_via() {
     let pcb = directory.join("board.kicad_pcb");
     let report = directory.join("route.json");
     // The link's ground island joins the source's ground pad only through the
-    // zone fill, which only KiCad's refill can prove; without it the route is
-    // reported open and the verdict is not a pass, but the macro still binds.
+    // zone fill. The default plane checker (CopperScript's own refill, or
+    // KiCad's where it is installed) proves it; `--verify-plane-fill none`
+    // leaves the route reported open. The macro binds either way.
     let (pcb_text, report_text) = (pcb.to_string_lossy().into_owned(), report.to_string_lossy().into_owned());
-    let mut args = vec![
-        "route-board",
-        "examples/antenna_synthesis/inverted_f.copper",
-        "-o",
-        &pcb_text,
-        "--report",
-        &report_text,
-        "--locked",
-        "--offline",
-    ];
-    let verifying = kicad_cli();
-    if let Some(cli) = verifying {
-        args.extend(["--verify-plane-fill", cli]);
-    }
-    let (status, output) = copper(&args);
-    if verifying.is_some() {
-        assert_eq!(status, 0, "{output}");
-        assert!(output.contains("native fill verified=True"), "{output}");
-    } else {
-        assert!(output.contains("DRC-OPEN-NET [GND]"), "{output}");
-    }
+    let args = |checker: &'static str| {
+        vec![
+            "route-board",
+            "examples/antenna_synthesis/inverted_f.copper",
+            "-o",
+            pcb_text.as_str(),
+            "--report",
+            report_text.as_str(),
+            "--locked",
+            "--offline",
+            "--verify-plane-fill",
+            checker,
+        ]
+    };
+    let (status, output) = copper(&args("none"));
+    assert_ne!(status, 0, "{output}");
+    assert!(output.contains("DRC-OPEN-NET [GND]"), "{output}");
+    let (status, output) = copper(&args(kicad_cli().unwrap_or("native")));
+    assert_eq!(status, 0, "{output}");
+    assert!(output.contains("native fill verified=True"), "{output}");
     let exported = std::fs::read_to_string(&pcb).expect("the exported board");
     // The link R1 needs 1.46 mm of spacing (bodies and legs clear) and gets
     // 5.6 mm of room (a fifth of the 28 mm region), so the feed sits at
@@ -310,10 +310,8 @@ fn an_inverted_f_binds_its_short_link_with_a_leg_and_a_ground_via() {
     assert!(exported.contains("(at 15.07 7.2 90)") || exported.contains("(at 15.07 7.2 270)"), "{exported}");
     let report = std::fs::read_to_string(&report).expect("the route report");
     assert!(report.contains("synthesized antenna copper preserved and materialized"), "{report}");
-    if verifying.is_some() {
-        // KiCad flags the arm's open end as dangling; it is excluded by name.
-        assert!(report.contains("(antenna ifa open end)"), "{report}");
-    }
+    // The plane check flags the arm's open end as dangling; it is excluded by name.
+    assert!(report.contains("(antenna ifa open end)"), "{report}");
 }
 
 #[test]

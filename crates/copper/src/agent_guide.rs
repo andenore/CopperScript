@@ -8,7 +8,7 @@ use std::io::Write;
 use copper_json::{Dumps, Object, Value, encode_str, text};
 use sha2::{Digest, Sha256};
 
-use crate::args;
+use crate::option_parser::{self, flag};
 
 const TOPICS_JSON: &str = include_str!("agent_guide_topics.json");
 
@@ -130,14 +130,14 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     let topics = topics();
     let names: Vec<&str> = topics.topics.iter().map(|(name, _)| name.as_str()).collect();
     let usage = format!("usage: copper agent-guide [-h] [--json] [{{{}}}]", names.join(","));
-    let parsed = match args::parse(arguments, &["--help", "--json"]) {
+    let parsed = match option_parser::parse(arguments, &[flag("--json")]) {
         Ok(parsed) => parsed,
         Err(message) => {
             let _ = writeln!(err, "{usage}\ncopper agent-guide: error: {message}");
             return 2;
         }
     };
-    if parsed.flags.contains(&"--help") {
+    if parsed.flag("--help") {
         let _ = writeln!(out, "{usage}\n\nread compact, versioned agent guidance; start here");
         return 0;
     }
@@ -157,7 +157,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         );
         return 2;
     };
-    match text::print(out, &render(&guide, parsed.flags.contains(&"--json"))) {
+    match text::print(out, &render(&guide, parsed.flag("--json"))) {
         Ok(()) => 0,
         Err(_) => 1,
     }

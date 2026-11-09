@@ -9,8 +9,8 @@ use copper_lang::footprints::{FootprintResolver, audit_resolved_footprints};
 use copper_lang::mechanical::NOT_IMPLEMENTED;
 use copper_lang::paths;
 
-use crate::args;
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
+use crate::option_parser::{self, flag, value};
 
 const USAGE: &str = "usage: copper audit-footprints [-h] [--locked] [--offline] [--footprint-root FOOTPRINT_ROOT] [--strict] [--json] board";
 
@@ -22,58 +22,28 @@ fn optional(value: &Option<String>) -> Value {
     value.as_deref().map_or(Value::Null, Value::from)
 }
 
-/// Split repeatable `--footprint-root` values out of the arguments.
-pub fn footprint_roots(
-    arguments: &[String],
-    usage: &str,
-    command: &str,
-    err: &mut dyn Write,
-) -> Result<(Vec<String>, Vec<PathBuf>), u8> {
-    let mut rest = Vec::new();
-    let mut roots = Vec::new();
-    let mut index = 0;
-    while index < arguments.len() {
-        let arg = &arguments[index];
-        if arg.len() > 3 && "--footprint-root".starts_with(arg.as_str()) && arg.starts_with("--f") {
-            let Some(value) = arguments.get(index + 1) else {
-                let _ =
-                    writeln!(err, "{usage}\ncopper {command}: error: argument --footprint-root: expected one argument");
-                return Err(2);
-            };
-            roots.push(PathBuf::from(value));
-            index += 2;
-            continue;
-        }
-        match arg.strip_prefix("--footprint-root=") {
-            Some(value) => roots.push(PathBuf::from(value)),
-            None => rest.push(arg.clone()),
-        }
-        index += 1;
-    }
-    Ok((rest, roots))
-}
-
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let (rest, roots) = match footprint_roots(arguments, USAGE, "audit-footprints", err) {
-        Ok(split) => split,
-        Err(code) => return code,
-    };
-    let parsed = match args::parse(&rest, &["--help", "--locked", "--offline", "--strict", "--json"]) {
+    let parsed = match option_parser::parse(
+        arguments,
+        &[value("--footprint-root"), flag("--locked"), flag("--offline"), flag("--strict"), flag("--json")],
+    ) {
         Ok(parsed) => parsed,
         Err(message) => {
             let _ = writeln!(err, "{USAGE}\ncopper audit-footprints: error: {message}");
             return 2;
         }
     };
-    if parsed.flags.contains(&"--help") {
+    if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\nresolve and validate all selected board footprints");
+        crate::help::options(out, "audit-footprints");
         return 0;
     }
+    let roots: Vec<PathBuf> = parsed.values("--footprint-root").into_iter().map(PathBuf::from).collect();
     let [board] = parsed.positionals.as_slice() else {
         let _ = writeln!(err, "{USAGE}\ncopper audit-footprints: error: the following arguments are required: board");
         return 2;
     };
-    let (locked, offline) = (parsed.flags.contains(&"--locked"), parsed.flags.contains(&"--offline"));
+    let (locked, offline) = (parsed.flag("--locked"), parsed.flag("--offline"));
     let design = match load_design(Path::new(board), locked, offline) {
         Ok(design) => design,
         Err(LoadError::Compile(failure)) if failure.code == NOT_IMPLEMENTED => {
@@ -81,12 +51,12 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return NOT_IMPLEMENTED_EXIT;
         }
         Err(failure) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {failure}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
             return 2;
         }
     };
     let base = paths::resolve(Path::new(board)).parent().map(Path::to_path_buf).unwrap_or_default();
-    let mut resolver = FootprintResolver::new(&base, &roots, parsed.flags.contains(&"--strict"), locked, offline);
+    let mut resolver = FootprintResolver::new(&base, &roots, parsed.flag("--strict"), locked, offline);
     let entries = match audit_resolved_footprints(&design.electrical, &mut resolver) {
         Ok(entries) => entries,
         Err(message) => {
@@ -96,7 +66,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     let resolved = entries.iter().filter(|entry| entry.passed()).count();
     let passed = !entries.is_empty() && resolved == entries.len();
-    if parsed.flags.contains(&"--json") {
+    if parsed.flag("--json") {
         let rows = entries
             .iter()
             .map(|entry| {

@@ -85,6 +85,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     if action == "-h" || action == "--help" {
         let _ = writeln!(out, "{USAGE}\n\npin and check explicit assembly selections offline");
+        crate::help::options(out, "assembly");
         return 0;
     }
     if !ACTIONS.contains(&action.as_str()) {
@@ -107,6 +108,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         } else {
             let _ = writeln!(out, "usage: copper assembly {action} [-h] [--locked] [--offline] ... board");
         }
+        crate::help::action_options(out, "assembly", action);
         return 0;
     }
     if action == "offers" {

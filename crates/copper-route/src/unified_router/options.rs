@@ -187,6 +187,117 @@ pub const FIELDS: &[&str] = &[
     "fine_region_options",
 ];
 
+/// Each option's value type as `--unified-set` reads it, field for field.
+const FIELD_TYPES: [(&str, &str); 78] = [
+    ("pitch_nm", "int or null"),
+    ("maximum_iterations", "int"),
+    ("stall_iterations", "int"),
+    ("present_factor", "float"),
+    ("present_growth", "float"),
+    ("history_increment", "float"),
+    ("via_cost_mm", "float"),
+    ("wrong_way_cost", "float"),
+    ("outer_layer_cost", "float"),
+    ("attach_radius_nm", "int"),
+    ("neck_radius_nm", "int"),
+    ("attach_candidates", "int"),
+    ("window_margin_nm", "int"),
+    ("present_limit", "float"),
+    ("window_growth_limit", "int"),
+    ("maximum_expansions", "int"),
+    ("commit_rounds", "int"),
+    ("pour_recheck", "bool"),
+    ("buses_first", "bool"),
+    ("bus_length_budget", "bool"),
+    ("bus_skew_tuning", "bool"),
+    ("length_priority", "bool"),
+    ("full_reroute_every", "int"),
+    ("rejection_marker_cost", "float"),
+    ("route_smoothing", "bool"),
+    ("ball_field_cost", "float"),
+    ("reuse_plane_vias", "bool"),
+    ("ball_field_via_sites", "bool"),
+    ("ball_field_band", "int"),
+    ("ball_field_exact", "bool"),
+    ("ball_field_exact_reach_nm", "int or null"),
+    ("exit_reservation_cost", "float"),
+    ("bus_bundles", "bool"),
+    ("bga_fanout", "bool"),
+    ("raster_margin_nm", "int or null"),
+    ("time_budget_s", "float or null"),
+    ("grid_window_nm", "[x0, y0, x1, y1] or null"),
+    ("critical_pair_state_limit", "int or null"),
+    ("critical_pair_state_escalation", "int"),
+    ("power_islands", "text or null"),
+    ("power_islands_ball_grid_only", "bool"),
+    ("plane_fill_width", "bool"),
+    ("implicit_neck_nm", "int"),
+    ("local_escape_radius_nm", "int"),
+    ("local_escape_step_nm", "int"),
+    ("save_inputs_path", "text or null"),
+    ("local_escape_limit", "int"),
+    ("pre_route_decouplers", "bool"),
+    ("direct", "bool"),
+    ("escapes_first", "bool"),
+    ("escape_net_order", "list of text"),
+    ("escape_layer_biases", "list of layer biases"),
+    ("retain_escape_copper", "bool"),
+    ("planned_escapes_as_copper", "bool"),
+    ("share_commit_index", "bool"),
+    ("failed_retry_every", "int"),
+    ("failed_retry_limit", "int"),
+    ("failed_retry_before_exit", "bool"),
+    ("outward_axis_threshold_nm", "int"),
+    ("attach_extension_steps_nm", "list of int"),
+    ("attach_extension_reach_nm", "int"),
+    ("local_escape_detour_nm", "int"),
+    ("local_escape_states", "int"),
+    ("open_flood_limit", "int"),
+    ("open_space_area_nm2", "int"),
+    ("plane_piece_area_nm2", "int"),
+    ("plane_piece_fraction", "float"),
+    ("repair_neighbour_reach_nm", "int"),
+    ("via_budget_factor", "float"),
+    ("via_overrun_factor", "float"),
+    ("bend_cost", "float"),
+    ("neck_cost", "float"),
+    ("guide_cost", "float"),
+    ("guide_margin_nm", "int"),
+    ("congestion_tile_nm", "int"),
+    ("export_congestion", "bool"),
+    ("fine_regions", "text"),
+    ("fine_region_options", "fine-region options or null"),
+];
+
+/// Every `--unified-set` key with its value type and default, for
+/// `route-board --list-unified-options`.
+pub fn option_defaults() -> Vec<(&'static str, &'static str, String)> {
+    let encoded = crate::state_codec::encode_unified_options(&UnifiedRouterOptions::default());
+    let copper_state::StateValue::Dataclass { fields, .. } = encoded else {
+        unreachable!("options encode as a dataclass")
+    };
+    FIELD_TYPES
+        .iter()
+        .map(|(name, kind)| (*name, *kind, fields.get(*name).map_or_else(|| "null".to_owned(), render_default)))
+        .collect()
+}
+
+fn render_default(value: &copper_state::StateValue) -> String {
+    use copper_state::StateValue;
+    match value {
+        StateValue::Null => "null".to_owned(),
+        StateValue::Bool(flag) => flag.to_string(),
+        StateValue::Int(number) => number.to_string(),
+        StateValue::Float(number) => copper_json::Dumps::compact().dumps(&Value::Float(*number)),
+        StateValue::Str(text) => text.clone(),
+        StateValue::List(items) | StateValue::Tuple(items) => {
+            format!("[{}]", items.iter().map(render_default).collect::<Vec<_>>().join(", "))
+        }
+        StateValue::Enum { value, .. } => render_default(value),
+        other => format!("{other:?}"),
+    }
+}
+
 impl Default for UnifiedRouterOptions {
     fn default() -> Self {
         UnifiedRouterOptions {
@@ -562,5 +673,22 @@ impl UnifiedRouterOptions {
             return fail("fine_regions must be \"off\", \"arrays\" or \"dense\"");
         }
         Ok(options)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn option_defaults_cover_every_field_in_order() {
+        let rows = super::option_defaults();
+        let names: Vec<&str> = rows.iter().map(|(name, _, _)| *name).collect();
+        assert_eq!(names, super::FIELDS);
+        let get = |key: &str| {
+            rows.iter().find(|(name, _, _)| *name == key).map(|(_, kind, default)| (*kind, default.as_str()))
+        };
+        assert_eq!(get("maximum_iterations"), Some(("int", "150")));
+        assert_eq!(get("via_cost_mm"), Some(("float", "1.5")));
+        assert_eq!(get("fine_regions"), Some(("text", "arrays")));
+        assert_eq!(get("pitch_nm"), Some(("int or null", "null")));
     }
 }

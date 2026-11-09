@@ -130,6 +130,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             out,
             "{USAGE}\n\nbounded critical-group diagnostic from a placement checkpoint or source-only inputs"
         );
+        crate::help::options(out, "replay-critical");
         return 0;
     }
     let state = match parsed.positionals.as_slice() {
@@ -139,7 +140,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     let pair_states = match parsed.value("--pair-states") {
         None => 6000,
-        Some(text) => match crate::report_args::python_int(text) {
+        Some(text) => match crate::option_parser::python_int(text) {
             Some(count) if count >= 0 => count,
             _ => {
                 let quoted = copper_json::python_str_repr(text);

@@ -38,6 +38,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             out,
             "{USAGE}\n\nfill the copper zones of a .kicad_pcb natively, with the design rules of its .kicad_pro and\n.kicad_dru (same stem by default), and write the filled board; no KiCad and no DRC"
         );
+        crate::help::options(out, "fill");
         return 0;
     }
     let (pcb, output) = match (parsed.positionals.as_slice(), parsed.value("--output")) {

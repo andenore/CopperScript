@@ -48,75 +48,22 @@ struct Arguments {
     positionals: Vec<String>,
 }
 
-fn looks_negative(value: &str) -> bool {
-    value.starts_with('-') && value[1..].parse::<f64>().is_ok()
-}
-
-/// argparse for this command: abbreviations, `--option=value` and `-oVALUE`.
+/// This command's options, parsed by the shared parser (`-o` is `--output`).
 fn parse(arguments: &[String]) -> Result<Arguments, String> {
-    let mut parsed = Arguments::default();
-    let mut index = 0;
-    let mut only_positionals = false;
-    while index < arguments.len() {
-        let arg = &arguments[index];
-        index += 1;
-        if only_positionals || !arg.starts_with('-') || arg == "-" || looks_negative(arg) {
-            parsed.positionals.push(arg.clone());
-            continue;
-        }
-        if arg == "--" {
-            only_positionals = true;
-            continue;
-        }
-        let (name, inline): (&str, Option<String>) = if arg == "-h" {
-            ("--help", None)
-        } else if let Some(value) = arg.strip_prefix("-o").filter(|_| !arg.starts_with("--")) {
-            ("--output", (!value.is_empty()).then(|| value.to_owned()))
-        } else {
-            let (key, value) = match arg.split_once('=') {
-                Some((key, value)) => (key, Some(value.to_owned())),
-                None => (arg.as_str(), None),
-            };
-            let options: Vec<&'static str> = FLAGS.iter().chain(VALUED.iter()).copied().collect();
-            let exact = options.iter().copied().find(|o| *o == key);
-            let matches: Vec<&'static str> = options.iter().copied().filter(|o| o.starts_with(key)).collect();
-            let option = match (exact, matches.as_slice()) {
-                (Some(option), _) => option,
-                (None, [option]) => option,
-                (None, []) => return Err(format!("unrecognized arguments: {arg}")),
-                (None, _) => return Err(format!("ambiguous option: {key} could match {}", matches.join(", "))),
-            };
-            (option, value)
-        };
-        if let Some(flag) = FLAGS.iter().copied().find(|f| *f == name) {
-            if inline.is_some() {
-                return Err(format!("argument {flag}: ignored explicit argument"));
-            }
-            parsed.flags.push(flag);
-            continue;
-        }
-        let value = match inline {
-            Some(value) => value,
-            None => match arguments.get(index) {
-                Some(value) if !value.starts_with('-') || looks_negative(value) => {
-                    index += 1;
-                    value.clone()
-                }
-                _ => return Err(format!("argument {name}: expected one argument")),
-            },
-        };
-        match name {
-            "--output" => parsed.output = Some(value),
-            "--footprint-root" => parsed.footprint_roots.push(value),
-            "--layers" => parsed.layers = Some(value),
-            "--fab-profile" => parsed.fab_profile = Some(value),
-            "--width-mm" => parsed.width_mm = Some(value),
-            "--height-mm" => parsed.height_mm = Some(value),
-            "--hard-macro" => parsed.hard_macros.push(value),
-            _ => parsed.placement_templates = Some(value),
-        }
-    }
-    Ok(parsed)
+    let parsed = crate::plan_layout::parse_options(arguments, &FLAGS, &VALUED)?;
+    let last = |name: &str| parsed.value(name).map(str::to_owned);
+    Ok(Arguments {
+        flags: FLAGS.iter().copied().filter(|name| parsed.flag(name)).collect(),
+        output: last("--output"),
+        footprint_roots: parsed.owned_values("--footprint-root"),
+        layers: last("--layers"),
+        fab_profile: last("--fab-profile"),
+        width_mm: last("--width-mm"),
+        height_mm: last("--height-mm"),
+        hard_macros: parsed.owned_values("--hard-macro"),
+        placement_templates: last("--placement-templates"),
+        positionals: parsed.positionals.clone(),
+    })
 }
 
 fn float(value: Option<&String>, default: f64, name: &str) -> Result<f64, String> {
@@ -140,6 +87,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     if parsed.flags.contains(&"--help") {
         let _ = writeln!(out, "{USAGE}\n\ngenerate a KiCad 8 PCB draft using resolved footprints");
+        crate::help::options(out, "export-kicad-pcb");
         return 0;
     }
     let layers = match parsed.layers.as_deref().map(str::trim) {
@@ -180,14 +128,14 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return not_implemented(err, &failure.message);
         }
         Err(failure) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {failure}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
             return 2;
         }
     };
     let diagnostics = match copper_lang::erc::check(&design.electrical, false) {
         Ok(diagnostics) => diagnostics,
         Err(message) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {message}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {message}"));
             return 2;
         }
     };

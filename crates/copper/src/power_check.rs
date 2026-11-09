@@ -10,43 +10,43 @@ use copper_lang::erc::has_errors;
 use copper_lang::mechanical::NOT_IMPLEMENTED;
 use copper_lang::power::analyze_power_states;
 
-use crate::args;
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
+use crate::option_parser::{self, flag};
 
 const USAGE: &str = "usage: copper power-check [-h] [--locked] [--offline] board";
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let parsed = match args::parse(arguments, &["--help", "--locked", "--offline"]) {
+    let parsed = match option_parser::parse(arguments, &[flag("--locked"), flag("--offline")]) {
         Ok(parsed) => parsed,
         Err(message) => {
             let _ = writeln!(err, "{USAGE}\ncopper power-check: error: {message}");
             return 2;
         }
     };
-    if parsed.flags.contains(&"--help") {
+    if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\nanalyze explicit steady-state power scenarios");
+        crate::help::options(out, "power-check");
         return 0;
     }
     let [board] = parsed.positionals.as_slice() else {
         let _ = writeln!(err, "{USAGE}\ncopper power-check: error: the following arguments are required: board");
         return 2;
     };
-    let design =
-        match load_design(Path::new(board), parsed.flags.contains(&"--locked"), parsed.flags.contains(&"--offline")) {
-            Ok(design) => design,
-            Err(LoadError::Compile(failure)) if failure.code == NOT_IMPLEMENTED => {
-                let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: power-check ({})", failure.message);
-                return NOT_IMPLEMENTED_EXIT;
-            }
-            Err(failure) => {
-                let _ = text::print(out, &format!("COMPILE ERROR: {failure}"));
-                return 2;
-            }
-        };
+    let design = match load_design(Path::new(board), parsed.flag("--locked"), parsed.flag("--offline")) {
+        Ok(design) => design,
+        Err(LoadError::Compile(failure)) if failure.code == NOT_IMPLEMENTED => {
+            let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: power-check ({})", failure.message);
+            return NOT_IMPLEMENTED_EXIT;
+        }
+        Err(failure) => {
+            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
+            return 2;
+        }
+    };
     let view = match elaborate(&design.electrical) {
         Ok(view) => view,
         Err(message) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {message}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {message}"));
             return 2;
         }
     };

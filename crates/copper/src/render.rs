@@ -34,6 +34,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\n{ABOUT}");
+        crate::help::options(out, "render");
         return 0;
     }
     let (directory, output) = match (parsed.positionals.as_slice(), parsed.value("--output")) {

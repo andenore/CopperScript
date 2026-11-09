@@ -29,13 +29,16 @@ provisional until native refill verifies actual connectivity. The low-level
 On Windows use the installed absolute executable path. KiCad major 10 is the
 qualified refill adapter; other majors are reported as unsupported, not approved.
 
-`--verify-plane-fill native` refills and checks each candidate with
-CopperScript's own [filler](native-filling.md) and [DRC](native-drc.md)
-instead of `kicad-cli`. The report is written in KiCad's shape, with the
+Without `--verify-plane-fill` (or with `--verify-plane-fill native`)
+`route-board` refills and checks each candidate with CopperScript's own
+[filler](native-filling.md) and [DRC](native-drc.md) instead of `kicad-cli`;
+`--verify-plane-fill none` turns the check, and so the filled-copper trials,
+off. The report is written in KiCad's shape, with the
 same UUIDs, so the evidence, the open-net mapping and the dangling-copper
 repairs are the same code either way. The evidence's `kicad_version` then
 reads `copperscript <version>`. The native DRC is narrower than KiCad's (no
-courtyard or silkscreen checks; see its list), so KiCad stays the default.
+courtyard or silkscreen checks; see its list), so the shared Make build
+passes KiCad's `kicad-cli` explicitly and KiCad stays the qualified adapter.
 `copper bench --kicad-cli native` and `copper benchmark-routing --kicad-cli
 native` select it as well.
 

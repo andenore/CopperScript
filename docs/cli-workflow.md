@@ -373,11 +373,14 @@ hot tiles.
 (`--placement-feedback-trials` is the older, unrelated budget of global
 placement trials per feedback iteration.)
 
-Pass `--verify-plane-fill "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"` to
-refill a disposable KiCad copy and include authoritative open-net/island
-findings in the report; a zone outline or stitched via alone is not proof of
-connectivity. `--verify-plane-fill native` does the same without KiCad, with
-CopperScript's own [filler](native-filling.md) and [DRC](native-drc.md). See [routing research tasks](routing-backlog.md).
+`route-board` refills a disposable copy of the written board and includes
+open-net/island findings in the report; a zone outline or stitched via alone
+is not proof of connectivity. By default it uses CopperScript's own
+[filler](native-filling.md) and [DRC](native-drc.md), so a run needs no KiCad
+to pass. Pass `--verify-plane-fill "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"`
+to use KiCad's refill and DRC instead (the qualified adapter, and broader:
+courtyards and silkscreen), or `--verify-plane-fill none` to skip the check;
+a run that defers zone nets then cannot pass. See [routing research tasks](routing-backlog.md).
 Use the [current backlog](../TODO.md) for unresolved solver work.
 
 ### Full-vertical routing from a fresh checkout (Windows / PowerShell)

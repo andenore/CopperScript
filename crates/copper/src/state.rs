@@ -6,7 +6,8 @@ use std::path::Path;
 use copper_json::{Dumps, text};
 use copper_state::{StateError, describe};
 
-use crate::{args, pypath};
+use crate::option_parser;
+use crate::pypath;
 
 const USAGE: &str = "usage: copper state [-h] {show} file";
 
@@ -16,16 +17,17 @@ fn error(out: &mut dyn Write, message: &str) -> u8 {
 }
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let parsed = match args::parse(arguments, &["--help"]) {
+    let parsed = match option_parser::parse(arguments, &[]) {
         Ok(parsed) => parsed,
         Err(message) => {
             let _ = writeln!(err, "{USAGE}\ncopper state: error: {message}");
             return 2;
         }
     };
-    if parsed.flags.contains(&"--help") {
+    if parsed.flag("--help") {
         let _ =
             writeln!(out, "{USAGE}\n\ninspect copperscript.state files (routing checkpoints and saved solver inputs)");
+        crate::help::options(out, "state");
         return 0;
     }
     let file = match parsed.positionals.as_slice() {

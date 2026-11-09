@@ -63,6 +63,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\n{ABOUT}");
+        crate::help::options(out, "models");
         return 0;
     }
     let (action, board) = match parsed.positionals.as_slice() {

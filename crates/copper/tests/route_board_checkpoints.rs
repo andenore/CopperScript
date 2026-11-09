@@ -26,8 +26,12 @@ struct Run {
     stdout: String,
 }
 
+/// `route-board` on the fixture. The plane check is off: it writes its
+/// evidence to a fresh, randomly named directory each run, so two runs'
+/// reports would differ in those paths and digests even with equal copper.
 fn route(extra: &[&str]) -> Run {
-    let mut args = vec!["route-board", BOARD, "--locked", "--offline", "--allow-proxy-footprints"];
+    let mut args =
+        vec!["route-board", BOARD, "--locked", "--offline", "--allow-proxy-footprints", "--verify-plane-fill", "none"];
     args.extend_from_slice(extra);
     let output = Command::new(env!("CARGO_BIN_EXE_copper"))
         .args(&args)

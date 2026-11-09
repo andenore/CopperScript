@@ -43,8 +43,8 @@ use copper_route::unified_router::UnifiedRouterOptions;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::option_parser::{self, Parsed, Spec, flag, short_value, value};
+use crate::option_parser::{python_float, python_int};
 use crate::pypath;
-use crate::report_args::{python_float, python_int};
 
 /// The build identity a placement checkpoint records: the crate version and
 /// the digest of the workspace's Rust sources (`build.rs`).
@@ -163,8 +163,9 @@ mod option_tests {
     }
 }
 
-const FLAGS: [&str; 17] = [
+const FLAGS: [&str; 18] = [
     "--locked",
+    "--list-unified-options",
     "--offline",
     "--no-check",
     "--allow-proxy-footprints",
@@ -429,7 +430,20 @@ impl Arguments {
     fn path(&self, name: &str) -> Option<String> {
         self.parsed.value(name).map(pypath::display)
     }
+
+    /// The plane-fill checker: CopperScript's own refill and DRC unless a
+    /// kicad-cli path is given, or none with `--verify-plane-fill none`.
+    fn plane_checker(&self) -> Option<String> {
+        match self.parsed.value("--verify-plane-fill") {
+            None => Some(copper_route::plane_verify::NATIVE_CHECKER.to_owned()),
+            Some(NO_PLANE_CHECKER) => None,
+            Some(checker) => Some(pypath::display(checker)),
+        }
+    }
 }
+
+/// `--verify-plane-fill none`: write the board without checking its fills.
+const NO_PLANE_CHECKER: &str = "none";
 
 const INTS: [(&str, i64, IntKind); 23] = [
     ("--candidates", 1, IntKind::Any),
@@ -742,6 +756,18 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     };
     if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\nattempt complete physical routing and run native DRC");
+        crate::help::options(out, "route-board");
+        return 0;
+    }
+    if parsed.flag("--list-unified-options") {
+        let rows = copper_route::unified_router::option_defaults();
+        let width = rows.iter().map(|(name, _, _)| name.len()).max().unwrap_or(0);
+        let kind_width = rows.iter().map(|(_, kind, _)| kind.len()).max().unwrap_or(0);
+        let _ = writeln!(out, "--unified-set KEY=VALUE keys (VALUE is JSON, else text):\n");
+        let _ = writeln!(out, "{:width$}  {:kind_width$}  default", "key", "type");
+        for (name, kind, default) in rows {
+            let _ = writeln!(out, "{name:width$}  {kind:kind_width$}  {default}");
+        }
         return 0;
     }
     let mut arguments = match check_arguments(parsed) {
@@ -763,14 +789,14 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         }
         Err(_) if debug => return not_implemented(err, "--debug tracebacks"),
         Err(failure) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {failure}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
             return 2;
         }
     };
     let diagnostics = match copper_lang::erc::check(&design.electrical, false) {
         Ok(diagnostics) => diagnostics,
         Err(message) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {message}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {message}"));
             return 2;
         }
     };
@@ -1345,7 +1371,7 @@ fn finish(
     use copper_route::flow::PhysicalFlowStatus;
     let arguments = context.arguments;
     let stopped = result.stopped_after.is_some();
-    let native_cli = if stopped { None } else { arguments.path("--verify-plane-fill") };
+    let native_cli = if stopped { None } else { arguments.plane_checker() };
     if !stopped {
         emit(progress, "final_contacts_native_drc", "started", Vec::new());
     }
@@ -1650,7 +1676,7 @@ fn finish(
         result.retained_prefix.as_ref().map(|prefix| prefix.missing_copper_occurrences(&output_board));
     let closure_status = if !stopped
         && complete_with_fill
-        && (arguments.text("--verify-plane-fill").is_none() || verified)
+        && (arguments.plane_checker().is_none() || verified)
         && duplicate_pending.is_empty()
         && plane_pending.is_empty()
         && retained_missing.is_none_or(|missing| missing == (0, 0))

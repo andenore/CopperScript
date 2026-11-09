@@ -2,19 +2,19 @@
 
 use std::io::Write;
 
-use crate::args;
+use crate::option_parser;
 
 const USAGE: &str = "usage: copper lsp [-h]";
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let parsed = match args::parse(arguments, &["--help"]) {
+    let parsed = match option_parser::parse(arguments, &[]) {
         Ok(parsed) => parsed,
         Err(message) => {
             let _ = writeln!(err, "{USAGE}\ncopper: error: {message}");
             return 2;
         }
     };
-    if parsed.flags.contains(&"--help") {
+    if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\noptions:\n  -h, --help  show this help message and exit");
         return 0;
     }

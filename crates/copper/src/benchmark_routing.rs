@@ -25,6 +25,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\nrun bounded routing acceptance cases and measure final copper");
+        crate::help::options(out, "benchmark-routing");
         return 0;
     }
     if let Some(extra) = parsed.positionals.first() {

@@ -44,6 +44,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             out,
             "{USAGE}\n\nplot native Gerber X2, Excellon, IPC-D-356 and position files from a filled board, without KiCad;\nzone fills are taken from the board as saved, not refilled, and no DRC is run"
         );
+        crate::help::options(out, "plot");
         return 0;
     }
     let (pcb, output) = match (parsed.positionals.as_slice(), parsed.value("--output")) {

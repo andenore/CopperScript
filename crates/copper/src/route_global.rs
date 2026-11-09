@@ -20,7 +20,8 @@ use copper_route::routeflow::{PlacementRoutingFeedbackOptions, optimize_placemen
 use copper_route::{GlobalRouterOptions, GlobalRoutingStatus};
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
-use crate::plan_layout::{OptionsError, parse_options, planner_arguments, planner_options, python_float, python_int};
+use crate::option_parser::{python_float, python_int};
+use crate::plan_layout::{OptionsError, parse_options, planner_arguments, planner_options};
 use crate::pypath;
 
 const USAGE: &str = "usage: copper route-global [-h] [--locked] [--offline] [-o OUTPUT] [--pcb-output PCB_OUTPUT] \
@@ -109,9 +110,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\nproduce multilayer routing guides with negotiated congestion");
+        crate::help::options(out, "route-global");
         return 0;
     }
-    let layers = match parsed.last("--layers") {
+    let layers = match parsed.value("--layers") {
         None => 2,
         Some(text) => match python_int(text) {
             Some(value) if [2, 4, 6].contains(&value) => value,
@@ -121,7 +123,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             None => return usage_error(err, &format!("argument --layers: invalid int value: '{text}'")),
         },
     };
-    let profile = parsed.last("--fab-profile").cloned().unwrap_or_else(|| "generic".to_owned());
+    let profile = parsed.value("--fab-profile").map(str::to_owned).unwrap_or_else(|| "generic".to_owned());
     if !["generic", "jlcpcb-four-layer", "jlcpcb-six-layer"].contains(&profile.as_str()) {
         return usage_error(
             err,
@@ -135,7 +137,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         Err(message) => return usage_error(err, &message),
     };
     let int = |name: &str, default: i64| -> Result<i64, String> {
-        match parsed.last(name) {
+        match parsed.value(name) {
             None => Ok(default),
             Some(text) => python_int(text).ok_or_else(|| format!("argument {name}: invalid int value: '{text}'")),
         }
@@ -146,7 +148,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         (Err(message), _, _) | (_, Err(message), _) | (_, _, Err(message)) => return usage_error(err, &message),
     };
     let float = |name: &str, default: f64| -> Result<f64, String> {
-        match parsed.last(name) {
+        match parsed.value(name) {
             None => Ok(default),
             Some(text) => python_float(text).ok_or_else(|| format!("argument {name}: invalid float value: '{text}'")),
         }
@@ -155,8 +157,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         (Ok(width), Ok(height)) => (width, height),
         (Err(message), _) | (_, Err(message)) => return usage_error(err, &message),
     };
-    let pin_step = parsed.last("--pin-access-step-mm").cloned().unwrap_or_else(|| "0.5".to_owned());
-    let critical_step = parsed.last("--critical-pin-access-step-mm").cloned();
+    let pin_step = parsed.value("--pin-access-step-mm").map(str::to_owned).unwrap_or_else(|| "0.5".to_owned());
+    let critical_step = parsed.value("--critical-pin-access-step-mm").map(str::to_owned);
     for (name, value) in
         [("--pin-access-step-mm", Some(&pin_step)), ("--critical-pin-access-step-mm", critical_step.as_ref())]
     {
@@ -166,7 +168,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return usage_error(err, &message);
         }
     }
-    let tile_text = parsed.last("--tile-size-mm").cloned().unwrap_or_else(|| "5".to_owned());
+    let tile_text = parsed.value("--tile-size-mm").map(str::to_owned).unwrap_or_else(|| "5".to_owned());
     let board = match parsed.positionals.as_slice() {
         [board] => board.clone(),
         [] => return usage_error(err, "the following arguments are required: board"),
@@ -179,14 +181,14 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return not_implemented(err, &failure.message);
         }
         Err(failure) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {failure}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
             return 2;
         }
     };
     let diagnostics = match copper_lang::erc::check(&design.electrical, false) {
         Ok(diagnostics) => diagnostics,
         Err(message) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {message}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {message}"));
             return 2;
         }
     };
@@ -214,7 +216,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             physicalize(&design, Footprints::Proxy, &options, locked, offline).map_err(Stop::Error)?
         } else {
             let base = paths::resolve(Path::new(&board)).parent().map(Path::to_path_buf).unwrap_or_default();
-            let roots: Vec<PathBuf> = parsed.all("--footprint-root").iter().map(PathBuf::from).collect();
+            let roots: Vec<PathBuf> = parsed.values("--footprint-root").iter().map(PathBuf::from).collect();
             let mut resolver = FootprintResolver::new(&base, &roots, false, locked, offline);
             physicalize(&design, Footprints::Resolved(&mut resolver), &options, locked, offline).map_err(Stop::Error)?
         };
@@ -236,7 +238,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
         .validated()
         .map_err(Stop::Error)?;
-        if let Some(scene) = parsed.last("--placement-templates") {
+        if let Some(scene) = parsed.value("--placement-templates") {
             board_physical = templates::apply_placement_templates(
                 board_physical,
                 Path::new(&pypath::display(scene)),
@@ -245,7 +247,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             )
             .map_err(Stop::Error)?;
         }
-        for scene in parsed.all("--hard-macro") {
+        for scene in parsed.values("--hard-macro") {
             board_physical = hard_macros::apply_hard_macro_scene(
                 board_physical,
                 Path::new(&pypath::display(scene)),
@@ -277,14 +279,14 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
     };
     let route = &flow.global_route;
-    let output = match parsed.last("--output") {
+    let output = match parsed.value("--output") {
         Some(output) => pypath::display(output),
         None => pypath::display(&format!("{}.global-route.json", design.electrical.name)),
     };
     let written = (|| -> copper_pcb::Result<()> {
         text::write_text(Path::new(&output), &route.to_json())
             .map_err(|e| Error::Value(paths::python_os_error(&e, Some(&output))))?;
-        if let Some(pcb) = parsed.last("--pcb-output") {
+        if let Some(pcb) = parsed.value("--pcb-output") {
             let materialized = copper_drc::macros::materialize_hard_macros(flow.board.clone())?;
             let manifest = kicad_pcb::generate(&materialized)?;
             project::write_kicad_project(&manifest, Path::new(&pypath::display(pcb))).map_err(Error::Value)?;

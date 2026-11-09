@@ -29,6 +29,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             out,
             "{USAGE}\n\ncompare two manufacturing file sets: Gerbers rasterised per X2 file function (default 10 um pitch,\n1 pixel erosion), drill hits within a tolerance (default 2 um), IPC-D-356 records and positions exactly"
         );
+        crate::help::options(out, "compare-cam");
         return 0;
     }
     let [reference, candidate] = parsed.positionals.as_slice() else {
