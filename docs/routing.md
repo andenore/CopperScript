@@ -42,10 +42,10 @@ plane check); `export`. `--stop-after placement` and `--checkpoint-dir` /
 - **Critical stage.** Differential pairs, clocks, RF feeds and length-matched
   buses route first under their own rules: coupled pair search with bounded
   escalation and rip-up of committed pairs that share a package, local surface
-  trees for short critical nets (`local_critical`), and post-route tuning
-  (`pair_tuning_spans` and the unit/group tuners).
-- **Fanout.** BGA dogbones and the late completion of cross-surface bypass links
-  (`fanout_bypass_completion`).
+  trees for short critical nets (`local_critical`), and post-route length
+  tuning (the pair, unit and group tuners).
+- **Fanout.** BGA dogbones and the cross-surface bypass links of decoupling
+  capacitors.
 - **Unified router.** One PathFinder negotiation over a shared multilayer lattice
   for every remaining net, with exact commit checks (below).
 - **Post-processing.** Land closure, route smoothing, stub cleanup and

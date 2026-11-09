@@ -471,25 +471,11 @@ tracks/vias are preserved; every complete supply/return path, protected owner,
 created-edge coverage and physical gate is checked before adoption. A legal
 local candidate alone does not establish standard-pipeline or board closure.
 
-After ordinary fanout passes its materialization gate, one explicit late bypass
-completion pass may retry only its original pending opposite-face source links,
-intersected with the original net filter. It requires newly generated ordinary
-copper and never repeats a completion round or reroutes ordinary/critical/area
-copper. Existing per-link proposer bounds remain authoritative. The pass and
-selected/completed/remaining links, generated counts and rollback reason are
-recorded in `FanoutResult.late_bypass`, separately from routing closure.
-
-Every late candidate retains the full early-semantic and ordinary occurrence
-prefix and source fields. Original via/surface handoffs, verified associations,
-admitted path witnesses, source budgets and physical gates are freshly checked.
-A rejected late candidate alone is rolled back. Only newly appended late objects
-join the semantic owner ledger; reused ordinary source paths/vias retain their
-original owners. Pending obligations use complete declared link identities;
-source validation still permits only one explicit association per capacitor.
-Existing handoffs are not replaced and a newly measured semantic port never
-invents an ordinary-domain candidate index. These physical joins and bounded
-completion reports do not establish electrical, RF, power or fabrication release
-qualification.
+An opposite-face bypass link still pending after ordinary fanout stays pending
+and is reported; fanout has no late completion pass. (One existed until
+2026-11-09 and was removed because it changed no board on the benchmark
+ladder.) Physical joins do not establish electrical, RF, power or fabrication
+release qualification.
 
 Local pin-access routing retains the eight-direction geometry contract even when
 exact endpoint coordinates divide computational grid intervals unequally. The

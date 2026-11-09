@@ -58,7 +58,7 @@ pub(super) fn accept(
     let rules = &board.net_routing_rules;
     let exact = (candidate.first.clone(), candidate.second.clone());
     let (proposed, tracks, vias) =
-        route_pair_exact(board, &rules[0], &rules[1], &routes, &exact, board, (&[], &[]), &board.tracks).expect("pair");
+        route_pair_exact(board, &rules[0], &rules[1], &routes, &exact, (&[], &[]), &board.tracks).expect("pair");
     let (accepted, tracks, vias) =
         validate_candidate(board, proposed, tracks, vias, &[], &[], None).expect("validated");
     let mut routed = board.clone();

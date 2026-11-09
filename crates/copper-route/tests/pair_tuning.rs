@@ -1,18 +1,19 @@
-//! `tune_virtual_pair_spans`, `tune_pair` and `matched_local_candidates`
-//! against frozen fixtures recorded from the former Python implementation
-//! (`fixtures/pair_tuning/`, not regenerated) on the inputs of the Python unit tests (no replay input reaches them).
+//! `tune_pair` and `matched_local_candidates` against frozen fixtures recorded
+//! from the former Python implementation (`fixtures/pair_tuning/`, not
+//! regenerated) on the inputs of the Python unit tests (no replay input reaches
+//! them). The fixtures' `spans` cases belonged to the removed virtual-span
+//! tuner and are skipped.
 
 use std::path::Path;
 
 use copper_drc::breakout::BreakoutRegions;
 use copper_json::Value;
 use copper_pcb::board::{PhysicalBoard, TrackSegment, Via};
-use copper_pcb::state_codec::{integer, items, layer, string_map, text, via};
+use copper_pcb::state_codec::{integer, items, layer, text, via};
 use copper_physical::Point;
 use copper_route::pair_search::PairSearchCandidate;
 use copper_route::pair_terminals::{LocalProposal, matched_local_candidates};
-use copper_route::pair_tuning::{PairTuning, tune_pair};
-use copper_route::pair_tuning_spans::{Node, tune_virtual_pair_spans};
+use copper_route::pair_tuning::tune_pair;
 use copper_state::StateValue;
 use indexmap::IndexMap;
 
@@ -85,7 +86,6 @@ fn outcome(added: i64, input: (&[TrackSegment], &[TrackSegment]), output: (&[Tra
 struct Case<'a> {
     fields: IndexMap<String, &'a StateValue>,
     source: PhysicalBoard,
-    held: PhysicalBoard,
 }
 
 impl Case<'_> {
@@ -98,8 +98,7 @@ impl Case<'_> {
     }
 }
 
-/// Every case with its source board (base board plus its tracks) and held
-/// board (the source unless the case lists held tracks and metadata).
+/// Every case with its source board (base board plus its tracks).
 fn cases(inputs: &StateValue) -> Vec<(String, Case<'_>)> {
     let top = map(inputs);
     let boards: IndexMap<String, PhysicalBoard> = map(top["boards"])
@@ -112,12 +111,7 @@ fn cases(inputs: &StateValue) -> Vec<(String, Case<'_>)> {
             let fields = map(value);
             let mut source = boards[text(fields["source"]).expect("board name").as_str()].clone();
             source.tracks = tracks(fields["source_tracks"]);
-            let mut held = source.clone();
-            if let Some(held_tracks) = fields.get("held_tracks") {
-                held.tracks = tracks(held_tracks);
-                held.metadata = string_map(fields.get("held_metadata").copied(), text).expect("metadata");
-            }
-            (name, Case { fields, source, held })
+            (name, Case { fields, source })
         })
         .collect()
 }
@@ -127,49 +121,6 @@ fn expected() -> copper_json::Object {
         panic!("expected object")
     };
     expected
-}
-
-fn plain_tuner(a: &mut Vec<TrackSegment>, b: &mut Vec<TrackSegment>, skew: i64, limit: i64, margin: i64) -> PairTuning {
-    tune_pair(a, b, skew, limit, margin, None)
-}
-
-#[test]
-fn virtual_pair_spans_match_python() {
-    let inputs = state(&fixture("inputs.state.json"));
-    let expected = expected();
-    let mut checked = 0;
-    for (name, case) in cases(&inputs) {
-        if text(case.fields["kind"]).expect("kind") != "spans" {
-            continue;
-        }
-        let (first, second) = (case.tracks("first"), case.tracks("second"));
-        let protected: Vec<Node> = items(case.fields["protected"])
-            .expect("protected")
-            .iter()
-            .map(|node| {
-                let node = items(node).expect("node");
-                let at = |index: usize| integer(&node[index]).expect("integer");
-                (text(&node[0]).expect("net"), layer(&node[1]).expect("layer"), Point::new(at(2), at(3)))
-            })
-            .collect();
-        let (mut a, mut b) = (first.clone(), second.clone());
-        let added = tune_virtual_pair_spans(
-            &mut a,
-            &mut b,
-            case.int("skew"),
-            case.int("amplitude"),
-            case.int("margin"),
-            &case.source,
-            &case.held,
-            &protected,
-            &vias(case.fields["vias"]),
-            &plain_tuner,
-        )
-        .expect("spans");
-        assert_eq!(outcome(added, (&first, &second), (&a, &b)), expected[name.as_str()], "{name}");
-        checked += 1;
-    }
-    assert!(checked >= 29, "{checked} span cases");
 }
 
 #[test]

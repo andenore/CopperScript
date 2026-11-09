@@ -2224,7 +2224,6 @@ pub(crate) fn route_pair(
     second_rule: &NetRoutingRule,
     routes: &IndexMap<String, GlobalNetRoute>,
     prefer_access_tracks: bool,
-    tuning_board: &PhysicalBoard,
     budget_prefix: &[TrackSegment],
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
     let (first, second) =
@@ -2324,7 +2323,6 @@ pub(crate) fn route_pair(
         (first_tracks, second_tracks),
         gap,
         strategy,
-        tuning_board,
         (&[], &[]),
         (guide, partner_guide),
         Some(offset),
@@ -2342,7 +2340,6 @@ pub(crate) fn route_pair_exact(
     second_rule: &NetRoutingRule,
     routes: &IndexMap<String, GlobalNetRoute>,
     exact: &(Vec<TrackSegment>, Vec<TrackSegment>),
-    tuning_board: &PhysicalBoard,
     transitions: (&[(Via, Via)], &[Via]),
     budget_prefix: &[TrackSegment],
 ) -> Result<(CriticalNetResult, Vec<TrackSegment>, Vec<Via>)> {
@@ -2373,7 +2370,6 @@ pub(crate) fn route_pair_exact(
         exact.clone(),
         gap,
         strategy,
-        tuning_board,
         transitions,
         (guide, partner_guide),
         None,
@@ -2391,7 +2387,6 @@ fn finish_pair(
     (mut first_tracks, mut second_tracks): (Vec<TrackSegment>, Vec<TrackSegment>),
     gap: i64,
     strategy: &str,
-    tuning_board: &PhysicalBoard,
     (via_pairs, return_vias): (&[(Via, Via)], &[Via]),
     guides: (&GlobalNetRoute, &GlobalNetRoute),
     coarse: Option<i64>,
@@ -2429,36 +2424,6 @@ fn finish_pair(
             breakout.any().then_some(&breakout),
         )
         .added_nm;
-        if tuned_length == 0 && coarse.is_none_or(|_| guides.0.vias.is_empty()) {
-            // Guide/via/access anchors and lead-in junctions cannot become
-            // artificial straight-run joins.
-            let mut nodes: Vec<crate::pair_tuning_spans::Node> = Vec::new();
-            for route in [guides.0, guides.1] {
-                for access in &route.accesses {
-                    let points = [access.pad_position, access.access_position]
-                        .into_iter()
-                        .chain(access.tracks.iter().flat_map(|track| [track.start, track.end]));
-                    nodes.extend(points.map(|point| (route.net.clone(), access.layer, point)));
-                }
-            }
-            let proposed: Vec<Via> =
-                via_pairs.iter().flat_map(|(a, b)| [a.clone(), b.clone()]).chain(return_vias.iter().cloned()).collect();
-            let tuner = |a: &mut Vec<TrackSegment>, b: &mut Vec<TrackSegment>, skew: i64, limit: i64, margin: i64| {
-                tune(a, b, skew, limit, margin, None)
-            };
-            tuned_length = crate::pair_tuning_spans::tune_virtual_pair_spans(
-                &mut first_tracks,
-                &mut second_tracks,
-                max_skew,
-                amplitude,
-                margin,
-                board,
-                tuning_board,
-                &nodes,
-                &proposed,
-                &tuner,
-            )?;
-        }
     }
     if tuned_length != 0 && breakout.any() {
         // Cut the new serpentine bumps too.
@@ -2759,8 +2724,7 @@ pub(crate) fn route_pair_group(
     let (result, pair_tracks, pair_vias) = match crossing {
         None => {
             let mut found: IndexSet<String> = IndexSet::new();
-            let (result, pair_tracks, pair_vias) =
-                route_pair(board, rule, partner_rule, &routes, false, &held, tracks)?;
+            let (result, pair_tracks, pair_vias) = route_pair(board, rule, partner_rule, &routes, false, tracks)?;
             let (result, pair_tracks, pair_vias) =
                 reject_reserved_plane_tracks(board, result, pair_tracks, pair_vias, rules);
             let outcome = validate_candidate(board, result, pair_tracks, pair_vias, tracks, vias, Some(&mut found))?;
@@ -2819,7 +2783,7 @@ pub(crate) fn route_pair_group(
     {
         // A coarse guide may already carry a checked multi-leg package exit:
         // one whole-pair proposal retains those actual lead-ins.
-        let (attempt, proposed_tracks, proposed_vias) = route_pair(board, first, second, &routes, true, &held, tracks)?;
+        let (attempt, proposed_tracks, proposed_vias) = route_pair(board, first, second, &routes, true, tracks)?;
         let (attempt, proposed_tracks, proposed_vias) =
             reject_reserved_plane_tracks(board, attempt, proposed_tracks, proposed_vias, rules);
         let (attempt, proposed_tracks, proposed_vias) =
@@ -2912,7 +2876,7 @@ pub(crate) fn route_pair_group(
                 let exact = (proposal.first.clone(), proposal.second.clone());
                 let transitions = (proposal.via_pairs.as_slice(), proposal.return_vias.as_slice());
                 let (attempt, proposed_tracks, proposed_vias) =
-                    route_pair_exact(board, first, second, &routes, &exact, &search_board, transitions, tracks)?;
+                    route_pair_exact(board, first, second, &routes, &exact, transitions, tracks)?;
                 let (attempt, proposed_tracks, proposed_vias) =
                     reject_reserved_plane_tracks(board, attempt, proposed_tracks, proposed_vias, rules);
                 validate_candidate(
@@ -3186,7 +3150,7 @@ fn route_nested_exit(
         offered += 1;
         let exact = (candidate.first.clone(), candidate.second.clone());
         let (mut attempt, mut pair_tracks, mut pair_vias) =
-            route_pair_exact(board, first, second, routes, &exact, &search_board, (&[], &[]), tracks)?;
+            route_pair_exact(board, first, second, routes, &exact, (&[], &[]), tracks)?;
         let stop = |offered: usize| offered >= NESTED_CANDIDATE_LIMIT;
         if attempt.connected && attempt.tuned_length_nm != 0 {
             let own: Vec<TrackSegment> = pair_tracks.iter().filter(|t| t.net == first.net).cloned().collect();
@@ -4016,7 +3980,7 @@ pub(crate) fn improve_pair_spine(
             continue;
         }
         let (proposed, tracks, vias) =
-            route_pair_exact(board, first, second, routes, &lanes, search_board, (&[], &[]), committed_tracks)?;
+            route_pair_exact(board, first, second, routes, &lanes, (&[], &[]), committed_tracks)?;
         let (proposed, tracks, vias) = reject_reserved_plane_tracks(board, proposed, tracks, vias, &pair_rules);
         let (proposed, tracks, vias) =
             validate_candidate(board, proposed, tracks, vias, committed_tracks, committed_vias, None)?;

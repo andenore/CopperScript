@@ -33,6 +33,16 @@ Implemented on `claude/copperscript-architecture-review-uzigis`:
 - **Architecture.** One decoder for saved boards (copper-route's duplicate,
   about 1,400 lines, is gone) and a schema registry
   ([schemas.md](schemas.md)) kept in step with the sources by a test.
+- **Routing clean-up (the refactor plan's last phase).** 17 `route-board`
+  solver options no caller set are removed (each keeps its former default and
+  is refused with a pointer to its replacement). `fanout_bypass_completion`,
+  `pair_tuning_spans` and `copper_ownership` are gone, about 1,600 lines with
+  their tests. Each removal was checked by comparing every ladder board's
+  written `board.kicad_pcb`, CopperProbe included: all byte-identical.
+  `local_critical` stays (switching it off lengthens routes on full-vertical
+  and asset-tracker), as does `bypass_reservations` (the read-only admission
+  check of bypass reservations). The plan and the routing backlog became one
+  page, [routing](routing.md), with the ladder status on every board.
 
 Corrections to the findings below:
 

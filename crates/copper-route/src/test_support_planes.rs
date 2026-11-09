@@ -449,8 +449,7 @@ mod breakout_regions {
         let routes: IndexMap<String, crate::routing::GlobalNetRoute> =
             global(&board).routes.into_iter().map(|route| (route.net.clone(), route)).collect();
         let (first, second) = (&board.net_routing_rules[0], &board.net_routing_rules[1]);
-        let (proposed, tracks, vias) =
-            route_pair(&board, first, second, &routes, false, &board, &board.tracks).unwrap();
+        let (proposed, tracks, vias) = route_pair(&board, first, second, &routes, false, &board.tracks).unwrap();
         assert_eq!(proposed.strategy, "aligned_pair");
         assert!(proposed.connected, "{:?}", proposed.diagnostics);
         let (accepted, kept, _) =

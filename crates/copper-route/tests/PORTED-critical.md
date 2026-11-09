@@ -17,7 +17,7 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_critical_replay.py | 12 | 8 | 4 | 0 | `src/critical_tests/critical_replay.rs`; the CLI case in `crates/copper/tests/critical_cli.rs` |
 | test_critical_diagnostics.py | 12 | 9 | 3 | 0 | `src/critical_tests/critical_diagnostics.rs` |
 | test_critical_reuse.py | 11 | 0 | 11 | 0 | none: `pcbir.critical_reuse` was not ported |
-| test_pair_tuning_spans.py | 10 | 10 | 0 | 0 | `src/critical_tests/pair_tuning_spans.rs` |
+| test_pair_tuning_spans.py | 10 | 0 | 10 | 0 | none: removed with `pair_tuning_spans` (2026-11-09) |
 | test_pair_return_boundaries.py | 9 | 9 | 0 | 0 | `src/critical_tests/pair_return_boundaries.rs` |
 | test_pair_terminal_fallback.py | 8 | 8 | 0 | 0 | `src/critical_tests/pair_terminal_fallback.rs`; the CLI case in `crates/copper/tests/critical_cli.rs` |
 | test_pair_geometry.py | 8 | 0 | 8 | 0 | none: `pcbir.pair_geometry` was not ported |
@@ -40,7 +40,7 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_pair_hybrid_contact_anchor.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_hybrid_contact_anchor.rs` |
 | test_pair_collinear_fork.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_collinear_fork.rs` |
 | test_pair_outer_transitions.py | 2 | 2 | 0 | 0 | `src/critical_tests/pair_outer_transitions.rs` |
-| test_pair_tuning_span_copper_contacts.py | 3 | 3 | 0 | 0 | `src/critical_tests/pair_tuning_span_copper_contacts.rs` |
+| test_pair_tuning_span_copper_contacts.py | 3 | 0 | 3 | 0 | none: removed with `pair_tuning_spans` (2026-11-09) |
 | test_bundle_tuning.py | 3 | 3 | 0 | 0 | `src/critical_tests/bundle_tuning.rs` |
 | test_partial_pair_macro_ports.py | 2 | 2 | 0 | 0 | `src/critical_tests/partial_pair_macro_ports.rs` |
 | test_pair_transition_diagnostics.py | 2 | 2 | 0 | 0 | `src/critical_tests/pair_transition_diagnostics.rs` |
@@ -56,8 +56,9 @@ monkeypatch: the Rust test checks the same specified outcome without the hook.
 | test_critical_return_preparation.py | 3 | 3 | 0 | 0 | `src/critical_tests/critical_return_preparation.rs` |
 | test_loose_pair_repair.py | 2 | 2 | 0 | 0 | `src/critical_tests/loose_pair_repair.rs`; the issue-list title in `crates/copper/tests/critical_cli.rs` |
 
-**Totals:** 46 of 46 files, 283 Python tests: 241 ported, 42 skipped, 0
-ignored (the earlier running total over-counted three tests).
+**Totals:** 46 of 46 files, 283 Python tests: 228 ported, 55 skipped, 0
+ignored (13 of the skips are the virtual-span tuner's tests, removed with
+it on 2026-11-09).
 
 Rust bugs found and fixed by the ports:
 - `pair_vias::return_via` accepted a clearance index bound to another source
@@ -190,12 +191,8 @@ pipeline stage called it.
 
 ### test_pair_tuning_spans.py
 
-- `exact_constructor_uses_fallback_only_with_full_held_context`: Python's
-  `tuning_board=None` (no span fallback) has no Rust form; every caller passes
-  the held board, so only the tuned outcome is checked.
-- `legacy_success_never_enters_span_fallback`: Python patched the fallback to
-  raise; here the exact pair's tuned length must equal the legacy tuner's.
-- Python's identity checks (`a is b`) are equality checks.
+The virtual-span tuner (`pair_tuning_spans`) was removed on 2026-11-09: it
+changed no board on the benchmark ladder. Its ported tests went with it.
 
 ### test_pair_return_boundaries.py
 

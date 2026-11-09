@@ -1000,7 +1000,7 @@ pub fn route_fanout(
         decoupling_witnesses: admitted,
         decoupling_pending_links: bypass.pending.clone(),
     };
-    crate::fanout_bypass_completion::complete_late_bypasses(result, &bypass.pending, &options, only_nets)
+    Ok(result)
 }
 
 #[cfg(test)]
