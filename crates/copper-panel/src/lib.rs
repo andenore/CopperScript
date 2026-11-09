@@ -192,12 +192,11 @@ pub fn panelize(
             layers.items().iter().filter_map(|l| l.string_value(1)).filter(|name| name.ends_with(".Cu")).collect()
         })
         .unwrap_or_default();
-    let edge_keepouts = frame::tab_edge_keepouts(
-        &frame.tabs,
-        &composition.poses,
-        rules::max_edge_clearance(&pro, &dru)?,
-        &copper_layers,
-    );
+    // After breaking, the mouse-bite walls are the board edge: they cut
+    // `inset + drill / 2` into the board, and the edge clearance counts from there.
+    let edge_clearance = rules::max_edge_clearance(&pro, &dru)?;
+    let depth = if edge_clearance > 0 { edge_clearance + spec.mouse_bite.inset + spec.mouse_bite.drill / 2 } else { 0 };
+    let edge_keepouts = frame::tab_edge_keepouts(&frame.tabs, &composition.poses, depth, &copper_layers);
     let mut tree = composition.tree;
     if let Node::List(items) = &mut tree {
         items.extend(frame.items);
@@ -908,6 +907,12 @@ mod tests {
         .err()
         .expect("refused");
         assert!(error.contains("tabs a_right and b_left are 0.5 mm apart"), "{error}");
+        // Touching tabs (a_top 3.5-6.5, a_top2 6.5-9.5) are refused too: their
+        // mouse bites would crowd together across the seam.
+        let error = panelize(&spec("tab a_top2 { board = A; side = top; at = 8 mm; }"), &files(), &none(), "demo")
+            .err()
+            .expect("refused");
+        assert!(error.contains("tabs a_top and a_top2 are 0 mm apart"), "{error}");
     }
 
     #[test]
@@ -970,8 +975,9 @@ mod tests {
 
     #[test]
     fn tab_landings_keep_the_edge_clearance() {
-        // With a 1 mm copper-to-edge clearance, every tab landing gets a 1 mm
-        // keep-out inside its board: a_top's from x 3.5 to 6.5, y 0 to 1.
+        // With a 1 mm copper-to-edge clearance, every tab landing gets a
+        // keep-out inside its board from the deepest mouse-bite wall (0.25 mm
+        // inset + 0.25 mm radius) 1 mm on: a_top's from x 3.5 to 6.5, y 0 to 1.5.
         let pro = PRO.replace(
             r#""design_settings": {}"#,
             r#""design_settings": {"rules": {"min_copper_edge_clearance": 1.0, "min_hole_clearance": 0.25}}"#,
@@ -990,7 +996,7 @@ mod tests {
         let points: Vec<(i64, i64)> = top.outline[0].edges.iter().map(|e| (e.end().x, e.end().y)).collect();
         let (x0, x1) = (points.iter().map(|p| p.0).min().unwrap(), points.iter().map(|p| p.0).max().unwrap());
         let (y0, y1) = (points.iter().map(|p| p.1).min().unwrap(), points.iter().map(|p| p.1).max().unwrap());
-        assert_eq!((x0, x1, y0, y1), (3_500_000, 6_500_000, 0, 1_000_000));
+        assert_eq!((x0, x1, y0, y1), (3_500_000, 6_500_000, 0, 1_500_000));
         assert!(top.not_allowed.iter().any(|k| k == "copperpour") && top.keepout == Some(true));
         // Without an edge clearance there are none.
         let plain = panelize(&spec(""), &files(), &none(), "demo").expect("a panel");

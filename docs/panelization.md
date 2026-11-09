@@ -93,9 +93,9 @@ panel ExamplePanel {
    a tab touches (both ends when it joins two boards), fiducials and tooling
    holes, and the outline (boards, tabs and rails united) on `Edge.Cuts`.
    Where a tab joins a board its edge leaves `Edge.Cuts`, so a keep-out
-   inside the board along the landing, as deep as the largest copper-to-edge
-   clearance the rules ask for, holds pours, tracks, vias and pads back as
-   the edge did.
+   inside the board along the landing holds pours, tracks, vias and pads
+   back as the edge did: as deep as the mouse bites cut (`inset` plus half
+   the drill) plus the largest copper-to-edge clearance the rules ask for.
 4. Refuses, naming the board, side and interval:
    - a tab on an antenna region opened to the perimeter, or within 1 mm of
      one (round a corner onto the next side too);
@@ -111,9 +111,9 @@ panel ExamplePanel {
      tabs that overlap anywhere on the panel (the same bridge declared from
      both boards included);
    - a tab closer than `spacing` to a board it passes (only its own board
-     and what it bridges to may touch it), or to another tab (the router
-     cannot mill a narrower slot), and a tab no wider than its mouse-bite
-     drill;
+     and what it bridges to may touch it), or to another tab, touching
+     included (the router cannot mill a narrower slot, and touching tabs
+     crowd their mouse bites), and a tab no wider than its mouse-bite drill;
    - fiducials and tooling holes that would leave the panel or overlap
      (a panel too narrow for them), and tooling holes without 0.2 mm of
      rail on either side;

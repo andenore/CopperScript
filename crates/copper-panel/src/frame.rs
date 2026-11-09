@@ -214,7 +214,7 @@ pub fn build(
             let dx = (rect[0] - area[2]).max(area[0] - rect[2]).max(0);
             let dy = (rect[1] - area[3]).max(area[1] - rect[3]).max(0);
             let gap = (dx as f64).hypot(dy as f64);
-            if gap > 0.0 && gap < spec.spacing as f64 {
+            if gap < spec.spacing as f64 {
                 return Err(format!(
                     "tabs {other} and {} are {} mm apart, closer than the panel spacing ({} mm): the router cannot \
                      mill between them; make them one tab or move one",
