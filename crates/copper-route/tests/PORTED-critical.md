@@ -185,7 +185,7 @@ Python's `propagation_delay` inline (length x sqrt(er) / c).
 
 All skipped: `prepare_single_critical_reuse`, `validate_single_critical_reuse`
 and `route_critical_nets(retained_critical=..., retained_accesses=...)` have no
-Rust counterpart. The module is on the routing-refactor retire list and no
+Rust counterpart. The module was retired with the legacy router; no
 pipeline stage called it.
 
 ### test_pair_tuning_spans.py
@@ -214,9 +214,9 @@ Python messages are restored.
 ### test_pair_geometry.py
 
 All skipped: `differential_pair_inventory` (the read-only
-`differential_pair_screens` report) has no Rust port. The routing-refactor
-plan still lists `pair_geometry` as a kept read-only report, so this is a
-missing port rather than a retired feature.
+`differential_pair_screens` report) has no Rust port. The routing rebuild
+kept `pair_geometry` as a read-only report, so this is a missing port rather
+than a retired feature.
 
 ### test_critical_bundles.py
 

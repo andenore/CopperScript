@@ -55,9 +55,10 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--routing-profile {quick,balanced,thorough}",
-                help: "standard work budgets: sets --filled-copper-trials, --filled-copper-search-states and \
-                       --decoupling-placement-trials (quick 2/2000/4, balanced 8/4000/16, thorough 16/12000/64) \
-                       unless they are given explicitly",
+                help: "standard work budgets: filled-copper repair trials and search states, and decoupling \
+                       placement trials (quick 2/2000/4, balanced 8/4000/16, thorough 16/12000/64); an explicit \
+                       --filled-copper-trials or --decoupling-placement-trials wins (default without a profile: \
+                       8/4000/64)",
             },
             // Board and stack-up.
             Opt { flag: "--layers {2,4,6}", help: "copper-layer count (default: 2)" },
@@ -76,7 +77,6 @@ pub const COMMANDS: &[Command] = &[
             // Placement.
             Opt { flag: "--candidates N", help: "placement candidates to generate (default: 1)" },
             Opt { flag: "--placement-grid-mm MM", help: "positive placement sampling step (default: 1)" },
-            Opt { flag: "--placement-seeds N", help: "positive placement seed budget (default: max(2, candidates))" },
             Opt {
                 flag: "--placement-refinement-passes N",
                 help: "optional placement refinement passes; 0 keeps the legalized poses (default: 2)",
@@ -86,22 +86,9 @@ pub const COMMANDS: &[Command] = &[
                 help: "optional escape-spacing improvement passes of placement (default: 2)",
             },
             Opt {
-                flag: "--power-domain-weight W",
-                help: "soft supply-domain attraction weight of placement; 0 disables it (default: 0.25)",
-            },
-            Opt {
                 flag: "--decoupling-placement-trials N",
                 help: "copper-access pose trials per decoupling capacitor; 0 disables the relocation heuristic \
                        (default: 64)",
-            },
-            Opt {
-                flag: "--support-pattern-trials N",
-                help: "joint support-pattern combination checks per placement seed; nonzero is not implemented \
-                       yet (default: 0)",
-            },
-            Opt {
-                flag: "--package-support-trials N",
-                help: "package-support placement trials; nonzero is not implemented yet (default: 0)",
             },
             Opt {
                 flag: "--placement-candidate ID",
@@ -132,15 +119,9 @@ pub const COMMANDS: &[Command] = &[
                 flag: "--fanout, --no-fanout",
                 help: "seed the unified router's pad escapes; --no-fanout routes without them (default: on)",
             },
-            Opt { flag: "--fanout-step-mm MM", help: "package escape sampling step (default: 0.5)" },
             Opt {
                 flag: "--fanout-refinement-step-mm MM",
                 help: "finer escape sampling step for empty or conflicting coarse escapes (default: 0.1)",
-            },
-            Opt {
-                flag: "--fanout-geometry-candidates N",
-                help: "experimental extra escape-site family tried when no other escape is found; 0 keeps the \
-                       established generation (default: 0)",
             },
             Opt { flag: "--fanout-maze", help: "try maze escapes for pins left without an escape choice" },
             Opt {
@@ -171,34 +152,6 @@ pub const COMMANDS: &[Command] = &[
             Opt { flag: "--tile-size-mm MM", help: "global routing tile size (default: 5)" },
             Opt { flag: "--router-iterations N", help: "global router iterations (default: 5)" },
             Opt { flag: "--pin-access-step-mm MM", help: "global router pin-access sampling step (default: 0.5)" },
-            Opt {
-                flag: "--critical-pin-access-step-mm MM",
-                help: "finer pin-access step retried for critical-net pins that found no access at \
-                       --pin-access-step-mm",
-            },
-            Opt {
-                flag: "--layer-preference-cost N",
-                help: "soft plane-aware global layer cost; 0 disables it (default: 4)",
-            },
-            Opt {
-                flag: "--direction-preference-cost N",
-                help: "soft alternating inner-layer direction cost of global routing; 0 disables it (default: 2)",
-            },
-            Opt {
-                flag: "--layer-assignment-passes N",
-                help: "opt-in passes, 0 to 8, moving ordinary guide runs away from same-layer crossings \
-                       (default: 0)",
-            },
-            Opt {
-                flag: "--local-demand-cost N",
-                help: "opt-in global cost moving ordinary guide runs away from full channels; 0 disables it \
-                       (default: 0)",
-            },
-            Opt {
-                flag: "--local-demand-pitch-mm MM",
-                help: "pitch of global local-demand estimation; requires --local-demand-cost greater than 0 \
-                       (default: 1)",
-            },
             // Unified router.
             Opt {
                 flag: "--unified-pitch-mm MM",
@@ -278,11 +231,6 @@ pub const COMMANDS: &[Command] = &[
                        (default: 0)",
             },
             Opt {
-                flag: "--plane-escape-width-mm MM",
-                help: "track width of plane-contact escapes, not below the board's track-width and clearance \
-                       floor (default: the net rule or board default track width)",
-            },
-            Opt {
                 flag: "--verify-plane-fill {native,none,KICAD_CLI}",
                 help: "check zone fills and connectivity of the written board: `native` refills and checks \
                        in-process (default), a kicad-cli path runs KiCad's refill and DRC, `none` skips the check \
@@ -292,19 +240,6 @@ pub const COMMANDS: &[Command] = &[
             Opt {
                 flag: "--filled-copper-trials N",
                 help: "native-driven filled-copper repair trials; 0 runs verification only (default: 8)",
-            },
-            Opt {
-                flag: "--filled-copper-search-states N",
-                help: "search-state cap of each filled-copper bridge trial (default: 4000)",
-            },
-            Opt {
-                flag: "--maximum-ripup-blockers N",
-                help: "most blocking nets one filled-copper repair trial may displace, 1 to 8 (default: 4)",
-            },
-            Opt {
-                flag: "--zone-dependency-expansions N",
-                help: "bounded blocker-cone expansions of filled-copper repair, 0 to 8; 0 disables them \
-                       (default: 2)",
             },
             Opt {
                 flag: "--native-evidence-directory DIR",
@@ -322,10 +257,6 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt { flag: "--require-verified-intent", help: "also fail unless every hard source requirement passes" },
             Opt { flag: "--progress", help: "print flushed phase, group and trial progress events" },
-            Opt {
-                flag: "--debug",
-                help: "request the full traceback of an error; this build reports tracebacks as not implemented",
-            },
             Opt {
                 flag: "--stop-after {placement}",
                 help: "stop after this stage and write a partial report and draft; such a run never passes",

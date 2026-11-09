@@ -71,6 +71,23 @@ fn not_options(name: &str) -> &'static [&'static str] {
             "--detailed-feedback-trials",
             "--critical-feedback-trials",
             "--pitch-mm",
+            "--debug",
+            "--support-pattern-trials",
+            "--package-support-trials",
+            "--placement-seeds",
+            "--power-domain-weight",
+            "--critical-pin-access-step-mm",
+            "--layer-preference-cost",
+            "--direction-preference-cost",
+            "--layer-assignment-passes",
+            "--local-demand-cost",
+            "--local-demand-pitch-mm",
+            "--fanout-step-mm",
+            "--fanout-geometry-candidates",
+            "--plane-escape-width-mm",
+            "--maximum-ripup-blockers",
+            "--zone-dependency-expansions",
+            "--filled-copper-search-states",
         ],
         // Arguments `bench` passes to `route-board` and to git.
         "bench" => &["--reuse-placement", "--checkpoint-dir", "--report", "-o", "--verify-plane-fill", "--short"],
@@ -203,6 +220,16 @@ fn every_documented_option_exists() {
         }
     }
     assert!(invented.is_empty(), "documented options the source does not name:\n{}", invented.join("\n"));
+}
+
+#[test]
+fn removed_options_are_not_documented() {
+    for name in COMMANDS {
+        let documented = documented(command(name).expect("checked above"));
+        for removed in not_options(name) {
+            assert!(!documented.contains(removed), "{name} still documents {removed}");
+        }
+    }
 }
 
 #[test]

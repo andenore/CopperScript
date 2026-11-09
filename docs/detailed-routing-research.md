@@ -26,7 +26,7 @@ native filled connectivity and independent DRC must agree before closure. Genera
 KiCad projects carry selected board rules; final qualification remains separate.
 
 Use [filled-copper feedback](filled-copper-feedback.md) and
-[stub cleanup](route-stub-cleanup.md) for specialized contracts; unresolved algorithm work is in [routing backlog](routing-backlog.md).
+[stub cleanup](route-stub-cleanup.md) for specialized contracts; unresolved algorithm work is in [routing backlog](routing.md#open-work).
 
 Related algorithm references: [KiCad router](https://docs.kicad.org/10.0/en/pcbnew/pcbnew.html),
 [TritonRoute](https://vlsicad.ucsd.edu/Publications/Journals/j133.pdf),

@@ -41,7 +41,6 @@ pub mod boundary_access;
 pub mod bypass_links;
 pub mod bypass_reservations;
 pub mod congestion_feedback;
-pub mod copper_ownership;
 pub mod critical;
 pub mod critical_bundles;
 pub mod critical_group_tuning;

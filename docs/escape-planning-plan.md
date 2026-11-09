@@ -121,7 +121,7 @@ CopperScript has the pieces around such a planner but not the planner. Today:
 - **D3-A, 92/99 clean.** Four of the seven remaining boards fail the same way. On the MySRaspiGW boards, the nets between module U1's pin column and the 2×4 header P1 cross. Each gap between header pins holds exactly one track: 2.54 mm pitch minus a 1.727 mm pad leaves 0.813 mm, and a 0.254 mm track with 0.254 mm clearance on each side needs 0.762 mm. Routing the nets one at a time lets the first ones take the gaps the later ones need.
 - **What the original designer did.** The board's own routing in PCBench escapes CE and MISO through vias, so the crossing nets move to the other layer. That is a layer assignment of crossing nets, exactly what simultaneous escape planning computes up front.
 - **D3 plan step 3.8 (`_enclosure_repair` in the detailed router) is the after-the-fact version.** Its enclosure repair rips up and reroutes nets in a window. It fixed 0049 but costs minutes per board, so it is limited to boards with at most two open nets.
-- **CopperProbe** (2026-10-21 routing refactor handoff): the ADC data lines route alone, but lose the corridor south of the FX10 to other nets. The handoff names "an escape plan or corridor reservation for the bus at the FX10 south edge" as the next lever.
+- **CopperProbe** (2026-10-21 routing handoff): the ADC data lines route alone, but lose the corridor south of the FX10 to other nets. The handoff names "an escape plan or corridor reservation for the bus at the FX10 south edge" as the next lever.
 
 ## State of the art
 

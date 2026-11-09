@@ -108,7 +108,7 @@ make EXAMPLE=cm4 layout KICAD_FOOTPRINTS="C:/Program Files/KiCad/10.0/share/kica
 make EXAMPLE=cm4 route RESOLVE_ARGS="--locked --offline"
 make EXAMPLE=cm4 route BUILD_ARGS=--dry-run
 make EXAMPLE=cm4 route COPPER=/path/to/rust/copper
-make EXAMPLE=full-vertical route EXTRA_ROUTE_ARGS="--zone-dependency-expansions 0"
+make EXAMPLE=full-vertical route EXTRA_ROUTE_ARGS="--routing-profile thorough"
 ```
 
 `make -n EXAMPLE=cm4 route` prints recipes without executing them. `BUILD_ARGS=--dry-run`

@@ -87,7 +87,20 @@ pub struct PlaneStitchResult {
     /// Remote pads of explicitly regional routing reservations remain
     /// ordinary feeder obligations; not a connected-pad inventory.
     pub explicit_feeder_pads: Vec<PadReference>,
-    pub copper_uses: Vec<crate::copper_ownership::CopperUse>,
+    pub copper_uses: Vec<CopperUse>,
+}
+
+/// One stitch contact's copper with the pads it serves: snapshot-bound
+/// occurrence ownership for disposable contact preparations, producer evidence
+/// rather than electrical qualification.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CopperUse {
+    pub id: String,
+    pub kind: String,
+    pub terminals: Vec<PadReference>,
+    pub tracks: Vec<TrackSegment>,
+    pub vias: Vec<Via>,
+    pub dependencies: Vec<String>,
 }
 
 impl PlaneStitchResult {
@@ -115,7 +128,6 @@ use copper_physical::{BoardSide, CopperLayer, Point, RoundedConvexShape};
 use num_rational::BigRational;
 
 use crate::access_sites::{circular_cell_sites, obstacle_boundary_sites};
-use crate::copper_ownership::CopperUse;
 use crate::routing_clearance::RoutingClearanceIndex;
 use crate::surface_path::{ViaSearch, surface_path_detour, surface_path_to_via, via_inside_board};
 

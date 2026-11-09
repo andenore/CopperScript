@@ -45,18 +45,18 @@ Corrections to the findings below:
 
 Not done, and why:
 
-- **Splitting `copper-route`.** The pipeline layer is not a leaf
-  (`critical`, `detailed`, `unified_router/route`, `decoupling_paths` and
-  `state_codec` import it), and the routing refactor plan, which governs
-  routing work, retires modules in its P7 phase. Splitting first would move
-  code that is about to be deleted; do it after P7.
+- **Splitting `copper-route`.** The pipeline layer is not a leaf:
+  `critical`, `detailed`, `unified_router/route`, `decoupling_paths` and
+  `state_codec` import it. A split needs those back-edges cut first (for
+  example, moving the congestion-feedback and checkpoint types they use
+  into a lower module); that is a design change, not a move.
 - **Speed items** (inventory hashing, conflict-index rebuilds, hasher,
   DRC broad phase, parallel trials) were not in this pass's scope.
 - **Python byte-exactness, a `state/v2` format and `serde`.** These change
   consumer-visible outputs and frozen fixtures, so they need an owner
   decision first.
 - **One workspace error type, one DRC, test reorganisation, CI caching.**
-  Each is a larger refactor of its own; CI changes were left alone because
+  Each is a larger change of its own; CI changes were left alone because
   GitHub Actions cannot be run from this environment.
 - **`copper build`** (a native replacement for `make/route-build.sh`) and
   repetition constructs beyond pin patterns.
@@ -184,7 +184,7 @@ arithmetic:
    `materialize_hard_macros` and two or three more times in
    `route_board.rs`. Binning with the scheme `routing_clearance.rs:1468-1474`
    already uses, then sorting findings by `(left, right)` index, keeps order
-   and removes a documented bottleneck (`routing-refactor-plan.md:376`).
+   and removes a documented bottleneck.
 4. **Full-plane copies per A\* call.** `via_owner()` returns `.to_vec()`
    of a plane-sized raster per search (`unified_router/search.rs:696, 734-741`),
    `via_transitions` copies one per layer pair (`:822-842`) and
@@ -441,7 +441,7 @@ Issues, in order of drag:
 The determinism rules (no `HashMap`, `IndexMap`/`BTreeMap` only, LF output),
 `unsafe_code = "forbid"`, exact-pinned unstable dependencies, `--locked`
 resolution with per-asset hashes, the decision log (CS-001…CS-143), the
-refactor plan's own diagnosis of accretion (`routing-refactor-plan.md` §2.4),
+routing rebuild's diagnosis of accretion (in Git history),
 the diagnostic design (codes, ranges, fixes, `explain`), and the
 `issues`/`view` iteration loop are all worth preserving through any of the
 changes above.

@@ -54,8 +54,8 @@ No profile forces a fixed component to move or changes RF/power requirements.
 
 Without a profile, the established individual CLI defaults remain, with eight
 native-driven repair trials. `--filled-copper-trials 0` runs verification only.
-`--filled-copper-search-states` caps each bridge trial. The shared blocker limit
-and dependency-expansion limit also apply. Critical, local contact, placement
+The profile's search states cap each bridge trial. The shared blocker limit
+(4) and dependency-expansion limit (2) also apply. Critical, local contact, placement
 and unified-router stages retain their separate bounds; the profile is not a
 total wall-clock timeout or an exhaustive routing search.
 `--package-initial-pair-states N` caps each coupled pair's search in the critical

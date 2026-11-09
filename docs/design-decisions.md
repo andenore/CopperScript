@@ -755,7 +755,7 @@ ordinary package terminal is a rank-0 boundary port, forcing other layers adds
 transitions beside package collars and destabilized full-vertical closure.
 Guides remain intent, never clearance evidence; exact checks and acceptance
 gates are unchanged. Spare-looking layers are not qualified reference planes.
-See the [layer-balance review](routing-backlog.md).
+See the [routing](routing.md).
 
 ## CS-162 — Ownership-safe smoothing of accepted ordinary copper (Accepted)
 
@@ -804,7 +804,7 @@ Escape selection is unchanged: every escape is now a fallback dropped if unused,
 not proof that an unreserved pin would have routed. Destination-facing boundary
 ports (`--package-destination-ports`) remain opt-in because they lengthened
 routes on the iteration board. See R18 in the
-[routing review checklist](routing-backlog.md).
+[routing open work](routing.md#open-work).
 
 ## CS-164 — Neck-down of ordinary nets near terminal lands (Accepted)
 
@@ -826,7 +826,7 @@ whose explicit-copper islands or via contacts would change keeps its copper.
 Global-routing demand, placement escape estimates and the package-escape maze
 keep the full width (conservative). Nets without breakout properties MUST route
 byte-identically. See R19 in the
-[routing review checklist](routing-backlog.md).
+[routing open work](routing.md#open-work).
 
 ## CS-165 — Planned paired layer swaps for crossing bundle pairs (Accepted)
 

@@ -2402,7 +2402,7 @@ Manufacturer geometry has now been recovered for fresh package-exit comparisons
 
 This is an execution plan for the failures measured on CopperProbe with
 `rust-m2` revision `916f0bff1f2e5650421312bbc3681a7a2c4dd7e2`. The
-[routing refactor plan](routing-refactor-plan.md) remains authoritative.
+[routing design and rules](routing.md) are authoritative.
 Work on joint package side/layer/order follows the
 [escape planning plan](escape-planning-plan.md), including one PR per step,
 its perturbation measurements and status updates. Do not start a competing
@@ -2629,7 +2629,7 @@ escape-aware placement feedback rather than adding a second controller.
 2. Classify the 10 dangling tracks and one dangling via by ownership. Use
    existing native dead-end cleanup only for eligible mutable copper. Repair
    required or immutable dangling connections; do not delete them to clear
-   the report. Respect the refactor plan's bounded final native-repair policy.
+   the report. Respect the bounded final native-repair policy ([routing](routing.md)).
 3. Profile the now-correct pipeline. Prioritize placement/global screening,
    decoupling work and repeated critical attempts from measured inclusive and
    exclusive timings; do not sum nested event durations. Improve reuse only

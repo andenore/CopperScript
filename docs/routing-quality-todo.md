@@ -6,7 +6,7 @@ preferences do not establish that antenna, supply-width and area-topology
 comments on the latest candidate have been resolved.
 
 Open joint decoupler/ordinary-area topology improvements are in the
-[routing backlog](routing-backlog.md). Current implemented behavior:
+[routing open work](routing.md#open-work). Current implemented behavior:
 
 - Decoupling intent names the protected pin/pad; local supply feeds prefer direct
   same-side access. Do not infer roles from designators or forbid ground vias.
