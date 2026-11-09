@@ -334,14 +334,21 @@ pub fn critical_lane_table(board: &PhysicalBoard, results: &[CriticalNetResult])
             for arc in board.arcs.iter().filter(|arc| &arc.net == net) {
                 arcs.entry(arc.layer).or_default().push((arc.width_nm, arc.length_nm()));
             }
-            let mut layers: Vec<CopperLayer> = per_layer.keys().copied().collect();
+            // Every layer carrying the net's copper: a layer with only arcs too.
+            let mut layers: Vec<CopperLayer> = per_layer.keys().chain(arcs.keys()).copied().collect();
+            layers = layers.iter().copied().fold(Vec::new(), |mut seen, layer| {
+                if !seen.contains(&layer) {
+                    seen.push(layer);
+                }
+                seen
+            });
             layers.sort_by_key(|layer| (order.get(layer).copied().unwrap_or(order.len()), layer.value()));
             let (delay_ps, permittivity, reason) = lane_delay(board, &per_layer, &arcs, &layers)?;
             let arc_length = |layer: &CopperLayer| arcs.get(layer).map_or(0, |items| items.iter().map(|a| a.1).sum());
             let mut layer_lengths = Object::new();
             for layer in &layers {
-                layer_lengths
-                    .insert(layer.value().to_owned(), Value::from(track_length(&per_layer[layer]) + arc_length(layer)));
+                let tracks = per_layer.get(layer).map_or(&[][..], Vec::as_slice);
+                layer_lengths.insert(layer.value().to_owned(), Value::from(track_length(tracks) + arc_length(layer)));
             }
             let routed_length = track_length(&tracks) + arcs.values().flatten().map(|a| a.1).sum::<i64>();
             let mut permittivities = Object::new();
@@ -388,7 +395,7 @@ fn lane_delay(
     let mut total = Decimal::zero();
     let mut permittivity: Vec<(&'static str, f64)> = Vec::new();
     for layer in layers {
-        let tracks = &per_layer[layer];
+        let tracks = per_layer.get(layer).map_or(&[][..], Vec::as_slice);
         let layer_arcs = arcs.get(layer).map_or(&[][..], Vec::as_slice);
         let length = track_length(tracks) + layer_arcs.iter().map(|a| a.1).sum::<i64>();
         if length <= 0 {
