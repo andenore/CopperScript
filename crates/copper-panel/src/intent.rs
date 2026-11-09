@@ -59,6 +59,21 @@ pub struct BoardIntent {
     pub references: Vec<String>,
     /// The source's synthesized radiators, which the routed board must carry.
     pub radiators: Vec<Radiator>,
+    /// The overhangs the source declares (no shape: their envelope is the
+    /// stretch times the distance); the panel fills it in.
+    pub declared_overhangs: Vec<Overhang>,
+    /// The routed board's courtyards, whose real shapes must stay off rails
+    /// and other boards; the panel fills them in.
+    pub courtyards: Vec<Courtyard>,
+}
+
+/// A footprint's courtyard in the board's frame: closed outlines (areas) and
+/// any curves that do not close (lines), in nanometres.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Courtyard {
+    pub reference: String,
+    pub areas: Vec<Vec<Point>>,
+    pub lines: Vec<Vec<Point>>,
 }
 
 /// How far beyond an antenna region's perimeter opening tabs stay away.
@@ -452,10 +467,10 @@ fn footprint_point(at: (f64, f64, f64), x: f64, y: f64) -> (f64, f64) {
 /// overhangs they keep tabs off the connector and its envelope off rails
 /// and boards, so a source that lost its overhang declaration cannot open
 /// the launch to tabs.
-pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Vec<Overhang> {
-    let b = bounds(outline);
+/// Every footprint's courtyard curves on the board, in millimetres, by reference.
+fn courtyard_curves(tree: &crate::sexpr::Node) -> Vec<(String, Vec<Curve>)> {
     let number = |n: &crate::sexpr::Node, k: usize| n.value(k).and_then(|v| v.parse::<f64>().ok());
-    let mut found: Vec<Overhang> = Vec::new();
+    let mut found: Vec<(String, Vec<Curve>)> = Vec::new();
     for footprint in tree.children("footprint") {
         let Some(at) = footprint.child("at") else { continue };
         let at = (number(at, 1).unwrap_or(0.0), number(at, 2).unwrap_or(0.0), number(at, 3).unwrap_or(0.0));
@@ -531,6 +546,17 @@ pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Ve
                 }
             }
         }
+        if !curves.is_empty() {
+            found.push((reference, curves));
+        }
+    }
+    found
+}
+
+pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Vec<Overhang> {
+    let b = bounds(outline);
+    let mut found: Vec<Overhang> = Vec::new();
+    for (reference, curves) in courtyard_curves(tree) {
         // Per side: each stretch where the courtyard reaches beyond it, and
         // how far. Curves that cross the side in one place chain through
         // shared ends into one stretch; separate crossings stay separate.
@@ -551,6 +577,73 @@ pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Ve
             merge_overhangs(&mut merged, stretches);
             found.extend(merged.into_iter().filter(|o| o.distance > 1_000 && o.end > o.start));
         }
+    }
+    found
+}
+
+/// Points along a curve from its start to its end (a circle's ring).
+fn curve_points(curve: Curve) -> Vec<(f64, f64)> {
+    match curve {
+        Curve::Segment(a, b) => vec![a, b],
+        Curve::Arc(s, m, e) => match arc_geometry(s, m, e) {
+            Some((c, r, a0, sweep)) => {
+                let n = arc_segments(r * 1e6, sweep);
+                let mut points: Vec<(f64, f64)> = (0..n)
+                    .map(|k| a0 + sweep * k as f64 / n as f64)
+                    .map(|t| (c.0 + r * t.cos(), c.1 + r * t.sin()))
+                    .collect();
+                points[0] = s;
+                points.push(e);
+                points
+            }
+            None => vec![s, e],
+        },
+        Curve::Circle(c, r) => {
+            let n = arc_segments(r * 1e6, std::f64::consts::TAU);
+            (0..n)
+                .map(|k| std::f64::consts::TAU * k as f64 / n as f64)
+                .map(|t| (c.0 + r * t.cos(), c.1 + r * t.sin()))
+                .collect()
+        }
+    }
+}
+
+/// The routed board's courtyards as shapes: curves chained end to end into
+/// closed outlines where they close, the rest kept as lines.
+pub fn routed_courtyards(tree: &crate::sexpr::Node) -> Vec<Courtyard> {
+    let nm = |p: (f64, f64)| ((p.0 * 1e6).round() as i64, (p.1 * 1e6).round() as i64);
+    let same = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1) < 1e-6;
+    let mut found = Vec::new();
+    for (reference, curves) in courtyard_curves(tree) {
+        let mut courtyard = Courtyard { reference, ..Courtyard::default() };
+        let mut open: Vec<Vec<(f64, f64)>> = Vec::new();
+        for curve in curves {
+            match curve {
+                Curve::Circle(..) => courtyard.areas.push(curve_points(curve).into_iter().map(nm).collect()),
+                _ => open.push(curve_points(curve)),
+            }
+        }
+        while let Some(mut chain) = open.pop() {
+            loop {
+                let end = *chain.last().expect("a point");
+                let Some(k) = open.iter().position(|c| same(c[0], end) || same(*c.last().expect("a point"), end))
+                else {
+                    break;
+                };
+                let mut next = open.remove(k);
+                if !same(next[0], end) {
+                    next.reverse();
+                }
+                chain.extend(next.into_iter().skip(1));
+            }
+            let points: Vec<Point> = chain.iter().copied().map(nm).collect();
+            if chain.len() > 2 && same(chain[0], *chain.last().expect("a point")) {
+                courtyard.areas.push(points);
+            } else {
+                courtyard.lines.push(points);
+            }
+        }
+        found.push(courtyard);
     }
     found
 }
@@ -659,7 +752,7 @@ pub fn check(
     for (board, intent) in intents {
         let pose = poses[board];
         let b = bounds(&local[board]);
-        for overhang in &intent.overhangs {
+        for overhang in &intent.declared_overhangs {
             if spec.assemble_after_depanel.iter().any(|e| *e == format!("{board}.{}", overhang.reference)) {
                 continue;
             }
@@ -706,6 +799,48 @@ pub fn check(
                     overhang.side.as_str(),
                     blockers.join(" and "),
                     overhang.reference
+                ));
+            }
+        }
+        // The routed courtyards by their real shape, past corners included.
+        for courtyard in &intent.courtyards {
+            if spec.assemble_after_depanel.iter().any(|e| *e == format!("{board}.{}", courtyard.reference)) {
+                continue;
+            }
+            let place = |ring: &Vec<Point>| -> Vec<(f64, f64)> {
+                ring.iter().map(|p| pose.apply(*p)).map(|(x, y)| (x as f64, y as f64)).collect()
+            };
+            let areas: Vec<poly::Contour> =
+                courtyard.areas.iter().flat_map(|ring| poly::polygon(&place(ring)).into_iter().flatten()).collect();
+            let mut shape = poly::even_odd(&areas);
+            for line in &courtyard.lines {
+                shape.extend(poly::polyline(&place(line), 2_000.0, false, 250.0));
+            }
+            let mut blockers: Vec<String> = Vec::new();
+            if rails.iter().any(|rail| {
+                let r = rect_shapes([(rail[0], rail[1]), (rail[2], rail[1]), (rail[2], rail[3]), (rail[0], rail[3])]);
+                !poly::intersection(&shape, &r).is_empty()
+            }) {
+                blockers.push("a rail".to_owned());
+            }
+            for (other, rings) in outlines {
+                let theirs: poly::Shapes = rings
+                    .iter()
+                    .flat_map(|ring| {
+                        poly::polygon(&ring.iter().map(|(x, y)| (*x as f64, *y as f64)).collect::<Vec<_>>())
+                    })
+                    .collect();
+                if other != board && !poly::intersection(&shape, &theirs).is_empty() {
+                    blockers.push(format!("board {other}"));
+                }
+            }
+            if !blockers.is_empty() {
+                return Err(format!(
+                    "board {board}: {}'s courtyard reaches into {}; turn the board, move the blocker, or list \
+                     \"{board}.{}\" in assemble_after_depanel",
+                    courtyard.reference,
+                    blockers.join(" and "),
+                    courtyard.reference
                 ));
             }
         }

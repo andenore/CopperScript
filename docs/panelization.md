@@ -92,7 +92,9 @@ panel ExamplePanel {
    - a tab on an antenna region opened to the perimeter (plus 1 mm);
    - a tab on a body overhang;
    - an overhanging body that reaches a rail or another board, unless
-     `assemble_after_depanel` lists `BOARD.REFERENCE`;
+     `assemble_after_depanel` lists `BOARD.REFERENCE`: a routed courtyard
+     by its real shape (past a board corner included), a body overhang the
+     source declares by its stretch and distance;
    - boards closer than `spacing`, measured edge to edge in every
      direction (diagonal neighbours included), tabs off their side, and
      tabs that overlap anywhere on the panel (the same bridge declared from

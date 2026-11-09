@@ -144,7 +144,9 @@ pub fn panelize(
         let tree = parse(&file.pcb, &board.pcb)?;
         let rings = outline_rings(&tree, &format!("board {}", board.name))?;
         intent.keep_clear.extend(intent::routed_keep_clear(&routed, &rings));
+        intent.declared_overhangs = intent.overhangs.clone();
         intent::merge_overhangs(&mut intent.overhangs, intent::routed_overhangs(&tree, &rings));
+        intent.courtyards = intent::routed_courtyards(&tree);
         poses.push(pose_for(&rings, board.quarter_turns, (board.at[0], board.at[1])));
         local.insert(board.name.clone(), rings);
         inputs.push(BoardInput { instance: board.name.clone(), tree });
@@ -741,6 +743,34 @@ mod tests {
             error.contains("tab a_right on board A's right side overlaps J4's body overhang (2.5-3.5 mm)"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_courtyard_turning_past_a_corner_stays_off_the_rail() {
+        // An L courtyard leaves A's right side at y 0.5-1 mm and turns up past
+        // the top-right corner into the top rail (y -7 to -2 mm), between
+        // boards A and B. Its overhang stretch on the right side (0-1 mm) is
+        // clear of a_right, but its shape reaches the rail.
+        let corner = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 0 0 0) \
+             (property \"Reference\" \"J3\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+             (fp_line (start 9 1) (end 11 1) (stroke (width 0.05) (type default)) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888881\")) \
+             (fp_line (start 11 1) (end 11 -3) (stroke (width 0.05) (type default)) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888882\")) \
+             (fp_line (start 11 -3) (end 10.5 -3) (stroke (width 0.05) (type default)) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888883\")) \
+             (fp_line (start 10.5 -3) (end 10.5 0.5) (stroke (width 0.05) (type default)) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888884\")) \
+             (fp_line (start 10.5 0.5) (end 9 0.5) (stroke (width 0.05) (type default)) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888885\")) \
+             (fp_line (start 9 0.5) (end 9 1) (stroke (width 0.05) (type default)) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888886\")))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = corner;
+        let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+        assert!(error.contains("board A: J3's courtyard reaches into a rail"), "{error}");
+        // Fitted after depanelization, it may.
+        let mut after = spec("");
+        after.assemble_after_depanel = vec!["A.J3".into()];
+        panelize(&after, &marked, &none(), "demo").expect("allowed when fitted after depanelization");
     }
 
     #[test]
