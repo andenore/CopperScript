@@ -90,7 +90,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     if parsed.flag("--help") {
         let _ = writeln!(
             out,
-            "{USAGE}\n\ncheck a filled .kicad_pcb natively against the design rules of its .kicad_pro and .kicad_dru\n(same stem by default): clearances, holes, board edge, sizes, keepouts, opens and dangling\ncopper; with --cam, also read back the Gerbers and drills under CAM_DIR for shorts and opens\nagainst the board netlist; --expected-open-ends excuses the dangling track ends a copper panelize\nreport lists (synthesized radiators' open tips), at that exact point on that net and layer only;\nexit 0 when clean, 1 with findings, 2 on error. No KiCad is run."
+            "{USAGE}\n\ncheck a filled .kicad_pcb natively against the design rules of its .kicad_pro and .kicad_dru\n(same stem by default): clearances, holes, board edge, sizes, keepouts, opens and dangling\ncopper; with --cam, also read back the Gerbers and drills under CAM_DIR for shorts and opens\nagainst the board netlist; --expected-open-ends excuses the dangling track ends a copper panelize\nreport or a route-board report (plane_verification) lists (synthesized radiators' open tips),\nat that exact point on that net and layer only;\nexit 0 when clean, 1 with findings, 2 on error. No KiCad is run."
         );
         return 0;
     }

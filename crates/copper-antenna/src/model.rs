@@ -250,11 +250,9 @@ impl<'a> Problem<'a> {
         let (along, across) = land_halves(site);
         let coarse_cell = (Fidelity::coarse(site, 1).cell * 1e6).round() as i64;
         let slot_gap = site.clearance.max(coarse_cell);
-        // The slot's sides stand the same modelled gap from the stub: at the
-        // bare board clearance a mesh line of the ground edge could merge with
-        // the stub's edge (lines closer than half a cell merge) and short the
-        // port.
-        let reach = (site.width / 2).max(along) + slot_gap;
+        // The slot's sides stand the board clearance from the stub, as the
+        // fill will; their mesh lines never merge with the stub's (`Boundary`).
+        let reach = (site.width / 2).max(along) + site.clearance;
         let slot = board_rect(site, site.feed_u - reach, site.feed_v - across - slot_gap, site.feed_u + reach, 0);
         let region = [mm(site.area.min_x), mm(site.area.min_y), mm(site.area.max_x), mm(site.area.max_y)];
         let covers = |layer: CopperLayer, point: Point| {
@@ -399,11 +397,12 @@ enum LineRank {
     Anchor,
     /// The region's padding.
     Edge,
-    /// Where the ground sheets end: the region and the feed slot. Not merged
-    /// with a copper line (nor copper with a port line) unless closer than a
-    /// fifth of the snap: they bound different conductors, and at the board
+    /// Where the ground sheets end: the region and the feed slot. Never merged
+    /// with a copper line or another boundary: they bound different
+    /// conductors (or a dropped edge snaps onto the nearest line), and at the board
     /// clearance from the stub a merged line joined ground to the radiator and
-    /// shorted the port.
+    /// shorted the port. (Copper keeps its own line beside a port line unless
+    /// within a quarter cell of it.)
     Boundary,
     /// Edges of the radiator, feed land, short and via: what the search
     /// moves, so a sub-cell change of a parameter never moves them a cell.
@@ -466,12 +465,18 @@ fn axis_lines(plan: &AxisPlan) -> Result<Vec<f64>, String> {
             }
             Some((last, last_rank)) if v - last < snap_at((last + v) / 2.0) => match (last_rank, rank) {
                 (LineRank::Port, LineRank::Port) => kept.push((v, rank)),
-                // Distinct conductors keep distinct lines: a copper edge
-                // dropped for a nearby port line snaps onto whichever line is
-                // nearer, a ground boundary included.
-                (LineRank::Boundary | LineRank::Port, LineRank::Copper)
-                | (LineRank::Copper, LineRank::Boundary | LineRank::Port)
-                    if v - last >= plan.snap / 5.0 =>
+                // Ground and radiator copper never share a line, however close:
+                // the gap between them is real, and a merged line shorts them.
+                // Nor do two ground boundaries: the solver snaps a sheet edge
+                // whose line was dropped onto the nearest line, which can be
+                // the radiator's (a slot side 0.1 mm past the region start).
+                (LineRank::Boundary, LineRank::Copper | LineRank::Boundary)
+                | (LineRank::Copper, LineRank::Boundary) => kept.push((v, rank)),
+                // A copper edge near a port line keeps its own line unless it is
+                // within a quarter cell of it (the stub's end inside the port gap
+                // would otherwise leave a sliver); then it moves onto the port.
+                (LineRank::Port, LineRank::Copper) | (LineRank::Copper, LineRank::Port)
+                    if v - last >= snap_at((last + v) / 2.0) / 2.0 =>
                 {
                     kept.push((v, rank))
                 }
@@ -1018,6 +1023,24 @@ mod tests {
         near.snap = 0.375;
         let lines = axis_lines(&near).expect("lines");
         assert!(lines.contains(&3.4) && lines.contains(&3.65), "{lines:?}");
+        // A ground boundary closer than any snap fraction still keeps its line.
+        let mut tight = plan(&[(3.4, LineRank::Boundary), (3.45, LineRank::Copper)], &[(0.0, 8.0, 0.5625)]);
+        tight.snap = 0.375;
+        let lines = axis_lines(&tight).expect("lines");
+        assert!(lines.contains(&3.4) && lines.contains(&3.45), "{lines:?}");
+        // Two ground boundaries 0.1 mm apart beside the stub keep both lines.
+        let mut slot = plan(
+            &[(16.0, LineRank::Boundary), (16.1, LineRank::Boundary), (16.2, LineRank::Copper)],
+            &[(0.0, 20.0, 0.375)],
+        );
+        slot.snap = 0.25;
+        let lines = axis_lines(&slot).expect("lines");
+        assert!([16.0, 16.1, 16.2].iter().all(|v| lines.contains(v)), "{lines:?}");
+        // Copper within a quarter cell of a port line moves onto it.
+        let mut sliver = plan(&[(11.715, LineRank::Port), (11.79, LineRank::Copper)], &[(0.0, 20.0, 0.5625)]);
+        sliver.snap = 0.375;
+        let lines = axis_lines(&sliver).expect("lines");
+        assert!(lines.contains(&11.715) && !lines.contains(&11.79), "{lines:?}");
         // A stub edge between the boundary and a port line keeps its own line.
         let mut between =
             plan(&[(3.4, LineRank::Boundary), (3.65, LineRank::Copper), (3.9, LineRank::Port)], &[(0.0, 8.0, 0.5625)]);

@@ -61,11 +61,9 @@ pub const GENERATOR: &str = "copper antenna/v0.2";
 /// Revision 5: every dielectric interface keeps its own z line (a prepreg
 /// thinner than half a z cell merged F.Cu's line into the ground layer's
 /// below it, and the grading around the lost line left a zero-width cell,
-/// and so a zero time step); the feed slot's sides stand the modelled slot
-/// gap from the stub, not the board clearance; and the lines where ground
-/// sheets end (region and slot) never merge with radiator copper lines (below
-/// half a cell, the ground edge merged onto the stub's line and shorted the
-/// port).
+/// and so a zero time step); and the lines where ground sheets end (region
+/// and feed slot) never merge with radiator copper lines (below half a cell,
+/// the ground edge merged onto the stub's line and shorted the port).
 pub const MODEL_REVISION: i64 = 5;
 /// The `members[].reference` and `net` role names inside the generated asset.
 const MEMBER: &str = "ANT";

@@ -128,7 +128,7 @@ pub fn document(problem: &Problem, site: &AntennaSite, digest: &str, outcome: &O
         ("generator", Json::from(GENERATOR)),
         ("solver", Json::from(SOLVER)),
         ("antenna", Json::from(site.name.as_str())),
-        ("declaration", Json::from(site.declaration.as_str())),
+        ("declaration", Json::from(relative_origin(&site.declaration))),
         ("feed", Json::from(site.feed.to_string())),
         ("site_digest", Json::from(digest)),
         ("method", Json::from(outcome.method)),
@@ -164,4 +164,13 @@ pub fn document(problem: &Problem, site: &AntennaSite, digest: &str, outcome: &O
 /// The document as text.
 pub fn render(document: &Json) -> String {
     Dumps::new().indent(2).dumps(document) + "\n"
+}
+
+/// `origin` (`PATH:LINE:COLUMN`) with PATH relative to the working directory
+/// when it lies inside it, so a committed report names the source as the
+/// project does, not one machine's checkout.
+fn relative_origin(origin: &str) -> String {
+    let Ok(here) = std::env::current_dir() else { return origin.to_owned() };
+    let prefix = format!("{}{}", here.display(), std::path::MAIN_SEPARATOR);
+    origin.strip_prefix(&prefix).map_or_else(|| origin.to_owned(), str::to_owned)
 }
