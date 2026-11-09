@@ -141,6 +141,25 @@ fn pairs_of_a_match_group_are_tuned_as_pairs_into_the_group_skew() {
     assert!(result.nets.iter().all(|item| item.lengths_nm == vec![nm(28.0), nm(28.0)] && item.skew_nm == 0));
     let lanes = critical_lane_table(&result.board, &result.nets).unwrap();
     assert!(lanes.iter().all(|lane| int(field(lane, "routed_length_nm")) == Some(nm(28.0))));
+    // An arched corner (CS-174) counts at its true length, on its layer.
+    let mut arched = result.board.clone();
+    let layer = lane(&arched.tracks, "LANE_B").iter().find(|t| t.net == "LANE_B_N").unwrap().layer;
+    let arc = copper_pcb::board::TrackArc {
+        net: "LANE_B_N".into(),
+        start: Point::new(0, nm(1.0)),
+        mid: Point::new(707_107, 707_107),
+        end: Point::new(nm(1.0), 0),
+        width_nm: 100_000,
+        layer,
+    };
+    let arc_length = arc.length_nm();
+    assert!((arc_length - 1_570_796).abs() <= 2, "{arc_length}");
+    arched.arcs.push(arc);
+    let lanes = critical_lane_table(&arched, &result.nets).unwrap();
+    let row = lanes.iter().find(|lane| text(field(lane, "net")) == "LANE_B_N").unwrap();
+    assert_eq!(int(field(row, "routed_length_nm")), Some(nm(28.0) + arc_length));
+    let layer_lengths = field(row, "layer_lengths_nm");
+    assert_eq!(int(field(layer_lengths, layer.value())), Some(nm(28.0) + arc_length));
     let document = copper_json::parse(&result.to_json().unwrap()).unwrap();
     let tuned = &field(&document, "match_tuning").as_array().unwrap()[0];
     assert_eq!(status(tuned), "tuned");
