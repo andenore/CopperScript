@@ -59,7 +59,7 @@ fn zsh() -> String {
         let (actions, options) = words(name);
         let mut list = actions;
         list.extend(options);
-        cases.push_str(&format!("        {name}) words=({}) ;;\n", list.join(" ")));
+        cases.push_str(&format!("        {name}) candidates=({}) ;;\n", list.join(" ")));
     }
     format!(
         "#compdef copper\n\
@@ -69,11 +69,12 @@ fn zsh() -> String {
          \x20       compadd -- {commands} --help --version\n\
          \x20       return\n\
          \x20   fi\n\
-         \x20   local -a words\n\
+         \x20   # `words` is zsh's array of the command line; keep it intact.\n\
+         \x20   local -a candidates\n\
          \x20   case $words[2] in\n\
          {cases}\
          \x20   esac\n\
-         \x20   compadd -- $words\n\
+         \x20   compadd -- $candidates\n\
          \x20   _files\n\
          }}\n\
          compdef _copper copper\n",
@@ -152,5 +153,30 @@ mod tests {
         }
         assert_eq!(call(&["tcsh"]).0, 2);
         assert_eq!(call(&[]).0, 2);
+    }
+
+    /// zsh passes the command line in `words`; a local of that name would
+    /// hide the command the `case` dispatches on.
+    #[test]
+    fn zsh_keeps_the_command_line_words() {
+        let script = zsh();
+        assert!(!script.contains("local -a words") && !script.contains(") words=("), "{script}");
+        assert!(script.contains("case $words[2] in") && script.contains("route-board) candidates=("));
+    }
+
+    /// Runs the script in zsh when it is installed: completing after
+    /// `copper route-board` offers that command's options.
+    #[test]
+    fn zsh_offers_the_current_commands_options() {
+        let probe = format!(
+            "compdef() {{ :; }}\ncompadd() {{ [[ $1 == -- ]] && shift; print -r -- \"$*\"; }}\n_files() {{ :; }}\n{}\n\
+             words=(copper route-board --rou)\nCURRENT=3\n_copper\n",
+            zsh()
+        );
+        let Ok(output) = std::process::Command::new("zsh").args(["-f", "-c", &probe]).output() else {
+            return; // zsh is not installed
+        };
+        let offered = String::from_utf8_lossy(&output.stdout);
+        assert!(offered.split_whitespace().any(|word| word == "--routing-profile"), "{offered}");
     }
 }
