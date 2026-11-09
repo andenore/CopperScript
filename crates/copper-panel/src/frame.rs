@@ -261,14 +261,34 @@ pub fn build(
         let direction = ((b.0 - a.0).signum(), (b.1 - a.1).signum());
         let centre = ((a.0 + b.0) / 2, (a.1 + b.1) / 2);
         let mut pads = Vec::new();
-        let mut ends = vec![-spec.mouse_bite.inset];
-        if built.across.is_some() {
-            ends.push(built.length + spec.mouse_bite.inset);
+        let mut ends = vec![(-spec.mouse_bite.inset, built.board.as_str())];
+        if let Some(across) = &built.across {
+            ends.push((built.length + spec.mouse_bite.inset, across.as_str()));
         }
-        for depth in ends {
+        let tab_material = ring_shapes(&corners);
+        for (depth, owner) in ends {
+            // Every hole perforates its board: it lies on the board and the
+            // tab, not in a slot or past a thin flange of the board.
+            let mut material: poly::Shapes = outlines[owner].iter().flat_map(|ring| ring_shapes(ring)).collect();
+            material.extend(tab_material.iter().cloned());
+            let material = poly::union(&material);
             for k in 0..count {
                 let along = -span / 2 + k * spec.mouse_bite.pitch;
                 let p = (direction.0 * along + normal.0 * depth, direction.1 * along + normal.1 * depth);
+                let hole = poly::circle(
+                    copper_cam::geometry::Point::new(centre.0 + p.0, centre.1 + p.1),
+                    spec.mouse_bite.drill as f64 / 2.0,
+                    250.0,
+                );
+                let astray: f64 = poly::difference(&hole, &material).iter().map(|s| poly::shape_area(s)).sum();
+                if astray > 1e6 {
+                    return Err(format!(
+                        "tab {}: its mouse bites {} mm inside board {owner} fall off the board (a slot or a flange \
+                         narrower than the inset); reduce mouse_bite.inset or move the tab",
+                        built.name,
+                        mm(spec.mouse_bite.inset)
+                    ));
+                }
                 pads.push(npth(p, spec.mouse_bite.drill));
             }
         }
