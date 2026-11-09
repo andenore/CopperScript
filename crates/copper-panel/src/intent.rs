@@ -754,8 +754,15 @@ pub fn check(
             let far = |p: Point| (p.0 + normal.0 * tab.length, p.1 + normal.1 * tab.length);
             let neighbour = &poses[across];
             let (a, b) = (neighbour.invert(far(tab.edge.0)), neighbour.invert(far(tab.edge.1)));
-            match side_of(bounds(&local[across]), a, b) {
-                Some((side, lo, hi)) => contact_clear(intents, &tab.name, across, side, lo, hi)?,
+            let nb = bounds(&local[across]);
+            match side_of(nb, a, b) {
+                Some((side, lo, hi)) => {
+                    let length = if matches!(side, Side::Top | Side::Bottom) { nb[2] - nb[0] } else { nb[3] - nb[1] };
+                    if lo < 0 || hi > length {
+                        return Err(format!("tab {} lands on board {across} off its {} side", tab.name, side.as_str()));
+                    }
+                    contact_clear(intents, &tab.name, across, side, lo, hi)?
+                }
                 None => {
                     return Err(format!(
                         "tab {} lands on board {} away from a straight side of its outline",

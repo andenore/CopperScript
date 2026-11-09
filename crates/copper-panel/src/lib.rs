@@ -944,6 +944,16 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_must_land_with_its_whole_width() {
+        // B lowered to y 3.999 mm: a_right (y 2-4) meets it over 1 um only.
+        let mut partial = spec("");
+        partial.boards[1].at = [12_000_000, 3_999_000];
+        partial.tabs.retain(|t| t.name != "b_top");
+        let error = panelize(&partial, &files(), &none(), "demo").err().expect("refused");
+        assert!(error.contains("tab a_right: only part of its far end lands on board B"), "{error}");
+    }
+
+    #[test]
     fn an_unnetted_copper_graphic_counts_as_unnetted_copper() {
         let line = BOARD.replacen(
             "(gr_line (start 0 0)",

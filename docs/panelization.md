@@ -73,7 +73,8 @@ panel ExamplePanel {
    references (`MONO-J1`) so boards stay electrically separate, derives
    fresh UUIDs, drops zone fills and the boards' outlines, and clips a zone
    or rule area that reaches past its board to the board's outline (alone,
-   the board edge stopped it). Stack-ups, layer
+   the board edge stopped it; a zone cut into pieces becomes one zone per
+   piece). Stack-ups, layer
    sets, project rules and the unconditional custom rules (in the same
    order) must agree; those rules are kept once, first, and are the only
    ones between two boards' items, whatever order the boards are declared
@@ -98,6 +99,8 @@ panel ExamplePanel {
      `assemble_after_depanel` lists `BOARD.REFERENCE`: a routed courtyard
      by its real shape (past a board corner included), a body overhang the
      source declares by its stretch and distance;
+   - a tab whose far end does not land with its whole width on the board
+     or rail it bridges to;
    - boards closer than `spacing`, measured edge to edge in every
      direction (diagonal neighbours included), tabs off their side, and
      tabs that overlap anywhere on the panel (the same bridge declared from

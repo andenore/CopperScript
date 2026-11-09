@@ -515,6 +515,24 @@ fn build_tab(
             side.as_str()
         ));
     }
+    // Its whole far end lands on what it bridges to: a sliver of a board or
+    // rail inside its width would hold the joint by a corner.
+    let far = |p: Point| (p.0 + n.0 * distance, p.1 + n.1 * distance);
+    let deep = |p: Point| (p.0 + n.0 * (distance + 1_000), p.1 + n.1 * (distance + 1_000));
+    let face = ring_shapes(&[far(a), far(b), deep(b), deep(a)]);
+    let target: poly::Shapes = match &across {
+        Some(name) => outlines[name].iter().flat_map(|ring| ring_shapes(ring)).collect(),
+        None => rails.iter().flat_map(|rail| rect_shapes(*rail)).collect(),
+    };
+    let landed: f64 = poly::intersection(&face, &target).iter().map(|s| poly::shape_area(s)).sum();
+    let whole: f64 = face.iter().map(|s| poly::shape_area(s)).sum();
+    if landed < whole * 0.999 {
+        return Err(format!(
+            "tab {}: only part of its far end lands on {}; move it so its whole width meets a straight side",
+            tab.name,
+            across.as_deref().map_or_else(|| "a rail".to_owned(), |b| format!("board {b}"))
+        ));
+    }
     let _ = spec;
     Ok(BuiltTab {
         name: tab.name.clone(),

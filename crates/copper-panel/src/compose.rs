@@ -356,8 +356,9 @@ impl Placer<'_> {
     /// fill stops at the board edge and a rule area beyond it does nothing;
     /// on the panel the outline also holds tabs, rails and other boards, so
     /// the part beyond the board is cut off. A zone inside its board is left
-    /// exactly as written. Returns false when nothing of it lies on the board.
-    fn clip_zone(&self, zone: &mut Node) -> Result<bool, String> {
+    /// exactly as written. A zone cut into several pieces becomes one zone
+    /// per piece (KiCad reads a zone's later polygons as holes of its first).
+    fn clip_zone(&self, zone: &Node) -> Result<Vec<Node>, String> {
         let number = |n: &Node, k: usize| n.value(k).and_then(|v| v.parse::<f64>().ok()).map(|v| v * 1e6);
         let mut contours: Vec<poly::Contour> = Vec::new();
         for polygon in zone.children("polygon") {
@@ -394,12 +395,9 @@ impl Placer<'_> {
             .collect();
         let beyond: f64 = poly::difference(&shape, &board).iter().map(|s| poly::shape_area(s)).sum();
         if beyond <= 1e6 {
-            return Ok(true);
+            return Ok(vec![zone.clone()]);
         }
         let clipped = poly::intersection(&shape, &board);
-        if clipped.is_empty() {
-            return Ok(false);
-        }
         if clipped.iter().any(|s| s.len() > 1) {
             let name = zone.child("name").and_then(|n| n.string_value(1)).unwrap_or_default();
             return Err(format!(
@@ -407,22 +405,32 @@ impl Placer<'_> {
                 self.source
             ));
         }
-        if let Some(list) = zone.items_mut() {
-            list.retain(|n| n.tag() != Some("polygon"));
-            for piece in &clipped {
-                let pts: Vec<Node> = piece[0]
-                    .iter()
-                    .map(|p| Node::list(vec![Node::atom("xy"), Node::atom(mm(p.x)), Node::atom(mm(p.y))]))
-                    .collect();
+        let mut zones = Vec::new();
+        for (k, piece) in clipped.iter().enumerate() {
+            let mut part = zone.clone();
+            if let Some(list) = part.items_mut() {
+                list.retain(|n| n.tag() != Some("polygon"));
                 let mut points = vec![Node::atom("pts")];
-                points.extend(pts);
+                points.extend(
+                    piece[0]
+                        .iter()
+                        .map(|p| Node::list(vec![Node::atom("xy"), Node::atom(mm(p.x)), Node::atom(mm(p.y))])),
+                );
                 list.push(Node::list(vec![Node::atom("polygon"), Node::list(points)]));
+                // Later pieces get their own UUIDs (derived from the zone's).
+                if k > 0
+                    && let Some(uuid) = list.iter_mut().find(|n| n.tag() == Some("uuid"))
+                    && let Some(old) = uuid.string_value(1)
+                {
+                    *uuid = Node::list(vec![Node::atom("uuid"), Node::string(&format!("{old}:piece{k}"))]);
+                }
             }
+            zones.push(part);
         }
-        Ok(true)
+        Ok(zones)
     }
 
-    fn place(&self, mut item: Node) -> Result<Option<Node>, String> {
+    fn place(&self, mut item: Node) -> Result<Vec<Node>, String> {
         let tag = item.tag().unwrap_or("").to_owned();
         match tag.as_str() {
             "footprint" => self.footprint(&mut item)?,
@@ -455,9 +463,11 @@ impl Placer<'_> {
                 }
                 // Every polygon (a zone may have several, holes included).
                 self.geometry(&mut item)?;
-                if !self.clip_zone(&mut item)? {
-                    return Ok(None);
+                let mut zones = self.clip_zone(&item)?;
+                for zone in &mut zones {
+                    self.uuids(zone);
                 }
+                return Ok(zones);
             }
             "segment" | "arc" | "via" => {
                 self.geometry(&mut item)?;
@@ -473,7 +483,7 @@ impl Placer<'_> {
             }
             _ if tag.starts_with("gr_") => {
                 if item.child("layer").and_then(|l| l.string_value(1)).as_deref() == Some("Edge.Cuts") {
-                    return Ok(None);
+                    return Ok(Vec::new());
                 }
                 self.geometry(&mut item)?;
                 if let Some(net) = item.child_mut("net") {
@@ -483,7 +493,7 @@ impl Placer<'_> {
             _ => return Err(format!("{}: top-level {tag} cannot be placed on a panel yet", self.source)),
         }
         self.uuids(&mut item);
-        Ok(Some(item))
+        Ok(vec![item])
     }
 }
 
@@ -558,9 +568,7 @@ pub fn compose(boards: &[BoardInput], poses: &[Pose]) -> Result<Composition, Str
             if !PLACED.contains(&tag) && tag != "gr_text" && !tag.starts_with("gr_") {
                 return Err(format!("{source}: top-level {tag} cannot be placed on a panel yet"));
             }
-            if let Some(placed) = placer.place(item.clone())? {
-                items.push(placed);
-            }
+            items.extend(placer.place(item.clone())?);
         }
     }
     Ok(Composition { tree: Node::List(items), outlines, poses: pose_map })
@@ -733,6 +741,26 @@ mod tests {
             .filter_map(|xy| xy.value(1).and_then(|v| v.parse::<f64>().ok()))
             .collect();
         assert!(!xs.is_empty() && xs.iter().all(|x| *x <= 10.0 + 1e-9), "{xs:?}");
+        // A U whose bottom lies past the edge clips into two arms: two zones,
+        // each with its own UUID.
+        let u = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"56565656-5656-5656-5656-565656565656\") (name \"u\") \
+             (hatch edge 0.5) (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) \
+             (polygon (pts (xy 1 2) (xy 2 2) (xy 2 7) (xy 8 7) (xy 8 2) (xy 9 2) (xy 9 8) (xy 1 8))))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let board = BoardInput { instance: "A".to_owned(), tree: parse(&u, "A").expect("parsed") };
+        let composed_u = compose(&[board], &[pose_for(&rings, 0, (0, 0))]).expect("composed");
+        let arms: Vec<&Node> = composed_u
+            .tree
+            .children("zone")
+            .filter(|z| z.child("name").and_then(|n| n.string_value(1)).as_deref() == Some("u"))
+            .collect();
+        assert_eq!(arms.len(), 2);
+        assert!(arms.iter().all(|z| z.children("polygon").count() == 1));
+        let uuids: Vec<Option<String>> = arms.iter().map(|z| z.child("uuid").and_then(|u| u.string_value(1))).collect();
+        assert_ne!(uuids[0], uuids[1]);
         // The board's own pour, drawn on its outline, is left exactly as written.
         let pour = composed.tree.children("zone").find(|z| z.child("name").is_none()).expect("the pour");
         assert_eq!(pour.children("polygon").count(), 1);
