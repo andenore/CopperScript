@@ -766,11 +766,44 @@ mod tests {
         let mut marked = files();
         marked[0].pcb = corner;
         let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
-        assert!(error.contains("board A: J3's courtyard reaches into a rail"), "{error}");
+        assert!(error.contains("board A: J3's courtyard (F.CrtYd) reaches into a rail"), "{error}");
         // Fitted after depanelization, it may.
         let mut after = spec("");
         after.assemble_after_depanel = vec!["A.J3".into()];
         panelize(&after, &marked, &none(), "demo").expect("allowed when fitted after depanelization");
+    }
+
+    #[test]
+    fn front_and_back_courtyards_do_not_cancel_out() {
+        // The same 4 mm circle on both courtyard layers, reaching 1.5 mm into
+        // the top rail (y -7 to -2 mm). a_top is left out so the rail check
+        // decides; A still joins B and the bottom rail.
+        let both = |layers: &[&str]| {
+            let circles: String = layers
+                .iter()
+                .enumerate()
+                .map(|(k, layer)| {
+                    format!("(fp_circle (center 0 0) (end 4 0) (stroke (width 0.05) (type default)) (fill none) (layer \"{layer}\") (uuid \"88888888-8888-8888-8888-88888888888{k}\")) ")
+                })
+                .collect();
+            BOARD.replacen(
+                "(gr_line (start 0 0)",
+                &format!(
+                    "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 5 0.5 0) \
+                     (property \"Reference\" \"J2\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+                     {circles})\n  (gr_line (start 0 0)"
+                ),
+                1,
+            )
+        };
+        let mut no_top = spec("");
+        no_top.tabs.retain(|t| t.name != "a_top");
+        for layers in [&["F.CrtYd"][..], &["B.CrtYd"][..], &["F.CrtYd", "B.CrtYd"][..]] {
+            let mut marked = files();
+            marked[0].pcb = both(layers);
+            let error = panelize(&no_top, &marked, &none(), "demo").err().expect("refused");
+            assert!(error.contains("J2's courtyard") && error.contains("reaches into a rail"), "{layers:?}: {error}");
+        }
     }
 
     #[test]

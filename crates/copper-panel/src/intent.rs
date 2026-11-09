@@ -72,6 +72,8 @@ pub struct BoardIntent {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Courtyard {
     pub reference: String,
+    /// The courtyard layer (`F.CrtYd` or `B.CrtYd`).
+    pub layer: String,
     pub areas: Vec<Vec<Point>>,
     pub lines: Vec<Vec<Point>>,
 }
@@ -467,10 +469,11 @@ fn footprint_point(at: (f64, f64, f64), x: f64, y: f64) -> (f64, f64) {
 /// overhangs they keep tabs off the connector and its envelope off rails
 /// and boards, so a source that lost its overhang declaration cannot open
 /// the launch to tabs.
-/// Every footprint's courtyard curves on the board, in millimetres, by reference.
-fn courtyard_curves(tree: &crate::sexpr::Node) -> Vec<(String, Vec<Curve>)> {
+/// Every footprint's courtyard curves on the board, in millimetres, by
+/// reference and courtyard layer (front and back courtyards stay apart).
+fn courtyard_curves(tree: &crate::sexpr::Node) -> Vec<(String, String, Vec<Curve>)> {
     let number = |n: &crate::sexpr::Node, k: usize| n.value(k).and_then(|v| v.parse::<f64>().ok());
-    let mut found: Vec<(String, Vec<Curve>)> = Vec::new();
+    let mut found: Vec<(String, String, Vec<Curve>)> = Vec::new();
     for footprint in tree.children("footprint") {
         let Some(at) = footprint.child("at") else { continue };
         let at = (number(at, 1).unwrap_or(0.0), number(at, 2).unwrap_or(0.0), number(at, 3).unwrap_or(0.0));
@@ -479,12 +482,13 @@ fn courtyard_curves(tree: &crate::sexpr::Node) -> Vec<(String, Vec<Curve>)> {
             .find(|p| p.string_value(1).as_deref() == Some("Reference"))
             .and_then(|p| p.string_value(2))
             .unwrap_or_default();
-        let mut curves: Vec<Curve> = Vec::new();
+        let mut by_layer: IndexMap<String, Vec<Curve>> = IndexMap::new();
         for item in footprint.items() {
             let layer = item.child("layer").and_then(|l| l.string_value(1)).unwrap_or_default();
             if !layer.ends_with(".CrtYd") && !layer.ends_with(".Courtyard") {
                 continue;
             }
+            let curves = by_layer.entry(layer).or_default();
             let xy = |tag: &str| item.child(tag).and_then(|n| Some((number(n, 1)?, number(n, 2)?)));
             let on_board = |p: (f64, f64)| footprint_point(at, p.0, p.1);
             // The courtyard's curves on the board (a turned footprint turns them).
@@ -546,8 +550,10 @@ fn courtyard_curves(tree: &crate::sexpr::Node) -> Vec<(String, Vec<Curve>)> {
                 }
             }
         }
-        if !curves.is_empty() {
-            found.push((reference, curves));
+        for (layer, curves) in by_layer {
+            if !curves.is_empty() {
+                found.push((reference.clone(), layer, curves));
+            }
         }
     }
     found
@@ -556,7 +562,7 @@ fn courtyard_curves(tree: &crate::sexpr::Node) -> Vec<(String, Vec<Curve>)> {
 pub fn routed_overhangs(tree: &crate::sexpr::Node, outline: &[Vec<Point>]) -> Vec<Overhang> {
     let b = bounds(outline);
     let mut found: Vec<Overhang> = Vec::new();
-    for (reference, curves) in courtyard_curves(tree) {
+    for (reference, _layer, curves) in courtyard_curves(tree) {
         // Per side: each stretch where the courtyard reaches beyond it, and
         // how far. Curves that cross the side in one place chain through
         // shared ends into one stretch; separate crossings stay separate.
@@ -614,8 +620,8 @@ pub fn routed_courtyards(tree: &crate::sexpr::Node) -> Vec<Courtyard> {
     let nm = |p: (f64, f64)| ((p.0 * 1e6).round() as i64, (p.1 * 1e6).round() as i64);
     let same = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1) < 1e-6;
     let mut found = Vec::new();
-    for (reference, curves) in courtyard_curves(tree) {
-        let mut courtyard = Courtyard { reference, ..Courtyard::default() };
+    for (reference, layer, curves) in courtyard_curves(tree) {
+        let mut courtyard = Courtyard { reference, layer, ..Courtyard::default() };
         let mut open: Vec<Vec<(f64, f64)>> = Vec::new();
         for curve in curves {
             match curve {
@@ -810,9 +816,10 @@ pub fn check(
             let place = |ring: &Vec<Point>| -> Vec<(f64, f64)> {
                 ring.iter().map(|p| pose.apply(*p)).map(|(x, y)| (x as f64, y as f64)).collect()
             };
-            let areas: Vec<poly::Contour> =
-                courtyard.areas.iter().flat_map(|ring| poly::polygon(&place(ring)).into_iter().flatten()).collect();
-            let mut shape = poly::even_odd(&areas);
+            // A courtyard has no holes: its outlines fill by union, so
+            // overlapping outlines never cancel (an even-odd fill would).
+            let areas: poly::Shapes = courtyard.areas.iter().flat_map(|ring| poly::polygon(&place(ring))).collect();
+            let mut shape = poly::union(&areas);
             for line in &courtyard.lines {
                 shape.extend(poly::polyline(&place(line), 2_000.0, false, 250.0));
             }
@@ -836,9 +843,10 @@ pub fn check(
             }
             if !blockers.is_empty() {
                 return Err(format!(
-                    "board {board}: {}'s courtyard reaches into {}; turn the board, move the blocker, or list \
+                    "board {board}: {}'s courtyard ({}) reaches into {}; turn the board, move the blocker, or list \
                      \"{board}.{}\" in assemble_after_depanel",
                     courtyard.reference,
+                    courtyard.layer,
                     blockers.join(" and "),
                     courtyard.reference
                 ));
