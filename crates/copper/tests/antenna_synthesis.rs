@@ -52,9 +52,9 @@ fn the_tuned_example_binds_its_synthesized_monopole_as_locked_copper() {
     assert_eq!(status, 0, "{output}");
     let exported = std::fs::read_to_string(&pcb).expect("the exported board");
     // The tuned monopole: from the feed pad (19, 6.65) through the ground
-    // edge (y = 6) to height 5.3 mm (y = 0.7), then 17.43 mm along the edge.
+    // edge (y = 6) to height 5.3 mm (y = 0.7), then 17.47 mm along the edge.
     assert!(exported.contains("(start 19 6.65)") && exported.contains("(end 19 0.7)"), "{exported}");
-    assert!(exported.contains("(start 19 0.7)") && exported.contains("(end 36.43 0.7)"), "{exported}");
+    assert!(exported.contains("(start 19 0.7)") && exported.contains("(end 36.47 0.7)"), "{exported}");
     assert!(exported.contains("(width 1)"), "{exported}");
     assert!(exported.matches("(locked yes)").count() >= 3, "{exported}");
     // The zone keepout opened to the perimeter exports on both copper layers;
@@ -65,6 +65,48 @@ fn the_tuned_example_binds_its_synthesized_monopole_as_locked_copper() {
     let report = std::fs::read_to_string(&report).expect("the route report");
     assert!(report.contains("\"antenna\""), "{report}");
     assert!(report.contains("synthesized antenna copper preserved and materialized"), "{report}");
+}
+
+#[test]
+fn native_verification_lists_the_radiator_end_for_filled_board_drc() {
+    let directory = scratch("open-end");
+    let (pcb, report, filled) =
+        (directory.join("board.kicad_pcb"), directory.join("route.json"), directory.join("filled.kicad_pcb"));
+    let (pcb_text, report_text, filled_text) = (
+        pcb.to_string_lossy().into_owned(),
+        report.to_string_lossy().into_owned(),
+        filled.to_string_lossy().into_owned(),
+    );
+    let (status, output) = copper(&[
+        "route-board",
+        "examples/antenna_synthesis/board.copper",
+        "-o",
+        &pcb_text,
+        "--report",
+        &report_text,
+        "--locked",
+        "--offline",
+        "--verify-plane-fill",
+        "native",
+    ]);
+    assert_eq!(status, 0, "{output}");
+    // The route report lists the radiator's open end (36.47, 0.7) by point,
+    // net and layer, in the form `copper drc --expected-open-ends` reads.
+    let text = std::fs::read_to_string(&report).expect("the route report");
+    assert!(text.contains("\"expected_open_ends\""), "{text}");
+    assert!(text.contains("\"36.47\"") && text.contains("\"ANT_FEED\""), "{text}");
+    let (status, output) = copper(&["fill", &pcb_text, "-o", &filled_text]);
+    assert_eq!(status, 0, "{output}");
+    for extension in ["kicad_pro", "kicad_dru"] {
+        let _ = std::fs::copy(pcb.with_extension(extension), filled.with_extension(extension));
+    }
+    // Without the report the open end fails DRC; with it, exactly that one is excused.
+    let (status, output) = copper(&["drc", &filled_text]);
+    assert_ne!(status, 0, "{output}");
+    assert!(output.contains("track_dangling"), "{output}");
+    let (status, output) = copper(&["drc", &filled_text, "--expected-open-ends", &report_text]);
+    assert_eq!(status, 0, "{output}");
+    assert!(output.contains("Excused 1 expected open end(s)"), "{output}");
 }
 
 #[test]

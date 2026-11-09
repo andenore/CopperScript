@@ -1295,7 +1295,10 @@ exclusion, export locking and port-continuity proof need nothing new:
 
 KiCad's DRC reports the radiator's open end as a dangling track; native
 verification (`route-board --verify-plane-fill`) excludes that one finding
-per antenna, by net and region, and records it as an expected open end. A
+per antenna, by net and region, and records it as an expected open end, also
+by point, net and layer (`plane_verification.expected_open_ends`), so
+`copper drc FILLED --expected-open-ends ROUTE_REPORT` excuses exactly those
+ends on the filled board. A
 ground island that the short's via joins only through the zone fill is
 proved by that refill, so an inverted-F needs native verification for a
 passing route.
