@@ -103,9 +103,12 @@ fn board_intent(source: &Path, locked: bool, offline: bool) -> Result<BoardInten
                 });
             }
         }
-        if let Ok((geometry, _)) = chosen_geometry(&physical, &site)
-            && let Ok(realized) = layout(&site, &geometry)
-            && realized.tiles.is_empty()
+        // The geometry the source binds: a stale tuned_for (an input of the
+        // full-wave model changed, or a new model revision) fails here as it
+        // does in route-board, rather than leaving the radiator unchecked.
+        let (geometry, _) = chosen_geometry(&physical, &site).map_err(fail)?;
+        let realized = layout(&site, &geometry).map_err(fail)?;
+        if realized.tiles.is_empty()
             && let Some((u, v)) = realized.path.last()
         {
             let end = site.frame.to_board(*u, *v);

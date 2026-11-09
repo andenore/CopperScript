@@ -59,7 +59,9 @@ panel ExamplePanel {
    the footprint references must agree (with the `CS_MH_`/`CS_MS_`
    footprints the export adds for mechanical holes and slots), and every
    synthesized radiator must lie on the routed board's copper (feed net and
-   layer). What the routed board shows itself counts too, whatever the
+   layer). A source whose antenna `tuned_for` is stale (an input of the
+   full-wave model changed, or a new model revision) is refused, as
+   `route-board` refuses it: re-run `copper synthesize-antenna` first. What the routed board shows itself counts too, whatever the
    source says: its rule areas that forbid copper pours, where they cover a
    side (ending on the edge or crossing it: antenna regions, connector
    launches; curved outlines followed to within a quarter micron, contours
