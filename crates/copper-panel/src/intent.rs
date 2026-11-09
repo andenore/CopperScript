@@ -348,7 +348,11 @@ fn beyond(curve: Curve, frame: SideFrame) -> Vec<Vec<(f64, f64)>> {
             cuts.sort_by(f64::total_cmp);
             for w in cuts.windows(2) {
                 let (sa, sb) = (w[0], w[1]);
-                if sb - sa < 1e-12 || frame.uv(at((sa + sb) / 2.0)).1 <= 0.0 {
+                // Between cuts the arc keeps to one side of the line, but may
+                // touch it at one point (a tangent circle): of three interior
+                // points at least two show the side.
+                let beyond_line = [0.25, 0.5, 0.75].iter().any(|f| frame.uv(at(sa + (sb - sa) * f)).1 > 0.0);
+                if sb - sa < 1e-12 || !beyond_line {
                     continue;
                 }
                 let mut points = vec![at(sa), at(sb)];
@@ -751,6 +755,16 @@ mod tests {
         assert!(points.iter().map(|p| p.1).fold(0.0, f64::max) > 0.0, "{points:?}");
         // Nothing beyond, nothing found.
         assert!(beyond(Curve::Segment((1.0, 1.0), (9.0, 5.0)), bottom).is_empty());
+        // A circle outside the side, touching it at one point, lies beyond it
+        // all round (its midpoint sample lands on the tangent point).
+        let right = SideFrame { side: Side::Right, bounds: [0.0, 0.0, 10.0, 6.0] };
+        let parts = beyond(Curve::Circle((10.5, 3.0), 0.5), right);
+        assert_eq!(parts.len(), 1, "{parts:?}");
+        let depth = parts[0].iter().map(|p| p.1).fold(0.0, f64::max);
+        let (lo, hi) = parts[0].iter().fold((f64::MAX, f64::MIN), |(lo, hi), p| (lo.min(p.0), hi.max(p.0)));
+        assert!((depth - 1.0).abs() < 1e-9 && (lo - 2.5).abs() < 1e-9 && (hi - 3.5).abs() < 1e-9, "{parts:?}");
+        // A circle inside, touching the side, lies beyond nowhere.
+        assert!(beyond(Curve::Circle((9.5, 3.0), 0.5), right).is_empty());
         // An arc going the long way round a cap leaves two separate parts.
         let at = |deg: f64| {
             let t = deg.to_radians();

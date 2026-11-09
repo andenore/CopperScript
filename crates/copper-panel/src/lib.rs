@@ -724,6 +724,26 @@ mod tests {
     }
 
     #[test]
+    fn a_courtyard_touching_the_edge_from_outside_holds_tabs_off() {
+        // A 0.5 mm circle outside A's right side, touching it at y = 3 mm,
+        // under a_right (2-4 mm).
+        let jack = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 10.5 3 0) \
+             (property \"Reference\" \"J4\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+             (fp_circle (center 0 0) (end 0.5 0) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = jack;
+        let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+        assert!(
+            error.contains("tab a_right on board A's right side overlaps J4's body overhang (2.5-3.5 mm)"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn an_unnetted_copper_graphic_counts_as_unnetted_copper() {
         let line = BOARD.replacen(
             "(gr_line (start 0 0)",
