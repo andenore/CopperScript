@@ -196,7 +196,14 @@ pub fn panelize(
     // `inset + drill / 2` into the board, and the edge clearance counts from there.
     let edge_clearance = rules::max_edge_clearance(&pro, &dru)?;
     let depth = if edge_clearance > 0 { edge_clearance + spec.mouse_bite.inset + spec.mouse_bite.drill / 2 } else { 0 };
-    let edge_keepouts = frame::tab_edge_keepouts(&frame.tabs, &composition.poses, depth, &copper_layers);
+    let edge_keepouts = frame::tab_edge_keepouts(
+        &frame.tabs,
+        &composition.poses,
+        &composition.outlines,
+        depth,
+        edge_clearance,
+        &copper_layers,
+    );
     let mut tree = composition.tree;
     if let Node::List(items) = &mut tree {
         items.extend(frame.items);
@@ -977,7 +984,8 @@ mod tests {
     fn tab_landings_keep_the_edge_clearance() {
         // With a 1 mm copper-to-edge clearance, every tab landing gets a
         // keep-out inside its board from the deepest mouse-bite wall (0.25 mm
-        // inset + 0.25 mm radius) 1 mm on: a_top's from x 3.5 to 6.5, y 0 to 1.5.
+        // inset + 0.25 mm radius) 1 mm on, and 1 mm past both tab ends (the
+        // outer bites reach almost to them): a_top's from x 2.5 to 7.5, y 0 to 1.5.
         let pro = PRO.replace(
             r#""design_settings": {}"#,
             r#""design_settings": {"rules": {"min_copper_edge_clearance": 1.0, "min_hole_clearance": 0.25}}"#,
@@ -996,7 +1004,11 @@ mod tests {
         let points: Vec<(i64, i64)> = top.outline[0].edges.iter().map(|e| (e.end().x, e.end().y)).collect();
         let (x0, x1) = (points.iter().map(|p| p.0).min().unwrap(), points.iter().map(|p| p.0).max().unwrap());
         let (y0, y1) = (points.iter().map(|p| p.1).min().unwrap(), points.iter().map(|p| p.1).max().unwrap());
-        assert_eq!((x0, x1, y0, y1), (3_500_000, 6_500_000, 0, 1_500_000));
+        assert_eq!((x0, x1, y0, y1), (2_500_000, 7_500_000, 0, 1_500_000));
+        // Clipped to the board: a_right's landing on A (y 2-4) reaches y 1-5.
+        let right = keepouts.iter().find(|z| z.name == "panel/tab-edge/a_right/near").expect("a_right's");
+        let ys: Vec<i64> = right.outline[0].edges.iter().map(|e| e.end().y).collect();
+        assert_eq!((ys.iter().min().copied(), ys.iter().max().copied()), (Some(1_000_000), Some(5_000_000)));
         assert!(top.not_allowed.iter().any(|k| k == "copperpour") && top.keepout == Some(true));
         // Without an edge clearance there are none.
         let plain = panelize(&spec(""), &files(), &none(), "demo").expect("a panel");

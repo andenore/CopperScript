@@ -548,15 +548,18 @@ fn build_tab(
 }
 
 /// Keep-outs inside each board along every tab landing, `depth` deep on
-/// the copper `layers`. Where a tab joins a board its edge leaves Edge.Cuts
-/// (the outline is the union), so fills and tracks there would lose the
-/// copper-to-edge clearance they keep on the board alone; the keep-out holds
-/// them back as the edge did. Its ends need none: the outline turns along
-/// the tab's sides there and keeps them clear.
+/// the copper `layers` and reaching `extend` past both tab ends, clipped to
+/// the board. Where a tab joins a board its edge leaves Edge.Cuts (the
+/// outline is the union), and after breaking the mouse-bite walls become the
+/// board edge, out to almost the tab's ends: fills and tracks there would
+/// lose the copper-to-edge clearance they keep on the board alone, so the
+/// keep-out holds them back from every bite wall as the edge did.
 pub fn tab_edge_keepouts(
     tabs: &[BuiltTab],
     poses: &IndexMap<String, Pose>,
+    outlines: &IndexMap<String, Vec<Vec<Point>>>,
     depth: i64,
+    extend: i64,
     layers: &[String],
 ) -> Vec<Node> {
     if depth <= 0 || layers.is_empty() {
@@ -567,25 +570,31 @@ pub fn tab_edge_keepouts(
     for tab in tabs {
         let n = poses[&tab.board].rotate(side_geometry([0, 0, 0, 0], tab.side).2);
         let (a, b) = tab.edge;
+        let dir = ((b.0 - a.0).signum(), (b.1 - a.1).signum());
+        let (a, b) = ((a.0 - dir.0 * extend, a.1 - dir.1 * extend), (b.0 + dir.0 * extend, b.1 + dir.1 * extend));
         let shift = |p: Point, d: i64| (p.0 + n.0 * d, p.1 + n.1 * d);
         // Into the tab's own board, and into the board it bridges to.
-        let mut strips = vec![("near", [a, b, shift(b, -depth), shift(a, -depth)])];
-        if tab.across.is_some() {
+        let mut strips = vec![("near", tab.board.as_str(), [a, b, shift(b, -depth), shift(a, -depth)])];
+        if let Some(across) = &tab.across {
             let (fa, fb) = (shift(a, tab.length), shift(b, tab.length));
-            strips.push(("far", [fa, fb, shift(fb, depth), shift(fa, depth)]));
+            strips.push(("far", across.as_str(), [fa, fb, shift(fb, depth), shift(fa, depth)]));
         }
-        for (end, corners) in strips {
-            let pts: Vec<String> = corners.iter().map(|p| format!("(xy {} {})", mm(p.0), mm(p.1))).collect();
-            let text = format!(
-                "(zone (layers {}) (uuid {}) (name {}) (hatch edge 0.5) \
-                 (keepout (tracks not_allowed) (vias not_allowed) (pads not_allowed) (copperpour not_allowed) (footprints allowed)) \
-                 (polygon (pts {})))",
-                layer_list.join(" "),
-                quote(&uuid(&format!("tab-edge:{}:{end}", tab.name))),
-                quote(&format!("panel/tab-edge/{}/{end}", tab.name)),
-                pts.join(" ")
-            );
-            zones.push(crate::sexpr::parse(&text, "frame").expect("a valid keep-out"));
+        for (end, board, corners) in strips {
+            let board_shape: poly::Shapes = outlines[board].iter().flat_map(|ring| ring_shapes(ring)).collect();
+            for (k, piece) in poly::intersection(&ring_shapes(&corners), &board_shape).iter().enumerate() {
+                let pts: Vec<String> = piece[0].iter().map(|p| format!("(xy {} {})", mm(p.x), mm(p.y))).collect();
+                let key = if k == 0 { format!("{}:{end}", tab.name) } else { format!("{}:{end}:{k}", tab.name) };
+                let text = format!(
+                    "(zone (layers {}) (uuid {}) (name {}) (hatch edge 0.5) \
+                     (keepout (tracks not_allowed) (vias not_allowed) (pads not_allowed) (copperpour not_allowed) (footprints allowed)) \
+                     (polygon (pts {})))",
+                    layer_list.join(" "),
+                    quote(&uuid(&format!("tab-edge:{key}"))),
+                    quote(&format!("panel/tab-edge/{}/{end}", tab.name)),
+                    pts.join(" ")
+                );
+                zones.push(crate::sexpr::parse(&text, "frame").expect("a valid keep-out"));
+            }
         }
     }
     zones

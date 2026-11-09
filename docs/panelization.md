@@ -92,10 +92,12 @@ panel ExamplePanel {
 3. Builds the frame: rails, tabs, mouse-bite holes `inset` into every board
    a tab touches (both ends when it joins two boards), fiducials and tooling
    holes, and the outline (boards, tabs and rails united) on `Edge.Cuts`.
-   Where a tab joins a board its edge leaves `Edge.Cuts`, so a keep-out
-   inside the board along the landing holds pours, tracks, vias and pads
-   back as the edge did: as deep as the mouse bites cut (`inset` plus half
-   the drill) plus the largest copper-to-edge clearance the rules ask for.
+   Where a tab joins a board its edge leaves `Edge.Cuts`, and after breaking
+   the mouse-bite walls are the board edge, so a keep-out inside the board
+   along the landing holds pours, tracks, vias and pads back as the edge
+   did: as deep as the bites cut (`inset` plus half the drill) plus the
+   largest copper-to-edge clearance the rules ask for, and that clearance
+   past both tab ends, clipped to the board.
 4. Refuses, naming the board, side and interval:
    - a tab on an antenna region opened to the perimeter, or within 1 mm of
      one (round a corner onto the next side too);
