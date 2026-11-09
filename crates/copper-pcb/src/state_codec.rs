@@ -8,7 +8,7 @@
 //! Python's `__post_init__` does and its `ValueError` is the message callers
 //! print.
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use num_traits::ToPrimitive;
 
 use copper_lang::mechanical::assembly::{BodyOverhang, body_outline};
@@ -615,12 +615,6 @@ fn stackup_layer(value: &StateValue) -> Result<StackupLayer> {
 fn stackup(value: &StateValue) -> Result<Stackup> {
     let fields = Fields::of(value, "pcbir.physical:Stackup")?;
     fields.allow(&["copper_layers", "thickness_nm", "physical_layers", "via_technologies"])?;
-    if fields
-        .get("via_technologies")
-        .is_some_and(|value| !matches!(value, StateValue::Tuple(items) if items.is_empty()))
-    {
-        return not_implemented("a stack-up with via technologies");
-    }
     let layers = match fields.get("copper_layers") {
         None => vec![CopperLayer::Front, CopperLayer::Back],
         Some(value) => sequence(Some(value), layer)?,
@@ -633,7 +627,91 @@ fn stackup(value: &StateValue) -> Result<Stackup> {
         stackup.thickness_nm = integer(thickness)?;
     }
     stackup.physical_layers = sequence(fields.get("physical_layers"), stackup_layer)?;
+    stackup.via_technologies = sequence(fields.get("via_technologies"), via_technology)?;
+    validate_stackup(&stackup)?;
     Ok(stackup)
+}
+
+/// The stack-up rules a saved board must meet: contiguous copper layers, a
+/// physical stack-up that matches them, and a consistent via catalog.
+fn validate_stackup(stackup: &Stackup) -> Result<()> {
+    let layers = &stackup.copper_layers;
+    if layers.is_empty() {
+        return Err(Error::Value("a stackup requires at least one copper layer".to_owned()));
+    }
+    if layers.iter().collect::<IndexSet<_>>().len() != layers.len() {
+        return Err(Error::Value("stackup copper layers must be unique".to_owned()));
+    }
+    if layers.len() > 2 {
+        let inner: Vec<CopperLayer> = CopperLayer::ALL
+            .iter()
+            .copied()
+            .filter(|l| !matches!(l, CopperLayer::Front | CopperLayer::Back))
+            .take(layers.len() - 2)
+            .collect();
+        let expected: Vec<CopperLayer> =
+            std::iter::once(CopperLayer::Front).chain(inner).chain(std::iter::once(CopperLayer::Back)).collect();
+        if *layers != expected {
+            return Err(Error::Value("multilayer stackups use contiguous F.Cu/In1.Cu.../B.Cu order".to_owned()));
+        }
+    }
+    if stackup.thickness_nm <= 0 {
+        return Err(Error::Value("board thickness must be positive".to_owned()));
+    }
+    if !stackup.physical_layers.is_empty() {
+        let explicit: Vec<CopperLayer> = stackup.physical_layers.iter().filter_map(|l| l.copper_layer).collect();
+        if explicit != *layers {
+            return Err(Error::Value("physical stackup copper order must match copper_layers".to_owned()));
+        }
+        if stackup.physical_layers.iter().map(|l| l.thickness_nm).sum::<i64>() != stackup.thickness_nm {
+            return Err(Error::Value("physical stackup thickness must equal board thickness".to_owned()));
+        }
+    }
+    let ids: IndexSet<&str> = stackup.via_technologies.iter().map(|t| t.id.as_str()).collect();
+    if ids.len() != stackup.via_technologies.len() {
+        return Err(Error::Value("via technology ids must be unique".to_owned()));
+    }
+    for technology in &stackup.via_technologies {
+        let (Some(low), Some(high)) = (
+            layers.iter().position(|l| *l == technology.from_layer),
+            layers.iter().position(|l| *l == technology.to_layer),
+        ) else {
+            return Err(Error::Value("via technology span must be in the stackup".to_owned()));
+        };
+        let (low, high) = (low.min(high), low.max(high));
+        if technology.kind == ViaKind::Through && (low, high) != (0, layers.len() - 1) {
+            return Err(Error::Value("through-via technology must span the complete stackup".to_owned()));
+        }
+        if technology.kind == ViaKind::Microvia && high - low != 1 {
+            return Err(Error::Value("microvias may span only adjacent copper layers".to_owned()));
+        }
+    }
+    Ok(())
+}
+
+/// `ViaTechnology`: one catalog entry of a stack-up, checked on its own.
+fn via_technology(value: &StateValue) -> Result<ViaTechnology> {
+    let fields = Fields::of(value, "pcbir.physical:ViaTechnology")?;
+    fields.allow(&[
+        "id",
+        "kind",
+        "from_layer",
+        "to_layer",
+        "minimum_drill_nm",
+        "minimum_annular_ring_nm",
+        "maximum_aspect_ratio",
+    ])?;
+    let technology = ViaTechnology {
+        id: text(fields.required("id")?)?,
+        kind: enumeration(fields.required("kind")?, "ViaKind", ViaKind::parse)?,
+        from_layer: layer(fields.required("from_layer")?)?,
+        to_layer: layer(fields.required("to_layer")?)?,
+        minimum_drill_nm: integer(fields.required("minimum_drill_nm")?)?,
+        minimum_annular_ring_nm: integer(fields.required("minimum_annular_ring_nm")?)?,
+        maximum_aspect_ratio: decimal(fields.required("maximum_aspect_ratio")?)?,
+    };
+    technology.validate()?;
+    Ok(technology)
 }
 
 fn design_rules(value: &StateValue) -> Result<DesignRules> {

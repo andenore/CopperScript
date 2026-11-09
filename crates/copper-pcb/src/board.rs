@@ -119,6 +119,29 @@ pub struct Stackup {
     pub via_technologies: Vec<ViaTechnology>,
 }
 
+/// `physical._via_span_depth`: the board thickness, or with a physical
+/// stack-up the layers from the first copper layer to the second.
+/// `None` where Python's position lookup raises `KeyError`.
+pub fn via_span_depth(stackup: &Stackup, first: CopperLayer, second: CopperLayer) -> Option<i64> {
+    if stackup.physical_layers.is_empty() {
+        return Some(stackup.thickness_nm);
+    }
+    let position = |layer: CopperLayer| {
+        stackup.physical_layers.iter().enumerate().rfind(|(_, item)| item.copper_layer == Some(layer))
+    };
+    let (low, high) = (position(first)?.0, position(second)?.0);
+    let (low, high) = (low.min(high), low.max(high));
+    Some(stackup.physical_layers[low..=high].iter().map(|item| item.thickness_nm).sum())
+}
+
+/// `Decimal(depth) / Decimal(drill) > maximum_aspect_ratio`.
+pub fn exceeds_aspect_ratio(depth: i64, drill: i64, maximum: &Decimal) -> bool {
+    match Decimal::from_i64(depth).div(&Decimal::from_i64(drill)) {
+        Ok(ratio) => ratio > *maximum,
+        Err(_) => true,
+    }
+}
+
 impl Stackup {
     pub fn new(copper_layers: Vec<CopperLayer>) -> Self {
         Stackup { copper_layers, thickness_nm: 1_600_000, physical_layers: Vec::new(), via_technologies: Vec::new() }

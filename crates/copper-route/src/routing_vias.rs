@@ -6,30 +6,8 @@
 
 use copper_pcb::board::{PhysicalBoard, Stackup, ViaKind};
 use copper_physical::CopperLayer;
-use copper_units::Decimal;
 
-/// `physical._via_span_depth`: the board thickness, or with a physical
-/// stack-up the layers from the first copper layer to the second.
-/// `None` where Python's position lookup raises `KeyError`.
-pub fn via_span_depth(stackup: &Stackup, first: CopperLayer, second: CopperLayer) -> Option<i64> {
-    if stackup.physical_layers.is_empty() {
-        return Some(stackup.thickness_nm);
-    }
-    let position = |layer: CopperLayer| {
-        stackup.physical_layers.iter().enumerate().rfind(|(_, item)| item.copper_layer == Some(layer))
-    };
-    let (low, high) = (position(first)?.0, position(second)?.0);
-    let (low, high) = (low.min(high), low.max(high));
-    Some(stackup.physical_layers[low..=high].iter().map(|item| item.thickness_nm).sum())
-}
-
-/// `Decimal(depth) / Decimal(drill) > maximum_aspect_ratio`.
-pub fn exceeds_aspect_ratio(depth: i64, drill: i64, maximum: &Decimal) -> bool {
-    match Decimal::from_i64(depth).div(&Decimal::from_i64(drill)) {
-        Ok(ratio) => ratio > *maximum,
-        Err(_) => true,
-    }
-}
+pub use copper_pcb::board::{exceeds_aspect_ratio, via_span_depth};
 
 /// `physical.select_via_technology`: the first legal technology of the
 /// span in profile order; `Ok(None)` without a catalog, `Err` (Python's
