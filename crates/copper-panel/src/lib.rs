@@ -79,6 +79,33 @@ fn overhangs_json(spec: &PanelSpec, intents: &IndexMap<String, BoardIntent>) -> 
     Json::Array(rows)
 }
 
+/// Mark a footprint `exclude_from_pos_files exclude_from_bom` in its `attr`.
+fn not_placed_on_panel(footprint: &mut Node) {
+    let Some(items) = footprint.items_mut() else { return };
+    match items.iter_mut().find(|n| n.tag() == Some("attr")) {
+        Some(attr) => {
+            if let Some(list) = attr.items_mut() {
+                for flag in ["exclude_from_pos_files", "exclude_from_bom"] {
+                    if !list.iter().any(|n| n.atom_text() == Some(flag)) {
+                        list.push(Node::atom(flag));
+                    }
+                }
+            }
+        }
+        None => {
+            let at = items.iter().position(|n| n.tag() == Some("at")).map_or(items.len(), |k| k + 1);
+            items.insert(
+                at,
+                Node::list(vec![
+                    Node::atom("attr"),
+                    Node::atom("exclude_from_pos_files"),
+                    Node::atom("exclude_from_bom"),
+                ]),
+            );
+        }
+    }
+}
+
 /// Read each board's routed `.kicad_pcb` and the `.kicad_pro` and
 /// `.kicad_dru` beside it, paths relative to `base` (the panel file's folder).
 pub fn read_boards(spec: &PanelSpec, base: &Path) -> Result<Vec<BoardFiles>, String> {
@@ -206,6 +233,19 @@ pub fn panelize(
     );
     let mut tree = composition.tree;
     if let Node::List(items) = &mut tree {
+        // Parts fitted after depanelization are not placed on the panel:
+        // out of its position files and BOM (the board alone still has them).
+        let later: Vec<String> = spec.assemble_after_depanel.iter().map(|e| e.replacen('.', "-", 1)).collect();
+        for footprint in items.iter_mut().filter(|n| n.tag() == Some("footprint")) {
+            let reference = footprint
+                .children("property")
+                .find(|p| p.string_value(1).as_deref() == Some("Reference"))
+                .and_then(|p| p.string_value(2))
+                .unwrap_or_default();
+            if later.contains(&reference) {
+                not_placed_on_panel(footprint);
+            }
+        }
         items.extend(frame.items);
         items.extend(edge_keepouts);
     }
@@ -636,14 +676,14 @@ mod tests {
 
     #[test]
     fn only_the_courtyard_beyond_the_edge_holds_tabs_off() {
-        // A triangle inside A from x 0.5 to 10 crosses the bottom side only
-        // from 0.5 to 2.4 mm: a_bottom (3.5-6.5 mm) stays allowed, a tab at
-        // 1-2 mm is refused.
+        // A triangle inside A from x 0.5 to 9 crosses the bottom side only
+        // from 0.5 to 1.71 mm, and stays clear of a_bottom's and a_right's
+        // bites: a_bottom stays allowed, a tab at 0.5-1.5 mm is refused.
         let triangle = BOARD.replacen(
             "(gr_line (start 0 0)",
             "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 0 0 0) \
              (property \"Reference\" \"J6\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
-             (fp_poly (pts (xy 0.5 6.5) (xy 10 4) (xy 0.5 4)) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
+             (fp_poly (pts (xy 0.5 6.5) (xy 9 3) (xy 0.5 3)) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
             1,
         );
         let mut marked = files();
@@ -658,7 +698,7 @@ mod tests {
         .err()
         .expect("refused");
         assert!(
-            error.contains("tab a_low on board A's bottom side overlaps J6's body overhang (0.5-2.4 mm)"),
+            error.contains("tab a_low on board A's bottom side overlaps J6's body overhang (0.5-1.714286 mm)"),
             "{error}"
         );
     }
@@ -794,10 +834,14 @@ mod tests {
         marked[0].pcb = corner;
         let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
         assert!(error.contains("board A: J3's courtyard (F.CrtYd) reaches into a rail"), "{error}");
-        // Fitted after depanelization, it may.
+        // Fitted after depanelization, it may, and the panel does not place it.
         let mut after = spec("");
         after.assemble_after_depanel = vec!["A.J3".into()];
-        panelize(&after, &marked, &none(), "demo").expect("allowed when fitted after depanelization");
+        let panel = panelize(&after, &marked, &none(), "demo").expect("allowed when fitted after depanelization");
+        let board = copper_cam::board::parse_board(&panel.pcb, "panel").expect("copper-cam reads the panel");
+        let j3 = board.footprints.iter().find(|f| f.reference == "A-J3").expect("A-J3");
+        assert!(j3.exclude_from_pos_files, "A-J3 stays out of the panel's position file");
+        assert!(panel.pcb.contains("exclude_from_bom"));
     }
 
     #[test]
@@ -1061,6 +1105,23 @@ mod tests {
             error.contains("tab a_tl on board A's top side") && error.contains("keep-out cluster/a/a-edge"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_courtyard_over_the_mouse_bites_is_refused() {
+        // J1's courtyard ends flush with A's top edge (x 3-7, y 0-0.4): no
+        // overhang, but a_top's bites are drilled 0-0.5 mm inside it.
+        let flush = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 0 0 0) \
+             (property \"Reference\" \"J1\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+             (fp_rect (start 3 0) (end 7 0.4) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = flush;
+        let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+        assert!(error.contains("J1's courtyard (F.CrtYd) reaches into the mouse bites of tab a_top"), "{error}");
     }
 
     #[test]

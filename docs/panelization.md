@@ -38,7 +38,8 @@ panel ExamplePanel {
   `.kicad_pro` and `.kicad_dru` beside it are read too), relative to the
   panel file.
 - `assemble_after_depanel = ["BOARD.REFERENCE", ...]` lists component bodies
-  fitted after depanelization: they may overhang a rail or a neighbour.
+  fitted after depanelization: they may overhang a rail or a neighbour, and
+  the panel marks them out of its position files and BOM.
 - Board names use letters, digits and underscores, and differ ignoring
   case: the panel prefixes their nets (`NAME/`) and references (`NAME-`).
   `rail` and `tab` are reserved (the report names a tab's far end `rail`;
@@ -104,8 +105,9 @@ panel ExamplePanel {
    - a tab on a body overhang;
    - an overhanging body that reaches a rail or another board, unless
      `assemble_after_depanel` lists `BOARD.REFERENCE`: a routed courtyard
-     by its real shape (past a board corner included), a body overhang the
-     source declares by its stretch and distance;
+     by its real shape (past a board corner included, and over a tab's
+     mouse bites inside the board too), a body overhang the source declares
+     by its stretch and distance;
    - a tab whose far end does not land with its whole width on the board
      or rail it bridges to;
    - boards closer than `spacing`, measured edge to edge in every

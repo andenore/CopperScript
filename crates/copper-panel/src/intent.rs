@@ -725,6 +725,31 @@ fn tabs_hit(shape: &poly::Shapes, tabs: &[BuiltTab], poses: &IndexMap<String, Po
         .collect()
 }
 
+/// The tabs whose mouse bites, drilled `inset` into the board each landing
+/// touches (to `inset + drill / 2` deep, along the tab's width), `shape` covers.
+fn bites_hit(shape: &poly::Shapes, spec: &PanelSpec, tabs: &[BuiltTab], poses: &IndexMap<String, Pose>) -> Vec<String> {
+    let depth = spec.mouse_bite.inset + spec.mouse_bite.drill / 2;
+    tabs.iter()
+        .filter(|tab| {
+            let n = poses[&tab.board].rotate(match tab.side {
+                Side::Top => (0, -1),
+                Side::Bottom => (0, 1),
+                Side::Left => (-1, 0),
+                Side::Right => (1, 0),
+            });
+            let (a, b) = tab.edge;
+            let shift = |p: Point, d: i64| (p.0 + n.0 * d, p.1 + n.1 * d);
+            let mut landings = vec![[a, b, shift(b, -depth), shift(a, -depth)]];
+            if tab.across.is_some() {
+                let (fa, fb) = (shift(a, tab.length), shift(b, tab.length));
+                landings.push([fa, fb, shift(fb, depth), shift(fa, depth)]);
+            }
+            landings.into_iter().any(|corners| !poly::intersection(shape, &rect_shapes(corners)).is_empty())
+        })
+        .map(|tab| format!("the mouse bites of tab {}", tab.name))
+        .collect()
+}
+
 /// Check the panel against every board's intent; returns the panel's open
 /// ends (panel coordinates, prefixed nets) for the DRC waiver.
 pub fn check(
@@ -870,6 +895,7 @@ pub fn check(
                 }
             }
             blockers.extend(tabs_hit(&shape, tabs, poses));
+            blockers.extend(bites_hit(&shape, spec, tabs, poses));
             bodies.push((
                 board.clone(),
                 format!("{}'s courtyard ({})", courtyard.reference, courtyard.layer),
