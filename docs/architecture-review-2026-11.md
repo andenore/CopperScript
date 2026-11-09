@@ -43,6 +43,8 @@ Each is fixable incrementally; a suggested order is at the end.
 | --- | --- |
 | `cargo build --release -p copper`, cold | 4 m 30 s wall, 9 m 25 s CPU |
 | Slowest compile units | copper-route 132 s, copper binary 103 s, ems 38 s, copper-lang 31 s |
+| `cargo test --workspace --release --no-run`, after the binary build | 25 m 29 s for 125 test binaries |
+| `cargo test --workspace --release`, run only | 34 s; 1,484 passed, 0 failed, 6 ignored |
 | `copper check` (valid_board, offline) | 34 ms |
 | `copper check` (nrf52, full_vertical, offline) | 74 ms, 79 ms |
 | `route-board` nrf52 (ladder args) | 1.36 s, status `fail`, 19/19 nets routed |
@@ -176,6 +178,15 @@ the process spawns and the "fail without KiCad" result at once.
   and `default-members` that exclude the two WASM crates (which pull
   wasm-bindgen, syn and proc-macro2 into every native build), would shorten
   the edit–run loop without touching the release artefact.
+- Test build: compiling the 125 test binaries in release took 25 m 29 s
+  *after* the `copper` binary was already built, while running them takes
+  34 s. The `[profile.release]` settings (`codegen-units = 1`, `lto =
+  "thin"`) apply to every test binary, and 23 CLI test files each link the
+  whole binary. This is the single largest cost in the contributor loop
+  and is why CI falls back to a debug `cargo test`. A `[profile.test]`
+  without LTO and with `codegen-units = 16`, plus one shared test harness
+  per crate instead of one binary per `tests/*.rs` file, should bring the
+  test build under five minutes without changing what is tested.
 - CI compiles the workspace four times (clippy debug `--all-targets`,
   release build, debug `cargo test`, `cargo install` in the Make job) with
   no cargo cache step (`.github/workflows/rust.yml:71-117`). README says
