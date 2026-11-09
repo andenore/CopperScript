@@ -1291,7 +1291,9 @@ exclusion, export locking and port-continuity proof need nothing new:
   and a `PlacementKeepout` (both sides, expanded by `keepout_margin`) for
   other components. Other pads of the feed footprint must be unconnected.
 - The feed pad is the macro's one external port; ordinary routing reaches it
-  from the matching network.
+  from the matching network. The macro's copper is the antenna, not a route:
+  a `max_length` (or pair skew) on the feed net measures only the routed
+  feed, leaving out the radiator, its feed stub and an inverted-F's short.
 
 KiCad's DRC reports the radiator's open end as a dangling track; native
 verification (`route-board --verify-plane-fill`) excludes that one finding

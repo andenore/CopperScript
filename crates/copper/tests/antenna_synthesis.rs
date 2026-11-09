@@ -109,6 +109,44 @@ fn native_verification_lists_the_radiator_end_for_filled_board_drc() {
     assert!(output.contains("Excused 1 expected open end(s)"), "{output}");
 }
 
+/// The example with `constraint routing(ANT_FEED) { max_length = LIMIT; }`,
+/// routed; returns the route report.
+fn routed_with_feed_budget(name: &str, limit: &str) -> String {
+    let board = mutated_example(name, |source| {
+        source.replacen(
+            "    mechanical {",
+            &format!("    constraint routing(ANT_FEED) {{ max_length = {limit}; }}\n\n    mechanical {{"),
+            1,
+        )
+    });
+    let directory = board.parent().expect("directory").to_path_buf();
+    let (pcb, report) = (directory.join("board.kicad_pcb"), directory.join("route.json"));
+    let (pcb_text, report_text) = (pcb.to_string_lossy().into_owned(), report.to_string_lossy().into_owned());
+    let (status, output) = copper(&[
+        "route-board",
+        &board.to_string_lossy(),
+        "-o",
+        &pcb_text,
+        "--report",
+        &report_text,
+        "--locked",
+        "--offline",
+    ]);
+    assert!(status == 0 || status == 1, "{output}");
+    std::fs::read_to_string(&report).expect("the route report")
+}
+
+#[test]
+fn a_feed_length_budget_leaves_out_the_antennas_own_copper() {
+    // The routed feed from U1.RF to the feed pad measures 13.54 mm; the
+    // radiator adds 22.77 mm on the same net. A 20 mm budget fits the feed alone.
+    let report = routed_with_feed_budget("feed-budget", "20mm");
+    assert!(!report.contains("DRC-MAX-LENGTH"), "{report}");
+    // A budget shorter than the routed feed itself still fails.
+    let report = routed_with_feed_budget("feed-budget-short", "3mm");
+    assert!(report.contains("DRC-MAX-LENGTH"), "{report}");
+}
+
 #[test]
 fn without_geometry_the_template_monopole_sits_on_the_region_centreline() {
     let board = with_lines("template", "");
