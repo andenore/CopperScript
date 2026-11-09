@@ -71,7 +71,9 @@ panel ExamplePanel {
 2. Moves every item by the board's pose, prefixes nets (`MONO/GND`; nets
    given by name, as KiCad 10 writes them, stay named) and
    references (`MONO-J1`) so boards stay electrically separate, derives
-   fresh UUIDs, drops zone fills and the boards' outlines. Stack-ups, layer
+   fresh UUIDs, drops zone fills and the boards' outlines, and clips a zone
+   or rule area that reaches past its board to the board's outline (alone,
+   the board edge stopped it). Stack-ups, layer
    sets, project rules and the unconditional custom rules (in the same
    order) must agree; those rules are kept once, first, and are the only
    ones between two boards' items, whatever order the boards are declared
@@ -101,9 +103,12 @@ panel ExamplePanel {
      tabs that overlap anywhere on the panel (the same bridge declared from
      both boards included);
    - a tab closer than `spacing` to a board it passes (only its own board
-     and what it bridges to may touch it);
+     and what it bridges to may touch it), or to another tab (the router
+     cannot mill a narrower slot), and a tab no wider than its mouse-bite
+     drill;
    - fiducials and tooling holes that would leave the panel or overlap
-     (a panel too narrow for them);
+     (a panel too narrow for them), and tooling holes without 0.2 mm of
+     rail on either side;
    - a panel that falls apart: boards, tabs and rails must be one piece.
 5. Writes `copperscript-panel/v0.1` beside the board (`OUT.panel.json`, or
    `--report`): boards, tabs (what each bridges, its gap and hole count),

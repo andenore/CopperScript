@@ -630,7 +630,7 @@ mod tests {
         marked[0].pcb = triangle;
         panelize(&spec(""), &marked, &none(), "demo").expect("a_bottom is clear of the overhang");
         let error = panelize(
-            &spec("tab a_low { board = A; side = bottom; at = 1.5 mm; width = 1 mm; }"),
+            &spec("tab a_low { board = A; side = bottom; at = 1 mm; width = 1 mm; }"),
             &marked,
             &none(),
             "demo",
@@ -692,7 +692,7 @@ mod tests {
         assert!(text.contains(r#""component":"J5","side":"bottom","from_mm":"1","to_mm":"2""#), "{text}");
         assert!(text.contains(r#""component":"J5","side":"bottom","from_mm":"8","to_mm":"9""#), "{text}");
         let error = panelize(
-            &spec("tab a_far { board = A; side = bottom; at = 8.5 mm; width = 1 mm; }"),
+            &spec("tab a_far { board = A; side = bottom; at = 9 mm; width = 1 mm; }"),
             &marked,
             &none(),
             "demo",
@@ -718,7 +718,7 @@ mod tests {
         marked[0].pcb = keepout;
         panelize(&spec(""), &marked, &none(), "demo").expect("a_top lies in the keep-out's hole");
         let error = panelize(
-            &spec("tab a_top_l { board = A; side = top; at = 1.5 mm; width = 1 mm; }"),
+            &spec("tab a_top_l { board = A; side = top; at = 1 mm; width = 1 mm; }"),
             &marked,
             &none(),
             "demo",
@@ -879,6 +879,68 @@ mod tests {
         both[1].pcb = line;
         let error = panelize(&spec(""), &both, &none(), "demo").err().expect("refused");
         assert!(error.contains("board B: 1 copper item(s) on no net"), "{error}");
+    }
+
+    #[test]
+    fn tabs_leave_the_router_room_between_them() {
+        // b_left (y 4.5-5.5) bridges the same gap as a_right (y 2-4), 0.5 mm away.
+        let error = panelize(
+            &spec("tab b_left { board = B; side = left; at = 5 mm; width = 1 mm; }"),
+            &files(),
+            &none(),
+            "demo",
+        )
+        .err()
+        .expect("refused");
+        assert!(error.contains("tabs a_right and b_left are 0.5 mm apart"), "{error}");
+    }
+
+    #[test]
+    fn a_tab_no_wider_than_its_holes_is_refused() {
+        let mut thin = spec("");
+        for tab in &mut thin.tabs {
+            if tab.name == "a_right" {
+                tab.width = 500_000;
+            }
+        }
+        let error = panelize(&thin, &files(), &none(), "demo").err().expect("refused");
+        assert!(error.contains("tab a_right is 0.5 mm wide, no wider than its 0.5 mm mouse-bite holes"), "{error}");
+    }
+
+    #[test]
+    fn a_tooling_hole_must_fit_its_rail() {
+        let mut thin = spec("");
+        thin.rails.top = 3_000_000;
+        thin.rails.bottom = 3_000_000;
+        thin.tooling_hole = Some(3_200_000);
+        let error = panelize(&thin, &files(), &none(), "demo").err().expect("refused");
+        assert!(error.contains("tooling holes of 3.2 mm need rails of at least 3.6 mm"), "{error}");
+    }
+
+    #[test]
+    fn a_keepout_reaching_a_neighbour_is_cut_at_its_board() {
+        // A's keep-out runs from x 8 to 14.5 mm, into B (x 12-22): on the panel
+        // it stops at A's edge, and a_right (2-4 mm) stays allowed.
+        let reach = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"55555555-5555-5555-5555-555555555555\") (name \"ko\") \
+             (hatch edge 0.5) (keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) \
+             (polygon (pts (xy 8 5.1) (xy 14.5 5.1) (xy 14.5 5.9) (xy 8 5.9))))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = reach;
+        let panel = panelize(&spec(""), &marked, &none(), "demo").expect("a_right is clear of the keep-out");
+        let board = copper_cam::board::parse_board(&panel.pcb, "panel").expect("copper-cam reads the panel");
+        let ko = board.zones.iter().find(|z| z.name == "ko").expect("the keep-out");
+        let max_x = ko
+            .outline
+            .iter()
+            .flat_map(|c| std::iter::once(c.start).chain(c.edges.iter().map(|e| e.end())))
+            .map(|p| p.x)
+            .max()
+            .expect("points");
+        assert!(max_x <= 10_000_000, "{max_x}");
     }
 
     #[test]

@@ -283,7 +283,7 @@ enum Curve {
 
 /// A circle through three points and the arc from `s` through `m` to `e`
 /// as (centre, radius, start angle, signed sweep); `None` when straight.
-fn arc_geometry(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Option<((f64, f64), f64, f64, f64)> {
+pub(crate) fn arc_geometry(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Option<((f64, f64), f64, f64, f64)> {
     let d = 2.0 * (s.0 * (m.1 - e.1) + m.0 * (e.1 - s.1) + e.0 * (s.1 - m.1));
     if d.abs() < 1e-12 {
         return None;
@@ -301,7 +301,7 @@ fn arc_geometry(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Option<((f64, f6
 
 /// Chords per arc so none strays more than a quarter micron from it (the
 /// keep-out is matched within a micron of the edge); `r` in nanometres.
-fn arc_segments(r: f64, sweep: f64) -> usize {
+pub(crate) fn arc_segments(r: f64, sweep: f64) -> usize {
     const SAGITTA: f64 = 250.0;
     let step = if r <= SAGITTA { std::f64::consts::FRAC_PI_2 } else { 2.0 * (1.0 - SAGITTA / r).acos() };
     ((sweep.abs() / step).ceil() as usize).clamp(8, 1_000_000)

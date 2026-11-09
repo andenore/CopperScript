@@ -188,6 +188,15 @@ pub fn build(
     let mut footprints: Vec<(String, Rect)> = Vec::new();
     for tab in &spec.tabs {
         let built = build_tab(spec, tab, local, outlines, poses, &rails)?;
+        // One hole as wide as the tab would cut it through.
+        if built.width <= spec.mouse_bite.drill {
+            return Err(format!(
+                "tab {} is {} mm wide, no wider than its {} mm mouse-bite holes: they would cut it through",
+                built.name,
+                mm(built.width),
+                mm(spec.mouse_bite.drill)
+            ));
+        }
         // Tabs may not share material: the same bridge declared from both
         // boards, or two tabs on one side, would drill the bites twice.
         let area = tab_rect(&built, poses[&built.board]);
@@ -198,6 +207,20 @@ pub fn build(
                     built.name,
                     built.board,
                     built.side.as_str()
+                ));
+            }
+            // Apart, tabs leave the router the panel spacing between them:
+            // a narrower slot cannot be milled.
+            let dx = (rect[0] - area[2]).max(area[0] - rect[2]).max(0);
+            let dy = (rect[1] - area[3]).max(area[1] - rect[3]).max(0);
+            let gap = (dx as f64).hypot(dy as f64);
+            if gap > 0.0 && gap < spec.spacing as f64 {
+                return Err(format!(
+                    "tabs {other} and {} are {} mm apart, closer than the panel spacing ({} mm): the router cannot \
+                     mill between them; make them one tab or move one",
+                    built.name,
+                    mm(gap.round() as i64),
+                    mm(spec.spacing)
                 ));
             }
         }
@@ -303,6 +326,18 @@ pub fn build(
         .collect();
     if let Some(drill) = spec.tooling_hole {
         features.extend(tooling_spots.iter().enumerate().map(|(k, at)| (format!("TH{}", k + 1), *at, drill / 2)));
+    }
+    // A tooling hole keeps 0.2 mm of rail on both sides, or it notches the rail open.
+    if let Some(drill) = spec.tooling_hole {
+        let narrowest = spec.rails.top.min(spec.rails.bottom);
+        if drill / 2 + 200_000 > narrowest / 2 {
+            return Err(format!(
+                "tooling holes of {} mm need rails of at least {} mm (0.2 mm of rail either side); the rails are {} mm",
+                mm(drill),
+                mm(drill + 400_000),
+                mm(narrowest)
+            ));
+        }
     }
     for (k, (name, at, r)) in features.iter().enumerate() {
         if at.0 - r < outer[0] || at.0 + r > outer[2] {
