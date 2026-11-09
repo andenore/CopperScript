@@ -5,6 +5,62 @@ improve usability and speed?". Everything below was measured on this checkout
 (4 cores, 15 GB, Rust 1.97.0) or cites a file and line. Measurements in this
 section were taken once; treat them as indicative, not as a benchmark.
 
+## Status (2026-11-09, after the first implementation pass)
+
+Implemented on `claude/copperscript-architecture-review-uzigis`:
+
+- **Build loop.** A `fast` profile (release without LTO, 16 codegen units)
+  builds the test binaries in about 6 minutes instead of 25. Debug builds
+  keep line tables only (the debug test binaries had grown to 25 GB), third-
+  party crates are optimised in debug, and plain `cargo build`/`cargo test`
+  skip the WebAssembly adapters.
+- **Command line.** One option parser for every command (the flag-only,
+  report and five private parsers are gone); grouped top-level help with
+  summaries; every command's `--help` lists its options and defaults from
+  one table, with a test that fails when help and accepted options drift;
+  `--version`; `copper completions bash|zsh|fish`; `copper init`; typo
+  suggestions; `route-board --list-unified-options`. `clap` was not adopted:
+  the shared parser keeps the argparse conventions consumers' scripts rely
+  on and adds no dependencies.
+- **Workflow.** `route-board` checks plane fills natively by default, so a
+  routed board can pass without KiCad (`--verify-plane-fill none` opts out,
+  a kicad-cli path still selects KiCad). On the five example ladder boards
+  completion, opens and DRC are unchanged; the check costs about 2 s on
+  fx10-bridge. `COMPILE ERROR` lines go to stderr, which the Make build no
+  longer discards.
+- **Language.** Net pin patterns (`U_MODEM.GND*;`) and `source_locations`
+  in the IR.
+- **Architecture.** One decoder for saved boards (copper-route's duplicate,
+  about 1,400 lines, is gone) and a schema registry
+  ([schemas.md](schemas.md)) kept in step with the sources by a test.
+
+Corrections to the findings below:
+
+- `decouples = U.VDD;` (bare) was already accepted and compiles to the same
+  IR as the quoted form; only the documentation showed the string form.
+- The two `OnceLock` hook registries are not silent: without
+  `install_hooks` both report "not implemented" naming the missing call.
+  Replacing them with parameters would touch about 27 call sites for little
+  gain, so they stay.
+
+Not done, and why:
+
+- **Splitting `copper-route`.** The pipeline layer is not a leaf
+  (`critical`, `detailed`, `unified_router/route`, `decoupling_paths` and
+  `state_codec` import it), and the routing refactor plan, which governs
+  routing work, retires modules in its P7 phase. Splitting first would move
+  code that is about to be deleted; do it after P7.
+- **Speed items** (inventory hashing, conflict-index rebuilds, hasher,
+  DRC broad phase, parallel trials) were not in this pass's scope.
+- **Python byte-exactness, a `state/v2` format and `serde`.** These change
+  consumer-visible outputs and frozen fixtures, so they need an owner
+  decision first.
+- **One workspace error type, one DRC, test reorganisation, CI caching.**
+  Each is a larger refactor of its own; CI changes were left alone because
+  GitHub Actions cannot be run from this environment.
+- **`copper build`** (a native replacement for `make/route-build.sh`) and
+  repetition constructs beyond pin patterns.
+
 ## Summary
 
 CopperScript is in better shape than its size suggests. The compiler front end
