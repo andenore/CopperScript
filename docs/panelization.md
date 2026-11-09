@@ -76,15 +76,16 @@ panel ExamplePanel {
    order) must agree; those rules are kept once, first, and are the only
    ones between two boards' items, whatever order the boards are declared
    in. A board with conditional rules repeats its whole rule list in its own
-   order (the last matching rule wins), with `Reference` and `NetName` names
-   prefixed (an empty name, and one of only `*`, stays as written) and each
+   order (the last matching rule wins), with the names its conditions give
+   prefixed (`Reference` and `NetName` comparisons and the footprint and
+   diff-pair functions such as `memberOfFootprint('J1')`, in either quote) (an empty name, and one of only `*`, stays as written) and each
    rule limited to pairs where
    neither item belongs to another board and at least one belongs to it: on
    the board, against the frame, the board edge or an unnetted hole, its
    rules apply as on the board alone.
-   A board with copper on no net (tracks, vias, zones, copper graphics and
-   copper text) is refused when it has conditional rules, since that copper
-   carries neither prefix.
+   Copper on no net (tracks, vias, zones, copper graphics and copper text)
+   on any board is refused when the panel has conditional rules, since that
+   copper carries neither prefix.
 3. Builds the frame: rails, tabs, mouse-bite holes `inset` into every board
    a tab touches (both ends when it joins two boards), fiducials and tooling
    holes, and the outline (boards, tabs and rails united) on `Edge.Cuts`.
@@ -99,6 +100,10 @@ panel ExamplePanel {
      direction (diagonal neighbours included), tabs off their side, and
      tabs that overlap anywhere on the panel (the same bridge declared from
      both boards included);
+   - a tab closer than `spacing` to a board it passes (only its own board
+     and what it bridges to may touch it);
+   - fiducials and tooling holes that would leave the panel or overlap
+     (a panel too narrow for them);
    - a panel that falls apart: boards, tabs and rails must be one piece.
 5. Writes `copperscript-panel/v0.1` beside the board (`OUT.panel.json`, or
    `--report`): boards, tabs (what each bridges, its gap and hole count),

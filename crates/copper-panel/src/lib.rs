@@ -111,6 +111,12 @@ pub fn panelize(
     let mut local = IndexMap::new();
     let mut poses = Vec::new();
     let mut intents = intents.to_vec();
+    // Board rules are scoped by net and reference prefixes, and they reach
+    // copper with neither (no net, outside footprints) on any board.
+    let mut conditional = false;
+    for (board, file) in spec.boards.iter().zip(files) {
+        conditional |= rules::has_conditional(&file.dru, &format!("board {} design rules", board.name))?;
+    }
     for ((board, file), intent) in spec.boards.iter().zip(files).zip(intents.iter_mut()) {
         let routed = copper_cam::board::parse_board(&file.pcb, &board.pcb)?;
         intent::verify_source(&board.name, intent, &routed)?;
@@ -134,10 +140,10 @@ pub fn panelize(
                 })
                 .count()
             + routed.texts.iter().filter(|t| matches!(t.layer, copper_cam::board::Layer::Copper(_))).count();
-        if unnetted > 0 && rules::has_conditional(&file.dru, &format!("board {} design rules", board.name))? {
+        if unnetted > 0 && conditional {
             return Err(format!(
-                "board {}: {unnetted} copper item(s) on no net, and conditional design rules that the panel can only \
-                 keep to the board by net and reference; give that copper a net",
+                "board {}: {unnetted} copper item(s) on no net, and the panel has conditional design rules that it \
+                 can only keep to their board by net and reference; give that copper a net",
                 board.name
             ));
         }
@@ -825,6 +831,54 @@ mod tests {
         let mut after = spec("");
         after.assemble_after_depanel = vec!["A.J1".into()];
         panelize(&after, &marked, &none(), "demo").expect("allowed when fitted after depanelization");
+    }
+
+    #[test]
+    fn a_tab_keeps_the_spacing_from_boards_it_passes() {
+        // B sits diagonally below-right of A, corner to corner 2 mm apart;
+        // a_bottom runs from A down to the bottom rail along B's left side.
+        for (at, gap) in [("8.5", "0"), ("8", "0.5")] {
+            let mut passing = spec("");
+            passing.boards[1].at = [10_000_000, 8_000_000];
+            passing.tabs.retain(|t| t.name != "a_right" && t.name != "b_top");
+            for tab in &mut passing.tabs {
+                if tab.name == "a_bottom" {
+                    tab.at = (at.parse::<f64>().expect("a number") * 1e6) as i64;
+                }
+            }
+            let error = panelize(&passing, &files(), &none(), "demo").err().expect("refused");
+            assert!(error.contains(&format!("tab a_bottom passes board B {gap} mm away")), "{at}: {error}");
+        }
+    }
+
+    #[test]
+    fn fiducials_and_tooling_holes_must_fit_the_panel() {
+        // Board A alone is 10 mm wide: FID1 (x 8) and TH2 (x 7) would overlap.
+        let mut narrow = spec("");
+        narrow.boards.truncate(1);
+        narrow.tabs.retain(|t| t.board == "A" && t.name != "a_right");
+        let error = panelize(&narrow, &files()[..1], &none()[..1], "demo").err().expect("refused");
+        assert!(error.contains("the panel is 10 mm wide") && error.contains("would"), "{error}");
+        narrow.fiducials = 0;
+        narrow.tooling_hole = None;
+        panelize(&narrow, &files()[..1], &none()[..1], "demo").expect("without them it fits");
+    }
+
+    #[test]
+    fn unnetted_copper_on_any_board_is_refused_when_rules_are_scoped() {
+        // B has no rules of its own but a netless copper line; A has a
+        // conditional rule, which would otherwise reach B's line.
+        let line = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(gr_line (start 1 4) (end 3 4) (stroke (width 0.2) (type solid)) (layer \"F.Cu\") (uuid \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\"))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut both = files();
+        both[0].dru =
+            "(version 1)\n(rule \"gap\" (constraint clearance (min 1mm)) (condition \"A.NetName == 'GND'\"))\n".into();
+        both[1].pcb = line;
+        let error = panelize(&spec(""), &both, &none(), "demo").err().expect("refused");
+        assert!(error.contains("board B: 1 copper item(s) on no net"), "{error}");
     }
 
     #[test]

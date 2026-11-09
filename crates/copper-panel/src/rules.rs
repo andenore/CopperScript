@@ -17,56 +17,94 @@ use copper_json::{Dumps, Value};
 
 use crate::sexpr::{Node, parse, print, quote};
 
-/// Rewrite `A.Reference == 'R1'` and `A.NetName != 'GND'` style comparisons.
+/// Functions whose quoted argument names footprint references, and nets.
+const REFERENCE_FUNCTIONS: [&str; 4] =
+    ["memberOfFootprint", "intersectsCourtyard", "intersectsFrontCourtyard", "intersectsBackCourtyard"];
+const NET_FUNCTIONS: [&str; 1] = ["inDiffPair"];
+
+/// Rewrite every name a condition gives to the panel's prefixed names:
+/// `.Reference` and `.NetName` compared with `==` or `!=`, and the argument
+/// of the functions that name footprints (`memberOfFootprint('J1')`, the
+/// courtyard tests) or nets (`inDiffPair('USB')`), in single or double
+/// quotes. An empty name, and one of only `*`, stays as written: it means
+/// no name or any name, the edge and unnetted items included.
 pub fn rewrite_condition(condition: &str, instance: &str) -> String {
-    let mut out = String::with_capacity(condition.len() + 16);
-    let mut rest = condition;
-    loop {
-        let next = ["Reference", "NetName"]
-            .iter()
-            .filter_map(|key| rest.find(&format!(".{key}")).map(|at| (at, *key)))
-            .min_by_key(|(at, _)| *at);
-        let Some((at, key)) = next else {
-            out.push_str(rest);
-            return out;
-        };
-        let head = at + key.len() + 1;
-        out.push_str(&rest[..head]);
-        rest = &rest[head..];
-        let trimmed = rest.trim_start();
-        let spaces = rest.len() - trimmed.len();
-        let op = if trimmed.starts_with("==") || trimmed.starts_with("!=") { &trimmed[..2] } else { "" };
-        if op.is_empty() {
+    let rename = |name: &str, reference: bool| -> String {
+        if name.is_empty() || name.chars().all(|c| c == '*') {
+            name.to_owned()
+        } else if reference {
+            format!("{instance}-{name}")
+        } else {
+            format!("{instance}/{name}")
+        }
+    };
+    let text = condition.as_bytes();
+    let skip = |mut j: usize| {
+        while j < text.len() && text[j].is_ascii_whitespace() {
+            j += 1;
+        }
+        j
+    };
+    // The quoted value at `j`: (value start, value end, closing quote index).
+    let quoted = |j: usize| -> Option<(usize, usize)> {
+        let q = *text.get(j)?;
+        if q != b'\'' && q != b'"' {
+            return None;
+        }
+        let end = j + 1 + text[j + 1..].iter().position(|&c| c == q)?;
+        Some((j + 1, end))
+    };
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut out: Vec<u8> = Vec::with_capacity(text.len() + 16);
+    let mut k = 0;
+    'scan: while k < text.len() {
+        let c = text[k];
+        if c == b'\'' || c == b'"' {
+            // A string no rule below claimed: copied as it is.
+            let end = quoted(k).map_or(text.len() - 1, |(_, end)| end);
+            out.extend_from_slice(&text[k..=end]);
+            k = end + 1;
             continue;
         }
-        let after_op = &trimmed[2..];
-        let value_start = after_op.len() - after_op.trim_start().len();
-        let value = &after_op[value_start..];
-        if let Some(stripped) = value.strip_prefix('\'')
-            && let Some(end) = stripped.find('\'')
-        {
-            let name = &stripped[..end];
-            // An empty name means "no net" or "no reference", and a name of
-            // only `*` matches anything, empty included (the board edge, an
-            // unnetted hole): both stay as written. The rule's scope already
-            // keeps it off other boards' items.
-            let renamed = if name.is_empty() || name.chars().all(|c| c == '*') {
-                name.to_owned()
-            } else if key == "Reference" {
-                format!("{instance}-{name}")
-            } else {
-                format!("{instance}/{name}")
-            };
-            out.push_str(&rest[..spaces]);
-            out.push_str(op);
-            out.push_str(&after_op[..value_start]);
-            out.push('\'');
-            out.push_str(&renamed);
-            out.push('\'');
-            rest = &stripped[end + 1..];
-            continue;
+        if c == b'.' {
+            let rest = &condition[k + 1..];
+            for (key, reference) in [("Reference", true), ("NetName", false)] {
+                let after = k + 1 + key.len();
+                if rest.starts_with(key) && text.get(after).is_none_or(|&c| !ident(c)) {
+                    let op = skip(after);
+                    if (text[op..].starts_with(b"==") || text[op..].starts_with(b"!="))
+                        && let Some((start, end)) = quoted(skip(op + 2))
+                    {
+                        out.extend_from_slice(&text[k..start]);
+                        out.extend_from_slice(rename(&condition[start..end], reference).as_bytes());
+                        out.push(text[end]);
+                        k = end + 1;
+                        continue 'scan;
+                    }
+                }
+            }
+            let functions =
+                REFERENCE_FUNCTIONS.iter().map(|f| (*f, true)).chain(NET_FUNCTIONS.iter().map(|f| (*f, false)));
+            for (function, reference) in functions {
+                let after = k + 1 + function.len();
+                if rest.starts_with(function) && text.get(after).is_none_or(|&c| !ident(c)) {
+                    let open = skip(after);
+                    if text.get(open) == Some(&b'(')
+                        && let Some((start, end)) = quoted(skip(open + 1))
+                    {
+                        out.extend_from_slice(&text[k..start]);
+                        out.extend_from_slice(rename(&condition[start..end], reference).as_bytes());
+                        out.push(text[end]);
+                        k = end + 1;
+                        continue 'scan;
+                    }
+                }
+            }
         }
+        out.push(c);
+        k += 1;
     }
+    String::from_utf8(out).unwrap_or_else(|_| condition.to_owned())
 }
 
 /// `item` (`A` or `B`) is one of board `instance`'s items.
@@ -238,6 +276,21 @@ mod tests {
             "B.NetName == '*' && B.Reference != '**'"
         );
         assert_eq!(rewrite_condition("A.NetName == 'PWR*'", "A"), "A.NetName == 'A/PWR*'");
+        // Double quotes, footprint functions and diff pairs are names too;
+        // other strings are left alone.
+        assert_eq!(rewrite_condition("A.NetName == \"GND\"", "A"), "A.NetName == \"A/GND\"");
+        assert_eq!(
+            rewrite_condition(
+                "A.memberOfFootprint('J1') && B.memberOfFootprint( \"J1\" ) && (A.Pad_Type == 'NPTH, mechanical')",
+                "X"
+            ),
+            "A.memberOfFootprint('X-J1') && B.memberOfFootprint( \"X-J1\" ) && (A.Pad_Type == 'NPTH, mechanical')"
+        );
+        assert_eq!(
+            rewrite_condition("A.intersectsCourtyard('U1') || A.inDiffPair('USB_D')", "X"),
+            "A.intersectsCourtyard('X-U1') || A.inDiffPair('X/USB_D')"
+        );
+        assert_eq!(rewrite_condition("A.Value == 'Reference'", "X"), "A.Value == 'Reference'");
     }
 
     #[test]
@@ -336,6 +389,17 @@ mod tests {
             assert_eq!(panel.edge_clearance(&item("A/SIG")), 1_000_000, "{wild}: {merged}");
             assert_eq!(panel.edge_clearance(&item("B/SIG")), 300_000, "{wild}: {merged}");
         }
+    }
+
+    #[test]
+    fn a_double_quoted_name_keeps_its_rule() {
+        let dru =
+            "(version 1)\n(rule \"g\" (constraint clearance (min 1mm)) (condition \"A.NetName == \\\"GND\\\"\"))\n";
+        let alone = Rules::load(PROJECT, Some(dru)).expect("the board's rules");
+        assert_eq!(alone.clearance(&item("GND"), &item("SIG")), 1_000_000);
+        let merged = merge_dru(&[("A".into(), dru.into())]).expect("merged");
+        let panel = Rules::load(PROJECT, Some(&merged)).expect("the panel rules");
+        assert_eq!(panel.clearance(&item("A/GND"), &item("A/SIG")), 1_000_000, "{merged}");
     }
 
     #[test]

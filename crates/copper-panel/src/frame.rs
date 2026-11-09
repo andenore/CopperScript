@@ -202,6 +202,23 @@ pub fn build(
             }
         }
         footprints.push((built.name.clone(), area));
+        // A tab may meet only its own board and what it bridges to: any other
+        // board keeps the milled gap from it, or the outline would fuse them.
+        let ring = vec![(area[0], area[1]), (area[2], area[1]), (area[2], area[3]), (area[0], area[3])];
+        for (name, rings) in outlines {
+            if *name == built.board || built.across.as_deref() == Some(name.as_str()) {
+                continue;
+            }
+            let gap = crate::intent::ring_distance(std::slice::from_ref(&ring), rings);
+            if gap < spec.spacing {
+                return Err(format!(
+                    "tab {} passes board {name} {} mm away, closer than the panel spacing ({} mm)",
+                    built.name,
+                    mm(gap),
+                    mm(spec.spacing)
+                ));
+            }
+        }
         let (a, b) = built.edge;
         let pose = poses[&built.board];
         let normal = pose.rotate(side_geometry([0, 0, 0, 0], built.side).2);
@@ -270,6 +287,41 @@ pub fn build(
         (outer[0] + 8_000_000, outer[3] - bottom_offset),
         (outer[2] - 8_000_000, outer[3] - bottom_offset),
     ];
+    let tooling_spots = [
+        (outer[0] + 3_000_000, rail_centre(true)),
+        (outer[2] - 3_000_000, rail_centre(true)),
+        (outer[0] + 3_000_000, rail_centre(false)),
+        (outer[2] - 3_000_000, rail_centre(false)),
+    ];
+    // Every fiducial (by its mask opening) and tooling hole lies on the panel
+    // and keeps 0.2 mm from the others: a narrow panel cannot hold them.
+    let mut features: Vec<(String, Point, i64)> = fiducial_spots
+        .iter()
+        .take(spec.fiducials as usize)
+        .enumerate()
+        .map(|(k, at)| (format!("FID{}", k + 1), *at, FIDUCIAL_OPENING_RADIUS))
+        .collect();
+    if let Some(drill) = spec.tooling_hole {
+        features.extend(tooling_spots.iter().enumerate().map(|(k, at)| (format!("TH{}", k + 1), *at, drill / 2)));
+    }
+    for (k, (name, at, r)) in features.iter().enumerate() {
+        if at.0 - r < outer[0] || at.0 + r > outer[2] {
+            return Err(format!(
+                "the panel is {} mm wide: {name} would leave it; widen the panel or drop fiducials and tooling holes",
+                mm(outer[2] - outer[0])
+            ));
+        }
+        for (other, there, q) in &features[k + 1..] {
+            let distance = ((at.0 - there.0) as f64).hypot((at.1 - there.1) as f64);
+            if distance < (r + q + 200_000) as f64 {
+                return Err(format!(
+                    "the panel is {} mm wide: {name} and {other} would overlap; widen the panel or drop fiducials \
+                     and tooling holes",
+                    mm(outer[2] - outer[0])
+                ));
+            }
+        }
+    }
     for (k, at) in fiducial_spots.iter().take(spec.fiducials as usize).enumerate() {
         let pad = "(pad \"1\" smd circle (at 0 0) (size 1 1) (layers \"F.Cu\" \"F.Mask\") (solder_mask_margin 0.5))"
             .to_owned();
@@ -283,13 +335,7 @@ pub fn build(
         ));
     }
     if let Some(drill) = spec.tooling_hole {
-        let spots = [
-            (outer[0] + 3_000_000, rail_centre(true)),
-            (outer[2] - 3_000_000, rail_centre(true)),
-            (outer[0] + 3_000_000, rail_centre(false)),
-            (outer[2] - 3_000_000, rail_centre(false)),
-        ];
-        for (k, at) in spots.iter().enumerate() {
+        for (k, at) in tooling_spots.iter().enumerate() {
             items.push(footprint(
                 "copper-panel:ToolingHole",
                 &format!("TH{}", k + 1),
