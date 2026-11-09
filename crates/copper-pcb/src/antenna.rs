@@ -25,7 +25,7 @@
 
 use std::path::Path;
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use sha2::{Digest, Sha256};
 
 use copper_json::{Dumps, Object, Value as Json, python_str_repr as repr};
@@ -1617,6 +1617,26 @@ pub fn recorded_syntheses(board: &PhysicalBoard) -> Vec<Object> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// The copper the board's synthesized antennas own: every track of their
+/// generated macros (the radiator, its feed stub and an inverted-F's short),
+/// at its board pose. A net's routed length leaves it out: it is the antenna,
+/// not a route, so a `max_length` on the feed net budgets only the routed feed.
+pub fn antenna_tracks(board: &PhysicalBoard) -> Result<IndexSet<TrackSegment>> {
+    let names: IndexSet<String> = recorded_syntheses(board)
+        .iter()
+        .filter_map(|record| record.get("name").and_then(Json::as_str).map(str::to_owned))
+        .collect();
+    let mut tracks = IndexSet::new();
+    if names.is_empty() {
+        return Ok(tracks);
+    }
+    let poses = crate::keepouts::placement_map(board);
+    for hard in board.hard_macros.iter().filter(|hard| names.contains(&hard.cluster)) {
+        tracks.extend(crate::hard_macros::resolved_macro_geometry(board, hard, &poses)?.tracks);
+    }
+    Ok(tracks)
 }
 
 /// A short human-readable statement of `site`'s band and target.
