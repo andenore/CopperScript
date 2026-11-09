@@ -64,7 +64,11 @@ pub const GENERATOR: &str = "copper antenna/v0.2";
 /// and so a zero time step); and the lines where ground sheets end (region
 /// and feed slot) never merge with radiator copper lines (below half a cell,
 /// the ground edge merged onto the stub's line and shorted the port).
-pub const MODEL_REVISION: i64 = 5;
+/// Revision 6: a mesh line keeps every role it carries through merging (a
+/// copper edge on a port line is still copper), so a ground boundary beside
+/// it keeps its own line (a feed slot wall within a snap of a stub edge that
+/// lay on a port line merged onto it and shorted the port).
+pub const MODEL_REVISION: i64 = 6;
 /// The `members[].reference` and `net` role names inside the generated asset.
 const MEMBER: &str = "ANT";
 const SHORT_MEMBER: &str = "SHORT";
