@@ -5,10 +5,16 @@
 //! A corner is a point where exactly two tracks of one net, layer and width
 //! meet (no via, land or immutable copper there). Its arc of radius r is
 //! tangent to both legs, which are trimmed by r·tan(θ/2) for the turn θ.
+//! Consecutive corners that turn the same way, such as the two 45° corners
+//! of an octilinear chamfer, form one compound turn of at most 90° when an
+//! arc of the radius tangent to the outer legs swallows the pieces between
+//! them; a compound turn that cannot be arched is planned corner by corner.
 //! The radius is the rule's `corner_radius`, reduced where the two tangents
 //! of a piece do not fit it, never below half the width. The members of a
 //! differential pair turn concentrically: the member inside the turn takes
-//! the radius, its partner the radius plus the lane spacing. Planning is pure geometry
+//! the radius, its partner the radius plus the lane spacing; where that does
+//! not fit, the partner's offset comes down (to equal arcs) before the
+//! radius does. Planning is pure geometry
 //! ([`plan_arched_copper`], [`planned_length_nm`]); the stage
 //! ([`arch_board`]) adds the clearance decisions and emits the copper.
 
@@ -89,6 +95,14 @@ pub struct PlannedArc {
     pub start: Point,
     pub mid: Point,
     pub end: Point,
+    /// Where the incoming and outgoing tracks meet the turn (both `corner`
+    /// for a single corner; the outer corners of a compound turn).
+    pub incoming_end: Point,
+    pub outgoing_end: Point,
+    /// Tracks between the corners of a compound turn, which the arc replaces.
+    pub swallowed: Vec<usize>,
+    /// The corners the arc replaces.
+    pub corners: Vec<Point>,
     /// The realised radius, nanometres.
     pub radius_nm: i64,
     /// Corners of one pair turn share a group; `matched` says so.
@@ -142,14 +156,25 @@ fn track_length_nm(track: &TrackSegment) -> i64 {
     round_int(hypot((track.end.x_nm - track.start.x_nm) as f64, (track.end.y_nm - track.start.y_nm) as f64))
 }
 
-/// A corner under planning.
+/// A corner (or compound turn) under planning.
+#[derive(Clone)]
 struct Corner {
     net: String,
     layer: CopperLayer,
     width_nm: i64,
+    /// The corner, or where a compound turn's outer legs meet.
     point: Point,
     incoming: usize,
     outgoing: usize,
+    /// Where the incoming and outgoing tracks end (`point` for one corner).
+    in_end: Point,
+    out_end: Point,
+    /// Distance from `point` back to `in_end` and on to `out_end`: the
+    /// part of each tangent that lies on the swallowed pieces.
+    ext_in: f64,
+    ext_out: f64,
+    swallowed: Vec<usize>,
+    members: Vec<Point>,
     /// Unit direction into the corner and out of it.
     d1: Vector,
     d2: Vector,
@@ -160,15 +185,176 @@ struct Corner {
     bisector: Vector,
     group: usize,
     matched: bool,
-    /// Radius offset of this member within its group (0 inside, the lane
-    /// spacing outside).
-    offset_nm: i64,
+    /// The pair member outside the turn, whose radius adds its group's
+    /// offset to the group radius.
+    outside: bool,
 }
 
 impl Corner {
-    fn tangent(&self, group_radius: f64) -> f64 {
-        (group_radius + self.offset_nm as f64) * self.k
+    /// This member's radius in a group of `radius` and `offset`.
+    fn radius(&self, radius: f64, offset: f64) -> f64 {
+        if self.outside { radius + offset } else { radius }
     }
+
+    fn tangent(&self, radius: f64, offset: f64) -> f64 {
+        self.radius(radius, offset) * self.k
+    }
+
+    /// The part of the tangent that lies on swallowed pieces, on `track`.
+    fn extension(&self, track: usize) -> f64 {
+        if track == self.incoming { self.ext_in } else { self.ext_out }
+    }
+
+    /// The corner travelled the other way.
+    fn reversed(&self) -> Corner {
+        Corner {
+            incoming: self.outgoing,
+            outgoing: self.incoming,
+            in_end: self.out_end,
+            out_end: self.in_end,
+            ext_in: self.ext_out,
+            ext_out: self.ext_in,
+            d1: (-self.d2.0, -self.d2.1),
+            d2: (-self.d1.0, -self.d1.1),
+            members: self.members.iter().rev().copied().collect(),
+            ..self.clone()
+        }
+    }
+
+    /// The sign of the turn: positive to the left.
+    fn side(&self) -> f64 {
+        (self.d1.0 * self.d2.1 - self.d1.1 * self.d2.0).signum()
+    }
+}
+
+/// A corner the planner must not merge into a compound turn.
+pub type CornerKey = (String, CopperLayer, Point);
+
+fn bisector_of(d1: Vector, d2: Vector) -> Option<Vector> {
+    unit(Point::new(0, 0), Point::new(round_int((d2.0 - d1.0) * 1e9), round_int((d2.1 - d1.1) * 1e9)))
+}
+
+/// `compound`: the one turn, of at most 90 degrees, from `chain[0]`'s
+/// incoming leg to the last corner's outgoing leg, when they meet ahead of
+/// both and an arc of `radius_nm` tangent to them swallows the pieces
+/// between. A U-turn is two such turns, so a pair's members split it alike.
+fn compound(chain: &[Corner], between: &[usize], radius_nm: f64) -> Option<Corner> {
+    let (first, last) = (&chain[0], &chain[chain.len() - 1]);
+    let (d1, d2) = (first.d1, last.d2);
+    let det = d1.0 * d2.1 - d1.1 * d2.0;
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let (dx, dy) = ((last.point.x_nm - first.point.x_nm) as f64, (last.point.y_nm - first.point.y_nm) as f64);
+    let ext_in = (dx * d2.1 - dy * d2.0) / det;
+    let ext_out = (d1.0 * dy - d1.1 * dx) / det;
+    let turn = (d1.0 * d2.0 + d1.1 * d2.1).clamp(-1.0, 1.0).acos();
+    if ext_in <= 0.0 || ext_out <= 0.0 || turn > PI / 2.0 + 1e-6 {
+        return None;
+    }
+    let k = (turn / 2.0).tan();
+    if radius_nm * k < ext_in.max(ext_out) {
+        return None;
+    }
+    Some(Corner {
+        point: at(first.point, d1, ext_in),
+        incoming: first.incoming,
+        outgoing: last.outgoing,
+        in_end: first.point,
+        out_end: last.point,
+        ext_in,
+        ext_out,
+        swallowed: between.to_vec(),
+        members: chain.iter().flat_map(|corner| corner.members.iter().copied()).collect(),
+        d1,
+        d2,
+        turn,
+        k,
+        bisector: bisector_of(d1, d2)?,
+        ..first.clone()
+    })
+}
+
+/// `merge_compound_turns`: each chain of corners joined by single pieces,
+/// with runs that turn the same way merged where [`compound`] allows,
+/// unless a corner is in `separate`.
+fn merge_compound_turns(
+    corners: Vec<Corner>,
+    policies: &IndexMap<String, CornerPolicy>,
+    separate: &IndexSet<CornerKey>,
+) -> Vec<Corner> {
+    let mut touching: IndexMap<usize, Vec<usize>> = IndexMap::new();
+    for (index, corner) in corners.iter().enumerate() {
+        touching.entry(corner.incoming).or_default().push(index);
+        touching.entry(corner.outgoing).or_default().push(index);
+    }
+    let neighbour = |index: usize, track: usize| -> Option<usize> {
+        touching[&track].iter().copied().find(|&other| other != index)
+    };
+    let mut visited = vec![false; corners.len()];
+    let mut merged = Vec::new();
+    // Chains start at a corner with an open side; what is left are loops.
+    let mut starts: Vec<usize> = (0..corners.len())
+        .filter(|&i| neighbour(i, corners[i].incoming).is_none() || neighbour(i, corners[i].outgoing).is_none())
+        .collect();
+    starts.extend(0..corners.len());
+    for start in starts {
+        if visited[start] {
+            continue;
+        }
+        // Orient the chain: each corner leaves along the next one's incoming track.
+        let mut first = corners[start].clone();
+        if neighbour(start, first.incoming).is_some_and(|other| !visited[other])
+            && neighbour(start, first.outgoing).is_none_or(|other| visited[other])
+        {
+            first = first.reversed();
+        }
+        visited[start] = true;
+        let mut chain = vec![first];
+        let mut between = Vec::new();
+        let mut current = start;
+        loop {
+            let track = chain.last().expect("a corner").outgoing;
+            let Some(next) = neighbour(current, track).filter(|&other| !visited[other]) else { break };
+            visited[next] = true;
+            let corner = &corners[next];
+            chain.push(if corner.incoming == track { corner.clone() } else { corner.reversed() });
+            between.push(track);
+            current = next;
+        }
+        let mut index = 0;
+        while index < chain.len() {
+            let mut end = index + 1;
+            let mut best: Option<Corner> = None;
+            while end < chain.len() {
+                let run = &chain[index..=end];
+                let policy = &policies[&run[0].net];
+                let blocked = run.iter().any(|corner| {
+                    corner.side() != run[0].side()
+                        || corner.members.iter().any(|p| separate.contains(&(corner.net.clone(), corner.layer, *p)))
+                });
+                let radius = (policy.radius_nm + policy.lane_spacing_nm) as f64;
+                match (!blocked).then(|| compound(run, &between[index..end], radius)).flatten() {
+                    Some(turn) => {
+                        best = Some(turn);
+                        end += 1;
+                    }
+                    None => break,
+                }
+            }
+            match best {
+                Some(turn) => {
+                    merged.push(turn);
+                    index = end;
+                }
+                None => {
+                    merged.push(chain[index].clone());
+                    index += 1;
+                }
+            }
+        }
+    }
+    merged
 }
 
 /// `plan_arched_copper`: the arcs and retained corners of `tracks` under
@@ -180,9 +366,39 @@ pub fn plan_arched_copper(
     immutable: &IndexSet<usize>,
     blocked: &dyn Fn(&str, CopperLayer, Point) -> bool,
 ) -> ArcPlan {
+    plan_arched_copper_separately(tracks, policies, immutable, blocked, &IndexSet::new())
+}
+
+/// [`plan_arched_copper`] with the corners in `separate` kept out of
+/// compound turns. A compound turn whose radius comes down too far to
+/// swallow its pieces is planned again corner by corner.
+pub fn plan_arched_copper_separately(
+    tracks: &[TrackSegment],
+    policies: &IndexMap<String, CornerPolicy>,
+    immutable: &IndexSet<usize>,
+    blocked: &dyn Fn(&str, CopperLayer, Point) -> bool,
+    separate: &IndexSet<CornerKey>,
+) -> ArcPlan {
+    let mut separate = separate.clone();
+    loop {
+        match plan_once(tracks, policies, immutable, blocked, &separate) {
+            Ok(plan) => return plan,
+            Err(split) => separate.extend(split),
+        }
+    }
+}
+
+/// One planning pass, or the corners of the compound turns that did not fit.
+fn plan_once(
+    tracks: &[TrackSegment],
+    policies: &IndexMap<String, CornerPolicy>,
+    immutable: &IndexSet<usize>,
+    blocked: &dyn Fn(&str, CopperLayer, Point) -> bool,
+    separate: &IndexSet<CornerKey>,
+) -> std::result::Result<ArcPlan, Vec<CornerKey>> {
     let mut plan = ArcPlan::default();
     if policies.is_empty() {
-        return plan;
+        return Ok(plan);
     }
     let mut ends: IndexMap<(&str, CopperLayer, Point), Vec<usize>> = IndexMap::new();
     for (index, track) in tracks.iter().enumerate() {
@@ -223,9 +439,7 @@ pub fn plan_arched_copper(
             plan.retained.push(retained(net, layer, point, "the legs double back"));
             continue;
         }
-        let Some(bisector) =
-            unit(Point::new(0, 0), Point::new(round_int((d2.0 - d1.0) * 1e9), round_int((d2.1 - d1.1) * 1e9)))
-        else {
+        let Some(bisector) = bisector_of(d1, d2) else {
             continue;
         };
         corners.push(Corner {
@@ -235,6 +449,12 @@ pub fn plan_arched_copper(
             point,
             incoming: a,
             outgoing: b,
+            in_end: point,
+            out_end: point,
+            ext_in: 0.0,
+            ext_out: 0.0,
+            swallowed: Vec::new(),
+            members: vec![point],
             d1,
             d2,
             turn,
@@ -242,12 +462,15 @@ pub fn plan_arched_copper(
             bisector,
             group: usize::MAX,
             matched: false,
-            offset_nm: 0,
+            outside: false,
         });
     }
+    let mut corners = merge_compound_turns(corners, policies, separate);
     // Pair members turning together share a group: the inside member keeps
     // the policy radius, the outside one adds the lane spacing and margin.
     let mut groups: Vec<f64> = Vec::new();
+    // Each group's lane spacing (0 for a corner turning alone).
+    let mut spacings: Vec<i64> = Vec::new();
     for index in 0..corners.len() {
         if corners[index].group != usize::MAX {
             continue;
@@ -264,9 +487,12 @@ pub fn plan_arched_copper(
                 if other.group != usize::MAX || other.net != *partner || other.layer != corner.layer {
                     continue;
                 }
-                if other.d1.0 * corner.d1.0 + other.d1.1 * corner.d1.1 < 0.9999
-                    || other.d2.0 * corner.d2.0 + other.d2.1 * corner.d2.1 < 0.9999
-                {
+                // Either way round: chains orient each member on its own.
+                let dot = |a: Vector, b: Vector| a.0 * b.0 + a.1 * b.1;
+                let reversed = |v: Vector| (-v.0, -v.1);
+                let along = dot(other.d1, corner.d1) >= 0.9999 && dot(other.d2, corner.d2) >= 0.9999;
+                let back = dot(other.d1, reversed(corner.d2)) >= 0.9999 && dot(other.d2, reversed(corner.d1)) >= 0.9999;
+                if !along && !back {
                     continue;
                 }
                 for (sign, partner_inside) in [(1.0, true), (-1.0, false)] {
@@ -284,62 +510,67 @@ pub fn plan_arched_copper(
         }
         let group = groups.len();
         groups.push(policy.radius_nm as f64);
+        spacings.push(if partner_index.is_some() { policy.lane_spacing_nm } else { 0 });
         corners[index].group = group;
         if let Some((other, partner_inside)) = partner_index {
-            let outside_offset = policy.lane_spacing_nm;
             corners[index].matched = true;
-            corners[index].offset_nm = if partner_inside { outside_offset } else { 0 };
+            corners[index].outside = partner_inside;
             corners[other].group = group;
             corners[other].matched = true;
-            corners[other].offset_nm = if partner_inside { 0 } else { outside_offset };
+            corners[other].outside = !partner_inside;
         }
     }
-    // Fit: the two tangents on one piece must fit its length; radii only shrink.
+    // Fit: the two tangents on one piece must fit its length. A pair's
+    // outside member first gives up its offset, down to equal arcs
+    // (translates of each other, which keep the lane spacing and the
+    // pair's skew); only then do the radii shrink.
     let mut by_track: IndexMap<usize, Vec<usize>> = IndexMap::new();
     for (index, corner) in corners.iter().enumerate() {
         by_track.entry(corner.incoming).or_default().push(index);
         by_track.entry(corner.outgoing).or_default().push(index);
     }
-    for _ in 0..64 {
-        let mut violated = false;
-        for (track, members) in &by_track {
-            let length = hypot(
-                (tracks[*track].end.x_nm - tracks[*track].start.x_nm) as f64,
-                (tracks[*track].end.y_nm - tracks[*track].start.y_nm) as f64,
-            );
-            let need: f64 = members.iter().map(|&c| corners[c].tangent(groups[corners[c].group])).sum();
-            if need <= length + 1e-9 {
-                continue;
-            }
-            violated = true;
-            // Water-fill: the largest radii on the piece come down to a
-            // common level that fits, smaller ones stay.
-            let mut ordered: Vec<usize> = members.clone();
-            ordered.sort_by(|a, b| groups[corners[*a].group].total_cmp(&groups[corners[*b].group]));
-            let fixed: f64 = ordered.iter().map(|&c| corners[c].offset_nm as f64 * corners[c].k).sum();
-            for first in 0..ordered.len() {
-                let kept: f64 = ordered[..first].iter().map(|&c| groups[corners[c].group] * corners[c].k).sum();
-                let rest: f64 = ordered[first..].iter().map(|&c| corners[c].k).sum();
-                let level = ((length - fixed - kept) / rest).max(0.0);
-                let below = first == 0 || groups[corners[ordered[first - 1]].group] <= level + 1e-9;
-                if below && (level <= groups[corners[ordered[first]].group] + 1e-9 || level == 0.0) {
-                    for &c in &ordered[first..] {
-                        let group = corners[c].group;
-                        groups[group] = groups[group].min(level);
-                    }
-                    break;
-                }
-            }
-        }
-        if !violated {
-            break;
-        }
-    }
-    // Realise each group's corners, or retain the whole group.
+    let mut offsets: Vec<f64> = spacings.iter().map(|&spacing| spacing as f64).collect();
+    let radii = groups.clone();
+    fit(tracks, &corners, &by_track, &mut offsets, &|corner| {
+        let radius = radii[corner.group] * corner.k;
+        if corner.outside { (corner.k, radius) } else { (0.0, radius) }
+    });
+    fit(tracks, &corners, &by_track, &mut groups, &|corner| {
+        (corner.k, corner.radius(0.0, offsets[corner.group]) * corner.k)
+    });
     let mut group_members: IndexMap<usize, Vec<usize>> = IndexMap::new();
     for (index, corner) in corners.iter().enumerate() {
         group_members.entry(corner.group).or_default().push(index);
     }
+    // A compound turn must still swallow its pieces, and a pair member's
+    // must turn with its partner's (one merging alone would shift the
+    // pair's skew); otherwise its group's compound turns are planned corner
+    // by corner.
+    let mut split: Vec<CornerKey> = Vec::new();
+    for corner in corners.iter().filter(|c| !c.swallowed.is_empty() && !c.matched) {
+        if policies[&corner.net].partner.is_some() {
+            split.extend(corner.members.iter().map(|p| (corner.net.clone(), corner.layer, *p)));
+        }
+    }
+    for (group, members) in &group_members {
+        let minimum = members.iter().map(|&c| corners[c].width_nm).max().unwrap_or(0) as f64 / 2.0;
+        let fits = members.iter().all(|&c| {
+            let corner = &corners[c];
+            corner.swallowed.is_empty()
+                || (groups[*group] >= minimum
+                    && corner.tangent(groups[*group], offsets[*group]) + 0.5 >= corner.ext_in.max(corner.ext_out))
+        });
+        if !fits {
+            for &c in members.iter().filter(|&&c| !corners[c].swallowed.is_empty()) {
+                let corner = &corners[c];
+                split.extend(corner.members.iter().map(|p| (corner.net.clone(), corner.layer, *p)));
+            }
+        }
+    }
+    if !split.is_empty() {
+        return Err(split);
+    }
+    // Realise each group's corners, or retain the whole group.
     for (group, members) in &group_members {
         let radius = groups[*group];
         let minimum = members.iter().map(|&c| corners[c].width_nm).max().unwrap_or(0) as f64 / 2.0;
@@ -360,7 +591,7 @@ pub fn plan_arched_copper(
         let mut failure: Option<&str> = None;
         for &c in members {
             let corner = &corners[c];
-            let own_radius = radius + corner.offset_nm as f64;
+            let own_radius = corner.radius(radius, offsets[*group]);
             let tangent = (own_radius * corner.k).round();
             if tangent < 1.0 {
                 failure = Some("the turn is too slight for an arc");
@@ -381,6 +612,10 @@ pub fn plan_arched_copper(
                 start,
                 mid,
                 end,
+                incoming_end: corner.in_end,
+                outgoing_end: corner.out_end,
+                swallowed: corner.swallowed.clone(),
+                corners: corner.members.clone(),
                 radius_nm: own_radius.round() as i64,
                 group: *group,
                 matched: corner.matched,
@@ -389,13 +624,19 @@ pub fn plan_arched_copper(
         // A pair's realised arcs must keep the lane spacing within what the
         // exact DRC tolerates on arcs.
         if failure.is_none() && geometries.len() == 2 {
-            let spacing = corners[members[0]].offset_nm.max(corners[members[1]].offset_nm) as f64;
+            let spacing = spacings[*group] as f64;
             let distance = copper_physical::arcs::arc_distance(&geometries[0], &geometries[1]);
             if distance < spacing - (copper_physical::arcs::ARC_DISTANCE_EPSILON_NM - 1.0) {
                 failure = Some("the pair's arcs do not keep their spacing through integer rounding");
             }
         }
         match failure {
+            Some(_) if members.iter().any(|&c| !corners[c].swallowed.is_empty()) => {
+                for &c in members {
+                    let corner = &corners[c];
+                    split.extend(corner.members.iter().map(|p| (corner.net.clone(), corner.layer, *p)));
+                }
+            }
             Some(reason) => {
                 for &c in members {
                     let corner = &corners[c];
@@ -405,8 +646,74 @@ pub fn plan_arched_copper(
             None => plan.arcs.extend(realised),
         }
     }
+    if !split.is_empty() {
+        return Err(split);
+    }
     plan.arcs.sort_by_key(|arc| (arc.net.clone(), arc.layer.value(), arc.corner.x_nm, arc.corner.y_nm));
-    plan
+    Ok(plan)
+}
+
+/// `fit`: the two tangents on one piece must fit its length; each group's
+/// value only shrinks. `term` gives a corner's tangent as the coefficient of
+/// its group's value and the rest.
+fn fit(
+    tracks: &[TrackSegment],
+    corners: &[Corner],
+    by_track: &IndexMap<usize, Vec<usize>>,
+    values: &mut [f64],
+    term: &dyn Fn(&Corner) -> (f64, f64),
+) {
+    for _ in 0..64 {
+        let mut violated = false;
+        for (track, members) in by_track {
+            let length = hypot(
+                (tracks[*track].end.x_nm - tracks[*track].start.x_nm) as f64,
+                (tracks[*track].end.y_nm - tracks[*track].start.y_nm) as f64,
+            );
+            let terms: Vec<(f64, f64)> = members.iter().map(|&c| term(&corners[c])).collect();
+            let value = |c: usize| values[corners[c].group];
+            let need: f64 = members
+                .iter()
+                .zip(&terms)
+                .map(|(&c, (coefficient, rest))| coefficient * value(c) + rest - corners[c].extension(*track))
+                .sum();
+            if need <= length + 1e-9 {
+                continue;
+            }
+            violated = true;
+            // Water-fill: the largest values on the piece come down to a
+            // common level that fits, smaller ones stay.
+            let fixed: f64 =
+                members.iter().zip(&terms).map(|(&c, (_, rest))| rest - corners[c].extension(*track)).sum();
+            let mut ordered: Vec<(usize, f64)> = members
+                .iter()
+                .zip(&terms)
+                .filter(|(_, (coefficient, _))| *coefficient > 0.0)
+                .map(|(&c, (coefficient, _))| (c, *coefficient))
+                .collect();
+            ordered.sort_by(|a, b| value(a.0).total_cmp(&value(b.0)));
+            let mut lowered: Option<(usize, f64)> = None;
+            for first in 0..ordered.len() {
+                let kept: f64 = ordered[..first].iter().map(|&(c, coefficient)| value(c) * coefficient).sum();
+                let rest: f64 = ordered[first..].iter().map(|&(_, coefficient)| coefficient).sum();
+                let level = ((length - fixed - kept) / rest).max(0.0);
+                let below = first == 0 || value(ordered[first - 1].0) <= level + 1e-9;
+                if below && (level <= value(ordered[first].0) + 1e-9 || level == 0.0) {
+                    lowered = Some((first, level));
+                    break;
+                }
+            }
+            if let Some((first, level)) = lowered {
+                for &(c, _) in &ordered[first..] {
+                    let group = corners[c].group;
+                    values[group] = values[group].min(level);
+                }
+            }
+        }
+        if !violated {
+            break;
+        }
+    }
 }
 
 fn retained(net: &str, layer: CopperLayer, corner: Point, reason: &str) -> RetainedCorner {
@@ -465,17 +772,22 @@ fn realise(corner: &Corner, own_radius: f64, tangent: f64) -> Option<(Point, Poi
 }
 
 /// `emit_arched_copper`: `tracks` trimmed at every arc of `arcs`, in their
-/// original order (pieces consumed whole are dropped), and the arcs.
+/// original order (pieces consumed whole, or swallowed by a compound turn,
+/// are dropped), and the arcs.
 pub fn emit_arched_copper(tracks: &[TrackSegment], arcs: &[PlannedArc]) -> ArchedCopper {
     // Each track's new end points, keyed by the original point.
     let mut trims: IndexMap<usize, Vec<(Point, Point)>> = IndexMap::new();
     for arc in arcs {
-        trims.entry(arc.incoming).or_default().push((arc.corner, arc.start));
-        trims.entry(arc.outgoing).or_default().push((arc.corner, arc.end));
+        trims.entry(arc.incoming).or_default().push((arc.incoming_end, arc.start));
+        trims.entry(arc.outgoing).or_default().push((arc.outgoing_end, arc.end));
     }
+    let swallowed: IndexSet<usize> = arcs.iter().flat_map(|arc| arc.swallowed.iter().copied()).collect();
     let mut emitted_arcs: Vec<TrackArc> = arcs.iter().map(PlannedArc::arc).collect();
     let mut result_tracks = Vec::new();
     for (index, track) in tracks.iter().enumerate() {
+        if swallowed.contains(&index) {
+            continue;
+        }
         let Some(trim) = trims.get(&index) else {
             result_tracks.push(track.clone());
             continue;
@@ -619,44 +931,55 @@ pub fn arch_board(board: &PhysicalBoard) -> Result<Option<(PhysicalBoard, ArcCor
             .into_iter()
             .any(|object| object.is_pad && object.net == net && shapes_touch_or_overlap(&object.shape, &probe))
     };
-    let plan = plan_arched_copper(&board.tracks, &policies, &immutable, &blocked);
-    let mut outcome = ArcCornerOutcome { retained: plan.retained.clone(), ..ArcCornerOutcome::default() };
-    // Clearance: a refused arc retains its whole group (both pair members).
-    let mut refused: IndexMap<usize, String> = IndexMap::new();
-    for arc in &plan.arcs {
-        if refused.contains_key(&arc.group) {
-            continue;
-        }
-        if let Some(reason) = arc_obstruction(board, &clearance, &policies, arc)? {
-            refused.insert(arc.group, reason);
-        }
-    }
-    let mut accepted = Vec::new();
-    for arc in plan.arcs {
-        match refused.get(&arc.group) {
-            Some(reason) => outcome.retained.push(retained(&arc.net, arc.layer, arc.corner, reason)),
-            None => accepted.push(arc),
-        }
-    }
-    // Connectivity: copper of the net that was connected (lands, vias,
-    // polygons and untouched tracks) must stay connected once the legs are
-    // trimmed; otherwise the arcs that cut it off stay sharp, with their groups.
-    let mut copper = emit_arched_copper(&board.tracks, &accepted);
-    loop {
-        let groups = disconnecting_groups(board, &copper, &accepted)?;
-        if groups.is_empty() {
-            break;
-        }
-        let mut kept = Vec::new();
-        for arc in accepted {
-            match groups.get(&arc.group) {
-                Some(reason) => outcome.retained.push(retained(&arc.net, arc.layer, arc.corner, reason)),
-                None => kept.push(arc),
+    // A compound turn that is refused is planned again corner by corner.
+    let mut separate: IndexSet<CornerKey> = IndexSet::new();
+    let (mut outcome, copper) = 'plan: loop {
+        let plan = plan_arched_copper_separately(&board.tracks, &policies, &immutable, &blocked, &separate);
+        let mut outcome = ArcCornerOutcome { retained: plan.retained.clone(), ..ArcCornerOutcome::default() };
+        // Clearance: a refused arc retains its whole group (both pair members).
+        let mut refused: IndexMap<usize, String> = IndexMap::new();
+        for arc in &plan.arcs {
+            if refused.contains_key(&arc.group) {
+                continue;
+            }
+            if let Some(reason) = arc_obstruction(board, &clearance, &policies, arc)? {
+                refused.insert(arc.group, reason);
             }
         }
-        accepted = kept;
-        copper = emit_arched_copper(&board.tracks, &accepted);
-    }
+        if split_compounds(&plan.arcs, &refused, &mut separate) {
+            continue 'plan;
+        }
+        let mut accepted = Vec::new();
+        for arc in plan.arcs {
+            match refused.get(&arc.group) {
+                Some(reason) => outcome.retained.push(retained(&arc.net, arc.layer, arc.corner, reason)),
+                None => accepted.push(arc),
+            }
+        }
+        // Connectivity: copper of the net that was connected (lands, vias,
+        // polygons and untouched tracks) must stay connected once the legs are
+        // trimmed; otherwise the arcs that cut it off stay sharp, with their groups.
+        let mut copper = emit_arched_copper(&board.tracks, &accepted);
+        loop {
+            let groups = disconnecting_groups(board, &copper, &accepted)?;
+            if groups.is_empty() {
+                break;
+            }
+            if split_compounds(&accepted, &groups, &mut separate) {
+                continue 'plan;
+            }
+            let mut kept = Vec::new();
+            for arc in accepted {
+                match groups.get(&arc.group) {
+                    Some(reason) => outcome.retained.push(retained(&arc.net, arc.layer, arc.corner, reason)),
+                    None => kept.push(arc),
+                }
+            }
+            accepted = kept;
+            copper = emit_arched_copper(&board.tracks, &accepted);
+        }
+        break (outcome, copper);
+    };
     outcome.retained.sort_by_key(|item| (item.net.clone(), item.layer.value(), item.corner.x_nm, item.corner.y_nm));
     outcome.arcs = copper.arcs.len();
     let mut nets: IndexSet<String> = copper.arcs.iter().map(|arc| arc.net.clone()).collect();
@@ -666,6 +989,20 @@ pub fn arch_board(board: &PhysicalBoard) -> Result<Option<(PhysicalBoard, ArcCor
     arched.tracks = copper.tracks;
     arched.arcs = copper.arcs;
     Ok(Some((arched, outcome)))
+}
+
+/// `split_compounds`: adds the corners of every compound turn in a group of
+/// `failed` to `separate`; whether there was one.
+fn split_compounds(arcs: &[PlannedArc], failed: &IndexMap<usize, String>, separate: &mut IndexSet<CornerKey>) -> bool {
+    let mut split = false;
+    for arc in arcs.iter().filter(|arc| failed.contains_key(&arc.group)) {
+        for corner in arcs.iter().filter(|other| other.group == arc.group && !other.swallowed.is_empty()) {
+            for point in &corner.corners {
+                split |= separate.insert((corner.net.clone(), corner.layer, *point));
+            }
+        }
+    }
+    split
 }
 
 /// The connectivity graph of `board`'s copper on `nets`, with `tracks` and
@@ -697,7 +1034,10 @@ fn disconnecting_groups(
     accepted: &[PlannedArc],
 ) -> Result<IndexMap<usize, String>> {
     let tracks = &board.tracks;
-    let legs: IndexSet<usize> = accepted.iter().flat_map(|arc| [arc.incoming, arc.outgoing]).collect();
+    let legs: IndexSet<usize> = accepted
+        .iter()
+        .flat_map(|arc| [arc.incoming, arc.outgoing].into_iter().chain(arc.swallowed.iter().copied()))
+        .collect();
     // Each untrimmed original track's copy in the emitted copper: the
     // emission keeps them, unchanged and in order.
     let mut copies: IndexMap<String, String> = IndexMap::new();
@@ -759,21 +1099,24 @@ fn disconnecting_groups(
                 continue;
             };
             let Some(arc_root) = after.get(&format!("arc:{position}:0")) else { continue };
-            let removed: Vec<CopperContact> =
-                [(arc.start, arc.corner, &tracks[arc.incoming]), (arc.corner, arc.end, &tracks[arc.outgoing])]
-                    .into_iter()
-                    .filter_map(|(start, end, leg)| {
-                        let shape = RoundedConvexShape::new(vec![start, end], leg.width_nm.div_euclid(2)).ok()?;
-                        Some(CopperContact {
-                            identity: "removed".to_owned(),
-                            net: leg.net.clone(),
-                            layers: vec![leg.layer],
-                            shape,
-                            drill: None,
-                            capped_layers: Vec::new(),
-                        })
-                    })
-                    .collect();
+            let removed: Vec<CopperContact> = [
+                (arc.start, arc.incoming_end, &tracks[arc.incoming]),
+                (arc.outgoing_end, arc.end, &tracks[arc.outgoing]),
+            ]
+            .into_iter()
+            .chain(arc.swallowed.iter().map(|&index| (tracks[index].start, tracks[index].end, &tracks[index])))
+            .filter_map(|(start, end, leg)| {
+                let shape = RoundedConvexShape::new(vec![start, end], leg.width_nm.div_euclid(2)).ok()?;
+                Some(CopperContact {
+                    identity: "removed".to_owned(),
+                    net: leg.net.clone(),
+                    layers: vec![leg.layer],
+                    shape,
+                    drill: None,
+                    capped_layers: Vec::new(),
+                })
+            })
+            .collect();
             let culprit = net_anchors.iter().find(|(contact, after_id)| {
                 after[*after_id] != *arc_root && removed.iter().any(|piece| copper_contacts_overlap(contact, piece))
             });
@@ -813,6 +1156,9 @@ fn arc_obstruction(
     let margin = STAGE_CLEARANCE_MARGIN_NM as f64;
     let short = |measured: f64, required: i64| measured < required as f64 + margin;
     let pieces = copper.clearance_pieces();
+    let breakout = &clearance.breakout;
+    let arc_land =
+        if breakout.declared.contains(&arc.net) { breakout.region(&arc.net, &[arc.start, arc.end]) } else { None };
     let probe = RoundedConvexShape::new(copper.chord_points(), half + copper_physical::arcs::chord_margin_nm())
         .expect("chord chain has points");
     for object in clearance.overlapping_objects(&probe, &[arc.layer]) {
@@ -823,7 +1169,10 @@ fn arc_obstruction(
         if partner && arc.matched {
             continue; // Concentric by construction.
         }
-        let required = if partner {
+        let required = if breakout.any() {
+            // Inside breakout regions the exact DRC's relaxed spacing applies.
+            breakout.spacing_nm(&arc.net, arc_land.as_deref(), &object.net, object.breakout_land.as_deref())
+        } else if partner {
             pair_gap
         } else {
             board
@@ -835,7 +1184,11 @@ fn arc_obstruction(
         };
         let measured = shape_distance(&geometry, &object.shape) - half as f64;
         if short(measured, required) {
-            let what = if object.occurrence.is_empty() { object.net.clone() } else { object.occurrence.clone() };
+            let what = if object.occurrence.is_empty() {
+                object.net.clone()
+            } else {
+                format!("{} ({})", object.occurrence, object.net)
+            };
             return Ok(Some(format!("clearance to {what}")));
         }
     }
@@ -957,6 +1310,176 @@ inner {inner:?} {g_inner:?}"
         let inner_length = planned_length_nm(&refs, "X", &pair_policies(MM, spacing));
         // The outer member saves more at its corner than the inner one.
         assert!(outer_length < 20 * MM && inner_length < 20 * MM - 2 * spacing);
+    }
+
+    /// An elbow whose corner is cut by a 45-degree chamfer of `cut` on each leg.
+    fn chamfered_elbow(net: &str, corner: (i64, i64), cut: (i64, i64)) -> Vec<TrackSegment> {
+        let (x, y) = corner;
+        vec![
+            track(net, (0, y), (x - cut.0, y), 200_000),
+            track(net, (x - cut.0, y), (x, y + cut.1), 200_000),
+            track(net, (x, y + cut.1), (x, 10 * MM), 200_000),
+        ]
+    }
+
+    #[test]
+    fn a_short_chamfer_becomes_one_arc_and_a_long_diagonal_two() {
+        let tracks = chamfered_elbow("S", (10 * MM, 0), (200_000, 200_000));
+        let plan = plan_arched_copper(&tracks, &policy(MM), &IndexSet::new(), &|_, _, _| false);
+        assert_eq!(plan.retained, Vec::new());
+        assert_eq!(plan.arcs.len(), 1, "{:?}", plan.arcs);
+        let arc = &plan.arcs[0];
+        assert_eq!((arc.start, arc.end), (Point::new(9 * MM, 0), Point::new(10 * MM, MM)));
+        assert_eq!((arc.swallowed.clone(), arc.radius_nm), (vec![1], MM));
+        let copper = emit_arched_copper(&tracks, &plan.arcs);
+        assert_eq!(copper.tracks.len(), 2);
+        assert_eq!((copper.tracks[0].end, copper.tracks[1].start), (Point::new(9 * MM, 0), Point::new(10 * MM, MM)));
+        let length = planned_length_nm(&tracks.iter().collect::<Vec<_>>(), "S", &policy(MM));
+        assert!((length - (18 * MM + 1_570_796)).abs() <= 2, "{length}");
+        // A 3 mm diagonal is a route of its own: two 45-degree arcs.
+        let tracks = chamfered_elbow("S", (8 * MM, 0), (3 * MM, 3 * MM));
+        let plan = plan_arched_copper(&tracks, &policy(500_000), &IndexSet::new(), &|_, _, _| false);
+        assert_eq!(plan.arcs.len(), 2);
+        assert!(plan.arcs.iter().all(|arc| arc.swallowed.is_empty() && arc.radius_nm == 500_000));
+        // A corner kept separate is planned corner by corner.
+        let tracks = chamfered_elbow("S", (10 * MM, 0), (200_000, 200_000));
+        let separate = IndexSet::from([("S".to_owned(), CopperLayer::Front, Point::new(9_800_000, 0))]);
+        let plan = plan_arched_copper_separately(&tracks, &policy(MM), &IndexSet::new(), &|_, _, _| false, &separate);
+        assert_eq!(plan.arcs.len(), 2);
+        assert!(plan.arcs.iter().all(|arc| arc.swallowed.is_empty() && arc.radius_nm < MM));
+    }
+
+    #[test]
+    fn a_chamfered_pair_turns_concentrically_through_one_arc_each() {
+        // The inner lane's chamfer is the outer one's, offset by the spacing.
+        let spacing = 400_000;
+        let mut tracks = chamfered_elbow("S", (10 * MM, 0), (200_000, 200_000));
+        let lean = round_int(spacing as f64 * (2f64.sqrt() - 1.0));
+        tracks.extend(chamfered_elbow("X", (10 * MM - spacing, spacing), (200_000 + lean, 200_000 + lean)));
+        let policies = pair_policies(MM, spacing);
+        let plan = plan_arched_copper(&tracks, &policies, &IndexSet::new(), &|_, _, _| false);
+        assert_eq!(plan.arcs.len(), 2, "{:?}", plan.retained);
+        let outer = plan.arcs.iter().find(|arc| arc.net == "S").unwrap();
+        let inner = plan.arcs.iter().find(|arc| arc.net == "X").unwrap();
+        assert!(outer.matched && inner.matched && outer.group == inner.group);
+        assert_eq!((inner.radius_nm, outer.radius_nm), (MM, MM + spacing));
+        assert!(!outer.swallowed.is_empty() && !inner.swallowed.is_empty());
+        let gap =
+            copper_physical::arcs::arc_distance(&outer.arc().geometry().unwrap(), &inner.arc().geometry().unwrap());
+        assert!((gap - spacing as f64).abs() <= 4.0, "{gap}");
+
+        // The inner lane drawn the other way round still turns with its partner.
+        let mut reversed: Vec<TrackSegment> = tracks.iter().filter(|t| t.net == "S").cloned().collect();
+        reversed.extend(tracks.iter().filter(|t| t.net == "X").rev().map(|t| TrackSegment {
+            start: t.end,
+            end: t.start,
+            ..t.clone()
+        }));
+        let plan = plan_arched_copper(&reversed, &policies, &IndexSet::new(), &|_, _, _| false);
+        assert_eq!(plan.arcs.len(), 2, "{:?}", plan.retained);
+        assert!(plan.arcs.iter().all(|arc| arc.matched));
+    }
+
+    #[test]
+    fn a_tight_pair_jog_turns_through_equal_arcs() {
+        // A 0.1 mm jog: concentric arcs would need 0.17 mm more diagonal.
+        let spacing = 400_000;
+        let lean = round_int(spacing as f64 * (2f64.sqrt() - 1.0));
+        let mut tracks = vec![
+            track("S", (0, 0), (5 * MM, 0), 200_000),
+            track("S", (5 * MM, 0), (5_100_000, 100_000), 200_000),
+            track("S", (5_100_000, 100_000), (10 * MM, 100_000), 200_000),
+        ];
+        tracks.extend([
+            track("X", (0, spacing), (5 * MM - lean, spacing), 200_000),
+            track("X", (5 * MM - lean, spacing), (5_100_000 - lean, spacing + 100_000), 200_000),
+            track("X", (5_100_000 - lean, spacing + 100_000), (10 * MM, spacing + 100_000), 200_000),
+        ]);
+        let plan = plan_arched_copper(&tracks, &pair_policies(300_000, spacing), &IndexSet::new(), &|_, _, _| false);
+        assert_eq!(plan.arcs.len(), 4, "{:?}", plan.retained);
+        for group in plan.arcs.iter().map(|arc| arc.group).collect::<IndexSet<_>>() {
+            let pair: Vec<&PlannedArc> = plan.arcs.iter().filter(|arc| arc.group == group).collect();
+            assert_eq!(pair.len(), 2);
+            assert!(pair[0].matched && pair[1].matched && pair[0].radius_nm == pair[1].radius_nm);
+            let gap = copper_physical::arcs::arc_distance(
+                &pair[0].arc().geometry().unwrap(),
+                &pair[1].arc().geometry().unwrap(),
+            );
+            assert!(gap >= spacing as f64 - 4.0, "{gap}");
+        }
+        // Equal arcs leave the pair's skew as the chamfers had it.
+        let refs: Vec<&TrackSegment> = tracks.iter().collect();
+        let skew = |policies: &IndexMap<String, CornerPolicy>| {
+            planned_length_nm(&refs, "S", policies) - planned_length_nm(&refs, "X", policies)
+        };
+        assert!((skew(&pair_policies(300_000, spacing)) - skew(&IndexMap::new())).abs() <= 4);
+    }
+
+    #[test]
+    fn a_low_pair_bump_turns_each_right_angle_through_one_arc_per_member() {
+        // Equal chamfers on both members, as arched tuning lays them; the
+        // 0.8 mm legs are short of the 1.0 mm concentric arcs need.
+        let (spacing, height, chamfer) = (400_000, 800_000, 200_000);
+        let bump = |net: &str, base: i64, entry: i64, leave: i64| -> Vec<TrackSegment> {
+            let corners = crate::critical_tuning::bump_path(entry, leave, height, chamfer, chamfer);
+            let mut points = vec![(0, base)];
+            points.extend(corners.iter().map(|&(axial, rise)| (axial, base + rise)));
+            points.push((10 * MM, base));
+            points.windows(2).map(|pair| track(net, pair[0], pair[1], 200_000)).collect()
+        };
+        let mut tracks = bump("X", spacing, 4 * MM, 6 * MM);
+        tracks.extend(bump("S", 0, 4 * MM + spacing, 6 * MM - spacing));
+        let policies = pair_policies(300_000, spacing);
+        let plan = plan_arched_copper(&tracks, &policies, &IndexSet::new(), &|_, _, _| false);
+        assert_eq!(plan.retained, Vec::new());
+        assert_eq!(plan.arcs.len(), 8, "{:?}", plan.arcs);
+        assert!(plan.arcs.iter().all(|arc| arc.matched && arc.swallowed.len() == 1));
+        for group in plan.arcs.iter().map(|arc| arc.group).collect::<IndexSet<_>>() {
+            let pair: Vec<&PlannedArc> = plan.arcs.iter().filter(|arc| arc.group == group).collect();
+            let mut radii: Vec<i64> = pair.iter().map(|arc| arc.radius_nm).collect();
+            radii.sort();
+            // The outside member gives up 0.2 mm of its offset; the inside one keeps the radius.
+            assert_eq!(radii, vec![300_000, 500_000]);
+            let gap = copper_physical::arcs::arc_distance(
+                &pair[0].arc().geometry().unwrap(),
+                &pair[1].arc().geometry().unwrap(),
+            );
+            assert!(gap >= spacing as f64 - 4.0, "{gap}");
+        }
+        // Each member is inside two of the turns and outside the other two.
+        let refs: Vec<&TrackSegment> = tracks.iter().collect();
+        let skew = |policies: &IndexMap<String, CornerPolicy>| {
+            planned_length_nm(&refs, "S", policies) - planned_length_nm(&refs, "X", policies)
+        };
+        assert!((skew(&policies) - skew(&IndexMap::new())).abs() <= 4);
+        // A U-turn is two quarter circles, never one wider turn.
+        let lone = bump("S", 0, 4 * MM, 4 * MM + 600_000);
+        let plan = plan_arched_copper(&lone, &policy(300_000), &IndexSet::new(), &|_, _, _| false);
+        assert_eq!(plan.arcs.len(), 4, "{:?}", plan.retained);
+        assert!(plan.arcs.iter().all(|arc| arc.radius_nm == 300_000 && arc.swallowed.len() == 1));
+    }
+
+    #[test]
+    fn an_obstructed_compound_turn_is_arched_corner_by_corner() {
+        let mut board = arc_board();
+        board.tracks = vec![
+            track("S", (3 * MM, 6 * MM), (9_800_000, 6 * MM), 200_000),
+            track("S", (9_800_000, 6 * MM), (10 * MM, 6_200_000), 200_000),
+            track("S", (10 * MM, 6_200_000), (10 * MM, 9 * MM), 200_000),
+        ];
+        let (arched, outcome) = arch_board(&board).unwrap().expect("arc-style net");
+        assert_eq!((outcome.arcs, arched.tracks.len()), (1, 2), "{:?}", outcome.retained);
+        // Foreign copper where the one arc would bulge: the chamfer's two
+        // corners arch on their own instead.
+        board.tracks.push(track("X", (9_580_000, 6_420_000), (9_620_000, 6_380_000), 100_000));
+        let (arched, outcome) = arch_board(&board).unwrap().expect("arc-style net");
+        assert_eq!(outcome.arcs, 2, "{:?}", outcome.retained);
+        assert!(arched.arcs.iter().all(|arc| arc.net == "S"));
+        // The chamfer is short enough for the two arcs to meet on it.
+        assert_eq!(arched.tracks.iter().filter(|t| t.net == "S").count(), 2);
+        let drc = copper_drc::run_physical_drc(&arched, copper_drc::Policy::default()).unwrap();
+        let errors: Vec<_> = drc.findings.iter().filter(|f| f.severity == copper_drc::Severity::Error).collect();
+        assert!(errors.iter().all(|f| !f.code.contains("CLEARANCE")), "{errors:?}");
     }
 
     #[test]
