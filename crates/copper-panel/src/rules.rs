@@ -147,6 +147,37 @@ fn rules_of(text: &str, source: &str) -> Result<Vec<Node>, String> {
     Ok(root.children("rule").cloned().collect())
 }
 
+/// The largest copper-to-edge clearance the panel's rules can ask for: the
+/// project minimum and every custom `edge_clearance` rule's minimum.
+pub fn max_edge_clearance(pro: &str, dru: &str) -> Result<i64, String> {
+    let mm_nm = |text: &str| -> Option<i64> {
+        let number = text.trim().trim_end_matches("mm");
+        number.parse::<f64>().ok().map(|v| (v * 1e6).round() as i64)
+    };
+    let project = copper_json::parse(pro).map_err(|e| format!("panel project: {e:?}"))?;
+    let mut worst = project
+        .get("board")
+        .and_then(|b| b.get("design_settings"))
+        .and_then(|d| d.get("rules"))
+        .and_then(|r| r.get("min_copper_edge_clearance"))
+        .and_then(|v| match v {
+            Value::Float(f) => Some((f * 1e6).round() as i64),
+            Value::Int(i) => i.to_string().parse::<i64>().ok().map(|v| v * 1_000_000),
+            _ => None,
+        })
+        .unwrap_or(0);
+    for rule in rules_of(dru, "panel design rules")? {
+        for constraint in rule.children("constraint") {
+            if constraint.value(1) == Some("edge_clearance")
+                && let Some(min) = constraint.child("min").and_then(|m| m.value(1)).and_then(mm_nm)
+            {
+                worst = worst.max(min);
+            }
+        }
+    }
+    Ok(worst)
+}
+
 /// Whether a `.kicad_dru` text has a rule with a condition.
 pub fn has_conditional(text: &str, source: &str) -> Result<bool, String> {
     Ok(rules_of(text, source)?.iter().any(|rule| rule.child("condition").is_some()))

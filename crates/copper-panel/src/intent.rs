@@ -422,12 +422,15 @@ pub fn routed_keep_clear(pcb: &copper_cam::board::Board, outline: &[Vec<Point>])
             contours.extend(poly::polygon(&ring).into_iter().flatten());
         }
         let shapes = poly::even_odd(&contours);
-        // The side, a micron either way: what of the keep-out touches it.
+        // Each side and the margin inside the board from it (a micron
+        // outside): what of the keep-out reaches the side or comes within the
+        // margin of it, round a corner too. Beyond the board it holds nothing.
+        let m = ANTENNA_TAB_MARGIN;
         let strips = [
-            (Side::Top, [b[0], b[1] - 1_000, b[2], b[1] + 1_000]),
-            (Side::Bottom, [b[0], b[3] - 1_000, b[2], b[3] + 1_000]),
-            (Side::Left, [b[0] - 1_000, b[1], b[0] + 1_000, b[3]]),
-            (Side::Right, [b[2] - 1_000, b[1], b[2] + 1_000, b[3]]),
+            (Side::Top, [b[0], b[1] - 1_000, b[2], b[1] + m]),
+            (Side::Bottom, [b[0], b[3] - m, b[2], b[3] + 1_000]),
+            (Side::Left, [b[0] - 1_000, b[1], b[0] + m, b[3]]),
+            (Side::Right, [b[2] - m, b[1], b[2] + 1_000, b[3]]),
         ];
         for (side, r) in strips {
             let strip = rect_shapes([(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])]);
@@ -775,6 +778,9 @@ pub fn check(
     // Body envelopes beyond the edge must stay clear of rails and other
     // boards, unless the component is fitted after depanelization.
     let mut open_ends = Vec::new();
+    // Bodies placed with the panel, by board: (board, label, layer, shape);
+    // an empty layer (a declared envelope) meets either side.
+    let mut bodies: Vec<(String, String, String, poly::Shapes)> = Vec::new();
     for (board, intent) in intents {
         let pose = poses[board];
         let b = bounds(&local[board]);
@@ -805,6 +811,7 @@ pub fn check(
                 }
             }
             blockers.extend(tabs_hit(&envelope, tabs, poses));
+            bodies.push((board.clone(), format!("{}'s body", overhang.reference), String::new(), envelope.clone()));
             for (other, rings) in outlines {
                 if other == board {
                     continue;
@@ -863,6 +870,12 @@ pub fn check(
                 }
             }
             blockers.extend(tabs_hit(&shape, tabs, poses));
+            bodies.push((
+                board.clone(),
+                format!("{}'s courtyard ({})", courtyard.reference, courtyard.layer),
+                courtyard.layer.clone(),
+                shape.clone(),
+            ));
             if !blockers.is_empty() {
                 return Err(format!(
                     "board {board}: {}'s courtyard ({}) reaches into {}; turn the board, move the blocker, or list \
@@ -880,6 +893,18 @@ pub fn check(
                 net: format!("{board}/{}", end.net),
                 layer: end.layer.clone(),
             });
+        }
+    }
+    // Two boards' bodies on the same side must not meet in the gap between them.
+    for (k, (board, label, layer, shape)) in bodies.iter().enumerate() {
+        for (other, other_label, other_layer, other_shape) in &bodies[k + 1..] {
+            let same_side = layer.is_empty() || other_layer.is_empty() || layer == other_layer;
+            if board != other && same_side && !poly::intersection(shape, other_shape).is_empty() {
+                return Err(format!(
+                    "board {board}: {label} meets board {other}'s {other_label} between the boards; move a board \
+                     or list one in assemble_after_depanel"
+                ));
+            }
         }
     }
     Ok(open_ends)

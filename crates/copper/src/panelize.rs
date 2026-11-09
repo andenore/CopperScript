@@ -12,6 +12,7 @@ use copper_lang::compiler::load_design;
 use copper_lang::elaborate::elaborate;
 use copper_lang::footprints::FootprintResolver;
 use copper_lang::model::ConstraintKind;
+use copper_lang::panel::Side;
 use copper_panel::compose::Point;
 use copper_panel::intent::{ANTENNA_TAB_MARGIN, BoardIntent, KeepClear, OpenEnd, Overhang, Radiator, side_of};
 use copper_pcb::antenna::{chosen_geometry, layout, resolve_sites};
@@ -74,19 +75,31 @@ fn board_intent(source: &Path, locked: bool, offline: bool) -> Result<BoardInten
     let flat = elaborate(&design.electrical).map_err(|e| format!("{}: {e}", source.display()))?;
     for site in resolve_sites(&physical, &flat).map_err(fail)? {
         let area = site.area;
-        let corners = [
-            ((area.min_x, area.min_y), (area.max_x, area.min_y)),
-            ((area.min_x, area.max_y), (area.max_x, area.max_y)),
-            ((area.min_x, area.min_y), (area.min_x, area.max_y)),
-            ((area.max_x, area.min_y), (area.max_x, area.max_y)),
-        ];
-        for (a, z) in corners {
-            if let Some((side, start, end)) = side_of(b, a, z) {
+        // Every side the region reaches or comes within the margin of keeps
+        // tabs off its stretch plus the margin, round a corner too.
+        let m = ANTENNA_TAB_MARGIN;
+        let along_x = (area.min_x - b[0], area.max_x - b[0]);
+        let along_y = (area.min_y - b[1], area.max_y - b[1]);
+        for (side, distance, (start, end)) in [
+            (Side::Top, area.min_y - b[1], along_x),
+            (Side::Bottom, b[3] - area.max_y, along_x),
+            (Side::Left, area.min_x - b[0], along_y),
+            (Side::Right, b[2] - area.max_x, along_y),
+        ] {
+            if distance <= m {
                 intent.keep_clear.push(KeepClear {
                     side,
-                    start: start - ANTENNA_TAB_MARGIN,
-                    end: end + ANTENNA_TAB_MARGIN,
-                    reason: format!("antenna {}'s region opened to the perimeter", site.name),
+                    start: start - m,
+                    end: end + m,
+                    reason: if distance <= 0 {
+                        format!("antenna {}'s region opened to the perimeter", site.name)
+                    } else {
+                        format!(
+                            "antenna {}'s region, {} mm from this side",
+                            site.name,
+                            copper_panel::compose::mm(distance)
+                        )
+                    },
                 });
             }
         }

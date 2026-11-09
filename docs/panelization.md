@@ -92,8 +92,13 @@ panel ExamplePanel {
 3. Builds the frame: rails, tabs, mouse-bite holes `inset` into every board
    a tab touches (both ends when it joins two boards), fiducials and tooling
    holes, and the outline (boards, tabs and rails united) on `Edge.Cuts`.
+   Where a tab joins a board its edge leaves `Edge.Cuts`, so a keep-out
+   inside the board along the landing, as deep as the largest copper-to-edge
+   clearance the rules ask for, holds pours, tracks, vias and pads back as
+   the edge did.
 4. Refuses, naming the board, side and interval:
-   - a tab on an antenna region opened to the perimeter (plus 1 mm);
+   - a tab on an antenna region opened to the perimeter, or within 1 mm of
+     one (round a corner onto the next side too);
    - a tab on a body overhang;
    - an overhanging body that reaches a rail or another board, unless
      `assemble_after_depanel` lists `BOARD.REFERENCE`: a routed courtyard
@@ -112,6 +117,8 @@ panel ExamplePanel {
    - fiducials and tooling holes that would leave the panel or overlap
      (a panel too narrow for them), and tooling holes without 0.2 mm of
      rail on either side;
+   - two boards' courtyards (or declared bodies) on the same side that
+     meet between the boards, unless one is fitted after depanelization;
    - a panel that falls apart: boards, tabs and rails must be one piece.
 5. Writes `copperscript-panel/v0.1` beside the board (`OUT.panel.json`, or
    `--report`): boards, tabs (what each bridges, its gap and hole count),
