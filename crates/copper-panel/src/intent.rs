@@ -709,6 +709,19 @@ pub fn ring_distance(a: &[Vec<Point>], b: &[Vec<Point>]) -> i64 {
     best.floor() as i64
 }
 
+/// The tabs whose full rectangle (the bridge material across the gap)
+/// `shape` overlaps, any board's tab included.
+fn tabs_hit(shape: &poly::Shapes, tabs: &[BuiltTab], poses: &IndexMap<String, Pose>) -> Vec<String> {
+    tabs.iter()
+        .filter(|tab| {
+            let r = crate::frame::tab_rect(tab, poses[&tab.board]);
+            !poly::intersection(shape, &rect_shapes([(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])]))
+                .is_empty()
+        })
+        .map(|tab| format!("tab {}", tab.name))
+        .collect()
+}
+
 /// Check the panel against every board's intent; returns the panel's open
 /// ends (panel coordinates, prefixed nets) for the DRC waiver.
 pub fn check(
@@ -784,6 +797,7 @@ pub fn check(
                     blockers.push("a rail".to_owned());
                 }
             }
+            blockers.extend(tabs_hit(&envelope, tabs, poses));
             for (other, rings) in outlines {
                 if other == board {
                     continue;
@@ -841,6 +855,7 @@ pub fn check(
                     blockers.push(format!("board {other}"));
                 }
             }
+            blockers.extend(tabs_hit(&shape, tabs, poses));
             if !blockers.is_empty() {
                 return Err(format!(
                     "board {board}: {}'s courtyard ({}) reaches into {}; turn the board, move the blocker, or list \

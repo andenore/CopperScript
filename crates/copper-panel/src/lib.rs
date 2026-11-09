@@ -807,6 +807,27 @@ mod tests {
     }
 
     #[test]
+    fn a_courtyard_stays_off_a_neighbours_tab() {
+        // A's courtyard lies above its top side, in the gap below the top rail
+        // (y -1.5 to -0.5 mm, x 8-16 mm): clear of the rail, both boards and
+        // a_top, but over B's top tab (x 15.5-18.5 mm, y -2-0 mm).
+        let reach = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 0 0 0) \
+             (property \"Reference\" \"J1\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+             (fp_rect (start 8 -1.5) (end 16 -0.5) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = reach;
+        let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+        assert!(error.contains("J1's courtyard (F.CrtYd) reaches into tab b_top"), "{error}");
+        let mut after = spec("");
+        after.assemble_after_depanel = vec!["A.J1".into()];
+        panelize(&after, &marked, &none(), "demo").expect("allowed when fitted after depanelization");
+    }
+
+    #[test]
     fn an_unnetted_copper_graphic_counts_as_unnetted_copper() {
         let line = BOARD.replacen(
             "(gr_line (start 0 0)",

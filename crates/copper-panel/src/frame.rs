@@ -449,7 +449,7 @@ fn build_tab(
 }
 
 /// The panel rectangle a built tab occupies across its gap.
-fn tab_rect(tab: &BuiltTab, pose: Pose) -> Rect {
+pub fn tab_rect(tab: &BuiltTab, pose: Pose) -> Rect {
     let normal = pose.rotate(side_geometry([0, 0, 0, 0], tab.side).2);
     let (a, b) = tab.edge;
     let far = |p: Point| (p.0 + normal.0 * tab.length, p.1 + normal.1 * tab.length);
