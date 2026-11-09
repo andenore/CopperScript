@@ -11,7 +11,7 @@
 use indexmap::{IndexMap, IndexSet};
 use num_traits::ToPrimitive;
 
-use copper_lang::mechanical::assembly::{BodyOverhang, body_outline};
+use copper_lang::mechanical::assembly::{AssemblyEnvelope, BodyOverhang, body_outline};
 use copper_lang::mechanical::stackup::StackupLayer;
 use copper_lang::silkscreen::{Artwork, ArtworkMaterial, Graphic};
 use copper_physical::footprint::{
@@ -1259,6 +1259,17 @@ pub fn validate_body_overhangs(board: &PhysicalBoard) -> Result<()> {
     Ok(())
 }
 
+fn assembly_envelope(value: &StateValue) -> Result<AssemblyEnvelope> {
+    let fields = Fields::of(value, "pcbir.physical:AssemblyEnvelope")?;
+    fields.allow(&["id", "outline", "side", "maximum_height_nm"])?;
+    Ok(AssemblyEnvelope {
+        id: text(fields.required("id")?)?,
+        outline: board_outline(fields.required("outline")?)?,
+        side: side(fields.required("side")?)?,
+        maximum_height_nm: integer(fields.required("maximum_height_nm")?)?,
+    })
+}
+
 fn assembly_access(value: &StateValue) -> Result<AssemblyAccess> {
     let fields = Fields::of(value, "pcbir.physical:AssemblyAccess")?;
     fields.allow(&["id", "reference", "outline", "side", "purpose"])?;
@@ -1433,7 +1444,7 @@ pub fn board(value: &StateValue) -> Result<PhysicalBoard> {
         "silkscreen",
         "power_feeds",
     ])?;
-    for name in ["zone_fills", "assembly_envelopes", "mechanical_references"] {
+    for name in ["zone_fills", "mechanical_references"] {
         if let Some(value) = fields.get(name)
             && !items(value)?.is_empty()
         {
@@ -1479,7 +1490,7 @@ pub fn board(value: &StateValue) -> Result<PhysicalBoard> {
         attachments: sequence(fields.get("attachments"), attachment)?,
         component_heights: sequence(fields.get("component_heights"), component_height)?,
         body_overhangs: sequence(fields.get("body_overhangs"), body_overhang)?,
-        assembly_envelopes: Vec::new(),
+        assembly_envelopes: sequence(fields.get("assembly_envelopes"), assembly_envelope)?,
         assembly_access: sequence(fields.get("assembly_access"), assembly_access)?,
         match_groups: sequence(fields.get("match_groups"), match_group)?,
         component_hole_clearances: sequence(fields.get("component_hole_clearances"), hole_clearance)?,

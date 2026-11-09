@@ -187,7 +187,7 @@ fn saved_body_overhang_rejects_nonboundary_and_diagonal_edges() {
 
 #[test]
 fn unsupported_mechanical_constraints_are_still_rejected() {
-    for name in ["assembly_envelopes", "mechanical_references", "zone_fills"] {
+    for name in ["mechanical_references", "zone_fills"] {
         let mut saved = saved_board();
         fields(&mut saved).insert(name.to_owned(), tuple(vec![StateValue::Null]));
         assert!(matches!(board(&saved), Err(Error::NotImplemented(_))), "{name}");

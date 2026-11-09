@@ -111,10 +111,11 @@ written by the removed Python implementation always counts as a different build.
 
 The Rust placement and unified replay readers preserve named boundary edges and
 audited body-overhang allowances, including their owner, interval, depth and
-reason. They validate actual boundary membership and overhang geometry instead
-of dropping these constraints. Unsupported saved constraints still fail explicitly:
-placement decoding does not support populated assembly envelopes, mechanical
-references or derived zone fills; unified replay also rejects populated datums
+reason, and assembly envelopes (enclosure height limits). They validate actual
+boundary membership and overhang geometry instead of dropping these
+constraints. Unsupported saved constraints still fail explicitly: placement
+decoding does not support populated mechanical references or derived zone
+fills; unified replay also rejects populated datums
 and attachment bindings pending their semantic validation.
 
 The same directory also receives `critical-inputs.state.json` (and
