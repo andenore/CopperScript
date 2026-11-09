@@ -35,8 +35,18 @@ for board in examples/*/board.copper; do
   target/release/copper check "$board" --locked
   target/release/copper audit-footprints "$board" --locked
 done
-cargo test --workspace --release
+cargo test --workspace --profile fast
 ```
+
+`--profile fast` is the release profile without link-time optimisation and
+with 16 codegen units: the same optimised code generation, built several times
+faster (about 6 minutes instead of 25 for the 125 test binaries on four
+cores). `cargo test --workspace --release` still works and matches the
+shipped binary exactly; debug `cargo test` (as CI runs it) keeps overflow
+checks. Debug builds keep line tables only, and third-party crates are
+optimised, so debug tests stay small on disk and quick where they reach
+num-bigint, i_overlay or the FDTD solver. A plain `cargo build` or `cargo test`
+skips the two WebAssembly adapters; `--workspace` or `-p` includes them.
 
 ## Experimental package retention
 

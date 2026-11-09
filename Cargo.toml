@@ -3,6 +3,27 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# A plain `cargo build` or `cargo test` skips the two WebAssembly adapters and
+# their wasm-bindgen proc-macro chain; `--workspace` (CI) and `-p` still reach them.
+default-members = [
+    "crates/copper",
+    "crates/copper-antenna",
+    "crates/copper-assembly",
+    "crates/copper-cam",
+    "crates/copper-drc",
+    "crates/copper-editor",
+    "crates/copper-json",
+    "crates/copper-lang",
+    "crates/copper-lsp",
+    "crates/copper-panel",
+    "crates/copper-pcb",
+    "crates/copper-physical",
+    "crates/copper-place",
+    "crates/copper-report",
+    "crates/copper-route",
+    "crates/copper-state",
+    "crates/copper-units",
+]
 
 [workspace.package]
 # Must match pyproject.toml: `agent-guide` reports it as package_version.
@@ -51,3 +72,25 @@ disallowed_types = "deny"
 [profile.release]
 codegen-units = 1
 lto = "thin"
+
+# Line tables keep panics and backtraces readable. Full debug info made the
+# 125 debug test binaries take 25 GB.
+[profile.dev]
+debug = "line-tables-only"
+
+# Third-party code is compiled once and rarely debugged: optimise it so debug
+# tests that reach num-bigint, i_overlay or the FDTD solver run at speed.
+[profile.dev.package."*"]
+debug = false
+opt-level = 2
+
+# Optimised tests without the release profile's whole-program settings:
+# `cargo test --workspace --profile fast`. Same code generation semantics as
+# release (no fast-math, same overflow behaviour), several times quicker to
+# build than `--release`, whose single codegen unit and LTO apply to each of
+# the 125 test binaries.
+[profile.fast]
+inherits = "release"
+codegen-units = 16
+lto = false
+incremental = true
