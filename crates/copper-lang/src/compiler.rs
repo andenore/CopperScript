@@ -601,9 +601,13 @@ fn lower_unit(
     merge_parts(&mut library, imported_parts, &document.location)?;
     let devices = imported_devices.clone();
     let mut board = Board { name: document.name.clone(), ..Board::default() };
+    let file = Path::new(&*document.location.filename).file_name().map(|name| name.to_string_lossy().into_owned());
+    board.sources.file = file.unwrap_or_default();
+    let at = |location: &Location| (location.line, location.column);
     let mut ports = IndexMap::new();
     let mut instances = Vec::new();
     let mut configurations = Vec::new();
+    let mut net_declarations: Vec<&NetDecl> = Vec::new();
     for declaration in &document.declarations {
         match declaration {
             Declaration::Component(component) => {
@@ -615,6 +619,7 @@ fn lower_unit(
                     ));
                 }
                 board.components.push(lower::component(component, &resolve_part(&component.part))?);
+                board.sources.components.entry(component.reference.clone()).or_insert_with(|| at(&component.location));
             }
             Declaration::Port(port) => {
                 if ports.contains_key(&port.name) {
@@ -647,9 +652,14 @@ fn lower_unit(
                     .map(|text| Endpoint::parse(text).map_err(|message| error("CMP010", message, &net.location)))
                     .collect::<Result<_>>()?;
                 board.nets.push(Net { name: net.name.clone(), endpoints });
+                board.sources.nets.entry(net.name.clone()).or_insert_with(|| at(&net.location));
+                net_declarations.push(net);
             }
             Declaration::NoConnect(item) => board.no_connects.extend(lower::no_connects(item)?),
-            Declaration::Supply(supply) => board.supplies.push(lower::supply(supply)?),
+            Declaration::Supply(supply) => {
+                board.supplies.push(lower::supply(supply)?);
+                board.sources.supplies.entry(supply.name.clone()).or_insert_with(|| at(&supply.location));
+            }
             Declaration::Interface(interface) => board.interfaces.push(lower::interface(interface)?),
             Declaration::Constraint(constraint) => board.constraints.push(lower::constraint(constraint)?),
             Declaration::Configuration(configuration) => configurations.push(configuration),
@@ -657,6 +667,7 @@ fn lower_unit(
             _ => {}
         }
     }
+    expand_pin_patterns(&mut board, &net_declarations, &library)?;
     for configuration in configurations {
         let selection = lower::configuration(configuration, &board.components, &library, &devices)?;
         board.peripheral_selections.push(selection);
@@ -665,6 +676,61 @@ fn lower_unit(
     board.library = library;
     board.devices = devices;
     Ok(Unit { board, ports, instances })
+}
+
+/// Replace each `COMPONENT.PREFIX*` endpoint with the component part's pins
+/// whose names start with `PREFIX`, in the part's pin order. Runs after every
+/// declaration is read, so a net may name a component declared below it.
+/// A pin the net already names is not repeated.
+fn expand_pin_patterns(
+    board: &mut Board,
+    declarations: &[&NetDecl],
+    library: &IndexMap<String, PartDefinition>,
+) -> Result<()> {
+    for (net, declaration) in board.nets.iter_mut().zip(declarations) {
+        if !net.endpoints.iter().any(|endpoint| endpoint.pin.ends_with('*')) {
+            continue;
+        }
+        let mut expanded: Vec<Endpoint> = Vec::new();
+        for (index, endpoint) in net.endpoints.iter().enumerate() {
+            let Some(prefix) = endpoint.pin.strip_suffix('*') else {
+                if !expanded.contains(endpoint) {
+                    expanded.push(endpoint.clone());
+                }
+                continue;
+            };
+            let location = declaration.endpoint_locations.get(index).unwrap_or(&declaration.location);
+            let pattern = format!("{}.{}", endpoint.component, endpoint.pin);
+            let part = board
+                .components
+                .iter()
+                .find(|component| component.reference == endpoint.component)
+                .and_then(|component| library.get(&component.part));
+            let Some(part) = part else {
+                return Err(error(
+                    "CMP212",
+                    format!("pin pattern {} needs a declared component with a known part", repr(&pattern)),
+                    location,
+                ));
+            };
+            for pin in part.pins.keys().filter(|pin| pin.starts_with(prefix)) {
+                let matched = Endpoint::new(&endpoint.component, pin);
+                if !expanded.contains(&matched) {
+                    expanded.push(matched);
+                }
+            }
+            let matched_any = part.pins.keys().any(|pin| pin.starts_with(prefix));
+            if !matched_any {
+                return Err(error(
+                    "CMP211",
+                    format!("pin pattern {} matches no pin of part {}", repr(&pattern), repr(&part.name)),
+                    location,
+                ));
+            }
+        }
+        net.endpoints = expanded;
+    }
+    Ok(())
 }
 
 fn validate_module_ports(body: &Board, ports: &IndexMap<String, PinType>, location: &Location) -> Result<()> {

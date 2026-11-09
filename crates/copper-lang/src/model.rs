@@ -660,6 +660,20 @@ pub struct Board {
     pub power_states: Vec<PowerState>,
     pub physical_macros: Vec<MacroBinding>,
     pub no_connects: Vec<NoConnect>,
+    /// Where the board's own components, nets and supplies are declared.
+    pub sources: SourceLocations,
+}
+
+/// The line and column (both 1-based) of each top-level declaration of a
+/// board, so a reviewer can open the declaration without searching for it.
+/// Every such declaration is in the board's own file.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SourceLocations {
+    /// The board file's name, without its directory.
+    pub file: String,
+    pub components: IndexMap<String, (usize, usize)>,
+    pub nets: IndexMap<String, (usize, usize)>,
+    pub supplies: IndexMap<String, (usize, usize)>,
 }
 
 /// Module provenance in a flat view.

@@ -125,7 +125,15 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "drc" => drc::run(rest, out, err),
         "compare-cam" => compare_cam::run(rest, out, err),
         "plan-layout" => plan_layout::run(rest, out, err),
-        "bench" => copper_route::ladder::run(rest, out, err),
+        "bench" => {
+            let code = copper_route::ladder::run(rest, out, err);
+            // The ladder runner lives in copper-route; its options are documented here.
+            let asked = rest.iter().take_while(|arg| *arg != "--").any(|arg| arg == "-h" || arg == "--help");
+            if code == 0 && asked {
+                help::options(out, "bench");
+            }
+            code
+        }
         "benchmark-routing" => benchmark_routing::run(rest, out, err),
         "route-global" => route_global::run(rest, out, err),
         "replay-unified" => replay_unified::run(rest, out, err),

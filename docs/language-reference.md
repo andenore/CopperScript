@@ -7,9 +7,12 @@ component C_BYPASS: CAPACITOR {
     value = 100nF;
     footprint = "Capacitor_SMD:C_0402_1005Metric";
     role = decoupling;
-    decouples = "U.VDD";
+    decouples = U.VDD;
 }
 ```
+
+`decouples` takes the pin like a net endpoint, `U.VDD`; the quoted form
+`"U.VDD"` is equivalent and compiles to the same IR.
 
 This is semantic component intent, not a numeric placement constraint. The
 association must name a real connected pin on the capacitor's feed net, with
@@ -665,7 +668,23 @@ net I2C_SDA {
 }
 ```
 
-An endpoint always has the form `component.pin`.
+An endpoint has the form `component.pin`. A pin pattern `component.PREFIX*`
+names every pin of the component's part whose name starts with `PREFIX`, in
+the part's pin order, so a module's ground pins need one line:
+
+```copper
+net GND {
+    U_MODEM.GND*;      // GND, GND_1, GND_27, ... as the part declares them
+    C1.2;
+}
+```
+
+The `*` follows the prefix directly and ends the name; it matches only part
+pin names (not device unit terminals). A pattern that matches no pin is an
+error (`CMP211`), as is one on a component whose part is unknown (`CMP212`).
+A pin the net already names is not repeated. Patterns may name a component
+declared further down the file. Check what a pattern selected with
+`copper query BOARD net NAME`.
 
 ## No-connect pins
 

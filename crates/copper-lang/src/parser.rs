@@ -569,7 +569,7 @@ impl Parser {
         let mut endpoint_locations = Vec::new();
         while !self.at_symbol("}") {
             endpoint_locations.push(self.current().location.clone());
-            endpoints.push(self.endpoint()?);
+            endpoints.push(self.net_endpoint()?);
             self.expect_symbol(";")?;
         }
         self.expect_symbol("}")?;
@@ -819,6 +819,22 @@ impl Parser {
             }
             _ => Err(self.error("PAR006", "expected a string, identifier, boolean, number, or quantity")),
         }
+    }
+
+    /// A net endpoint: `COMPONENT.PIN`, or `COMPONENT.PREFIX*` for every pin of
+    /// the component's part whose name starts with `PREFIX` (the `*` written
+    /// directly after the prefix).
+    fn net_endpoint(&mut self) -> Result<String> {
+        let endpoint = self.endpoint()?;
+        if self.at_symbol("*") {
+            let star = self.current();
+            if star.location.offset != self.previous(1).end_offset {
+                return Err(self.error_at("PAR017", "a pin pattern's * must follow its prefix directly", star));
+            }
+            self.advance();
+            return Ok(format!("{endpoint}*"));
+        }
+        Ok(endpoint)
     }
 
     fn endpoint(&mut self) -> Result<String> {
