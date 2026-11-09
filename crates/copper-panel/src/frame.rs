@@ -188,6 +188,15 @@ pub fn build(
     let mut footprints: Vec<(String, Rect)> = Vec::new();
     for tab in &spec.tabs {
         let built = build_tab(spec, tab, local, outlines, poses, &rails)?;
+        // One hole as wide as the tab would cut it through.
+        if built.width <= spec.mouse_bite.drill {
+            return Err(format!(
+                "tab {} is {} mm wide, no wider than its {} mm mouse-bite holes: they would cut it through",
+                built.name,
+                mm(built.width),
+                mm(spec.mouse_bite.drill)
+            ));
+        }
         // Tabs may not share material: the same bridge declared from both
         // boards, or two tabs on one side, would drill the bites twice.
         let area = tab_rect(&built, poses[&built.board]);
@@ -200,8 +209,39 @@ pub fn build(
                     built.side.as_str()
                 ));
             }
+            // Apart, tabs leave the router the panel spacing between them:
+            // a narrower slot cannot be milled.
+            let dx = (rect[0] - area[2]).max(area[0] - rect[2]).max(0);
+            let dy = (rect[1] - area[3]).max(area[1] - rect[3]).max(0);
+            let gap = (dx as f64).hypot(dy as f64);
+            if gap < spec.spacing as f64 {
+                return Err(format!(
+                    "tabs {other} and {} are {} mm apart, closer than the panel spacing ({} mm): the router cannot \
+                     mill between them; make them one tab or move one",
+                    built.name,
+                    mm(gap.round() as i64),
+                    mm(spec.spacing)
+                ));
+            }
         }
         footprints.push((built.name.clone(), area));
+        // A tab may meet only its own board and what it bridges to: any other
+        // board keeps the milled gap from it, or the outline would fuse them.
+        let ring = vec![(area[0], area[1]), (area[2], area[1]), (area[2], area[3]), (area[0], area[3])];
+        for (name, rings) in outlines {
+            if *name == built.board || built.across.as_deref() == Some(name.as_str()) {
+                continue;
+            }
+            let gap = crate::intent::ring_distance(std::slice::from_ref(&ring), rings);
+            if gap < spec.spacing {
+                return Err(format!(
+                    "tab {} passes board {name} {} mm away, closer than the panel spacing ({} mm)",
+                    built.name,
+                    mm(gap),
+                    mm(spec.spacing)
+                ));
+            }
+        }
         let (a, b) = built.edge;
         let pose = poses[&built.board];
         let normal = pose.rotate(side_geometry([0, 0, 0, 0], built.side).2);
@@ -221,14 +261,34 @@ pub fn build(
         let direction = ((b.0 - a.0).signum(), (b.1 - a.1).signum());
         let centre = ((a.0 + b.0) / 2, (a.1 + b.1) / 2);
         let mut pads = Vec::new();
-        let mut ends = vec![-spec.mouse_bite.inset];
-        if built.across.is_some() {
-            ends.push(built.length + spec.mouse_bite.inset);
+        let mut ends = vec![(-spec.mouse_bite.inset, built.board.as_str())];
+        if let Some(across) = &built.across {
+            ends.push((built.length + spec.mouse_bite.inset, across.as_str()));
         }
-        for depth in ends {
+        let tab_material = ring_shapes(&corners);
+        for (depth, owner) in ends {
+            // Every hole perforates its board: it lies on the board and the
+            // tab, not in a slot or past a thin flange of the board.
+            let mut material: poly::Shapes = outlines[owner].iter().flat_map(|ring| ring_shapes(ring)).collect();
+            material.extend(tab_material.iter().cloned());
+            let material = poly::union(&material);
             for k in 0..count {
                 let along = -span / 2 + k * spec.mouse_bite.pitch;
                 let p = (direction.0 * along + normal.0 * depth, direction.1 * along + normal.1 * depth);
+                let hole = poly::circle(
+                    copper_cam::geometry::Point::new(centre.0 + p.0, centre.1 + p.1),
+                    spec.mouse_bite.drill as f64 / 2.0,
+                    250.0,
+                );
+                let astray: f64 = poly::difference(&hole, &material).iter().map(|s| poly::shape_area(s)).sum();
+                if astray > 1e6 {
+                    return Err(format!(
+                        "tab {}: its mouse bites {} mm inside board {owner} fall off the board (a slot or a flange \
+                         narrower than the inset); reduce mouse_bite.inset or move the tab",
+                        built.name,
+                        mm(spec.mouse_bite.inset)
+                    ));
+                }
                 pads.push(npth(p, spec.mouse_bite.drill));
             }
         }
@@ -270,6 +330,53 @@ pub fn build(
         (outer[0] + 8_000_000, outer[3] - bottom_offset),
         (outer[2] - 8_000_000, outer[3] - bottom_offset),
     ];
+    let tooling_spots = [
+        (outer[0] + 3_000_000, rail_centre(true)),
+        (outer[2] - 3_000_000, rail_centre(true)),
+        (outer[0] + 3_000_000, rail_centre(false)),
+        (outer[2] - 3_000_000, rail_centre(false)),
+    ];
+    // Every fiducial (by its mask opening) and tooling hole lies on the panel
+    // and keeps 0.2 mm from the others: a narrow panel cannot hold them.
+    let mut features: Vec<(String, Point, i64)> = fiducial_spots
+        .iter()
+        .take(spec.fiducials as usize)
+        .enumerate()
+        .map(|(k, at)| (format!("FID{}", k + 1), *at, FIDUCIAL_OPENING_RADIUS))
+        .collect();
+    if let Some(drill) = spec.tooling_hole {
+        features.extend(tooling_spots.iter().enumerate().map(|(k, at)| (format!("TH{}", k + 1), *at, drill / 2)));
+    }
+    // A tooling hole keeps 0.2 mm of rail on both sides, or it notches the rail open.
+    if let Some(drill) = spec.tooling_hole {
+        let narrowest = spec.rails.top.min(spec.rails.bottom);
+        if drill / 2 + 200_000 > narrowest / 2 {
+            return Err(format!(
+                "tooling holes of {} mm need rails of at least {} mm (0.2 mm of rail either side); the rails are {} mm",
+                mm(drill),
+                mm(drill + 400_000),
+                mm(narrowest)
+            ));
+        }
+    }
+    for (k, (name, at, r)) in features.iter().enumerate() {
+        if at.0 - r < outer[0] || at.0 + r > outer[2] {
+            return Err(format!(
+                "the panel is {} mm wide: {name} would leave it; widen the panel or drop fiducials and tooling holes",
+                mm(outer[2] - outer[0])
+            ));
+        }
+        for (other, there, q) in &features[k + 1..] {
+            let distance = ((at.0 - there.0) as f64).hypot((at.1 - there.1) as f64);
+            if distance < (r + q + 200_000) as f64 {
+                return Err(format!(
+                    "the panel is {} mm wide: {name} and {other} would overlap; widen the panel or drop fiducials \
+                     and tooling holes",
+                    mm(outer[2] - outer[0])
+                ));
+            }
+        }
+    }
     for (k, at) in fiducial_spots.iter().take(spec.fiducials as usize).enumerate() {
         let pad = "(pad \"1\" smd circle (at 0 0) (size 1 1) (layers \"F.Cu\" \"F.Mask\") (solder_mask_margin 0.5))"
             .to_owned();
@@ -283,13 +390,7 @@ pub fn build(
         ));
     }
     if let Some(drill) = spec.tooling_hole {
-        let spots = [
-            (outer[0] + 3_000_000, rail_centre(true)),
-            (outer[2] - 3_000_000, rail_centre(true)),
-            (outer[0] + 3_000_000, rail_centre(false)),
-            (outer[2] - 3_000_000, rail_centre(false)),
-        ];
-        for (k, at) in spots.iter().enumerate() {
+        for (k, at) in tooling_spots.iter().enumerate() {
             items.push(footprint(
                 "copper-panel:ToolingHole",
                 &format!("TH{}", k + 1),
@@ -434,6 +535,24 @@ fn build_tab(
             side.as_str()
         ));
     }
+    // Its whole far end lands on what it bridges to: a sliver of a board or
+    // rail inside its width would hold the joint by a corner.
+    let far = |p: Point| (p.0 + n.0 * distance, p.1 + n.1 * distance);
+    let deep = |p: Point| (p.0 + n.0 * (distance + 1_000), p.1 + n.1 * (distance + 1_000));
+    let face = ring_shapes(&[far(a), far(b), deep(b), deep(a)]);
+    let target: poly::Shapes = match &across {
+        Some(name) => outlines[name].iter().flat_map(|ring| ring_shapes(ring)).collect(),
+        None => rails.iter().flat_map(|rail| rect_shapes(*rail)).collect(),
+    };
+    let landed: f64 = poly::intersection(&face, &target).iter().map(|s| poly::shape_area(s)).sum();
+    let whole: f64 = face.iter().map(|s| poly::shape_area(s)).sum();
+    if landed < whole * 0.999 {
+        return Err(format!(
+            "tab {}: only part of its far end lands on {}; move it so its whole width meets a straight side",
+            tab.name,
+            across.as_deref().map_or_else(|| "a rail".to_owned(), |b| format!("board {b}"))
+        ));
+    }
     let _ = spec;
     Ok(BuiltTab {
         name: tab.name.clone(),
@@ -448,8 +567,61 @@ fn build_tab(
     })
 }
 
+/// Keep-outs inside each board along every tab landing, `depth` deep on
+/// the copper `layers` and reaching `extend` past both tab ends, clipped to
+/// the board. Where a tab joins a board its edge leaves Edge.Cuts (the
+/// outline is the union), and after breaking the mouse-bite walls become the
+/// board edge, out to almost the tab's ends: fills and tracks there would
+/// lose the copper-to-edge clearance they keep on the board alone, so the
+/// keep-out holds them back from every bite wall as the edge did.
+pub fn tab_edge_keepouts(
+    tabs: &[BuiltTab],
+    poses: &IndexMap<String, Pose>,
+    outlines: &IndexMap<String, Vec<Vec<Point>>>,
+    depth: i64,
+    extend: i64,
+    layers: &[String],
+) -> Vec<Node> {
+    if depth <= 0 || layers.is_empty() {
+        return Vec::new();
+    }
+    let layer_list: Vec<String> = layers.iter().map(|l| quote(l)).collect();
+    let mut zones = Vec::new();
+    for tab in tabs {
+        let n = poses[&tab.board].rotate(side_geometry([0, 0, 0, 0], tab.side).2);
+        let (a, b) = tab.edge;
+        let dir = ((b.0 - a.0).signum(), (b.1 - a.1).signum());
+        let (a, b) = ((a.0 - dir.0 * extend, a.1 - dir.1 * extend), (b.0 + dir.0 * extend, b.1 + dir.1 * extend));
+        let shift = |p: Point, d: i64| (p.0 + n.0 * d, p.1 + n.1 * d);
+        // Into the tab's own board, and into the board it bridges to.
+        let mut strips = vec![("near", tab.board.as_str(), [a, b, shift(b, -depth), shift(a, -depth)])];
+        if let Some(across) = &tab.across {
+            let (fa, fb) = (shift(a, tab.length), shift(b, tab.length));
+            strips.push(("far", across.as_str(), [fa, fb, shift(fb, depth), shift(fa, depth)]));
+        }
+        for (end, board, corners) in strips {
+            let board_shape: poly::Shapes = outlines[board].iter().flat_map(|ring| ring_shapes(ring)).collect();
+            for (k, piece) in poly::intersection(&ring_shapes(&corners), &board_shape).iter().enumerate() {
+                let pts: Vec<String> = piece[0].iter().map(|p| format!("(xy {} {})", mm(p.x), mm(p.y))).collect();
+                let key = if k == 0 { format!("{}:{end}", tab.name) } else { format!("{}:{end}:{k}", tab.name) };
+                let text = format!(
+                    "(zone (layers {}) (uuid {}) (name {}) (hatch edge 0.5) \
+                     (keepout (tracks not_allowed) (vias not_allowed) (pads not_allowed) (copperpour not_allowed) (footprints allowed)) \
+                     (polygon (pts {})))",
+                    layer_list.join(" "),
+                    quote(&uuid(&format!("tab-edge:{key}"))),
+                    quote(&format!("panel/tab-edge/{}/{end}", tab.name)),
+                    pts.join(" ")
+                );
+                zones.push(crate::sexpr::parse(&text, "frame").expect("a valid keep-out"));
+            }
+        }
+    }
+    zones
+}
+
 /// The panel rectangle a built tab occupies across its gap.
-fn tab_rect(tab: &BuiltTab, pose: Pose) -> Rect {
+pub fn tab_rect(tab: &BuiltTab, pose: Pose) -> Rect {
     let normal = pose.rotate(side_geometry([0, 0, 0, 0], tab.side).2);
     let (a, b) = tab.edge;
     let far = |p: Point| (p.0 + normal.0 * tab.length, p.1 + normal.1 * tab.length);

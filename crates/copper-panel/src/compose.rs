@@ -5,6 +5,7 @@
 //! is refilled), and each board's `Edge.Cuts` outline is taken out for the
 //! frame to replace. Anything the composer does not know how to place fails.
 
+use copper_cam::poly;
 use indexmap::IndexMap;
 use sha2::{Digest, Sha256};
 
@@ -197,6 +198,8 @@ struct Placer<'a> {
     /// The boards name their nets (`(net "GND")`, KiCad 10) instead of
     /// numbering them against a net table; the panel keeps that form.
     named: bool,
+    /// The board's outline on the panel: its zones are clipped to it.
+    outline: &'a [Vec<Point>],
 }
 
 impl Placer<'_> {
@@ -349,7 +352,85 @@ impl Placer<'_> {
         result
     }
 
-    fn place(&self, mut item: Node) -> Result<Option<Node>, String> {
+    /// Clip a placed zone to the board's outline. On the board alone its
+    /// fill stops at the board edge and a rule area beyond it does nothing;
+    /// on the panel the outline also holds tabs, rails and other boards, so
+    /// the part beyond the board is cut off. A zone inside its board is left
+    /// exactly as written. A zone cut into several pieces becomes one zone
+    /// per piece (KiCad reads a zone's later polygons as holes of its first).
+    fn clip_zone(&self, zone: &Node) -> Result<Vec<Node>, String> {
+        let number = |n: &Node, k: usize| n.value(k).and_then(|v| v.parse::<f64>().ok()).map(|v| v * 1e6);
+        let mut contours: Vec<poly::Contour> = Vec::new();
+        for polygon in zone.children("polygon") {
+            let mut ring: Vec<(f64, f64)> = Vec::new();
+            for node in polygon.child("pts").map(Node::items).unwrap_or_default() {
+                let at = |tag: &str| node.child(tag).and_then(|n| Some((number(n, 1)?, number(n, 2)?)));
+                match node.tag() {
+                    Some("xy") => ring.extend(number(node, 1).zip(number(node, 2))),
+                    Some("arc") => {
+                        if let (Some(s), Some(m), Some(e)) = (at("start"), at("mid"), at("end")) {
+                            match crate::intent::arc_geometry(s, m, e) {
+                                Some((c, r, a0, sweep)) => {
+                                    let n = crate::intent::arc_segments(r, sweep);
+                                    ring.extend(
+                                        (0..=n)
+                                            .map(|k| a0 + sweep * k as f64 / n as f64)
+                                            .map(|t| (c.0 + r * t.cos(), c.1 + r * t.sin())),
+                                    );
+                                }
+                                None => ring.extend([s, e]),
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            contours.extend(poly::polygon(&ring).into_iter().flatten());
+        }
+        let shape = poly::even_odd(&contours);
+        let board: poly::Shapes = self
+            .outline
+            .iter()
+            .flat_map(|ring| poly::polygon(&ring.iter().map(|(x, y)| (*x as f64, *y as f64)).collect::<Vec<_>>()))
+            .collect();
+        let beyond: f64 = poly::difference(&shape, &board).iter().map(|s| poly::shape_area(s)).sum();
+        if beyond <= 1e6 {
+            return Ok(vec![zone.clone()]);
+        }
+        let clipped = poly::intersection(&shape, &board);
+        if clipped.iter().any(|s| s.len() > 1) {
+            let name = zone.child("name").and_then(|n| n.string_value(1)).unwrap_or_default();
+            return Err(format!(
+                "{}: zone {name:?} reaches beyond the board and has holes; clip it to the board outline",
+                self.source
+            ));
+        }
+        let mut zones = Vec::new();
+        for (k, piece) in clipped.iter().enumerate() {
+            let mut part = zone.clone();
+            if let Some(list) = part.items_mut() {
+                list.retain(|n| n.tag() != Some("polygon"));
+                let mut points = vec![Node::atom("pts")];
+                points.extend(
+                    piece[0]
+                        .iter()
+                        .map(|p| Node::list(vec![Node::atom("xy"), Node::atom(mm(p.x)), Node::atom(mm(p.y))])),
+                );
+                list.push(Node::list(vec![Node::atom("polygon"), Node::list(points)]));
+                // Later pieces get their own UUIDs (derived from the zone's).
+                if k > 0
+                    && let Some(uuid) = list.iter_mut().find(|n| n.tag() == Some("uuid"))
+                    && let Some(old) = uuid.string_value(1)
+                {
+                    *uuid = Node::list(vec![Node::atom("uuid"), Node::string(&format!("{old}:piece{k}"))]);
+                }
+            }
+            zones.push(part);
+        }
+        Ok(zones)
+    }
+
+    fn place(&self, mut item: Node) -> Result<Vec<Node>, String> {
         let tag = item.tag().unwrap_or("").to_owned();
         match tag.as_str() {
             "footprint" => self.footprint(&mut item)?,
@@ -382,6 +463,11 @@ impl Placer<'_> {
                 }
                 // Every polygon (a zone may have several, holes included).
                 self.geometry(&mut item)?;
+                let mut zones = self.clip_zone(&item)?;
+                for zone in &mut zones {
+                    self.uuids(zone);
+                }
+                return Ok(zones);
             }
             "segment" | "arc" | "via" => {
                 self.geometry(&mut item)?;
@@ -397,7 +483,7 @@ impl Placer<'_> {
             }
             _ if tag.starts_with("gr_") => {
                 if item.child("layer").and_then(|l| l.string_value(1)).as_deref() == Some("Edge.Cuts") {
-                    return Ok(None);
+                    return Ok(Vec::new());
                 }
                 self.geometry(&mut item)?;
                 if let Some(net) = item.child_mut("net") {
@@ -407,7 +493,7 @@ impl Placer<'_> {
             _ => return Err(format!("{}: top-level {tag} cannot be placed on a panel yet", self.source)),
         }
         self.uuids(&mut item);
-        Ok(Some(item))
+        Ok(vec![item])
     }
 }
 
@@ -462,10 +548,18 @@ pub fn compose(boards: &[BoardInput], poses: &[Pose]) -> Result<Composition, Str
     for ((board, pose), old_nets) in boards.iter().zip(poses).zip(&old_tables) {
         let source = format!("board {}", board.instance);
         let rings = outline_rings(&board.tree, &source)?;
-        outlines
-            .insert(board.instance.clone(), rings.iter().map(|r| r.iter().map(|p| pose.apply(*p)).collect()).collect());
+        let placed: Vec<Vec<Point>> = rings.iter().map(|r| r.iter().map(|p| pose.apply(*p)).collect()).collect();
+        outlines.insert(board.instance.clone(), placed.clone());
         pose_map.insert(board.instance.clone(), *pose);
-        let placer = Placer { instance: &board.instance, pose: *pose, nets: &nets, old_nets, source: &source, named };
+        let placer = Placer {
+            instance: &board.instance,
+            pose: *pose,
+            nets: &nets,
+            old_nets,
+            source: &source,
+            named,
+            outline: &placed,
+        };
         for item in board.tree.items().iter().skip(1) {
             let tag = item.tag().unwrap_or("");
             if HEADER.contains(&tag) || tag == "setup" || tag == "net" || tag == "title_block" {
@@ -474,9 +568,7 @@ pub fn compose(boards: &[BoardInput], poses: &[Pose]) -> Result<Composition, Str
             if !PLACED.contains(&tag) && tag != "gr_text" && !tag.starts_with("gr_") {
                 return Err(format!("{source}: top-level {tag} cannot be placed on a panel yet"));
             }
-            if let Some(placed) = placer.place(item.clone())? {
-                items.push(placed);
-            }
+            items.extend(placer.place(item.clone())?);
         }
     }
     Ok(Composition { tree: Node::List(items), outlines, poses: pose_map })
@@ -623,6 +715,55 @@ mod tests {
         let zones: Vec<Option<&str>> = board.zones.iter().map(|z| z.net.as_deref()).collect();
         assert_eq!(zones, [Some("A/GND"), Some("B/GND")]);
         assert!(composed.tree.children("net").next().is_none(), "named nets need no table");
+    }
+
+    #[test]
+    fn a_zone_beyond_its_board_is_clipped_to_it() {
+        // A rule area from x 8 to 14.5 mm on a 10 mm board keeps only x 8-10.
+        let reach = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"55555555-5555-5555-5555-555555555555\") (name \"ko\") \
+             (hatch edge 0.5) (keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) \
+             (polygon (pts (xy 8 5.1) (xy 14.5 5.1) (xy 14.5 5.9) (xy 8 5.9))))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let board = BoardInput { instance: "A".to_owned(), tree: parse(&reach, "A").expect("parsed") };
+        let rings = outline_rings(&board.tree, "A").expect("outline");
+        let composed = compose(&[board], &[pose_for(&rings, 0, (0, 0))]).expect("composed");
+        let zone = composed
+            .tree
+            .children("zone")
+            .find(|z| z.child("name").and_then(|n| n.string_value(1)).as_deref() == Some("ko"))
+            .expect("the keep-out");
+        let xs: Vec<f64> = zone
+            .children("polygon")
+            .flat_map(|p| p.child("pts").map(|pts| pts.children("xy").cloned().collect::<Vec<_>>()).unwrap_or_default())
+            .filter_map(|xy| xy.value(1).and_then(|v| v.parse::<f64>().ok()))
+            .collect();
+        assert!(!xs.is_empty() && xs.iter().all(|x| *x <= 10.0 + 1e-9), "{xs:?}");
+        // A U whose bottom lies past the edge clips into two arms: two zones,
+        // each with its own UUID.
+        let u = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"56565656-5656-5656-5656-565656565656\") (name \"u\") \
+             (hatch edge 0.5) (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) \
+             (polygon (pts (xy 1 2) (xy 2 2) (xy 2 7) (xy 8 7) (xy 8 2) (xy 9 2) (xy 9 8) (xy 1 8))))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let board = BoardInput { instance: "A".to_owned(), tree: parse(&u, "A").expect("parsed") };
+        let composed_u = compose(&[board], &[pose_for(&rings, 0, (0, 0))]).expect("composed");
+        let arms: Vec<&Node> = composed_u
+            .tree
+            .children("zone")
+            .filter(|z| z.child("name").and_then(|n| n.string_value(1)).as_deref() == Some("u"))
+            .collect();
+        assert_eq!(arms.len(), 2);
+        assert!(arms.iter().all(|z| z.children("polygon").count() == 1));
+        let uuids: Vec<Option<String>> = arms.iter().map(|z| z.child("uuid").and_then(|u| u.string_value(1))).collect();
+        assert_ne!(uuids[0], uuids[1]);
+        // The board's own pour, drawn on its outline, is left exactly as written.
+        let pour = composed.tree.children("zone").find(|z| z.child("name").is_none()).expect("the pour");
+        assert_eq!(pour.children("polygon").count(), 1);
     }
 
     #[test]

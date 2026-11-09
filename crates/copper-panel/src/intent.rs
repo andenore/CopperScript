@@ -283,7 +283,7 @@ enum Curve {
 
 /// A circle through three points and the arc from `s` through `m` to `e`
 /// as (centre, radius, start angle, signed sweep); `None` when straight.
-fn arc_geometry(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Option<((f64, f64), f64, f64, f64)> {
+pub(crate) fn arc_geometry(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Option<((f64, f64), f64, f64, f64)> {
     let d = 2.0 * (s.0 * (m.1 - e.1) + m.0 * (e.1 - s.1) + e.0 * (s.1 - m.1));
     if d.abs() < 1e-12 {
         return None;
@@ -301,7 +301,7 @@ fn arc_geometry(s: (f64, f64), m: (f64, f64), e: (f64, f64)) -> Option<((f64, f6
 
 /// Chords per arc so none strays more than a quarter micron from it (the
 /// keep-out is matched within a micron of the edge); `r` in nanometres.
-fn arc_segments(r: f64, sweep: f64) -> usize {
+pub(crate) fn arc_segments(r: f64, sweep: f64) -> usize {
     const SAGITTA: f64 = 250.0;
     let step = if r <= SAGITTA { std::f64::consts::FRAC_PI_2 } else { 2.0 * (1.0 - SAGITTA / r).acos() };
     ((sweep.abs() / step).ceil() as usize).clamp(8, 1_000_000)
@@ -422,12 +422,15 @@ pub fn routed_keep_clear(pcb: &copper_cam::board::Board, outline: &[Vec<Point>])
             contours.extend(poly::polygon(&ring).into_iter().flatten());
         }
         let shapes = poly::even_odd(&contours);
-        // The side, a micron either way: what of the keep-out touches it.
+        // Each side and the margin inside the board from it (a micron
+        // outside): what of the keep-out reaches the side or comes within the
+        // margin of it, round a corner too. Beyond the board it holds nothing.
+        let m = ANTENNA_TAB_MARGIN;
         let strips = [
-            (Side::Top, [b[0], b[1] - 1_000, b[2], b[1] + 1_000]),
-            (Side::Bottom, [b[0], b[3] - 1_000, b[2], b[3] + 1_000]),
-            (Side::Left, [b[0] - 1_000, b[1], b[0] + 1_000, b[3]]),
-            (Side::Right, [b[2] - 1_000, b[1], b[2] + 1_000, b[3]]),
+            (Side::Top, [b[0], b[1] - 1_000, b[2], b[1] + m]),
+            (Side::Bottom, [b[0], b[3] - m, b[2], b[3] + 1_000]),
+            (Side::Left, [b[0] - 1_000, b[1], b[0] + m, b[3]]),
+            (Side::Right, [b[2] - m, b[1], b[2] + 1_000, b[3]]),
         ];
         for (side, r) in strips {
             let strip = rect_shapes([(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])]);
@@ -709,6 +712,44 @@ pub fn ring_distance(a: &[Vec<Point>], b: &[Vec<Point>]) -> i64 {
     best.floor() as i64
 }
 
+/// The tabs whose full rectangle (the bridge material across the gap)
+/// `shape` overlaps, any board's tab included.
+fn tabs_hit(shape: &poly::Shapes, tabs: &[BuiltTab], poses: &IndexMap<String, Pose>) -> Vec<String> {
+    tabs.iter()
+        .filter(|tab| {
+            let r = crate::frame::tab_rect(tab, poses[&tab.board]);
+            !poly::intersection(shape, &rect_shapes([(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])]))
+                .is_empty()
+        })
+        .map(|tab| format!("tab {}", tab.name))
+        .collect()
+}
+
+/// The tabs whose mouse bites, drilled `inset` into the board each landing
+/// touches (to `inset + drill / 2` deep, along the tab's width), `shape` covers.
+fn bites_hit(shape: &poly::Shapes, spec: &PanelSpec, tabs: &[BuiltTab], poses: &IndexMap<String, Pose>) -> Vec<String> {
+    let depth = spec.mouse_bite.inset + spec.mouse_bite.drill / 2;
+    tabs.iter()
+        .filter(|tab| {
+            let n = poses[&tab.board].rotate(match tab.side {
+                Side::Top => (0, -1),
+                Side::Bottom => (0, 1),
+                Side::Left => (-1, 0),
+                Side::Right => (1, 0),
+            });
+            let (a, b) = tab.edge;
+            let shift = |p: Point, d: i64| (p.0 + n.0 * d, p.1 + n.1 * d);
+            let mut landings = vec![[a, b, shift(b, -depth), shift(a, -depth)]];
+            if tab.across.is_some() {
+                let (fa, fb) = (shift(a, tab.length), shift(b, tab.length));
+                landings.push([fa, fb, shift(fb, depth), shift(fa, depth)]);
+            }
+            landings.into_iter().any(|corners| !poly::intersection(shape, &rect_shapes(corners)).is_empty())
+        })
+        .map(|tab| format!("the mouse bites of tab {}", tab.name))
+        .collect()
+}
+
 /// Check the panel against every board's intent; returns the panel's open
 /// ends (panel coordinates, prefixed nets) for the DRC waiver.
 pub fn check(
@@ -741,8 +782,15 @@ pub fn check(
             let far = |p: Point| (p.0 + normal.0 * tab.length, p.1 + normal.1 * tab.length);
             let neighbour = &poses[across];
             let (a, b) = (neighbour.invert(far(tab.edge.0)), neighbour.invert(far(tab.edge.1)));
-            match side_of(bounds(&local[across]), a, b) {
-                Some((side, lo, hi)) => contact_clear(intents, &tab.name, across, side, lo, hi)?,
+            let nb = bounds(&local[across]);
+            match side_of(nb, a, b) {
+                Some((side, lo, hi)) => {
+                    let length = if matches!(side, Side::Top | Side::Bottom) { nb[2] - nb[0] } else { nb[3] - nb[1] };
+                    if lo < 0 || hi > length {
+                        return Err(format!("tab {} lands on board {across} off its {} side", tab.name, side.as_str()));
+                    }
+                    contact_clear(intents, &tab.name, across, side, lo, hi)?
+                }
                 None => {
                     return Err(format!(
                         "tab {} lands on board {} away from a straight side of its outline",
@@ -755,6 +803,9 @@ pub fn check(
     // Body envelopes beyond the edge must stay clear of rails and other
     // boards, unless the component is fitted after depanelization.
     let mut open_ends = Vec::new();
+    // Bodies placed with the panel, by board: (board, label, layer, shape);
+    // an empty layer (a declared envelope) meets either side.
+    let mut bodies: Vec<(String, String, String, poly::Shapes)> = Vec::new();
     for (board, intent) in intents {
         let pose = poses[board];
         let b = bounds(&local[board]);
@@ -784,6 +835,8 @@ pub fn check(
                     blockers.push("a rail".to_owned());
                 }
             }
+            blockers.extend(tabs_hit(&envelope, tabs, poses));
+            bodies.push((board.clone(), format!("{}'s body", overhang.reference), String::new(), envelope.clone()));
             for (other, rings) in outlines {
                 if other == board {
                     continue;
@@ -841,6 +894,14 @@ pub fn check(
                     blockers.push(format!("board {other}"));
                 }
             }
+            blockers.extend(tabs_hit(&shape, tabs, poses));
+            blockers.extend(bites_hit(&shape, spec, tabs, poses));
+            bodies.push((
+                board.clone(),
+                format!("{}'s courtyard ({})", courtyard.reference, courtyard.layer),
+                courtyard.layer.clone(),
+                shape.clone(),
+            ));
             if !blockers.is_empty() {
                 return Err(format!(
                     "board {board}: {}'s courtyard ({}) reaches into {}; turn the board, move the blocker, or list \
@@ -858,6 +919,18 @@ pub fn check(
                 net: format!("{board}/{}", end.net),
                 layer: end.layer.clone(),
             });
+        }
+    }
+    // Two boards' bodies on the same side must not meet in the gap between them.
+    for (k, (board, label, layer, shape)) in bodies.iter().enumerate() {
+        for (other, other_label, other_layer, other_shape) in &bodies[k + 1..] {
+            let same_side = layer.is_empty() || other_layer.is_empty() || layer == other_layer;
+            if board != other && same_side && !poly::intersection(shape, other_shape).is_empty() {
+                return Err(format!(
+                    "board {board}: {label} meets board {other}'s {other_label} between the boards; move a board \
+                     or list one in assemble_after_depanel"
+                ));
+            }
         }
     }
     Ok(open_ends)

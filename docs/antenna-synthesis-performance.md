@@ -90,6 +90,53 @@ metric and wall time is quoted with its spread.
     unconnected tile costs a full evaluation of unchanged copper. The share
     is not yet measured.
 
+## Model revision 6
+
+A mesh line keeps every role it carries through merging: a copper edge
+that lands on a port line is still copper, so a ground boundary (a feed-slot
+wall at the board clearance) beside it keeps its own line. Before, the merged
+line carried only the port rank, the wall merged onto it, and the slot wall
+landed on the stub's copper and shorted the port.
+
+## Model revision 5
+
+Found synthesizing CopperAssetTracker's three antennas on JLCPCB's
+JLC06161H-3313 six-layer stack (0.0994 mm prepregs under F.Cu and over
+B.Cu, 0.1 mm board clearance); neither failure shows on the two-layer
+example board:
+
+- **Thin prepregs.** z lines closer than half the z cell merge, and equal
+  ranks keep the first, so F.Cu's line (z = 0) merged into In1.Cu's
+  (-0.0994 mm): the top ground and radiator moved onto the inner plane, and
+  the grading around the lost line left a 0.0000 mm cell (150 z lines, dt
+  0.0000 ps, which never finishes). The z snap is now at most 0.45 x the
+  thinnest dielectric, so every interface keeps its own line: 57 z lines and
+  dt 0.20 ps for the BLE site's fine mesh (1.32 M cells).
+- **Ground boundaries next to copper.** Region and slot edges (where the
+  ground sheets end) ranked below copper, so a ground edge closer to the
+  radiator than the snap distance merged onto its line and shorted the port:
+  the feed slot's sides at the 0.1 mm board clearance (Z = j1.8 ohm at every
+  frequency, 0.0 dB at every length), and the region's start 0.25 mm from a
+  1.5 mm stub, whose edge was also dropped for the nearby port line (Z =
+  j3 ohm). A ground boundary and a copper edge, or two ground boundaries,
+  now never share a line (a sheet edge whose line was dropped is snapped by
+  the solver onto the nearest line, which was the stub's when the slot side
+  stood 0.11 mm past the region start); a
+  copper edge keeps its own line beside a port line unless within a quarter
+  cell of it, where it moves onto the port (the stub's square end inside the
+  port gap would otherwise leave a sliver that sets the time step). Only the
+  region's padding still snaps onto copper. The slot keeps the board
+  clearance at its sides, as the fill will.
+
+These change what is simulated, so the revision moves and every `tuned_for`
+digest is renewed by a fresh synthesis. The example re-synthesized to a
+22.77 mm monopole (height 5.3 mm) at 2.371 GHz on the fine mesh, -12.3 dB
+matched over the band with 0.85 nH series then 2.54 pF shunt, 86 %
+efficiency, against 22.73 mm under revision 4 (+0.2 % in length). Keeping
+the real gaps costs time step: the example's fine dt is 0.14 ps (0.24 ps
+in revision 3), since the 0.1 to 0.2 mm ground gaps beside the stub are now
+cells of their own.
+
 ## Model revision 4
 
 No cell is coarser than the frequency limit (a fifteenth of the guided

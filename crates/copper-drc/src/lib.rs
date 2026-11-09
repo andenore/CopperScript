@@ -279,7 +279,7 @@ pub fn run_physical_drc(board: &PhysicalBoard, policy: Policy) -> Result<Report>
     let mut relaxations: Vec<BreakoutRelaxation> = Vec::new();
     check_track_rules(board, &mut findings, &mut relaxations)?;
     covered.push(coverage("track_width_and_budgets", Executed, true, ""));
-    check_differential_rules(board, &mut findings);
+    check_differential_rules(board, &mut findings)?;
     covered.push(coverage("differential_geometry", Executed, true, ""));
     check_length_match(board, &mut findings)?;
     covered.push(coverage(
@@ -525,11 +525,14 @@ fn via_spans_overlap(board: &PhysicalBoard, first: &Via, second: &Via) -> Result
     Ok(false)
 }
 
-fn routed_length(board: &PhysicalBoard, net: &str) -> i64 {
+/// The routed length of `net`: its tracks and arcs, leaving out `antenna`
+/// copper (a synthesized antenna's radiator is not a route; see
+/// [`copper_pcb::antenna::antenna_tracks`]).
+fn routed_length(board: &PhysicalBoard, net: &str, antenna: &IndexSet<TrackSegment>) -> i64 {
     board
         .tracks
         .iter()
-        .filter(|t| t.net == net)
+        .filter(|t| t.net == net && !antenna.contains(*t))
         .map(|t| round_int(hypot((t.end.x_nm - t.start.x_nm) as f64, (t.end.y_nm - t.start.y_nm) as f64)))
         .sum::<i64>()
         + crate::arcs::routed_arc_length_nm(board, net)
@@ -637,8 +640,9 @@ fn check_track_rules(
     }
     let mut sorted: Vec<(&&str, &&NetRoutingRule)> = rules.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(b.0));
+    let antenna = copper_pcb::antenna::antenna_tracks(board)?;
     for (net, rule) in sorted {
-        let length = routed_length(board, net);
+        let length = routed_length(board, net, &antenna);
         if let Some(maximum) = rule.max_length_nm
             && length > maximum
         {
@@ -737,7 +741,8 @@ fn check_vias(board: &PhysicalBoard, findings: &mut Vec<Finding>) {
 }
 
 /// `_check_differential_rules`.
-fn check_differential_rules(board: &PhysicalBoard, findings: &mut Vec<Finding>) {
+fn check_differential_rules(board: &PhysicalBoard, findings: &mut Vec<Finding>) -> Result<()> {
+    let antenna = copper_pcb::antenna::antenna_tracks(board)?;
     let rules: IndexMap<&str, &NetRoutingRule> = board.net_routing_rules.iter().map(|r| (r.net.as_str(), r)).collect();
     let mut processed: Vec<Vec<String>> = Vec::new();
     let mut sorted: Vec<&NetRoutingRule> = board.net_routing_rules.iter().collect();
@@ -757,7 +762,7 @@ fn check_differential_rules(board: &PhysicalBoard, findings: &mut Vec<Finding>) 
             );
             continue;
         };
-        let skew = (routed_length(board, &rule.net) - routed_length(board, partner_net)).abs();
+        let skew = (routed_length(board, &rule.net, &antenna) - routed_length(board, partner_net, &antenna)).abs();
         let limits: Vec<i64> = [rule.max_skew_nm, partner.max_skew_nm].into_iter().flatten().collect();
         if let Some(limit) = limits.iter().min()
             && skew > *limit
@@ -778,6 +783,7 @@ fn check_differential_rules(board: &PhysicalBoard, findings: &mut Vec<Finding>) 
             );
         }
     }
+    Ok(())
 }
 
 /// `return_span_covers`.
@@ -2053,6 +2059,6 @@ pub fn routing_rule_findings(board: &PhysicalBoard) -> Result<Vec<Finding>> {
     let mut relaxations: Vec<BreakoutRelaxation> = Vec::new();
     check_track_rules(board, &mut findings, &mut relaxations)?;
     check_vias(board, &mut findings);
-    check_differential_rules(board, &mut findings);
+    check_differential_rules(board, &mut findings)?;
     Ok(findings)
 }

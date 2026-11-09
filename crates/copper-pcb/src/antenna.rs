@@ -25,7 +25,7 @@
 
 use std::path::Path;
 
-use indexmap::IndexMap;
+use indexmap::{IndexMap, IndexSet};
 use sha2::{Digest, Sha256};
 
 use copper_json::{Dumps, Object, Value as Json, python_str_repr as repr};
@@ -58,7 +58,17 @@ pub const GENERATOR: &str = "copper antenna/v0.2";
 /// Revision 4: no cell, the feed and short zones' included, is coarser than
 /// the frequency limit (a fifteenth of the guided wavelength at the sweep's
 /// top), which bands above about 12 GHz on FR4 reached.
-pub const MODEL_REVISION: i64 = 4;
+/// Revision 5: every dielectric interface keeps its own z line (a prepreg
+/// thinner than half a z cell merged F.Cu's line into the ground layer's
+/// below it, and the grading around the lost line left a zero-width cell,
+/// and so a zero time step); and the lines where ground sheets end (region
+/// and feed slot) never merge with radiator copper lines (below half a cell,
+/// the ground edge merged onto the stub's line and shorted the port).
+/// Revision 6: a mesh line keeps every role it carries through merging (a
+/// copper edge on a port line is still copper), so a ground boundary beside
+/// it keeps its own line (a feed slot wall within a snap of a stub edge that
+/// lay on a port line merged onto it and shorted the port).
+pub const MODEL_REVISION: i64 = 6;
 /// The `members[].reference` and `net` role names inside the generated asset.
 const MEMBER: &str = "ANT";
 const SHORT_MEMBER: &str = "SHORT";
@@ -1611,6 +1621,26 @@ pub fn recorded_syntheses(board: &PhysicalBoard) -> Vec<Object> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// The copper the board's synthesized antennas own: every track of their
+/// generated macros (the radiator, its feed stub and an inverted-F's short),
+/// at its board pose. A net's routed length leaves it out: it is the antenna,
+/// not a route, so a `max_length` on the feed net budgets only the routed feed.
+pub fn antenna_tracks(board: &PhysicalBoard) -> Result<IndexSet<TrackSegment>> {
+    let names: IndexSet<String> = recorded_syntheses(board)
+        .iter()
+        .filter_map(|record| record.get("name").and_then(Json::as_str).map(str::to_owned))
+        .collect();
+    let mut tracks = IndexSet::new();
+    if names.is_empty() {
+        return Ok(tracks);
+    }
+    let poses = crate::keepouts::placement_map(board);
+    for hard in board.hard_macros.iter().filter(|hard| names.contains(&hard.cluster)) {
+        tracks.extend(crate::hard_macros::resolved_macro_geometry(board, hard, &poses)?.tracks);
+    }
+    Ok(tracks)
 }
 
 /// A short human-readable statement of `site`'s band and target.

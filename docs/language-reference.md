@@ -1310,11 +1310,16 @@ exclusion, export locking and port-continuity proof need nothing new:
   and a `PlacementKeepout` (both sides, expanded by `keepout_margin`) for
   other components. Other pads of the feed footprint must be unconnected.
 - The feed pad is the macro's one external port; ordinary routing reaches it
-  from the matching network.
+  from the matching network. The macro's copper is the antenna, not a route:
+  a `max_length` (or pair skew) on the feed net measures only the routed
+  feed, leaving out the radiator, its feed stub and an inverted-F's short.
 
 KiCad's DRC reports the radiator's open end as a dangling track; native
 verification (`route-board --verify-plane-fill`) excludes that one finding
-per antenna, by net and region, and records it as an expected open end. A
+per antenna, by net and region, and records it as an expected open end, also
+by point, net and layer (`plane_verification.expected_open_ends`), so
+`copper drc FILLED --expected-open-ends ROUTE_REPORT` excuses exactly those
+ends on the filled board. A
 ground island that the short's via joins only through the zone fill is
 proved by that refill, so an inverted-F needs native verification for a
 passing route.
@@ -1849,29 +1854,42 @@ constraint routing(LVDS_P) {
   by default three times the net's routing width. Where a piece between two
   corners cannot hold both tangents (r·tan(θ/2) each), the larger radii on
   that piece come down to a common level that fits; a corner whose legs
-  cannot hold half the width stays sharp. Both members of a pair must
-  declare the same `corner_style` and `corner_radius`; the member inside a
-  turn takes the radius and its partner the radius plus the lane spacing, so
-  the pair stays concentric and keeps its gap. A member turning alone takes
-  its own radius.
+  cannot hold half the width keeps its octilinear shape. Consecutive corners
+  that turn the same way, such as the two 45° corners of a chamfer, form one
+  compound turn of at most 90° when an arc of the radius tangent to the
+  outer legs swallows the pieces between them, so a chamfered 90° bend
+  becomes one quarter circle and a chamfered U-turn two; a compound turn
+  that does not fit or is refused is arched corner by corner. Both members
+  of a pair must declare the same `corner_style` and `corner_radius`; the
+  member inside a turn takes the radius and its partner the radius plus the
+  lane spacing, so the pair stays concentric and keeps its gap. A pair
+  member's compound turn needs its partner's. Where the legs are too short
+  for concentric arcs, the outside member first gives up its extra radius,
+  down to equal arcs (translates of each other, which keep the pair's skew),
+  and only then does the radius shrink; the gap never narrows and widens
+  mid-turn by at most 1/cos(θ/2) − 1 (8 % at 45°, 41 % at 90°). A member
+  turning alone takes its own radius.
 - An arc is emitted only when its copper is clear of foreign copper,
   keep-outs, macro regions, routing reservations and the board edge by the
-  rule's clearance plus 2 nm (the partner's copper is concentric by
-  construction). A refused corner stays sharp, as does one blocked by a via
-  or land. The route report's `arc_corners` entry counts the arcs and lists
+  clearance plus 2 nm, with breakout values inside breakout regions as the
+  exact DRC applies them (the partner's copper keeps its gap by
+  construction). A refused corner keeps its octilinear shape, as does one
+  blocked by a via or land. The route report's `arc_corners` entry counts the arcs and lists
   every retained corner with its reason; `summary.copper.arcs` counts them
   and `track_length_mm` includes their length. The stage is the last change
   to the copper before the exact DRC and the native checks, so KiCad sees
   the arcs; a net the filled-copper feedback loop reroutes afterwards loses
   its arcs (its new copper is octilinear).
-- Lengths count an arc at radius × sweep. Length-match and pair-skew tuning
-  of arc-style nets plan against the same policy: bumps and serpentines keep
-  sharp 90° corners for the stage, every unit is measured as arched, and a
-  step may gain up to 4 nm beyond its even target. Tops and risers are
-  semicircular where their length allows two tangents of the radius; each
-  pair member turns through two inside and two outside corners per bump or
-  leg, so both gain the same length. `tuning_group` requires octilinear
-  corners. The final `DRC-LENGTH-MATCH` check measures the emitted copper,
+- Arc-style nets are routed and tuned exactly as octilinear ones (45°
+  route chamfers, chamfered bumps and serpentines); the stage only rounds
+  their corners, so arching never makes a corner sharper. One difference:
+  both members of an arc-style pair take the same chamfers on bumps and
+  serpentines (octilinear pairs widen the outside member's by the lane
+  spacing), so every right-angle turn of a tuning feature becomes one arc
+  per member and the chamfers stay skew-neutral if the stage refuses one. Lengths count an
+  arc at radius × sweep: length-match and pair-skew tuning of arc-style nets
+  measure every unit as arched, and a step may gain up to 4 nm beyond its
+  even target. `tuning_group` requires octilinear corners. The final `DRC-LENGTH-MATCH` check measures the emitted copper,
   so a corner the stage refused shows up there.
 - Exact DRC measures arc distances in floating point from the exact centre
   of the three stored points and reports a violation when a distance falls

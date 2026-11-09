@@ -54,11 +54,15 @@ fn with_copper(board: &PhysicalBoard, accepted: &Accepted) -> PhysicalBoard {
 }
 
 /// `_net_track_length`: routed length as DRC measures it.
+/// The board's routed copper on `name` plus `new_tracks`, leaving out a
+/// synthesized antenna's own copper ([`copper_pcb::antenna::antenna_tracks`]):
+/// a `max_length` on an antenna feed net budgets the feed, not the radiator.
 fn net_track_length(board: &PhysicalBoard, name: &str, new_tracks: &[TrackSegment]) -> i64 {
+    let antenna = copper_pcb::antenna::antenna_tracks(board).unwrap_or_default();
     board
         .tracks
         .iter()
-        .filter(|t| t.net == name)
+        .filter(|t| t.net == name && !antenna.contains(*t))
         .chain(new_tracks)
         .map(|t| round_int(hypot((t.end.x_nm - t.start.x_nm) as f64, (t.end.y_nm - t.start.y_nm) as f64)))
         .sum()

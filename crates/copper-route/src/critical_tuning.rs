@@ -307,6 +307,16 @@ pub(crate) struct Slot {
     pub width: i64,
     /// A twin bump: the inner member bulges from this normal coordinate toward -side.
     pub twin_base: Option<i64>,
+    /// CS-174: both members of an arched pair take the same chamfers, so
+    /// each chamfered right-angle turn arches as one quarter circle.
+    pub equal_chamfers: bool,
+}
+
+impl Slot {
+    /// The lane spacing the outside member's chamfers grow by (0 when both members take the same).
+    pub(crate) fn chamfer_spacing(&self) -> i64 {
+        if self.equal_chamfers { 0 } else { self.spacing }
+    }
 }
 
 /// `UnitTuning`: one unit's tuning, the tuned copper or `None` and the reason.
@@ -357,7 +367,8 @@ pub struct TunerOptions {
     pub leg_limit: usize,
     pub vias: Vec<Via>,
     /// CS-174: the arc-corner policies of the board. A unit whose nets all
-    /// have one is tuned with sharp 90-degree corners and measured as arched.
+    /// have one is tuned with the octilinear bumps and serpentines, which
+    /// the arc-corner stage rounds where they fit, and measured as arched.
     pub corners: IndexMap<String, CornerPolicy>,
 }
 
@@ -377,12 +388,6 @@ impl Default for TunerOptions {
 /// `arched_unit`: whether every net of the unit arches its corners.
 pub(crate) fn arched_unit(nets: &[String], corners: &IndexMap<String, CornerPolicy>) -> bool {
     !nets.is_empty() && nets.iter().all(|net| corners.contains_key(net))
-}
-
-/// `corner_loss`: the length a 90-degree corner of radius `radius_nm` loses
-/// against its sharp corner, rounded (two tangents for a quarter circle).
-pub(crate) fn corner_loss(radius_nm: i64) -> i64 {
-    round_int(radius_nm as f64 * (2.0 - std::f64::consts::PI / 2.0))
 }
 
 /// Features (corner lists) to splice into each line, by line index.
@@ -424,12 +429,6 @@ impl ArchedUnit {
     pub fn length(&self, tracks: &[TrackSegment]) -> i64 {
         let refs: Vec<&TrackSegment> = tracks.iter().collect();
         planned_length_nm(&refs, &self.nets[0], &self.corners)
-    }
-
-    /// Length one member loses at the two corners of one leg (inside, then outside).
-    pub fn leg_loss(&self, spacing_nm: i64) -> i64 {
-        let radius = self.corners[&self.nets[0]].radius_nm;
-        corner_loss(radius) + corner_loss(radius + spacing_nm)
     }
 }
 
@@ -481,12 +480,13 @@ impl UnitTuner {
             base_length_nm: 0,
         });
         let arched = arched.map(|unit| ArchedUnit { base_length_nm: unit.length(&tracks), ..unit });
-        let sharp = arched.is_some();
         let runs = if amplitude_limit_nm > 0 { unit_runs(&segments, nets, spacing_nm) } else { Vec::new() };
-        let slots = slots(&segments, &runs, spacing_nm);
+        let equal_chamfers = arched.is_some();
+        let slots: Vec<Slot> =
+            slots(&segments, &runs, spacing_nm).into_iter().map(|slot| Slot { equal_chamfers, ..slot }).collect();
         let mut rooms = IndexMap::new();
         for slot in &slots {
-            rooms.insert(*slot, room(board, obstacles, nets, slot, amplitude_limit_nm, 1, sharp.then_some((0, 0)))?);
+            rooms.insert(*slot, room(board, obstacles, nets, slot, amplitude_limit_nm, 1, None)?);
         }
         let ends = terminal_ends(&tracks);
         let breakout = &obstacles.breakout;
@@ -526,7 +526,7 @@ impl UnitTuner {
                     amplitude_limit_nm,
                     options.leg_gap_nm,
                     clearance_nm,
-                    sharp,
+                    equal_chamfers,
                 )?);
             }
             for window in &windows {
@@ -589,11 +589,10 @@ impl UnitTuner {
         if self.arched.is_none() {
             return slot_gain(slot, height);
         }
-        if height < 1 {
+        let mut features = Features::new();
+        if add_bumps(&mut features, &[*slot], &[height]).is_empty() {
             return 0;
         }
-        let mut features = Features::new();
-        add_bumps(&mut features, &[*slot], &[height], true);
         self.arched_gain(&features)
     }
 
@@ -602,11 +601,12 @@ impl UnitTuner {
         if self.arched.is_none() {
             return window_capacity(window, heights);
         }
-        if heights.iter().any(|height| *height < 1) {
+        let chamfer = window_chamfer(window, heights);
+        if chamfer < 1 {
             return 0;
         }
         let mut features = Features::new();
-        add_serpentine(&mut features, &self.segments, window, heights, 0);
+        add_serpentine(&mut features, &self.segments, window, heights, chamfer);
         self.arched_gain(&features)
     }
 
@@ -730,13 +730,12 @@ impl UnitTuner {
         }
         let rooms: Vec<i64> = chosen.iter().map(|slot| self.rooms[slot]).collect();
         let heights = levelled(&rooms, added_nm, &|index, height| self.slot_gain(&chosen[index], height));
-        let sharp = self.is_arched();
         let build = |heights: &[i64]| {
             let mut features = Features::new();
-            add_bumps(&mut features, &chosen, heights, sharp);
+            add_bumps(&mut features, &chosen, heights);
             features
         };
-        let (heights, features) = if sharp {
+        let (heights, features) = if self.is_arched() {
             match self.corrected(&rooms, heights, added_nm, &build) {
                 Some((heights, features, _)) => (heights, features),
                 None => return Ok(UnitTuning::failed("insufficient tuning room once the corners are arched")),
@@ -748,7 +747,7 @@ impl UnitTuner {
         let used: Vec<i64> = chosen
             .iter()
             .zip(&heights)
-            .filter(|(slot, height)| sharp || slot_gain(slot, **height) != 0)
+            .filter(|(slot, height)| slot_gain(slot, **height) != 0)
             .map(|(_, height)| *height)
             .collect();
         Ok(UnitTuning {
@@ -834,35 +833,6 @@ impl UnitTuner {
                 self.slot_gain(&bumps[index - serpentine_tops], height)
             }
         };
-        if let Some(unit) = &self.arched {
-            // Arched corners: every leg loses its two corners' arcs; the
-            // estimate is corrected against the arched length.
-            let loss: i64 = chosen
-                .iter()
-                .map(|window| (window.tops.len() as i64 + 1) * unit.leg_loss(window.tops[0].spacing))
-                .sum();
-            let heights = levelled(&rooms, added_nm + loss, &gain);
-            let sizes: Vec<usize> = chosen.iter().map(|window| window.tops.len()).collect();
-            let build = |heights: &[i64]| {
-                let mut features = Features::new();
-                for (window, part) in chosen.iter().zip(parts(sizes.iter().copied(), heights)) {
-                    add_serpentine(&mut features, &self.segments, window, &part, 0);
-                }
-                add_bumps(&mut features, &bumps, &heights[heights.len() - bumps.len()..], true);
-                features
-            };
-            let Some((heights, features, _)) = self.corrected(&rooms, heights, added_nm, &build) else {
-                return Ok(UnitTuning::failed("insufficient tuning room once the corners are arched"));
-            };
-            let amplitudes: Vec<i64> = heights.clone();
-            return Ok(UnitTuning {
-                tracks: Some(self.spliced(&features)?),
-                bumps: bumps.len() as i64,
-                legs: chosen.iter().map(|window| window.tops.len() as i64 + 1).sum(),
-                amplitudes_nm: amplitudes,
-                ..UnitTuning::default()
-            });
-        }
         let mut chamfer = chosen.iter().map(|window| window_chamfer(window, &window.rooms)).min().unwrap_or(0);
         let mut heights = rooms.clone();
         let mut exhausted = true;
@@ -874,7 +844,7 @@ impl UnitTuner {
             let total = added_nm
                 + chosen
                     .iter()
-                    .map(|window| (window.tops.len() as i64 + 1) * leg_loss(chamfer, window.tops[0].spacing))
+                    .map(|window| (window.tops.len() as i64 + 1) * leg_loss(chamfer, window.tops[0].chamfer_spacing()))
                     .sum::<i64>();
             if total.rem_euclid(2) != 0 {
                 chamfer -= 1;
@@ -899,13 +869,36 @@ impl UnitTuner {
         if chamfer < 1 {
             return Ok(UnitTuning::failed("serpentine tops too low for 45-degree corners"));
         }
+        let sizes: Vec<usize> = chosen.iter().map(|window| window.tops.len()).collect();
+        if self.is_arched() {
+            // The octilinear estimate, corrected against the arched length;
+            // every serpentine must still take the chamfer.
+            let build = |heights: &[i64]| {
+                let mut features = Features::new();
+                for (window, part) in chosen.iter().zip(parts(sizes.iter().copied(), heights)) {
+                    add_serpentine(&mut features, &self.segments, window, &part, chamfer);
+                }
+                add_bumps(&mut features, &bumps, &heights[heights.len() - bumps.len()..]);
+                features
+            };
+            let fits = |heights: &[i64]| {
+                chosen
+                    .iter()
+                    .zip(parts(sizes.iter().copied(), heights))
+                    .all(|(w, part)| window_chamfer(w, &part) >= chamfer)
+            };
+            match self.corrected(&rooms, heights, added_nm, &build) {
+                Some((corrected, _, _)) if fits(&corrected) => heights = corrected,
+                _ => return Ok(UnitTuning::failed("insufficient tuning room once the corners are arched")),
+            }
+        }
         let mut features = Features::new();
         let mut amplitudes: Vec<i64> = Vec::new();
-        for (window, part) in chosen.iter().zip(parts(chosen.iter().map(|window| window.tops.len()), &heights)) {
+        for (window, part) in chosen.iter().zip(parts(sizes.iter().copied(), &heights)) {
             add_serpentine(&mut features, &self.segments, window, &part, chamfer);
             amplitudes.extend(part);
         }
-        let used = add_bumps(&mut features, &bumps, &heights[heights.len() - bumps.len()..], false);
+        let used = add_bumps(&mut features, &bumps, &heights[heights.len() - bumps.len()..]);
         let bump_count = used.len() as i64;
         amplitudes.extend(used);
         Ok(UnitTuning {
@@ -975,18 +968,16 @@ pub(crate) fn double(height: i64) -> i64 {
 }
 
 /// `_add_bumps`: add each bump's corners to its members; the heights of the bumps that add length.
-///
-/// `sharp` bumps (CS-174) keep 90-degree corners for the arc-corner stage.
-fn add_bumps(features: &mut Features, slots: &[Slot], heights: &[i64], sharp: bool) -> Vec<i64> {
+fn add_bumps(features: &mut Features, slots: &[Slot], heights: &[i64]) -> Vec<i64> {
     let mut used = Vec::new();
     for (slot, &height) in slots.iter().zip(heights) {
-        if (sharp && height < 1) || (!sharp && slot_gain(slot, height) == 0) {
+        if slot_gain(slot, height) == 0 {
             continue;
         }
         used.push(height);
         // The bulge-side member is inside the turn at the run corners, the
         // other member at the top corners.
-        let (inside, outside) = if sharp { (0, 0) } else { bump_chamfers(height, slot.width, slot.spacing) };
+        let (inside, outside) = bump_chamfers(height, slot.width, slot.chamfer_spacing());
         let path = bump_path(slot.start, slot.end, height, inside, outside);
         features.entry(slot.outer).or_default().push(path.iter().map(|&(a, r)| (a, slot.side * r)).collect());
         if slot.twin_base.is_some() {
@@ -1065,7 +1056,7 @@ pub fn bump_path(entry: i64, leave: i64, height: i64, base: i64, top: i64) -> Ve
 
 /// `_slot_gain`: length each member gains from a bump of `height` in `slot`.
 fn slot_gain(slot: &Slot, height: i64) -> i64 {
-    let (base, top) = bump_chamfers(height, slot.width, slot.spacing);
+    let (base, top) = bump_chamfers(height, slot.width, slot.chamfer_spacing());
     bump_gain(height, base, top)
 }
 
@@ -1252,6 +1243,7 @@ fn run_slot(
         spacing: run.distance,
         width,
         twin_base: None,
+        equal_chamfers: false,
     }
 }
 
@@ -1298,6 +1290,7 @@ pub(crate) fn slots(tracks: &BTreeMap<usize, TrackSegment>, runs: &[UnitRun], sp
                     spacing: 0,
                     width,
                     twin_base: Some(normal(tracks[&inner].start, h)),
+                    equal_chamfers: false,
                 });
                 continue;
             }
@@ -1324,7 +1317,7 @@ fn unit_windows(
     limit: i64,
     gap: Option<i64>,
     clearance_nm: i64,
-    sharp: bool,
+    equal_chamfers: bool,
 ) -> Result<Vec<Window>> {
     let width = run_width(tracks, run);
     let distance = run.distance;
@@ -1335,22 +1328,26 @@ fn unit_windows(
     if count < 2 {
         return Ok(Vec::new());
     }
-    let offset = run.low + 3 * width + (usable - count * pitch - distance).div_euclid(2);
-    let floor = if sharp { 2 } else { 4.max(chamfer_offset(distance) + 2) };
-    let chamfers = if sharp { (0, 0) } else { (width, 1 + chamfer_offset(distance)) };
+    let first = run.low + 3 * width + (usable - count * pitch - distance).div_euclid(2);
+    let offset = if equal_chamfers { 0 } else { chamfer_offset(distance) };
+    let floor = 4.max(offset + 2);
+    let chamfers = (width, 1 + offset);
     let mut tops: IndexMap<(i64, i64), Slot> = IndexMap::new();
     let mut rooms: IndexMap<(i64, i64), i64> = IndexMap::new();
     for position in 0..count {
         for side in [1, -1] {
-            let slot = run_slot(
-                tracks,
-                run,
-                position,
-                side,
-                offset + position * pitch,
-                offset + (position + 1) * pitch + distance,
-                width,
-            );
+            let slot = Slot {
+                equal_chamfers,
+                ..run_slot(
+                    tracks,
+                    run,
+                    position,
+                    side,
+                    first + position * pitch,
+                    first + (position + 1) * pitch + distance,
+                    width,
+                )
+            };
             rooms.insert((position, side), room(board, obstacles, nets, &slot, limit, floor, Some(chamfers))?);
             tops.insert((position, side), slot);
         }
@@ -1429,7 +1426,7 @@ pub(crate) fn feature_legs(heights: &[i64]) -> Vec<i64> {
 /// (L - d) // 2; and at most (w + gap - 1) // 2, so the inner member's top
 /// keeps a straight piece. Below 1, no serpentine fits.
 fn window_chamfer(window: &Window, heights: &[i64]) -> i64 {
-    let (width, offset) = (window.tops[0].width, chamfer_offset(window.tops[0].spacing));
+    let (width, offset) = (window.tops[0].width, chamfer_offset(window.tops[0].chamfer_spacing()));
     feature_legs(heights)
         .into_iter()
         .map(|leg| leg.div_euclid(4).min((leg - offset).div_euclid(2)))
@@ -1442,7 +1439,7 @@ pub(crate) fn window_capacity(window: &Window, heights: &[i64]) -> i64 {
     if chamfer < 1 {
         return 0;
     }
-    2 * heights.iter().sum::<i64>() - (heights.len() as i64 + 1) * leg_loss(chamfer, window.tops[0].spacing)
+    2 * heights.iter().sum::<i64>() - (heights.len() as i64 + 1) * leg_loss(chamfer, window.tops[0].chamfer_spacing())
 }
 
 /// The bounding box of several bounds.
@@ -1483,8 +1480,21 @@ pub fn serpentine_path(
     member: i64,
     chamfer: i64,
 ) -> Vec<(i64, i64)> {
-    // Sharp corners (CS-174) take no chamfer offset either.
-    let offset = if chamfer == 0 { 0 } else { chamfer_offset(spacing) };
+    serpentine_corners(first_leg, pitch, spacing, chamfer_offset(spacing), sides, heights, member, chamfer)
+}
+
+/// `serpentine_path` with the outside corners' chamfer growing by `offset`.
+#[allow(clippy::too_many_arguments)]
+fn serpentine_corners(
+    first_leg: i64,
+    pitch: i64,
+    spacing: i64,
+    offset: i64,
+    sides: &[i64],
+    heights: &[i64],
+    member: i64,
+    chamfer: i64,
+) -> Vec<(i64, i64)> {
     let mut rises = vec![0];
     rises.extend(sides.iter().zip(heights).map(|(side, height)| side * height));
     rises.push(0);
@@ -1523,10 +1533,11 @@ fn add_serpentine(
             Some(other) if normal(tracks[&index].start, h) > normal(tracks[&other].start, h) => 1,
             Some(_) => -1,
         };
-        features.entry(index).or_default().push(serpentine_path(
+        features.entry(index).or_default().push(serpentine_corners(
             window.tops[0].start,
             window.pitch,
             window.tops[0].spacing,
+            chamfer_offset(window.tops[0].chamfer_spacing()),
             &sides,
             heights,
             member,
@@ -1547,7 +1558,7 @@ pub(crate) fn rounded(spine: Vec<Point>, radius_nm: i64) -> RoundedConvexShape {
 /// top end. `chamfers` (base, top) replace the bump's own, as for a
 /// serpentine top.
 fn swept(slot: &Slot, height: i64, chamfers: Option<(i64, i64)>) -> RoundedConvexShape {
-    let (base, top) = chamfers.unwrap_or_else(|| bump_chamfers(height, slot.width, slot.spacing));
+    let (base, top) = chamfers.unwrap_or_else(|| bump_chamfers(height, slot.width, slot.chamfer_spacing()));
     let mut corners = bump_path(slot.start, slot.end, height, base, top);
     if corners.len() == 8 {
         corners = [&corners[..1], &corners[2..6], &corners[7..]].concat();
@@ -2253,12 +2264,24 @@ pub(crate) mod tests {
             .collect()
     }
 
-    fn axis_aligned(tracks: &[TrackSegment]) -> bool {
-        tracks.iter().all(|t| t.start.x_nm == t.end.x_nm || t.start.y_nm == t.end.y_nm)
+    /// The sharpest turn, in degrees, where two tracks of one net meet.
+    fn sharpest_turn(tracks: &[TrackSegment]) -> f64 {
+        let mut sharpest: f64 = 0.0;
+        for (i, a) in tracks.iter().enumerate() {
+            for b in &tracks[i + 1..] {
+                if a.net != b.net || a.end != b.start {
+                    continue;
+                }
+                let (ux, uy) = ((a.end.x_nm - a.start.x_nm) as f64, (a.end.y_nm - a.start.y_nm) as f64);
+                let (vx, vy) = ((b.end.x_nm - b.start.x_nm) as f64, (b.end.y_nm - b.start.y_nm) as f64);
+                sharpest = sharpest.max((ux * vy - uy * vx).abs().atan2(ux * vx + uy * vy).to_degrees());
+            }
+        }
+        sharpest
     }
 
     #[test]
-    fn arched_unit_tuner_gains_its_arched_length_with_sharp_corners() {
+    fn arched_unit_tuner_gains_its_arched_length_with_octilinear_corners() {
         let board = board();
         let index = RoutingClearanceIndex::new(&board).expect("index");
         let tracks = vec![
@@ -2275,7 +2298,8 @@ pub(crate) mod tests {
             for target in [1_000_000, 3_000_000] {
                 let plan = tuner.plan(target).expect("plan");
                 let tuned = plan.tracks.clone().unwrap_or_else(|| panic!("{}: {}", style.value(), plan.reason));
-                assert!(axis_aligned(&tuned), "{}: sharp corners only", style.value());
+                let turn = sharpest_turn(&tuned);
+                assert!(turn > 1.0 && turn < 45.01, "{}: 45-degree corners, not {turn}", style.value());
                 let refs: Vec<&TrackSegment> = tuned.iter().collect();
                 let before: Vec<&TrackSegment> = tracks.iter().collect();
                 let gain = planned_length_nm(&refs, "S", &corners) - planned_length_nm(&before, "S", &corners);
@@ -2309,7 +2333,8 @@ pub(crate) mod tests {
                 .expect("tuner");
             let plan = tuner.plan(1_000_000).expect("plan");
             let tuned = plan.tracks.clone().unwrap_or_else(|| panic!("{}: {}", style.value(), plan.reason));
-            assert!(axis_aligned(&tuned));
+            let turn = sharpest_turn(&tuned);
+            assert!(turn > 1.0 && turn < 45.01, "{}: 45-degree corners, not {turn}", style.value());
             let refs: Vec<&TrackSegment> = tuned.iter().collect();
             let before: Vec<&TrackSegment> = tracks.iter().collect();
             let gain = |net: &str| planned_length_nm(&refs, net, &corners) - planned_length_nm(&before, net, &corners);

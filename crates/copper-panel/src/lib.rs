@@ -79,6 +79,33 @@ fn overhangs_json(spec: &PanelSpec, intents: &IndexMap<String, BoardIntent>) -> 
     Json::Array(rows)
 }
 
+/// Mark a footprint `exclude_from_pos_files exclude_from_bom` in its `attr`.
+fn not_placed_on_panel(footprint: &mut Node) {
+    let Some(items) = footprint.items_mut() else { return };
+    match items.iter_mut().find(|n| n.tag() == Some("attr")) {
+        Some(attr) => {
+            if let Some(list) = attr.items_mut() {
+                for flag in ["exclude_from_pos_files", "exclude_from_bom"] {
+                    if !list.iter().any(|n| n.atom_text() == Some(flag)) {
+                        list.push(Node::atom(flag));
+                    }
+                }
+            }
+        }
+        None => {
+            let at = items.iter().position(|n| n.tag() == Some("at")).map_or(items.len(), |k| k + 1);
+            items.insert(
+                at,
+                Node::list(vec![
+                    Node::atom("attr"),
+                    Node::atom("exclude_from_pos_files"),
+                    Node::atom("exclude_from_bom"),
+                ]),
+            );
+        }
+    }
+}
+
 /// Read each board's routed `.kicad_pcb` and the `.kicad_pro` and
 /// `.kicad_dru` beside it, paths relative to `base` (the panel file's folder).
 pub fn read_boards(spec: &PanelSpec, base: &Path) -> Result<Vec<BoardFiles>, String> {
@@ -111,6 +138,12 @@ pub fn panelize(
     let mut local = IndexMap::new();
     let mut poses = Vec::new();
     let mut intents = intents.to_vec();
+    // Board rules are scoped by net and reference prefixes, and they reach
+    // copper with neither (no net, outside footprints) on any board.
+    let mut conditional = false;
+    for (board, file) in spec.boards.iter().zip(files) {
+        conditional |= rules::has_conditional(&file.dru, &format!("board {} design rules", board.name))?;
+    }
     for ((board, file), intent) in spec.boards.iter().zip(files).zip(intents.iter_mut()) {
         let routed = copper_cam::board::parse_board(&file.pcb, &board.pcb)?;
         intent::verify_source(&board.name, intent, &routed)?;
@@ -134,10 +167,10 @@ pub fn panelize(
                 })
                 .count()
             + routed.texts.iter().filter(|t| matches!(t.layer, copper_cam::board::Layer::Copper(_))).count();
-        if unnetted > 0 && rules::has_conditional(&file.dru, &format!("board {} design rules", board.name))? {
+        if unnetted > 0 && conditional {
             return Err(format!(
-                "board {}: {unnetted} copper item(s) on no net, and conditional design rules that the panel can only \
-                 keep to the board by net and reference; give that copper a net",
+                "board {}: {unnetted} copper item(s) on no net, and the panel has conditional design rules that it \
+                 can only keep to their board by net and reference; give that copper a net",
                 board.name
             ));
         }
@@ -174,15 +207,48 @@ pub fn panelize(
         spec.boards.iter().zip(&intents).map(|(b, i)| (b.name.clone(), i.clone())).collect();
     let open_ends =
         intent::check(spec, &intent_map, &local, &composition.outlines, &composition.poses, &frame.tabs, &frame.rails)?;
-    let mut tree = composition.tree;
-    if let Node::List(items) = &mut tree {
-        items.extend(frame.items);
-    }
     let named = |f: fn(&BoardFiles) -> &String| -> Vec<(String, String)> {
         spec.boards.iter().zip(files).map(|(b, file)| (b.name.clone(), f(file).clone())).collect()
     };
     let dru = rules::merge_dru(&named(|f| &f.dru))?;
     let pro = rules::merge_pro(&named(|f| &f.pro), &format!("{file_stem}.kicad_pro"))?;
+    let copper_layers: Vec<String> = composition
+        .tree
+        .child("layers")
+        .map(|layers| {
+            layers.items().iter().filter_map(|l| l.string_value(1)).filter(|name| name.ends_with(".Cu")).collect()
+        })
+        .unwrap_or_default();
+    // After breaking, the mouse-bite walls are the board edge: they cut
+    // `inset + drill / 2` into the board, and the edge clearance counts from there.
+    let edge_clearance = rules::max_edge_clearance(&pro, &dru)?;
+    let depth = if edge_clearance > 0 { edge_clearance + spec.mouse_bite.inset + spec.mouse_bite.drill / 2 } else { 0 };
+    let edge_keepouts = frame::tab_edge_keepouts(
+        &frame.tabs,
+        &composition.poses,
+        &composition.outlines,
+        depth,
+        edge_clearance,
+        &copper_layers,
+    );
+    let mut tree = composition.tree;
+    if let Node::List(items) = &mut tree {
+        // Parts fitted after depanelization are not placed on the panel:
+        // out of its position files and BOM (the board alone still has them).
+        let later: Vec<String> = spec.assemble_after_depanel.iter().map(|e| e.replacen('.', "-", 1)).collect();
+        for footprint in items.iter_mut().filter(|n| n.tag() == Some("footprint")) {
+            let reference = footprint
+                .children("property")
+                .find(|p| p.string_value(1).as_deref() == Some("Reference"))
+                .and_then(|p| p.string_value(2))
+                .unwrap_or_default();
+            if later.contains(&reference) {
+                not_placed_on_panel(footprint);
+            }
+        }
+        items.extend(frame.items);
+        items.extend(edge_keepouts);
+    }
     let (x0, y0, x1, y1) = frame.bounds;
     let fab_checks = checks::run(spec, frame.bounds, &frame.tabs, min_gap);
     let report = object(vec![
@@ -610,21 +676,21 @@ mod tests {
 
     #[test]
     fn only_the_courtyard_beyond_the_edge_holds_tabs_off() {
-        // A triangle inside A from x 0.5 to 10 crosses the bottom side only
-        // from 0.5 to 2.4 mm: a_bottom (3.5-6.5 mm) stays allowed, a tab at
-        // 1-2 mm is refused.
+        // A triangle inside A from x 0.5 to 9 crosses the bottom side only
+        // from 0.5 to 1.71 mm, and stays clear of a_bottom's and a_right's
+        // bites: a_bottom stays allowed, a tab at 0.5-1.5 mm is refused.
         let triangle = BOARD.replacen(
             "(gr_line (start 0 0)",
             "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 0 0 0) \
              (property \"Reference\" \"J6\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
-             (fp_poly (pts (xy 0.5 6.5) (xy 10 4) (xy 0.5 4)) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
+             (fp_poly (pts (xy 0.5 6.5) (xy 9 3) (xy 0.5 3)) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
             1,
         );
         let mut marked = files();
         marked[0].pcb = triangle;
         panelize(&spec(""), &marked, &none(), "demo").expect("a_bottom is clear of the overhang");
         let error = panelize(
-            &spec("tab a_low { board = A; side = bottom; at = 1.5 mm; width = 1 mm; }"),
+            &spec("tab a_low { board = A; side = bottom; at = 1 mm; width = 1 mm; }"),
             &marked,
             &none(),
             "demo",
@@ -632,7 +698,7 @@ mod tests {
         .err()
         .expect("refused");
         assert!(
-            error.contains("tab a_low on board A's bottom side overlaps J6's body overhang (0.5-2.4 mm)"),
+            error.contains("tab a_low on board A's bottom side overlaps J6's body overhang (0.5-1.714286 mm)"),
             "{error}"
         );
     }
@@ -686,7 +752,7 @@ mod tests {
         assert!(text.contains(r#""component":"J5","side":"bottom","from_mm":"1","to_mm":"2""#), "{text}");
         assert!(text.contains(r#""component":"J5","side":"bottom","from_mm":"8","to_mm":"9""#), "{text}");
         let error = panelize(
-            &spec("tab a_far { board = A; side = bottom; at = 8.5 mm; width = 1 mm; }"),
+            &spec("tab a_far { board = A; side = bottom; at = 9 mm; width = 1 mm; }"),
             &marked,
             &none(),
             "demo",
@@ -698,21 +764,22 @@ mod tests {
 
     #[test]
     fn a_hole_in_a_keepout_leaves_its_stretch_to_tabs() {
-        // The keep-out crosses A's top side from 1 to 9.5 mm, with a hole from
-        // 2 to 8 mm through the edge: a_top (3.5-6.5 mm) lies in the hole,
-        // clear of the 1 mm margins (keep-clear 0-3 and 7-10.5 mm).
+        // The keep-out crosses A's top side from 1 to 8.5 mm (1.5 mm short of
+        // the right side), with a hole from 2 to 8 mm through the edge: a_top
+        // (3.5-6.5 mm) lies in the hole, clear of the 1 mm margins
+        // (keep-clear 0-3 and 7-9.5 mm).
         let keepout = BOARD.replacen(
             "(gr_line (start 0 0)",
             "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"55555555-5555-5555-5555-555555555555\") (name \"cluster/a/a-edge\") \
              (hatch edge 0.5) (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) \
-             (polygon (pts (xy 1 -1) (xy 9.5 -1) (xy 9.5 4) (xy 1 4))) (polygon (pts (xy 2 -0.5) (xy 8 -0.5) (xy 8 2) (xy 2 2))))\n  (gr_line (start 0 0)",
+             (polygon (pts (xy 1 -1) (xy 8.5 -1) (xy 8.5 4) (xy 1 4))) (polygon (pts (xy 2 -0.5) (xy 8 -0.5) (xy 8 2) (xy 2 2))))\n  (gr_line (start 0 0)",
             1,
         );
         let mut marked = files();
         marked[0].pcb = keepout;
         panelize(&spec(""), &marked, &none(), "demo").expect("a_top lies in the keep-out's hole");
         let error = panelize(
-            &spec("tab a_top_l { board = A; side = top; at = 1.5 mm; width = 1 mm; }"),
+            &spec("tab a_top_l { board = A; side = top; at = 1 mm; width = 1 mm; }"),
             &marked,
             &none(),
             "demo",
@@ -767,10 +834,14 @@ mod tests {
         marked[0].pcb = corner;
         let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
         assert!(error.contains("board A: J3's courtyard (F.CrtYd) reaches into a rail"), "{error}");
-        // Fitted after depanelization, it may.
+        // Fitted after depanelization, it may, and the panel does not place it.
         let mut after = spec("");
         after.assemble_after_depanel = vec!["A.J3".into()];
-        panelize(&after, &marked, &none(), "demo").expect("allowed when fitted after depanelization");
+        let panel = panelize(&after, &marked, &none(), "demo").expect("allowed when fitted after depanelization");
+        let board = copper_cam::board::parse_board(&panel.pcb, "panel").expect("copper-cam reads the panel");
+        let j3 = board.footprints.iter().find(|f| f.reference == "A-J3").expect("A-J3");
+        assert!(j3.exclude_from_pos_files, "A-J3 stays out of the panel's position file");
+        assert!(panel.pcb.contains("exclude_from_bom"));
     }
 
     #[test]
@@ -804,6 +875,280 @@ mod tests {
             let error = panelize(&no_top, &marked, &none(), "demo").err().expect("refused");
             assert!(error.contains("J2's courtyard") && error.contains("reaches into a rail"), "{layers:?}: {error}");
         }
+    }
+
+    #[test]
+    fn a_courtyard_stays_off_a_neighbours_tab() {
+        // A's courtyard lies above its top side, in the gap below the top rail
+        // (y -1.5 to -0.5 mm, x 8-16 mm): clear of the rail, both boards and
+        // a_top, but over B's top tab (x 15.5-18.5 mm, y -2-0 mm).
+        let reach = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 0 0 0) \
+             (property \"Reference\" \"J1\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+             (fp_rect (start 8 -1.5) (end 16 -0.5) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = reach;
+        let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+        assert!(error.contains("J1's courtyard (F.CrtYd) reaches into tab b_top"), "{error}");
+        let mut after = spec("");
+        after.assemble_after_depanel = vec!["A.J1".into()];
+        panelize(&after, &marked, &none(), "demo").expect("allowed when fitted after depanelization");
+    }
+
+    #[test]
+    fn a_tab_keeps_the_spacing_from_boards_it_passes() {
+        // B sits diagonally below-right of A, corner to corner 2 mm apart;
+        // a_bottom runs from A down to the bottom rail along B's left side.
+        for (at, gap) in [("8.5", "0"), ("8", "0.5")] {
+            let mut passing = spec("");
+            passing.boards[1].at = [10_000_000, 8_000_000];
+            passing.tabs.retain(|t| t.name != "a_right" && t.name != "b_top");
+            for tab in &mut passing.tabs {
+                if tab.name == "a_bottom" {
+                    tab.at = (at.parse::<f64>().expect("a number") * 1e6) as i64;
+                }
+            }
+            let error = panelize(&passing, &files(), &none(), "demo").err().expect("refused");
+            assert!(error.contains(&format!("tab a_bottom passes board B {gap} mm away")), "{at}: {error}");
+        }
+    }
+
+    #[test]
+    fn fiducials_and_tooling_holes_must_fit_the_panel() {
+        // Board A alone is 10 mm wide: FID1 (x 8) and TH2 (x 7) would overlap.
+        let mut narrow = spec("");
+        narrow.boards.truncate(1);
+        narrow.tabs.retain(|t| t.board == "A" && t.name != "a_right");
+        let error = panelize(&narrow, &files()[..1], &none()[..1], "demo").err().expect("refused");
+        assert!(error.contains("the panel is 10 mm wide") && error.contains("would"), "{error}");
+        narrow.fiducials = 0;
+        narrow.tooling_hole = None;
+        panelize(&narrow, &files()[..1], &none()[..1], "demo").expect("without them it fits");
+    }
+
+    #[test]
+    fn unnetted_copper_on_any_board_is_refused_when_rules_are_scoped() {
+        // B has no rules of its own but a netless copper line; A has a
+        // conditional rule, which would otherwise reach B's line.
+        let line = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(gr_line (start 1 4) (end 3 4) (stroke (width 0.2) (type solid)) (layer \"F.Cu\") (uuid \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\"))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut both = files();
+        both[0].dru =
+            "(version 1)\n(rule \"gap\" (constraint clearance (min 1mm)) (condition \"A.NetName == 'GND'\"))\n".into();
+        both[1].pcb = line;
+        let error = panelize(&spec(""), &both, &none(), "demo").err().expect("refused");
+        assert!(error.contains("board B: 1 copper item(s) on no net"), "{error}");
+    }
+
+    #[test]
+    fn tabs_leave_the_router_room_between_them() {
+        // b_left (y 4.5-5.5) bridges the same gap as a_right (y 2-4), 0.5 mm away.
+        let error = panelize(
+            &spec("tab b_left { board = B; side = left; at = 5 mm; width = 1 mm; }"),
+            &files(),
+            &none(),
+            "demo",
+        )
+        .err()
+        .expect("refused");
+        assert!(error.contains("tabs a_right and b_left are 0.5 mm apart"), "{error}");
+        // Touching tabs (a_top 3.5-6.5, a_top2 6.5-9.5) are refused too: their
+        // mouse bites would crowd together across the seam.
+        let error = panelize(&spec("tab a_top2 { board = A; side = top; at = 8 mm; }"), &files(), &none(), "demo")
+            .err()
+            .expect("refused");
+        assert!(error.contains("tabs a_top and a_top2 are 0 mm apart"), "{error}");
+    }
+
+    #[test]
+    fn a_tab_no_wider_than_its_holes_is_refused() {
+        let mut thin = spec("");
+        for tab in &mut thin.tabs {
+            if tab.name == "a_right" {
+                tab.width = 500_000;
+            }
+        }
+        let error = panelize(&thin, &files(), &none(), "demo").err().expect("refused");
+        assert!(error.contains("tab a_right is 0.5 mm wide, no wider than its 0.5 mm mouse-bite holes"), "{error}");
+    }
+
+    #[test]
+    fn a_tooling_hole_must_fit_its_rail() {
+        let mut thin = spec("");
+        thin.rails.top = 3_000_000;
+        thin.rails.bottom = 3_000_000;
+        thin.tooling_hole = Some(3_200_000);
+        let error = panelize(&thin, &files(), &none(), "demo").err().expect("refused");
+        assert!(error.contains("tooling holes of 3.2 mm need rails of at least 3.6 mm"), "{error}");
+    }
+
+    #[test]
+    fn a_keepout_reaching_a_neighbour_is_cut_at_its_board() {
+        // A's keep-out runs from x 8 to 14.5 mm, into B (x 12-22): on the panel
+        // it stops at A's edge, and a_right (2-4 mm) stays allowed.
+        let reach = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"55555555-5555-5555-5555-555555555555\") (name \"ko\") \
+             (hatch edge 0.5) (keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) \
+             (polygon (pts (xy 8 5.1) (xy 14.5 5.1) (xy 14.5 5.9) (xy 8 5.9))))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = reach;
+        let panel = panelize(&spec(""), &marked, &none(), "demo").expect("a_right is clear of the keep-out");
+        let board = copper_cam::board::parse_board(&panel.pcb, "panel").expect("copper-cam reads the panel");
+        let ko = board.zones.iter().find(|z| z.name == "ko").expect("the keep-out");
+        let max_x = ko
+            .outline
+            .iter()
+            .flat_map(|c| std::iter::once(c.start).chain(c.edges.iter().map(|e| e.end())))
+            .map(|p| p.x)
+            .max()
+            .expect("points");
+        assert!(max_x <= 10_000_000, "{max_x}");
+    }
+
+    #[test]
+    fn a_tab_must_land_with_its_whole_width() {
+        // B lowered to y 3.999 mm: a_right (y 2-4) meets it over 1 um only.
+        let mut partial = spec("");
+        partial.boards[1].at = [12_000_000, 3_999_000];
+        partial.tabs.retain(|t| t.name != "b_top");
+        let error = panelize(&partial, &files(), &none(), "demo").err().expect("refused");
+        assert!(error.contains("tab a_right: only part of its far end lands on board B"), "{error}");
+    }
+
+    #[test]
+    fn tab_landings_keep_the_edge_clearance() {
+        // With a 1 mm copper-to-edge clearance, every tab landing gets a
+        // keep-out inside its board from the deepest mouse-bite wall (0.25 mm
+        // inset + 0.25 mm radius) 1 mm on, and 1 mm past both tab ends (the
+        // outer bites reach almost to them): a_top's from x 2.5 to 7.5, y 0 to 1.5.
+        let pro = PRO.replace(
+            r#""design_settings": {}"#,
+            r#""design_settings": {"rules": {"min_copper_edge_clearance": 1.0, "min_hole_clearance": 0.25}}"#,
+        );
+        let mut both = files();
+        for f in &mut both {
+            f.pro = pro.clone();
+        }
+        let panel = panelize(&spec(""), &both, &none(), "demo").expect("a panel");
+        let board = copper_cam::board::parse_board(&panel.pcb, "panel").expect("copper-cam reads the panel");
+        let keepouts: Vec<&copper_cam::board::Zone> =
+            board.zones.iter().filter(|z| z.name.starts_with("panel/tab-edge/")).collect();
+        // a_top, a_bottom, b_top near ends, a_right near and far.
+        assert_eq!(keepouts.len(), 5, "{:?}", keepouts.iter().map(|z| &z.name).collect::<Vec<_>>());
+        let top = keepouts.iter().find(|z| z.name == "panel/tab-edge/a_top/near").expect("a_top's");
+        let points: Vec<(i64, i64)> = top.outline[0].edges.iter().map(|e| (e.end().x, e.end().y)).collect();
+        let (x0, x1) = (points.iter().map(|p| p.0).min().unwrap(), points.iter().map(|p| p.0).max().unwrap());
+        let (y0, y1) = (points.iter().map(|p| p.1).min().unwrap(), points.iter().map(|p| p.1).max().unwrap());
+        assert_eq!((x0, x1, y0, y1), (2_500_000, 7_500_000, 0, 1_500_000));
+        // Clipped to the board: a_right's landing on A (y 2-4) reaches y 1-5.
+        let right = keepouts.iter().find(|z| z.name == "panel/tab-edge/a_right/near").expect("a_right's");
+        let ys: Vec<i64> = right.outline[0].edges.iter().map(|e| e.end().y).collect();
+        assert_eq!((ys.iter().min().copied(), ys.iter().max().copied()), (Some(1_000_000), Some(5_000_000)));
+        assert!(top.not_allowed.iter().any(|k| k == "copperpour") && top.keepout == Some(true));
+        // Without an edge clearance there are none.
+        let plain = panelize(&spec(""), &files(), &none(), "demo").expect("a panel");
+        assert!(!plain.pcb.contains("panel/tab-edge/"));
+    }
+
+    #[test]
+    fn two_boards_courtyards_must_not_meet_between_them() {
+        // A's J1 reaches x 8.5-11.5, B's J2 x 10.5-13.5 (on the panel), y
+        // 0.2-1.8: neither reaches the other board, but they meet in the gap.
+        let body = |x: &str, name: &str| {
+            BOARD.replacen(
+                "(gr_line (start 0 0)",
+                &format!(
+                    "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at {x} 1 0) \
+                     (property \"Reference\" \"{name}\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+                     (fp_rect (start -1.5 -0.8) (end 1.5 0.8) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)"
+                ),
+                1,
+            )
+        };
+        let mut both = files();
+        both[0].pcb = body("10", "J1");
+        both[1].pcb = body("0", "J2");
+        let error = panelize(&spec(""), &both, &none(), "demo").err().expect("refused");
+        assert!(error.contains("J1's courtyard (F.CrtYd) meets board B's J2's courtyard (F.CrtYd)"), "{error}");
+        let mut after = spec("");
+        after.assemble_after_depanel = vec!["A.J1".into()];
+        panelize(&after, &both, &none(), "demo").expect("one fitted after depanelization");
+    }
+
+    #[test]
+    fn the_keepout_margin_reaches_round_a_corner() {
+        // A keep-out opened to A's left side (x 0-2, y 0.5-3) lies 0.5 mm
+        // from the top side: a tab there at 0-1 mm is within its margin.
+        let keepout = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(zone (net 0) (net_name \"\") (layer \"F.Cu\") (uuid \"55555555-5555-5555-5555-555555555555\") (name \"cluster/a/a-edge\") \
+             (hatch edge 0.5) (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed)) \
+             (polygon (pts (xy 0 0.5) (xy 2 0.5) (xy 2 3) (xy 0 3))))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = keepout;
+        let error =
+            panelize(&spec("tab a_tl { board = A; side = top; at = 0.5 mm; width = 1 mm; }"), &marked, &none(), "demo")
+                .err()
+                .expect("refused");
+        assert!(
+            error.contains("tab a_tl on board A's top side") && error.contains("keep-out cluster/a/a-edge"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_courtyard_over_the_mouse_bites_is_refused() {
+        // J1's courtyard ends flush with A's top edge (x 3-7, y 0-0.4): no
+        // overhang, but a_top's bites are drilled 0-0.5 mm inside it.
+        let flush = BOARD.replacen(
+            "(gr_line (start 0 0)",
+            "(footprint \"X:J\" (layer \"F.Cu\") (uuid \"66666666-6666-6666-6666-666666666666\") (at 0 0 0) \
+             (property \"Reference\" \"J1\" (at 0 0 0) (layer \"F.Fab\") (uuid \"77777777-7777-7777-7777-777777777777\") (effects (font (size 1 1) (thickness 0.15)))) \
+             (fp_rect (start 3 0) (end 7 0.4) (stroke (width 0.05) (type default)) (fill none) (layer \"F.CrtYd\") (uuid \"88888888-8888-8888-8888-888888888888\")))\n  (gr_line (start 0 0)",
+            1,
+        );
+        let mut marked = files();
+        marked[0].pcb = flush;
+        let error = panelize(&spec(""), &marked, &none(), "demo").err().expect("refused");
+        assert!(error.contains("J1's courtyard (F.CrtYd) reaches into the mouse bites of tab a_top"), "{error}");
+    }
+
+    #[test]
+    fn mouse_bites_must_land_on_the_board_they_perforate() {
+        // B's left side is a 0.6 mm flange in front of a notch open to its top
+        // (x 0.6-2 mm, y 0-4.5 mm): a_right lands on the flange over its whole
+        // width, but holes 0.9 mm in would be drilled in the notch.
+        let notched = BOARD
+            .replacen("(gr_line (start 0 0) (end 10 0) (layer \"Edge.Cuts\") (uuid \"a\"))", "", 1)
+            .replacen("(gr_line (start 10 0) (end 10 6) (layer \"Edge.Cuts\") (uuid \"b\"))", "", 1)
+            .replacen("(gr_line (start 10 6) (end 0 6) (layer \"Edge.Cuts\") (uuid \"c\"))", "", 1)
+            .replacen(
+                "(gr_line (start 0 6) (end 0 0) (layer \"Edge.Cuts\") (uuid \"d\"))",
+                "(gr_poly (pts (xy 0 0) (xy 0.6 0) (xy 0.6 4.5) (xy 2 4.5) (xy 2 0) (xy 10 0) (xy 10 6) (xy 0 6)) (layer \"Edge.Cuts\") (uuid \"e\"))",
+                1,
+            );
+        let mut both = files();
+        both[1].pcb = notched;
+        let mut deep = spec("");
+        deep.tabs.retain(|t| t.name != "b_top");
+        deep.mouse_bite.inset = 900_000;
+        let error = panelize(&deep, &both, &none(), "demo").err().expect("refused");
+        assert!(error.contains("tab a_right: its mouse bites 0.9 mm inside board B fall off the board"), "{error}");
+        // At the default 0.25 mm the holes stay on the flange.
+        let mut shallow = spec("");
+        shallow.tabs.retain(|t| t.name != "b_top");
+        panelize(&shallow, &both, &none(), "demo").expect("the bites land on the flange");
     }
 
     #[test]

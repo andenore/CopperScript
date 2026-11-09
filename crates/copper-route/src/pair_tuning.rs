@@ -260,9 +260,10 @@ fn arc_projection(path: &[(Point, Point)], point: (f64, f64)) -> f64 {
 }
 
 /// `tune_pair_arched`: `tune_pair` for a pair whose corners are arched
-/// (CS-174): lengths are measured as arched and the bumps keep sharp
-/// 90-degree corners for the arc-corner stage. Bump counts rise until the
-/// least height whose arched gain covers the excess fits the amplitude.
+/// (CS-174): the bumps are `tune_pair`'s chamfered ones, which the
+/// arc-corner stage rounds where they fit, and lengths are measured as
+/// arched. Bump counts rise until the least height whose arched gain covers
+/// the excess fits the amplitude.
 pub fn tune_pair_arched(
     first: &mut Vec<TrackSegment>,
     second: &mut Vec<TrackSegment>,
@@ -312,7 +313,7 @@ pub fn tune_pair_arched(
         let mut ordered = placements.to_vec();
         ordered.sort_by_key(|entry| std::cmp::Reverse(entry.0));
         for &(index, from_start, bumps) in &ordered {
-            let pieces = serpentine(&tuned[index], bumps, height, 0, from_start, &partner_copy);
+            let pieces = serpentine(&tuned[index], bumps, height, width, from_start, &partner_copy);
             tuned.splice(index..index + 1, pieces);
         }
         let gain = arched(&both(&tuned, &partner_copy), &target_net) - base;
@@ -362,7 +363,7 @@ pub fn tune_pair_arched(
 }
 
 /// `_serpentine`: replace one axis-aligned segment with `bumps` chamfered
-/// bumps whose chamfer leg is at most `chamfer_width` (0 for sharp corners, CS-174).
+/// bumps whose chamfer leg is at most `chamfer_width`.
 fn serpentine(
     track: &TrackSegment,
     bumps: i64,
@@ -381,7 +382,7 @@ fn serpentine(
         offsets.sort_unstable();
     }
     let (nx, ny) = away_from_partner(track, partner);
-    let (base, top) = if chamfer_width == 0 { (0, 0) } else { bump_chamfers(height, chamfer_width, 0) };
+    let (base, top) = bump_chamfers(height, chamfer_width, 0);
     let at = |distance: i64, rise: i64| {
         Point::new(track.start.x_nm + ux * distance + nx * rise, track.start.y_nm + uy * distance + ny * rise)
     };
@@ -455,7 +456,7 @@ mod tests {
     }
 
     #[test]
-    fn arched_pair_skew_is_compensated_with_sharp_bumps() {
+    fn arched_pair_skew_is_compensated_with_chamfered_bumps() {
         // The partner detours by 2 x 1 mm; both members arch at 0.3 mm.
         let mut first = vec![track("P", (0, 0), (12_000_000, 0))];
         let mut second = vec![
@@ -480,7 +481,8 @@ mod tests {
         assert!(tuning.first_tuned, "{tuning:?}");
         assert!(tuning.added_nm > 0, "{tuning:?}");
         assert_eq!(second, before.1);
-        assert!(first.len() > 1 && first.iter().all(|t| t.start.x_nm == t.end.x_nm || t.start.y_nm == t.end.y_nm));
+        // The bumps keep tune_pair's 45-degree chamfers for the arc stage to round.
+        assert!(first.len() > 1 && first.iter().any(|t| t.start.x_nm != t.end.x_nm && t.start.y_nm != t.end.y_nm));
         let all: Vec<&TrackSegment> = first.iter().chain(&second).collect();
         let length = |net: &str| planned_length_nm(&all, net, &corners);
         let skew = (length("P") - length("N")).abs();

@@ -38,7 +38,8 @@ panel ExamplePanel {
   `.kicad_pro` and `.kicad_dru` beside it are read too), relative to the
   panel file.
 - `assemble_after_depanel = ["BOARD.REFERENCE", ...]` lists component bodies
-  fitted after depanelization: they may overhang a rail or a neighbour.
+  fitted after depanelization: they may overhang a rail or a neighbour, and
+  the panel marks them out of its position files and BOM.
 - Board names use letters, digits and underscores, and differ ignoring
   case: the panel prefixes their nets (`NAME/`) and references (`NAME-`).
   `rail` and `tab` are reserved (the report names a tab's far end `rail`;
@@ -58,7 +59,9 @@ panel ExamplePanel {
    the footprint references must agree (with the `CS_MH_`/`CS_MS_`
    footprints the export adds for mechanical holes and slots), and every
    synthesized radiator must lie on the routed board's copper (feed net and
-   layer). What the routed board shows itself counts too, whatever the
+   layer). A source whose antenna `tuned_for` is stale (an input of the
+   full-wave model changed, or a new model revision) is refused, as
+   `route-board` refuses it: re-run `copper synthesize-antenna` first. What the routed board shows itself counts too, whatever the
    source says: its rule areas that forbid copper pours, where they cover a
    side (ending on the edge or crossing it: antenna regions, connector
    launches; curved outlines followed to within a quarter micron, contours
@@ -71,34 +74,57 @@ panel ExamplePanel {
 2. Moves every item by the board's pose, prefixes nets (`MONO/GND`; nets
    given by name, as KiCad 10 writes them, stay named) and
    references (`MONO-J1`) so boards stay electrically separate, derives
-   fresh UUIDs, drops zone fills and the boards' outlines. Stack-ups, layer
+   fresh UUIDs, drops zone fills and the boards' outlines, and clips a zone
+   or rule area that reaches past its board to the board's outline (alone,
+   the board edge stopped it; a zone cut into pieces becomes one zone per
+   piece). Stack-ups, layer
    sets, project rules and the unconditional custom rules (in the same
    order) must agree; those rules are kept once, first, and are the only
    ones between two boards' items, whatever order the boards are declared
    in. A board with conditional rules repeats its whole rule list in its own
-   order (the last matching rule wins), with `Reference` and `NetName` names
-   prefixed (an empty name, and one of only `*`, stays as written) and each
+   order (the last matching rule wins), with the names its conditions give
+   prefixed (`Reference` and `NetName` comparisons and the footprint and
+   diff-pair functions such as `memberOfFootprint('J1')`, in either quote) (an empty name, and one of only `*`, stays as written) and each
    rule limited to pairs where
    neither item belongs to another board and at least one belongs to it: on
    the board, against the frame, the board edge or an unnetted hole, its
    rules apply as on the board alone.
-   A board with copper on no net (tracks, vias, zones, copper graphics and
-   copper text) is refused when it has conditional rules, since that copper
-   carries neither prefix.
+   Copper on no net (tracks, vias, zones, copper graphics and copper text)
+   on any board is refused when the panel has conditional rules, since that
+   copper carries neither prefix.
 3. Builds the frame: rails, tabs, mouse-bite holes `inset` into every board
    a tab touches (both ends when it joins two boards), fiducials and tooling
    holes, and the outline (boards, tabs and rails united) on `Edge.Cuts`.
+   Where a tab joins a board its edge leaves `Edge.Cuts`, and after breaking
+   the mouse-bite walls are the board edge, so a keep-out inside the board
+   along the landing holds pours, tracks, vias and pads back as the edge
+   did: as deep as the bites cut (`inset` plus half the drill) plus the
+   largest copper-to-edge clearance the rules ask for, and that clearance
+   past both tab ends, clipped to the board.
 4. Refuses, naming the board, side and interval:
-   - a tab on an antenna region opened to the perimeter (plus 1 mm);
+   - a tab on an antenna region opened to the perimeter, or within 1 mm of
+     one (round a corner onto the next side too);
    - a tab on a body overhang;
    - an overhanging body that reaches a rail or another board, unless
      `assemble_after_depanel` lists `BOARD.REFERENCE`: a routed courtyard
-     by its real shape (past a board corner included), a body overhang the
-     source declares by its stretch and distance;
+     by its real shape (past a board corner included, and over a tab's
+     mouse bites inside the board too), a body overhang the source declares
+     by its stretch and distance;
+   - a tab whose far end does not land with its whole width on the board
+     or rail it bridges to;
    - boards closer than `spacing`, measured edge to edge in every
      direction (diagonal neighbours included), tabs off their side, and
      tabs that overlap anywhere on the panel (the same bridge declared from
      both boards included);
+   - a tab closer than `spacing` to a board it passes (only its own board
+     and what it bridges to may touch it), or to another tab, touching
+     included (the router cannot mill a narrower slot, and touching tabs
+     crowd their mouse bites), and a tab no wider than its mouse-bite drill;
+   - fiducials and tooling holes that would leave the panel or overlap
+     (a panel too narrow for them), and tooling holes without 0.2 mm of
+     rail on either side;
+   - two boards' courtyards (or declared bodies) on the same side that
+     meet between the boards, unless one is fitted after depanelization;
    - a panel that falls apart: boards, tabs and rails must be one piece.
 5. Writes `copperscript-panel/v0.1` beside the board (`OUT.panel.json`, or
    `--report`): boards, tabs (what each bridges, its gap and hole count),

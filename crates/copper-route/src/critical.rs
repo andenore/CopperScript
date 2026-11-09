@@ -312,7 +312,7 @@ pub fn critical_net_document(item: &CriticalNetResult) -> Value {
 /// `critical_lane_table`: per critical net, routed length, signal vias,
 /// layers and screening delay.
 ///
-/// Lengths and layers cover the net's track copper on `board`. The delay is
+/// Lengths and layers cover the net's track and arc copper on `board`. The delay is
 /// quasi-TEM screening evidence from the declared stack-up's dielectric next
 /// to each layer, excludes via barrels, and is not sign-off.
 pub fn critical_lane_table(board: &PhysicalBoard, results: &[CriticalNetResult]) -> Result<Vec<Value>> {
@@ -329,13 +329,28 @@ pub fn critical_lane_table(board: &PhysicalBoard, results: &[CriticalNetResult])
             for track in &tracks {
                 per_layer.entry(track.layer).or_default().push(track);
             }
-            let mut layers: Vec<CopperLayer> = per_layer.keys().copied().collect();
+            // An arched corner (CS-174) meets its trimmed legs on their layer.
+            let mut arcs: IndexMap<CopperLayer, Vec<(i64, i64)>> = IndexMap::new();
+            for arc in board.arcs.iter().filter(|arc| &arc.net == net) {
+                arcs.entry(arc.layer).or_default().push((arc.width_nm, arc.length_nm()));
+            }
+            // Every layer carrying the net's copper: a layer with only arcs too.
+            let mut layers: Vec<CopperLayer> = per_layer.keys().chain(arcs.keys()).copied().collect();
+            layers = layers.iter().copied().fold(Vec::new(), |mut seen, layer| {
+                if !seen.contains(&layer) {
+                    seen.push(layer);
+                }
+                seen
+            });
             layers.sort_by_key(|layer| (order.get(layer).copied().unwrap_or(order.len()), layer.value()));
-            let (delay_ps, permittivity, reason) = lane_delay(board, &per_layer, &layers)?;
+            let (delay_ps, permittivity, reason) = lane_delay(board, &per_layer, &arcs, &layers)?;
+            let arc_length = |layer: &CopperLayer| arcs.get(layer).map_or(0, |items| items.iter().map(|a| a.1).sum());
             let mut layer_lengths = Object::new();
             for layer in &layers {
-                layer_lengths.insert(layer.value().to_owned(), Value::from(track_length(&per_layer[layer])));
+                let tracks = per_layer.get(layer).map_or(&[][..], Vec::as_slice);
+                layer_lengths.insert(layer.value().to_owned(), Value::from(track_length(tracks) + arc_length(layer)));
             }
+            let routed_length = track_length(&tracks) + arcs.values().flatten().map(|a| a.1).sum::<i64>();
             let mut permittivities = Object::new();
             for (layer, value) in permittivity {
                 permittivities.insert(layer.to_owned(), Value::Float(value));
@@ -344,7 +359,7 @@ pub fn critical_lane_table(board: &PhysicalBoard, results: &[CriticalNetResult])
                 ("net", Value::from(net.as_str())),
                 ("group", texts(&item.nets)),
                 ("connected", Value::from(item.connected)),
-                ("routed_length_nm", Value::from(track_length(&tracks))),
+                ("routed_length_nm", Value::from(routed_length)),
                 ("layer_lengths_nm", Value::Object(layer_lengths)),
                 ("layers", Value::Array(layers.iter().map(|layer| Value::from(layer.value())).collect())),
                 ("via_count", Value::from(board.vias.iter().filter(|via| &via.net == net).count() as i64)),
@@ -363,10 +378,12 @@ fn decimal_error(error: copper_units::DecimalError) -> Error {
 }
 
 /// `_lane_delay`: the screening delay of a lane, its per-layer effective
-/// permittivity, or why there is none.
+/// permittivity, or why there is none. `arcs` holds each layer's arcs as
+/// (width, length).
 fn lane_delay(
     board: &PhysicalBoard,
     per_layer: &IndexMap<CopperLayer, Vec<&TrackSegment>>,
+    arcs: &IndexMap<CopperLayer, Vec<(i64, i64)>>,
     layers: &[CopperLayer],
 ) -> Result<(Option<f64>, Vec<(&'static str, f64)>, Option<String>)> {
     if board.stackup.physical_layers.is_empty() {
@@ -378,14 +395,18 @@ fn lane_delay(
     let mut total = Decimal::zero();
     let mut permittivity: Vec<(&'static str, f64)> = Vec::new();
     for layer in layers {
-        let tracks = &per_layer[layer];
-        let length = track_length(tracks);
+        let tracks = per_layer.get(layer).map_or(&[][..], Vec::as_slice);
+        let layer_arcs = arcs.get(layer).map_or(&[][..], Vec::as_slice);
+        let length = track_length(tracks) + layer_arcs.iter().map(|a| a.1).sum::<i64>();
         if length <= 0 {
             continue;
         }
         let mut widths: IndexMap<i64, i64> = IndexMap::new();
         for track in tracks {
             *widths.entry(track.width_nm).or_default() += track_length(&[*track]);
+        }
+        for (width, arc_length) in layer_arcs {
+            *widths.entry(*width).or_default() += arc_length;
         }
         let width = *widths.keys().min_by_key(|value| (-widths[*value], **value)).expect("tracks");
         let (effective, reason) = effective_permittivity(board, *layer, width)?;
