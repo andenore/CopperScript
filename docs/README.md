@@ -36,6 +36,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Use or change editor language features | [Language server and implementation plan](language-server.md) |
 | Package or publish the VS Code extension | [Extension release plan](extension-release-plan.md) |
 | Work on compiler internals or ERC | [Compiler architecture](compiler-architecture.md) |
+| Plan usability or speed improvements across the workspace | [Architecture and design review (2026-11)](architecture-review-2026-11.md) |
 | Plan unfinished work | [Current backlog](../TODO.md) |
 
 
