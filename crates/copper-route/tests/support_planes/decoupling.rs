@@ -4,7 +4,6 @@
 use copper_pcb::board::{DecouplingLink, NetRoutingRule, PhysicalBoard, Stackup};
 use copper_physical::{BoardSide, CopperLayer, DesignRules, Point};
 use copper_route::fanout::FanoutResult;
-use indexmap::IndexMap;
 
 use super::*;
 
