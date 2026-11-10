@@ -109,6 +109,26 @@ pub const EXPLANATIONS: &[(&str, &str, &str)] = &[
         "A pin voltage limit could not be evaluated (often relative to an unknown rail).",
         "Connect the reference pin to a declared supply.",
     ),
+    (
+        "LOGIC_HIGH_OVERVOLTAGE",
+        "A push-pull output, or a pull-up resistor, takes a signal net above the voltage limit of a pin on it.",
+        "Use a level shifter, a lower I/O rail, or a part whose input is rated for the driver's rail. Above an absolute maximum is an error; above only the operating maximum is a warning when an absolute maximum is declared.",
+    ),
+    (
+        "LOGIC_HIGH_TOO_LOW",
+        "A driver's output-high level is below the receiver's declared input-high threshold (vih).",
+        "Use a level shifter or a driver on a higher I/O rail, or check the thresholds against the datasheet.",
+    ),
+    (
+        "LOGIC_LOW_TOO_HIGH",
+        "A driver's declared output-low level (vol) is above the receiver's declared input-low threshold (vil).",
+        "Use a driver with a lower output-low level or a receiver with a higher vil.",
+    ),
+    (
+        "LOGIC_LEVEL_UNRESOLVED",
+        "A pin's explicit io_supply or rail-relative logic threshold could not be evaluated.",
+        "Connect the named reference pin to a declared supply, or fix the reference.",
+    ),
     ("I2C_MISSING_SIGNAL", "An I2C interface does not map SDA or SCL.", "Add `sda = NET; scl = NET;`."),
     ("I2C_TOO_FEW_PARTICIPANTS", "An I2C interface binds fewer than two components.", "Bind the host and each target."),
     ("I2C_MISSING_BINDING", "A bound component has no SDA or SCL pin binding.", "Add the pin to its `bind` block."),

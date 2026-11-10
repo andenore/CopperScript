@@ -296,13 +296,86 @@ resolved, because the reference is not on a declared supply, is connected to
 supplies with different voltages, or names no pin or active pad, ERC reports
 the error `VOLTAGE_LIMIT_UNRESOLVED`, a fixed cap still applies on its own, and
 the operating bound on that side stays a hard limit. Limits are only evaluated
-for pins on nets with a declared supply; signal nets carry no voltage in the
-IR. When several active profiles of one package pin declare a range, the
+for pins on nets with a declared supply by the supply checks above; the logic
+levels of signal nets are checked as described in
+[Logic levels](#logic-levels). When several active profiles of one package pin declare a range, the
 package pin's own range wins, then the first bonded device pad's.
 Power-domain `voltage_min`/`voltage_max` remain operating limits checked as
 errors. The serialized IR carries the absolute range as
 `profile.absolute_voltage` (`rating = "absolute"`); a relative bound is
 `{"reference", "offset", "limit"}`.
+
+### Logic levels
+
+Signal nets carry no voltage in the IR, so the supply checks above never see
+them. A pin or pad can instead name its I/O rail and declare logic thresholds,
+and ERC then compares the drivers and receivers of every net that has no
+declared supply:
+
+```copper
+pin IO1 {
+    number = "5";
+    domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull";
+    io_supply = VDDIO;            // the pin or pad whose supply is the I/O rail
+    vih = "0.7*VDDIO";            // input-high minimum
+    vil = "0.3*VDDIO";            // input-low maximum
+    voh = "VDDIO-0.4V";           // output-high minimum
+    vol = 0.4V;                   // output-low maximum
+    absolute_max = "VDDIO+0.3V";
+}
+```
+
+`io_supply` on a pin names another pin of the same part or, for a device-backed
+part, a pad of its device; on a device pad it names a pad of the same device. Each threshold is either a voltage
+(`2.0V`) or a quoted rail-relative level `"[SCALE*]PAD[+|-]OFFSET"`, for example
+`"0.7*VDD"`, `"VDD-0.4V"`, `"VDD"` or `"0.3*VDD+0.1V"`. `PAD` is named like the
+reference of a relative absolute limit and is evaluated per component. Unknown
+references are rejected at compile time (`CMP127`), malformed values with
+`CMP120`, and a fixed `vil` above a fixed `vih` with `CMP121`. The thresholds
+are optional and appear in the IR as `profile.io_supply` and
+`profile.logic_levels` only when declared.
+
+ERC resolves the I/O rail of a pin in this order: its `io_supply`, then, for a
+device-backed pin, the `power_domain` of its active bonded pads through that
+domain's `supply_pads` (when they all resolve to one voltage). The rail voltage
+is the declared supply voltage on the net of the named pin or pad. A pin whose
+rail cannot be resolved takes no part in rail-based checks and gets no
+diagnostic. If a pin declares `io_supply` or a rail-relative threshold and it
+cannot be evaluated, ERC reports the error `LOGIC_LEVEL_UNRESOLVED`.
+
+A driver is a pin with direction `output` or `bidirectional`, a `digital` or
+`clock` domain and the `push_pull` drive mode. A pin that declares no drive mode
+is not assumed to be push-pull. Every other pin on the net is a receiver, except
+pins that are only `power` or `ground`; a bidirectional pin is both. A pin is
+never compared with itself, and two pins of one component on identical rails are
+skipped.
+
+| Condition | Diagnostic |
+| --- | --- |
+| driver rail voltage above the receiver's absolute maximum | error `LOGIC_HIGH_OVERVOLTAGE` |
+| above the operating maximum, inside a declared and resolved absolute maximum | warning `LOGIC_HIGH_OVERVOLTAGE` |
+| above the operating maximum, no absolute bound | error `LOGIC_HIGH_OVERVOLTAGE` |
+| driver output-high below the receiver's `vih` | error `LOGIC_HIGH_TOO_LOW` |
+| driver `vol` above the receiver's `vil` | error `LOGIC_LOW_TOO_HIGH` |
+
+The overvoltage severities follow the supply checks. The driver's output-high
+level is its `voh` when declared, otherwise its rail voltage; `LOGIC_HIGH_TOO_LOW`
+and `LOGIC_LOW_TOO_HIGH` need the receiver's threshold and, for `vol`, the
+driver's, and both sides must resolve. There is one diagnostic per driver,
+receiver and code. Messages name both pins, the net and the numbers with their
+derivation.
+
+A resistor from a signal net to a net with a declared non-zero supply is a
+pull-up. Its supply voltage is a high level on the net and is checked against
+the limits of every pin on it with `LOGIC_HIGH_OVERVOLTAGE`, so an open-drain
+pin gets a high level only through such a resistor. A net with resistors to
+supplies of different voltages (a divider or bias network, including one to
+ground) has no single high level and is not checked this way.
+
+Limits of the check: it compares logic levels, not analog voltages, and it does
+not model timing, hysteresis, current or the signal's rise time. Pins without
+`io_supply`, power domain or thresholds are not checked, so unannotated
+libraries stay quiet.
 
 Part and device provenance is optional. Definitions may use
 `source_document`, `source_revision`, `source_location`, `source_url`, and
