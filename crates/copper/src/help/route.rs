@@ -579,8 +579,9 @@ pub const COMMANDS: &[Command] = &[
             Opt { flag: "--label LABEL", help: "label recorded in results.json (default: the --out directory name)" },
             Opt {
                 flag: "--baseline BASELINE",
-                help: "earlier results.json to compare with; lost completion, more DRC errors or native opens, or \
-                       a slowdown beyond max(1.25x, +30 s) exits 1",
+                help: "earlier results.json to compare with; lost completion, more DRC errors, native opens, \
+                       unrouted critical groups, skew or length-match violations, or a slowdown \
+                       beyond max(1.25x, +30 s) exits 1",
             },
             Opt {
                 flag: "--kicad-cli KICAD_CLI",

@@ -134,9 +134,9 @@ former defaults.
 The metric is the benchmark ladder (`copper bench bench/ladder.json`): the CI
 [Rust workflow](../.github/workflows/rust.yml) routes the example boards and the
 consumer boards (CopperLedRing, CopperAssetTracker, and CopperProbe where the
-token allows) and compares completion, opens, DRC, native connectivity and time
-against `bench/ladder-baseline.json`. Locally, set `COPPER_BOARDS` to a folder
-holding the consumer checkouts.
+token allows) and compares completion, opens, DRC, native connectivity,
+routing-intent findings and time against `bench/ladder-baseline.json`. Locally,
+set `COPPER_BOARDS` to a folder holding the consumer checkouts.
 
 - A change is good if completion goes up or time goes down without other
   regressions. Evidence is the ladder result, the diff and the tests.
@@ -149,21 +149,43 @@ holding the consumer checkouts.
 - Iterate on failures with `copper issues RUN` and `copper view RUN --issue ID`
   (`copper agent-guide iteration`), not one-off scripts.
 
+The DRC column counts hard physical errors only, so a board can show DRC 0 and
+still miss its signal-integrity intent. Two columns carry that intent, read from
+the route-board report:
+
+- Intent is "critical unrouted / skew / length-match": the critical groups the
+  router left unconnected (`CRITICAL-UNROUTED`, from `critical.nets`), and the
+  differential pairs over their skew limit (`DRC-DIFF-SKEW`) and length-match
+  groups over theirs (`DRC-LENGTH-MATCH`), both from `summary.drc.budget_warnings_by_code`.
+  The ladder reports a regression when any of the three rises against the
+  baseline. A baseline written before a field existed is treated as unknown for
+  that field and is not flagged.
+- Crossings is the number of net pairs that cross on one layer in the escape
+  model (`escape.crossing_pairs`, the `ESCAPE-CROSSING` findings). It is advisory
+  and mostly a property of the placement, so it is shown but not guarded.
+
 Status (ladder of 2026-11-09, native plane check, two boards at a time on a
 shared 4-core container):
 
-| Board | Completion | Opens | DRC | Time |
-| --- | ---: | ---: | ---: | ---: |
-| browser-routing-demo | 1.0 | 0 / 2 | 0 | 0.0 s |
-| browser-routing-weave | 1.0 | 0 / 8 | 0 | 0.3 s |
-| round-led-ring | 0.980 | 1 / 51 | 0 | 9 s |
-| nrf52 | 1.0 | 0 / 35 | 0 | 5 s |
-| full-vertical | 1.0 | 0 / 86 | 0 | 21 s |
-| cm4 | 1.0 | 0 / 21 | 0 | 4 s |
-| fx10-bridge | 0.953 | 4 / 85 | 0 | 222 s |
-| led-ring | 1.0 | 0 / 51 | 0 | 3 s |
-| asset-tracker | 1.0 | 0 / 124 | 0 | 39 s |
-| copper-probe | 0.983 | 4 / 237 | 0 | 4995 s |
+| Board | Completion | Opens | DRC | Intent | Crossings | Time |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| browser-routing-demo | 1.0 | 0 / 2 | 0 | 0 / 0 / 0 | 0 | 0.0 s |
+| browser-routing-weave | 1.0 | 0 / 8 | 0 | 0 / 0 / 0 | 4 | 0.3 s |
+| round-led-ring | 0.980 | 1 / 51 | 0 | 0 / 0 / 0 | 0 | 9 s |
+| nrf52 | 1.0 | 0 / 35 | 0 | not yet measured | not yet measured | 5 s |
+| full-vertical | 1.0 | 0 / 86 | 0 | not yet measured | not yet measured | 21 s |
+| cm4 | 1.0 | 0 / 21 | 0 | not yet measured | not yet measured | 4 s |
+| fx10-bridge | 0.953 | 4 / 85 | 0 | 1 / 4 / 1 | 50 | 222 s |
+| led-ring | 1.0 | 0 / 51 | 0 | not yet measured | not yet measured | 3 s |
+| asset-tracker | 1.0 | 0 / 124 | 0 | not yet measured | not yet measured | 39 s |
+| copper-probe | 0.983 | 4 / 237 | 0 | not yet measured | not yet measured | 4995 s |
+
+The Intent and Crossings columns were measured on 2026-11-10 for the four boards
+that ran (browser-routing-demo, browser-routing-weave, round-led-ring,
+fx10-bridge); the other rows keep the numbers of the 2026-11-09 ladder and have
+no intent measurement yet. fx10-bridge has one critical group unrouted, four
+differential pairs over their skew limit and one length-match group over its
+limit while its DRC column reads 0.
 
 The goals the router was rebuilt for: CopperProbe (6 layers, 169-ball 0.75 mm
 BGA, QFN ADC, USB 3 pairs) with 0 opens, 0 exact DRC errors, native DRC clean

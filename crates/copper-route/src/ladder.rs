@@ -300,7 +300,27 @@ pub fn run_board(board: &Board, out: &Path, options: &RunOptions) -> Result<Obje
     let timings_text = std::fs::read_to_string(report.with_extension("timings.json")).ok();
     let timings = timings_text.and_then(|text| copper_json::parse(&text).ok());
     record.insert("phases".to_owned(), Value::Object(phase_seconds(timings.as_ref().unwrap_or(&document))));
+    record.insert("intent".to_owned(), Value::Object(intent_counts(&document)));
     Ok(record)
+}
+
+/// Routing-intent counts that the summary does not carry, read from the report:
+/// the `critical.nets` entries that are not connected (`CRITICAL-UNROUTED` in
+/// `copper issues`) and the report's own `escape.crossing_pairs` total (the sum
+/// over the `ESCAPE-CROSSING` findings, which are advisory). A missing section
+/// is unknown (null), not zero.
+fn intent_counts(document: &Value) -> Object {
+    let mut counts = Object::new();
+    let unrouted = match document.get("critical").and_then(|section| section.get("nets")) {
+        Some(Value::Array(nets)) => Value::from(
+            nets.iter().filter(|net| matches!(net.get("connected"), Some(Value::Bool(false)))).count() as u64,
+        ),
+        _ => Value::Null,
+    };
+    counts.insert("critical_unrouted".to_owned(), unrouted);
+    let crossings = document.get("escape").and_then(|section| section.get("crossing_pairs")).cloned();
+    counts.insert("escape_crossings".to_owned(), crossings.unwrap_or(Value::Null));
+    counts
 }
 
 enum Outcome {
@@ -405,6 +425,18 @@ pub fn row(result: &Value) -> Object {
     row.insert("plane_opens".to_owned(), plane_opens);
     row.insert("drc_errors".to_owned(), get(&section("drc"), "errors"));
     row.insert("native_unconnected".to_owned(), get(&section("native"), "unconnected"));
+    // Routing-intent findings. Skew and length-match are the summary's budget
+    // warnings (absent in records written before they were counted: unknown).
+    let drc = section("drc");
+    let budget = |code: &str| match drc.get("budget_warnings_by_code") {
+        Some(codes @ Value::Object(_)) => Value::from(or_zero(&get(codes, code)) as u64),
+        _ => Value::Null,
+    };
+    let intent = result.get("intent").cloned().unwrap_or_else(|| empty.clone());
+    row.insert("critical_unrouted".to_owned(), get(&intent, "critical_unrouted"));
+    row.insert("skew_violations".to_owned(), budget("DRC-DIFF-SKEW"));
+    row.insert("length_match_violations".to_owned(), budget("DRC-LENGTH-MATCH"));
+    row.insert("escape_crossings".to_owned(), get(&intent, "escape_crossings"));
     row.insert("vias".to_owned(), get(&section("copper"), "vias"));
     row.insert("length_mm".to_owned(), get(&section("copper"), "track_length_mm"));
     row.insert("elapsed_s".to_owned(), get(result, "elapsed_s"));
@@ -479,6 +511,15 @@ pub fn compare(baseline: &Value, candidate: &Value) -> Vec<String> {
                 python_str(&new["native_unconnected"])
             ));
         }
+        for (key, label) in [
+            ("critical_unrouted", "unrouted critical connections"),
+            ("skew_violations", "pair skew violations"),
+            ("length_match_violations", "length-match violations"),
+        ] {
+            if !is_none(&before[key]) && !is_none(&new[key]) && or_zero(&new[key]) > or_zero(&before[key]) {
+                problems.push(format!("{name}: {label} {} -> {}", python_str(&before[key]), python_str(&new[key])));
+            }
+        }
         let slow = or_zero(&before["elapsed_s"]);
         if or_zero(&new["elapsed_s"]) > (slow * SLOWDOWN_LIMIT).max(slow + SLOWDOWN_FLOOR_SECONDS) {
             problems.push(format!(
@@ -504,8 +545,8 @@ pub fn markdown(document: &Value, problems: Option<&[String]>) -> String {
         String::new(),
         format!("CopperScript `{commit}`, {}", python_str(&field("started_utc"))),
         String::new(),
-        "| Board | Status | Completion | Opens / connections | Plane opens (est.) | DRC errors | Native unconnected | Vias | Length mm | Time s |".to_owned(),
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |".to_owned(),
+        "| Board | Status | Completion | Opens / connections | Plane opens (est.) | DRC errors | Native unconnected | Critical unrouted / skew / length-match | Escape crossings | Vias | Length mm | Time s |".to_owned(),
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |".to_owned(),
     ];
     let cell = |value: &Value| if is_none(value) { "–".to_owned() } else { python_str(value) };
     if let Some(Value::Array(results)) = document.get("results") {
@@ -516,8 +557,21 @@ pub fn markdown(document: &Value, problems: Option<&[String]>) -> String {
             } else {
                 format!("{} / {}", python_str(&row["opens"]), python_str(&row["connections"]))
             };
+            let intent = if ["critical_unrouted", "skew_violations", "length_match_violations"]
+                .iter()
+                .all(|key| is_none(&row[*key]))
+            {
+                "–".to_owned()
+            } else {
+                format!(
+                    "{} / {} / {}",
+                    cell(&row["critical_unrouted"]),
+                    cell(&row["skew_violations"]),
+                    cell(&row["length_match_violations"])
+                )
+            };
             lines.push(format!(
-                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+                "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
                 python_str(&item.get("name").cloned().unwrap_or(Value::Null)),
                 python_str(&row["status"]),
                 cell(&row["completion"]),
@@ -525,6 +579,8 @@ pub fn markdown(document: &Value, problems: Option<&[String]>) -> String {
                 cell(&row["plane_opens"]),
                 cell(&row["drc_errors"]),
                 cell(&row["native_unconnected"]),
+                intent,
+                cell(&row["escape_crossings"]),
                 cell(&row["vias"]),
                 cell(&row["length_mm"]),
                 cell(&row["elapsed_s"]),
@@ -917,11 +973,11 @@ mod tests {
     }
 
     const TABLE: &str = "# Benchmark ladder: run\n\nCopperScript `unknown`, 2026-10-27T20:00:00+00:00\n\n\
-| Board | Status | Completion | Opens / connections | Plane opens (est.) | DRC errors | Native unconnected | Vias | Length mm | Time s |\n\
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n\
-| a | skipped | – | – | – | – | – | – | – | – |\n\
-| b | completed | 1.0 | 0 / 12 | 2 | 0 | – | 7 | 123.4 | 12.5 |\n\
-| c | error | – | – | – | – | – | – | – | 0.3 |\n";
+| Board | Status | Completion | Opens / connections | Plane opens (est.) | DRC errors | Native unconnected | Critical unrouted / skew / length-match | Escape crossings | Vias | Length mm | Time s |\n\
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n\
+| a | skipped | – | – | – | – | – | – | – | – | – | – |\n\
+| b | completed | 1.0 | 0 / 12 | 2 | 0 | – | – | – | 7 | 123.4 | 12.5 |\n\
+| c | error | – | – | – | – | – | – | – | – | – | 0.3 |\n";
 
     #[test]
     fn markdown_and_comparison_match_python() {
@@ -957,6 +1013,78 @@ mod tests {
                 "b: time 100.0s -> 140.5s"
             ]
         );
+    }
+
+    fn intent_result(unrouted: i64, escape: i64, budget: &str) -> Value {
+        copper_json::parse(&format!(
+            r#"{{"name":"b","status":"completed","elapsed_s":10.0,"intent":{{"critical_unrouted":{unrouted},"escape_crossings":{escape}}},
+            "summary":{{"signal":{{"completion":1.0}},"drc":{{"errors":0,"budget_warnings_by_code":{budget}}}}}}}"#
+        ))
+        .unwrap()
+    }
+
+    fn wrap(result: Value) -> Value {
+        let mut document = Object::new();
+        document.insert("results".to_owned(), Value::Array(vec![result]));
+        Value::Object(document)
+    }
+
+    #[test]
+    fn row_counts_intent_findings() {
+        let row = row(&intent_result(1, 50, r#"{"DRC-DIFF-SKEW":4,"DRC-LENGTH-MATCH":1,"DRC-MAX-LENGTH":9}"#));
+        assert_eq!(python_str(&row["critical_unrouted"]), "1");
+        assert_eq!(python_str(&row["skew_violations"]), "4");
+        assert_eq!(python_str(&row["length_match_violations"]), "1");
+        assert_eq!(python_str(&row["escape_crossings"]), "50");
+        // A summary with an empty budget map counts zero; one without it is unknown.
+        let clean = super::row(&intent_result(0, 0, "{}"));
+        assert_eq!(python_str(&clean["skew_violations"]), "0");
+        let old = super::row(&copper_json::parse(r#"{"status":"completed","summary":{"drc":{"errors":0}}}"#).unwrap());
+        assert!(is_none(&old["skew_violations"]) && is_none(&old["critical_unrouted"]));
+    }
+
+    #[test]
+    fn intent_counts_read_the_report() {
+        let document = copper_json::parse(
+            r#"{"critical":{"nets":[{"connected":true},{"connected":false},{"connected":false}]},
+            "escape":{"crossing_pairs":50,"pairs":[{"crossing_pairs":40},{"crossing_pairs":10}]}}"#,
+        )
+        .unwrap();
+        let counts = intent_counts(&document);
+        assert_eq!(python_str(&counts["critical_unrouted"]), "2");
+        assert_eq!(python_str(&counts["escape_crossings"]), "50");
+        let none = intent_counts(&copper_json::parse("{}").unwrap());
+        assert!(is_none(&none["critical_unrouted"]) && is_none(&none["escape_crossings"]));
+    }
+
+    #[test]
+    fn rising_intent_findings_are_regressions() {
+        let before = wrap(intent_result(0, 50, r#"{"DRC-DIFF-SKEW":4,"DRC-LENGTH-MATCH":1}"#));
+        let worse = wrap(intent_result(1, 80, r#"{"DRC-DIFF-SKEW":5,"DRC-LENGTH-MATCH":2}"#));
+        assert_eq!(
+            compare(&before, &worse),
+            [
+                "b: unrouted critical connections 0 -> 1",
+                "b: pair skew violations 4 -> 5",
+                "b: length-match violations 1 -> 2"
+            ]
+        );
+        // Equal or lower is fine, and escape crossings are advisory.
+        assert!(compare(&before, &before).is_empty());
+        assert!(compare(&worse, &before).is_empty());
+        // A baseline without the fields is unknown, not zero.
+        let old = wrap(
+            copper_json::parse(r#"{"name":"b","status":"completed","elapsed_s":10.0,"summary":{"drc":{"errors":0}}}"#)
+                .unwrap(),
+        );
+        assert!(compare(&old, &worse).is_empty());
+    }
+
+    #[test]
+    fn intent_column_renders() {
+        let table = markdown(&wrap(intent_result(1, 50, r#"{"DRC-DIFF-SKEW":4,"DRC-LENGTH-MATCH":1}"#)), None);
+        assert!(table.contains("| Critical unrouted / skew / length-match | Escape crossings |"), "{table}");
+        assert!(table.contains("| 0 | – | 1 / 4 / 1 | 50 |"), "{table}");
     }
 
     #[test]
