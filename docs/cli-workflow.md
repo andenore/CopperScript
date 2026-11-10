@@ -471,6 +471,10 @@ make EXAMPLE=full-vertical route `
   RUN_DIR="build/my-routing-run"
 ```
 
+`copper build SOURCE -- OPTIONS` does the same inside the binary, without Make,
+bash or `jq`, and verifies with CopperScript's own refill and DRC unless you pass
+`--verify kicad`; see [Make builds](make-builds.md#copper-build-the-same-build-without-make).
+
 The runner preserves the router's exit code: **1** means unmet routing/DRC
 gates, **2** means setup/execution error, **3** means an unsupported path (the
 compiler's not-implemented exit) and **130** means interruption.

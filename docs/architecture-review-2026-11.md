@@ -27,7 +27,9 @@ Implemented on `claude/copperscript-architecture-review-uzigis`:
   a kicad-cli path still selects KiCad). On the five example ladder boards
   completion, opens and DRC are unchanged; the check costs about 2 s on
   fx10-bridge. `COMPILE ERROR` lines go to stderr, which the Make build no
-  longer discards.
+  longer discards. `copper build` runs what `make/route-build.sh` does inside
+  the binary (see [Make builds](make-builds.md)): it prints its step plan,
+  verifies natively by default, and `--verify kicad` keeps the kicad-cli path.
 - **Language.** Net pin patterns (`U_MODEM.GND*;`) and `source_locations`
   in the IR.
 - **Architecture.** One decoder for saved boards (copper-route's duplicate,
@@ -68,8 +70,7 @@ Not done, and why:
 - **One workspace error type, one DRC, test reorganisation, CI caching.**
   Each is a larger change of its own; CI changes were left alone because
   GitHub Actions cannot be run from this environment.
-- **`copper build`** (a native replacement for `make/route-build.sh`) and
-  repetition constructs beyond pin patterns.
+- **Repetition constructs** beyond pin patterns.
 
 ## Summary
 

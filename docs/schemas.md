@@ -22,6 +22,7 @@ older versions, as `copperscript-assembly-lock` does.
 | `copperscript-assembly-offers/v0.1` | `copper-assembly` | `copper-assembly/src/offers/mod.rs` |
 | `copperscript-assembly-report/v0.1` | `copper-assembly` | `copper-assembly/src/assembly.rs` |
 | `copperscript-bench/v1` | `copper-route` | `copper-route/src/ladder.rs` |
+| `copperscript-build/v1` | `copper` | `copper/src/build.rs` |
 | `copperscript-cam-comparison/v0.1` | `copper-cam` | `copper-cam/src/compare/mod.rs` |
 | `copperscript-critical-replay/v1` | `copper` | `copper/src/replay_critical.rs` |
 | `copperscript-critical-route/v0.1` | `copper-route` | `copper-route/src/critical.rs` |

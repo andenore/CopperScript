@@ -276,6 +276,55 @@ pub const COMMANDS: &[Command] = &[
         actions: &[],
     },
     Command {
+        name: "build",
+        group: Group::Layout,
+        summary: "route a board, refill and check it, and write run.json binding the outputs by SHA-256",
+        options: &[
+            Opt {
+                flag: "--project-root DIR",
+                help: "the project: SOURCE must be inside it and the output below its build/ (default: the current \
+                       directory)",
+            },
+            Opt {
+                flag: "--output-root DIR",
+                help: "parent of the run directories (default: build/SOURCE-STEM below the project)",
+            },
+            Opt {
+                flag: "--output-dir DIR",
+                help: "the run directory itself, which must be new or empty and below the project's build/ \
+                       (default: OUTPUT_ROOT/UTC-TIME-PID)",
+            },
+            Opt {
+                flag: "--verify {native,kicad}",
+                help: "refill and check the routed board with CopperScript's own filler and DRC, which needs no \
+                       KiCad, or with kicad-cli (default: native)",
+            },
+            Opt {
+                flag: "--kicad-cli PATH",
+                help: "kicad-cli for --verify kicad (default: $KICAD_CLI, then PATH, then the standard Windows KiCad \
+                       10 install); with --verify native it is only reported as an available cross-check",
+            },
+            Opt {
+                flag: "--kicad-footprints DIR",
+                help: "KiCad footprint libraries, passed to route-board as a footprint root. With --verify kicad the                        default is share/kicad/footprints beside kicad-cli, else /usr/share/kicad/footprints. A                        native build passes a root only when this is given, so it never depends on an installed                        KiCad; route-board's own --footprint-root also works after --",
+            },
+            Opt {
+                flag: "--locked",
+                help: "require copper.lock to match every package byte (for check and route-board)",
+            },
+            Opt {
+                flag: "--offline",
+                help: "reject remote package cache misses while resolving the board (routing itself always runs \
+                       offline)",
+            },
+            Opt {
+                flag: "--dry-run",
+                help: "print the step plan, check the source offline and exit without writing anything",
+            },
+        ],
+        actions: &[],
+    },
+    Command {
         name: "plan-layout",
         group: Group::Layout,
         summary: "produce a legal placement candidate and coarse routability report",

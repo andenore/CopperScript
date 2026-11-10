@@ -94,6 +94,50 @@ an unavailable requested identity remains an error rather than a silent fallback
 GNU Make normally returns 2 when a recipe fails; inspect `run.json` for the
 underlying routing exit code. No failure is suppressed with `-` or `|| true`.
 
+## `copper build`: the same build without Make
+
+`copper build SOURCE [options] -- [ROUTE-BOARD OPTIONS...]` is the native
+equivalent of `make/route-build.sh`: it needs neither GNU Make, bash, `jq`,
+`sha256sum` nor KiCad, and runs `check`, `route-board`, the refill and DRC in
+the `copper` binary. It prints its step plan first (`--dry-run` prints it,
+checks the source offline and writes nothing), uses the same options
+(`--project-root`, `--output-root`, `--output-dir`, `--kicad-cli`,
+`--kicad-footprints`, `--locked`, `--offline`), the same run directory layout,
+the same refusal of an existing non-empty directory and the same exit status
+(0, 1, 2, 3). `--copper` does not exist, because the compiler is the running
+binary.
+
+```sh
+copper build board.copper --locked -- --layers 4 --routing-profile balanced
+copper build board.copper --verify kicad --kicad-cli /path/to/kicad-cli -- --layers 4
+```
+
+`--verify native` (the default) refills the routed board with CopperScript's
+filler and checks it with its DRC, writing `native-drc.json`.
+`--verify kicad` runs `kicad-cli pcb drc --refill-zones --save-board` exactly as
+the script does and writes `kicad-drc.json`; use it when KiCad's DRC is the
+check you want (it also covers courtyards and silkscreen) and to cross-check a
+native result. `run.json` records the mode (`verify`) and, besides the
+script's fields, a `schema` and the name of the DRC report (`drc_report`). A
+run from `--verify native` has no `kicad-drc.json`, so `copper editor-overlay`
+reports its native DRC evidence as missing.
+`make/release-build.sh` still expects `kicad-drc.json`, so a release today needs
+a `--verify kicad` build (or the script).
+
+A native build passes a footprint root to `route-board` only when you give
+`--kicad-footprints` (or `--footprint-root` after `--`), so it resolves
+footprints the same way on every machine, whether or not KiCad is installed.
+Boards that use KiCad footprint ids therefore need one of the two; boards whose
+footprints come from pinned packages need neither. A `--kicad-cli` or
+`--kicad-footprints` path that does not exist is an error in both modes.
+
+Keep the Make route for builds that already go through `make/board.mk`
+(`make route`), for CI that pins the script, and when you want the runner to
+be a file you can read and edit; both write the same directory layout and
+neither replaces the other. Press Ctrl-C on a `copper build` and the process
+ends at once, leaving `run.json` with status `running`; the script has the
+same gap when it is killed rather than interrupted.
+
 ## Overrides
 
 KiCad paths are automatically discovered for `route` from environment/PATH or

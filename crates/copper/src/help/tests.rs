@@ -12,6 +12,7 @@ fn source(name: &str) -> &'static str {
         "assembly" => include_str!("../assembly.rs"),
         "audit-footprints" => include_str!("../audit_footprints.rs"),
         "bench" => include_str!("../../../copper-route/src/ladder.rs"),
+        "build" => include_str!("../build.rs"),
         "benchmark-routing" => include_str!("../benchmark_routing.rs"),
         "check" => include_str!("../check.rs"),
         "check-footprint" => include_str!("../check_footprint.rs"),
@@ -88,6 +89,28 @@ fn not_options(name: &str) -> &'static [&'static str] {
             "--maximum-ripup-blockers",
             "--zone-dependency-expansions",
             "--filled-copper-search-states",
+        ],
+        // `--copper` only produces an error (the build runs in-process); the rest
+        // are arguments `build` passes to `route-board`, `fill`, `drc`, kicad-cli
+        // and git, or refuses after `--`.
+        "build" => &[
+            "--copper",
+            "--footprint-root",
+            "--verify-plane-fill",
+            "--report",
+            "-o",
+            "--output",
+            "--macro-inputs",
+            "--hard-macro",
+            "--placement-templates",
+            "--expected-open-ends",
+            "--refill-zones",
+            "--save-board",
+            "--severity-all",
+            "--format",
+            "--porcelain",
+            "--no-ext-diff",
+            "-C",
         ],
         // Arguments `bench` passes to `route-board` and to git.
         "bench" => &["--reuse-placement", "--checkpoint-dir", "--report", "-o", "--verify-plane-fill", "--short"],

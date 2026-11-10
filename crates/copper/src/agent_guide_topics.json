@@ -184,6 +184,16 @@
      ],
      [
       "copper",
+      "build",
+      "board.copper",
+      "--locked",
+      "--dry-run",
+      "--",
+      "--routing-profile",
+      "balanced"
+     ],
+     [
+      "copper",
       "summarize",
       "build/NEW-RUN/route.json",
       "--issues",
@@ -191,6 +201,7 @@
      ]
     ],
     "guidance": [
+     "copper build runs check, route-board, a saved native refill with DRC and a completion gate into a fresh directory below build/, and writes run.json binding the outputs by SHA-256; it prints its step plan first, and --dry-run stops there. Options after -- go to route-board; output, report, verification and resolution options are set by the build. --verify kicad uses kicad-cli instead of the native refill and DRC.",
      "Use the project's documented build/review target: it carries layer count, fabrication profile, footprints, placement intent, macros and native tool settings. Retain locked inputs. A generic command below needs those project options before use.",
      "Run check for ERC and audit-footprints for selected footprint geometry before routing. Use the shared route-board pipeline and a bounded routing profile for solver work. Save reports and candidates in a fresh build directory.",
      "route-board emits a compact summary and a source-bound requirement ledger. Default success means its routing gates passed; --require-verified-intent additionally requires hard declaration coverage. Inspect blocked, failed, assumed, external and not-run results explicitly.",

@@ -7,6 +7,7 @@ mod agent_guide;
 mod assembly;
 mod audit_footprints;
 mod benchmark_routing;
+mod build;
 mod check;
 mod check_footprint;
 mod commands;
