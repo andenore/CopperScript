@@ -18,7 +18,7 @@ use copper_physical::pyfloat::{hypot, round_int};
 use super::negotiate::{Accepted, EventSink};
 use super::options::UnifiedRouterOptions;
 use super::rasters::FREE;
-use super::router::Router;
+use super::router::{Router, SearchFailureReason};
 use crate::congestion_feedback::CongestionMap;
 use crate::detailed::{
     DetailedNetResult, DetailedRoutingMetrics, DetailedRoutingResult, DetailedRoutingStatus, fingerprint,
@@ -464,7 +464,17 @@ pub(crate) fn route_diagnostics(
                             .required_search_failures
                             .iter()
                             .flat_map(|failure| {
-                                std::iter::once(format!("unified: {}", failure.diagnostic()))
+                                // One extra flood per unresolved exhausted connection,
+                                // only here where the final diagnostics are assembled.
+                                let wall = router
+                                    .specs
+                                    .iter()
+                                    .find(|spec| &spec.name == name)
+                                    .filter(|_| failure.reason == SearchFailureReason::FrontierExhausted)
+                                    .and_then(|spec| {
+                                        router.wall_report(spec, &failure.source_nodes, &failure.target_nodes)
+                                    });
+                                std::iter::once(format!("unified: {}", failure.diagnostic_with(wall.as_ref())))
                                     .chain(failure.access_diagnostics())
                             })
                             .collect()

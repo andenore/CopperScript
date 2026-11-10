@@ -16,6 +16,7 @@ mod replay;
 pub mod route;
 pub mod router;
 pub mod search;
+mod walls;
 
 pub use options::*;
 pub use replay::*;

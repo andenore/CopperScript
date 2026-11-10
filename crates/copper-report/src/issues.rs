@@ -24,10 +24,20 @@ fn short_diagnostics(items: &[Value]) -> String {
         .iter()
         .take(3)
         .map(|item| {
-            let text = py::text(item);
+            let full = py::text(item);
+            // The router appends what walls in a failed search after the
+            // counts and pads; keep that tail readable when the head is cut.
+            let (text, wall) = match full.split_once("; walled_in=") {
+                Some((head, tail)) => (head.to_owned(), Some(tail)),
+                None => (full.clone(), None),
+            };
             let mut short: String = text.chars().take(240).collect();
             if text.chars().count() > 240 {
                 short.push('…');
+            }
+            if let Some(tail) = wall {
+                short.push_str("; walled_in=");
+                short.extend(tail.chars().take(320));
             }
             short
         })
@@ -2670,6 +2680,35 @@ mod tests {
         let issue = find_issue(&issues, "R1").unwrap();
         assert_eq!(issue.objects, ["U2.1", "U1.1"]);
         assert_eq!(issue.points, [(100.0, 20.0), (1.0, 2.0)]);
+    }
+
+    #[test]
+    fn long_search_diagnostic_keeps_its_wall_summary_in_the_title() {
+        let head = format!("unified: search frontier exhausted; expanded=1 searches=1 {}", "x".repeat(300));
+        let diagnostic = format!(
+            "{head}; remaining_pads=[U2.1]; walled_in=target; reached_nodes=9; region_nm=(1,2)-(3,4); \
+             boundary_nodes=20; bounded_by=[RESET:41%,GND:20%]"
+        );
+        let report = copper_json::parse(&format!(
+            r#"{{"detailed":{{"nets":[{{"net":"A","connected":false,"diagnostics":["{diagnostic}"]}}]}}}}"#
+        ))
+        .unwrap();
+        let mut scene = Scene::default();
+        scene.pads.push(crate::scene::ScenePad {
+            reference: "U2".into(),
+            pad: "1".into(),
+            net: "A".into(),
+            layers: vec!["F.Cu".into()],
+            polygon: vec![],
+            center: (100.0, 20.0),
+            drill: 0.0,
+        });
+        let issues = run_issues(&mut report_run(report, scene), 3.0).unwrap();
+        let issue = find_issue(&issues, "R1").unwrap();
+        let title = py::text(&issue.title);
+        assert!(title.contains("…; walled_in=target; reached_nodes=9"), "{title}");
+        assert!(title.ends_with("bounded_by=[RESET:41%,GND:20%]"), "{title}");
+        assert_eq!(issue.objects, ["U2.1"]);
     }
 
     #[test]

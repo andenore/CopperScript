@@ -14,6 +14,17 @@ use crate::routing_lattice::LatticeBlock;
 pub const FOREIGN: i32 = -2;
 pub const FREE: i32 = -1;
 
+/// What a [`FOREIGN`] node is blocked by (see [`Rasters::foreign_causes`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WallCause {
+    Net(i32),
+    /// A pad that belongs to no net.
+    UnconnectedPad,
+    /// A keep-out, macro region, or netless track or via: the obstacle type
+    /// does not record which, only that it is not a pad.
+    NetlessObstacle,
+}
+
 /// `_Obstacle`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Obstacle {
@@ -208,6 +219,56 @@ impl Rasters {
         }
         let (nodes, cells) = &self.track[&key];
         (nodes, cells)
+    }
+
+    /// The track owners already built for a width class (`None`: never built).
+    /// Report-only readers use this so they leave the lazy cache untouched.
+    pub fn track_cached(&self, width: i64, clearance: i64) -> Option<(&[i32], &[i32])> {
+        self.track.get(&(width, clearance)).map(|(nodes, cells)| (nodes.as_slice(), cells.as_slice()))
+    }
+
+    /// The through-via owners already built for a via class (`None`: never built).
+    pub fn via_cached(&self, size: i64, drill: i64, clearance: i64) -> Option<&[i32]> {
+        self.via.get(&(size, drill, clearance, (0, self.nl.saturating_sub(1)))).map(Vec::as_slice)
+    }
+
+    /// Whether the board outline or a cut-out alone blocks a track of
+    /// `half_width` at lattice column `column` (a node, or a cell centre when
+    /// `cell`; `None` on a nested lattice, whose columns do not index one block).
+    pub fn edge_blocks(&self, column: usize, half_width: f64, cell: bool) -> Option<bool> {
+        let [view] = self.views.as_slice() else { return None };
+        let threshold = half_width + self.minimum_clearance_nm as f64 + view.margin as f64;
+        let (inside, edge) =
+            if cell { (&view.inside_cells, &view.edge_cells) } else { (&view.inside_nodes, &view.edge_nodes) };
+        Some(!(inside[column] && edge[column] >= threshold))
+    }
+
+    /// Why a track of `half_width` at `(x, y)` on `layer` is blocked where the
+    /// raster says [`FOREIGN`]: the obstacles whose reach covers the point,
+    /// each net, the pads without a net, and the other netless obstacles
+    /// (keep-outs, macro regions, netless tracks and vias) once. Empty: only
+    /// the board outline reaches it. A report-only re-derivation of
+    /// `build_block` (the margin of the first block stands for all).
+    pub fn foreign_causes(&self, x: f64, y: f64, layer: usize, half_width: f64, clearance: i64) -> Vec<WallCause> {
+        let margin = self.views.first().map_or(0, |view| view.margin) as f64;
+        let mut causes: Vec<WallCause> = Vec::new();
+        for item in &self.obstacles {
+            if !item.blocks_tracks || !item.layers.contains(&layer) {
+                continue;
+            }
+            let reach = (item.radius + clearance.max(item.clearance)) as f64 + half_width + margin;
+            let distance =
+                if item.polygon { polygon_distance(&item.spine, x, y) } else { spine_distance(&item.spine, x, y) };
+            let cause = match (item.owner, item.is_pad) {
+                (FOREIGN, true) => WallCause::UnconnectedPad,
+                (FOREIGN, false) => WallCause::NetlessObstacle,
+                (owner, _) => WallCause::Net(owner),
+            };
+            if distance < reach && !causes.contains(&cause) {
+                causes.push(cause);
+            }
+        }
+        causes
     }
 
     /// `via(size, drill, clearance, span)`: owners for a physical via span.

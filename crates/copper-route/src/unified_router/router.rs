@@ -156,6 +156,12 @@ pub struct ConnectionFailure {
     /// Empty for plane contacts and attempts that did not select a source tree.
     pub source_groups: Vec<FailedPadGroup>,
     pub groups: Vec<FailedPadGroup>,
+    /// Lattice nodes of the tree the search grew from and of the targets it
+    /// sought, kept for an exhausted frontier only: the final diagnostics
+    /// flood them to name the copper that closed the region.
+    /// Shared, so cloning a failure (negotiation clones routes) copies no list.
+    pub source_nodes: std::rc::Rc<[i64]>,
+    pub target_nodes: std::rc::Rc<[i64]>,
 }
 
 impl ConnectionFailure {
@@ -169,6 +175,12 @@ impl ConnectionFailure {
     }
 
     pub fn diagnostic(&self) -> String {
+        self.diagnostic_with(None)
+    }
+
+    /// The diagnostic with the copper that bounds the searched region appended
+    /// as further `; key=value` fields (see [`super::walls::WallReport`]).
+    pub(crate) fn diagnostic_with(&self, wall: Option<&super::walls::WallReport>) -> String {
         let reason = match self.reason {
             SearchFailureReason::FrontierExhausted => "search frontier exhausted",
             SearchFailureReason::ExpansionLimit => "search expansion limit exhausted",
@@ -228,8 +240,13 @@ impl ConnectionFailure {
             )
         };
         format!(
-            "{reason}; expanded={} searches={} source_accesses={} target_accesses={} deadline_reached={}; unresolved pad groups (zero-based) [{groups}]{remaining}{sources}",
-            self.expanded, self.searches, self.source_access_count, self.target_access_count, self.deadline_reached
+            "{reason}; expanded={} searches={} source_accesses={} target_accesses={} deadline_reached={}; unresolved pad groups (zero-based) [{groups}]{remaining}{sources}{}",
+            self.expanded,
+            self.searches,
+            self.source_access_count,
+            self.target_access_count,
+            self.deadline_reached,
+            wall.map(super::walls::WallReport::describe).unwrap_or_default()
         )
     }
 }

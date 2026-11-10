@@ -4316,6 +4316,8 @@ mod unified_diagnostic_tests {
             source_access_count: if exhausted { 2 } else { 0 },
             target_access_count: 2,
             groups: Vec::new(),
+            source_nodes: std::rc::Rc::from([]),
+            target_nodes: std::rc::Rc::from([]),
         };
         let detailed = crate::detailed::DetailedNetResult {
             net: "CLK".to_owned(),

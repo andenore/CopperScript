@@ -51,6 +51,15 @@ pub fn disc_offsets_cached(radius: f64) -> std::rc::Rc<Vec<(i64, i64)>> {
     })
 }
 
+/// Keep the searched nodes of a connection whose frontier ran dry, for the
+/// final wall report (see `walls.rs`).
+fn keep_nodes(failure: &mut ConnectionFailure, attempt: &SearchAttempt, sources: &[(i64, f64)], targets: &[i64]) {
+    if attempt.failure == Some(SearchFailureReason::FrontierExhausted) {
+        failure.source_nodes = sources.iter().map(|s| s.0).collect();
+        failure.target_nodes = targets.into();
+    }
+}
+
 /// What a search targets: candidate nodes (in order), and per target the
 /// extra cost of ending there.
 pub struct Targets<'a> {
@@ -109,6 +118,8 @@ impl Router<'_, '_> {
             target_access_count: targets,
             source_groups: Vec::new(),
             groups: self.failed_pad_groups(index, groups),
+            source_nodes: std::rc::Rc::from([]),
+            target_nodes: std::rc::Rc::from([]),
         }
     }
 
@@ -340,6 +351,7 @@ impl Router<'_, '_> {
                 if found.path.is_none() {
                     let mut failure = self.connection_failure(index, &found, sources.len(), keys.len(), &remaining);
                     failure.source_groups = self.failed_pad_groups(index, &tree_groups);
+                    keep_nodes(&mut failure, &found, &sources, &keys);
                     route.required_search_failures.push(failure);
                     if route.reason.is_empty() {
                         route.reason = format!("no path to {} remaining pad groups", remaining.len());
@@ -445,13 +457,10 @@ impl Router<'_, '_> {
                 if found.path.is_none() {
                     missing += (!optional) as usize;
                     if !optional {
-                        route.required_search_failures.push(self.connection_failure(
-                            index,
-                            &found,
-                            source_list.len(),
-                            allowed.len(),
-                            &[position],
-                        ));
+                        let mut failure =
+                            self.connection_failure(index, &found, source_list.len(), allowed.len(), &[position]);
+                        keep_nodes(&mut failure, &found, &source_list, &allowed);
+                        route.required_search_failures.push(failure);
                     }
                     continue;
                 }
@@ -484,13 +493,10 @@ impl Router<'_, '_> {
             if found.path.is_none() {
                 missing += (!optional) as usize;
                 if !optional {
-                    route.required_search_failures.push(self.connection_failure(
-                        index,
-                        &found,
-                        source_list.len(),
-                        target_list.len(),
-                        &[position],
-                    ));
+                    let mut failure =
+                        self.connection_failure(index, &found, source_list.len(), target_list.len(), &[position]);
+                    keep_nodes(&mut failure, &found, &source_list, &target_list);
+                    route.required_search_failures.push(failure);
                 }
                 continue;
             }

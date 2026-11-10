@@ -124,6 +124,111 @@ fn wider_window_success_discards_earlier_frontier_failure() {
     assert!(route.connected && route.required_search_failures.is_empty());
 }
 
+/// Four tracks of another net on both layers around `centre`, `half` mm to a side.
+fn sealed_box(centre: (f64, f64), half: f64) -> Vec<copper_pcb::board::TrackSegment> {
+    let corners = [
+        (centre.0 - half, centre.1 - half),
+        (centre.0 + half, centre.1 - half),
+        (centre.0 + half, centre.1 + half),
+        (centre.0 - half, centre.1 + half),
+    ];
+    [CopperLayer::Front, CopperLayer::Back]
+        .iter()
+        .flat_map(|&layer| (0..4).map(move |i| track("BLOCK", corners[i], corners[(i + 1) % 4], 0.3, layer)))
+        .collect()
+}
+
+#[test]
+fn final_diagnostic_names_the_copper_that_walls_in_an_exhausted_connection() {
+    let board =
+        pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)]), ("BLOCK", &[(10.0, 20.0)])], 2, sealed_box((20.0, 13.0), 1.0));
+    let mut router = router(&board, &options(), &[&board.nets[0]]);
+    let route = router.route_net(0, 1.0).unwrap();
+    assert!(!route.connected);
+    let failure = &route.required_search_failures[0];
+    assert_eq!(failure.reason, SearchFailureReason::FrontierExhausted);
+    // The search itself carries no wall text; only the final diagnostics do.
+    assert!(!failure.diagnostic().contains("bounded_by"));
+    let routes = IndexMap::from([("A".to_owned(), route)]);
+    let text = route_diagnostics(&router, &routes, &IndexMap::new())["A"].search[0].clone();
+    assert!(text.contains("remaining_pads=[A_1.1]"), "{text}");
+    assert!(text.contains("; walled_in=target; reached_nodes="), "{text}");
+    // The box is BLOCK copper on both layers; the pad's own via keep-out also
+    // keeps the search off the second layer, which the summary counts apart.
+    let wall = text.split_once("; bounded_by=[").unwrap().1;
+    assert!(
+        wall.contains("BLOCK:") && wall.contains("; via_blocked_columns=") && !wall.contains("board_edge"),
+        "{text}"
+    );
+    // The existing fields keep their order and the new ones come last.
+    let (head, tail) = text.split_once("; walled_in=").unwrap();
+    assert_eq!(head, format!("unified: {}", routes["A"].required_search_failures[0].diagnostic()));
+    assert!(!tail.contains("remaining_pads"));
+}
+
+#[test]
+fn wall_shares_are_ranked_capped_and_rounded() {
+    use super::walls::{WallReport, WallSide, rank_shares};
+    let weights = IndexMap::from([
+        ("GND".to_owned(), 20.0),
+        ("RESET".to_owned(), 41.0),
+        ("board_edge".to_owned(), 10.0),
+        ("SWDCLK".to_owned(), 20.0),
+        ("keepout_or_netless_copper".to_owned(), 5.0),
+        ("VDD".to_owned(), 3.0),
+        ("NRST".to_owned(), 1.0),
+    ]);
+    let shares = rank_shares(weights);
+    let order: Vec<&str> = shares.iter().map(|(label, _)| label.as_str()).collect();
+    assert_eq!(
+        order,
+        ["RESET", "GND", "SWDCLK", "board_edge", "keepout_or_netless_copper", "VDD", "NRST"],
+        "ties break by name"
+    );
+    let report = WallReport {
+        side: WallSide::Source,
+        reached: 12,
+        boundary: 90,
+        shares,
+        via_columns: 7,
+        layers: Some((2, 4)),
+        bounds_nm: (1, 2, 3, 4),
+    };
+    assert_eq!(
+        report.describe(),
+        "; walled_in=source; reached_nodes=12; region_nm=(1,2)-(3,4); boundary_nodes=90; \
+         bounded_by=[RESET:41%,GND:20%,SWDCLK:20%,board_edge:10%,keepout_or_netless_copper:5%,+2 more]; via_blocked_columns=7; layers_allowed=2/4"
+    );
+}
+
+#[test]
+fn netless_obstacles_are_told_apart_by_what_the_obstacle_records() {
+    use super::rasters::{FOREIGN, Obstacle, WallCause};
+    let board = pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)])], 2, vec![]);
+    let mut router = router_all(&board, &options());
+    let obstacle = |owner, is_pad, at| Obstacle {
+        owner,
+        layers: vec![0],
+        spine: vec![at],
+        radius: 100_000,
+        clearance: 0,
+        is_pad,
+        blocks_tracks: true,
+        blocks_vias: true,
+        polygon: false,
+    };
+    let (pad, region, net) = (pt(10.0, 10.0), pt(20.0, 20.0), pt(30.0, 30.0));
+    router.rasters.obstacles =
+        vec![obstacle(FOREIGN, true, pad), obstacle(FOREIGN, false, region), obstacle(3, true, net)];
+    let causes = |at: copper_physical::Point| {
+        router.rasters.foreign_causes(at.x_nm as f64, at.y_nm as f64, 0, 125_000.0, 150_000)
+    };
+    assert_eq!(causes(pad), [WallCause::UnconnectedPad]);
+    assert_eq!(causes(region), [WallCause::NetlessObstacle]);
+    assert_eq!(causes(net), [WallCause::Net(3)]);
+    assert!(causes(pt(40.0, 5.0)).is_empty(), "only the outline reaches a point near no obstacle");
+}
+
 #[test]
 fn optional_plane_failure_does_not_mark_required_connection_budget() {
     let board = pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)])], 2, vec![]);
