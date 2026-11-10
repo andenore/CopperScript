@@ -7,6 +7,7 @@
 //! check with the clearance index decides every track and via written.
 
 pub mod astar;
+pub mod closure;
 pub mod geometry;
 pub mod lattice;
 pub mod negotiate;

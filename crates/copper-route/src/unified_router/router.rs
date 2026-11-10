@@ -162,6 +162,9 @@ pub struct ConnectionFailure {
     /// Shared, so cloning a failure (negotiation clones routes) copies no list.
     pub source_nodes: std::rc::Rc<[i64]>,
     pub target_nodes: std::rc::Rc<[i64]>,
+    /// The closure check rejected the connection without running A*: the side
+    /// whose region it found closed.
+    pub closure: Option<super::closure::ClosureSide>,
 }
 
 impl ConnectionFailure {
@@ -240,12 +243,13 @@ impl ConnectionFailure {
             )
         };
         format!(
-            "{reason}; expanded={} searches={} source_accesses={} target_accesses={} deadline_reached={}; unresolved pad groups (zero-based) [{groups}]{remaining}{sources}{}",
+            "{reason}; expanded={} searches={} source_accesses={} target_accesses={} deadline_reached={}; unresolved pad groups (zero-based) [{groups}]{remaining}{sources}{}{}",
             self.expanded,
             self.searches,
             self.source_access_count,
             self.target_access_count,
             self.deadline_reached,
+            self.closure.map(|side| format!("; closure_check={}", side.word())).unwrap_or_default(),
             wall.map(super::walls::WallReport::describe).unwrap_or_default()
         )
     }
@@ -625,6 +629,10 @@ pub struct Router<'p, 'b> {
     pub fine_plan: Option<crate::fine_regions::FineRegionPlan>,
     /// The nested lattice's kernel tables (built on its first search).
     pub kernel_tables: Option<crate::routing_lattice::KernelTables>,
+    /// Scratch of the closure check (see `closure.rs`).
+    pub closure: super::closure::ClosureScratch,
+    /// Nets whose last connection search ran dry; the closure check runs first for them.
+    pub exhausted_nets: IndexSet<usize>,
 }
 
 /// A net's global-route corridor: its nodes, sorted, and their box.
@@ -865,6 +873,8 @@ impl<'p, 'b> Router<'p, 'b> {
             exact_via_conflicts: IndexMap::new(),
             fine_plan,
             kernel_tables: None,
+            closure: Default::default(),
+            exhausted_nets: IndexSet::new(),
             lattice,
         };
         let (obstacles, holes) = router.obstacles()?;

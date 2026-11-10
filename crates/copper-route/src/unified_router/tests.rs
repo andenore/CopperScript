@@ -347,6 +347,99 @@ fn congestion_capacity_is_per_area_on_both_lattices() {
     assert!(congestion_map(&mut uniform, &[], mm(1.0)).capacity.iter().flatten().all(|c| c.is_finite()));
 }
 
+/// The closure check on a nested lattice: a patch node walled in by a ring of
+/// another net's copper is proved closed, open ground is not, and the
+/// two halves of a portal pair touch.
+#[test]
+fn closure_check_runs_on_the_nested_lattice() {
+    use super::rasters::Obstacle;
+    use super::router::NetSpec;
+    use crate::routing_lattice::Lattice;
+    let mut board = board(
+        "NestedBGA",
+        20.0,
+        20.0,
+        vec![ball_array("test/bga25_0.75", 5, 0.75, 0.35)],
+        vec![placement("U1", "test/bga25_0.75", 10.0, 10.0)],
+        Vec::new(),
+    );
+    board.stackup = copper_pcb::board::Stackup::new(layers(4));
+    board.rules = copper_physical::DesignRules {
+        minimum_clearance_nm: mm(0.1),
+        minimum_track_width_nm: mm(0.1),
+        default_track_width_nm: mm(0.1),
+        default_via_size_nm: mm(0.4),
+        default_via_drill_nm: mm(0.2),
+        minimum_hole_clearance_nm: mm(0.15),
+        ..copper_physical::DesignRules::default()
+    };
+    let options = UnifiedRouterOptions { fine_regions: "dense".to_owned(), ..opts() };
+    let mut router = router(&board, &options, &[]);
+    assert!(router.lattice.is_nested());
+    router.specs.push(NetSpec {
+        name: "N".to_owned(),
+        nid: 900,
+        width: mm(0.1),
+        clearance: mm(0.1),
+        via_size: mm(0.4),
+        via_drill: mm(0.2),
+        layers: vec![0, 1, 2, 3],
+        components: Vec::new(),
+        span: 0,
+        via_factor: 1.0,
+        neck_width: 0,
+        neck_clearance: 0,
+        plane: Default::default(),
+        region: Default::default(),
+        neck: Default::default(),
+        neck_mid: Default::default(),
+        target_only: Vec::new(),
+        optional: 0,
+        via_budget: None,
+        max_length: None,
+        islands: 0,
+        joined: Default::default(),
+        explicit: Default::default(),
+        anchors: Vec::new(),
+        component_pads: Vec::new(),
+        component_access_diagnostics: Vec::new(),
+    });
+    let centre = pt(7.5, 7.5);
+    let ring = |half: i64| {
+        let corners = [(-half, -half), (half, -half), (half, half), (-half, half), (-half, -half)];
+        corners
+            .iter()
+            .map(|(dx, dy)| copper_physical::Point { x_nm: centre.x_nm + dx, y_nm: centre.y_nm + dy })
+            .collect()
+    };
+    // Built before the first raster, so the ring is part of the legality masks.
+    router.rasters.obstacles.push(Obstacle {
+        owner: 5,
+        layers: vec![0, 1, 2, 3],
+        spine: ring(mm(0.5)),
+        radius: mm(0.05),
+        clearance: 0,
+        is_pad: false,
+        blocks_tracks: true,
+        blocks_vias: true,
+        polygon: false,
+    });
+    let inside = router.lattice.nearest(0, centre);
+    let far = router.lattice.nearest(0, pt(2.0, 2.0));
+    let (closed, visits) = router.closed_connection(0, &[far], &[inside], 4096);
+    assert_eq!(closed, Some(super::closure::ClosureSide::Target));
+    assert!(visits > 0);
+    let tables = router.kernel_tables.clone().expect("tables built for the check");
+    assert!(tables.1[router.lattice.column(inside) as usize] > 0, "the ring sits in a fine block");
+    // Open ground never closes; a portal pair touches.
+    let open_a = router.lattice.nearest(0, pt(15.0, 3.0));
+    let open_b = router.lattice.nearest(0, pt(17.0, 3.0));
+    assert_eq!(router.closed_connection(0, &[open_a], &[open_b], 64).0, None);
+    let twin = tables.4.iter().position(|&t| t >= 0).expect("a portal twin");
+    let (a, b) = (twin as i64, tables.4[twin] as i64);
+    assert_eq!(router.closed_connection(0, &[a], &[b], 64), (None, 0));
+}
+
 /// `test_unified_router_options.py::test_complete_plane_net_without_new_copper_is_not_counted_open`
 /// (the routed half is `pads_already_stitched_into_their_plane_count_as_joined`).
 #[test]

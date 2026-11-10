@@ -62,7 +62,13 @@ previous timed event. `copper bench` copies the timings into each board's
 - **Fanout.** BGA dogbones and the cross-surface bypass links of decoupling
   capacitors.
 - **Unified router.** One PathFinder negotiation over a shared multilayer lattice
-  for every remaining net, with exact commit checks (below).
+  for every remaining net, with exact commit checks (below). When a connection's first search window runs dry,
+  or before searching a net that ran dry before, the router floods the
+  copper-free region around its targets (then its sources) under rules at least as
+  permissive as the A* kernel's, necks and vias included; a region that closes
+  within a few hundred nodes without touching the other side fails the connection
+  at once. Such a failure keeps the reason `FrontierExhausted` and reads
+  `closure_check=target|source` in `copper issues`; routing results do not change.
 - **Post-processing.** Land closure, route smoothing, stub cleanup and
   single-layer via sweep; declared zones are stitched automatically.
 - **Verification.** Exact physical DRC on the explicit copper, then a refill and

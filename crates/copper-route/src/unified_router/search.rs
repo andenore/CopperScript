@@ -9,6 +9,7 @@ use copper_physical::pyfloat::hypot;
 use super::astar::{
     FLAG_NECK, FLAG_NECK_MID, FLAG_REGION, FLAG_TARGET, NestedTables, Scratch, SearchInput, SearchStop, search_outcome,
 };
+use super::closure::CLOSURE_CAP;
 use super::geometry::{disc_offsets, segment_offsets};
 use super::rasters::FOREIGN;
 
@@ -74,6 +75,8 @@ pub(crate) struct SearchAttempt {
     pub expanded: i64,
     pub searches: usize,
     pub deadline_reached: bool,
+    /// Rejected by the closure check instead of searched (see `closure.rs`).
+    pub closure: Option<super::closure::ClosureSide>,
 }
 
 impl SearchAttempt {
@@ -84,6 +87,7 @@ impl SearchAttempt {
             expanded: 0,
             searches: 0,
             deadline_reached: reason == SearchFailureReason::Deadline,
+            closure: None,
         }
     }
 
@@ -120,6 +124,7 @@ impl Router<'_, '_> {
             groups: self.failed_pad_groups(index, groups),
             source_nodes: std::rc::Rc::from([]),
             target_nodes: std::rc::Rc::from([]),
+            closure: attempt.closure,
         }
     }
 
@@ -612,11 +617,31 @@ impl Router<'_, '_> {
                 bbox = (bbox.0.min(cx0), bbox.1.min(cy0), bbox.2.max(cx1), bbox.3.max(cy1));
             }
         }
+        // A net whose last connection ran dry is checked before any window.
+        if self.exhausted_nets.contains(&index)
+            && let Some(closed) = self.closure_attempt(index, sources, targets.nodes)
+        {
+            return Ok(closed);
+        }
         let mut previous = SearchAttempt::failed(SearchFailureReason::FrontierExhausted);
         for attempt in 0..3 {
             let result = self.astar(index, sources, &targets, present, bbox, tbox)?.following(previous);
             if result.path.is_some() || bbox == whole || attempt == 2 {
+                if result.path.is_some() {
+                    self.exhausted_nets.shift_remove(&index);
+                } else if result.failure == Some(SearchFailureReason::FrontierExhausted) {
+                    self.exhausted_nets.insert(index);
+                }
                 return Ok(result);
+            }
+            // Otherwise the first window that runs dry is the cue to check, before
+            // the larger windows repeat the search.
+            if attempt == 0
+                && result.failure == Some(SearchFailureReason::FrontierExhausted)
+                && let Some(closed) = self.closure_attempt(index, sources, targets.nodes)
+            {
+                self.exhausted_nets.insert(index);
+                return Ok(closed.following(result));
             }
             previous = result;
             bbox = self.lattice.grow_box(bbox, margin * (attempt + 2) * 2);
@@ -625,6 +650,21 @@ impl Router<'_, '_> {
             }
         }
         unreachable!("three search windows")
+    }
+
+    /// The failed attempt the closure check stands in for, if it proves the
+    /// connection cannot succeed (see `closure.rs`).
+    fn closure_attempt(&mut self, index: usize, sources: &[(i64, f64)], targets: &[i64]) -> Option<SearchAttempt> {
+        let nodes: Vec<i64> = sources.iter().map(|s| s.0).collect();
+        let (side, _) = self.closed_connection(index, &nodes, targets, CLOSURE_CAP);
+        side.map(|side| SearchAttempt {
+            path: None,
+            failure: Some(SearchFailureReason::FrontierExhausted),
+            expanded: 0,
+            searches: 0,
+            deadline_reached: false,
+            closure: Some(side),
+        })
     }
 
     /// `_move_base`: heading-adjusted planar move costs `[layer][move]`.
@@ -1002,6 +1042,7 @@ impl Router<'_, '_> {
             expanded: outcome.expanded,
             searches: 1,
             deadline_reached: false,
+            closure: None,
         })
     }
 

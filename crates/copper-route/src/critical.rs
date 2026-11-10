@@ -4318,6 +4318,7 @@ mod unified_diagnostic_tests {
             groups: Vec::new(),
             source_nodes: std::rc::Rc::from([]),
             target_nodes: std::rc::Rc::from([]),
+            closure: None,
         };
         let detailed = crate::detailed::DetailedNetResult {
             net: "CLK".to_owned(),

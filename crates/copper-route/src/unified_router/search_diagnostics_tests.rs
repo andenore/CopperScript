@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use super::UnifiedRouterOptions;
+use super::closure::ClosureSide;
 use super::route::{adopt_route_diagnostics, route_diagnostics, route_unified};
 use super::router::{OpenReachStop, SearchFailureReason};
 use super::search::Targets;
@@ -124,24 +125,121 @@ fn wider_window_success_discards_earlier_frontier_failure() {
     assert!(route.connected && route.required_search_failures.is_empty());
 }
 
-/// Four tracks of another net on both layers around `centre`, `half` mm to a side.
-fn sealed_box(centre: (f64, f64), half: f64) -> Vec<copper_pcb::board::TrackSegment> {
+/// Four tracks of another net on `layers` around `centre`, `half` mm to a side.
+fn sealed_box(centre: (f64, f64), half: f64, layers: &[CopperLayer]) -> Vec<copper_pcb::board::TrackSegment> {
     let corners = [
         (centre.0 - half, centre.1 - half),
         (centre.0 + half, centre.1 - half),
         (centre.0 + half, centre.1 + half),
         (centre.0 - half, centre.1 + half),
     ];
-    [CopperLayer::Front, CopperLayer::Back]
+    layers
         .iter()
         .flat_map(|&layer| (0..4).map(move |i| track("BLOCK", corners[i], corners[(i + 1) % 4], 0.3, layer)))
         .collect()
 }
 
+const BOTH: [CopperLayer; 2] = [CopperLayer::Front, CopperLayer::Back];
+
+/// Board with net A from (6, 13) to a pad at (20, 13) in router coordinates.
+fn closure_board(wall: Vec<copper_pcb::board::TrackSegment>) -> copper_pcb::board::PhysicalBoard {
+    pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)]), ("BLOCK", &[(10.0, 20.0)])], 2, wall)
+}
+
+#[test]
+fn closure_check_rejects_a_sealed_pocket_before_the_larger_windows() {
+    let board = closure_board(sealed_box((20.0, 13.0), 1.0, &BOTH));
+    let mut router = router(&board, &options(), &[&board.nets[0]]);
+    let (start, end) = (xy(&router, 6.0, 13.0), xy(&router, 20.0, 13.0));
+    let find = |router: &mut super::router::Router<'_, '_>| {
+        router.search_with_outcome(0, &[(start, 0.0)], Targets { nodes: &[end], extra: None }, 1.0).unwrap()
+    };
+    // A net never seen to fail runs its first window, then the check ends the search.
+    let first = find(&mut router);
+    assert_eq!(first.failure, Some(SearchFailureReason::FrontierExhausted));
+    assert_eq!(first.closure, Some(ClosureSide::Target));
+    assert_eq!(first.searches, 1, "only the first window ran");
+    assert!(first.expanded > 0);
+    // The next search of that net is rejected before any A* work.
+    let again = find(&mut router);
+    assert_eq!(again.failure, Some(SearchFailureReason::FrontierExhausted));
+    assert_eq!((again.closure, again.searches, again.expanded), (Some(ClosureSide::Target), 0, 0));
+    // The failure record keeps the reason and the nodes, and says how it ended.
+    let route = router.route_net(0, 1.0).unwrap();
+    let failure = &route.required_search_failures[0];
+    assert_eq!(failure.reason, SearchFailureReason::FrontierExhausted);
+    assert!(
+        failure.diagnostic().contains("expanded=0 searches=0")
+            && failure.diagnostic().contains("; closure_check=target")
+    );
+    assert!(!failure.source_nodes.is_empty() && !failure.target_nodes.is_empty());
+    let routes = IndexMap::from([("A".to_owned(), route)]);
+    let text = route_diagnostics(&router, &routes, &IndexMap::new())["A"].search[0].clone();
+    assert!(text.contains("; closure_check=target; walled_in=target;"), "{text}");
+}
+
+#[test]
+fn closure_check_never_rejects_what_the_search_can_reach() {
+    fn flagged(board: &copper_pcb::board::PhysicalBoard) -> super::router::Router<'_, '_> {
+        let mut router = router(board, &options(), &[&board.nets[0]]);
+        router.exhausted_nets.insert(0);
+        router
+    }
+    let search = |router: &mut super::router::Router<'_, '_>| {
+        let (start, end) = (xy(router, 6.0, 13.0), xy(router, 20.0, 13.0));
+        router.search_with_outcome(0, &[(start, 0.0)], Targets { nodes: &[end], extra: None }, 1.0).unwrap()
+    };
+    // Nothing in the way.
+    let board = closure_board(vec![]);
+    let mut open = flagged(&board);
+    let found = search(&mut open);
+    assert!(found.path.is_some() && found.closure.is_none() && found.searches >= 1);
+
+    // Only a via gets in: the box walls the front layer, the back layer is open.
+    let board = closure_board(sealed_box((20.0, 13.0), 2.0, &[CopperLayer::Front]));
+    let mut router = flagged(&board);
+    let found = search(&mut router);
+    let (path, _) = found.path.expect("reached through a via");
+    let layer_of = |node: i64| crate::routing_lattice::Lattice::layer_of(&router.lattice, node);
+    assert!(path.iter().any(|&n| layer_of(n) != layer_of(path[0])), "the route changes layer");
+    assert!(found.closure.is_none());
+
+    // Only a neck gets in: the wall zone is foreign copper, but the net's neck
+    // may step onto it from its region. A strict-owner flood would close.
+    let board = closure_board(sealed_box((20.0, 13.0), 1.0, &BOTH));
+    let mut router = flagged(&board);
+    let (width, clearance) = (router.specs[0].width, router.specs[0].clearance);
+    let nid = router.specs[0].nid;
+    let owner = router.rasters.track(width, clearance).0.to_vec();
+    let mut strip = IndexSet::new();
+    let mut x = 15.0;
+    while x <= 21.0 {
+        strip.insert(xy(&router, x, 13.0));
+        x += 0.05;
+    }
+    let neck: IndexSet<i64> =
+        strip.iter().copied().filter(|&n| owner[n as usize] != -1 && owner[n as usize] != nid).collect();
+    assert!(neck.len() >= 2, "the strip crosses the wall zone");
+    let (start, end) = (xy(&router, 6.0, 13.0), xy(&router, 20.0, 13.0));
+    router.specs[0].region = strip;
+    router.specs[0].neck = neck;
+    let (closed, _) = router.closed_connection(0, &[start], &[end], 512);
+    assert_eq!(closed, None, "the neck lets the kernel in");
+    let found = search(&mut router);
+    assert!(found.path.is_some() && found.closure.is_none(), "and it does get in");
+    router.specs[0].neck.clear();
+    let (closed, _) = router.closed_connection(0, &[start], &[end], 512);
+    assert_eq!(closed, Some(ClosureSide::Target), "without the neck the pocket is closed");
+    assert!(search(&mut router).path.is_none());
+}
+
 #[test]
 fn final_diagnostic_names_the_copper_that_walls_in_an_exhausted_connection() {
-    let board =
-        pad_board(&[("A", &[(3.0, 10.0), (17.0, 10.0)]), ("BLOCK", &[(10.0, 20.0)])], 2, sealed_box((20.0, 13.0), 1.0));
+    let board = pad_board(
+        &[("A", &[(3.0, 10.0), (17.0, 10.0)]), ("BLOCK", &[(10.0, 20.0)])],
+        2,
+        sealed_box((20.0, 13.0), 1.0, &BOTH),
+    );
     let mut router = router(&board, &options(), &[&board.nets[0]]);
     let route = router.route_net(0, 1.0).unwrap();
     assert!(!route.connected);
