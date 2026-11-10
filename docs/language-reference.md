@@ -928,6 +928,20 @@ placement or manual review, and requirement verification still fails the
 declared constraint. `max_vias`, `maximum_uncoupled_length` and every other
 profile gate stay hard. Reused critical copper must meet its current budget.
 
+`maximum_stub_length` limits the stubs of a net's routed copper. A stub is a
+branch that leaves a junction of the copper and ends at a dead end that is not
+a pad or a pour: a dangling track or arc end, or an unused via. Its length is
+measured along the copper (arcs at their true length) from the junction to the
+farthest dead end of the branch; a via barrel adds nothing. A branch that ends
+on another pad is a route, not a stub, so a multi-pad net is not held to the
+limit on its branches to pads. Exact DRC reports one `DRC-STUB-LENGTH` error
+per net, for its longest stub, when that exceeds the limit. Only nets whose
+pads are all connected are measured (an open net is reported as
+`DRC-OPEN-NET`), synthesized antenna copper is where a feed ends, not a stub, a track end
+that lands on a via, pad or pour joins it, and a via or pad on the body of a
+track splits the track there. The check does not look for
+electrical effects: it is not a via-stub resonance or impedance analysis.
+
 USB/differential profiles need not be top-layer-only. For example,
 `allowed_layers = "F.Cu,In2.Cu"; max_vias = 2;` permits matched terminal
 transitions and another-layer paired middle route. `max_vias` counts signal

@@ -16,6 +16,7 @@ pub mod digest;
 pub mod legality;
 pub mod macros;
 pub mod signal_integrity;
+mod stubs;
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -302,6 +303,15 @@ pub fn run_physical_drc(board: &PhysicalBoard, policy: Policy) -> Result<Report>
         true,
         "filled-capped vias are not held to the minimum via size and drill",
     ));
+    if board.net_routing_rules.iter().any(|r| r.maximum_stub_length_nm.is_some()) {
+        crate::stubs::check_stub_lengths(board, &mut findings)?;
+        covered.push(coverage(
+            "stub_length",
+            Executed,
+            true,
+            "dangling track, arc and via branches measured along the copper of connected nets; via barrels and pad branches are not stubs",
+        ));
+    }
     check_board_edge(board, &mut findings)?;
     covered.push(coverage("copper_to_board_edge", Executed, true, ""));
     check_copper_spacing(board, &mut findings, &mut relaxations)?;
