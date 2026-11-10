@@ -9,24 +9,25 @@ use copper_lang::elaborate::elaborate;
 use copper_lang::mechanical::NOT_IMPLEMENTED;
 use copper_lang::query::{QUERY_KINDS, render_query, run_query};
 
-use crate::args;
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
+use crate::option_parser::{self, flag};
 
 const USAGE: &str = "usage: copper query [-h] [--json] [--locked] [--offline] board {components,component,pins,nets,net,unconnected} [name]";
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let parsed = match args::parse(arguments, &["--help", "--json", "--locked", "--offline"]) {
+    let parsed = match option_parser::parse(arguments, &[flag("--json"), flag("--locked"), flag("--offline")]) {
         Ok(parsed) => parsed,
         Err(message) => {
             let _ = writeln!(err, "{USAGE}\ncopper query: error: {message}");
             return 2;
         }
     };
-    if parsed.flags.contains(&"--help") {
+    if parsed.flag("--help") {
         let _ = writeln!(
             out,
             "{USAGE}\n\nanswer compact questions about the compiled design (pins, nets, components, open pins)"
         );
+        crate::help::options(out, "query");
         return 0;
     }
     let (board, kind, name) = match parsed.positionals.as_slice() {
@@ -49,28 +50,27 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         );
         return 2;
     }
-    let design =
-        match load_design(Path::new(board), parsed.flags.contains(&"--locked"), parsed.flags.contains(&"--offline")) {
-            Ok(design) => design,
-            Err(LoadError::Compile(failure)) if failure.code == NOT_IMPLEMENTED => {
-                let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: query ({})", failure.message);
-                return NOT_IMPLEMENTED_EXIT;
-            }
-            Err(failure) => {
-                let _ = text::print(out, &format!("COMPILE ERROR: {failure}"));
-                return 2;
-            }
-        };
+    let design = match load_design(Path::new(board), parsed.flag("--locked"), parsed.flag("--offline")) {
+        Ok(design) => design,
+        Err(LoadError::Compile(failure)) if failure.code == NOT_IMPLEMENTED => {
+            let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: query ({})", failure.message);
+            return NOT_IMPLEMENTED_EXIT;
+        }
+        Err(failure) => {
+            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
+            return 2;
+        }
+    };
     let view = match elaborate(&design.electrical) {
         Ok(view) => view,
         Err(message) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {message}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {message}"));
             return 2;
         }
     };
     match run_query(view, kind, name) {
         Ok(result) => {
-            let rendered = if parsed.flags.contains(&"--json") {
+            let rendered = if parsed.flag("--json") {
                 Dumps::compact().sort_keys(true).dumps(&result)
             } else {
                 render_query(&result)

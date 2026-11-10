@@ -8,8 +8,8 @@ use copper_report::issues::{filter_issues, find_issue, issues_document, load_run
 use copper_report::py::PyErr;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
+use crate::option_parser::{self, flag, python_float, python_int, value};
 use crate::pypath;
-use crate::report_args::{self, flag, python_float, python_int, valued};
 
 const USAGE: &str = "usage: copper issues [-h] [--issue ID] [--net NET] \
 [--stage {global,access,critical,native,physical,routing,layout,placement,review,error}] [--code CODE] \
@@ -43,37 +43,38 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         2
     };
     let options = [
-        valued("--issue"),
-        valued("--net"),
-        valued("--stage"),
-        valued("--code"),
-        valued("--limit"),
-        valued("--cluster-mm"),
+        value("--issue"),
+        value("--net"),
+        value("--stage"),
+        value("--code"),
+        value("--limit"),
+        value("--cluster-mm"),
         flag("--json"),
     ];
-    let parsed = match report_args::parse(arguments, &options) {
+    let parsed = match option_parser::parse_report(arguments, &options) {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
             let _ = writeln!(
                 out,
                 "{USAGE}\n\nlist a run's failures grouped by cause, each with an id, nets, layers and window"
             );
+            crate::help::options(out, "issues");
             return 0;
         }
         Err(message) => return usage_error(err, &message),
     };
-    let stage = parsed.last("--stage");
+    let stage = parsed.value("--stage");
     if let Some(stage) = stage.filter(|stage| !STAGES.contains(stage)) {
         return usage_error(err, &format!("argument --stage: invalid choice: '{stage}'"));
     }
-    let limit = match parsed.last("--limit") {
+    let limit = match parsed.value("--limit") {
         None => 15,
         Some(value) => match python_int(value) {
             Some(limit) => limit,
             None => return usage_error(err, &format!("argument --limit: invalid int value: '{value}'")),
         },
     };
-    let cluster_mm = match parsed.last("--cluster-mm") {
+    let cluster_mm = match parsed.value("--cluster-mm") {
         None => 3.0,
         Some(value) => match python_float(value) {
             Some(cluster) => cluster,
@@ -85,15 +86,15 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         [] => return usage_error(err, "the following arguments are required: target"),
         [_, extra, ..] => return usage_error(err, &format!("unrecognized arguments: {extra}")),
     };
-    let json = parsed.has("--json");
+    let json = parsed.flag("--json");
     let result = (|| {
         let mut run = load_run(&target)?;
         let issues = run_issues(&mut run, cluster_mm)?;
-        let issues = match parsed.last("--issue") {
+        let issues = match parsed.value("--issue") {
             Some(id) => vec![find_issue(&issues, id)?.clone()],
             None => issues,
         };
-        let issues = filter_issues(issues, parsed.last("--net"), stage, parsed.last("--code"))?;
+        let issues = filter_issues(issues, parsed.value("--net"), stage, parsed.value("--code"))?;
         let document = issues_document(&mut run, &issues, (limit != 0).then_some(limit))?;
         if json { document.json() } else { render_issues(&document) }
     })();

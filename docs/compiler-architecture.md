@@ -61,6 +61,13 @@ wires the crates into commands. Key crates:
 
 `.copper` is the only user-facing source format accepted by the compiler.
 
+The compiled IR (`copperscript-ir/v0.1`) records where each of the board's
+own components, nets and supplies is declared, under `source_locations`:
+the board file's name (no directory, so the IR does not depend on where the
+compiler ran) and a 1-based `line` and `column` per name, pointing at the
+declared name. Reviewers such as CopperReview open declarations from it
+instead of searching the source.
+
 
 The [full-vertical acceptance design](full-vertical-example.md) combines
 an STM32G0C1, CAN, an EG800G cellular modem over UART and USB, an nRF52832

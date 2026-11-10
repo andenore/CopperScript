@@ -575,6 +575,29 @@ fn module_value(definition: &ModuleDefinition) -> Value {
     object(entries)
 }
 
+/// `source_locations`: the board file and each declaration's line and column.
+fn source_locations_value(sources: &SourceLocations) -> Value {
+    let table = |entries: &IndexMap<String, (usize, usize)>| {
+        let mut object = Object::new();
+        for (name, (line, column)) in entries {
+            object.insert(
+                name.clone(),
+                Value::Object(Object::from([
+                    ("line".to_owned(), Value::from(*line as i64)),
+                    ("column".to_owned(), Value::from(*column as i64)),
+                ])),
+            );
+        }
+        Value::Object(object)
+    };
+    object(vec![
+        ("file", text(&sources.file)),
+        ("components", table(&sources.components)),
+        ("nets", table(&sources.nets)),
+        ("supplies", table(&sources.supplies)),
+    ])
+}
+
 /// `board_to_dict(board)` for the electrical part.
 pub fn board_value(board: &Board) -> Object {
     let mut entries =
@@ -596,6 +619,9 @@ pub fn board_value(board: &Board) -> Object {
     let mut modules: Vec<&ModuleDefinition> = board.module_definitions.values().collect();
     modules.sort_by(|a, b| a.name.cmp(&b.name));
     entries.push(("module_definitions", Value::Array(modules.into_iter().map(module_value).collect())));
+    if !board.sources.file.is_empty() {
+        entries.push(("source_locations", source_locations_value(&board.sources)));
+    }
     let mut dependencies: Vec<&Dependency> = board.dependencies.iter().collect();
     dependencies.sort_by(|a, b| a.import_path.cmp(&b.import_path));
     entries.push((

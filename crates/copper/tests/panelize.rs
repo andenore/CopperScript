@@ -16,6 +16,19 @@ fn copper(args: &[&str]) -> (i32, String) {
     (output.status.code().unwrap_or(-1), text)
 }
 
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).expect("a directory");
+    for entry in std::fs::read_dir(from).expect("a readable directory") {
+        let entry = entry.expect("an entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), &target).expect("a copied file");
+        }
+    }
+}
+
 fn slash(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -106,6 +119,34 @@ fn routed_example_boards_panelize_refill_and_pass_native_drc() {
     ]);
     assert_eq!(status, 1, "{output}");
     assert!(!output.contains("Excused") && output.contains("track end is not connected"), "{output}");
+    // A source whose tuned_for no longer matches the model is refused, not
+    // skipped: its radiator could not be checked or excused.
+    let stale_dir = directory.join("stale-source");
+    copy_dir(&workspace().join("examples/antenna_synthesis"), &stale_dir);
+    let board_text = std::fs::read_to_string(stale_dir.join("board.copper")).expect("the example source");
+    let at = board_text.find("tuned_for = \"sha256:").expect("a tuned_for") + "tuned_for = \"sha256:".len();
+    let stale_text = format!("{}{}{}", &board_text[..at], "0".repeat(64), &board_text[at + 64..]);
+    std::fs::write(stale_dir.join("board.copper"), stale_text).expect("the stale source");
+    let stale_panel = directory.join("panel-stale.copper");
+    let text = std::fs::read_to_string(&panel).expect("the panel source");
+    std::fs::write(
+        &stale_panel,
+        text.replace(
+            &slash(&workspace().join("examples/antenna_synthesis/board.copper")),
+            &slash(&stale_dir.join("board.copper")),
+        ),
+    )
+    .expect("the stale panel");
+    let (status, output) = copper(&[
+        "panelize",
+        &slash(&stale_panel),
+        "-o",
+        &slash(&directory.join("stale/panel.kicad_pcb")),
+        "--locked",
+        "--offline",
+    ]);
+    assert_eq!(status, 1, "{output}");
+    assert!(output.contains("geometry was tuned for sha256:0000"), "{output}");
     // The routed inverted-F with the monopole's source (same outline) is refused.
     let swapped = directory.join("panel-swapped.copper");
     let text = std::fs::read_to_string(&panel).expect("the panel source");

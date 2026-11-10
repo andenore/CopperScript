@@ -162,7 +162,6 @@ fn resumed_transition_ownership_passes_exact_gates_and_corruption_rolls_back() {
             &rules[1],
             &routes,
             &exact,
-            &board,
             (pairs, &candidate.return_vias),
             &board.tracks,
         )

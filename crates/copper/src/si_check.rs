@@ -51,10 +51,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             out,
             "{USAGE}\n\nscreen impedance, reference planes, layer groups and length-match groups before routing"
         );
-        let _ = writeln!(
-            out,
-            "\n--layers defaults to source requirements; an explicit count must match a declared stackup."
-        );
+        crate::help::options(out, "si-check");
         return 0;
     }
     let layers = match parsed.value("--layers").map(str::trim) {
@@ -83,7 +80,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return not_implemented(err, &failure.message);
         }
         Err(failure) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {failure}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
             return 2;
         }
     };

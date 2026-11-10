@@ -67,7 +67,7 @@ proposals rejected by native connectivity, deterministic routing and observation
 progress.
 
 General-net wider/projected guides, larger-tree/Steiner improvement and branch-safe
-cleanup are tracked in [routing backlog](routing-backlog.md). Reference matching-ground copper/support, antenna
+cleanup are tracked in [routing open work](routing.md#open-work). Reference matching-ground copper/support, antenna
 keepouts, actual stackup/return-path qualification and a complete ordinary-net
 reroute remain separate requirements. Short connected copper alone is not RF
 performance or production signoff.

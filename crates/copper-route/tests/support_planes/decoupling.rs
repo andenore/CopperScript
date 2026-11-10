@@ -1,12 +1,9 @@
 //! Cross-surface bypass scenes: `fixture` of
-//! `tests/test_decoupling_crosslayer_paths.py`, `scene` of
-//! `tests/test_decoupling_existing_launches.py` and `incumbent_scene` of
-//! `tests/test_fanout_late_bypass_completion.py`.
+//! `tests/test_decoupling_crosslayer_paths.py` and `scene` of `tests/test_decoupling_existing_launches.py`.
 
 use copper_pcb::board::{DecouplingLink, NetRoutingRule, PhysicalBoard, Stackup};
 use copper_physical::{BoardSide, CopperLayer, DesignRules, Point};
 use copper_route::fanout::FanoutResult;
-use indexmap::IndexMap;
 
 use super::*;
 
@@ -109,39 +106,6 @@ pub fn reservation(result: &FanoutResult) -> copper_route::bypass_reservations::
         decoupling_vias: result.decoupling_vias.clone(),
         decoupling_witnesses: result.decoupling_witnesses.clone(),
     }
-}
-
-pub const EARLY_UNAVAILABLE: &str = "early source launch unavailable";
-
-/// `incumbent_scene`: the source board without copper, the link, an
-/// incumbent fanout holding the scene's ordinary launches as via ports with
-/// the bypass pending, and the original pending obligations.
-pub fn incumbent_scene() -> (PhysicalBoard, DecouplingLink, FanoutResult, Vec<(DecouplingLink, String)>) {
-    let (board, link) = existing_launches(false);
-    let mut source = board.clone();
-    source.tracks.clear();
-    source.vias.clear();
-    let ports: IndexMap<copper_pcb::board::PadReference, Point> =
-        [(link.target.clone(), board.vias[0].position), (pad_ref(&link.target.component, "G"), board.vias[1].position)]
-            .into_iter()
-            .collect();
-    let pending = vec![(link.clone(), EARLY_UNAVAILABLE.to_owned())];
-    let incumbent = FanoutResult {
-        accesses: ports,
-        pending_pads: vec![link.capacitor.clone(), link.return_pad.clone()],
-        added_track_count: board.tracks.len() as i64,
-        added_via_count: board.vias.len() as i64,
-        created_tracks: board.tracks.clone(),
-        created_vias: board.vias.clone(),
-        assignment: None,
-        surface_accesses: None,
-        decoupling_tracks: Vec::new(),
-        decoupling_vias: Vec::new(),
-        decoupling_witnesses: Vec::new(),
-        decoupling_pending_links: pending.clone(),
-        board,
-    };
-    (source, link, incumbent, pending)
 }
 
 /// `grid` of `tests/test_decoupling_cell_maze.py`: the six-layer

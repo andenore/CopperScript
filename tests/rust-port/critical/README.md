@@ -114,7 +114,7 @@ The `reserved-*` inputs also save `reserved_accesses`: the bypass-only
 | `reserved-crossface-forged` | the same with a forged extra via | 6000 | `invalid package-access bypass reservations` |
 | `reserved-short` | the same with an ordinary reservation track across both pair lands | 6000 | a failed reservation preflight (`<package-reservations>`) |
 
-No synthetic input reaches a tuned `tune_virtual_pair_spans`, the
+No synthetic input reaches the
 clearance-aware retry `pair_terminals._matched_local_candidates`, or twin
 bumps beside vias: their tests drive them with hand-made copper or patched
 candidates, which a replay input cannot carry.

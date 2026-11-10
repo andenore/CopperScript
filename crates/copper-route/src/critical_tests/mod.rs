@@ -36,8 +36,6 @@ mod pair_terminal_fallback;
 mod pair_through_hole_contacts;
 mod pair_transition_diagnostics;
 mod pair_transition_families;
-mod pair_tuning_span_copper_contacts;
-mod pair_tuning_spans;
 mod pair_vias;
 mod partial_pair_macro_ports;
 mod planned_crossings;

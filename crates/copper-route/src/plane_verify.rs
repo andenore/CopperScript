@@ -698,8 +698,9 @@ pub fn verify_filled_planes(
     };
     let objects = native_object_map(board)?;
     // A synthesized antenna's radiator ends in the open on purpose; KiCad
-    // reports that end as dangling. Exclude exactly those findings.
-    let antennas = antenna_open_end_regions(board);
+    // reports that end as dangling. Exclude exactly those findings: a segment
+    // whose free end is the synthesized tip, on the radiator's net and layer.
+    let tips = antenna_tips(board);
     let mut expected_uuids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut expected_antenna_open_ends = Vec::new();
     let mut expected_open_ends = Vec::new();
@@ -715,35 +716,16 @@ pub fn verify_filled_planes(
             && let [entry] = entries.as_slice()
             && let Some(Value::Str(uuid)) = entry.as_object().and_then(|o| o.get("uuid"))
             && let Some(object) = objects.get(uuid)
-            && object.kind == "segment"
-            && let Some(antenna) = antennas.iter().find(|(net, region, _)| {
-                object.net.as_deref() == Some(net.as_str())
-                    && object.positions_nm.iter().any(|(x, y)| {
-                        copper_physical::geometry::point_in_polygon(copper_physical::Point::new(*x, *y), region)
-                    })
-            })
+            && let Some((antenna, (x, y))) = excused_tip(object, &objects, &tips)
         {
             expected_uuids.insert(uuid.clone());
-            // The open end: the segment endpoint no other copper of the net
-            // touches (the report carries no position).
-            let shared = |point: &(i64, i64)| {
-                objects.values().any(|other| {
-                    other.uuid != object.uuid && other.net == object.net && other.positions_nm.contains(point)
-                })
-            };
-            if let (Some((x, y)), Some(net), Some(layer)) = (
-                object.positions_nm.iter().find(|point| !shared(point)),
-                object.net.clone(),
-                object.layers.first().cloned(),
-            ) {
-                let mm = |nm: i64| format!("{}", nm as f64 / 1e6);
-                expected_open_ends.push((mm(*x), mm(*y), net, layer));
-            }
+            let mm = |nm: i64| format!("{}", nm as f64 / 1e6);
+            expected_open_ends.push((mm(x), mm(y), antenna.net.clone(), antenna.layer.clone()));
             expected_antenna_open_ends.push(format!(
                 "{}: {} (antenna {} open end)",
                 "track_dangling",
                 description(item)?,
-                antenna.2
+                antenna.name
             ));
             continue;
         }
@@ -844,30 +826,65 @@ pub fn verify_filled_planes(
     Ok(evidence)
 }
 
-/// The feed net, region and name of every synthesized antenna recorded on
-/// the board (`metadata["antenna_synthesis"]`).
-fn antenna_open_end_regions(board: &PhysicalBoard) -> Vec<(String, Vec<copper_physical::Point>, String)> {
+/// A synthesized antenna's radiator tip: its feed net, the open end of its
+/// recorded path, the radiator's copper layer and the antenna's name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AntennaTip {
+    net: String,
+    tip: (i64, i64),
+    layer: String,
+    name: String,
+}
+
+/// Every synthesized antenna's tip recorded on the board
+/// (`metadata["antenna_synthesis"]`, the last point of `path_nm`). Pixel
+/// antennas record no path and have no tip to excuse.
+fn antenna_tips(board: &PhysicalBoard) -> Vec<AntennaTip> {
+    let coordinate = |value: &Value| match value {
+        Value::Int(n) => num_traits::ToPrimitive::to_i64(n),
+        _ => None,
+    };
     copper_pcb::antenna::recorded_syntheses(board)
         .into_iter()
         .filter_map(|record| {
-            let net = record.get("net")?.as_str()?.to_owned();
-            let name = record.get("name")?.as_str()?.to_owned();
-            let region: Vec<copper_physical::Point> = record
-                .get("region_nm")?
-                .as_array()?
-                .iter()
-                .filter_map(|p| {
-                    let pair = p.as_array()?;
-                    let coordinate = |value: &Value| match value {
-                        Value::Int(n) => num_traits::ToPrimitive::to_i64(n),
-                        _ => None,
-                    };
-                    Some(copper_physical::Point::new(coordinate(pair.first()?)?, coordinate(pair.get(1)?)?))
-                })
-                .collect();
-            (region.len() >= 3).then_some((net, region, name))
+            let last = record.get("path_nm")?.as_array()?.last()?.as_array()?;
+            Some(AntennaTip {
+                net: record.get("net")?.as_str()?.to_owned(),
+                tip: (coordinate(last.first()?)?, coordinate(last.get(1)?)?),
+                layer: copper_physical::CopperLayer::Front.value().to_owned(),
+                name: record.get("name")?.as_str()?.to_owned(),
+            })
         })
         .collect()
+}
+
+/// The antenna tip a dangling segment ends at, when that is all it is: a
+/// segment on the radiator's net and layer whose free end (an endpoint no
+/// other copper of the net touches) lies on the recorded tip, within a
+/// micron. Any other dangling copper of the feed net stays a finding.
+fn excused_tip<'a>(
+    object: &NativeCopperItem,
+    objects: &IndexMap<String, NativeCopperItem>,
+    tips: &'a [AntennaTip],
+) -> Option<(&'a AntennaTip, (i64, i64))> {
+    if object.kind != "segment" {
+        return None;
+    }
+    let shared = |point: &(i64, i64)| {
+        objects
+            .values()
+            .any(|other| other.uuid != object.uuid && other.net == object.net && other.positions_nm.contains(point))
+    };
+    tips.iter().find_map(|tip| {
+        if object.net.as_deref() != Some(tip.net.as_str()) || !object.layers.contains(&tip.layer) {
+            return None;
+        }
+        object
+            .positions_nm
+            .iter()
+            .find(|p| !shared(p) && (p.0 - tip.tip.0).abs() <= 1_000 && (p.1 - tip.tip.1).abs() <= 1_000)
+            .map(|p| (tip, *p))
+    })
 }
 
 /// `tempfile.TemporaryDirectory(prefix=...)`, removed on drop.
@@ -1415,4 +1432,48 @@ pub fn cleanup_native_dead_ends(
         }
     }
     Ok(current)
+}
+
+#[cfg(test)]
+mod antenna_tip_tests {
+    use super::*;
+
+    fn segment(uuid: &str, net: &str, layer: &str, from: (i64, i64), to: (i64, i64)) -> NativeCopperItem {
+        NativeCopperItem {
+            uuid: uuid.to_owned(),
+            kind: "segment".to_owned(),
+            net: Some(net.to_owned()),
+            component: None,
+            pad: None,
+            layers: vec![layer.to_owned()],
+            positions_nm: vec![from, to],
+            region: None,
+            index: None,
+        }
+    }
+
+    #[test]
+    fn only_the_synthesized_tip_is_excused() {
+        let front = copper_physical::CopperLayer::Front.value();
+        let back = copper_physical::CopperLayer::Back.value();
+        let tips = vec![AntennaTip {
+            net: "FEED".into(),
+            tip: (20_000_000, 1_000_000),
+            layer: front.into(),
+            name: "a".into(),
+        }];
+        let mut objects = IndexMap::new();
+        // The radiator: feed (5, 1) to a bend (10, 1), then on to the tip (20, 1).
+        objects.insert("r1".into(), segment("r1", "FEED", front, (5_000_000, 1_000_000), (10_000_000, 1_000_000)));
+        objects.insert("r2".into(), segment("r2", "FEED", front, (10_000_000, 1_000_000), (20_000_000, 1_000_000)));
+        // An unintended stub off the bend, inside the antenna region.
+        objects.insert("stub".into(), segment("stub", "FEED", front, (10_000_000, 1_000_000), (10_000_000, 3_000_000)));
+        let tip = excused_tip(&objects["r2"], &objects, &tips).expect("the radiator's tip");
+        assert_eq!(tip.1, (20_000_000, 1_000_000));
+        assert!(excused_tip(&objects["stub"], &objects, &tips).is_none(), "an unintended branch stays a finding");
+        // The same tip point on the back layer is not the radiator.
+        let mut other = IndexMap::new();
+        other.insert("back".into(), segment("back", "FEED", back, (18_000_000, 1_000_000), (20_000_000, 1_000_000)));
+        assert!(excused_tip(&other["back"], &other, &tips).is_none(), "the wrong layer stays a finding");
+    }
 }

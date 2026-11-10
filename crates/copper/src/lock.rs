@@ -10,28 +10,29 @@ use copper_lang::macros::prepare_board_macros;
 use copper_lang::mechanical::NOT_IMPLEMENTED;
 use copper_lang::paths;
 
-use crate::args;
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
+use crate::option_parser::{self, flag};
 
 const USAGE: &str = "usage: copper lock [-h] [--locked] [--offline] board";
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let parsed = match args::parse(arguments, &["--help", "--locked", "--offline"]) {
+    let parsed = match option_parser::parse(arguments, &[flag("--locked"), flag("--offline")]) {
         Ok(parsed) => parsed,
         Err(message) => {
             let _ = writeln!(err, "{USAGE}\ncopper lock: error: {message}");
             return 2;
         }
     };
-    if parsed.flags.contains(&"--help") {
+    if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\nresolve package content and update copper.lock");
+        crate::help::options(out, "lock");
         return 0;
     }
     let [board] = parsed.positionals.as_slice() else {
         let _ = writeln!(err, "{USAGE}\ncopper lock: error: the following arguments are required: board");
         return 2;
     };
-    let (locked, offline) = (parsed.flags.contains(&"--locked"), parsed.flags.contains(&"--offline"));
+    let (locked, offline) = (parsed.flag("--locked"), parsed.flag("--offline"));
     let design = match load_design(Path::new(board), locked, offline) {
         Ok(design) => design,
         Err(LoadError::Compile(failure)) if failure.code == NOT_IMPLEMENTED => {
@@ -39,7 +40,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return NOT_IMPLEMENTED_EXIT;
         }
         Err(failure) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {failure}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
             return 2;
         }
     };

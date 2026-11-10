@@ -1263,7 +1263,6 @@ fn admit_local_candidate(
         second,
         local_routes,
         &exact,
-        board,
         (&candidate.via_pairs, &candidate.return_vias),
         &board.tracks,
     )?;

@@ -1,8 +1,6 @@
-# Agent guidance
-
-**Routing refactor in progress.** Routing, placement-for-routing and power
-work follow [the routing refactor plan](docs/routing-refactor-plan.md). Where
-that plan conflicts with the rules below, the plan wins:
+Routing, placement-for-routing and power work follow [routing](docs/routing.md):
+its pipeline rules (never block, one negotiation, declared planes, exact
+legality, native verification at the end) and its measurement rules:
 - Measure every change with the benchmark ladder.
 - Don't create new evidence bundles.
 - Don't add gate-driven recovery modules.

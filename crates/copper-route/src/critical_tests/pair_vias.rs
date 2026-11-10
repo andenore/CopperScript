@@ -68,8 +68,7 @@ fn owner(
 ) -> crate::critical::Proposal {
     let rules = &board.net_routing_rules;
     let (proposed, created, vias) =
-        route_pair_exact(board, &rules[0], &rules[1], routes, &tracks, board, (pairs, returns), &board.tracks)
-            .expect("pair");
+        route_pair_exact(board, &rules[0], &rules[1], routes, &tracks, (pairs, returns), &board.tracks).expect("pair");
     validate_candidate(board, proposed, created, vias, &[], &[], None).expect("validated")
 }
 

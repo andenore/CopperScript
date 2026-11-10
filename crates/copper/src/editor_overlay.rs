@@ -7,8 +7,8 @@ use copper_editor::overlay::{NativeProbe, export_overlay};
 use copper_json::text;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
+use crate::option_parser;
 use crate::pypath;
-use crate::report_args::{self, Opt};
 
 const USAGE: &str = "usage: copper editor-overlay [-h] --kicad-python KICAD_PYTHON -o OUTPUT run";
 
@@ -29,8 +29,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(err, "{USAGE}\ncopper editor-overlay: error: {message}");
         2
     };
-    let options = [report_args::valued("--kicad-python"), Opt { long: "--output", short: Some("-o"), valued: true }];
-    let parsed = match report_args::parse(arguments, &options) {
+    let options = [option_parser::value("--kicad-python"), option_parser::short_value("--output", "-o")];
+    let parsed = match option_parser::parse_report(arguments, &options) {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
             let _ = text::print(out, HELP);
@@ -44,17 +44,17 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         [_, extra, ..] => return usage_error(err, &format!("unrecognized arguments: {extra}")),
     };
     let mut missing = Vec::new();
-    if parsed.last("--kicad-python").is_none() {
+    if parsed.value("--kicad-python").is_none() {
         missing.push("--kicad-python");
     }
-    if parsed.last("--output").is_none() {
+    if parsed.value("--output").is_none() {
         missing.push("-o/--output");
     }
     if !missing.is_empty() {
         return usage_error(err, &format!("the following arguments are required: {}", missing.join(", ")));
     }
-    let kicad_python = pypath::display(parsed.last("--kicad-python").expect("checked"));
-    let output = pypath::display(parsed.last("--output").expect("checked"));
+    let kicad_python = pypath::display(parsed.value("--kicad-python").expect("checked"));
+    let output = pypath::display(parsed.value("--output").expect("checked"));
     let run_path = pypath::display(&run_arg);
     match export_overlay(Path::new(&run_path), Path::new(&kicad_python), Path::new(&output), &mut NativeProbe) {
         Ok(written) => {

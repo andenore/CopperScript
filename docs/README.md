@@ -15,7 +15,8 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Resolve or pin footprints | [Footprint dependencies](footprint-dependencies.md) |
 | Read compact reports or requirement coverage | [LLM workflow](llm-workflow.md) |
 | Iterate on routing or placement failures | [LLM workflow: iteration](llm-workflow.md#routing-and-placement-iteration); `copper agent-guide iteration` |
-| Plan closure of the measured Rust CopperProbe routing failures | [Rust placement and routing closure plan](rust-routing-closure-plan.md), subordinate to the routing refactor and escape plans |
+| Understand or change the routing pipeline, its rules and how changes are measured | [Routing](routing.md) |
+| Plan closure of the measured Rust CopperProbe routing failures | [Rust placement and routing closure plan](rust-routing-closure-plan.md), subordinate to [routing](routing.md) and the escape plan |
 | Change routing or native repair | [Filled-copper feedback](filled-copper-feedback.md); follow linked specialized references only as needed |
 | Plan or implement joint escape planning (side, layer, order per package) | [Escape planning plan](escape-planning-plan.md); implemented contract: [escape planning](escape-planning.md) |
 | Investigate blocked package exits | [Required reference-layout comparison](component-integration-guidelines.md#package-escape-faults-reference-comparison-is-required) |
@@ -36,6 +37,8 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Use or change editor language features | [Language server and implementation plan](language-server.md) |
 | Package or publish the VS Code extension | [Extension release plan](extension-release-plan.md) |
 | Work on compiler internals or ERC | [Compiler architecture](compiler-architecture.md) |
+| Find the code behind a JSON document's `schema` | [Output and input schemas](schemas.md) |
+| Plan usability or speed improvements across the workspace | [Architecture and design review (2026-11)](architecture-review-2026-11.md) |
 | Plan unfinished work | [Current backlog](../TODO.md) |
 
 
@@ -44,7 +47,7 @@ Current contracts describe supported behavior. Board guides keep their latest
 documented status; old routing/bug narratives are recoverable from Git rather
 than duplicated in the checkout. Read accepted [design decisions](design-decisions.md)
 only for a specific architectural change. Contributor tasks live in the
-[routing backlog](routing-backlog.md), [optimization backlog](routing-optimization-todo.md),
+[routing open work](routing.md#open-work), [optimization backlog](routing-optimization-todo.md),
 [qualification backlog](qualification-todo.md) and [other contributor backlog](contributor-backlog.md).
 The [device model](device-model.md) and [placement contracts](placement-internals.md)
 are focused internal references.

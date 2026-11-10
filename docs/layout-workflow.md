@@ -48,8 +48,10 @@ physical results, use resolved `.kicad_mod` footprints. In either case the
 result remains non-fabrication-ready because no detailed routes or sign-off
 checks have run.
 
-`--support-pattern-trials 8` enables bounded joint capacitor-bank refinement on
-`plan-layout`, `route-global` and `route-board`. It tries source-bound bank
+Bounded joint capacitor-bank refinement (`--support-pattern-trials N` on
+`plan-layout` and `route-global`) was a feature of the Python implementation;
+the Rust planner reports a nonzero value as not implemented, and `route-board`
+no longer accepts the option. It tries source-bound bank
 patterns with actual local supply/return and reserved signal-path checks before
 power/contact preparation is frozen. The default is disabled. Fixed/rigid
 intent and region/rotation restrictions remain binding; the option cannot
@@ -147,7 +149,7 @@ connectivity scores. Package, critical and detailed stages retain exact gates.
 
 Actual filled references, RF/USB impedance, thermal/current capacity and final
 CAM require separate evidence. Finite search failure never permits weaker source
-rules. Open algorithm scope is in [routing backlog](routing-backlog.md).
+rules. Open algorithm scope is in [routing open work](routing.md#open-work).
 
 
 A bounded mutable legalization failure discards only its deterministic seed;

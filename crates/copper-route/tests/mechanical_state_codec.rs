@@ -1,7 +1,7 @@
 //! Mechanical intent survives both board decoders and unified-input replay.
 mod support_routers;
 
-use copper_lang::mechanical::assembly::BodyOverhang;
+use copper_lang::mechanical::assembly::{AssemblyEnvelope, BodyOverhang};
 use copper_pcb::board::{ComponentPlacementRule, PhysicalAttachment, PhysicalBoard};
 use copper_physical::{BoardDatum, BoardEdge, BoardSide, Point};
 use copper_route::state_codec::{encode_board, inputs_state_text, load_inputs, physical_board};
@@ -46,6 +46,7 @@ fn assert_both_roundtrip(board: &PhysicalBoard) {
         assert_eq!(decoded.boundary_edges, board.boundary_edges);
         assert_eq!(decoded.outline, board.outline);
         assert_eq!(decoded.placement_rules, board.placement_rules);
+        assert_eq!(decoded.assembly_envelopes, board.assembly_envelopes);
         // Avoid dumping a megabyte-sized real fixture if another saved field drifts.
         assert!(encode_board(&decoded) == encoded, "board encode/decode changed saved fields");
     }
@@ -58,6 +59,42 @@ fn named_edge_and_audited_body_allowance_roundtrip_without_widening_board() {
     let edge = &mut reversed.boundary_edges[0];
     std::mem::swap(&mut edge.start, &mut edge.end);
     assert_both_roundtrip(&reversed);
+}
+
+/// `mechanical_board` under an enclosure height limit on its back side.
+fn enveloped_board() -> PhysicalBoard {
+    let mut board = mechanical_board();
+    board.assembly_envelopes.push(AssemblyEnvelope {
+        id: "LID".to_owned(),
+        outline: board.outline.clone(),
+        side: BoardSide::Back,
+        maximum_height_nm: 3_500_000,
+    });
+    board
+}
+
+#[test]
+fn assembly_envelopes_roundtrip_and_replay() {
+    assert_both_roundtrip(&enveloped_board());
+    let board = enveloped_board();
+    let global = routes::global(&board, 5.0);
+    let text = inputs_state_text(&board, &global, &UnifiedRouterOptions::default(), None, false).unwrap();
+    let decoded = load_inputs(&text, "synthetic.state.json").unwrap();
+    assert_eq!(decoded.board.assembly_envelopes, board.assembly_envelopes);
+}
+
+#[test]
+fn malformed_and_duplicate_assembly_envelopes_are_rejected() {
+    let mut duplicate = enveloped_board();
+    duplicate.assembly_envelopes.push(duplicate.assembly_envelopes[0].clone());
+    assert!(physical_board(&encode_board(&duplicate)).is_err());
+    let mut encoded = encode_board(&enveloped_board());
+    let StateValue::Dataclass { fields, .. } = &mut encoded else { panic!("board") };
+    let StateValue::Tuple(items) = fields.get_mut("assembly_envelopes").unwrap() else { panic!("envelopes") };
+    let StateValue::Dataclass { fields, .. } = &mut items[0] else { panic!("envelope") };
+    fields.insert("unrecognized_constraint".to_owned(), StateValue::Bool(true));
+    assert!(physical_board(&encoded).is_err());
+    assert!(copper_pcb::state_codec::board(&encoded).is_err());
 }
 
 #[test]

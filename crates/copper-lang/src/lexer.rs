@@ -39,7 +39,7 @@ pub struct Token {
     pub end_offset: usize,
 }
 
-const SYMBOLS: &str = "{}[]():;=,.+-/";
+const SYMBOLS: &str = "{}[]():;=,.+-/*";
 
 struct Lexer {
     source: Vec<char>,

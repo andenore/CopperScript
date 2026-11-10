@@ -1125,6 +1125,33 @@ mod tests {
     }
 
     #[test]
+    fn mouse_bites_must_land_on_the_board_they_perforate() {
+        // B's left side is a 0.6 mm flange in front of a notch open to its top
+        // (x 0.6-2 mm, y 0-4.5 mm): a_right lands on the flange over its whole
+        // width, but holes 0.9 mm in would be drilled in the notch.
+        let notched = BOARD
+            .replacen("(gr_line (start 0 0) (end 10 0) (layer \"Edge.Cuts\") (uuid \"a\"))", "", 1)
+            .replacen("(gr_line (start 10 0) (end 10 6) (layer \"Edge.Cuts\") (uuid \"b\"))", "", 1)
+            .replacen("(gr_line (start 10 6) (end 0 6) (layer \"Edge.Cuts\") (uuid \"c\"))", "", 1)
+            .replacen(
+                "(gr_line (start 0 6) (end 0 0) (layer \"Edge.Cuts\") (uuid \"d\"))",
+                "(gr_poly (pts (xy 0 0) (xy 0.6 0) (xy 0.6 4.5) (xy 2 4.5) (xy 2 0) (xy 10 0) (xy 10 6) (xy 0 6)) (layer \"Edge.Cuts\") (uuid \"e\"))",
+                1,
+            );
+        let mut both = files();
+        both[1].pcb = notched;
+        let mut deep = spec("");
+        deep.tabs.retain(|t| t.name != "b_top");
+        deep.mouse_bite.inset = 900_000;
+        let error = panelize(&deep, &both, &none(), "demo").err().expect("refused");
+        assert!(error.contains("tab a_right: its mouse bites 0.9 mm inside board B fall off the board"), "{error}");
+        // At the default 0.25 mm the holes stay on the flange.
+        let mut shallow = spec("");
+        shallow.tabs.retain(|t| t.name != "b_top");
+        panelize(&shallow, &both, &none(), "demo").expect("the bites land on the flange");
+    }
+
+    #[test]
     fn an_unnetted_copper_graphic_counts_as_unnetted_copper() {
         let line = BOARD.replacen(
             "(gr_line (start 0 0)",

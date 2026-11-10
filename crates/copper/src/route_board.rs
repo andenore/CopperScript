@@ -43,8 +43,8 @@ use copper_route::unified_router::UnifiedRouterOptions;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::option_parser::{self, Parsed, Spec, flag, short_value, value};
+use crate::option_parser::{python_float, python_int};
 use crate::pypath;
-use crate::report_args::{python_float, python_int};
 
 /// The build identity a placement checkpoint records: the crate version and
 /// the digest of the workspace's Rust sources (`build.rs`).
@@ -53,7 +53,30 @@ pub const BUILD_IDENTITY: &str = concat!("copper ", env!("CARGO_PKG_VERSION"), "
 const USAGE: &str = "usage: copper route-board [-h] [--locked] [--offline] [-o OUTPUT] [--report REPORT] \
 [--routing-profile {quick,balanced,thorough}] [--no-check] [options] board";
 
+/// Values of solver controls that were options until no caller set them.
+const POWER_DOMAIN_WEIGHT: f64 = 0.25;
+const FILLED_COPPER_SEARCH_STATES: i64 = 4000;
+const MAXIMUM_RIPUP_BLOCKERS: i64 = 4;
+const ZONE_DEPENDENCY_EXPANSIONS: i64 = 2;
+
 const RETIRED_OPTIONS: &[(&str, &str)] = &[
+    ("--debug", "errors are reported without a traceback"),
+    ("--support-pattern-trials", "only 0 was implemented, which is now fixed"),
+    ("--package-support-trials", "only 0 was implemented, which is now fixed"),
+    ("--placement-seeds", "placement uses max(2, --candidates) seeds"),
+    ("--power-domain-weight", "the placement weight is fixed at its former default 0.25"),
+    ("--critical-pin-access-step-mm", "critical pins use --pin-access-step-mm"),
+    ("--layer-preference-cost", "the global router uses its former default 4"),
+    ("--direction-preference-cost", "the global router uses its former default 2"),
+    ("--layer-assignment-passes", "the global router uses its former default 0"),
+    ("--local-demand-cost", "the global router's local demand estimate is off, as it was by default"),
+    ("--local-demand-pitch-mm", "the global router's local demand estimate is off, as it was by default"),
+    ("--fanout-step-mm", "fanout samples every 0.5 mm, its former default"),
+    ("--fanout-geometry-candidates", "fanout uses its former default 0"),
+    ("--plane-escape-width-mm", "plane escapes use the net's rule width"),
+    ("--maximum-ripup-blockers", "filled-copper repair uses its former default 4"),
+    ("--zone-dependency-expansions", "filled-copper repair uses its former default 2"),
+    ("--filled-copper-search-states", "use --routing-profile (quick 2000, balanced 4000, thorough 12000)"),
     ("--unified-direct", "use --unified-set direct=true"),
     ("--unified-no-decouplers", "use --unified-set pre_route_decouplers=false"),
     ("--unified-retain-escape-copper", "use --unified-set retain_escape_copper=true"),
@@ -165,11 +188,11 @@ mod option_tests {
 
 const FLAGS: [&str; 17] = [
     "--locked",
+    "--list-unified-options",
     "--offline",
     "--no-check",
     "--allow-proxy-footprints",
     "--require-verified-intent",
-    "--debug",
     "--progress",
     "--fanout-maze",
     "--ground-via-in-pad",
@@ -195,7 +218,7 @@ const MORE_FLAGS: [&str; 8] = [
     "--no-early-plane-stitch",
 ];
 
-const VALUED: [&str; 59] = [
+const VALUED: [&str; 43] = [
     "--report",
     "--routing-profile",
     "--footprint-root",
@@ -205,11 +228,7 @@ const VALUED: [&str; 59] = [
     "--placement-grid-mm",
     "--escape-margin-mm",
     "--escape-transit-lanes",
-    "--power-domain-weight",
-    "--support-pattern-trials",
-    "--package-support-trials",
     "--decoupling-placement-trials",
-    "--placement-seeds",
     "--placement-refinement-passes",
     "--escape-spacing-passes",
     "--width-mm",
@@ -218,27 +237,17 @@ const VALUED: [&str; 59] = [
     "--placement-templates",
     "--placement-feedback-trials",
     "--pin-access-step-mm",
-    "--critical-pin-access-step-mm",
     "--placement-candidate",
     "--tile-size-mm",
     "--router-iterations",
     "--feedback-iterations",
-    "--local-demand-pitch-mm",
-    "--maximum-ripup-blockers",
     "--unified-pitch-mm",
     "--unified-time-budget-s",
     "--unified-save-inputs",
     "--unified-set",
     "--package-initial-pair-states",
-    "--fanout-step-mm",
-    "--fanout-geometry-candidates",
     "--fanout-refinement-step-mm",
     "--congestion-feedback-trials",
-    "--zone-dependency-expansions",
-    "--layer-preference-cost",
-    "--direction-preference-cost",
-    "--layer-assignment-passes",
-    "--local-demand-cost",
     "--plane-stitch-step-mm",
     "--plane-stitch-radius-mm",
     "--plane-maze-step-mm",
@@ -246,11 +255,9 @@ const VALUED: [&str; 59] = [
     "--plane-contact-radius-mm",
     "--prefer-local-ground-pad",
     "--plane-stitch-detour-mm",
-    "--plane-escape-width-mm",
     "--early-plane-pad",
     "--verify-plane-fill",
     "--filled-copper-trials",
-    "--filled-copper-search-states",
     "--native-evidence-directory",
     "--stop-after",
     "--checkpoint-dir",
@@ -363,8 +370,6 @@ struct Arguments {
     lengths: Vec<(&'static str, String)>,
     unified_pitch_mm: Option<String>,
     unified_time_budget_s: Option<f64>,
-    critical_pin_access_step_mm: Option<String>,
-    plane_escape_width_mm: Option<String>,
     filled_copper_trials: i64,
     filled_copper_search_states: i64,
 }
@@ -429,31 +434,34 @@ impl Arguments {
     fn path(&self, name: &str) -> Option<String> {
         self.parsed.value(name).map(pypath::display)
     }
+
+    /// The plane-fill checker: CopperScript's own refill and DRC unless a
+    /// kicad-cli path is given, or none with `--verify-plane-fill none`.
+    fn plane_checker(&self) -> Option<String> {
+        match self.parsed.value("--verify-plane-fill") {
+            None => Some(copper_route::plane_verify::NATIVE_CHECKER.to_owned()),
+            Some(NO_PLANE_CHECKER) => None,
+            Some(checker) => Some(pypath::display(checker)),
+        }
+    }
 }
 
-const INTS: [(&str, i64, IntKind); 23] = [
+/// `--verify-plane-fill none`: write the board without checking its fills.
+const NO_PLANE_CHECKER: &str = "none";
+
+const INTS: [(&str, i64, IntKind); 13] = [
     ("--candidates", 1, IntKind::Any),
     ("--escape-transit-lanes", 1, IntKind::Any),
-    ("--support-pattern-trials", 0, IntKind::Any),
-    ("--package-support-trials", 0, IntKind::Any),
     ("--decoupling-placement-trials", 64, IntKind::Nonnegative),
     ("--placement-refinement-passes", 2, IntKind::Nonnegative),
     ("--escape-spacing-passes", 2, IntKind::Nonnegative),
     ("--placement-feedback-trials", 24, IntKind::Nonnegative),
     ("--router-iterations", 5, IntKind::Any),
     ("--feedback-iterations", 1, IntKind::Any),
-    ("--maximum-ripup-blockers", 4, IntKind::Any),
     ("--package-initial-pair-states", 6000, IntKind::Nonnegative),
-    ("--fanout-geometry-candidates", 0, IntKind::Nonnegative),
     ("--congestion-feedback-trials", 4, IntKind::Nonnegative),
-    ("--zone-dependency-expansions", 2, IntKind::Range9),
-    ("--layer-preference-cost", 4, IntKind::Any),
-    ("--direction-preference-cost", 2, IntKind::Any),
-    ("--layer-assignment-passes", 0, IntKind::Range9),
-    ("--local-demand-cost", 0, IntKind::Any),
     ("--plane-maze-budget", 12000, IntKind::Any),
     ("--filled-copper-trials", 8, IntKind::Nonnegative),
-    ("--filled-copper-search-states", 4000, IntKind::Any),
     ("--layers", 2, IntKind::Layers),
 ];
 
@@ -461,15 +469,13 @@ const INTS: [(&str, i64, IntKind); 23] = [
 enum IntKind {
     Any,
     Nonnegative,
-    Range9,
     Layers,
 }
 
 /// `_positive_mm` (`positive`) and `_nonnegative_mm` options with their defaults.
-const LENGTHS: [(&str, &str, bool); 9] = [
+const LENGTHS: [(&str, &str, bool); 8] = [
     ("--placement-grid-mm", "1", true),
     ("--pin-access-step-mm", "0.5", true),
-    ("--fanout-step-mm", "0.5", true),
     ("--fanout-refinement-step-mm", "0.1", true),
     ("--plane-stitch-step-mm", "0.5", true),
     ("--plane-stitch-radius-mm", "3", true),
@@ -515,7 +521,6 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
                 let valid = match kind {
                     IntKind::Any => true,
                     IntKind::Nonnegative => value >= 0,
-                    IntKind::Range9 => (0..9).contains(&value),
                     IntKind::Layers => [2, 4, 6].contains(&value),
                 };
                 if !valid {
@@ -539,21 +544,6 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
             Err(Stop::Value { message, .. } | Stop::UnknownPart { message, .. }) => return usage(message),
         }
     }
-    let optional_length = |name: &str| -> Result<Option<String>, Checked> {
-        match parsed.value(name) {
-            None => Ok(None),
-            Some(text) => match checked_length(text, true) {
-                Ok(true) => Ok(Some(text.to_owned())),
-                Ok(false) => Err(Checked::Usage(format!(
-                    "argument {name}: expected a positive finite length in mm, got '{text}'"
-                ))),
-                Err(Stop::Pending(what)) => Err(Checked::Pending(what)),
-                Err(Stop::Value { message, .. } | Stop::UnknownPart { message, .. }) => Err(Checked::Usage(message)),
-            },
-        }
-    };
-    let critical_pin_access_step_mm = optional_length("--critical-pin-access-step-mm")?;
-    let plane_escape_width_mm = optional_length("--plane-escape-width-mm")?;
     let choices: [(&str, &[&str]); 3] = [
         ("--routing-profile", &["quick", "balanced", "thorough"]),
         ("--fab-profile", &["generic", "jlcpcb-four-layer", "jlcpcb-six-layer"]),
@@ -576,14 +566,7 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
     };
     let width_mm = float("--width-mm")?.unwrap_or(100.0);
     let height_mm = float("--height-mm")?.unwrap_or(80.0);
-    let domain_weight = float("--power-domain-weight")?.unwrap_or(0.25);
     let unified_time_budget_s = float("--unified-time-budget-s")?;
-    let seeds = match parsed.value("--placement-seeds") {
-        None => None,
-        Some(text) => Some(python_int(text).filter(|value| *value > 0).ok_or_else(|| {
-            Checked::Usage(format!("argument --placement-seeds: expected a positive integer, got '{text}'"))
-        })?),
-    };
     // `type=Decimal`: bad text raises InvalidOperation, which argparse does not catch.
     let unified_pitch_mm = match parsed.value("--unified-pitch-mm") {
         None => None,
@@ -610,17 +593,17 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
         grid_mm: lengths[0].1.clone(),
         escape_margin_mm: parsed.value("--escape-margin-mm").unwrap_or("0.5").to_owned(),
         transit_lanes: get("--escape-transit-lanes"),
-        domain_weight,
-        support_trials: get("--support-pattern-trials"),
-        package_trials: get("--package-support-trials"),
+        domain_weight: POWER_DOMAIN_WEIGHT,
+        support_trials: 0,
+        package_trials: 0,
         decoupling_trials: get("--decoupling-placement-trials"),
-        seeds,
+        seeds: None,
         refinement_passes: get("--placement-refinement-passes"),
         spacing_passes: get("--escape-spacing-passes"),
     };
     let layers = parsed.value("--layers").map(|_| get("--layers"));
     let filled_copper_trials = get("--filled-copper-trials");
-    let filled_copper_search_states = get("--filled-copper-search-states");
+    let filled_copper_search_states = FILLED_COPPER_SEARCH_STATES;
     let fab_profile = parsed.value("--fab-profile").unwrap_or("generic").to_owned();
     Ok(Arguments {
         parsed,
@@ -634,8 +617,6 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
         lengths,
         unified_pitch_mm,
         unified_time_budget_s,
-        critical_pin_access_step_mm,
-        plane_escape_width_mm,
         filled_copper_trials,
         filled_copper_search_states,
     })
@@ -654,9 +635,7 @@ fn apply_routing_profile(arguments: &mut Arguments, argv: &[String]) {
     if !given.contains(&"--filled-copper-trials") {
         arguments.filled_copper_trials = filled_trials;
     }
-    if !given.contains(&"--filled-copper-search-states") {
-        arguments.filled_copper_search_states = filled_states;
-    }
+    arguments.filled_copper_search_states = filled_states;
     if !given.contains(&"--decoupling-placement-trials") {
         arguments.planner.decoupling_trials = decoupling_trials;
     }
@@ -742,10 +721,18 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     };
     if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\nattempt complete physical routing and run native DRC");
-        let _ = writeln!(
-            out,
-            "\n--layers defaults to source requirements; an explicit count must match a declared stackup."
-        );
+        crate::help::options(out, "route-board");
+        return 0;
+    }
+    if parsed.flag("--list-unified-options") {
+        let rows = copper_route::unified_router::option_defaults();
+        let width = rows.iter().map(|(name, _, _)| name.len()).max().unwrap_or(0);
+        let kind_width = rows.iter().map(|(_, kind, _)| kind.len()).max().unwrap_or(0);
+        let _ = writeln!(out, "--unified-set KEY=VALUE keys (VALUE is JSON, else text):\n");
+        let _ = writeln!(out, "{:width$}  {:kind_width$}  default", "key", "type");
+        for (name, kind, default) in rows {
+            let _ = writeln!(out, "{name:width$}  {kind:kind_width$}  {default}");
+        }
         return 0;
     }
     let mut arguments = match check_arguments(parsed) {
@@ -753,11 +740,8 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         Err(Checked::Usage(message)) => return usage_error(err, &message),
         Err(Checked::Pending(what)) => return not_implemented(err, &what),
     };
-    if arguments.text("--local-demand-pitch-mm").is_some() && arguments.int("--local-demand-cost") <= 0 {
-        return usage_error(err, "--local-demand-pitch-mm requires --local-demand-cost greater than 0");
-    }
     apply_routing_profile(&mut arguments, argv);
-    let debug = arguments.flag("--debug");
+    let debug = false;
     let (locked, offline) = (arguments.flag("--locked"), arguments.flag("--offline"));
     let board_path = pypath::display(&arguments.board);
     let design = match load_design(Path::new(&board_path), locked, offline) {
@@ -767,14 +751,14 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         }
         Err(_) if debug => return not_implemented(err, "--debug tracebacks"),
         Err(failure) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {failure}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {failure}"));
             return 2;
         }
     };
     let diagnostics = match copper_lang::erc::check(&design.electrical, false) {
         Ok(diagnostics) => diagnostics,
         Err(message) => {
-            let _ = text::print(out, &format!("COMPILE ERROR: {message}"));
+            let _ = text::print(err, &format!("COMPILE ERROR: {message}"));
             return 2;
         }
     };
@@ -956,10 +940,7 @@ fn route(
         maximum_radius_nm: length("--plane-stitch-radius-mm")?,
         maximum_contact_radius_nm: length("--plane-contact-radius-mm")?,
         maximum_detour_nm: length("--plane-stitch-detour-mm")?,
-        escape_width_nm: match &arguments.plane_escape_width_mm {
-            Some(text) => Some(nm_from_mm(text, "--plane-escape-width-mm")?),
-            None => None,
-        },
+        escape_width_nm: None,
         ground_via_in_pad,
         include_surface_zones: arguments.boolean("--stitch-surface-zones", true),
         preferred_ground_pads: Some(preferred_ground_pads.into_iter().collect()),
@@ -989,19 +970,14 @@ fn route(
     let router_options = GlobalRouterOptions {
         tile_size_nm,
         escape_step_nm: length("--pin-access-step-mm")?,
-        critical_escape_step_nm: match &arguments.critical_pin_access_step_mm {
-            Some(text) => Some(nm_from_mm(text, "--critical-pin-access-step-mm")?),
-            None => None,
-        },
+        critical_escape_step_nm: None,
         maximum_iterations: arguments.int("--router-iterations"),
-        layer_preference_cost: arguments.int("--layer-preference-cost").div_euclid(2).max(0),
-        direction_preference_cost: arguments.int("--direction-preference-cost").div_euclid(2).max(0),
-        layer_assignment_passes: arguments.int("--layer-assignment-passes"),
-        local_demand_cost: arguments.int("--local-demand-cost").max(0),
-        local_demand_pitch_nm: nm_from_mm(
-            arguments.text("--local-demand-pitch-mm").unwrap_or("1"),
-            "--local-demand-pitch-mm",
-        )?,
+        // The command line's former defaults, halved as before: 4 and 2.
+        layer_preference_cost: 2,
+        direction_preference_cost: 1,
+        layer_assignment_passes: 0,
+        local_demand_cost: 0,
+        local_demand_pitch_nm: 1_000_000,
         ..GlobalRouterOptions::default()
     }
     .validated()
@@ -1019,10 +995,10 @@ fn route(
     let fanout_options = if arguments.fanout() {
         Some(
             FanoutOptions {
-                step_nm: length("--fanout-step-mm")?,
+                step_nm: 500_000,
                 refinement_step_nm: length("--fanout-refinement-step-mm")?,
                 maze_escapes: arguments.flag("--fanout-maze"),
-                maximum_geometry_candidates: arguments.int("--fanout-geometry-candidates"),
+                maximum_geometry_candidates: 0,
                 ..FanoutOptions::default()
             }
             .validated()
@@ -1304,8 +1280,8 @@ fn filled_feedback_options(
     copper_route::filled_feedback::FilledCopperFeedbackOptions {
         maximum_trials: if direct { 0 } else { arguments.filled_copper_trials },
         maximum_search_states: arguments.filled_copper_search_states,
-        maximum_blockers: arguments.int("--maximum-ripup-blockers"),
-        maximum_dependency_expansions: arguments.int("--zone-dependency-expansions"),
+        maximum_blockers: MAXIMUM_RIPUP_BLOCKERS,
+        maximum_dependency_expansions: ZONE_DEPENDENCY_EXPANSIONS,
     }
 }
 
@@ -1321,14 +1297,11 @@ fn work_limits(arguments: &Arguments, unified: &UnifiedRouterOptions) -> Value {
         ("unified_search_states", Value::from(unified.maximum_expansions)),
         ("fine_regions", Value::from(unified.fine_regions.as_str())),
         ("pin_access_step_mm", Value::from(arguments.length("--pin-access-step-mm"))),
-        (
-            "critical_pin_access_step_mm",
-            arguments.critical_pin_access_step_mm.as_deref().map_or(Value::Null, Value::from),
-        ),
+        ("critical_pin_access_step_mm", Value::Null),
         ("placement_feedback_trials", Value::from(arguments.int("--placement-feedback-trials"))),
         ("package_initial_pair_states", Value::from(arguments.int("--package-initial-pair-states"))),
-        ("zone_dependency_expansions", Value::from(arguments.int("--zone-dependency-expansions"))),
-        ("maximum_ripup_blockers", Value::from(arguments.int("--maximum-ripup-blockers"))),
+        ("zone_dependency_expansions", Value::from(ZONE_DEPENDENCY_EXPANSIONS)),
+        ("maximum_ripup_blockers", Value::from(MAXIMUM_RIPUP_BLOCKERS)),
         ("filled_copper_trials", Value::from(filled_trials)),
         ("filled_copper_search_states", Value::from(arguments.filled_copper_search_states)),
         ("decoupling_placement_trials", Value::from(arguments.planner.decoupling_trials)),
@@ -1351,7 +1324,7 @@ fn finish(
     use copper_route::flow::PhysicalFlowStatus;
     let arguments = context.arguments;
     let stopped = result.stopped_after.is_some();
-    let native_cli = if stopped { None } else { arguments.path("--verify-plane-fill") };
+    let native_cli = if stopped { None } else { arguments.plane_checker() };
     if !stopped {
         emit(progress, "final_contacts_native_drc", "started", Vec::new());
     }
@@ -1656,7 +1629,7 @@ fn finish(
         result.retained_prefix.as_ref().map(|prefix| prefix.missing_copper_occurrences(&output_board));
     let closure_status = if !stopped
         && complete_with_fill
-        && (arguments.text("--verify-plane-fill").is_none() || verified)
+        && (arguments.plane_checker().is_none() || verified)
         && duplicate_pending.is_empty()
         && plane_pending.is_empty()
         && retained_missing.is_none_or(|missing| missing == (0, 0))

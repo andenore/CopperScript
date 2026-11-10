@@ -40,6 +40,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             out,
             "{USAGE}\n\nexport native-DRC-clean KiCad manufacturing files without independent CAM qualification;\n--drc native refills and checks the board with CopperScript (and reads the plotted files back)\ninstead of kicad-cli; --plotter native writes the files with CopperScript's own plotter;\nwith both, KiCad is not needed"
         );
+        crate::help::options(out, "export-manufacturing");
         return 0;
     }
     let (pcb, output) = match (parsed.positionals.as_slice(), parsed.value("--output")) {

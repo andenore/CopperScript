@@ -160,6 +160,24 @@ fn pairs_of_a_match_group_are_tuned_as_pairs_into_the_group_skew() {
     assert_eq!(int(field(row, "routed_length_nm")), Some(nm(28.0) + arc_length));
     let layer_lengths = field(row, "layer_lengths_nm");
     assert_eq!(int(field(layer_lengths, layer.value())), Some(nm(28.0) + arc_length));
+    // A layer carrying only an arc is a layer of the lane too.
+    let other = if layer == CopperLayer::Front { CopperLayer::Back } else { CopperLayer::Front };
+    let mut arc_only = arched.clone();
+    let lone = copper_pcb::board::TrackArc {
+        net: "LANE_B_N".into(),
+        start: Point::new(nm(10.0), nm(1.0)),
+        mid: Point::new(nm(10.0) + 707_107, 707_107),
+        end: Point::new(nm(11.0), 0),
+        width_nm: 100_000,
+        layer: other,
+    };
+    let lone_length = lone.length_nm();
+    arc_only.arcs.push(lone);
+    let lanes = critical_lane_table(&arc_only, &result.nets).unwrap();
+    let row = lanes.iter().find(|lane| text(field(lane, "net")) == "LANE_B_N").unwrap();
+    assert_eq!(int(field(field(row, "layer_lengths_nm"), other.value())), Some(lone_length));
+    assert!(field(row, "layers").as_array().unwrap().iter().any(|l| l.as_str() == Some(other.value())));
+    assert_eq!(int(field(row, "routed_length_nm")), Some(nm(28.0) + arc_length + lone_length));
     let document = copper_json::parse(&result.to_json().unwrap()).unwrap();
     let tuned = &field(&document, "match_tuning").as_array().unwrap()[0];
     assert_eq!(status(tuned), "tuned");

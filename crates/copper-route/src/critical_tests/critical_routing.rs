@@ -45,7 +45,7 @@ fn map_rules(board: &mut PhysicalBoard, change: impl Fn(NetRoutingRule) -> NetRo
 
 fn pair_attempt(board: &PhysicalBoard, global: &GlobalRoutingResult) -> crate::critical::Proposal {
     let rules = &board.net_routing_rules;
-    route_pair(board, &rules[0], &rules[1], &guides_by_net(global), false, board, &board.tracks).expect("pair attempt")
+    route_pair(board, &rules[0], &rules[1], &guides_by_net(global), false, &board.tracks).expect("pair attempt")
 }
 
 fn with_transition(mut global: GlobalRoutingResult, net: &str) -> GlobalRoutingResult {

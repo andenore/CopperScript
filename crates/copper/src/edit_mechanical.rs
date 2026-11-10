@@ -13,8 +13,8 @@ use copper_json::{Dumps, Value, text};
 use copper_lang::paths;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
+use crate::option_parser::{self, python_int};
 use crate::pypath;
-use crate::report_args::{self, Opt, python_int};
 
 const USAGE: &str = "usage: copper edit-mechanical [-h] [--project PROJECT] [--locked] [--offline]
                               [--footprint-root FOOTPRINT_ROOT]
@@ -75,21 +75,21 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         2
     };
     let options = [
-        report_args::valued("--project"),
-        report_args::flag("--locked"),
-        report_args::flag("--offline"),
-        report_args::valued("--footprint-root"),
-        report_args::valued("--layers"),
-        report_args::valued("--fab-profile"),
-        report_args::valued("--placement-templates"),
-        report_args::valued("--hard-macro"),
-        report_args::flag("--allow-proxy-footprints"),
-        report_args::flag("--no-browser"),
-        report_args::valued("--port"),
-        report_args::valued("--scene-output"),
-        Opt { long: "--overlay", short: None, valued: true },
+        option_parser::value("--project"),
+        option_parser::flag("--locked"),
+        option_parser::flag("--offline"),
+        option_parser::value("--footprint-root"),
+        option_parser::value("--layers"),
+        option_parser::value("--fab-profile"),
+        option_parser::value("--placement-templates"),
+        option_parser::value("--hard-macro"),
+        option_parser::flag("--allow-proxy-footprints"),
+        option_parser::flag("--no-browser"),
+        option_parser::value("--port"),
+        option_parser::value("--scene-output"),
+        option_parser::value("--overlay"),
     ];
-    let parsed = match report_args::parse(arguments, &options) {
+    let parsed = match option_parser::parse_report(arguments, &options) {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
             let _ = text::print(out, HELP);
@@ -97,7 +97,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
         Err(message) => return usage_error(err, &message),
     };
-    let layers = match parsed.last("--layers") {
+    let layers = match parsed.value("--layers") {
         None => None,
         Some(value) => match python_int(value) {
             Some(count) if [2, 4, 6].contains(&count) => Some(count),
@@ -110,14 +110,14 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             None => return usage_error(err, &format!("argument --layers: invalid int value: '{value}'")),
         },
     };
-    let profile = parsed.last("--fab-profile").unwrap_or("generic").to_owned();
+    let profile = parsed.value("--fab-profile").unwrap_or("generic").to_owned();
     if !PROFILES.contains(&profile.as_str()) {
         return usage_error(
             err,
             &format!("argument --fab-profile: invalid choice: '{profile}' (choose from '{}')", PROFILES.join("', '")),
         );
     }
-    if let Some(port) = parsed.last("--port")
+    if let Some(port) = parsed.value("--port")
         && python_int(port).is_none()
     {
         return usage_error(err, &format!("argument --port: invalid int value: '{port}'"));
@@ -127,20 +127,21 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         [] => return usage_error(err, "the following arguments are required: board"),
         [_, extra, ..] => return usage_error(err, &format!("unrecognized arguments: {extra}")),
     };
-    let scene_output = parsed.last("--scene-output").map(|p| PathBuf::from(pypath::display(p)));
-    let port = parsed.last("--port").and_then(python_int).unwrap_or(0);
-    let path_list =
-        |name: &str| -> Vec<PathBuf> { parsed.all(name).iter().map(|p| PathBuf::from(pypath::display(p))).collect() };
+    let scene_output = parsed.value("--scene-output").map(|p| PathBuf::from(pypath::display(p)));
+    let port = parsed.value("--port").and_then(python_int).unwrap_or(0);
+    let path_list = |name: &str| -> Vec<PathBuf> {
+        parsed.owned_values(name).iter().map(|p| PathBuf::from(pypath::display(p))).collect()
+    };
     let settings = BuildSettings {
         footprint_roots: path_list("--footprint-root"),
         layers,
         fab_profile: profile,
-        templates: parsed.last("--placement-templates").map(|p| PathBuf::from(pypath::display(p))),
+        templates: parsed.value("--placement-templates").map(|p| PathBuf::from(pypath::display(p))),
         macros: path_list("--hard-macro"),
-        allow_proxy: parsed.has("--allow-proxy-footprints"),
+        allow_proxy: parsed.flag("--allow-proxy-footprints"),
     };
-    let project = parsed.last("--project").map(|p| PathBuf::from(pypath::display(p)));
-    let overlay = parsed.last("--overlay").map(|p| PathBuf::from(pypath::display(p)));
+    let project = parsed.value("--project").map(|p| PathBuf::from(pypath::display(p)));
+    let overlay = parsed.value("--overlay").map(|p| PathBuf::from(pypath::display(p)));
     let serving = scene_output.is_none();
     let progress = |out: &mut dyn Write, message: &str| {
         if serving {
@@ -153,8 +154,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         progress(out, "Opening board: checking source and dependencies...");
         copper_editor::dependencies::prepare_editor_dependencies(
             &board,
-            parsed.has("--offline"),
-            parsed.has("--locked"),
+            parsed.flag("--offline"),
+            parsed.flag("--locked"),
             project.as_deref(),
             &mut |message| progress(out, message),
         )?;
@@ -187,7 +188,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
                     "Placement previews are temporary; source changes require explicit review/save. Ctrl+C stops the local service.",
                 );
                 let _ = out.flush();
-                if !parsed.has("--no-browser") {
+                if !parsed.flag("--no-browser") {
                     open_browser(&server.url());
                 }
                 copper_editor::server::serve(server, &exit_not_implemented);

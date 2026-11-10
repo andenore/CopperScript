@@ -91,9 +91,7 @@ fn every_candidate_gate_has_a_named_first_failing_reason() {
     );
     let guides = guides_by_net(&coarse(&board));
     let exact = |first: &NetRoutingRule, second: &NetRoutingRule, pairs: &[(Via, Via)]| {
-        route_pair_exact(&board, first, second, &guides, &lanes, &board, (pairs, &[]), &board.tracks)
-            .expect("exact pair")
-            .0
+        route_pair_exact(&board, first, second, &guides, &lanes, (pairs, &[]), &board.tracks).expect("exact pair").0
     };
     let skewed = exact(&tight[0], &tight[1], &[]);
     // Skew is a review warning; the uncoupled length stays a hard gate.
@@ -237,7 +235,7 @@ fn with_guide_via(mut global: GlobalRoutingResult, net: &str, position: copper_p
 
 fn coarse_attempt(board: &PhysicalBoard, global: &GlobalRoutingResult) -> crate::critical::Proposal {
     let rules = &board.net_routing_rules;
-    route_pair(board, &rules[0], &rules[1], &guides_by_net(global), false, board, &board.tracks).expect("coarse pair")
+    route_pair(board, &rules[0], &rules[1], &guides_by_net(global), false, &board.tracks).expect("coarse pair")
 }
 
 #[test]
@@ -510,8 +508,7 @@ fn pair_max_length_counts_retained_prefix_without_claiming_its_ownership() {
     obstacles.tracks = retained.clone();
     let rules = &board.net_routing_rules;
     let (result, generated, _) =
-        route_pair_exact(&board, &rules[0], &rules[1], &guides, &lanes, &obstacles, (&[], &[]), &retained)
-            .expect("pair");
+        route_pair_exact(&board, &rules[0], &rules[1], &guides, &lanes, (&[], &[]), &retained).expect("pair");
     assert!(result.connected);
     assert_eq!(result.lengths_nm, vec![4 * MM, 4 * MM]);
     assert_eq!(result.track_count, 4);
@@ -538,8 +535,7 @@ fn prepared_branches_in_search_obstacles_are_counted_once_in_pair_budget() {
     search_board.tracks.extend([lanes.0[0].clone(), lanes.1[0].clone()]);
     let rules = &board.net_routing_rules;
     let (result, generated, _) =
-        route_pair_exact(&board, &rules[0], &rules[1], &guides, &lanes, &search_board, (&[], &[]), &retained)
-            .expect("pair");
+        route_pair_exact(&board, &rules[0], &rules[1], &guides, &lanes, (&[], &[]), &retained).expect("pair");
     assert!(result.connected);
     assert!(result.warnings.is_empty());
     assert_eq!(result.lengths_nm, vec![4 * MM, 4 * MM]);
@@ -552,7 +548,7 @@ fn pair_without_retained_copper_keeps_candidate_length_budget() {
     let guides = guides_by_net(&coarse(&board));
     let rules = &board.net_routing_rules;
     let (result, generated, _) =
-        route_pair_exact(&board, &rules[0], &rules[1], &guides, &lanes, &board, (&[], &[]), &[]).expect("pair");
+        route_pair_exact(&board, &rules[0], &rules[1], &guides, &lanes, (&[], &[]), &[]).expect("pair");
     assert!(result.connected);
     assert!(result.warnings.is_empty());
     assert_eq!(result.lengths_nm, vec![4 * MM, 4 * MM]);

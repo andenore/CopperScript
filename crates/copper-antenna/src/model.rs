@@ -456,40 +456,52 @@ fn axis_lines(plan: &AxisPlan) -> Result<Vec<f64>, String> {
             .map(|(_, _, limit)| limit / 2.0)
             .fold(plan.snap, f64::min)
     };
-    let mut kept: Vec<(f64, LineRank)> = Vec::new();
+    // Each kept line: its position, its highest rank, and what it carries:
+    // a copper edge or a ground boundary. A line keeps those roles however
+    // it merged (a copper edge on a port line is still copper), so a ground
+    // boundary never lands on it.
+    let mut kept: Vec<(f64, LineRank, bool, bool)> = Vec::new();
     for (v, rank) in candidates {
+        let (copper, boundary) = (rank == LineRank::Copper, rank == LineRank::Boundary);
         match kept.last().copied() {
-            Some((last, _)) if v - last < 1e-9 => {
+            Some((last, _, _, _)) if v - last < 1e-9 => {
                 let top = kept.last_mut().expect("a line");
                 top.1 = top.1.max(rank);
+                top.2 |= copper;
+                top.3 |= boundary;
             }
-            Some((last, last_rank)) if v - last < snap_at((last + v) / 2.0) => match (last_rank, rank) {
-                (LineRank::Port, LineRank::Port) => kept.push((v, rank)),
-                // Ground and radiator copper never share a line, however close:
-                // the gap between them is real, and a merged line shorts them.
-                // Nor do two ground boundaries: the solver snaps a sheet edge
-                // whose line was dropped onto the nearest line, which can be
-                // the radiator's (a slot side 0.1 mm past the region start).
-                (LineRank::Boundary, LineRank::Copper | LineRank::Boundary)
-                | (LineRank::Copper, LineRank::Boundary) => kept.push((v, rank)),
-                // A copper edge near a port line keeps its own line unless it is
-                // within a quarter cell of it (the stub's end inside the port gap
-                // would otherwise leave a sliver); then it moves onto the port.
-                (LineRank::Port, LineRank::Copper) | (LineRank::Copper, LineRank::Port)
-                    if v - last >= snap_at((last + v) / 2.0) / 2.0 =>
-                {
-                    kept.push((v, rank))
-                }
-                (_, r) if r > last_rank => {
+            Some((last, last_rank, last_copper, last_boundary)) if v - last < snap_at((last + v) / 2.0) => {
+                let separate =
+                    // Two port lines (the terminals) always stay.
+                    (last_rank == LineRank::Port && rank == LineRank::Port)
+                    // Ground and radiator copper never share a line, however
+                    // close: the gap between them is real, and a merged line
+                    // shorts them. Nor do two ground boundaries: the solver
+                    // snaps a sheet edge whose line was dropped onto the
+                    // nearest line, which can be the radiator's.
+                    || (boundary && (last_copper || last_boundary))
+                    || (copper && last_boundary)
+                    // A copper edge near a port line keeps its own line unless
+                    // it is within a quarter cell of it (the stub's end inside
+                    // the port gap would otherwise leave a sliver); then it
+                    // moves onto the port.
+                    || (((last_rank == LineRank::Port && copper) || (last_copper && rank == LineRank::Port))
+                        && v - last >= snap_at((last + v) / 2.0) / 2.0);
+                if separate {
+                    kept.push((v, rank, copper, boundary));
+                } else if rank > last_rank {
                     kept.pop();
-                    kept.push((v, rank));
+                    kept.push((v, rank, copper || last_copper, boundary || last_boundary));
+                } else {
+                    let top = kept.last_mut().expect("a line");
+                    top.2 |= copper;
+                    top.3 |= boundary;
                 }
-                _ => {}
-            },
-            _ => kept.push((v, rank)),
+            }
+            _ => kept.push((v, rank, copper, boundary)),
         }
     }
-    let kept: Vec<f64> = kept.into_iter().map(|(v, _)| v).collect();
+    let kept: Vec<f64> = kept.into_iter().map(|(v, _, _, _)| v).collect();
     let zone_lo = plan.zones.iter().map(|z| z.0).fold(f64::INFINITY, f64::min);
     let zone_hi = plan.zones.iter().map(|z| z.1).fold(f64::NEG_INFINITY, f64::max);
     let inner_lines: Vec<f64> =
@@ -996,6 +1008,20 @@ mod tests {
 
     fn cells(lines: &[f64]) -> Vec<f64> {
         lines.windows(2).map(|w| w[1] - w[0]).collect()
+    }
+
+    #[test]
+    fn a_copper_edge_on_a_port_line_still_keeps_ground_off_it() {
+        // The stub's edge coincides with a port line; the slot wall stands
+        // 0.1 mm beside it (the board clearance). Merging the copper into the
+        // port must not let the wall merge too: that shorts the port.
+        let lines = axis_lines(&plan(
+            &[(0.0, LineRank::Port), (0.0, LineRank::Copper), (0.1, LineRank::Boundary), (1.5, LineRank::Copper)],
+            &[(-1.0, 3.0, 0.5)],
+        ))
+        .expect("lines");
+        assert!(lines.iter().any(|v| v.abs() < 1e-9), "{lines:?}");
+        assert!(lines.iter().any(|v| (v - 0.1).abs() < 1e-9), "the slot wall keeps its line: {lines:?}");
     }
 
     #[test]

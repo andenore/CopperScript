@@ -15,7 +15,9 @@ fn check(board: &str, listing: &Path) -> (i32, String) {
         .current_dir(workspace())
         .output()
         .expect("the copper binary runs");
-    (output.status.code().unwrap_or(-1), String::from_utf8_lossy(&output.stdout).into_owned())
+    // Findings are on stdout; a compile error is on stderr.
+    let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    (output.status.code().unwrap_or(-1), text)
 }
 
 #[test]

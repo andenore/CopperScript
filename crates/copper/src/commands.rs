@@ -4,9 +4,10 @@ use std::io::Write;
 
 use crate::{
     agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compare_cam, compile,
-    compile_macro, drc, edit_mechanical, editor_overlay, explain, export_kicad, export_kicad_pcb, export_manufacturing,
-    fill, issues, library, lock, lsp, models, plan_layout, plot, power_check, query, render, replay_critical,
-    replay_unified, route_board, route_global, si_check, state, summarize, synthesize_antenna, view,
+    compile_macro, completions, drc, edit_mechanical, editor_overlay, explain, export_kicad, export_kicad_pcb,
+    export_manufacturing, fill, help, init, issues, library, lock, lsp, models, plan_layout, plot, power_check, query,
+    render, replay_critical, replay_unified, route_board, route_global, si_check, state, summarize, synthesize_antenna,
+    view,
 };
 
 /// Exit status of behaviour a command does not implement.
@@ -14,48 +15,59 @@ pub const NOT_IMPLEMENTED_EXIT: u8 = 3;
 /// The stderr marker of behaviour a command does not implement.
 pub const NOT_IMPLEMENTED_MARKER: &str = "not implemented";
 
-/// Every command, in the order the help lists them.
+/// Every command, in the order the help lists them within each group.
 pub const COMMANDS: &[&str] = &[
+    "agent-guide",
+    "init",
+    "explain",
+    "completions",
+    "check",
+    "compile",
+    "query",
+    "power-check",
+    "lock",
+    "library",
+    "audit-footprints",
+    "check-footprint",
     "compile-macro",
     "lsp",
-    "agent-guide",
-    "library",
-    "summarize",
-    "benchmark-routing",
-    "editor-overlay",
-    "edit-mechanical",
-    "edit",
-    "export-manufacturing",
-    "plot",
-    "render",
-    "models",
-    "fill",
-    "drc",
-    "compare-cam",
-    "assembly",
-    "check",
-    "explain",
-    "issues",
-    "view",
-    "state",
-    "replay-unified",
-    "replay-critical",
-    "query",
-    "si-check",
-    "lock",
-    "power-check",
-    "compile",
-    "export-kicad",
-    "export-kicad-pcb",
-    "synthesize-antenna",
-    "panelize",
     "plan-layout",
     "route-global",
     "route-board",
-    "check-footprint",
-    "audit-footprints",
+    "edit-mechanical",
+    "edit",
+    "editor-overlay",
+    "synthesize-antenna",
+    "si-check",
+    "issues",
+    "view",
+    "summarize",
+    "state",
+    "replay-unified",
+    "replay-critical",
+    "export-kicad",
+    "export-kicad-pcb",
+    "fill",
+    "plot",
+    "drc",
+    "render",
+    "compare-cam",
+    "export-manufacturing",
+    "assembly",
+    "panelize",
+    "models",
     "bench",
+    "benchmark-routing",
 ];
+
+/// `copper --version`: the crate version and the first 12 hex digits of the
+/// digest of the workspace's Rust sources (the full digest is in placement
+/// checkpoints).
+pub fn version() -> String {
+    let digest = env!("COPPER_SOURCE_DIGEST");
+    let hex = digest.strip_prefix("sha256:").unwrap_or(digest);
+    format!("copper {} (sources {})", env!("CARGO_PKG_VERSION"), &hex[..hex.len().min(12)])
+}
 
 const USAGE: &str = "usage: copper COMMAND [ARGS]";
 
@@ -72,12 +84,15 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let rest = &args[1..];
     match command.as_str() {
         "-h" | "--help" => {
-            let _ = writeln!(out, "{USAGE}\n\nCopperScript command line. Commands:");
-            for name in COMMANDS {
-                let _ = writeln!(out, "  {name}");
-            }
+            help::top_level(out, USAGE);
             0
         }
+        "-V" | "--version" => {
+            let _ = writeln!(out, "{}", version());
+            0
+        }
+        "init" => init::run(rest, out, err),
+        "completions" => completions::run(rest, out, err),
         "agent-guide" => agent_guide::run(rest, out, err),
         "state" => state::run(rest, out, err),
         "compile" => compile::run(rest, out, err),
@@ -110,21 +125,54 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "drc" => drc::run(rest, out, err),
         "compare-cam" => compare_cam::run(rest, out, err),
         "plan-layout" => plan_layout::run(rest, out, err),
-        "bench" => copper_route::ladder::run(rest, out, err),
+        "bench" => {
+            let code = copper_route::ladder::run(rest, out, err);
+            // The ladder runner lives in copper-route; its options are documented here.
+            let asked = rest.iter().take_while(|arg| *arg != "--").any(|arg| arg == "-h" || arg == "--help");
+            if code == 0 && asked {
+                help::options(out, "bench");
+            }
+            code
+        }
         "benchmark-routing" => benchmark_routing::run(rest, out, err),
         "route-global" => route_global::run(rest, out, err),
         "replay-unified" => replay_unified::run(rest, out, err),
         "editor-overlay" => editor_overlay::run(rest, out, err),
         "edit-mechanical" | "edit" => edit_mechanical::run(rest, out, err),
         _ => {
-            let _ = writeln!(
-                err,
-                "{USAGE}\ncopper: error: invalid command '{command}' (choose from {})",
-                COMMANDS.join(", ")
-            );
+            let _ = writeln!(err, "{USAGE}\ncopper: error: invalid command '{command}'");
+            match suggestion(command) {
+                Some(close) => {
+                    let _ = writeln!(err, "did you mean `copper {close}`? (`copper --help` lists every command)");
+                }
+                None => {
+                    let _ = writeln!(err, "`copper --help` lists every command");
+                }
+            }
             2
         }
     }
+}
+
+/// The command closest to a mistyped one, when it is close enough to be a typo.
+fn suggestion(typed: &str) -> Option<&'static str> {
+    let distance = |a: &str, b: &str| {
+        let b: Vec<char> = b.chars().collect();
+        let mut row: Vec<usize> = (0..=b.len()).collect();
+        for (i, ca) in a.chars().enumerate() {
+            let mut previous = row[0];
+            row[0] = i + 1;
+            for (j, cb) in b.iter().enumerate() {
+                let next = (row[j + 1] + 1).min(row[j] + 1).min(previous + usize::from(ca != *cb));
+                previous = row[j + 1];
+                row[j + 1] = next;
+            }
+        }
+        row[b.len()]
+    };
+    let (best, score) = COMMANDS.iter().map(|name| (*name, distance(typed, name))).min_by_key(|(_, score)| *score)?;
+    let prefix = COMMANDS.iter().find(|name| typed.len() >= 3 && name.starts_with(typed));
+    prefix.copied().or((score <= 2 || score * 3 <= best.len()).then_some(best))
 }
 
 #[cfg(test)]
@@ -139,11 +187,48 @@ mod tests {
     }
 
     #[test]
-    fn help_lists_every_command() {
+    fn help_lists_every_command_with_its_summary() {
         let (code, out, _) = call(&["--help"]);
         assert_eq!(code, 0);
-        assert!(COMMANDS.iter().all(|name| out.contains(&format!("  {name}\n"))), "{out}");
+        for name in COMMANDS {
+            let summary = help::command(name).unwrap_or_else(|| panic!("{name} has no help entry")).summary;
+            assert!(
+                out.lines().any(|line| line.trim_start().starts_with(&format!("{name} ")) && line.ends_with(summary)),
+                "{name}: {out}"
+            );
+        }
         assert!(!out.contains("Python"), "{out}");
+    }
+
+    #[test]
+    fn version_names_the_build() {
+        let (code, out, _) = call(&["--version"]);
+        assert_eq!(code, 0);
+        assert!(out.starts_with(&format!("copper {} (sources ", env!("CARGO_PKG_VERSION"))), "{out}");
+        assert_eq!(call(&["-V"]).1, out);
+    }
+
+    #[test]
+    fn compile_errors_go_to_stderr() {
+        for command in [&["check"][..], &["compile"], &["query", "nets"], &["lock"], &["power-check"]] {
+            let mut args = vec![command[0], "does-not-exist.copper"];
+            args.extend(&command[1..]);
+            args.push("--offline");
+            let (code, out, err) = call(&args);
+            let command = command[0];
+            assert_eq!(code, 2, "{command}");
+            assert!(out.is_empty(), "{command}: {out}");
+            assert!(err.starts_with("COMPILE ERROR: "), "{command}: {err}");
+        }
+    }
+
+    #[test]
+    fn mistyped_commands_get_a_suggestion() {
+        let (code, _, err) = call(&["rout-board"]);
+        assert_eq!(code, 2);
+        assert!(err.contains("did you mean `copper route-board`?"), "{err}");
+        assert!(call(&["chek"]).2.contains("`copper check`"));
+        assert!(!call(&["frobnicate"]).2.contains("did you mean"));
     }
 
     #[test]

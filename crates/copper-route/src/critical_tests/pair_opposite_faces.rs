@@ -52,7 +52,6 @@ fn owner(board: &PhysicalBoard, candidate: &PairSearchCandidate) -> crate::criti
         &rules[1],
         &routes(board),
         &exact,
-        board,
         (&candidate.via_pairs, &candidate.return_vias),
         &board.tracks,
     )

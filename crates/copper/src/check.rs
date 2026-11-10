@@ -17,7 +17,8 @@ use copper_lang::mechanical::NOT_IMPLEMENTED;
 use copper_lang::paths;
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
-use crate::{args, pypath};
+use crate::option_parser::{self, flag, value};
+use crate::pypath;
 
 const USAGE: &str =
     "usage: copper check [-h] [--locked] [--offline] [--json] [--pins {warn,error,off}] [--macro-inputs FILE] board";
@@ -31,39 +32,23 @@ fn plural(count: usize, word: &str) -> String {
 }
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let mut rest = Vec::new();
-    let mut pins = "warn".to_owned();
-    let mut macro_inputs: Option<String> = None;
-    let mut index = 0;
-    while index < arguments.len() {
-        let arg = &arguments[index];
-        if arg == "--pins" || "--pins".starts_with(arg.as_str()) && arg.len() > 3 && arg.starts_with("--p") {
-            let Some(value) = arguments.get(index + 1) else {
-                let _ = writeln!(err, "{USAGE}\ncopper check: error: argument --pins: expected one argument");
-                return 2;
-            };
-            pins = value.clone();
-            index += 2;
-            continue;
+    let parsed = match option_parser::parse(
+        arguments,
+        &[flag("--locked"), flag("--offline"), flag("--json"), value("--pins"), value("--macro-inputs")],
+    ) {
+        Ok(parsed) => parsed,
+        Err(message) => {
+            let _ = writeln!(err, "{USAGE}\ncopper check: error: {message}");
+            return 2;
         }
-        if arg == "--macro-inputs" {
-            let Some(value) = arguments.get(index + 1) else {
-                let _ = writeln!(err, "{USAGE}\ncopper check: error: argument --macro-inputs: expected one argument");
-                return 2;
-            };
-            macro_inputs = Some(value.clone());
-            index += 2;
-            continue;
-        }
-        if let Some(value) = arg.strip_prefix("--macro-inputs=") {
-            macro_inputs = Some(value.to_owned());
-        } else if let Some(value) = arg.strip_prefix("--pins=") {
-            pins = value.to_owned();
-        } else {
-            rest.push(arg.clone());
-        }
-        index += 1;
+    };
+    if parsed.flag("--help") {
+        let _ = writeln!(out, "{USAGE}\n\nrun electrical rules checks");
+        crate::help::options(out, "check");
+        return 0;
     }
+    let pins = parsed.value("--pins").unwrap_or("warn").to_owned();
+    let macro_inputs = parsed.value("--macro-inputs").map(str::to_owned);
     if !["warn", "error", "off"].contains(&pins.as_str()) {
         let _ = writeln!(
             err,
@@ -71,25 +56,14 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         );
         return 2;
     }
-    let parsed = match args::parse(&rest, &["--help", "--locked", "--offline", "--json"]) {
-        Ok(parsed) => parsed,
-        Err(message) => {
-            let _ = writeln!(err, "{USAGE}\ncopper check: error: {message}");
-            return 2;
-        }
-    };
-    if parsed.flags.contains(&"--help") {
-        let _ = writeln!(out, "{USAGE}\n\nrun electrical rules checks");
-        return 0;
-    }
     let [board] = parsed.positionals.as_slice() else {
         let _ = writeln!(err, "{USAGE}\ncopper check: error: the following arguments are required: board");
         return 2;
     };
-    let json = parsed.flags.contains(&"--json");
+    let json = parsed.flag("--json");
     let display = pypath::display(board);
     let path = Path::new(board);
-    let design = match load_design(path, parsed.flags.contains(&"--locked"), parsed.flags.contains(&"--offline")) {
+    let design = match load_design(path, parsed.flag("--locked"), parsed.flag("--offline")) {
         Ok(design) => design,
         Err(LoadError::Compile(failure)) if failure.code == NOT_IMPLEMENTED => {
             let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: check ({})", failure.message);
@@ -118,7 +92,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
                 print(out, &Dumps::compact().sort_keys(true).dumps(&check_document(None, &display, vec![document])));
                 return 2;
             }
-            print(out, &format!("COMPILE ERROR: {failure}"));
+            print(err, &format!("COMPILE ERROR: {failure}"));
             return 2;
         }
     };
@@ -126,7 +100,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     let mut diagnostics = match check(board, pins != "off") {
         Ok(diagnostics) => diagnostics,
         Err(message) => {
-            print(out, &format!("COMPILE ERROR: {message}"));
+            print(err, &format!("COMPILE ERROR: {message}"));
             return 2;
         }
     };
@@ -138,14 +112,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
     }
     if let Some(target) = &macro_inputs {
-        let prepared = match prepare_board_macros(
-            board,
-            parsed.flags.contains(&"--locked"),
-            parsed.flags.contains(&"--offline"),
-        ) {
+        let prepared = match prepare_board_macros(board, parsed.flag("--locked"), parsed.flag("--offline")) {
             Ok(prepared) => prepared,
             Err(message) => {
-                print(out, &format!("COMPILE ERROR: {message}"));
+                print(err, &format!("COMPILE ERROR: {message}"));
                 return 2;
             }
         };

@@ -92,6 +92,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             out,
             "{USAGE}\n\nroute a --unified-save-inputs state again with option overrides and summarise it"
         );
+        crate::help::options(out, "replay-unified");
         return 0;
     }
     let state = match parsed.positionals.as_slice() {

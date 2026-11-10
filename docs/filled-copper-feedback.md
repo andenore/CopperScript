@@ -29,13 +29,16 @@ provisional until native refill verifies actual connectivity. The low-level
 On Windows use the installed absolute executable path. KiCad major 10 is the
 qualified refill adapter; other majors are reported as unsupported, not approved.
 
-`--verify-plane-fill native` refills and checks each candidate with
-CopperScript's own [filler](native-filling.md) and [DRC](native-drc.md)
-instead of `kicad-cli`. The report is written in KiCad's shape, with the
+Without `--verify-plane-fill` (or with `--verify-plane-fill native`)
+`route-board` refills and checks each candidate with CopperScript's own
+[filler](native-filling.md) and [DRC](native-drc.md) instead of `kicad-cli`;
+`--verify-plane-fill none` turns the check, and so the filled-copper trials,
+off. The report is written in KiCad's shape, with the
 same UUIDs, so the evidence, the open-net mapping and the dangling-copper
 repairs are the same code either way. The evidence's `kicad_version` then
 reads `copperscript <version>`. The native DRC is narrower than KiCad's (no
-courtyard or silkscreen checks; see its list), so KiCad stays the default.
+courtyard or silkscreen checks; see its list), so the shared Make build
+passes KiCad's `kicad-cli` explicitly and KiCad stays the qualified adapter.
 `copper bench --kicad-cli native` and `copper benchmark-routing --kicad-cli
 native` select it as well.
 
@@ -51,8 +54,8 @@ No profile forces a fixed component to move or changes RF/power requirements.
 
 Without a profile, the established individual CLI defaults remain, with eight
 native-driven repair trials. `--filled-copper-trials 0` runs verification only.
-`--filled-copper-search-states` caps each bridge trial. The shared blocker limit
-and dependency-expansion limit also apply. Critical, local contact, placement
+The profile's search states cap each bridge trial. The shared blocker limit
+(4) and dependency-expansion limit (2) also apply. Critical, local contact, placement
 and unified-router stages retain their separate bounds; the profile is not a
 total wall-clock timeout or an exhaustive routing search.
 `--package-initial-pair-states N` caps each coupled pair's search in the critical
@@ -468,25 +471,11 @@ tracks/vias are preserved; every complete supply/return path, protected owner,
 created-edge coverage and physical gate is checked before adoption. A legal
 local candidate alone does not establish standard-pipeline or board closure.
 
-After ordinary fanout passes its materialization gate, one explicit late bypass
-completion pass may retry only its original pending opposite-face source links,
-intersected with the original net filter. It requires newly generated ordinary
-copper and never repeats a completion round or reroutes ordinary/critical/area
-copper. Existing per-link proposer bounds remain authoritative. The pass and
-selected/completed/remaining links, generated counts and rollback reason are
-recorded in `FanoutResult.late_bypass`, separately from routing closure.
-
-Every late candidate retains the full early-semantic and ordinary occurrence
-prefix and source fields. Original via/surface handoffs, verified associations,
-admitted path witnesses, source budgets and physical gates are freshly checked.
-A rejected late candidate alone is rolled back. Only newly appended late objects
-join the semantic owner ledger; reused ordinary source paths/vias retain their
-original owners. Pending obligations use complete declared link identities;
-source validation still permits only one explicit association per capacitor.
-Existing handoffs are not replaced and a newly measured semantic port never
-invents an ordinary-domain candidate index. These physical joins and bounded
-completion reports do not establish electrical, RF, power or fabrication release
-qualification.
+An opposite-face bypass link still pending after ordinary fanout stays pending
+and is reported; fanout has no late completion pass. (One existed until
+2026-11-09 and was removed because it changed no board on the benchmark
+ladder.) Physical joins do not establish electrical, RF, power or fabrication
+release qualification.
 
 Local pin-access routing retains the eight-direction geometry contract even when
 exact endpoint coordinates divide computational grid intervals unequally. The

@@ -95,7 +95,7 @@ source, ownership, association and physical checks. The default policy is unchan
 
 `route-board` routes ordinary nets with the unified negotiated router, after the
 established coupled differential/critical routing and decoupler preparation. It
-is the only ordinary router: the pre-refactor pass-based pipeline (`--router
+is the only ordinary router: the former pass-based pipeline (`--router
 legacy`, with package-access search, power preparation and area planning, and
 the late zone-escape repair) was removed on 2026-10-26. Pair routing,
 skew tuning and return-path checks remain available in this standard pipeline.
@@ -111,9 +111,7 @@ Use `--routing-profile quick|balanced|thorough` for the standard work budgets,
 `--unified-time-budget-s` for negotiation time, and `--unified-pitch-mm` for the
 physical routing grid. Expert solver settings use the existing repeatable
 `--unified-set OPTION=VALUE` interface, shared with replay and benchmarks.
-`--fanout` options seed pad escapes and repair rounds. Global demand estimation
-has a separate `--local-demand-pitch-mm`, accepted only with a positive
-`--local-demand-cost`.
+`--fanout` options seed pad escapes and repair rounds.
 
 The routing option cleanup removes duplicate switches. Migrate existing commands
 as follows; effective defaults are unchanged:
@@ -131,7 +129,28 @@ as follows; effective defaults are unchanged:
 | `--no-route-smoothing` | `--unified-set route_smoothing=false` |
 | `--stitch-zone-pads` | Omit: declared copper zones stitch automatically |
 | `--detailed-feedback-trials D`, `--critical-feedback-trials C` | One `--congestion-feedback-trials N`; preserve the old effective budget with `N=max(previous N, D+C)` (previous N defaults to 4) |
-| `--pitch-mm P` | Omit when demand cost was zero; otherwise `--local-demand-pitch-mm P` |
+| `--pitch-mm P` | Omit; the global demand estimate it paced is off |
+
+A later cut (2026-11-09) removed seventeen `route-board` solver controls that no
+example, consumer board, benchmark or script set. Each keeps its former
+default, and naming one fails with that value:
+
+| Removed option | Fixed behaviour |
+| --- | --- |
+| `--debug` | Errors print without a traceback |
+| `--support-pattern-trials`, `--package-support-trials` | 0, the only implemented value |
+| `--placement-seeds` | `max(2, --candidates)` seeds |
+| `--power-domain-weight` | 0.25 |
+| `--critical-pin-access-step-mm` | Critical pins use `--pin-access-step-mm` |
+| `--layer-preference-cost`, `--direction-preference-cost` | 4 and 2 (the global search uses half of each) |
+| `--layer-assignment-passes`, `--local-demand-cost`, `--local-demand-pitch-mm` | Off |
+| `--fanout-step-mm`, `--fanout-geometry-candidates` | 0.5 mm and 0 |
+| `--plane-escape-width-mm` | The net's rule width |
+| `--maximum-ripup-blockers`, `--zone-dependency-expansions` | 4 and 2 |
+| `--filled-copper-search-states` | Set by `--routing-profile`; 4000 without one |
+
+`plan-layout` and `route-global` keep their own placement options
+(`--placement-seeds`, `--power-domain-weight`, the support trials).
 
 Removed options fail before loading the board and name their replacement. Report
 keys `work_limits.ignored_flags` and `mapped_flags` remain empty for schema
@@ -299,7 +318,8 @@ appear as `ESCAPE_CHANNEL_DEFICIT` warnings in the layout report. Optional
 estimate on `plan-layout`, `route-global` and `route-board`, not DRC clearance.
 See the [escape-aware placement plan](placement-internals.md).
 The physical planner also uses soft supply-domain distribution objectives:
-`--power-domain-weight 0.25` is the default; `0` disables domain attraction.
+weight 0.25 (`--power-domain-weight` on `plan-layout` and `route-global`; `0`
+disables domain attraction).
 Multi-supply parts participate in each rail group without a hard boundary or
 midpoint rule. Declared plane nets have reduced generic wirelength attraction.
 Package preflight reserves plane contacts by default with fanout enabled;
@@ -335,14 +355,10 @@ fill remains provisional until KiCad refills the zones and verifies physical
 connectivity. A net named GND without a declared zone receives no implicit
 plane.
 
-Soft plane-aware global layer costs and
-alternating inner-layer directions can be tuned with
-`--layer-preference-cost` and `--direction-preference-cost` (zero disables
-either preference); they do not override explicit layer restrictions or DRC.
-Accepted ordinary copper is straightened unless `--unified-set route_smoothing=false` is
-given. Opt-in `--layer-assignment-passes` and `--local-demand-cost` move ordinary
-guide runs away from same-layer crossings and full channels; see the
-[layer-balance review](routing-backlog.md).
+Soft plane-aware global layer costs and alternating inner-layer directions
+guide the global search; they do not override explicit layer restrictions or
+DRC. Accepted ordinary copper is straightened unless
+`--unified-set route_smoothing=false` is given.
 For intentional diagonal placement, add a
 `constraint allowed_orientations(U1) { values = "0,45,90"; }`; unconstrained
 parts retain 0/90/180/270-degree candidates.
@@ -380,11 +396,14 @@ hot tiles.
 (`--placement-feedback-trials` is the older, unrelated budget of global
 placement trials per feedback iteration.)
 
-Pass `--verify-plane-fill "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"` to
-refill a disposable KiCad copy and include authoritative open-net/island
-findings in the report; a zone outline or stitched via alone is not proof of
-connectivity. `--verify-plane-fill native` does the same without KiCad, with
-CopperScript's own [filler](native-filling.md) and [DRC](native-drc.md). See [routing research tasks](routing-backlog.md).
+`route-board` refills a disposable copy of the written board and includes
+open-net/island findings in the report; a zone outline or stitched via alone
+is not proof of connectivity. By default it uses CopperScript's own
+[filler](native-filling.md) and [DRC](native-drc.md), so a run needs no KiCad
+to pass. Pass `--verify-plane-fill "C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"`
+to use KiCad's refill and DRC instead (the qualified adapter, and broader:
+courtyards and silkscreen), or `--verify-plane-fill none` to skip the check;
+a run that defers zone nets then cannot pass. See [routing](routing.md).
 Use the [current backlog](../TODO.md) for unresolved solver work.
 
 ### Full-vertical routing from a fresh checkout (Windows / PowerShell)
@@ -465,8 +484,7 @@ Runs are not function-profiled. See
 [profiling and optimization assessment](routing-performance.md) for details,
 current evidence and the prioritized optimization work list.
 The detailed [optimization todos](routing-optimization-todo.md) track implementation.
-Filled-copper repair supports bounded blocker-cone expansion; use
-`EXTRA_ROUTE_ARGS="--zone-dependency-expansions 0"` to compare without that extension.
+Filled-copper repair supports bounded blocker-cone expansion (two expansions).
 Inspect a run without changing it with `copper issues "build/full-vertical/runs/<run-id>"`
 or `copper summarize "build/full-vertical/runs/<run-id>/route-report.json"`.
 The [performance guide](routing-performance.md) explains guarded before/after comparisons.

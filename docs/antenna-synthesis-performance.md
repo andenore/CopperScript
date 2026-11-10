@@ -90,6 +90,14 @@ metric and wall time is quoted with its spread.
     unconnected tile costs a full evaluation of unchanged copper. The share
     is not yet measured.
 
+## Model revision 6
+
+A mesh line keeps every role it carries through merging: a copper edge
+that lands on a port line is still copper, so a ground boundary (a feed-slot
+wall at the board clearance) beside it keeps its own line. Before, the merged
+line carried only the port rank, the wall merged onto it, and the slot wall
+landed on the stub's copper and shorted the port.
+
 ## Model revision 5
 
 Found synthesizing CopperAssetTracker's three antennas on JLCPCB's

@@ -5,16 +5,17 @@ use std::io::Write;
 use copper_json::{Dumps, Object, Value, text};
 use copper_report::explain::{FAMILY_NAMES, codes, explain, suggest_code};
 
+use crate::option_parser::{self, flag};
 use crate::pypath;
-use crate::report_args::{self, flag};
 
 const USAGE: &str = "usage: copper explain [-h] [--list] [--json] [code]";
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let parsed = match report_args::parse(arguments, &[flag("--list"), flag("--json")]) {
+    let parsed = match option_parser::parse_report(arguments, &[flag("--list"), flag("--json")]) {
         Ok(Some(parsed)) => parsed,
         Ok(None) => {
             let _ = writeln!(out, "{USAGE}\n\nexplain a diagnostic code and its usual fix");
+            crate::help::options(out, "explain");
             return 0;
         }
         Err(message) => {
@@ -30,10 +31,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return 2;
         }
     };
-    let json = parsed.has("--json");
+    let json = parsed.flag("--json");
     // An empty code lists, as Python's `not args.code` does.
     let code = match code {
-        Some(code) if !code.is_empty() && !parsed.has("--list") => code,
+        Some(code) if !code.is_empty() && !parsed.flag("--list") => code,
         _ => {
             let codes = codes();
             let rendered = if json {

@@ -4,7 +4,6 @@
 //! [`commands::NOT_IMPLEMENTED_EXIT`] and says "not implemented" on stderr.
 
 mod agent_guide;
-mod args;
 mod assembly;
 mod audit_footprints;
 mod benchmark_routing;
@@ -14,6 +13,7 @@ mod commands;
 mod compare_cam;
 mod compile;
 mod compile_macro;
+mod completions;
 mod drc;
 mod edit_mechanical;
 mod editor_overlay;
@@ -22,6 +22,8 @@ mod export_kicad;
 mod export_kicad_pcb;
 mod export_manufacturing;
 mod fill;
+mod help;
+mod init;
 mod issues;
 mod library;
 mod lock;
@@ -37,7 +39,6 @@ mod query;
 mod render;
 mod replay_critical;
 mod replay_unified;
-mod report_args;
 mod route_board;
 mod route_global;
 mod si_check;

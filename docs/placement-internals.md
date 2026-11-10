@@ -2,7 +2,7 @@
 
 These are implemented planner rules. Public commands and report interpretation
 are in [layout workflow](layout-workflow.md); pending improvements are in the
-[routing backlog](routing-backlog.md). No board-specific coordinates belong in
+[routing open work](routing.md#open-work). No board-specific coordinates belong in
 the shared placer.
 
 ## Directional escape spacing
@@ -100,9 +100,9 @@ escape/routing checks. Do not infer preserved dogbones from a legal cap pack.
 
 `PlacementPlannerOptions.support_pattern_trials` opts into joint support
 placement after ordinary capacitor refinement and before placement candidate
-ranking. It defaults to zero. The normal `plan-layout`, `route-global` and
-`route-board` commands expose `--support-pattern-trials N`; N is the complete
-combination-check allowance per placement seed, not a fabrication constraint.
+ranking. It defaults to zero, and the Rust planner reports any other value as
+not implemented (the stage was not ported from Python). `plan-layout` and
+`route-global` accept `--support-pattern-trials N`; `route-board` does not.
 The stage does not move accepted routed/frozen copper. Public output remains
 unrouted source poses; proof copper is separate.
 
@@ -279,7 +279,8 @@ immutable footprint and exact transformed pose geometry, never legality answers.
 ## Discarding an exhausted seed
 
 The default deterministic seed count remains `max(2, candidate_count)`. An
-explicit positive `seed_count` (`--placement-seeds`) bounds attempts instead.
+explicit positive `seed_count` (`--placement-seeds` on `plan-layout` and
+`route-global`) bounds attempts instead.
 Only
 the private typed failure from exhausted mutable legalization/local repair
 discards one attempt and permits the next already planned seed. Each attempt

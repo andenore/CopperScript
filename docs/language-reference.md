@@ -7,9 +7,12 @@ component C_BYPASS: CAPACITOR {
     value = 100nF;
     footprint = "Capacitor_SMD:C_0402_1005Metric";
     role = decoupling;
-    decouples = "U.VDD";
+    decouples = U.VDD;
 }
 ```
+
+`decouples` takes the pin like a net endpoint, `U.VDD`; the quoted form
+`"U.VDD"` is equivalent and compiles to the same IR.
 
 This is semantic component intent, not a numeric placement constraint. The
 association must name a real connected pin on the capacitor's feed net, with
@@ -669,7 +672,23 @@ net I2C_SDA {
 }
 ```
 
-An endpoint always has the form `component.pin`.
+An endpoint has the form `component.pin`. A pin pattern `component.PREFIX*`
+names every pin of the component's part whose name starts with `PREFIX`, in
+the part's pin order, so a module's ground pins need one line:
+
+```copper
+net GND {
+    U_MODEM.GND*;      // GND, GND_1, GND_27, ... as the part declares them
+    C1.2;
+}
+```
+
+The `*` follows the prefix directly and ends the name; it matches only part
+pin names (not device unit terminals). A pattern that matches no pin is an
+error (`CMP211`), as is one on a component whose part is unknown (`CMP212`).
+A pin the net already names is not repeated. Patterns may name a component
+declared further down the file. Check what a pattern selected with
+`copper query BOARD net NAME`.
 
 ## No-connect pins
 
@@ -1086,9 +1105,9 @@ native refill must still prove each consumer joins its source.
 
 Physical placement derives overlapping power-domain membership from nonzero
 supply nets and active power-pin profiles. Ground is excluded. Distinct nets
-remain distinct even at the same voltage. `--power-domain-weight` on
-`plan-layout`, `route-global` and `route-board` sets the soft source-to-load
-distribution attraction (default `0.25`, range `0..1`, `0` disables it).
+remain distinct even at the same voltage. The soft source-to-load
+distribution attraction is 0.25 (`--power-domain-weight` on `plan-layout` and
+`route-global`, range `0..1`, `0` disables it).
 Source-free rails use a consumer centroid; consumers are normalized by
 component, not supply-pin count. Fixed/relative/macro constraints and escape
 space remain stronger objectives. Multi-domain parts are not forced to a
@@ -1295,7 +1314,9 @@ exclusion, export locking and port-continuity proof need nothing new:
   and a `PlacementKeepout` (both sides, expanded by `keepout_margin`) for
   other components. Other pads of the feed footprint must be unconnected.
 - The feed pad is the macro's one external port; ordinary routing reaches it
-  from the matching network.
+  from the matching network. The macro's copper is the antenna, not a route:
+  a `max_length` (or pair skew) on the feed net measures only the routed
+  feed, leaving out the radiator, its feed stub and an inverted-F's short.
 
 KiCad's DRC reports the radiator's open end as a dangling track; native
 verification (`route-board --verify-plane-fill`) excludes that one finding
@@ -1392,8 +1413,8 @@ including one declared inside its module. These are compile errors.
 (`clearance` exceeds the board `minimum_hole_clearance`) need the resolved
 footprint and rules, so physicalization reports them.
 
-Package escape sampling is configurable on `route-board`: `--fanout-step-mm`
-defaults to 0.5 mm and `--fanout-refinement-step-mm` defaults to 0.1 mm. Empty
+Package escape sampling on `route-board` steps 0.5 mm, and
+`--fanout-refinement-step-mm` (default 0.1 mm) sets the finer pass. Empty
 coarse domains and conflicting selected escapes receive bounded finer radial
 and, when enabled, two-leg alternatives against the same immutable input.
 Easy pins keep their coarse choices. Refinement must be no coarser than the
@@ -1727,10 +1748,6 @@ and the total coupled length:
 CRITICAL LANES: 5 nets; pairs=2, worst skew=0.800 mm, over max_skew=1; match groups=1, over max_skew=0; min spacing outside breakout: critical=0.300 mm (A_N to B_P), signal=0.507 mm (A_P to S); coupled length=20.763 mm; bends>45deg=2 (sharpest 90.0 deg)
 ```
 
-`route-board --debug` prints the
-full traceback of an error before the usual one-line message. Without the flag,
-output is unchanged.
-
 An impedance target is not proof that the provisional width/gap meets it.
 Missing stackup/field-solver evidence stays an explicit assumption. Nordic's
 chip-side matching connection is not labelled a generic 50-ohm RF feed; its
@@ -2042,19 +2059,12 @@ Duplicate-land `added_track_count` counts final-stage additions;
 
 ### Routing search costs
 
-`route-board --layer-preference-cost` and `--direction-preference-cost` are
-soft physical-search rates per millimetre, not electrical properties or hard
-layer restrictions. The global guide search uses half the selected rates on top
-of a baseline distance rate of 10 cost units/mm; via and bend events have
-separate fixed costs. The unified router prices its own lattice through the
+The global guide search adds soft layer- and direction-preference rates of 2
+and 1 cost units/mm on top of a baseline distance rate of 10 cost units/mm;
+they are not electrical properties or hard layer restrictions. Via and bend
+events have separate fixed costs. The unified router prices its own lattice through the
 `--unified-set OPTION=VALUE` options and `--unified-pitch-mm`.
 
-Opt-in `--layer-assignment-passes N` (default 0) relabels ordinary
-via-bounded guide runs onto another permitted signal layer after global
-negotiation when that avoids forced same-layer crossings (priced as one via
-pair each) or, with `--local-demand-cost` (per mm at a full edge, counted in
-`--local-demand-pitch-mm` lanes), a crowded channel. Tile paths and via counts do not
-change; planes, explicit layers and critical/paired/power guides are fixed.
 Accepted ordinary copper is straightened by default; `--unified-set route_smoothing=false`
 keeps it as searched. Smoothing never moves vias, reserved or immutable copper.
 

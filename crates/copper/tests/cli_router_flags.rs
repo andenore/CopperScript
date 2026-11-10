@@ -136,28 +136,26 @@ fn retired_options_explain_replacement_before_loading_source() {
 }
 
 #[test]
-fn local_demand_pitch_requires_enabled_demand() {
-    let run = copper(&["route-board", "missing.copper", "--local-demand-pitch-mm", "0.5"], &scratch("pitch"));
-    assert_eq!(run.status, 2);
-    assert!(run.stderr.contains("requires --local-demand-cost greater than 0"), "{}", run.stderr);
+fn unused_solver_controls_are_refused_with_their_fixed_value() {
+    let directory = scratch("fixed");
+    for (flag, fixed) in [
+        ("--local-demand-pitch-mm", "local demand estimate is off"),
+        ("--layer-preference-cost", "former default 4"),
+        ("--fanout-step-mm", "every 0.5 mm"),
+        ("--filled-copper-search-states", "use --routing-profile"),
+    ] {
+        let run = copper(&["route-board", "missing.copper", flag, "1"], &directory);
+        assert_eq!(run.status, 2, "{flag}");
+        assert!(run.stderr.contains(&format!("{flag} was removed; ")), "{flag}: {}", run.stderr);
+        assert!(run.stderr.contains(fixed), "{flag}: {}", run.stderr);
+    }
 }
 
 #[test]
 fn expert_options_reach_effective_report() {
     let directory = scratch("expert");
     let (source, footprints) = router_board(&directory);
-    let extra = [
-        "--unified-set",
-        "maximum_iterations=20",
-        "--unified-set",
-        "route_smoothing=false",
-        "--local-demand-pitch-mm",
-        "0.5",
-        "--local-demand-cost",
-        "3",
-        "--layer-assignment-passes",
-        "1",
-    ];
+    let extra = ["--unified-set", "maximum_iterations=20", "--unified-set", "route_smoothing=false"];
     let (run, report) = route(&directory, &source, &footprints, "expert", &extra);
     let limits = object(&report, "work_limits");
     assert_eq!(limits.get("unified_iterations"), Some(&Value::from(20i64)));

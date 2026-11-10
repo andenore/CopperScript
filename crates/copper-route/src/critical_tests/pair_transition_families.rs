@@ -52,7 +52,6 @@ fn outer_family_escapes_legal_but_isolated_short_collars() {
             &rules[1],
             &routes,
             &exact,
-            &board,
             (&candidate.via_pairs, &candidate.return_vias),
             &board.tracks,
         )

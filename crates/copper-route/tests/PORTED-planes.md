@@ -18,7 +18,7 @@ test that loops over its cases.
 | test_group_tuning.py | 11 | 0 (parts of 2 tests: see notes) | 0 | `tests/group_tuning.rs` (10); `src/test_support_planes.rs` (`drop_group_steps`) |
 | test_breakout_regions.py | 11 | 0 | 0 | `tests/breakout_regions.rs` (9); `src/test_support_planes.rs` (2: `route_single`, `route_pair` + `validate_candidate`) |
 | test_interstitial_fanout.py | 10 | 0 (installed-KiCad half of the native-project test and the `MAX_TERMINAL_CAPACITY_PROPOSALS` monkeypatch dropped: see notes) | 0 | `tests/interstitial_fanout.rs` (7); `src/test_support_planes.rs` (3: `legal_choices`, `maze_choices`) |
-| test_fanout_late_bypass_completion.py | 7 | 2: the 7-fault rollback test (substituted `route_decouplers` proposals: Python internals, Rust has no seam); the compact-report test (`LateBypassCompletionReport` is not modelled in Rust) | 0 | `tests/fanout_late_bypass_completion.rs` |
+| test_fanout_late_bypass_completion.py | 0 | 9: the late completion pass (`fanout_bypass_completion`) was removed on 2026-11-09 with its tests | 0 | none |
 | test_surface_power_breakout.py | 8 | 0 | 0 | `tests/surface_power_breakout.rs` |
 | test_route_closure.py | 8 | 0 | 0 | `tests/route_closure.rs` |
 | test_fanout_access_pressure.py | 6 | 2: the failed-native-gate rollback (`run_physical_drc` monkeypatch: Python internals); pin analysis is observational (`FanoutPinAnalysis` is not modelled in Rust) | 0 | `tests/fanout_access_pressure.rs` |
@@ -41,7 +41,7 @@ test that loops over its cases.
 | test_native_fill_crossings.py | 1 | 2: the `_EdgeYIndex` parity-accelerator cases (Python internals: Rust's `native_fill_polygon` has no edge index) | 0 | `tests/native_fill_crossings.rs` |
 | test_stackup_vias.py | 2 | 0 | 0 | `tests/stackup_vias.rs` |
 | test_autonomous_plane_access.py | 2 | 0 | 0 | `tests/autonomous_plane_access.rs` (1); `crates/copper/src/route_board.rs` `option_tests` (1, the CLI defaults) |
-| test_released_plane_bypass.py | 0 | 1: the unknown-retry-trigger rejection (Rust's `complete_late_bypasses` has no `trigger` parameter, so there is no unknown trigger to reject) | 0 | none |
+| test_released_plane_bypass.py | 0 | 1: the unknown-retry-trigger rejection (Rust has no late bypass retry, so there is no trigger to reject) | 0 | none |
 | test_crosslayer_fanout_budgets.py | 1 | 0 | 0 | `tests/crosslayer_fanout_budgets.rs` (parametrized cases loop) |
 
 ## Notes
@@ -110,18 +110,9 @@ test that loops over its cases.
   dropped (a Rust constant). Rust's `can_via` always checks hole copper
   (Python's `check_hole_copper=True`).
 
-- `test_fanout_late_bypass_completion.py`: Rust's `complete_late_bypasses`
-  returns no completion report (no `late_bypass` status, passes or reason)
-  and `FanoutResult` carries no `pin_analysis`; a completed pass is checked
-  as cleared pending obligations with appended back-side semantic tracks,
-  an unchanged one as a field-by-field copy of the incumbent. The normal
-  fanout case patched `_legal_choices` away to force the early bypass to
-  fail and observed `route_decouplers`; without those seams it checks the
-  shared end state (link verified, ledger covered, created copper equal to
-  the board's). The obstructed half of the old-witness case needed a
-  substituted proposal and is dropped. The one-capacitor-two-targets board
-  check runs where Rust makes it, when a board state is decoded. Scene
-  builders are in `support_planes/decoupling.rs`.
+- `test_fanout_late_bypass_completion.py`: the late completion pass and its
+  tests were removed on 2026-11-09; it changed no board on the benchmark
+  ladder.
 
 - `test_route_closure.py`: the Python tests passed a `SimpleNamespace` as
   the pipeline; Rust's `routing_complete_with_fill` takes a
@@ -238,5 +229,5 @@ test that loops over its cases.
   The `with_test_owners` helper was unused by the remaining tests.
 
 - `test_crosslayer_fanout_budgets.py`: `support_planes::decoupling::reservation`
-  (moved from `tests/fanout_late_bypass_completion.rs`) gives
+  gives
   `verified_bypass_reservations` the fanout result's semantic ledger.
