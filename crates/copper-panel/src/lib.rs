@@ -229,6 +229,7 @@ pub fn panelize(
         &composition.outlines,
         depth,
         edge_clearance,
+        spec.mouse_bite.drill / 2,
         &copper_layers,
     );
     let mut tree = composition.tree;
@@ -1057,6 +1058,69 @@ mod tests {
         // Without an edge clearance there are none.
         let plain = panelize(&spec(""), &files(), &none(), "demo").expect("a panel");
         assert!(!plain.pcb.contains("panel/tab-edge/"));
+    }
+
+    #[test]
+    fn tab_landing_keepouts_leave_out_the_mouse_bites() {
+        // The keep-outs forbid pads, so they must not contain the panel's own
+        // mouse-bite holes (KiCad would report each one), while still covering
+        // the rest of the landing. A 1.2 mm inset puts the holes wholly inside
+        // the keep-out, which then needs holes of its own.
+        let pro = PRO.replace(
+            r#""design_settings": {}"#,
+            r#""design_settings": {"rules": {"min_copper_edge_clearance": 1.0, "min_hole_clearance": 0.25}}"#,
+        );
+        let mut both = files();
+        for f in &mut both {
+            f.pro = pro.clone();
+        }
+        for inset in [250_000, 1_200_000] {
+            let mut deep = spec("");
+            deep.mouse_bite.inset = inset;
+            let panel = panelize(&deep, &both, &none(), "demo").expect("a panel");
+            let board = copper_cam::board::parse_board(&panel.pcb, "panel").expect("copper-cam reads the panel");
+            let keepouts: Vec<copper_cam::poly::Shapes> = board
+                .zones
+                .iter()
+                .filter(|z| z.name.starts_with("panel/tab-edge/"))
+                .map(|z| {
+                    let pts: Vec<(f64, f64)> =
+                        z.outline[0].edges.iter().map(|e| (e.end().x as f64, e.end().y as f64)).collect();
+                    copper_cam::poly::polygon(&pts)
+                })
+                .collect();
+            assert_eq!(keepouts.len(), 5);
+            let bites: Vec<&copper_cam::board::Pad> = board
+                .footprints
+                .iter()
+                .filter(|f| f.reference.starts_with("TAB-"))
+                .flat_map(|f| f.pads.iter())
+                .collect();
+            assert!(!bites.is_empty());
+            for pad in &bites {
+                let hole = copper_cam::poly::circle(pad.center, pad.width as f64 / 2.0, 250.0);
+                for keepout in &keepouts {
+                    let inside: f64 = copper_cam::poly::intersection(&hole, keepout)
+                        .iter()
+                        .map(|s| copper_cam::poly::shape_area(s))
+                        .sum();
+                    assert!(
+                        inside < 1.0,
+                        "inset {inset}: a bite at {:?} lies in a keep-out ({inside} nm2)",
+                        pad.center
+                    );
+                }
+            }
+            // a_top's landing (x 2.5-7.5 mm, 1 + inset + 0.25 mm deep) less its
+            // own five holes, at most: nothing else is cut away.
+            let top = board.zones.iter().find(|z| z.name == "panel/tab-edge/a_top/near").expect("a_top's");
+            let pts: Vec<(f64, f64)> =
+                top.outline[0].edges.iter().map(|e| (e.end().x as f64, e.end().y as f64)).collect();
+            let area: f64 = copper_cam::poly::polygon(&pts).iter().map(|s| copper_cam::poly::shape_area(s)).sum();
+            let strip = 5.0e6 * (1.25e6 + inset as f64);
+            let r = 250_000.0 + frame::BITE_CUT_MARGIN as f64;
+            assert!(area > strip - 5.0 * std::f64::consts::PI * r * r - 1e6 && area < strip, "inset {inset}: {area}");
+        }
     }
 
     #[test]

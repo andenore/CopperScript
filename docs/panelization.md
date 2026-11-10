@@ -100,7 +100,9 @@ panel ExamplePanel {
    along the landing holds pours, tracks, vias and pads back as the edge
    did: as deep as the bites cut (`inset` plus half the drill) plus the
    largest copper-to-edge clearance the rules ask for, and that clearance
-   past both tab ends, clipped to the board.
+   past both tab ends, clipped to the board. The mouse-bite holes are cut
+   out of it (10 um wider than drilled): they are the panel's own, and
+   KiCad would otherwise report each as an item the keep-out forbids.
 4. Refuses, naming the board, side and interval:
    - a tab on an antenna region opened to the perimeter, or within 1 mm of
      one (round a corner onto the next side too);

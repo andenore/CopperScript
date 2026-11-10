@@ -42,6 +42,8 @@ pub struct BuiltTab {
     /// The gap it spans.
     pub length: i64,
     pub mouse_bites: usize,
+    /// The panel position of every mouse-bite hole centre.
+    pub bites: Vec<Point>,
     /// The tab's board-edge segment on the panel.
     pub edge: (Point, Point),
 }
@@ -261,6 +263,7 @@ pub fn build(
         let direction = ((b.0 - a.0).signum(), (b.1 - a.1).signum());
         let centre = ((a.0 + b.0) / 2, (a.1 + b.1) / 2);
         let mut pads = Vec::new();
+        let mut bites = Vec::new();
         let mut ends = vec![(-spec.mouse_bite.inset, built.board.as_str())];
         if let Some(across) = &built.across {
             ends.push((built.length + spec.mouse_bite.inset, across.as_str()));
@@ -290,9 +293,9 @@ pub fn build(
                     ));
                 }
                 pads.push(npth(p, spec.mouse_bite.drill));
+                bites.push((centre.0 + p.0, centre.1 + p.1));
             }
         }
-        let bites = pads.len();
         items.push(footprint(
             "copper-panel:MouseBites",
             &format!("TAB-{}", built.name),
@@ -301,7 +304,7 @@ pub fn build(
             "board_only exclude_from_pos_files exclude_from_bom",
             pads,
         ));
-        tabs.push(BuiltTab { mouse_bites: bites, ..built });
+        tabs.push(BuiltTab { mouse_bites: bites.len(), bites, ..built });
     }
     // Fiducials and tooling holes on the top and bottom rails.
     let rail_centre = |top: bool| if top { (outer[1] + all[1] - s) / 2 } else { (all[3] + s + outer[3]) / 2 };
@@ -563,6 +566,7 @@ fn build_tab(
         across,
         length: distance,
         mouse_bites: 0,
+        bites: Vec::new(),
         edge: (a, b),
     })
 }
@@ -574,18 +578,32 @@ fn build_tab(
 /// board edge, out to almost the tab's ends: fills and tracks there would
 /// lose the copper-to-edge clearance they keep on the board alone, so the
 /// keep-out holds them back from every bite wall as the edge did.
+///
+/// The mouse-bite holes themselves (radius `bite_radius`) are cut out of the
+/// keep-outs: they are the panel's own, and a keep-out that forbids pads would
+/// otherwise contain them (KiCad reports each as an item not allowed). Board
+/// pads stay forbidden there: after breaking, the bite walls are their edge.
 pub fn tab_edge_keepouts(
     tabs: &[BuiltTab],
     poses: &IndexMap<String, Pose>,
     outlines: &IndexMap<String, Vec<Vec<Point>>>,
     depth: i64,
     extend: i64,
+    bite_radius: i64,
     layers: &[String],
 ) -> Vec<Node> {
     if depth <= 0 || layers.is_empty() {
         return Vec::new();
     }
     let layer_list: Vec<String> = layers.iter().map(|l| quote(l)).collect();
+    // Every hole, 10 um wider than drilled so no polygon edge grazes it.
+    let holes: poly::Shapes = tabs
+        .iter()
+        .flat_map(|tab| tab.bites.iter())
+        .flat_map(|p| {
+            poly::circle(copper_cam::geometry::Point::new(p.0, p.1), (bite_radius + BITE_CUT_MARGIN) as f64, 250.0)
+        })
+        .collect();
     let mut zones = Vec::new();
     for tab in tabs {
         let n = poses[&tab.board].rotate(side_geometry([0, 0, 0, 0], tab.side).2);
@@ -601,8 +619,13 @@ pub fn tab_edge_keepouts(
         }
         for (end, board, corners) in strips {
             let board_shape: poly::Shapes = outlines[board].iter().flat_map(|ring| ring_shapes(ring)).collect();
-            for (k, piece) in poly::intersection(&ring_shapes(&corners), &board_shape).iter().enumerate() {
-                let pts: Vec<String> = piece[0].iter().map(|p| format!("(xy {} {})", mm(p.x), mm(p.y))).collect();
+            let strip = poly::intersection(&ring_shapes(&corners), &board_shape);
+            let strip = if holes.is_empty() { strip } else { poly::difference(&strip, &holes) };
+            for (k, piece) in strip.iter().enumerate() {
+                // A hole wholly inside the strip is joined to its outline by a
+                // zero-width bridge, as KiCad stores zone outlines.
+                let pts: Vec<String> =
+                    poly::fracture(piece).iter().map(|p| format!("(xy {} {})", mm(p.x), mm(p.y))).collect();
                 let key = if k == 0 { format!("{}:{end}", tab.name) } else { format!("{}:{end}:{k}", tab.name) };
                 let text = format!(
                     "(zone (layers {}) (uuid {}) (name {}) (hatch edge 0.5) \
@@ -619,6 +642,9 @@ pub fn tab_edge_keepouts(
     }
     zones
 }
+
+/// How much wider than the drill a mouse bite is cut out of a keep-out.
+pub const BITE_CUT_MARGIN: i64 = 10_000;
 
 /// The panel rectangle a built tab occupies across its gap.
 pub fn tab_rect(tab: &BuiltTab, pose: Pose) -> Rect {
