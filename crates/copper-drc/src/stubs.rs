@@ -521,7 +521,10 @@ impl Graph {
     ///
     /// A stub attaches to the route at one junction, or hangs off a route end
     /// that has no route; its length is the greatest shortest distance, along
-    /// stub copper only, from that junction to any junction in the stub.
+    /// stub copper only, from that junction to any point of the stub. In a
+    /// loop that point is inside an edge: on an edge of length `L` whose ends
+    /// lie `a` and `b` away, the farthest point is `(a + b + L) / 2` away, so
+    /// splitting an edge into several never changes the result.
     fn longest_stub(&self) -> Option<(f64, String)> {
         let route = self.route_edges();
         let attached =
@@ -556,6 +559,21 @@ impl Graph {
                         arrived[next] = Some(edge);
                         queue.push(Reverse((total.to_bits(), next)));
                     }
+                }
+            }
+            // Edge interiors: a stub edge between two reached stub junctions
+            // (or the attachment itself) peaks between its ends when it closes
+            // a loop. Half a nanometre above both ends keeps rounding on a
+            // straight branch from relabelling its far end.
+            let inside = |vertex: usize| vertex == source || (best[vertex].is_finite() && !attached(vertex));
+            for (index, edge) in self.edges.iter().enumerate() {
+                let [a, b] = edge.ends;
+                if route[index] || !inside(a) || !inside(b) {
+                    continue;
+                }
+                let peak = (best[a] + best[b] + edge.length_nm) / 2.0;
+                if peak > best[a].max(best[b]) + 0.5 && longest.as_ref().is_none_or(|(length, _)| peak > *length) {
+                    longest = Some((peak, edge.label.clone()));
                 }
             }
         }

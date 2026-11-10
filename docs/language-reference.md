@@ -935,8 +935,10 @@ path between two route ends is route copper, including every loop that joins
 two of them; all other copper is stub copper: a dangling track or arc, an
 unused via, or a loop that hangs off the route. A stub's length is the
 greatest distance along the copper, by the shortest way, from the junction
-where it attaches to the route to any junction in it; arcs count at their
-true length and a via barrel adds nothing. A branch that ends on another pad is
+where it attaches to the route to any point of it (for a loop, the point
+halfway round, which may lie partway along a track), so how the copper is cut
+into tracks does not change it; arcs count at their true length and a via
+barrel adds nothing. A branch that ends on another pad is
 a route, not a stub, so a multi-pad net is not held to the limit on its
 branches to pads. Exact DRC reports one `DRC-STUB-LENGTH` error per net, for
 its longest stub, when that exceeds the limit. Only nets whose pads are all

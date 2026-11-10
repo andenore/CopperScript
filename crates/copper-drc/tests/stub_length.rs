@@ -494,15 +494,35 @@ fn a_parallel_segment_touching_a_stub_is_one_stub() {
     near(only_finding(&board).measured_nm, 2 * MM, 50_000);
 }
 
-#[test]
-fn a_lasso_is_measured_to_the_farthest_junction_of_its_loop() {
-    // A 1 mm neck, then a triangle: 1 mm across, 1 mm up, and 1.414 mm back.
-    let mut board = board(Some(MM), false);
+/// A 1 mm neck, then a triangle: 1 mm across, 1 mm up and 1.414 mm back. With
+/// `split`, the 1 mm upright is two tracks meeting halfway.
+fn lasso(limit: i64, split: bool) -> PhysicalBoard {
+    let mut board = board(Some(limit), false);
     board.tracks.push(track((7 * MM, Y), (7 * MM, Y + MM)));
     board.tracks.push(track((7 * MM, Y + MM), (8 * MM, Y + MM)));
-    board.tracks.push(track((8 * MM, Y + MM), (8 * MM, Y + 2 * MM)));
+    if split {
+        board.tracks.push(track((8 * MM, Y + MM), (8 * MM, Y + 1_500_000)));
+        board.tracks.push(track((8 * MM, Y + 1_500_000), (8 * MM, Y + 2 * MM)));
+    } else {
+        board.tracks.push(track((8 * MM, Y + MM), (8 * MM, Y + 2 * MM)));
+    }
     board.tracks.push(track((8 * MM, Y + 2 * MM), (7 * MM, Y + MM)));
-    near(only_finding(&board).measured_nm, MM + 1_414_214, 2);
+    board
+}
+
+#[test]
+fn a_lasso_is_measured_to_the_farthest_point_of_its_loop() {
+    // Halfway round the 3.414 mm loop, on the upright: 1 + 1.707 mm.
+    near(only_finding(&lasso(MM, false)).measured_nm, MM + 1_707_107, 2);
+}
+
+#[test]
+fn how_a_loop_is_segmented_does_not_change_its_stub_length() {
+    for split in [false, true] {
+        near(only_finding(&lasso(MM, split)).measured_nm, MM + 1_707_107, 2);
+        assert!(stub_findings(&lasso(2_708_000, split)).is_empty(), "split {split}");
+        assert_eq!(stub_findings(&lasso(2_706_000, split)).len(), 1, "split {split}");
+    }
 }
 
 #[test]
