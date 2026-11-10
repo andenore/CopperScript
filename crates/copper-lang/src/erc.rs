@@ -197,6 +197,17 @@ impl Context {
         }
         merged.voltage = profiles.iter().find_map(|profile| profile.voltage.clone());
         merged.absolute_voltage = profiles.iter().find_map(|profile| profile.absolute_voltage.clone());
+        merged.io_supply = profiles.iter().find_map(|profile| profile.io_supply.clone());
+        let levels = |select: fn(&LogicLevels) -> &Option<LogicLevel>| {
+            profiles.iter().find_map(|profile| profile.logic_levels.as_ref().and_then(|l| select(l).clone()))
+        };
+        let merged_levels = LogicLevels {
+            vih: levels(|l| &l.vih),
+            vil: levels(|l| &l.vil),
+            voh: levels(|l| &l.voh),
+            vol: levels(|l| &l.vol),
+        };
+        merged.logic_levels = (!merged_levels.is_empty()).then_some(merged_levels);
         Some(merged)
     }
 
@@ -697,6 +708,97 @@ fn resolve_relative(bound: &RelativeVoltage, reference: &Quantity, upper: bool) 
     }
 }
 
+/// The limits of one pin, with relative bounds evaluated for its component.
+struct PinLimits {
+    absolute_min: Option<Quantity>,
+    absolute_min_text: String,
+    /// The absolute minimum is a resolved value (so the operating minimum is only a warning).
+    exact_min: bool,
+    absolute_max: Option<Quantity>,
+    absolute_max_text: String,
+    exact_max: bool,
+    operating_min: Option<Quantity>,
+    operating_max: Option<Quantity>,
+    /// Relative absolute bounds that could not be evaluated: (property, bound, reason).
+    unresolved: Vec<(&'static str, RelativeVoltage, String)>,
+}
+
+/// How a voltage exceeds the high side of a pin's limits.
+enum HighExcess {
+    /// Above the absolute maximum: an error.
+    Absolute { maximum_text: String },
+    /// Above the operating maximum but inside a resolved absolute maximum: a warning.
+    OperatingSoft { maximum: Quantity, absolute_text: String },
+    /// Above the operating maximum with no resolved absolute bound: an error.
+    OperatingHard { maximum: Quantity },
+}
+
+impl PinLimits {
+    fn resolve(
+        context: &Context,
+        component: &ComponentInstance,
+        part: &PartDefinition,
+        profile: &ElectricalProfile,
+    ) -> PinLimits {
+        let mut unresolved = Vec::new();
+        let mut absolute_bound = |name: &'static str, bound: Option<&Bound>| -> (Option<Quantity>, String, bool) {
+            match bound {
+                None => (None, "None".to_owned(), false),
+                Some(Bound::Fixed(value)) => (Some(value.clone()), value.to_string(), true),
+                Some(Bound::Relative(relative)) => {
+                    match context.reference_voltage(component, part, &relative.reference) {
+                        Err(reason) => {
+                            unresolved.push((name, relative.clone(), reason));
+                            let text =
+                                relative.limit.as_ref().map(ToString::to_string).unwrap_or_else(|| "None".to_owned());
+                            (relative.limit.clone(), text, false)
+                        }
+                        Ok(reference) => {
+                            let value = resolve_relative(relative, &reference, name == "absolute_max");
+                            let text = format!("{value} ({relative}; {} = {reference})", relative.reference);
+                            (Some(value), text, true)
+                        }
+                    }
+                }
+            }
+        };
+        let absolute = profile.absolute_voltage.as_ref();
+        let (absolute_min, absolute_min_text, exact_min) =
+            absolute_bound("absolute_min", absolute.and_then(|range| range.minimum.as_ref()));
+        let (absolute_max, absolute_max_text, exact_max) =
+            absolute_bound("absolute_max", absolute.and_then(|range| range.maximum.as_ref()));
+        let operating = profile.voltage.as_ref();
+        PinLimits {
+            absolute_min,
+            absolute_min_text,
+            exact_min,
+            absolute_max,
+            absolute_max_text,
+            exact_max,
+            operating_min: operating.and_then(|range| voltage_bound(&range.minimum)).cloned(),
+            operating_max: operating.and_then(|range| voltage_bound(&range.maximum)).cloned(),
+            unresolved,
+        }
+    }
+
+    fn below_absolute(&self, voltage: &Quantity) -> bool {
+        self.absolute_min.as_ref().is_some_and(|minimum| voltage.base_value() < minimum.base_value())
+    }
+
+    /// The shared severity policy for a voltage above the pin's high limits.
+    fn high_excess(&self, voltage: &Quantity) -> Option<HighExcess> {
+        if self.absolute_max.as_ref().is_some_and(|maximum| maximum.base_value() < voltage.base_value()) {
+            return Some(HighExcess::Absolute { maximum_text: self.absolute_max_text.clone() });
+        }
+        let maximum = self.operating_max.as_ref().filter(|maximum| maximum.base_value() < voltage.base_value())?;
+        Some(if self.exact_max {
+            HighExcess::OperatingSoft { maximum: maximum.clone(), absolute_text: self.absolute_max_text.clone() }
+        } else {
+            HighExcess::OperatingHard { maximum: maximum.clone() }
+        })
+    }
+}
+
 fn check_pin_voltage(
     context: &Context,
     endpoint: &Endpoint,
@@ -708,81 +810,350 @@ fn check_pin_voltage(
     let mut diagnostics = Vec::new();
     let voltage = &supply.voltage;
     let subject = endpoint.to_string();
-    let mut absolute_bound = |name: &str, bound: Option<&Bound>| -> (Option<Quantity>, String, bool) {
-        match bound {
-            None => (None, "None".to_owned(), false),
-            Some(Bound::Fixed(value)) => (Some(value.clone()), value.to_string(), true),
-            Some(Bound::Relative(relative)) => match context.reference_voltage(component, part, &relative.reference) {
-                Err(reason) => {
-                    diagnostics.push(Diagnostic::error(
-                        "VOLTAGE_LIMIT_UNRESOLVED",
-                        format!("{name} {relative} cannot be evaluated against {voltage}: {reason}"),
-                        subject.clone(),
-                    ));
-                    let text = relative.limit.as_ref().map(ToString::to_string).unwrap_or_else(|| "None".to_owned());
-                    (relative.limit.clone(), text, false)
-                }
-                Ok(reference) => {
-                    let value = resolve_relative(relative, &reference, name == "absolute_max");
-                    let text = format!("{value} ({relative}; {} = {reference})", relative.reference);
-                    (Some(value), text, true)
-                }
-            },
-        }
-    };
-    let absolute = profile.absolute_voltage.as_ref();
-    let (absolute_min, absolute_min_text, exact_min) =
-        absolute_bound("absolute_min", absolute.and_then(|range| range.minimum.as_ref()));
-    let (absolute_max, absolute_max_text, exact_max) =
-        absolute_bound("absolute_max", absolute.and_then(|range| range.maximum.as_ref()));
-    let below_absolute = absolute_min.as_ref().is_some_and(|minimum| voltage.base_value() < minimum.base_value());
-    let above_absolute = absolute_max.as_ref().is_some_and(|maximum| maximum.base_value() < voltage.base_value());
+    let limits = PinLimits::resolve(context, component, part, &profile);
+    for (name, relative, reason) in &limits.unresolved {
+        diagnostics.push(Diagnostic::error(
+            "VOLTAGE_LIMIT_UNRESOLVED",
+            format!("{name} {relative} cannot be evaluated against {voltage}: {reason}"),
+            subject.clone(),
+        ));
+    }
+    let below_absolute = limits.below_absolute(voltage);
     if below_absolute {
         diagnostics.push(Diagnostic::error(
             "SUPPLY_VOLTAGE_ABSOLUTE_LOW",
-            format!("{voltage} is below the pin absolute minimum {absolute_min_text}"),
+            format!("{voltage} is below the pin absolute minimum {}", limits.absolute_min_text),
             subject.clone(),
         ));
     }
-    if above_absolute {
-        diagnostics.push(Diagnostic::error(
+    match limits.high_excess(voltage) {
+        Some(HighExcess::Absolute { maximum_text }) => diagnostics.push(Diagnostic::error(
             "SUPPLY_VOLTAGE_ABSOLUTE_HIGH",
-            format!("{voltage} exceeds the pin absolute maximum {absolute_max_text}"),
+            format!("{voltage} exceeds the pin absolute maximum {maximum_text}"),
             subject.clone(),
-        ));
+        )),
+        Some(HighExcess::OperatingSoft { maximum, absolute_text }) => diagnostics.push(Diagnostic::warning(
+            "SUPPLY_VOLTAGE_HIGH",
+            format!(
+                "{voltage} exceeds the pin operating maximum {maximum} but is within the absolute maximum {absolute_text}"
+            ),
+            subject.clone(),
+        )),
+        Some(HighExcess::OperatingHard { maximum }) => diagnostics.push(Diagnostic::error(
+            "SUPPLY_VOLTAGE_HIGH",
+            format!("{voltage} exceeds the pin maximum {maximum}"),
+            subject.clone(),
+        )),
+        None => {}
     }
-    let operating = profile.voltage.as_ref();
-    if let Some(minimum) = operating.and_then(|range| voltage_bound(&range.minimum))
+    if let Some(minimum) = &limits.operating_min
         && voltage.base_value() < minimum.base_value()
         && !below_absolute
     {
-        diagnostics.push(if exact_min {
+        diagnostics.push(if limits.exact_min {
             Diagnostic::warning(
                 "SUPPLY_VOLTAGE_LOW",
-                format!("{voltage} is below the pin operating minimum {minimum} but within the absolute minimum {absolute_min_text}"),
-                subject.clone(),
-            )
-        } else {
-            Diagnostic::error("SUPPLY_VOLTAGE_LOW", format!("{voltage} is below the pin minimum {minimum}"), subject.clone())
-        });
-    }
-    if let Some(maximum) = operating.and_then(|range| voltage_bound(&range.maximum))
-        && maximum.base_value() < voltage.base_value()
-        && !above_absolute
-    {
-        diagnostics.push(if exact_max {
-            Diagnostic::warning(
-                "SUPPLY_VOLTAGE_HIGH",
                 format!(
-                    "{voltage} exceeds the pin operating maximum {maximum} but is within the absolute maximum {absolute_max_text}"
+                    "{voltage} is below the pin operating minimum {minimum} but within the absolute minimum {}",
+                    limits.absolute_min_text
                 ),
                 subject.clone(),
             )
         } else {
-            Diagnostic::error("SUPPLY_VOLTAGE_HIGH", format!("{voltage} exceeds the pin maximum {maximum}"), subject.clone())
+            Diagnostic::error(
+                "SUPPLY_VOLTAGE_LOW",
+                format!("{voltage} is below the pin minimum {minimum}"),
+                subject.clone(),
+            )
         });
     }
     diagnostics
+}
+
+/// The I/O rail a pin's logic levels are referenced to.
+enum Rail {
+    /// No `io_supply` and no resolvable power domain: the pin takes no part in rail checks.
+    Unknown,
+    Resolved {
+        voltage: Quantity,
+        text: String,
+    },
+    /// An explicit `io_supply` that could not be evaluated.
+    Unresolved(String),
+}
+
+/// Resolve a pin's I/O rail: its `io_supply` first, then the supply pads of
+/// the power domains of its active bonded device pads (when they agree).
+fn io_rail(
+    context: &Context,
+    component: &ComponentInstance,
+    part: &PartDefinition,
+    pin: &PackagePinDefinition,
+    profile: &ElectricalProfile,
+) -> Rail {
+    if let Some(reference) = &profile.io_supply {
+        return match context.reference_voltage(component, part, reference) {
+            Ok(voltage) => Rail::Resolved { text: format!("io_supply {reference} = {voltage}"), voltage },
+            Err(reason) => Rail::Unresolved(format!("io_supply {reference} cannot be evaluated: {reason}")),
+        };
+    }
+    let Some(device) = context.device_of(part) else { return Rail::Unknown };
+    let mut voltages: IndexMap<Decimal, (Quantity, String)> = IndexMap::new();
+    for pad in active_device_pads(component, pin, Some(device)) {
+        let Some(domain) = pad.power_domain.as_ref().and_then(|name| device.power_domains.get(name)) else { continue };
+        for supply_pad in &domain.supply_pads {
+            if let Ok(voltage) = context.reference_voltage(component, part, supply_pad) {
+                let text = format!("power domain {} supply pad {supply_pad} = {voltage}", domain.name);
+                voltages.entry(voltage.base_value().clone()).or_insert((voltage, text));
+            }
+        }
+    }
+    if voltages.len() == 1 {
+        let (voltage, text) = voltages.into_values().next().expect("one voltage");
+        Rail::Resolved { voltage, text }
+    } else {
+        Rail::Unknown
+    }
+}
+
+/// A logic threshold as a voltage with its derivation.
+fn resolve_level(
+    context: &Context,
+    component: &ComponentInstance,
+    part: &PartDefinition,
+    level: &LogicLevel,
+) -> Result<(Quantity, String), String> {
+    match level {
+        LogicLevel::Fixed(value) => Ok((value.clone(), value.to_string())),
+        LogicLevel::Rail(rail) => {
+            let reference = context.reference_voltage(component, part, &rail.reference)?;
+            let value = rail.resolve(&reference);
+            let text = format!("{value} ({rail}; {} = {reference})", rail.reference);
+            Ok((value, text))
+        }
+    }
+}
+
+/// One pin of a signal net with everything the logic-level checks need.
+struct LogicPin<'a> {
+    endpoint: Endpoint,
+    component: &'a ComponentInstance,
+    part: &'a PartDefinition,
+    profile: ElectricalProfile,
+    limits: PinLimits,
+    rail: Rail,
+}
+
+impl LogicPin<'_> {
+    /// A push-pull digital or clock output. A pin with no declared drive mode is
+    /// not assumed to be push-pull, matching `OUTPUT_CONFLICT`.
+    fn is_driver(&self) -> bool {
+        let profile = &self.profile;
+        (profile.directions.contains(&Direction::Output) || profile.directions.contains(&Direction::Bidirectional))
+            && (profile.domains.contains(&SignalDomain::Digital) || profile.domains.contains(&SignalDomain::Clock))
+            && profile.drive_modes.contains(&DriveMode::PushPull)
+    }
+
+    fn level(&self, context: &Context, select: fn(&LogicLevels) -> &Option<LogicLevel>) -> Option<(Quantity, String)> {
+        let level = self.profile.logic_levels.as_ref().and_then(|levels| select(levels).as_ref())?;
+        resolve_level(context, self.component, self.part, level).ok()
+    }
+
+    fn high_voltage(&self) -> Option<(&Quantity, &str)> {
+        match &self.rail {
+            Rail::Resolved { voltage, text } => Some((voltage, text)),
+            _ => None,
+        }
+    }
+}
+
+/// The supply a net is pulled up to by a resistor, when that is unambiguous.
+/// A net with resistors to supplies of different voltages (including ground)
+/// is a divider or bias network and has no single high level.
+fn pull_up_source(context: &Context, net: &Net) -> Option<(Quantity, String)> {
+    let mut voltages: IndexMap<Decimal, &Supply> = IndexMap::new();
+    for supply in &context.board.supplies {
+        if supply.net != net.name && has_resistor_between(context, &net.name, &supply.net) {
+            voltages.entry(supply.voltage.base_value().clone()).or_insert(supply);
+        }
+    }
+    if voltages.len() != 1 {
+        return None;
+    }
+    let supply = voltages.into_values().next().expect("one supply");
+    if supply.voltage.base_value().is_zero() {
+        return None;
+    }
+    Some((supply.voltage.clone(), format!("pull-up resistor to {}", supply.net)))
+}
+
+fn high_overvoltage(
+    source: &str,
+    net: &str,
+    voltage: &Quantity,
+    derivation: &str,
+    receiver: &Endpoint,
+    excess: HighExcess,
+) -> Diagnostic {
+    let prefix = format!("{source} takes {net} to {voltage} ({derivation}), which");
+    let subject = receiver.to_string();
+    let diagnostic = match excess {
+        HighExcess::Absolute { maximum_text } => Diagnostic::error(
+            "LOGIC_HIGH_OVERVOLTAGE",
+            format!("{prefix} exceeds the absolute maximum {maximum_text} of {receiver}"),
+            subject,
+        ),
+        HighExcess::OperatingSoft { maximum, absolute_text } => Diagnostic::warning(
+            "LOGIC_HIGH_OVERVOLTAGE",
+            format!(
+                "{prefix} exceeds the operating maximum {maximum} of {receiver} but is within its absolute maximum {absolute_text}"
+            ),
+            subject,
+        ),
+        HighExcess::OperatingHard { maximum } => Diagnostic::error(
+            "LOGIC_HIGH_OVERVOLTAGE",
+            format!("{prefix} exceeds the maximum {maximum} of {receiver}"),
+            subject,
+        ),
+    };
+    diagnostic.hint(Some("use a level shifter, a lower I/O rail, or a part rated for the voltage".to_owned()))
+}
+
+/// Logic-level compatibility between the pins of nets without a declared supply.
+fn check_logic_levels(context: &Context) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for net in &context.board.nets {
+        if context.board.supplies.iter().any(|supply| supply.net == net.name) {
+            continue;
+        }
+        let mut seen: BTreeSet<Endpoint> = BTreeSet::new();
+        let mut pins: Vec<LogicPin> = Vec::new();
+        for endpoint in &net.endpoints {
+            let Some((component, part, pin)) = context.resolve_pin(endpoint) else { continue };
+            let canonical = Endpoint::new(&component.reference, &pin.name);
+            if !seen.insert(canonical.clone()) {
+                continue;
+            }
+            let Some(profile) = context.pin_profile(component, part, pin) else { continue };
+            let power_only = !profile.domains.is_empty()
+                && profile.domains.iter().all(|domain| matches!(domain, SignalDomain::Power | SignalDomain::Ground));
+            if power_only {
+                continue;
+            }
+            let limits = PinLimits::resolve(context, component, part, &profile);
+            let rail = io_rail(context, component, part, pin, &profile);
+            pins.push(LogicPin { endpoint: canonical, component, part, profile, limits, rail });
+        }
+        if pins.len() < 2 {
+            continue;
+        }
+        for pin in &pins {
+            if let Rail::Unresolved(reason) = &pin.rail {
+                diagnostics.push(Diagnostic::error(
+                    "LOGIC_LEVEL_UNRESOLVED",
+                    format!("{reason}; logic levels of this pin on {} are not checked", net.name),
+                    pin.endpoint.to_string(),
+                ));
+            }
+            if let Some(levels) = &pin.profile.logic_levels {
+                for (name, level) in levels.declared() {
+                    if let LogicLevel::Rail(_) = level
+                        && let Err(reason) = resolve_level(context, pin.component, pin.part, level)
+                    {
+                        diagnostics.push(Diagnostic::error(
+                            "LOGIC_LEVEL_UNRESOLVED",
+                            format!("{name} {} cannot be evaluated: {reason}", logic_level_text(level)),
+                            pin.endpoint.to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some((voltage, derivation)) = pull_up_source(context, net) {
+            for receiver in &pins {
+                if let Some(excess) = receiver.limits.high_excess(&voltage) {
+                    diagnostics.push(high_overvoltage(
+                        "a pull-up",
+                        &net.name,
+                        &voltage,
+                        &derivation,
+                        &receiver.endpoint,
+                        excess,
+                    ));
+                }
+            }
+        }
+        for driver in pins.iter().filter(|pin| pin.is_driver()) {
+            let high = driver.high_voltage();
+            let output_high = match driver.level(context, |levels| &levels.voh) {
+                Some((value, text)) => Some((value, format!("voh {text}"))),
+                None if driver.profile.logic_levels.as_ref().is_some_and(|levels| levels.voh.is_some()) => None,
+                None => high.map(|(voltage, text)| (voltage.clone(), format!("I/O rail {text}"))),
+            };
+            let output_low = driver.level(context, |levels| &levels.vol);
+            for receiver in pins.iter().filter(|pin| pin.endpoint != driver.endpoint) {
+                if driver.component.reference == receiver.component.reference
+                    && let (Some((a, _)), Some((b, _))) = (driver.high_voltage(), receiver.high_voltage())
+                    && a.base_value() == b.base_value()
+                {
+                    continue;
+                }
+                if let Some((voltage, derivation)) = high
+                    && let Some(excess) = receiver.limits.high_excess(voltage)
+                {
+                    diagnostics.push(high_overvoltage(
+                        &driver.endpoint.to_string(),
+                        &net.name,
+                        voltage,
+                        derivation,
+                        &receiver.endpoint,
+                        excess,
+                    ));
+                }
+                if let Some((driven, driven_text)) = &output_high
+                    && let Some((needed, needed_text)) = receiver.level(context, |levels| &levels.vih)
+                    && driven.base_value() < needed.base_value()
+                {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            "LOGIC_HIGH_TOO_LOW",
+                            format!(
+                                "{} drives {} high at {driven} ({driven_text}), below the input-high threshold vih {needed_text} of {}",
+                                driver.endpoint, net.name, receiver.endpoint
+                            ),
+                            receiver.endpoint.to_string(),
+                        )
+                        .hint(Some("use a level shifter or a driver on a higher I/O rail".to_owned())),
+                    );
+                }
+                if let Some((driven, driven_text)) = &output_low
+                    && let Some((allowed, allowed_text)) = receiver.level(context, |levels| &levels.vil)
+                    && allowed.base_value() < driven.base_value()
+                {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            "LOGIC_LOW_TOO_HIGH",
+                            format!(
+                                "{} drives {} low at up to {driven} (vol {driven_text}), above the input-low threshold vil {allowed_text} of {}",
+                                driver.endpoint, net.name, receiver.endpoint
+                            ),
+                            receiver.endpoint.to_string(),
+                        )
+                        .hint(Some("use a level shifter or a driver with a lower output-low level".to_owned())),
+                    );
+                }
+            }
+        }
+    }
+    diagnostics
+}
+
+/// A logic threshold as written, for messages.
+fn logic_level_text(level: &LogicLevel) -> String {
+    match level {
+        LogicLevel::Fixed(value) => value.to_string(),
+        LogicLevel::Rail(rail) => rail.to_string(),
+    }
 }
 
 fn check_power_inputs(context: &Context) -> Vec<Diagnostic> {
@@ -1554,6 +1925,7 @@ pub fn check_view(view: FlatElectricalView, unmarked: bool) -> Vec<Diagnostic> {
     diagnostics.extend(check_references(&context));
     diagnostics.extend(check_output_conflicts(&context));
     diagnostics.extend(check_supplies(&context));
+    diagnostics.extend(check_logic_levels(&context));
     diagnostics.extend(check_power_inputs(&context));
     for interface in &context.board.interfaces {
         if interface.type_name == "std.i2c" {
