@@ -235,8 +235,8 @@ coarse model now holds about 21 MB of fields and coefficients, close to the
 
 The re-synthesized example is a 22.73 mm monopole (height 5.3 mm) at
 2.376 GHz, -12.2 dB matched over the band with 0.88 nH series then 2.57 pF
-shunt, 86 % efficiency. `site/assets/antenna-synthesis.json` still shows the
-revision 2 numbers and needs its promo build re-run.
+shunt, 86 % efficiency (revision 3; `site/assets/antenna-synthesis.json` was
+refreshed for revision 6 on 10 November).
 
 ## Plan
 

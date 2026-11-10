@@ -438,8 +438,8 @@ joined through the refilled zone.
 - The first-order template uses the microstrip permittivity, which assumes
   ground under the trace; an antenna region has none. On the example board
   the lowered template (`monopole height=3mm length=17.46mm`) resonates at
-  2.73 GHz on the fine mesh, 12 % high, and misses -10 dB even matched
-  (-8.8 dB, model revision 3); the same length at full height, where synthesis starts,
+  2.72 GHz on the fine mesh, 12 % high, and misses -10 dB even matched
+  (-8.9 dB, model revision 6); the same length at full height, where synthesis starts,
   resonates at 2.93 GHz on the coarse mesh. That gap is why synthesis matters.
 
 ## Risks

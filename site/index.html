@@ -111,8 +111,8 @@
     bands = <span class="syntax-string">"2400 MHz-2483.5 MHz"</span>;
     track_width = <span class="syntax-value">1mm</span>;
     <span class="syntax-comment">// pasted from copper synthesize-antenna</span>
-    geometry = <span class="syntax-string">"monopole height=5.3mm length=22.73mm"</span>;
-    tuned_for = <span class="syntax-string">"sha256:a8a788b9…fa9c"</span>;
+    geometry = <span class="syntax-string">"monopole height=5.3mm length=22.77mm"</span>;
+    tuned_for = <span class="syntax-string">"sha256:fadfbf76…95ba"</span>;
 }</code></pre>
           <div class="code-annotation"><span class="annotation-arrow" aria-hidden="true">↳</span><p><strong>The geometry is bound to the board it was tuned on.</strong><br>The digest covers the outline, stack-up, ground zone, region, track rules, feed and band. Change one and the board stops compiling until synthesis is re-run.</p></div>
           <p class="code-footnote">From the <a href="https://github.com/andenore/CopperScript/blob/main/examples/antenna_synthesis/README.md">antenna synthesis example</a>, a synthetic two-component probe board. The digest is shortened here.</p>
@@ -122,19 +122,19 @@
             <button type="button" data-design="template">First-order template</button><button type="button" data-design="synthesized" aria-pressed="true">Full-wave synthesis</button>
           </div></div>
           <div class="antenna-panels">
-            <figure class="antenna-board"><div class="panel-label"><span>F.Cu · antenna corner</span><span id="antenna-geometry">monopole height=5.3mm length=22.73mm</span></div><div id="antenna-board-svg" class="antenna-board-svg"><p class="small">The figure draws the recorded copper and curves with JavaScript. The numbers are below and in <a href="assets/antenna-synthesis.json">antenna-synthesis.json</a>.</p></div></figure>
+            <figure class="antenna-board"><div class="panel-label"><span>F.Cu · antenna corner</span><span id="antenna-geometry">monopole height=5.3mm length=22.77mm</span></div><div id="antenna-board-svg" class="antenna-board-svg"><p class="small">The figure draws the recorded copper and curves with JavaScript. The numbers are below and in <a href="assets/antenna-synthesis.json">antenna-synthesis.json</a>.</p></div></figure>
             <figure class="antenna-chart"><div class="panel-label"><span>Return loss at the feed, dB</span><span class="chart-legend"><span class="key key-matched">Matched</span><span class="key key-bare">Bare antenna</span></span></div><div id="antenna-chart-svg" class="antenna-chart-svg"></div></figure>
           </div>
           <div class="board-stats antenna-stats" aria-live="polite">
-            <div><strong id="antenna-resonance">2.38 GHz</strong><span>resonance</span></div>
-            <div><strong id="antenna-worst">−12.2 dB</strong><span>worst in band, matched</span></div>
-            <div><strong id="antenna-match">0.88 nH · 2.57 pF</strong><span id="antenna-match-label">series L, then shunt C</span></div>
+            <div><strong id="antenna-resonance">2.37 GHz</strong><span>resonance</span></div>
+            <div><strong id="antenna-worst">−12.3 dB</strong><span>worst in band, matched</span></div>
+            <div><strong id="antenna-match">0.85 nH · 2.54 pF</strong><span id="antenna-match-label">series L, then shunt C</span></div>
             <div><strong id="antenna-efficiency">86 %</strong><span>radiation efficiency</span></div>
           </div>
           <details class="antenna-table"><summary>Show the curve as a table</summary><div id="antenna-table"></div></details>
         </div>
       </div>
-      <div class="evidence-row antenna-evidence"><div><h3>From a quarter-wave guess to a tuned trace.</h3><p>Without a <code>geometry</code>, the compiler lowers a first-order quarter-wave template. On the fine full-wave mesh it resonates at 2.73 GHz, 12 % above the band centre, and misses the −10 dB target even with a match, because its permittivity assumes ground under the trace. <code>copper synthesize-antenna</code> tunes the resonance on the pinned pure-Rust FDTD solver, polishes height and length with Nelder-Mead, fits an L-section match and verifies the result on a fine mesh with radiation efficiency.</p><p>The antenna lowers to a generated hard macro: locked copper, a region that blocks tracks, vias and fill on every layer, and the feed pad as its one port. Monopole, meander and inverted-F topologies are searched parametrically; a pixel topology uses a genetic algorithm.</p></div><div class="qualification-note"><span class="eyebrow">SIMULATION ONLY</span><p>One model of the board: other components, the enclosure and cables are not in it, ground layers are assumed stitched and matching parts are ideal. Bench tuning in the final enclosure and radiated and regulatory testing remain mandatory.</p><a href="https://github.com/andenore/CopperScript/blob/main/docs/pcb-antenna-synthesis-research.md">Read the synthesis research note ↗</a></div></div>
+      <div class="evidence-row antenna-evidence"><div><h3>From a quarter-wave guess to a tuned trace.</h3><p>Without a <code>geometry</code>, the compiler lowers a first-order quarter-wave template. On the fine full-wave mesh it resonates at 2.72 GHz, 12 % above the band centre, and misses the −10 dB target even with a match, because its permittivity assumes ground under the trace. <code>copper synthesize-antenna</code> tunes the resonance on the pinned pure-Rust FDTD solver, polishes height and length with Nelder-Mead, fits an L-section match and verifies the result on a fine mesh with radiation efficiency.</p><p>The antenna lowers to a generated hard macro: locked copper, a region that blocks tracks, vias and fill on every layer, and the feed pad as its one port. Monopole, meander and inverted-F topologies are searched parametrically; a pixel topology uses a genetic algorithm.</p></div><div class="qualification-note"><span class="eyebrow">SIMULATION ONLY</span><p>One model of the board: other components, the enclosure and cables are not in it, ground layers are assumed stitched and matching parts are ideal. Bench tuning in the final enclosure and radiated and regulatory testing remain mandatory.</p><a href="https://github.com/andenore/CopperScript/blob/main/docs/pcb-antenna-synthesis-research.md">Read the synthesis research note ↗</a></div></div>
       <div class="showcase-links"><a class="text-link" href="https://github.com/andenore/CopperScript/blob/main/docs/language-reference.md#trace-antenna-synthesis">Read the antenna constraint reference ↗</a><a class="text-link" href="assets/antenna-synthesis.json">Inspect the recorded curves ↗</a><a class="text-link" href="https://github.com/andenore/CopperScript/tree/main/examples/antenna_synthesis">Run the example ↗</a></div>
     </div></section>
 

@@ -219,7 +219,7 @@ if (navigator.clipboard && window.isSecureContext) {
     root.querySelectorAll("[data-design]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.design === key)));
   }
 
-  fetch("assets/antenna-synthesis.json?v=20261107-rev3").then(r => r.ok ? r.json() : Promise.reject(r.status)).then(data => {
+  fetch("assets/antenna-synthesis.json?v=20261110-rev6").then(r => r.ok ? r.json() : Promise.reject(r.status)).then(data => {
     const controls = document.getElementById("antenna-controls");
     controls.hidden = false;
     controls.querySelectorAll("[data-design]").forEach(button => button.addEventListener("click", () => show(data, button.dataset.design)));
