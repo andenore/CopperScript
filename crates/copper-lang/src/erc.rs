@@ -878,8 +878,8 @@ enum Rail {
         voltage: Quantity,
         text: String,
     },
-    /// An explicit `io_supply` that could not be evaluated.
-    Unresolved(String),
+    /// An explicit `io_supply` that could not be evaluated: (reference, reason).
+    Unresolved(String, String),
 }
 
 /// Resolve a pin's I/O rail: its `io_supply` first, then the supply pads of
@@ -894,7 +894,7 @@ fn io_rail(
     if let Some(reference) = &profile.io_supply {
         return match context.reference_voltage(component, part, reference) {
             Ok(voltage) => Rail::Resolved { text: format!("io_supply {reference} = {voltage}"), voltage },
-            Err(reason) => Rail::Unresolved(format!("io_supply {reference} cannot be evaluated: {reason}")),
+            Err(reason) => Rail::Unresolved(reference.clone(), reason),
         };
     }
     let Some(device) = context.device_of(part) else { return Rail::Unknown };
@@ -959,6 +959,18 @@ impl LogicPin<'_> {
         resolve_level(context, self.component, self.part, level).ok()
     }
 
+    /// A pin that may be an input instead: its overvoltage on another pin that
+    /// can itself drive the net depends on which of the two is the output.
+    fn may_be_input(&self) -> bool {
+        self.profile.directions.contains(&Direction::Bidirectional)
+            || self.profile.directions.contains(&Direction::Input)
+    }
+
+    fn can_drive(&self) -> bool {
+        self.profile.directions.contains(&Direction::Output)
+            || self.profile.directions.contains(&Direction::Bidirectional)
+    }
+
     fn high_voltage(&self) -> Option<(&Quantity, &str)> {
         match &self.rail {
             Rail::Resolved { voltage, text } => Some((voltage, text)),
@@ -994,9 +1006,28 @@ fn high_overvoltage(
     derivation: &str,
     receiver: &Endpoint,
     excess: HighExcess,
+    conditional: bool,
 ) -> Diagnostic {
-    let prefix = format!("{source} takes {net} to {voltage} ({derivation}), which");
     let subject = receiver.to_string();
+    if conditional {
+        // Either pin may be the output: the excess exists only if `source` drives.
+        let limit = match excess {
+            HighExcess::Absolute { maximum_text } => format!("absolute maximum {maximum_text}"),
+            HighExcess::OperatingSoft { maximum, .. } => format!("operating maximum {maximum}"),
+            HighExcess::OperatingHard { maximum } => format!("maximum {maximum}"),
+        };
+        return Diagnostic::warning(
+            "LOGIC_HIGH_OVERVOLTAGE",
+            format!(
+                "{source} would take {net} to {voltage} ({derivation}) if it is configured as an output, which exceeds the {limit} of {receiver}"
+            ),
+            subject,
+        )
+        .hint(Some(format!(
+            "keep {source} an input, or use a level shifter; declare the input thresholds (vih, vil) to check that direction"
+        )));
+    }
+    let prefix = format!("{source} takes {net} to {voltage} ({derivation}), which");
     let diagnostic = match excess {
         HighExcess::Absolute { maximum_text } => Diagnostic::error(
             "LOGIC_HIGH_OVERVOLTAGE",
@@ -1022,6 +1053,7 @@ fn high_overvoltage(
 /// Logic-level compatibility between the pins of nets without a declared supply.
 fn check_logic_levels(context: &Context) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
+    let mut unresolved: BTreeSet<(String, String)> = BTreeSet::new();
     for net in &context.board.nets {
         if context.board.supplies.iter().any(|supply| supply.net == net.name) {
             continue;
@@ -1048,17 +1080,24 @@ fn check_logic_levels(context: &Context) -> Vec<Diagnostic> {
             continue;
         }
         for pin in &pins {
-            if let Rail::Unresolved(reason) = &pin.rail {
+            // One diagnostic per component and reference, not one per pin.
+            if let Rail::Unresolved(reference, reason) = &pin.rail
+                && unresolved.insert((pin.component.reference.clone(), reference.clone()))
+            {
                 diagnostics.push(Diagnostic::error(
                     "LOGIC_LEVEL_UNRESOLVED",
-                    format!("{reason}; logic levels of this pin on {} are not checked", net.name),
+                    format!(
+                        "io_supply {reference} cannot be evaluated: {reason}; logic levels of {} pins on this rail are not checked",
+                        pin.component.reference
+                    ),
                     pin.endpoint.to_string(),
                 ));
             }
             if let Some(levels) = &pin.profile.logic_levels {
                 for (name, level) in levels.declared() {
-                    if let LogicLevel::Rail(_) = level
+                    if let LogicLevel::Rail(rail) = level
                         && let Err(reason) = resolve_level(context, pin.component, pin.part, level)
+                        && unresolved.insert((pin.component.reference.clone(), rail.reference.clone()))
                     {
                         diagnostics.push(Diagnostic::error(
                             "LOGIC_LEVEL_UNRESOLVED",
@@ -1079,7 +1118,23 @@ fn check_logic_levels(context: &Context) -> Vec<Diagnostic> {
                         &derivation,
                         &receiver.endpoint,
                         excess,
+                        false,
                     ));
+                }
+                if let Some((needed, needed_text)) = receiver.level(context, |levels| &levels.vih)
+                    && voltage.base_value() < needed.base_value()
+                {
+                    diagnostics.push(
+                        Diagnostic::error(
+                            "LOGIC_HIGH_TOO_LOW",
+                            format!(
+                                "a pull-up holds {} high at {voltage} ({derivation}), below the input-high threshold vih {needed_text} of {}",
+                                net.name, receiver.endpoint
+                            ),
+                            receiver.endpoint.to_string(),
+                        )
+                        .hint(Some("pull up to the receiver's I/O rail or use a level shifter".to_owned())),
+                    );
                 }
             }
         }
@@ -1108,6 +1163,7 @@ fn check_logic_levels(context: &Context) -> Vec<Diagnostic> {
                         derivation,
                         &receiver.endpoint,
                         excess,
+                        driver.may_be_input() && receiver.can_drive(),
                     ));
                 }
                 if let Some((driven, driven_text)) = &output_high

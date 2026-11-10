@@ -365,9 +365,18 @@ driver's, and both sides must resolve. There is one diagnostic per driver,
 receiver and code. Messages name both pins, the net and the numbers with their
 derivation.
 
+ERC cannot know which way a bidirectional pin is used. When a driver that may
+also be an input (`bidirectional`) exceeds the limit of a pin that can itself
+drive the net (`output` or `bidirectional`), `LOGIC_HIGH_OVERVOLTAGE` is a
+warning that says the excess exists only if the first pin is configured as an
+output. Against an input-only pin the severities in the table apply.
+`LOGIC_LEVEL_UNRESOLVED` is reported once per component and reference, not
+once per pin.
+
 A resistor from a signal net to a net with a declared non-zero supply is a
 pull-up. Its supply voltage is a high level on the net and is checked against
-the limits of every pin on it with `LOGIC_HIGH_OVERVOLTAGE`, so an open-drain
+the limits of every pin on it with `LOGIC_HIGH_OVERVOLTAGE`, and against every
+declared `vih` with `LOGIC_HIGH_TOO_LOW`, so an open-drain
 pin gets a high level only through such a resistor. A net with resistors to
 supplies of different voltages (a divider or bias network, including one to
 ground) has no single high level and is not checked this way.

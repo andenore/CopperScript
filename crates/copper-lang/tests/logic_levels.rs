@@ -318,3 +318,82 @@ fn declared_fields_reach_the_ir_and_absent_fields_do_not() {
     let json = Dumps::compact().dumps(&part_value(part));
     assert!(!json.contains("io_supply") && !json.contains("logic_levels"), "{json}");
 }
+
+const GPIO: (&str, &str) = (
+    "gpio",
+    r#"part Mcu {
+    pin IO { number = "1"; domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull"; io_supply = VDD; }
+    pin IO2 { number = "3"; domains = "digital"; directions = "bidirectional"; drive_modes = "push_pull"; io_supply = VDD; }
+    pin VDD { number = "2"; domains = "power"; directions = "input"; }
+}"#,
+);
+
+#[test]
+fn a_bidirectional_pin_on_a_lower_voltage_output_is_only_a_warning() {
+    // Either pin may be the output, so the 3.3 V level exists only if the GPIO drives.
+    let tx = r#"part Tx {
+    pin OUT { number = "1"; domains = "digital"; directions = "output"; drive_modes = "push_pull"; voltage_max = 1.9V; }
+}"#;
+    let board = r#"
+    component U1: p.Mcu;
+    component U2: p.Tx;
+    supply V3V3 { voltage = 3.3V; external = true; }
+    net V3V3 { U1.VDD; }
+    net SIG { U1.IO; U2.OUT; }
+"#;
+    let found = logic_diagnostics("bidirectional-output", &[GPIO, ("tx", tx)], board);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!((found[0].code.as_str(), found[0].severity), ("LOGIC_HIGH_OVERVOLTAGE", Severity::Warning));
+    assert!(found[0].message.contains("if it is configured as an output"), "{}", found[0].message);
+}
+
+#[test]
+fn a_bidirectional_pin_above_an_input_only_pin_is_an_error() {
+    let rx = receiver("voltage_max = 1.8V;");
+    let board = r#"
+    component U1: p.Mcu;
+    component U2: p.Rx;
+    supply V3V3 { voltage = 3.3V; external = true; }
+    net V3V3 { U1.VDD; U2.VDD; }
+    net SIG { U1.IO; U2.IN; }
+"#;
+    let found = logic_diagnostics("bidirectional-input", &[GPIO, ("rx", &rx)], board);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!((found[0].code.as_str(), found[0].severity), ("LOGIC_HIGH_OVERVOLTAGE", Severity::Error));
+}
+
+#[test]
+fn a_pull_up_below_the_input_high_threshold_is_an_error() {
+    let rx = receiver("io_supply = VDD; vih = \"0.7*VDD\";");
+    let resistor = r#"part R {
+    category = "passive.resistor";
+    pin P1 { number = "1"; domains = "analog"; directions = "passive"; }
+    pin P2 { number = "2"; domains = "analog"; directions = "passive"; }
+}"#;
+    let board = r#"
+    component U2: p.Rx;
+    component R1: p.R;
+    supply V3V3 { voltage = 3.3V; external = true; }
+    supply V1V8 { voltage = 1.8V; external = true; }
+    net V3V3 { U2.VDD; }
+    net V1V8 { R1.P1; }
+    net SIG { U2.IN; R1.P2; }
+"#;
+    let found = logic_diagnostics("pull-up-vih", &[("rx", &rx), ("r", resistor)], board);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!((found[0].code.as_str(), found[0].severity), ("LOGIC_HIGH_TOO_LOW", Severity::Error));
+    for needle in ["pull-up", "1.8 V", "2.31 V", "U2.IN"] {
+        assert!(found[0].message.contains(needle), "{needle}: {}", found[0].message);
+    }
+}
+
+#[test]
+fn an_unresolved_rail_is_reported_once_per_component() {
+    let rx = "part Rx {\n    pin IN { number = \"1\"; domains = \"digital\"; directions = \"input\"; }\n    pin IN2 { number = \"2\"; domains = \"digital\"; directions = \"input\"; }\n}";
+    let board =
+        "    component U1: p.Mcu;\n    component U2: p.Rx;\n    net A { U1.IO; U2.IN; }\n    net B { U1.IO2; U2.IN2; }";
+    let found = logic_diagnostics("unresolved-once", &[GPIO, ("rx", rx)], board);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].code, "LOGIC_LEVEL_UNRESOLVED");
+    assert!(found[0].message.contains("U1 pins on this rail"), "{}", found[0].message);
+}
