@@ -144,6 +144,71 @@ impl fmt::Display for RelativeVoltage {
     }
 }
 
+/// A logic threshold that follows the I/O rail: `scale * REF + offset`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RailLevel {
+    pub reference: String,
+    pub scale: Decimal,
+    pub offset: Quantity,
+}
+
+impl RailLevel {
+    /// The threshold for a rail at `reference` volts.
+    pub fn resolve(&self, reference: &Quantity) -> Quantity {
+        let scaled = reference.base_value().mul(&self.scale).expect("voltages scale within the context");
+        let base = scaled.add(self.offset.base_value()).expect("voltages add within the context");
+        Quantity::from_base(Dimension::Voltage, base, "V").expect("volts")
+    }
+}
+
+impl fmt::Display for RailLevel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut text = if self.scale == Decimal::from_i64(1) {
+            self.reference.clone()
+        } else {
+            format!("{}*{}", self.scale.normalize().expect("a scale normalizes").to_fixed_string(), self.reference)
+        };
+        let offset = self.offset.base_value();
+        if !offset.is_zero() {
+            let sign = if offset.is_negative() { "-" } else { "+" };
+            let magnitude = Quantity::from_base(Dimension::Voltage, offset.abs(), self.offset.display_unit())
+                .expect("a voltage offset keeps a voltage unit");
+            text = format!("{text}{sign}{}", plain_voltage(&magnitude));
+        }
+        formatter.write_str(&text)
+    }
+}
+
+/// One logic threshold: a fixed voltage or a rail-relative level.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LogicLevel {
+    Fixed(Quantity),
+    Rail(RailLevel),
+}
+
+/// Optional logic thresholds of a pin or pad: input-high minimum, input-low
+/// maximum, output-high minimum and output-low maximum.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LogicLevels {
+    pub vih: Option<LogicLevel>,
+    pub vil: Option<LogicLevel>,
+    pub voh: Option<LogicLevel>,
+    pub vol: Option<LogicLevel>,
+}
+
+impl LogicLevels {
+    pub fn is_empty(&self) -> bool {
+        self.vih.is_none() && self.vil.is_none() && self.voh.is_none() && self.vol.is_none()
+    }
+
+    /// Every declared threshold with its property name.
+    pub fn declared(&self) -> impl Iterator<Item = (&'static str, &LogicLevel)> {
+        [("vih", &self.vih), ("vil", &self.vil), ("voh", &self.voh), ("vol", &self.vol)]
+            .into_iter()
+            .filter_map(|(name, level)| level.as_ref().map(|level| (name, level)))
+    }
+}
+
 /// One bound of a quantity range.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Bound {
@@ -185,6 +250,10 @@ pub struct ElectricalProfile {
     pub current: Option<QuantityRange>,
     /// Absolute-maximum ratings; `voltage` stays the operating range.
     pub absolute_voltage: Option<QuantityRange>,
+    /// The pin or pad of the same part or device whose supply is this pin's I/O rail.
+    pub io_supply: Option<String>,
+    /// Logic thresholds; `None` when none is declared.
+    pub logic_levels: Option<LogicLevels>,
 }
 
 impl ElectricalProfile {
@@ -197,6 +266,8 @@ impl ElectricalProfile {
             voltage: None,
             current: None,
             absolute_voltage: None,
+            io_supply: None,
+            logic_levels: None,
         }
     }
 

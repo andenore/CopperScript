@@ -258,6 +258,20 @@ fn relative_limit(term: &str) -> Option<(String, Option<Offset>)> {
     }
 }
 
+/// The signed voltage offset of a relative limit; absent means zero.
+fn offset_quantity(tail: Option<Offset>, label: &str, location: &Location) -> Result<Quantity> {
+    match tail {
+        None => Ok(quantity_of(Dimension::Voltage, "0", "V")),
+        Some((sign, number, unit)) => {
+            if !Dimension::Voltage.units().iter().any(|(name, _)| *name == unit) {
+                return Err(error("CMP120", format!("{label} offset must use V or mV"), location));
+            }
+            let signed = if sign == '+' { number } else { format!("-{number}") };
+            Ok(quantity_of(Dimension::Voltage, &signed, &unit))
+        }
+    }
+}
+
 /// `_voltage_limit`: a fixed voltage or `"PAD[+|-]OFFSET"`, optionally capped.
 fn voltage_limit(value: Option<&Scalar>, label: &str, location: &Location) -> Result<Option<Bound>> {
     let Some(value) = value else { return Ok(None) };
@@ -288,17 +302,7 @@ fn voltage_limit(value: Option<&Scalar>, label: &str, location: &Location) -> Re
             if relative.is_some() {
                 return Err(error("CMP120", usage, location));
             }
-            let offset = match tail {
-                None => quantity_of(Dimension::Voltage, "0", "V"),
-                Some((sign, number, unit)) => {
-                    if !Dimension::Voltage.units().iter().any(|(name, _)| *name == unit) {
-                        return Err(error("CMP120", format!("{label} offset must use V or mV"), location));
-                    }
-                    let signed = if sign == '+' { number } else { format!("-{number}") };
-                    quantity_of(Dimension::Voltage, &signed, &unit)
-                }
-            };
-            relative = Some((reference, offset));
+            relative = Some((reference, offset_quantity(tail, label, location)?));
         } else {
             return Err(error("CMP120", usage, location));
         }
@@ -346,6 +350,71 @@ fn absolute_voltage_range(
     Ok(Some(QuantityRange::new(minimum, maximum, "absolute")))
 }
 
+/// One logic threshold: a fixed voltage, or a quoted `"[SCALE*]PAD[+|-]OFFSET"`.
+fn logic_level(value: Option<&Scalar>, label: &str, location: &Location) -> Result<Option<LogicLevel>> {
+    let Some(value) = value else { return Ok(None) };
+    if let Scalar::Quantity { .. } = value {
+        let compiled = quantity(value, location)?;
+        if !is_voltage(&compiled) {
+            return Err(error("CMP120", format!("{label} must use V or mV"), location));
+        }
+        return Ok(Some(LogicLevel::Fixed(compiled)));
+    }
+    let usage = format!(
+        "{label} must be a voltage such as 2.0V or a rail-relative level such as \"0.7*VDD\", \"VDD-0.4V\" or \"VDD\""
+    );
+    let Scalar::Str(text) = value else { return Err(error("CMP120", usage, location)) };
+    let text = trim_space(text);
+    if let Some((number, unit)) = fixed_limit(text) {
+        if !Dimension::Voltage.units().iter().any(|(name, _)| *name == unit) {
+            return Err(error("CMP120", usage, location));
+        }
+        return Ok(Some(LogicLevel::Fixed(quantity_of(Dimension::Voltage, &number, &unit))));
+    }
+    let (scale, rest) = match leading_number(text, false) {
+        Some((number, after)) => {
+            let Some(rest) = trim_space(after).strip_prefix('*') else { return Err(error("CMP120", usage, location)) };
+            (Decimal::parse(number).expect("source numbers are valid decimals"), rest)
+        }
+        None => (Decimal::from_i64(1), text),
+    };
+    if scale.is_zero() {
+        return Err(error("CMP120", format!("{label} scale must be greater than zero"), location));
+    }
+    let Some((reference, tail)) = relative_limit(rest) else { return Err(error("CMP120", usage, location)) };
+    let offset = offset_quantity(tail, label, location)?;
+    Ok(Some(LogicLevel::Rail(RailLevel { reference, scale, offset })))
+}
+
+/// `vih`, `vil`, `voh` and `vol`; `None` when none is declared.
+fn logic_levels(attributes: &Attributes, location: &Location) -> Result<Option<LogicLevels>> {
+    let levels = LogicLevels {
+        vih: logic_level(attributes.get("vih"), "vih", location)?,
+        vil: logic_level(attributes.get("vil"), "vil", location)?,
+        voh: logic_level(attributes.get("voh"), "voh", location)?,
+        vol: logic_level(attributes.get("vol"), "vol", location)?,
+    };
+    if let (Some(LogicLevel::Fixed(low)), Some(LogicLevel::Fixed(high))) = (&levels.vil, &levels.vih)
+        && high.base_value() < low.base_value()
+    {
+        return Err(error("CMP121", format!("vil {low} exceeds vih {high}"), location));
+    }
+    Ok((!levels.is_empty()).then_some(levels))
+}
+
+/// Pins and pads that `io_supply` and rail-relative logic levels name.
+pub fn logic_level_references(profile: Option<&ElectricalProfile>) -> Vec<String> {
+    let Some(profile) = profile else { return Vec::new() };
+    let mut references: Vec<String> = profile.io_supply.iter().cloned().collect();
+    if let Some(levels) = &profile.logic_levels {
+        references.extend(levels.declared().filter_map(|(_, level)| match level {
+            LogicLevel::Rail(rail) => Some(rail.reference.clone()),
+            LogicLevel::Fixed(_) => None,
+        }));
+    }
+    references
+}
+
 pub fn relative_limit_references(profile: Option<&ElectricalProfile>) -> Vec<String> {
     let Some(absolute) = profile.and_then(|profile| profile.absolute_voltage.as_ref()) else { return Vec::new() };
     [&absolute.minimum, &absolute.maximum]
@@ -389,6 +458,8 @@ pub fn electrical_profile(attributes: &Attributes, location: &Location) -> Resul
     let operating = voltage_range(attributes, location)?;
     let traits = csv_names(attributes.get("traits").unwrap_or(&empty()), "electrical traits", location)?;
     let absolute_voltage = absolute_voltage_range(attributes, operating.as_ref(), location)?;
+    let io_supply = optional_string(attributes.get("io_supply"), "io_supply", location)?;
+    let logic_levels = logic_levels(attributes, location)?;
     Ok(ElectricalProfile {
         domains: domains.into_iter().collect(),
         directions: directions.into_iter().collect(),
@@ -397,6 +468,8 @@ pub fn electrical_profile(attributes: &Attributes, location: &Location) -> Resul
         voltage: operating,
         current: None,
         absolute_voltage,
+        io_supply,
+        logic_levels,
     })
 }
 
@@ -488,6 +561,11 @@ pub fn compile_device(document: &Document, qualified_name: &str) -> Result<Devic
                         "voltage_max",
                         "absolute_min",
                         "absolute_max",
+                        "io_supply",
+                        "vih",
+                        "vil",
+                        "voh",
+                        "vol",
                         "when",
                     ],
                     location,
@@ -764,6 +842,15 @@ pub fn compile_device(document: &Document, qualified_name: &str) -> Result<Devic
                 ));
             }
         }
+        for reference in logic_level_references(Some(&pad.profile)) {
+            if !pads.contains_key(&reference) {
+                return Err(error(
+                    "CMP127",
+                    format!("pad {} I/O rail references unknown device pad {}", repr(&pad.name), repr(&reference)),
+                    location,
+                ));
+            }
+        }
         if let Some(domain) = &pad.power_domain
             && !power_domains.contains_key(domain)
         {
@@ -914,6 +1001,11 @@ pub fn compile_part(
                         "voltage_max",
                         "absolute_min",
                         "absolute_max",
+                        "io_supply",
+                        "vih",
+                        "vil",
+                        "voh",
+                        "vol",
                         "connection",
                         "required_net_traits",
                         "parallel_power_group",
@@ -940,6 +1032,11 @@ pub fn compile_part(
                     "voltage_max",
                     "absolute_min",
                     "absolute_max",
+                    "io_supply",
+                    "vih",
+                    "vil",
+                    "voh",
+                    "vol",
                 ]
                 .iter()
                 .any(|name| attributes.contains_key(*name));
@@ -1072,14 +1169,30 @@ pub fn compile_part(
                 ));
             }
         }
+        let unknown_reference = |reference: &String| {
+            let known = pins.contains_key(reference)
+                || device_definition.is_some_and(|device| device.pads.contains_key(reference));
+            !known && (resolved_device.is_none() || device_definition.is_some())
+        };
         for reference in relative_limit_references(pin.profile.as_ref()) {
-            let known = pins.contains_key(&reference)
-                || device_definition.is_some_and(|device| device.pads.contains_key(&reference));
-            if !known && (resolved_device.is_none() || device_definition.is_some()) {
+            if unknown_reference(&reference) {
                 return Err(error(
                     "CMP122",
                     format!(
                         "pin {} voltage limit references unknown pin or device pad {}",
+                        repr(&pin.name),
+                        repr(&reference)
+                    ),
+                    location,
+                ));
+            }
+        }
+        for reference in logic_level_references(pin.profile.as_ref()) {
+            if unknown_reference(&reference) {
+                return Err(error(
+                    "CMP127",
+                    format!(
+                        "pin {} I/O rail references unknown pin or device pad {}",
                         repr(&pin.name),
                         repr(&reference)
                     ),

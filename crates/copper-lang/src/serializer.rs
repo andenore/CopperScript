@@ -59,6 +59,21 @@ fn bound_value(bound: &Option<Bound>) -> Value {
     }
 }
 
+fn logic_level_value(level: &LogicLevel) -> Value {
+    match level {
+        LogicLevel::Fixed(quantity) => quantity_value(quantity),
+        LogicLevel::Rail(rail) => object(vec![
+            ("reference", text(&rail.reference)),
+            ("scale", text(&rail.scale.decimal_text())),
+            ("offset", quantity_value(&rail.offset)),
+        ]),
+    }
+}
+
+fn logic_levels_value(levels: &LogicLevels) -> Value {
+    object(levels.declared().map(|(name, level)| (name, logic_level_value(level))).collect())
+}
+
 fn condition_value(condition: &Option<Condition>) -> Value {
     condition.as_ref().map(|condition| string_map(&condition.selections)).unwrap_or(Value::Null)
 }
@@ -86,6 +101,12 @@ fn profile_value(profile: Option<&ElectricalProfile>) -> Value {
     ];
     if profile.absolute_voltage.is_some() {
         result.push(("absolute_voltage", range_value(&profile.absolute_voltage)));
+    }
+    if let Some(io_supply) = &profile.io_supply {
+        result.push(("io_supply", text(io_supply)));
+    }
+    if let Some(levels) = &profile.logic_levels {
+        result.push(("logic_levels", logic_levels_value(levels)));
     }
     object(result)
 }
