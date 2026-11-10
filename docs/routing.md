@@ -34,6 +34,15 @@ commit, pour re-check, congestion); `land_closure_native_drc`;
 plane check); `export`. `--stop-after placement` and `--checkpoint-dir` /
 `--reuse-placement` cut a run at the placement boundary.
 
+With `--progress`, a run also writes `<report>.timings.json` beside the report:
+wall-clock seconds per stage (each placement-feedback trial separately) and
+`total_s`. Stages nest, so a `global_route` entry contains its
+`global_iteration_N` entries and the entries do not sum to the total. The
+timings stay out of the report itself, whose digest is recorded in the summary.
+The unified router's `seconds` on its progress events is the time since its
+previous timed event. `copper bench` copies the timings into each board's
+`phases`.
+
 - **Fixed copper first.** Hard macros (including library fanout macros),
   required via-in-pad arrays, user-locked copper and source keepouts are
   materialized before routing and never move.

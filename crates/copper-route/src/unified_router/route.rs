@@ -39,6 +39,27 @@ fn emit(on_progress: &mut Option<&mut dyn Progress>, phase: &str, event: &str, d
     }
 }
 
+/// Wall-clock laps for the `seconds` of progress events: operational telemetry
+/// only, never part of a routing result. It reads the clock only when a
+/// progress observer is installed, so the browser build (which has none and
+/// cannot call `Instant::now()`) never touches it.
+struct Laps(Option<Instant>);
+
+impl Laps {
+    fn new(on_progress: &Option<&mut dyn Progress>) -> Self {
+        Laps(on_progress.is_some().then(Instant::now))
+    }
+
+    /// Seconds since the previous lap (or the start), to the microsecond.
+    fn take(&mut self) -> Value {
+        let Some(last) = &mut self.0 else { return Value::Float(0.0) };
+        let now = Instant::now();
+        let seconds = now.duration_since(*last).as_secs_f64();
+        *last = now;
+        Value::Float((seconds * 1e6).round() / 1e6)
+    }
+}
+
 /// `_with`: `board` plus the accepted copper of every net, by name.
 fn with_copper(board: &PhysicalBoard, accepted: &Accepted) -> PhysicalBoard {
     let mut names: Vec<&String> = accepted.keys().collect();
@@ -673,6 +694,7 @@ pub fn route_unified(
     }
     // A soft wall-clock deadline (D6: a result reached before it does not
     // depend on timing; one cut short can differ from Python's).
+    let mut laps = Laps::new(&on_progress);
     let deadline = options
         .time_budget_s
         .filter(|budget| *budget != 0.0)
@@ -823,7 +845,7 @@ pub fn route_unified(
         let finest = router.fine_plan.as_ref().expect("fine plan").uniform_nodes_at_finest;
         setup.push(("uniform_nodes_at_finest", int(finest)));
     }
-    setup.push(("seconds", Value::Float(0.0)));
+    setup.push(("seconds", laps.take()));
     emit(&mut on_progress, "unified_setup", "finished", setup);
     let mut seeded_iterations = 0;
     let mut remaining = None;
@@ -889,7 +911,7 @@ pub fn route_unified(
             ("accepted", int(accepted.len() as i64)),
             ("rejected", int(rejected.len() as i64)),
             ("conflicted", int(conflicts.len() as i64)),
-            ("seconds", Value::Float(0.0)),
+            ("seconds", laps.take()),
         ],
     );
     for round_index in 1..options.commit_rounds {
@@ -966,7 +988,7 @@ pub fn route_unified(
                 ("round", int(round_index + 1)),
                 ("adopted", Value::Bool(improved)),
                 ("seeded", Value::Bool(improved && seeded)),
-                ("seconds", Value::Float(0.0)),
+                ("seconds", laps.take()),
             ],
         );
         if !improved {
@@ -994,7 +1016,9 @@ pub fn route_unified(
         complete = adopted_complete;
         selected_diagnostics.extend(diagnostics);
         iterations += report.0;
-        emit(&mut on_progress, "unified_pour_recheck", "finished", report.1);
+        let mut details = report.1;
+        details.push(("seconds", laps.take()));
+        emit(&mut on_progress, "unified_pour_recheck", "finished", details);
     }
     if !bus_accepted.is_empty() {
         accepted = merge(&bus_accepted, &accepted);
@@ -1071,7 +1095,7 @@ pub fn route_unified(
                 ("tiles", int((map.nx * map.ny) as i64)),
                 ("hot_tiles", int(hot as i64)),
                 ("failed_points", int(map.failed_points.len() as i64)),
-                ("seconds", Value::Float(0.0)),
+                ("seconds", laps.take()),
             ],
         );
         Some(map)
@@ -1155,7 +1179,7 @@ pub fn route_unified(
         vec![
             ("routed", int(accepted.len() as i64)),
             ("unrouted", int(unrouted.len() as i64)),
-            ("seconds", Value::Float(0.0)),
+            ("seconds", laps.take()),
         ],
     );
     let routing_fingerprint = fingerprint(&global_route.routing_fingerprint, &routed, &metrics);

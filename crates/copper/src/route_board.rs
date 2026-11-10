@@ -119,6 +119,30 @@ mod option_tests {
     use super::*;
 
     #[test]
+    fn timings_sidecar_follows_the_run_and_never_outlives_it() {
+        let directory = std::env::temp_dir().join(format!("copper-timings-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let report = directory.join("route-report.json");
+        let sidecar = directory.join("route-report.timings.json");
+        assert_eq!(sibling(&report, ".timings.json"), report.with_extension("timings.json"));
+        // No report written: nothing to describe.
+        write_timings_beside(&report, None);
+        assert!(!sidecar.exists());
+        std::fs::write(&report, "{}\n").unwrap();
+        let mut tracker = StageTracker::new(None);
+        tracker.observe("export", "started", Vec::new());
+        tracker.observe("export", "finished", Vec::new());
+        write_timings_beside(&report, Some(&tracker.state));
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(text.ends_with("}\n") && text.contains("\"export\""), "{text}");
+        // A later run without timings removes the stale sidecar; a missing one is fine.
+        write_timings_beside(&report, None);
+        assert!(!sidecar.exists());
+        write_timings_beside(&report, None);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
     fn compile_codes_with_non_ascii_text_are_not_codes() {
         assert_eq!(compile_code("board.copper:3:5: MAC005: missing binding"), Some("MAC005"));
         // Six bytes with a multibyte character across byte three: no code, no panic.
@@ -771,6 +795,9 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     }
     let mut stage_state: Option<StageState> = None;
     let outcome = route(&arguments, &design, &board_path, &diagnostics, out, &mut stage_state);
+    if outcome.is_ok() {
+        write_timings(&arguments, &design.electrical.name, stage_state.as_ref());
+    }
     match outcome {
         Ok(Finished::Done { lines, exit }) => {
             for line in lines {
@@ -1145,6 +1172,29 @@ fn route(
     })();
     *stage_state = tracker.map(|tracker| tracker.state);
     result
+}
+
+/// The wall-clock stage timings (`--progress` runs) beside the report, as
+/// `<report>.timings.json`. They stay out of the report itself: its digest is
+/// recorded in the summary and must not depend on the clock. A run without
+/// timings removes an older sidecar so it cannot be read as this run's. A
+/// failure to write them is ignored, as for any other telemetry.
+fn write_timings(arguments: &Arguments, board_name: &str, state: Option<&StageState>) {
+    let report = PathBuf::from(arguments.path("--report").unwrap_or_else(|| format!("{board_name}.route-report.json")));
+    write_timings_beside(&report, state);
+}
+
+fn write_timings_beside(report: &Path, state: Option<&StageState>) {
+    if !report.is_file() {
+        return;
+    }
+    let sidecar = sibling(report, ".timings.json");
+    let Some(state) = state else {
+        let _ = std::fs::remove_file(&sidecar);
+        return;
+    };
+    let content = copper_json::Dumps::new().indent(2).sort_keys(true).dumps(&state.timings_document()) + "\n";
+    let _ = copper_json::text::write_text(&sidecar, &content);
 }
 
 /// The pads of zone nets and of `GND`, in net order.

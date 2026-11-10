@@ -29,6 +29,7 @@ use crate::routeflow::{FeedbackIteration, FeedbackStatus, PlacementRoutingFeedba
 use crate::routing::GlobalRouterOptions;
 
 pub const ERROR_SCHEMA: &str = "copperscript-route-error/v1";
+pub const TIMINGS_SCHEMA: &str = "copperscript-route-timings/v1";
 
 /// `StageTracker`: wraps a progress callback and remembers where a run got to.
 pub struct StageTracker<'a> {
@@ -42,18 +43,65 @@ pub struct StageState {
     pub started: Vec<String>,
     pub finished: Vec<String>,
     pub origin: Instant,
+    /// Wall-clock seconds per stage label, summed over repeats, in first-seen order.
+    pub timings: Vec<(String, f64)>,
+    /// Stage labels that have started, with their start, until they finish.
+    running: Vec<(String, Instant)>,
 }
 
 impl<'a> StageTracker<'a> {
     pub fn new(callback: Option<&'a mut dyn Progress>) -> Self {
         StageTracker {
             callback,
-            state: StageState { started: Vec::new(), finished: Vec::new(), origin: Instant::now() },
+            state: StageState {
+                started: Vec::new(),
+                finished: Vec::new(),
+                origin: Instant::now(),
+                timings: Vec::new(),
+                running: Vec::new(),
+            },
         }
     }
 }
 
+/// The label a stage is timed under: its phase, plus the trial it belongs to
+/// when the event names one (`placement_feedback_trial_3`,
+/// `placement_global_trial_1_2`), so each trial is reported separately.
+fn stage_label(phase: &str, details: &[(&'static str, Value)]) -> String {
+    let number = |key: &str| {
+        details.iter().find_map(|(name, value)| match value {
+            Value::Int(number) if *name == key => Some(number.to_string()),
+            _ => None,
+        })
+    };
+    let mut label = phase.to_owned();
+    for key in ["index", "iteration", "trial"] {
+        if let Some(value) = number(key) {
+            label = format!("{label}_{value}");
+        }
+    }
+    label
+}
+
 impl StageState {
+    /// The `timings` of the timing sidecar: wall-clock seconds per stage plus
+    /// the run's `total_s`. Telemetry only; it is never written into the
+    /// report, whose digest must not depend on the clock.
+    pub fn timings_document(&self) -> Value {
+        let mut timings = Object::new();
+        for (label, seconds) in &self.timings {
+            timings.insert(label.clone(), Value::Float(crate::progress::round_seconds(*seconds)));
+        }
+        timings.insert(
+            "total_s".to_owned(),
+            Value::Float(crate::progress::round_seconds(self.origin.elapsed().as_secs_f64())),
+        );
+        let mut document = Object::new();
+        document.insert("schema".to_owned(), Value::from(TIMINGS_SCHEMA));
+        document.insert("timings".to_owned(), Value::Object(timings));
+        Value::Object(document)
+    }
+
     pub fn open_stages(&self) -> Vec<String> {
         let mut remaining = self.started.clone();
         for phase in &self.finished {
@@ -69,8 +117,18 @@ impl Progress for StageTracker<'_> {
     fn observe(&mut self, phase: &str, event: &str, details: Vec<(&'static str, Value)>) {
         if event == "started" {
             self.state.started.push(phase.to_owned());
+            self.state.running.push((stage_label(phase, &details), Instant::now()));
         } else if ["finished", "reused", "stopped", "blocked", "failed"].contains(&event) {
             self.state.finished.push(phase.to_owned());
+            let label = stage_label(phase, &details);
+            if let Some(position) = self.state.running.iter().rposition(|(running, _)| *running == label) {
+                let (label, began) = self.state.running.remove(position);
+                let seconds = began.elapsed().as_secs_f64();
+                match self.state.timings.iter_mut().find(|(known, _)| *known == label) {
+                    Some((_, total)) => *total += seconds,
+                    None => self.state.timings.push((label, seconds)),
+                }
+            }
         }
         if let Some(callback) = self.callback.as_mut() {
             callback.observe(phase, event, details);
@@ -397,6 +455,28 @@ mod tests {
         tracker.observe("b", "started", Vec::new());
         tracker.observe("a", "finished", Vec::new());
         assert_eq!(tracker.state.open_stages(), ["b"]);
+    }
+
+    #[test]
+    fn tracker_times_each_trial_and_sums_repeats() {
+        let trial = |index: i64| vec![("index", crate::progress::int(index))];
+        let mut tracker = StageTracker::new(None);
+        for index in [1, 2] {
+            tracker.observe("placement_feedback_trial", "started", trial(index));
+            tracker.observe("placement_feedback_trial", "finished", trial(index));
+        }
+        for _ in 0..2 {
+            tracker.observe("unified_direct", "started", Vec::new());
+            tracker.observe("unified_direct", "finished", Vec::new());
+        }
+        tracker.observe("never_started", "finished", Vec::new());
+        let labels: Vec<&str> = tracker.state.timings.iter().map(|(label, _)| label.as_str()).collect();
+        assert_eq!(labels, ["placement_feedback_trial_1", "placement_feedback_trial_2", "unified_direct"]);
+        assert!(tracker.state.timings.iter().all(|(_, seconds)| *seconds >= 0.0));
+        let document = tracker.state.timings_document();
+        let timings = document.get("timings").expect("timings");
+        assert!(matches!(timings.get("total_s"), Some(Value::Float(seconds)) if *seconds >= 0.0));
+        assert!(timings.get("placement_feedback_trial_2").is_some());
     }
 
     #[test]

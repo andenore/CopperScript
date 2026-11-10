@@ -6,7 +6,7 @@
    "tags": ["small", "browser", "synthetic"],
    "timeout_s": 30,
    "args": [
-    "--locked", "--offline", "--allow-proxy-footprints",
+    "--locked", "--offline", "--allow-proxy-footprints", "--progress",
     "--width-mm", "40", "--height-mm", "30", "--layers", "2",
     "--candidates", "1", "--feedback-iterations", "1", "--router-iterations", "3",
     "--congestion-feedback-trials", "0",
@@ -23,7 +23,7 @@
    "tags": ["small", "browser", "synthetic"],
    "timeout_s": 30,
    "args": [
-    "--locked", "--offline", "--allow-proxy-footprints",
+    "--locked", "--offline", "--allow-proxy-footprints", "--progress",
     "--width-mm", "40", "--height-mm", "30", "--layers", "2",
     "--candidates", "1", "--feedback-iterations", "1", "--router-iterations", "3",
     "--congestion-feedback-trials", "0",

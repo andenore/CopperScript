@@ -218,6 +218,19 @@ fn default_without_a_ball_array_is_the_plain_uniform_lattice_and_off_copper() {
     let keys = |e: &Events| setup(e).iter().map(|(k, _)| *k).collect::<IndexSet<_>>();
     assert_eq!(keys(&events), IndexSet::from(["nets", "grid", "seconds"]));
     assert_eq!(keys(&events), keys(&off_events));
+    // The events carry real wall-clock laps, and the routing does not depend on them.
+    let seconds: Vec<f64> = ["unified_setup", "unified_commit", "unified_route"]
+        .into_iter()
+        .flat_map(|phase| events.of(phase, "finished"))
+        .flat_map(|details| details.iter())
+        .filter(|(key, _)| *key == "seconds")
+        .map(|(_, value)| match value {
+            Value::Float(seconds) => *seconds,
+            other => panic!("seconds is not a float: {other:?}"),
+        })
+        .collect();
+    assert!(seconds.len() >= 3 && seconds.iter().all(|s| *s >= 0.0), "{seconds:?}");
+    assert!(seconds.iter().sum::<f64>() > 0.0, "{seconds:?}");
     // dense refines the QFN instead.
     let nested = router(&board, &dense());
     let factors: Vec<i64> = nested.lattice.blocks()[1..].iter().map(|b| b.factor).collect();

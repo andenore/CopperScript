@@ -296,7 +296,10 @@ pub fn run_board(board: &Board, out: &Path, options: &RunOptions) -> Result<Obje
     record.insert("status".to_owned(), Value::from(status));
     record.insert("route_status".to_owned(), document.get("status").cloned().unwrap_or(Value::Null));
     record.insert("summary".to_owned(), summary.clone());
-    record.insert("phases".to_owned(), Value::Object(phase_seconds(&document)));
+    // Wall-clock timings live beside the report, not in it (its digest is recorded).
+    let timings_text = std::fs::read_to_string(report.with_extension("timings.json")).ok();
+    let timings = timings_text.and_then(|text| copper_json::parse(&text).ok());
+    record.insert("phases".to_owned(), Value::Object(phase_seconds(timings.as_ref().unwrap_or(&document))));
     Ok(record)
 }
 

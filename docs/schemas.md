@@ -46,6 +46,7 @@ older versions, as `copperscript-assembly-lock` does.
 | `copperscript-route-board/v0.1` | `copper`, `copper-place`, `copper-report` | `copper-place/src/summary.rs`, `copper-report/src/issues.rs`, `copper-report/src/summary.rs` … |
 | `copperscript-route-error/v1` | `copper-route` | `copper-route/src/iteration_checkpoints.rs` |
 | `copperscript-route-summary/v1` | `copper-report`, `copper-route` | `copper-report/src/issues.rs`, `copper-report/src/summary.rs`, `copper-route/src/route_summary.rs` |
+| `copperscript-route-timings/v1` | `copper-route` | `copper-route/src/iteration_checkpoints.rs` |
 | `copperscript-routing-acceptance/v0.1` | `copper-route` | `copper-route/src/routing_acceptance.rs` |
 | `copperscript-routing-quality/v0.1` | `copper-route` | `copper-route/src/routing_metrics.rs` |
 | `copperscript-si-check/v0.1` | `copper-drc` | `copper-drc/src/signal_integrity.rs` |
