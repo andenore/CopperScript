@@ -11,7 +11,7 @@ use copper_lang::compiler::{LoadError, load_design};
 use copper_lang::footprints::FootprintResolver;
 use copper_lang::mechanical::NOT_IMPLEMENTED;
 use copper_lang::paths;
-use copper_pcb::physicalize::{Footprints, PhysicalOptions, physicalize};
+use copper_pcb::physicalize::{Footprints, physicalize};
 use copper_pcb::{Error, hard_macros, kicad_pcb, project, templates};
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
@@ -140,12 +140,16 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     };
     if parsed.flags.contains(&"--help") {
         let _ = writeln!(out, "{USAGE}\n\ngenerate a KiCad 8 PCB draft using resolved footprints");
+        let _ = writeln!(
+            out,
+            "\n--layers defaults to source requirements; an explicit count must match a declared stackup."
+        );
         return 0;
     }
     let layers = match parsed.layers.as_deref().map(str::trim) {
-        None => 2,
+        None => None,
         Some(text) => match text.parse::<i64>() {
-            Ok(value) if [2, 4, 6].contains(&value) => value,
+            Ok(value) if [2, 4, 6].contains(&value) => Some(value),
             Ok(value) => {
                 return usage_error(err, &format!("argument --layers: invalid choice: {value} (choose from 2, 4, 6)"));
             }
@@ -200,11 +204,13 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     }
     let generated = (|| -> Result<kicad_pcb::Manifest, Error> {
         let mechanical = design.mechanical.is_some();
-        let options = PhysicalOptions::new(
-            if mechanical { 100.0 } else { width },
-            if mechanical { 80.0 } else { height },
+        let options = copper_pcb::configuration::physical_options(
+            &design,
+            (if mechanical { 100.0 } else { width }, if mechanical { 80.0 } else { height }),
             layers,
             &profile,
+            locked,
+            offline,
         )?;
         let mut board_physical = if parsed.flags.contains(&"--allow-proxy-footprints") {
             physicalize(&design, Footprints::Proxy, &options, locked, offline)?

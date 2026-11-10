@@ -10,7 +10,7 @@ The installed CLI guide is the common workflow bootstrap across repositories.
 | Author board silkscreen or change default branding | [Silkscreen](silkscreen.md) |
 | Arch the corners of RF, analog or tuned pair nets | [Arched corners](language-reference.md#arched-corners) |
 | Run check, compile, placement or export | [CLI workflow](cli-workflow.md) |
-| Configure a board build | [Make builds](make-builds.md), [examples](../examples/README.md) |
+| Configure a board build | [Board configuration](board-configuration.md), [Make builds](make-builds.md), [examples](../examples/README.md) |
 | Find parts across dependencies | [Library context](library-context.md) |
 | Resolve or pin footprints | [Footprint dependencies](footprint-dependencies.md) |
 | Read compact reports or requirement coverage | [LLM workflow](llm-workflow.md) |

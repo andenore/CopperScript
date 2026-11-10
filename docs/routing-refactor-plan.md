@@ -156,6 +156,12 @@ DRC moved to `copper-pcb`, `copper-physical`, `copper-lang` and `copper-drc`
 
 ### Keep (core primitives)
 
+Source configuration follow-up (2026-11-10): move the editor's layer-selection
+policy into `copper-pcb::configuration`, shared by physical CLI commands and
+the editor. This resolves declared construction and layer requirements before
+placement; it adds no routing stage or recovery policy. See
+[board configuration](board-configuration.md) for ownership and migration.
+
 | Module | Role in new design |
 | --- | --- |
 | `physical`, `physicalize`, `compiler`, `parser`, ERC, backends | Unchanged: model, language and export |

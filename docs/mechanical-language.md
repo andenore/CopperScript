@@ -206,10 +206,10 @@ mechanical {
 
 Layer, order and property errors fail at compile time with source locations
 (`MEC006`; an unknown layer kind is `PAR014`). The stack-up lowers to
-`Stackup.physical_layers` during physicalization. The selected copper-layer
-count (`--layers`) must name exactly the declared copper layers; otherwise
-physicalization fails with the stack-up's location. A stack-up belongs to the
-board, so `board_profile` definitions cannot declare one.
+`Stackup.physical_layers` during physicalization. Physical commands derive the
+copper-layer count from this declaration when `--layers` is omitted. An explicit
+count must match exactly; a conflict fails with the stack-up's location. A
+stack-up belongs to the board, so `board_profile` definitions cannot declare one.
 
 When a stack-up is declared, the KiCad PCB export writes it to the board
 setup with KiCad's `dielectric 1`, `dielectric 2` … names. A dielectric

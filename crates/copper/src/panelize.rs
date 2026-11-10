@@ -16,7 +16,7 @@ use copper_lang::panel::Side;
 use copper_panel::compose::Point;
 use copper_panel::intent::{ANTENNA_TAB_MARGIN, BoardIntent, KeepClear, OpenEnd, Overhang, Radiator, side_of};
 use copper_pcb::antenna::{chosen_geometry, layout, resolve_sites};
-use copper_pcb::physicalize::{Footprints, PhysicalOptions, physicalize};
+use copper_pcb::physicalize::{Footprints, physicalize};
 
 use crate::option_parser::{self, flag, short_value, value};
 
@@ -34,7 +34,8 @@ fn board_intent(source: &Path, locked: bool, offline: bool) -> Result<BoardInten
             format!("{}: {message}", source.display())
         }
     };
-    let options = PhysicalOptions::new(100.0, 80.0, 2, "generic").map_err(fail)?;
+    let options = copper_pcb::configuration::physical_options(&bare, (100.0, 80.0), None, "generic", locked, offline)
+        .map_err(fail)?;
     let base = source.parent().map(Path::to_path_buf).unwrap_or_default();
     let mut resolver = FootprintResolver::new(&base, &[], false, locked, offline);
     let physical = physicalize(&bare, Footprints::Resolved(&mut resolver), &options, locked, offline).map_err(fail)?;

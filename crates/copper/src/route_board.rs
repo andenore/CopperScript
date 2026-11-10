@@ -24,7 +24,7 @@ use copper_lang::mechanical::NOT_IMPLEMENTED;
 use copper_lang::paths;
 use copper_pcb::Error;
 use copper_pcb::board::{PadReference, PhysicalBoard};
-use copper_pcb::physicalize::{Footprints, PhysicalOptions, physicalize};
+use copper_pcb::physicalize::{Footprints, physicalize};
 use copper_pcb::{hard_macros, templates};
 use copper_place::PlannerOptions;
 use copper_route::bench::unified_overrides;
@@ -354,7 +354,7 @@ fn nm_from_mm(text: &str, option: &str) -> Result<i64, Stop> {
 struct Arguments {
     parsed: Parsed,
     board: String,
-    layers: i64,
+    layers: Option<i64>,
     fab_profile: String,
     planner: PlannerArguments,
     width_mm: f64,
@@ -618,7 +618,7 @@ fn check_arguments(parsed: Parsed) -> Result<Arguments, Checked> {
         refinement_passes: get("--placement-refinement-passes"),
         spacing_passes: get("--escape-spacing-passes"),
     };
-    let layers = get("--layers");
+    let layers = parsed.value("--layers").map(|_| get("--layers"));
     let filled_copper_trials = get("--filled-copper-trials");
     let filled_copper_search_states = get("--filled-copper-search-states");
     let fab_profile = parsed.value("--fab-profile").unwrap_or("generic").to_owned();
@@ -742,6 +742,10 @@ pub fn run(argv: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     };
     if parsed.flag("--help") {
         let _ = writeln!(out, "{USAGE}\n\nattempt complete physical routing and run native DRC");
+        let _ = writeln!(
+            out,
+            "\n--layers defaults to source requirements; an explicit count must match a declared stackup."
+        );
         return 0;
     }
     let mut arguments = match check_arguments(parsed) {
@@ -858,11 +862,13 @@ fn route(
 ) -> Result<Finished, Stop> {
     let (locked, offline) = (arguments.flag("--locked"), arguments.flag("--offline"));
     let mechanical = design.mechanical.is_some();
-    let options = PhysicalOptions::new(
-        if mechanical { 100.0 } else { arguments.width_mm },
-        if mechanical { 80.0 } else { arguments.height_mm },
+    let options = copper_pcb::configuration::physical_options(
+        design,
+        (if mechanical { 100.0 } else { arguments.width_mm }, if mechanical { 80.0 } else { arguments.height_mm }),
         arguments.layers,
         &arguments.fab_profile,
+        locked,
+        offline,
     )?;
     let unknown_part = |error: Error| match &error {
         Error::Value(message) if message.starts_with("component ") && message.contains(" uses unknown part ") => {

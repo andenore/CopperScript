@@ -1,5 +1,12 @@
 # CLI design and review workflow
 
+Physical commands share source-driven layer selection: omit `--layers` to use
+the declared `mechanical.stackup`, or the smallest supported stack required by
+source constraints and the fabrication profile. An explicit count must agree
+with a declared stackup. See [board configuration](board-configuration.md) for
+the ownership of physical requirements, build preferences and invocation
+settings.
+
 For standalone physical assets, `copper compile-macro SOURCE.copper -o ASSET.json`
 lowers a `macro` definition with generated footprint digests. `--locked --offline`
 verifies cached dependency inventory. Boards can import and bind named Copper

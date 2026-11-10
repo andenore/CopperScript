@@ -83,8 +83,12 @@ stackup {
 }
 ```
 
-It lowers to `Stackup.physical_layers`; the selected `--layers` must name
-exactly the declared copper layers. The stack-up feeds impedance screening
+It lowers to `Stackup.physical_layers` and selects the copper layer count
+automatically. An explicit `--layers` must match the declared copper layers.
+Without a declared stack-up or explicit count, physical commands select the
+smallest supported stack accommodating source layer requirements and the
+fabrication profile; they do not invent dielectric properties. See
+[board configuration](board-configuration.md). The stack-up feeds impedance screening
 (see [signal-integrity screening](#signal-integrity-screening)) and the KiCad
 board stack-up. See [the mechanical language specification](mechanical-language.md#board-stack-up)
 for its validation rules.

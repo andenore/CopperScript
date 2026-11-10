@@ -13,7 +13,7 @@ use copper_lang::footprints::FootprintResolver;
 use copper_lang::mechanical::NOT_IMPLEMENTED;
 use copper_lang::paths;
 use copper_pcb::Error;
-use copper_pcb::physicalize::{Footprints, PhysicalOptions, physicalize};
+use copper_pcb::physicalize::{Footprints, physicalize};
 
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::option_parser::{self, flag, value};
@@ -51,12 +51,16 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             out,
             "{USAGE}\n\nscreen impedance, reference planes, layer groups and length-match groups before routing"
         );
+        let _ = writeln!(
+            out,
+            "\n--layers defaults to source requirements; an explicit count must match a declared stackup."
+        );
         return 0;
     }
     let layers = match parsed.value("--layers").map(str::trim) {
-        None => 2,
+        None => None,
         Some(text) => match text.parse::<i64>() {
-            Ok(value) if [2, 4, 6].contains(&value) => value,
+            Ok(value) if [2, 4, 6].contains(&value) => Some(value),
             Ok(value) => {
                 return usage_error(err, &format!("argument --layers: invalid choice: {value} (choose from 2, 4, 6)"));
             }
@@ -84,7 +88,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         }
     };
     let physical = (|| {
-        let options = PhysicalOptions::new(100.0, 80.0, layers, profile)?;
+        let options =
+            copper_pcb::configuration::physical_options(&design, (100.0, 80.0), layers, profile, locked, offline)?;
         if parsed.flag("--allow-proxy-footprints") {
             physicalize(&design, Footprints::Proxy, &options, locked, offline)
         } else {
