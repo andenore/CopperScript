@@ -123,7 +123,7 @@ Any `.copper` board can use the root recipes, not just registered examples:
 
 ```sh
 make SOURCE=examples/hierarchical_board/board.copper compile
-make SOURCE=path/to/my_board.copper route LAYERS=4 FAB_PROFILE=jlcpcb-four-layer
+make SOURCE=path/to/my_board.copper route FAB_PROFILE=jlcpcb-four-layer
 ```
 
 Use the default `EXAMPLE=valid` when overriding `SOURCE` to avoid carrying
@@ -134,10 +134,17 @@ settings-only Makefile such as:
 
 ```make
 SOURCE := board.copper
-LAYERS := 4
 FAB_PROFILE := jlcpcb-four-layer
 include make/board.mk
 ```
+
+Layer selection comes from the board's declared stackup and layer requirements,
+with fabrication presets supplying a compatible count when needed. The shared
+recipes leave `LAYERS` empty by default. `make LAYERS=4 ...` remains an explicit
+check/selection and cannot replace a conflicting source stackup. Use a compiler
+containing the source-configuration change (`c70ac72` or later). Physical
+stackups, planes and net rules belong in `.copper`; fabrication-preset selection
+and solver budgets remain build settings until their source syntax is supported.
 
 The independent project owns its manifest/lock and `build/` gitignore entry;
 it needs no example-specific script. `COPPER` selects the executable, and

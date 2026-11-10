@@ -1,4 +1,4 @@
-# Shared GNU Make rules: set SOURCE, layers and options before including.
+# Shared GNU Make rules: set SOURCE and invocation options before including.
 # Geometry and part identities belong in .copper, never in these recipes.
 .DEFAULT_GOAL := all
 BOARD_MK_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
@@ -8,7 +8,9 @@ PROJECT_ROOT ?= $(CURDIR)
 SOURCE ?= board.copper
 BOARD_NAME ?= $(basename $(notdir $(SOURCE)))
 OUT ?= $(PROJECT_ROOT)/build/$(BOARD_NAME)
-LAYERS ?= 2
+# Empty uses the source stackup/layer requirements. An explicit count remains
+# available for diagnostics and must agree with a declared physical stackup.
+LAYERS ?=
 FAB_PROFILE ?= generic
 RESOLVE_ARGS ?= --locked
 KICAD_CLI ?=
@@ -28,7 +30,8 @@ EDITOR_ARGS ?=
 KICAD_PYTHON ?= /usr/bin/python3
 
 _paths = $(if $(strip $(KICAD_CLI)),--kicad-cli "$(KICAD_CLI)") $(if $(strip $(KICAD_FOOTPRINTS)),--kicad-footprints "$(KICAD_FOOTPRINTS)")
-_physical_common = --layers $(LAYERS) --fab-profile $(FAB_PROFILE) \
+_layer_args = $(if $(strip $(LAYERS)),--layers $(LAYERS))
+_physical_common = $(_layer_args) --fab-profile $(FAB_PROFILE) \
  $(if $(strip $(PLACEMENT_TEMPLATES)),--placement-templates "$(PLACEMENT_TEMPLATES)") \
  $(if $(strip $(HARD_MACRO)),--hard-macro "$(HARD_MACRO)") \
  $(foreach macro,$(HARD_MACROS),--hard-macro "$(macro)")
