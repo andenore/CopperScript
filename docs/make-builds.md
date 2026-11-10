@@ -118,9 +118,9 @@ filler and checks it with its DRC, writing `native-drc.json`.
 the script does and writes `kicad-drc.json`; use it when KiCad's DRC is the
 check you want (it also covers courtyards and silkscreen) and to cross-check a
 native result. `run.json` records the mode (`verify`) and, besides the
-script's fields, a `schema` and the name of the DRC report (`drc_report`). A
-run from `--verify native` has no `kicad-drc.json`, so `copper editor-overlay`
-reports its native DRC evidence as missing.
+script's fields, a `schema` and the name of the DRC report (`drc_report`).
+`copper editor-overlay` reads the report `drc_report` names (`kicad-drc.json` when
+the manifest has none, as the script's runs do), so it accepts either mode.
 `make/release-build.sh` still expects `kicad-drc.json`, so a release today needs
 a `--verify kicad` build (or the script).
 

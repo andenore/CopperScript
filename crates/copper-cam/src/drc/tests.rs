@@ -228,3 +228,12 @@ fn opens_name_the_nearest_pads_of_a_spanning_tree() {
     links.sort();
     assert_eq!(links, [vec!["q1", "q2"], vec!["q2", "q3"]], "{report:#?}");
 }
+
+#[test]
+fn the_json_report_states_its_coordinate_unit() {
+    let board = parse_board(&text("", false), "test").unwrap();
+    let report = check(&board, &Rules::load(PROJECT, None).unwrap()).unwrap();
+    let json = report.to_json("test", &[]);
+    assert_eq!(json.get("coordinate_units"), Some(&copper_json::Value::from("mm")));
+    assert!(json.get("violations").is_some() && json.get("unconnected_items").is_some());
+}

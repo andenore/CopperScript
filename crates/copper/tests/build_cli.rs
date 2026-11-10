@@ -220,6 +220,8 @@ fn a_native_build_writes_a_manifest_that_binds_its_files() {
     assert_eq!(field(&report, "status").as_str(), Some("pass"));
     let drc = copper_json::parse(&std::fs::read_to_string(run.join("native-drc.json")).unwrap()).unwrap();
     assert_eq!(field(&drc, "violations").as_array().map(<[Value]>::len), Some(0));
+    // The overlay reads the unit from the report itself.
+    assert_eq!(field(&drc, "coordinate_units").as_str(), Some("mm"));
 }
 
 #[test]

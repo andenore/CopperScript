@@ -137,6 +137,7 @@ impl Report {
             ("schema", Value::from("copperscript-drc/v0.1")),
             ("source", Value::from(source)),
             ("rules", strings(rule_files)),
+            ("coordinate_units", Value::from("mm")),
             ("passed", Value::Bool(self.passed())),
             ("violations", entries(&self.violations)),
             ("unconnected_items", entries(&self.unconnected)),

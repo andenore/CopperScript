@@ -401,6 +401,21 @@ fn strip(text: &str) -> &str {
     text.trim_matches(copper_json::python_isspace)
 }
 
+/// The DRC report a build manifest binds: `drc_report` (written by `copper
+/// build`), else KiCad's `kicad-drc.json` as the build script names it. It must
+/// be a plain file name, so only a sibling of `run.json` is ever read.
+fn drc_report_name(run: &Value) -> Result<String> {
+    match manifest_get(run, "drc_report")? {
+        None => Ok("kicad-drc.json".to_owned()),
+        Some(Value::Str(name))
+            if !name.is_empty() && !name.contains(['/', '\\']) && name != ".." && paths::extension(name) == ".json" =>
+        {
+            Ok(name.clone())
+        }
+        Some(_) => value("routing manifest names an unusable DRC report"),
+    }
+}
+
 /// `export_overlay`: export only fixed sibling artefacts of a user-chosen
 /// build manifest; the returned path is the output as given.
 pub fn export_overlay(
@@ -413,7 +428,8 @@ pub fn export_overlay(
     let folder = run_path.parent().map(Path::to_path_buf).unwrap_or_default();
     let resolved_output = paths::resolve(output);
     let output_name = output.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-    let evidence_names = ["run.json", "board.editor-intent.json", "kicad-drc.json", "route-report.json"];
+    let evidence_names =
+        ["run.json", "board.editor-intent.json", "kicad-drc.json", "native-drc.json", "route-report.json"];
     if resolved_output.parent() != Some(folder.as_path())
         || paths::extension(&output_name) != ".json"
         || evidence_names.contains(&output_name.as_str())
@@ -515,7 +531,7 @@ pub fn export_overlay(
         ("reason", Value::from("No matching saved-board native DRC evidence")),
         ("remaining", Value::Array(Vec::new())),
     ]);
-    let report_path = folder.join("kicad-drc.json");
+    let report_path = folder.join(drc_report_name(&run)?);
     if report_path.is_file() {
         let (report, raw) = read_json(&report_path)?;
         let report_hash = sha256_hex(&raw);
@@ -648,7 +664,7 @@ impl RoutedOverlay {
         }
         let evidence = required(&result.data, "evidence")?;
         if required(evidence, "verified")? == &Value::Bool(true) {
-            let (report, report_raw) = read_json(&folder.join("kicad-drc.json"))?;
+            let (report, report_raw) = read_json(&folder.join(drc_report_name(&run)?))?;
             let report_hash = Value::from(sha256_hex(&report_raw));
             if manifest_get(&run, "filled_board_sha256")? != Some(&Value::from(pcb_hash.as_str()))
                 || manifest_get(&run, "native_drc_sha256")? != Some(&report_hash)
@@ -926,4 +942,90 @@ pub fn write_intent(
     let text = Dumps::new().indent(2).sort_keys(true).dumps(&data) + "\n";
     copper_json::text::write_text(path, &text)
         .map_err(|e| Error::Os(paths::python_os_error(&e, Some(&paths::display(path)))))
+}
+
+#[cfg(test)]
+mod drc_report_tests {
+    use super::*;
+
+    /// A probe that reports a board with nothing on it, matching the intent below.
+    struct Empty;
+
+    impl ProbeRunner for Empty {
+        fn run(&mut self, _: &Path, _: &Path) -> ProbeResult {
+            Ok((
+                0,
+                r#"{"layers":["F.Cu","B.Cu"],"poses":[],"tracks":[],"vias":[],"fills":[]}"#.to_owned(),
+                String::new(),
+            ))
+        }
+    }
+
+    const SHA: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    /// A build directory: the board, its intent, a DRC report named
+    /// `report_name` and a manifest that binds them (and names the report when
+    /// `named` is set, as `copper build` does).
+    fn directory(tag: &str, report_name: &str, report: &str, named: Option<&str>) -> PathBuf {
+        let folder = std::env::temp_dir().join(format!("copper-overlay-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let intent = format!(
+            r#"{{"schema":"{INTENT_SCHEMA}","source_revision":"{SHA}","electrical_digest":"{SHA}","physical_digest":"{SHA}","poses":[],"native_references":{{}},"tracks":[],"vias":[]}}"#
+        );
+        std::fs::write(folder.join("board.kicad_pcb"), "(kicad_pcb)").unwrap();
+        std::fs::write(folder.join("board.editor-intent.json"), &intent).unwrap();
+        std::fs::write(folder.join(report_name), report).unwrap();
+        let mut manifest = vec![
+            format!(r#""editor_intent_sha256":"{}""#, sha256_hex(intent.as_bytes())),
+            format!(r#""filled_board_sha256":"{}""#, sha256_hex(b"(kicad_pcb)")),
+            format!(r#""native_drc_sha256":"{}""#, sha256_hex(report.as_bytes())),
+        ];
+        if let Some(name) = named {
+            manifest.push(format!(r#""drc_report":"{name}""#));
+        }
+        std::fs::write(folder.join("run.json"), format!("{{{}}}", manifest.join(","))).unwrap();
+        folder
+    }
+
+    fn evidence(folder: &Path) -> Result<Value> {
+        let output = folder.join("overlay.json");
+        export_overlay(&folder.join("run.json"), Path::new("python"), &output, &mut Empty)?;
+        let overlay = copper_json::parse(&std::fs::read_to_string(&output).unwrap()).unwrap();
+        Ok(overlay.get("evidence").expect("the overlay has evidence").clone())
+    }
+
+    const KICAD: &str = r#"{"coordinate_units":"mm","violations":[],"unconnected_items":[]}"#;
+    const NATIVE: &str = r#"{"schema":"copperscript-drc/v0.1","coordinate_units":"mm","passed":true,"violations":[],"unconnected_items":[]}"#;
+
+    #[test]
+    fn a_script_manifest_without_drc_report_reads_kicad_drc_json() {
+        let folder = directory("script", "kicad-drc.json", KICAD, None);
+        let found = evidence(&folder).unwrap();
+        assert_eq!(found.get("verified"), Some(&Value::Bool(true)));
+        assert_eq!(found.get("drc_sha256"), Some(&Value::from(sha256_hex(KICAD.as_bytes()))));
+    }
+
+    #[test]
+    fn a_native_build_manifest_names_its_report() {
+        let folder = directory("native", "native-drc.json", NATIVE, Some("native-drc.json"));
+        let found = evidence(&folder).unwrap();
+        assert_eq!(found.get("verified"), Some(&Value::Bool(true)));
+        assert_eq!(found.get("drc_sha256"), Some(&Value::from(sha256_hex(NATIVE.as_bytes()))));
+    }
+
+    #[test]
+    fn a_report_without_millimetre_coordinates_is_not_evidence() {
+        let bare = r#"{"violations":[],"unconnected_items":[]}"#;
+        let folder = directory("units", "native-drc.json", bare, Some("native-drc.json"));
+        assert_eq!(evidence(&folder).unwrap().get("verified"), Some(&Value::Bool(false)));
+    }
+
+    #[test]
+    fn the_report_must_be_a_sibling_file_name() {
+        for name in ["../kicad-drc.json", "sub/native-drc.json", "native-drc.txt", ""] {
+            let folder = directory("escape", "kicad-drc.json", KICAD, Some(name));
+            assert!(evidence(&folder).is_err(), "{name:?} was accepted");
+        }
+    }
 }
