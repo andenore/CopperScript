@@ -1,21 +1,37 @@
 //! `DRC-STUB-LENGTH`: a routing rule's `maximum_stub_length` against the
 //! routed copper of its net.
 //!
-//! A stub is a branch of a connected net's copper that leaves a junction and
-//! ends at a dead end that is not a pad or a pour: a dangling track or arc end
-//! or an unused via. Its length is measured along the copper, from the
-//! junction to the farthest dead end of the branch; arcs count at their true
-//! length and a via barrel does not count. Branches that end on a pad are
-//! routes, not stubs. Only nets that are completely connected are measured,
-//! since the open net is the finding on a partly routed one.
+//! The copper of a connected net is a graph of junctions joined by stretches
+//! of track and arc. Its route ends are the pads, pours and synthesized
+//! antenna copper (the terminal junctions). Copper is route copper when it
+//! lies on a simple path between two route ends; all other copper is stub
+//! copper. A stub is a connected part of the stub copper, it attaches to the
+//! route (or to a lone route end) at one junction, and its length is the
+//! greatest along-copper shortest distance from that junction to any junction
+//! in the stub. Arcs count at their true length and a via barrel does not
+//! count. Branches that end on a pad are routes, not stubs. Only nets that
+//! are completely connected are measured, since the open net is the finding
+//! on a partly routed one.
 //!
-//! The copper becomes a graph of junctions joined by track and arc pieces.
-//! Track and arc ends that overlap on a layer share a junction; an end that
-//! lands on the body of another piece splits it there; an end that lands on a
-//! via, pad or pour joins that object's junction, as do objects that overlap
-//! each other. The stubs are what pruning dead-end junctions removes.
+//! The junctions come from the geometry. Ends that overlap on a layer share
+//! a junction; an end that lands on the body of another piece, and a pad or
+//! via on a piece's body, split it there; pieces whose centre lines cross
+//! are split and joined at the crossing; an end on a via, pad or pour joins
+//! that object's junction, as do objects that overlap each other. Copper that
+//! overlaps itself needs no separate normalisation: overlapping pieces join at
+//! their ends and landings, and the copies between those junctions become
+//! parallel stretches, which count once because lengths are shortest
+//! distances and a loop is never route copper unless it joins two route ends.
+//!
+//! Route copper is found with the biconnected components of the graph. In
+//! a biconnected block every edge lies on a simple path between any two of its
+//! junctions, so a block is route copper exactly when it lies on the
+//! block-cut tree path between two route ends. Those blocks are what remains
+//! of the block-cut tree after repeatedly dropping leaves that are not route
+//! ends.
 
-use std::collections::VecDeque;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -30,33 +46,58 @@ use crate::connectivity::{
 };
 use crate::{Finding, shape};
 
+/// A piece and a vertex (or segment) index within its path.
+type Place = (usize, usize);
+
 /// One track, or one arc as its chord chain, with its copper length.
 struct Piece {
     layer: CopperLayer,
     path: Vec<Point>,
+    /// The position of each path vertex along the piece, from 0 to 1.
+    at: Vec<f64>,
     radius_nm: i64,
     length_nm: f64,
     label: String,
 }
 
 impl Piece {
+    fn new(layer: CopperLayer, path: Vec<Point>, radius_nm: i64, length_nm: f64, label: String) -> Piece {
+        let spans: Vec<f64> = path.windows(2).map(|pair| distance(pair[0], pair[1])).collect();
+        let total: f64 = spans.iter().sum();
+        let mut at = vec![0.0];
+        let mut before = 0.0;
+        for span in &spans {
+            before += span;
+            at.push(if total > 0.0 { before / total } else { 0.0 });
+        }
+        if let Some(last) = at.last_mut() {
+            *last = 1.0;
+        }
+        Piece { layer, path, at, radius_nm, length_nm, label }
+    }
+
+    fn segment(&self, segment: usize) -> [Point; 2] {
+        [self.path[segment], self.path[segment + 1]]
+    }
+
     fn ends(&self) -> [Point; 2] {
         [self.path[0], self.path[self.path.len() - 1]]
+    }
+
+    /// The position along the piece of the point `t` along its `segment`.
+    fn position(&self, segment: usize, t: f64) -> f64 {
+        self.at[segment] + t * (self.at[segment + 1] - self.at[segment])
     }
 
     /// The distance from `point` to the path and the position of the nearest
     /// point along it as a fraction of its length.
     fn project(&self, point: Point) -> (f64, f64) {
-        let spans: Vec<f64> = self.path.windows(2).map(|pair| distance(pair[0], pair[1])).collect();
-        let total: f64 = spans.iter().sum();
         let mut best = (f64::INFINITY, 0.0);
-        let mut before = 0.0;
-        for (pair, span) in self.path.windows(2).zip(&spans) {
+        for (index, pair) in self.path.windows(2).enumerate() {
             let (away, t) = project(point, pair[0], pair[1]);
             if away < best.0 {
-                best = (away, if total > 0.0 { (before + t * span) / total } else { 0.0 });
+                best = (away, self.position(index, t));
             }
-            before += span;
         }
         best
     }
@@ -120,22 +161,184 @@ fn is_terminal(key: &str) -> bool {
 fn pieces(board: &PhysicalBoard, net: &str, antenna: &IndexSet<copper_pcb::board::TrackSegment>) -> Vec<Piece> {
     let tracks =
         board.tracks.iter().enumerate().filter(|(_, t)| t.net == net && !antenna.contains(*t)).map(|(index, track)| {
-            Piece {
-                layer: track.layer,
-                path: vec![track.start, track.end],
-                radius_nm: track.width_nm / 2,
-                length_nm: distance(track.start, track.end),
-                label: format!("track:{index}"),
-            }
+            let length = distance(track.start, track.end);
+            Piece::new(track.layer, vec![track.start, track.end], track.width_nm / 2, length, format!("track:{index}"))
         });
-    let arcs = board.arcs.iter().enumerate().filter(|(_, a)| a.net == net).map(|(index, arc)| Piece {
-        layer: arc.layer,
-        path: arc.chord_points(),
-        radius_nm: arc.width_nm / 2,
-        length_nm: arc.length_nm() as f64,
-        label: format!("arc:{index}"),
+    let arcs = board.arcs.iter().enumerate().filter(|(_, a)| a.net == net).map(|(index, arc)| {
+        let length = arc.length_nm() as f64;
+        Piece::new(arc.layer, arc.chord_points(), arc.width_nm / 2, length, format!("arc:{index}"))
     });
     tracks.chain(arcs).collect()
+}
+
+/// The distance from `point` to a segment.
+fn project_gap(point: Point, segment: [Point; 2]) -> f64 {
+    project(point, segment[0], segment[1]).0
+}
+
+/// How far apart the centre lines of two segments are: nothing when they
+/// cross, else the least distance of an end to the other segment.
+fn segment_gap(a: [Point; 2], b: [Point; 2]) -> f64 {
+    if crossing(a[0], a[1], b[0], b[1]).is_some() {
+        return 0.0;
+    }
+    [project_gap(a[0], b), project_gap(a[1], b), project_gap(b[0], a), project_gap(b[1], a)]
+        .into_iter()
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// The positions along segments `a0`-`a1` and `b0`-`b1` where their centre
+/// lines cross, if they do.
+fn crossing(a0: Point, a1: Point, b0: Point, b1: Point) -> Option<(f64, f64)> {
+    let (p, q) = (xy(a0), xy(b0));
+    let (r, s) = ((xy(a1).0 - p.0, xy(a1).1 - p.1), (xy(b1).0 - q.0, xy(b1).1 - q.1));
+    let cross = |u: (f64, f64), v: (f64, f64)| u.0 * v.1 - u.1 * v.0;
+    let denominator = cross(r, s);
+    if denominator == 0.0 {
+        return None;
+    }
+    let offset = (q.0 - p.0, q.1 - p.1);
+    let (t, u) = (cross(offset, s) / denominator, cross(offset, r) / denominator);
+    ((0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u)).then_some((t, u))
+}
+
+/// The junctions of the pieces: the two ends of each piece and the places
+/// where other copper splits it.
+#[derive(Default)]
+struct Sites {
+    junctions: Junctions,
+    /// The junction of each end of each piece, `2 * piece` and `2 * piece + 1`.
+    ends: Vec<usize>,
+    /// The junctions inside each piece, by position along it.
+    cuts: Vec<Vec<(f64, usize)>>,
+    made: IndexMap<(usize, u64), usize>,
+}
+
+impl Sites {
+    /// The junction at `position` (0 to 1) along `piece`: an end, or a split
+    /// made there once.
+    fn at(&mut self, piece: usize, position: f64) -> usize {
+        if position <= 0.0 {
+            return self.ends[2 * piece];
+        }
+        if position >= 1.0 {
+            return self.ends[2 * piece + 1];
+        }
+        if let Some(cut) = self.made.get(&(piece, position.to_bits())) {
+            return *cut;
+        }
+        let cut = self.junctions.add();
+        self.cuts[piece].push((position, cut));
+        self.made.insert((piece, position.to_bits()), cut);
+        cut
+    }
+
+    /// Joins a vertex of piece `from` to the nearest point of a segment of
+    /// piece `onto`. A point within reach of the other piece's own end joins
+    /// that end instead of splitting the piece beside it.
+    fn touch(&mut self, pieces: &[Piece], from: Place, onto: Place, reach: f64) {
+        let (point, [start, end]) = (pieces[from.0].path[from.1], pieces[onto.0].segment(onto.1));
+        let (_, t) = project(point, start, end);
+        let spot = Point::new(
+            start.x_nm + (t * (end.x_nm - start.x_nm) as f64).round() as i64,
+            start.y_nm + (t * (end.y_nm - start.y_nm) as f64).round() as i64,
+        );
+        let [first, last] = pieces[onto.0].ends();
+        let there = if distance(spot, first) < reach {
+            self.ends[2 * onto.0]
+        } else if distance(spot, last) < reach {
+            self.ends[2 * onto.0 + 1]
+        } else {
+            self.at(onto.0, pieces[onto.0].position(onto.1, t))
+        };
+        let here = self.at(from.0, pieces[from.0].at[from.1]);
+        self.junctions.union(here, there);
+    }
+
+    /// Joins two pieces on one layer wherever their copper overlaps.
+    ///
+    /// The segment pairs whose centre lines are closer than `reach` (or cross)
+    /// fall into patches of neighbouring segments, and each patch is one
+    /// contact: the ends of either piece that lie on the other, else the
+    /// crossings of the centre lines, else the closest points. A crossing is
+    /// one junction however many chords of an arc lie within reach of it.
+    fn join(&mut self, pieces: &[Piece], i: usize, j: usize) {
+        let (first, second) = (&pieces[i], &pieces[j]);
+        let reach = (first.radius_nm + second.radius_nm) as f64;
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        for sa in 0..first.path.len() - 1 {
+            for sb in 0..second.path.len() - 1 {
+                if segment_gap(first.segment(sa), second.segment(sb)) < reach {
+                    pairs.push((sa, sb));
+                }
+            }
+        }
+        let mut patches = Junctions::default();
+        for _ in &pairs {
+            patches.add();
+        }
+        for (x, p) in pairs.iter().enumerate() {
+            for (y, q) in pairs.iter().enumerate().skip(x + 1) {
+                if p.0.abs_diff(q.0) <= 1 && p.1.abs_diff(q.1) <= 1 {
+                    patches.union(x, y);
+                }
+            }
+        }
+        let mut contacts: IndexMap<usize, Vec<(usize, usize)>> = IndexMap::new();
+        for (index, pair) in pairs.iter().enumerate() {
+            contacts.entry(patches.find(index)).or_default().push(*pair);
+        }
+        let last = (first.path.len() - 1, second.path.len() - 1);
+        for patch in contacts.values() {
+            let mut landed = false;
+            for &(sa, sb) in patch {
+                for k in 0..2 {
+                    let (a, b) = (sa + k, sb + k);
+                    if (a == 0 || a == last.0) && project_gap(first.path[a], second.segment(sb)) < reach {
+                        self.touch(pieces, (i, a), (j, sb), reach);
+                        landed = true;
+                    }
+                    if (b == 0 || b == last.1) && project_gap(second.path[b], first.segment(sa)) < reach {
+                        self.touch(pieces, (j, b), (i, sa), reach);
+                        landed = true;
+                    }
+                }
+            }
+            if landed {
+                continue;
+            }
+            let mut crossed = false;
+            for &(sa, sb) in patch {
+                let [a0, a1] = first.segment(sa);
+                let [b0, b1] = second.segment(sb);
+                if let Some((ta, tb)) = crossing(a0, a1, b0, b1) {
+                    let (here, there) = (self.at(i, first.position(sa, ta)), self.at(j, second.position(sb, tb)));
+                    self.junctions.union(here, there);
+                    crossed = true;
+                }
+            }
+            if crossed {
+                continue;
+            }
+            // Close without crossing: join at the closest of the vertices.
+            let mut closest: Option<(f64, Place, Place)> = None;
+            for &(sa, sb) in patch {
+                for k in 0..2 {
+                    for (gap, from, onto) in [
+                        (project_gap(first.path[sa + k], second.segment(sb)), (i, sa + k), (j, sb)),
+                        (project_gap(second.path[sb + k], first.segment(sa)), (j, sb + k), (i, sa)),
+                    ] {
+                        if closest.is_none_or(|(best, _, _)| gap < best) {
+                            closest = Some((gap, from, onto));
+                        }
+                    }
+                }
+            }
+            if let Some((_, from, onto)) = closest {
+                self.touch(pieces, from, onto, reach);
+            }
+        }
+    }
 }
 
 /// A stretch of copper between two junctions.
@@ -145,42 +348,247 @@ struct Edge {
     label: String,
 }
 
+/// The junction graph of a net: vertices are junctions, edges are stretches
+/// of copper between them (parallel edges are possible).
+#[derive(Default)]
+struct Graph {
+    index: IndexMap<usize, usize>,
+    /// For each vertex its `(neighbour, edge)` pairs.
+    adjacency: Vec<Vec<(usize, usize)>>,
+    edges: Vec<GraphEdge>,
+    /// Route ends: pads, pours and antenna copper.
+    terminal: Vec<bool>,
+    /// The via at a vertex, which names a stub that ends in one.
+    via: Vec<Option<String>>,
+}
+
+struct GraphEdge {
+    ends: [usize; 2],
+    length_nm: f64,
+    label: String,
+}
+
+/// The biconnected components of a graph, each as its edges (Tarjan's
+/// algorithm, with the parent edge rather than the parent vertex skipped so
+/// that parallel edges form a block).
+struct Blocks<'a> {
+    adjacency: &'a [Vec<(usize, usize)>],
+    discovered: Vec<usize>,
+    low: Vec<usize>,
+    clock: usize,
+    stack: Vec<usize>,
+    blocks: Vec<Vec<usize>>,
+}
+
+impl Blocks<'_> {
+    fn visit(&mut self, vertex: usize, parent_edge: Option<usize>) {
+        self.clock += 1;
+        self.discovered[vertex] = self.clock;
+        self.low[vertex] = self.clock;
+        for &(next, edge) in &self.adjacency[vertex] {
+            if Some(edge) == parent_edge {
+                continue;
+            }
+            if self.discovered[next] == 0 {
+                self.stack.push(edge);
+                self.visit(next, Some(edge));
+                self.low[vertex] = self.low[vertex].min(self.low[next]);
+                if self.low[next] >= self.discovered[vertex] {
+                    let mut block = Vec::new();
+                    while let Some(top) = self.stack.pop() {
+                        block.push(top);
+                        if top == edge {
+                            break;
+                        }
+                    }
+                    self.blocks.push(block);
+                }
+            } else if self.discovered[next] < self.discovered[vertex] {
+                self.stack.push(edge);
+                self.low[vertex] = self.low[vertex].min(self.discovered[next]);
+            }
+        }
+    }
+}
+
+impl Graph {
+    /// The vertex of a junction, added on first use.
+    fn vertex(&mut self, junction: usize) -> usize {
+        let next = self.index.len();
+        let vertex = *self.index.entry(junction).or_insert(next);
+        if vertex == next {
+            self.adjacency.push(Vec::new());
+            self.terminal.push(false);
+            self.via.push(None);
+        }
+        vertex
+    }
+
+    /// The connected component of every vertex.
+    fn components(&self) -> Vec<usize> {
+        let mut component = vec![usize::MAX; self.adjacency.len()];
+        for start in 0..component.len() {
+            if component[start] != usize::MAX {
+                continue;
+            }
+            let mut pending = vec![start];
+            component[start] = start;
+            while let Some(vertex) = pending.pop() {
+                for &(next, _) in &self.adjacency[vertex] {
+                    if component[next] == usize::MAX {
+                        component[next] = start;
+                        pending.push(next);
+                    }
+                }
+            }
+        }
+        component
+    }
+
+    /// Whether each edge is route copper: it lies on a simple path between
+    /// two route ends.
+    ///
+    /// The vertices and blocks form a forest (the block-cut tree, with its
+    /// non-cut vertices as leaves). The route is the part of it between the
+    /// route ends: what remains after dropping, again and again, a leaf that
+    /// is not a route end. Components with fewer than two route ends have no
+    /// route.
+    fn route_edges(&self) -> Vec<bool> {
+        let count = self.adjacency.len();
+        let mut tarjan = Blocks {
+            adjacency: &self.adjacency,
+            discovered: vec![0; count],
+            low: vec![0; count],
+            clock: 0,
+            stack: Vec::new(),
+            blocks: Vec::new(),
+        };
+        for vertex in 0..count {
+            if tarjan.discovered[vertex] == 0 {
+                tarjan.visit(vertex, None);
+            }
+        }
+        let blocks = tarjan.blocks;
+        let component = self.components();
+        let mut ends_in = vec![0usize; count];
+        for (vertex, component) in component.iter().enumerate() {
+            ends_in[*component] += usize::from(self.terminal[vertex]);
+        }
+        // Tree nodes: the vertices, then the blocks.
+        let mut tree: Vec<Vec<usize>> = vec![Vec::new(); count + blocks.len()];
+        for (block, edges) in blocks.iter().enumerate() {
+            let members: IndexSet<usize> = edges.iter().flat_map(|edge| self.edges[*edge].ends).collect();
+            for vertex in members {
+                tree[vertex].push(count + block);
+                tree[count + block].push(vertex);
+            }
+        }
+        let mut degree: Vec<usize> = tree.iter().map(Vec::len).collect();
+        let mut alive = vec![true; tree.len()];
+        for vertex in 0..count {
+            alive[vertex] = ends_in[component[vertex]] >= 2;
+        }
+        for (block, edges) in blocks.iter().enumerate() {
+            alive[count + block] = ends_in[component[self.edges[edges[0]].ends[0]]] >= 2;
+        }
+        let droppable = |node: usize| node >= count || !self.terminal[node];
+        let mut pending: Vec<usize> =
+            (0..tree.len()).filter(|node| alive[*node] && degree[*node] <= 1 && droppable(*node)).collect();
+        while let Some(node) = pending.pop() {
+            if !alive[node] {
+                continue;
+            }
+            alive[node] = false;
+            for &next in &tree[node] {
+                if alive[next] {
+                    degree[next] -= 1;
+                    if degree[next] <= 1 && droppable(next) {
+                        pending.push(next);
+                    }
+                }
+            }
+        }
+        let mut route = vec![false; self.edges.len()];
+        for (block, edges) in blocks.iter().enumerate() {
+            for edge in edges {
+                route[*edge] = alive[count + block];
+            }
+        }
+        route
+    }
+
+    /// The longest stub as `(length, name of its far end)`.
+    ///
+    /// A stub attaches to the route at one junction, or hangs off a route end
+    /// that has no route; its length is the greatest shortest distance, along
+    /// stub copper only, from that junction to any junction in the stub.
+    fn longest_stub(&self) -> Option<(f64, String)> {
+        let route = self.route_edges();
+        let attached =
+            |vertex: usize| self.terminal[vertex] || self.adjacency[vertex].iter().any(|(_, edge)| route[*edge]);
+        let mut longest: Option<(f64, String)> = None;
+        for source in (0..self.adjacency.len()).filter(|vertex| attached(*vertex)) {
+            let mut best = vec![f64::INFINITY; self.adjacency.len()];
+            let mut arrived: Vec<Option<usize>> = vec![None; self.adjacency.len()];
+            let mut queue = BinaryHeap::from([Reverse((0.0f64.to_bits(), source))]);
+            best[source] = 0.0;
+            while let Some(Reverse((bits, vertex))) = queue.pop() {
+                let reached = f64::from_bits(bits);
+                if reached > best[vertex] {
+                    continue;
+                }
+                if vertex != source {
+                    if attached(vertex) {
+                        continue;
+                    }
+                    let name = self.via[vertex]
+                        .clone()
+                        .or_else(|| arrived[vertex].map(|edge| self.edges[edge].label.clone()))
+                        .unwrap_or_default();
+                    if longest.as_ref().is_none_or(|(length, _)| reached > *length) {
+                        longest = Some((reached, name));
+                    }
+                }
+                for &(next, edge) in self.adjacency[vertex].iter().filter(|(_, edge)| !route[*edge]) {
+                    let total = reached + self.edges[edge].length_nm;
+                    if total < best[next] {
+                        best[next] = total;
+                        arrived[next] = Some(edge);
+                        queue.push(Reverse((total.to_bits(), next)));
+                    }
+                }
+            }
+        }
+        longest
+    }
+}
+
 /// The longest stub of one net's copper as `(length, dead-end object)`.
 ///
 /// `objects` are the net's pad, pour and via contacts grouped by object.
 fn longest_stub(pieces: &[Piece], objects: &IndexMap<String, Vec<&CopperContact>>) -> Result<Option<(i64, String)>> {
-    let mut junctions = Junctions::default();
-    let ends: Vec<usize> = pieces.iter().flat_map(|_| [junctions.add(), junctions.add()]).collect();
-    let object_junction: Vec<usize> = objects.iter().map(|_| junctions.add()).collect();
-    // Overlapping ends join, or split the piece they land on.
-    let mut cuts: Vec<Vec<(f64, usize)>> = vec![Vec::new(); pieces.len()];
+    let mut sites = Sites::default();
+    sites.ends = pieces.iter().flat_map(|_| [sites.junctions.add(), sites.junctions.add()]).collect();
+    sites.cuts = vec![Vec::new(); pieces.len()];
+    let object_junction: Vec<usize> = objects.iter().map(|_| sites.junctions.add()).collect();
+    // Pieces on one layer join where their copper overlaps.
+    for (i, first) in pieces.iter().enumerate() {
+        for (j, _) in pieces.iter().enumerate().skip(i + 1).filter(|(_, p)| p.layer == first.layer) {
+            sites.join(pieces, i, j);
+        }
+    }
     for (i, from) in pieces.iter().enumerate() {
         for (e, point) in from.ends().into_iter().enumerate() {
-            for (j, onto) in pieces.iter().enumerate().filter(|(j, o)| *j != i && o.layer == from.layer) {
-                let reach = (from.radius_nm + onto.radius_nm) as f64;
-                let mut joined = false;
-                for (k, end) in onto.ends().into_iter().enumerate() {
-                    if distance(point, end) < reach {
-                        junctions.union(ends[2 * i + e], ends[2 * j + k]);
-                        joined = true;
-                    }
-                }
-                if !joined {
-                    let (away, along) = onto.project(point);
-                    if away < reach {
-                        cuts[j].push((along, ends[2 * i + e]));
-                    }
-                }
-            }
             // Ends that land on a pad, pour or via join its junction.
             let disk = shape(vec![point], from.radius_nm)?;
             for (group, contacts) in objects.values().enumerate() {
                 if contacts.iter().any(|c| c.layers.contains(&from.layer) && positive_area_overlap(&disk, &c.shape)) {
-                    junctions.union(ends[2 * i + e], object_junction[group]);
+                    sites.junctions.union(sites.ends[2 * i + e], object_junction[group]);
                 }
             }
         }
     }
+    let Sites { mut junctions, mut cuts, ends, .. } = sites;
     // Objects that overlap each other (a via in a pad) are one junction.
     for (a, first) in objects.values().enumerate() {
         for (b, second) in objects.values().enumerate().skip(a + 1) {
@@ -223,11 +631,7 @@ fn longest_stub(pieces: &[Piece], objects: &IndexMap<String, Vec<&CopperContact>
         let mut chain: Vec<(f64, usize)> = vec![(0.0, ends[2 * index])];
         let mut inner = std::mem::take(&mut cuts[index]);
         inner.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (along, port) in inner {
-            let cut = junctions.add();
-            junctions.union(cut, port);
-            chain.push((along, cut));
-        }
+        chain.extend(inner);
         chain.push((1.0, ends[2 * index + 1]));
         for pair in chain.windows(2) {
             let (from, to) = (junctions.find(pair[0].1), junctions.find(pair[1].1));
@@ -240,56 +644,23 @@ fn longest_stub(pieces: &[Piece], objects: &IndexMap<String, Vec<&CopperContact>
             }
         }
     }
-    let mut terminal: IndexSet<usize> = IndexSet::new();
-    let mut via: IndexMap<usize, &str> = IndexMap::new();
+    let mut graph = Graph::default();
+    for edge in &edges {
+        let ends = edge.ends.map(|end| graph.vertex(junctions.find(end)));
+        let id = graph.edges.len();
+        graph.edges.push(GraphEdge { ends, length_nm: edge.length_nm, label: edge.label.clone() });
+        graph.adjacency[ends[0]].push((ends[1], id));
+        graph.adjacency[ends[1]].push((ends[0], id));
+    }
     for (key, junction) in objects.keys().zip(&object_junction) {
-        let root = junctions.find(*junction);
+        let index = graph.vertex(junctions.find(*junction));
         if is_terminal(key) {
-            terminal.insert(root);
+            graph.terminal[index] = true;
         } else {
-            via.insert(root, key);
+            graph.via[index] = Some(key.clone());
         }
     }
-    // Prune dead-end junctions; what each carries is the longest copper
-    // hanging off it, ending at the labelled object.
-    let mut incident: IndexMap<usize, Vec<usize>> = IndexMap::new();
-    for (index, edge) in edges.iter().enumerate() {
-        for end in edge.ends {
-            incident.entry(end).or_default().push(index);
-        }
-    }
-    let mut degree: IndexMap<usize, usize> = incident.iter().map(|(junction, list)| (*junction, list.len())).collect();
-    let mut hanging: IndexMap<usize, (f64, String)> = IndexMap::new();
-    let mut cut_edges = vec![false; edges.len()];
-    let mut queue: VecDeque<usize> = degree
-        .iter()
-        .filter(|(junction, count)| **count <= 1 && !terminal.contains(*junction))
-        .map(|(j, _)| *j)
-        .collect();
-    let mut longest: Option<(f64, String)> = None;
-    while let Some(junction) = queue.pop_front() {
-        let Some(&edge) = incident[&junction].iter().find(|edge| !cut_edges[**edge]) else { continue };
-        cut_edges[edge] = true;
-        let [first, second] = edges[edge].ends;
-        let parent = if first == junction { second } else { first };
-        *degree.get_mut(&junction).expect("junction") = 0;
-        let (below, end) = hanging.get(&junction).cloned().unwrap_or_else(|| {
-            (0.0, via.get(&junction).map_or_else(|| edges[edge].label.clone(), |k| (*k).to_owned()))
-        });
-        let carried = below + edges[edge].length_nm;
-        *degree.get_mut(&parent).expect("parent") -= 1;
-        if hanging.get(&parent).is_none_or(|(best, _)| *best <= carried) {
-            hanging.insert(parent, (carried, end.clone()));
-        }
-        if terminal.contains(&parent) || degree[&parent] >= 2 {
-            if longest.as_ref().is_none_or(|(best, _)| carried > *best) {
-                longest = Some((carried, end));
-            }
-        } else {
-            queue.push_back(parent);
-        }
-    }
-    Ok(longest.map(|(length, end)| (round_int(length), end)))
+    Ok(graph.longest_stub().map(|(length, end)| (round_int(length), end)))
 }
 
 /// `maximum_stub_length` of every net whose rule declares one.

@@ -407,3 +407,109 @@ fn a_dangling_branch_off_an_antenna_feed_is_still_a_stub() {
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0].measured_nm, Some(1_500_000));
 }
+
+/// The one finding on `board`, which must be the only one.
+fn only_finding(board: &PhysicalBoard) -> Finding {
+    let mut found = stub_findings(board);
+    assert_eq!(found.len(), 1, "{found:?}");
+    found.remove(0)
+}
+
+fn near(measured: Option<i64>, expected: i64, tolerance: i64) {
+    let measured = measured.expect("measured");
+    assert!((measured - expected).abs() <= tolerance, "{measured} against {expected}");
+}
+
+// --- crossings ---------------------------------------------------------------
+
+#[test]
+fn a_track_crossing_the_route_in_an_x_leaves_a_stub_on_each_side() {
+    // 2 mm hang below the main route and 3 mm above it; no end is near it.
+    let mut board = board(Some(MM), false);
+    board.tracks.push(track((7 * MM, Y - 2 * MM), (7 * MM, Y + 3 * MM)));
+    assert_eq!(only_finding(&board).measured_nm, Some(3 * MM));
+    board.net_routing_rules = vec![rule("N", Some(3 * MM))];
+    assert!(stub_findings(&board).is_empty());
+}
+
+#[test]
+fn a_crossing_with_both_sides_within_the_limit_is_quiet() {
+    let mut board = board(Some(MM), false);
+    board.tracks.push(track((7 * MM, Y - 500_000), (7 * MM, Y + 600_000)));
+    assert!(stub_findings(&board).is_empty());
+}
+
+#[test]
+fn a_branch_stopping_on_the_far_edge_of_the_route_is_a_tee_not_a_stub() {
+    // Pad C feeds a track that stops on the far edge of the main route.
+    let mut board = board(Some(1), true);
+    board.tracks.push(track((7 * MM, Y + 8 * MM), (7 * MM, Y - 100_000)));
+    assert!(stub_findings(&board).is_empty());
+}
+
+#[test]
+fn an_arc_crossing_the_route_leaves_a_stub_on_each_side() {
+    // 120 degrees of a 2 mm circle centred on the main route, crossing it once.
+    let mut board = board(Some(MM), false);
+    board.arcs.push(TrackArc {
+        net: "N".to_owned(),
+        start: Point::new(7 * MM, Y - 1_732_051),
+        mid: Point::new(8 * MM, Y),
+        end: Point::new(7 * MM, Y + 1_732_051),
+        width_nm: 200_000,
+        layer: CopperLayer::Front,
+    });
+    near(only_finding(&board).measured_nm, 2_094_395, 10_000);
+    board.net_routing_rules = vec![rule("N", Some(2_100_000))];
+    assert!(stub_findings(&board).is_empty());
+}
+
+// --- overlapping copper and loops ---------------------------------------------
+
+#[test]
+fn a_redundant_segment_over_the_middle_of_a_stub_does_not_hide_it() {
+    let mut board = with_stub(2 * MM, Some(MM));
+    board.tracks.push(track((7 * MM, Y + 500_000), (7 * MM, Y + 1_500_000)));
+    assert_eq!(only_finding(&board).measured_nm, Some(2 * MM));
+}
+
+#[test]
+fn a_redundant_segment_running_past_the_end_of_a_stub_lengthens_it() {
+    let mut board = with_stub(2 * MM, Some(MM));
+    board.tracks.push(track((7 * MM, Y + MM), (7 * MM, Y + 2_500_000)));
+    assert_eq!(only_finding(&board).measured_nm, Some(2_500_000));
+}
+
+#[test]
+fn an_exact_duplicate_of_a_stub_is_one_stub() {
+    let mut board = with_stub(2 * MM, Some(MM));
+    board.tracks.push(track((7 * MM, Y), (7 * MM, Y + 2 * MM)));
+    assert_eq!(only_finding(&board).measured_nm, Some(2 * MM));
+}
+
+#[test]
+fn a_parallel_segment_touching_a_stub_is_one_stub() {
+    let mut board = with_stub(2 * MM, Some(MM));
+    board.tracks.push(track((7 * MM + 100_000, Y), (7 * MM + 100_000, Y + 2 * MM)));
+    near(only_finding(&board).measured_nm, 2 * MM, 50_000);
+}
+
+#[test]
+fn a_lasso_is_measured_to_the_farthest_junction_of_its_loop() {
+    // A 1 mm neck, then a triangle: 1 mm across, 1 mm up, and 1.414 mm back.
+    let mut board = board(Some(MM), false);
+    board.tracks.push(track((7 * MM, Y), (7 * MM, Y + MM)));
+    board.tracks.push(track((7 * MM, Y + MM), (8 * MM, Y + MM)));
+    board.tracks.push(track((8 * MM, Y + MM), (8 * MM, Y + 2 * MM)));
+    board.tracks.push(track((8 * MM, Y + 2 * MM), (7 * MM, Y + MM)));
+    near(only_finding(&board).measured_nm, MM + 1_414_214, 2);
+}
+
+#[test]
+fn a_loop_between_two_pads_is_route_copper() {
+    let mut board = board(Some(1), false);
+    board.tracks.push(track((2 * MM, Y), (2 * MM, Y + 1_500_000)));
+    board.tracks.push(track((2 * MM, Y + 1_500_000), (12 * MM, Y + 1_500_000)));
+    board.tracks.push(track((12 * MM, Y + 1_500_000), (12 * MM, Y)));
+    assert!(stub_findings(&board).is_empty());
+}

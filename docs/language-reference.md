@@ -928,19 +928,27 @@ placement or manual review, and requirement verification still fails the
 declared constraint. `max_vias`, `maximum_uncoupled_length` and every other
 profile gate stay hard. Reused critical copper must meet its current budget.
 
-`maximum_stub_length` limits the stubs of a net's routed copper. A stub is a
-branch that leaves a junction of the copper and ends at a dead end that is not
-a pad or a pour: a dangling track or arc end, or an unused via. Its length is
-measured along the copper (arcs at their true length) from the junction to the
-farthest dead end of the branch; a via barrel adds nothing. A branch that ends
-on another pad is a route, not a stub, so a multi-pad net is not held to the
-limit on its branches to pads. Exact DRC reports one `DRC-STUB-LENGTH` error
-per net, for its longest stub, when that exceeds the limit. Only nets whose
-pads are all connected are measured (an open net is reported as
-`DRC-OPEN-NET`), synthesized antenna copper is where a feed ends, not a stub, a track end
-that lands on a via, pad or pour joins it, and a via or pad on the body of a
-track splits the track there. The check does not look for
-electrical effects: it is not a via-stub resonance or impedance analysis.
+`maximum_stub_length` limits the stubs of a net's routed copper. The copper is
+a graph of junctions joined by tracks and arcs, and its route ends are the
+net's pads, pours and synthesized antenna copper. Copper that lies on a simple
+path between two route ends is route copper, including every loop that joins
+two of them; all other copper is stub copper: a dangling track or arc, an
+unused via, or a loop that hangs off the route. A stub's length is the
+greatest distance along the copper, by the shortest way, from the junction
+where it attaches to the route to any junction in it; arcs count at their
+true length and a via barrel adds nothing. A branch that ends on another pad is
+a route, not a stub, so a multi-pad net is not held to the limit on its
+branches to pads. Exact DRC reports one `DRC-STUB-LENGTH` error per net, for
+its longest stub, when that exceeds the limit. Only nets whose pads are all
+connected are measured (an open net is reported as `DRC-OPEN-NET`).
+
+Pieces of copper join where they overlap: ends that overlap share a junction;
+an end on the body of another piece, a via or pad on the body of a track, and
+a crossing of two centre lines split the pieces there; an end on a via, pad or
+pour joins it. Copper laid over copper, such as a duplicated or overlapping
+segment, adds a parallel stretch between the same junctions and does not
+hide or lengthen a stub. The check does not look for electrical effects: it is
+not a via-stub resonance or impedance analysis.
 
 USB/differential profiles need not be top-layer-only. For example,
 `allowed_layers = "F.Cu,In2.Cu"; max_vias = 2;` permits matched terminal
