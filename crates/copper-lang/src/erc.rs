@@ -1088,7 +1088,7 @@ fn check_logic_levels(context: &Context) -> Vec<Diagnostic> {
             if let Rail::Unresolved(reference, reason) = &pin.rail
                 && unresolved.insert((pin.component.reference.clone(), reference.clone()))
             {
-                diagnostics.push(Diagnostic::error(
+                diagnostics.push(Diagnostic::warning(
                     "LOGIC_LEVEL_UNRESOLVED",
                     format!(
                         "io_supply {reference} cannot be evaluated: {reason}; logic levels of {} pins on this rail are not checked",
@@ -1103,7 +1103,7 @@ fn check_logic_levels(context: &Context) -> Vec<Diagnostic> {
                         && let Err(reason) = resolve_level(context, pin.component, pin.part, level)
                         && unresolved.insert((pin.component.reference.clone(), rail.reference.clone()))
                     {
-                        diagnostics.push(Diagnostic::error(
+                        diagnostics.push(Diagnostic::warning(
                             "LOGIC_LEVEL_UNRESOLVED",
                             format!("{name} {} cannot be evaluated: {reason}", logic_level_text(level)),
                             pin.endpoint.to_string(),

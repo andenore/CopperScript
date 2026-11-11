@@ -127,7 +127,7 @@ pub const EXPLANATIONS: &[(&str, &str, &str)] = &[
     (
         "LOGIC_LEVEL_UNRESOLVED",
         "A pin's explicit io_supply or rail-relative logic threshold could not be evaluated.",
-        "Connect the named reference pin to a declared supply, or fix the reference.",
+        "Declare a supply on the net of the named reference pin, or fix the reference. Until then the levels of those pins are not checked.",
     ),
     (
         "MISSING_PULL",

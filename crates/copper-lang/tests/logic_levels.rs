@@ -257,7 +257,7 @@ fn unresolved_explicit_rail_is_an_error() {
     let rx = receiver("voltage_max = 1.8V;");
     let found = logic_diagnostics("unresolved-io", &[DRIVER, ("rx", &rx)], board);
     assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!((found[0].code.as_str(), found[0].severity), ("LOGIC_LEVEL_UNRESOLVED", Severity::Error));
+    assert_eq!((found[0].code.as_str(), found[0].severity), ("LOGIC_LEVEL_UNRESOLVED", Severity::Warning));
     assert_eq!(found[0].subject.as_deref(), Some("U1.OUT"));
     assert!(found[0].message.contains("io_supply VDD"), "{}", found[0].message);
 

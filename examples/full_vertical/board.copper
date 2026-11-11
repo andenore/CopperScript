@@ -295,6 +295,7 @@ board FullVerticalTracker {
     supply V5 { voltage = 5V; external = true; }
     supply V3V3 { voltage = 3.3V; external = true; }
     supply V3V8 { voltage = 3.8V; external = true; }
+    supply V1V8_MODEM { voltage = 1.8V; source = U_MODEM.VDD_EXT; }
     supply GND { voltage = 0V; external = true; }
 
     power_state NORMAL {

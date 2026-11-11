@@ -341,7 +341,8 @@ domain's `supply_pads` (when they all resolve to one voltage). The rail voltage
 is the declared supply voltage on the net of the named pin or pad. A pin whose
 rail cannot be resolved takes no part in rail-based checks and gets no
 diagnostic. If a pin declares `io_supply` or a rail-relative threshold and it
-cannot be evaluated, ERC reports the error `LOGIC_LEVEL_UNRESOLVED`.
+cannot be evaluated, ERC reports the warning `LOGIC_LEVEL_UNRESOLVED`: the levels are not checked,
+usually because the rail net has no declared `supply`.
 
 A driver is a pin with direction `output` or `bidirectional`, a `digital` or
 `clock` domain and the `push_pull` drive mode. A pin that declares no drive mode
