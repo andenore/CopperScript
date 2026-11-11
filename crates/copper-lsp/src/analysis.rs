@@ -63,6 +63,7 @@ fn properties(kind: &str) -> &'static [&'static str] {
             "emi_role",
             "rise_time",
             "fall_time",
+            "slew_rate",
             "current_peak",
             "bond",
             "connection",

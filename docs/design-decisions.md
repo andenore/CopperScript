@@ -1124,7 +1124,7 @@ carry them. See [arched routing](language-reference.md#arched-corners).
 
 Pins and device pads MAY declare `emi_role` (`switch`, `hot_supply`,
 `hot_return`, `bootstrap`, `gate_drive`, `feedback`, `sense`) with
-`rise_time`, `fall_time` and `current_peak`; parts MAY declare a fixed or
+`rise_time`, `fall_time`, `slew_rate` and `current_peak`; parts MAY declare a fixed or
 ranged `switching_frequency`, `topology`, `shielding`, `esl`, `esr`,
 `self_resonance`, `output_capacitance` and `external_cable`; a component MAY
 fix `switching_frequency` inside the part's range. Values are datasheet facts
@@ -1133,6 +1133,21 @@ constraints `emission` (cable connectors, a limit `standard`, an optional
 `cable_length`; at most one per board, `CMP131`) and `emi_accept` (one
 component or pin, a `code` and a nonempty `reason`, `CMP132`) are validated
 and ignored by physical lowering.
+
+`slew_rate` is the switch-node dv/dt, a positive quantity in `V/ns`, `V/us`
+or `kV/us` (base unit V/s, `Dimension::SlewRate` in `copper-units`). The
+lexer already yields `3V` and `/ns` as separate tokens, so the parser joins an
+adjacent `/` and identifier to the unit of a number only when the result is one
+of those three units; no other `/` changes meaning and the lexer is untouched.
+It is not an enum of device technologies: a silicon or wide-bandgap class is
+inferred from the declared value (20 V/ns or more is reported as wide-bandgap
+class, information only). With a declared `rise_time`/`fall_time` the time wins
+for the timing; without one `emi-check` derives `0.8 V_swing / slew_rate`. The
+IR carries `profile.emi.slew_rate` only when declared, so unannotated libraries
+keep their IR. What `emi-check` assumes where the language says nothing (edge
+time, device capacitance, DC-bias loss, operating current) is a table of rule
+of thumb defaults in one module, always tagged, printed with its rule and
+reported as a band; declared values replace it.
 
 `copper_lang::emi::analyze` derives switching cells (controller, topology,
 frequency, role pins, switch nets, magnetic, catch diode, hot capacitors with

@@ -98,9 +98,12 @@ fn emi_profile_value(emi: &EmiProfile) -> Value {
     if let Some(role) = emi.role {
         result.push(("role", text(role.value())));
     }
-    for (name, quantity) in
-        [("rise_time", &emi.rise_time), ("fall_time", &emi.fall_time), ("current_peak", &emi.current_peak)]
-    {
+    for (name, quantity) in [
+        ("rise_time", &emi.rise_time),
+        ("fall_time", &emi.fall_time),
+        ("slew_rate", &emi.slew_rate),
+        ("current_peak", &emi.current_peak),
+    ] {
         if let Some(quantity) = quantity {
             result.push((name, quantity_value(quantity)));
         }

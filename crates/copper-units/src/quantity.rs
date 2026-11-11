@@ -23,10 +23,12 @@ pub enum Dimension {
     Power,
     Energy,
     Charge,
+    /// Voltage slew rate (switch-node dv/dt), base unit V/s.
+    SlewRate,
 }
 
 impl Dimension {
-    pub const ALL: [Dimension; 12] = [
+    pub const ALL: [Dimension; 13] = [
         Dimension::Voltage,
         Dimension::Resistance,
         Dimension::Capacitance,
@@ -39,6 +41,7 @@ impl Dimension {
         Dimension::Power,
         Dimension::Energy,
         Dimension::Charge,
+        Dimension::SlewRate,
     ];
 
     /// The Python class name.
@@ -56,6 +59,7 @@ impl Dimension {
             Dimension::Power => "Power",
             Dimension::Energy => "Energy",
             Dimension::Charge => "Charge",
+            Dimension::SlewRate => "SlewRate",
         }
     }
 
@@ -80,6 +84,7 @@ impl Dimension {
             Dimension::Power => &[("W", "1"), ("mW", "1e-3")],
             Dimension::Energy => &[("J", "1"), ("mJ", "1e-3"), ("uJ", "1e-6")],
             Dimension::Charge => &[("C", "1"), ("mC", "1e-3"), ("uC", "1e-6")],
+            Dimension::SlewRate => &[("V/s", "1"), ("V/us", "1e6"), ("kV/us", "1e9"), ("V/ns", "1e9")],
         }
     }
 

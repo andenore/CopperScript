@@ -32,14 +32,33 @@ const BAND_FILL: &str = "#f2a900";
 #[derive(Clone, Debug, PartialEq)]
 pub struct Harmonic {
     pub frequency_hz: f64,
-    /// DM + CM added as magnitudes.
+    /// DM + CM added as magnitudes (the nominal case).
     pub total_dbuv: f64,
+    /// Lower and upper end of the band over the rule-of-thumb inputs, when the finding has one. The
+    /// stem is drawn at the high end (the headline and the margin), the whisker spans low to high.
+    pub low_dbuv: Option<f64>,
+    pub high_dbuv: Option<f64>,
     pub dm_dbuv: Option<f64>,
     pub cm_dbuv: Option<f64>,
     pub limit_qp: Option<f64>,
     pub limit_avg: Option<f64>,
     pub margin_db: Option<f64>,
     pub uncertainty_db: f64,
+}
+
+impl Harmonic {
+    /// The level of the stem: the high end of the band, else the total.
+    fn level(&self) -> f64 {
+        self.high_dbuv.unwrap_or(self.total_dbuv)
+    }
+
+    /// The band, when the harmonic has one that is visibly open.
+    fn band(&self) -> Option<(f64, f64)> {
+        match (self.low_dbuv, self.high_dbuv) {
+            (Some(low), Some(high)) if high - low > 0.05 => Some((low, high)),
+            _ => None,
+        }
+    }
 }
 
 /// What one panel shows: a cell's conducted spectrum.
@@ -50,7 +69,7 @@ pub struct SpectrumPanel {
     pub frequency_hz: Option<f64>,
     /// The `emission` standard whose conducted limits are drawn, when one is declared.
     pub standard: Option<String>,
-    /// The finding's tags (`worst_case_current`, `assumed_edge_time`, `differential_mode_only`, ...).
+    /// The finding's tags (`worst_case_current`, `rule_of_thumb_edge`, `differential_mode_only`, ...).
     pub tags: Vec<String>,
     pub harmonics: Vec<Harmonic>,
 }
@@ -87,6 +106,8 @@ pub fn panels_from_report(report: &Value) -> Vec<SpectrumPanel> {
                 Some(Harmonic {
                     frequency_hz: field(h, "frequency_hz")?,
                     total_dbuv: field(h, "total_dbuv")?,
+                    low_dbuv: field(h, "low_dbuv"),
+                    high_dbuv: field(h, "high_dbuv"),
                     dm_dbuv: field(h, "dm_dbuv"),
                     cm_dbuv: field(h, "cm_dbuv"),
                     limit_qp: field(h, "limit_qp"),
@@ -180,7 +201,7 @@ fn worst(harmonics: &[Harmonic]) -> Option<usize> {
         harmonics
             .iter()
             .enumerate()
-            .max_by(|a, b| a.1.total_dbuv.total_cmp(&b.1.total_dbuv).then(b.0.cmp(&a.0)))
+            .max_by(|a, b| a.1.level().total_cmp(&b.1.level()).then(b.0.cmp(&a.0)))
             .map(|(i, _)| i)
     })
 }
@@ -209,7 +230,8 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
     // Level axis: 10 dB gridlines around the data and the limits, at most 90 dB high.
     let mut values: Vec<f64> = Vec::new();
     for h in &panel.harmonics {
-        values.push(h.total_dbuv);
+        values.push(h.level());
+        values.extend(h.band().map(|b| b.0));
         values.extend(h.limit_qp);
         values.extend(h.limit_avg);
     }
@@ -335,7 +357,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         let h = &panel.harmonics[i];
         if h.uncertainty_db > 0.0 {
             let x = px(h.frequency_hz);
-            let (top_y, bottom_y) = (py(h.total_dbuv + h.uncertainty_db), py(h.total_dbuv - h.uncertainty_db));
+            let (top_y, bottom_y) = (py(h.level() + h.uncertainty_db), py(h.level() - h.uncertainty_db));
             out.push(format!(
                 "<rect class=\"uncertainty-band\" x=\"{}\" y=\"{}\" width=\"14\" height=\"{}\" fill=\"{BAND_FILL}\" fill-opacity=\"0.30\"/>",
                 n(x - 7.0),
@@ -359,17 +381,41 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
             ));
         }
     }
-    // Stems.
+    // Bands of the rule-of-thumb inputs: a whisker from the low to the high end behind each stem.
+    for h in &panel.harmonics {
+        if let Some((low, high)) = h.band() {
+            let x = px(h.frequency_hz);
+            let (top_y, bottom_y) = (py(high), py(low));
+            out.push(format!(
+                "<g class=\"rot-band\" data-frequency-hz=\"{}\" data-low-dbuv=\"{}\" data-high-dbuv=\"{}\"><rect x=\"{}\" y=\"{}\" width=\"8\" height=\"{}\" fill=\"{LEVEL}\" fill-opacity=\"0.22\"/>                 <path d=\"M {} {} L {} {} M {} {} L {} {}\" fill=\"none\" stroke=\"{LEVEL}\" stroke-opacity=\"0.7\" stroke-width=\"1.5\"/></g>",
+                n(h.frequency_hz),
+                n(low),
+                n(high),
+                n(x - 4.0),
+                n(top_y),
+                n(bottom_y - top_y),
+                n(x - 4.0),
+                n(top_y),
+                n(x + 4.0),
+                n(top_y),
+                n(x - 4.0),
+                n(bottom_y),
+                n(x + 4.0),
+                n(bottom_y)
+            ));
+        }
+    }
+    // Stems, at the high end of the band.
     let baseline = y0 + PLOT_HEIGHT;
     for h in &panel.harmonics {
-        let over_avg = h.limit_avg.is_some_and(|l| h.total_dbuv > l);
+        let over_avg = h.limit_avg.is_some_and(|l| h.level() > l);
         let color = if over_avg { WARNING } else { LEVEL };
-        let (x, y) = (px(h.frequency_hz), py(h.total_dbuv));
+        let (x, y) = (px(h.frequency_hz), py(h.level()));
         out.push(format!(
             "<g class=\"harmonic{}\" data-frequency-hz=\"{}\" data-dbuv=\"{}\"><line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{color}\" stroke-width=\"1.5\"/><circle cx=\"{}\" cy=\"{}\" r=\"3\" fill=\"{color}\"/></g>",
             if over_avg { " over-average" } else { "" },
             n(h.frequency_hz),
-            n(h.total_dbuv),
+            n(h.level()),
             n(x),
             n(baseline),
             n(x),
@@ -410,7 +456,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
             n(x0 + 8.0),
             n(y0 + 16.0),
             frequency_text(h.frequency_hz),
-            n(h.total_dbuv),
+            n(h.level()),
             n(h.uncertainty_db)
         ));
     }
@@ -421,9 +467,22 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         format!(
             "<line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"-9\" stroke=\"{LEVEL}\" stroke-width=\"1.5\"/><circle cx=\"0\" cy=\"-9\" r=\"3\" fill=\"{LEVEL}\"/>"
         ),
-        if has_cm { "harmonic, total level" } else { "harmonic, differential mode only" }.to_owned(),
+        match (has_cm, panel.harmonics.iter().any(|h| h.band().is_some())) {
+            (true, _) => "harmonic, total level",
+            (false, false) => "harmonic, differential mode only",
+            (false, true) => "harmonic at the high end of its band, differential mode only",
+        }
+        .to_owned(),
     )];
-    if panel.harmonics.iter().any(|h| h.limit_avg.is_some_and(|l| h.total_dbuv > l)) {
+    if panel.harmonics.iter().any(|h| h.band().is_some()) {
+        entries.push((
+            format!(
+                "<rect x=\"-4\" y=\"-12\" width=\"8\" height=\"13\" fill=\"{LEVEL}\" fill-opacity=\"0.22\" stroke=\"{LEVEL}\" stroke-opacity=\"0.7\"/>"
+            ),
+            "band: rule-of-thumb inputs".to_owned(),
+        ));
+    }
+    if panel.harmonics.iter().any(|h| h.limit_avg.is_some_and(|l| h.level() > l)) {
         entries.push((
             format!(
                 "<line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"-9\" stroke=\"{WARNING}\" stroke-width=\"1.5\"/><circle cx=\"0\" cy=\"-9\" r=\"3\" fill=\"{WARNING}\"/>"
@@ -510,6 +569,8 @@ mod tests {
         Harmonic {
             frequency_hz: 500e3 * f64::from(k),
             total_dbuv: level,
+            low_dbuv: None,
+            high_dbuv: None,
             dm_dbuv: Some(level),
             cm_dbuv: None,
             limit_qp: qp,
@@ -527,7 +588,7 @@ mod tests {
             standard: with_limits.then(|| "cispr32_class_b".to_owned()),
             tags: vec![
                 "worst_case_current".to_owned(),
-                "assumed_edge_time".to_owned(),
+                "rule_of_thumb_edge".to_owned(),
                 "differential_mode_only".to_owned(),
             ],
             harmonics: vec![
@@ -584,7 +645,7 @@ mod tests {
         assert_eq!(svg.matches("class=\"uncertainty-whisker\"").count(), 1);
         assert!(svg.contains("worst harmonic: 500 kHz at 60 dBuV, -14 dB to the average line"), "{svg}");
         assert!(svg.contains("screening estimate, not EMC qualification"));
-        assert!(svg.contains("worst_case_current, assumed_edge_time, differential_mode_only"));
+        assert!(svg.contains("worst_case_current, rule_of_thumb_edge, differential_mode_only"));
         // Explicit background, fixed palette: no CSS variables or currentColor.
         assert!(svg.contains("<rect width=\"900\" height=\"574\" fill=\"#ffffff\"/>"), "{svg}");
         assert!(!svg.contains("currentColor") && !svg.contains("var("));
@@ -603,6 +664,45 @@ mod tests {
         assert_eq!(svg.matches("class=\"cm\"").count(), 4);
         assert_eq!(svg.matches("class=\"dm\"").count(), 4);
         assert!(svg.contains("harmonic, total level"));
+    }
+
+    #[test]
+    fn a_band_is_a_whisker_behind_the_stem_at_the_high_end() {
+        let mut p = panel(true);
+        // Bands on the first two harmonics only; the others keep a single level.
+        p.harmonics[0].low_dbuv = Some(52.0);
+        p.harmonics[0].high_dbuv = Some(60.0);
+        p.harmonics[1].low_dbuv = Some(20.0);
+        p.harmonics[1].high_dbuv = Some(31.0);
+        let svg = spectrum_svg("EmiBuck", &[p.clone()]);
+        assert_eq!(svg.matches("<g class=\"rot-band\"").count(), 2, "{svg}");
+        assert!(svg.contains("data-low-dbuv=\"52\" data-high-dbuv=\"60\""), "{svg}");
+        assert!(svg.contains("band: rule-of-thumb inputs"));
+        assert!(svg.contains("harmonic at the high end of its band"));
+        // The whisker is drawn before (behind) the stems.
+        assert!(svg.find("class=\"rot-band\"").unwrap() < svg.find("<g class=\"harmonic").unwrap());
+        // The stem sits at the high end, not at the nominal total.
+        p.harmonics[1].high_dbuv = Some(33.0);
+        let moved = spectrum_svg("EmiBuck", &[p.clone()]);
+        assert!(moved.contains("data-frequency-hz=\"1000000\" data-dbuv=\"33\""), "{moved}");
+        // Deterministic, and no band elements without bands.
+        assert_eq!(moved, spectrum_svg("EmiBuck", &[p]));
+        let plain = spectrum_svg("EmiBuck", &[panel(true)]);
+        assert!(!plain.contains("rot-band") && !plain.contains("band: rule-of-thumb inputs"));
+    }
+
+    #[test]
+    fn the_band_is_read_from_the_report_harmonics() {
+        let report = copper_json::parse(
+            r#"{"findings":[{"code":"EMI-CONDUCTED","cell":"U1","tags":[],"measures":{"harmonics":[
+               {"frequency_hz":500000.0,"total_dbuv":40.0,"low_dbuv":32.0,"high_dbuv":44.5,"uncertainty_db":6.0},
+               {"frequency_hz":1000000.0,"total_dbuv":30.0,"uncertainty_db":6.0}]}}]}"#,
+        )
+        .unwrap();
+        let panels = panels_from_report(&report);
+        let h = &panels[0].harmonics;
+        assert_eq!((h[0].low_dbuv, h[0].high_dbuv), (Some(32.0), Some(44.5)));
+        assert_eq!((h[1].low_dbuv, h[1].high_dbuv), (None, None));
     }
 
     #[test]

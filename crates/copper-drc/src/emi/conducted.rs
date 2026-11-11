@@ -20,17 +20,9 @@ use copper_emi::estimate::limits::{Class, Detector};
 use copper_lang::model::ComponentValue;
 use copper_units::Dimension;
 
+use super::defaults::{DEFAULT_ESR, PACKAGE_ESL, RAMP_10_90};
 use super::*;
 
-/// Edge time assumed for a switch pin that declares none, s (10 to 90 %).
-const ASSUMED_EDGE: f64 = 10e-9;
-/// A linear ramp takes 80 % of its full (0 to 100 %) time between the 10 % and 90 % points.
-const RAMP_10_90: f64 = 0.8;
-/// ESR assumed for a ceramic capacitor whose part declares none, ohm.
-const DEFAULT_ESR: f64 = 5e-3;
-/// ESL assumed by SMD package, H.
-const PACKAGE_ESL: [(&str, f64); 5] =
-    [("0402", 0.4e-9), ("0603", 0.5e-9), ("0805", 0.6e-9), ("1206", 0.8e-9), ("1210", 0.9e-9)];
 /// Uncertainty below and from this frequency (literature envelope: 5 dB at low MHz, 7 to 12 dB above).
 const UNCERTAINTY_SPLIT: f64 = 5e6;
 const UNCERTAINTY_LOW_DB: f64 = 6.0;
@@ -92,9 +84,18 @@ struct CapacitorModel {
     capacitor: Capacitor,
     sources: Vec<String>,
     defaulted: bool,
+    /// The SMD package of a capacitor whose part declares no parasitics: the DC-bias rule of thumb applies.
+    package: Option<&'static str>,
 }
 
 impl CapacitorModel {
+    /// The capacitor after the DC-bias loss of its package (rule of thumb), when the rule applies.
+    fn derated(&self) -> Option<Capacitor> {
+        let package = self.package?;
+        let loss = defaults::dc_bias_loss(package);
+        Some(Capacitor { capacitance: self.capacitor.capacitance * (1.0 - loss), ..self.capacitor })
+    }
+
     fn describe(&self) -> String {
         format!(
             "{} {} ESR {} ESL {} ({})",
@@ -165,20 +166,26 @@ fn capacitor_model(view: &FlatElectricalView, reference: &str) -> Result<Capacit
         capacitor: Capacitor { capacitance, esr, esl },
         sources,
         defaulted,
+        package: if defaulted { package.map(|(code, _)| code) } else { None },
     })
 }
 
 /// Parallel combination of identical-type branches: capacitance adds, ESR and ESL combine as resistances.
 fn parallel(models: &[CapacitorModel]) -> Capacitor {
+    parallel_of(&models.iter().map(|m| m.capacitor).collect::<Vec<_>>())
+}
+
+/// [`parallel`] of resolved capacitors.
+fn parallel_of(capacitors: &[Capacitor]) -> Capacitor {
     let combine = |f: fn(&Capacitor) -> f64| {
-        if models.iter().any(|m| f(&m.capacitor) == 0.0) {
+        if capacitors.iter().any(|c| f(c) == 0.0) {
             0.0
         } else {
-            1.0 / models.iter().map(|m| 1.0 / f(&m.capacitor)).sum::<f64>()
+            1.0 / capacitors.iter().map(|c| 1.0 / f(c)).sum::<f64>()
         }
     };
     Capacitor {
-        capacitance: models.iter().map(|m| m.capacitor.capacitance).sum(),
+        capacitance: capacitors.iter().map(|c| c.capacitance).sum(),
         esr: combine(|c| c.esr),
         esl: combine(|c| c.esl),
     }
@@ -189,13 +196,16 @@ struct FilterModel {
     inductor: String,
     upstream_net: String,
     filter: InputFilter,
+    /// The filter with the DC-bias loss rule of thumb applied to the upstream ceramic capacitors that
+    /// declare no parasitics; `None` when no upstream capacitor is subject to it.
+    derated: Option<InputFilter>,
     components: Vec<String>,
     description: String,
     tags: Vec<String>,
 }
 
 enum FilterOutcome {
-    Modelled(FilterModel),
+    Modelled(Box<FilterModel>),
     /// No series element on the feed path of the hot supply net (the note lists ignored downstream feeds).
     NoneRecognised(Option<String>),
     /// The hot supply net is fed through transparent `dc_power_path` parts only: no filter inductor.
@@ -600,7 +610,7 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
         }
     }
     if models.iter().any(|m| m.defaulted) {
-        tags.push("default_capacitor_parasitics".to_owned());
+        tags.push(defaults::TAG_PARASITICS.to_owned());
     }
     let supply_capacitor = (!models.is_empty()).then(|| parallel(&models));
     let mut description = format!(
@@ -631,6 +641,11 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
             "; no upstream capacitor to the hot return recognised, so the filter is a series inductor only (first order)",
         ),
     }
+    if models.iter().any(|m| m.package.is_some()) {
+        description.push_str(
+            "; the DC-bias loss rule of thumb applies to the upstream ceramic capacitors that declare no parasitics (band corner)",
+        );
+    }
     if !through.is_empty() {
         description.push_str(&format!("; {through}"));
         tags.push("feed_resistance_not_modelled".to_owned());
@@ -641,14 +656,20 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
     let mut components = vec![s.reference.clone()];
     components.extend(models.iter().map(|m| m.component.clone()));
     components.extend(transparent.iter().map(|e| e.reference.clone()));
-    FilterOutcome::Modelled(FilterModel {
+    let filter = InputFilter { inductance, dcr: dcr.unwrap_or(0.0), parallel_capacitance, supply_capacitor };
+    let derated = models.iter().any(|m| m.package.is_some()).then(|| {
+        let capacitors: Vec<Capacitor> = models.iter().map(|m| m.derated().unwrap_or(m.capacitor)).collect();
+        InputFilter { supply_capacitor: Some(parallel_of(&capacitors)), ..filter }
+    });
+    FilterOutcome::Modelled(Box::new(FilterModel {
         inductor: s.reference.clone(),
         upstream_net: upstream,
-        filter: InputFilter { inductance, dcr: dcr.unwrap_or(0.0), parallel_capacitance, supply_capacitor },
+        filter,
+        derated,
         components,
         description,
         tags,
-    })
+    }))
 }
 
 /// `Class` of the declared emission standard's conducted line, when the standard has one.
@@ -769,24 +790,18 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         }
     };
 
-    // Edge time.
-    let positive = |q: &Option<Quantity>| q.as_ref().map(quantity).filter(|t| *t > 0.0);
-    let declared_edge = match (positive(&cell.rise_time), positive(&cell.fall_time)) {
-        (Some(r), Some(f)) => Some((r, f)),
-        (Some(t), None) | (None, Some(t)) => Some((t, t)),
-        (None, None) => None,
+    // Edge time: declared, derived from a declared slew rate, or the default slew band.
+    let Some(edge) = drive.edge.clone() else {
+        na(cx, format!("prediction skipped: {}", drive.edge_missing));
+        return;
     };
-    let assumed_edge = declared_edge.is_none();
-    let (rise_10_90, fall_10_90) = declared_edge.unwrap_or((ASSUMED_EDGE, ASSUMED_EDGE));
-    let (rise, fall) = (rise_10_90 / RAMP_10_90, fall_10_90 / RAMP_10_90);
-    let assumed_limit = 1.0 / (PI * 10.0 * ASSUMED_EDGE);
 
     // Input filter.
     let filter = detect_filter(view, cell);
     let (filter_model, filter_text, filter_status) = match filter {
         FilterOutcome::Modelled(model) => {
             let text = model.description.clone();
-            (Some(model), text, CoverageStatus::Executed)
+            (Some(*model), text, CoverageStatus::Executed)
         }
         FilterOutcome::NoneRecognised(note) => (
             None,
@@ -818,17 +833,38 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         }
     }
 
-    // The prediction.
+    // The prediction. The nominal case comes first; the corners of the rule-of-thumb bands follow:
+    // {fast, slow edge} x {capacitance un-derated, derated}. The operating-current band is analytic.
     let class = conducted_class(&cx.standard);
-    let mut input = ConductedInput::buck(vin, vout, current, drive.frequency, rise, hot.capacitor);
-    input.current_rise_time = rise;
-    input.current_fall_time = fall;
-    input.hot_loop_inductance = loop_inductance;
-    input.filter = filter_model.as_ref().map(|f| f.filter);
-    input.limit_class = class.unwrap_or(Class::B);
-    if assumed_edge {
-        input.max_frequency = assumed_limit;
+    let dc_band = hot.package.is_some() || filter_model.as_ref().is_some_and(|f| f.derated.is_some());
+    let nominal_derated = dc_band && defaults::nominal_is_derated(vin);
+    #[derive(Clone, Copy)]
+    struct Case {
+        edge: Corner,
+        derated: bool,
     }
+    let mut cases = vec![Case { edge: Corner::Nominal, derated: nominal_derated }];
+    let edge_corners: &[Corner] = if edge.banded() { &[Corner::Fast, Corner::Slow] } else { &[Corner::Nominal] };
+    let capacitor_states: &[bool] = if dc_band { &[false, true] } else { &[false] };
+    for corner in edge_corners {
+        for derated in capacitor_states {
+            cases.push(Case { edge: *corner, derated: *derated });
+        }
+    }
+    let hot_at = |derated: bool| if derated { hot.derated().unwrap_or(hot.capacitor) } else { hot.capacitor };
+    let build = |case: Case| {
+        let (rise_10_90, fall_10_90) = edge.rise_fall(case.edge);
+        let (rise, fall) = (rise_10_90 / RAMP_10_90, fall_10_90 / RAMP_10_90);
+        let mut input = ConductedInput::buck(vin, vout, current, drive.frequency, rise, hot_at(case.derated));
+        input.current_rise_time = rise;
+        input.current_fall_time = fall;
+        input.hot_loop_inductance = loop_inductance;
+        input.filter =
+            filter_model.as_ref().map(|f| if case.derated { f.derated.unwrap_or(f.filter) } else { f.filter });
+        input.limit_class = class.unwrap_or(Class::B);
+        input
+    };
+    let input = build(cases[0]);
     let report = match conducted::predict(&input) {
         Ok(report) => report,
         Err(error) => {
@@ -840,23 +876,37 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         na(
             cx,
             format!(
-                "no harmonic of {} lies in {} to {}{}",
+                "no harmonic of {} lies in {} to {}",
                 si(drive.frequency, "Hz"),
                 si(input.min_frequency, "Hz"),
-                si(input.max_frequency, "Hz"),
-                if assumed_edge { " (range restricted because the edge time is assumed)" } else { "" }
+                si(input.max_frequency, "Hz")
             ),
         );
         return;
     }
+    let mut corner_reports = Vec::new();
+    for case in &cases[1..] {
+        match conducted::predict(&build(*case)) {
+            Ok(corner) => corner_reports.push(corner),
+            Err(error) => {
+                na(cx, format!("prediction skipped: {error}"));
+                return;
+            }
+        }
+    }
+    let offset_db = defaults::operating_current_offset_db();
 
     // Per-harmonic rows with margins only against a declared standard that has a conducted table.
+    // `total` is the nominal case at the current limit; `high` the largest level over the corner cases at the
+    // limit; `low` the smallest level over them at the typical operating current. The margin is the high end's.
     struct Row {
         n: u32,
         f: f64,
         source: f64,
         dm: f64,
         total: f64,
+        low: f64,
+        high: f64,
         qp: Option<f64>,
         avg: Option<f64>,
         margin_qp: Option<f64>,
@@ -867,16 +917,28 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         .iter()
         .map(|h| {
             let on = class.is_some();
+            let mut levels = vec![h.total_dbuv];
+            for corner in &corner_reports {
+                if let Some(other) = corner.harmonics.iter().find(|o| o.harmonic == h.harmonic) {
+                    levels.push(other.total_dbuv);
+                }
+            }
+            let high = levels.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let low = levels.iter().copied().fold(f64::INFINITY, f64::min) + offset_db;
+            let qp = h.limit_quasi_peak_dbuv.filter(|_| on);
+            let avg = h.limit_average_dbuv.filter(|_| on);
             Row {
                 n: h.harmonic,
                 f: h.frequency,
                 source: h.source_current_peak,
                 dm: h.dm_dbuv,
                 total: h.total_dbuv,
-                qp: h.limit_quasi_peak_dbuv.filter(|_| on),
-                avg: h.limit_average_dbuv.filter(|_| on),
-                margin_qp: h.margin_quasi_peak_db.filter(|_| on),
-                margin_avg: h.margin_average_db.filter(|_| on),
+                low,
+                high,
+                qp,
+                avg,
+                margin_qp: qp.map(|limit| limit - high),
+                margin_avg: avg.map(|limit| limit - high),
             }
         })
         .collect();
@@ -892,7 +954,7 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
             .min_by(|(_, a), (_, b)| row_margin(a).unwrap().total_cmp(&row_margin(b).unwrap()))
             .map(|(i, _)| i)
     } else {
-        rows.iter().enumerate().max_by(|(_, a), (_, b)| a.total.total_cmp(&b.total)).map(|(i, _)| i)
+        rows.iter().enumerate().max_by(|(_, a), (_, b)| a.high.total_cmp(&b.high)).map(|(i, _)| i)
     }
     .unwrap_or(0);
     let worst = &rows[worst_index];
@@ -912,16 +974,27 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     let uncertainty = |f: f64| if f < UNCERTAINTY_SPLIT { UNCERTAINTY_LOW_DB } else { UNCERTAINTY_HIGH_DB };
     let fundamental = rows.iter().find(|r| r.n == 1);
 
+    // The edge and capacitance the nominal case used.
+    let (rise_10_90, fall_10_90) = edge.rise_fall(Corner::Nominal);
+    let (rise, fall) = (rise_10_90 / RAMP_10_90, fall_10_90 / RAMP_10_90);
+    let hot_nominal = hot_at(nominal_derated);
+    let hot_derated = hot.derated();
+    let loss = hot.package.map(defaults::dc_bias_loss);
+
     // Tags.
     let mut tags: Vec<String> = Vec::new();
     tags.extend(summary.tags.iter().cloned());
     tags.push("worst_case_current".to_owned());
     tags.push("differential_mode_only".to_owned());
-    if assumed_edge {
-        tags.push("assumed_edge_time".to_owned());
+    if let Some(tag) = edge.tag() {
+        tags.push(tag.to_owned());
+    }
+    tags.push(defaults::TAG_CURRENT.to_owned());
+    if dc_band {
+        tags.push(defaults::TAG_DC_BIAS.to_owned());
     }
     if hot.defaulted {
-        tags.push("default_capacitor_parasitics".to_owned());
+        tags.push(defaults::TAG_PARASITICS.to_owned());
     }
     if let Some(model) = &filter_model {
         for tag in &model.tags {
@@ -969,15 +1042,15 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
             },
         ),
     );
-    let edge_source = if assumed_edge {
-        format!(
-            "ASSUMED: the switch pin declares no rise_time/fall_time; 10 ns (10-90 %) assumed and only harmonics below {} \
-             (1 / (10 pi t)) are reported, where the differential-mode level is nearly independent of the edge",
-            si(assumed_limit, "Hz")
-        )
-    } else {
-        "switch pin rise_time/fall_time (10-90 % datasheet values)".to_owned()
-    };
+    let edge_source = format!(
+        "{}; {}",
+        edge.describe(Some(vin)),
+        match edge.basis {
+            EdgeBasis::Declared => "declared by the switch pin".to_owned(),
+            EdgeBasis::SlewRate => "exact: derived from the declared slew_rate".to_owned(),
+            EdgeBasis::RuleOfThumb => "a rule-of-thumb band, not a datasheet value".to_owned(),
+        }
+    );
     put(&mut inputs, "rise_time_10_90", input_entry(rise_10_90, "s", edge_source.clone()));
     put(&mut inputs, "fall_time_10_90", input_entry(fall_10_90, "s", edge_source));
     put(
@@ -985,20 +1058,33 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         "rise_time_0_100",
         input_entry(rise, "s", "10-90 % time divided by 0.8 (linear ramp), the ramp time of the trapezoid".to_owned()),
     );
+    let current_rule = defaults::current_rule();
     put(
         &mut inputs,
         "load_current",
         input_entry(
             current,
             "A",
-            "switch pin current_peak, the current LIMIT used as the on-time current amplitude (worst case); no load current is declared"
-                .to_owned(),
+            format!(
+                "switch pin current_peak, the current LIMIT used as the on-time current amplitude (worst case, the headline); no load current is declared; band low end {} A {}",
+                rounded(current * defaults::OPERATING_CURRENT_FRACTION, 4),
+                defaults::rule_text_unreplaceable(&current_rule)
+            ),
         ),
     );
+    let dc_text = if dc_band {
+        let package = hot.package.unwrap_or("");
+        format!(
+            "DC-bias loss {}",
+            defaults::rule_text(&defaults::dc_bias_rule(package), "esr and esl (or self_resonance) on the part")
+        )
+    } else {
+        "no DC-bias derating applied".to_owned()
+    };
     put(
         &mut inputs,
         "hot_capacitor",
-        input_entry(hot.capacitor.capacitance, "F", format!("{}; no DC-bias derating applied", hot.describe())),
+        input_entry(hot_nominal.capacitance, "F", format!("{}; {dc_text}", hot.describe())),
     );
     put(&mut inputs, "hot_capacitor_esr", input_entry(hot.capacitor.esr, "ohm", hot.sources.join("; ")));
     put(&mut inputs, "hot_capacitor_esl", input_entry(hot.capacitor.esl, "H", hot.sources.join("; ")));
@@ -1022,28 +1108,29 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
             format!("{} of the declared range, evaluated there only", drive.frequency_note)
         }
     ));
-    lines.push(if assumed_edge {
-        format!(
-            "edge time ASSUMED {} (10-90 %), the switch pin declares none; reported harmonics limited to below {} where the level is nearly independent of it",
-            si(ASSUMED_EDGE, "s"),
-            si(assumed_limit, "Hz")
-        )
-    } else {
-        format!(
+    lines.push(match edge.basis {
+        EdgeBasis::Declared => format!(
             "edge time rise {} / fall {} (10-90 %, switch pin), ramp {} / {} (0-100 %, divided by 0.8)",
             si(rise_10_90, "s"),
             si(fall_10_90, "s"),
             si(rise, "s"),
             si(fall, "s")
-        )
+        ),
+        _ => format!("{}; ramp {} (0-100 %, divided by 0.8)", edge.input_line(Some(vin)), si(rise, "s")),
     });
+    for note in &drive.edge_notes {
+        lines.push(note.clone());
+    }
     lines.push(format!(
-        "load current {} = the switch current LIMIT (current_peak), worst case, no load current is declared; rescale a level by 20 log10(I / {}) dB",
+        "load current {} = the switch current LIMIT (current_peak), worst case and the headline, no load current is declared; band low end {} = {} x the limit, {:.1} dB {}",
         si(current, "A"),
-        si(current, "A")
+        si(current * defaults::OPERATING_CURRENT_FRACTION, "A"),
+        defaults::OPERATING_CURRENT_FRACTION,
+        offset_db,
+        defaults::rule_text_unreplaceable(&current_rule)
     ));
     lines.push(format!(
-        "hot capacitor {}{}; DC-bias derating is not applied (a ceramic can lose more than half its capacitance at bias, so real levels can be higher)",
+        "hot capacitor {}{}; {}",
         hot.describe(),
         if others.is_empty() {
             String::new()
@@ -1053,6 +1140,32 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
                 other_names.join(", "),
                 si(other_capacitance, "F")
             )
+        },
+        if dc_band {
+            let capacitance_text = match (hot_derated, loss) {
+                (Some(derated), Some(loss)) => format!(
+                    "nominal {} in a band of {} (derated by {:.0} %) to {} (no loss)",
+                    si(hot_nominal.capacitance, "F"),
+                    si(derated.capacitance, "F"),
+                    loss * 100.0,
+                    si(hot.capacitor.capacitance, "F")
+                ),
+                _ => "the hot capacitor declares its parasitics, only upstream capacitors are derated".to_owned(),
+            };
+            format!(
+                "{capacitance_text}; DC-bias loss {}{}",
+                defaults::rule_text(
+                    &defaults::dc_bias_rule(hot.package.unwrap_or("0805")),
+                    "esr and esl (or self_resonance) on the part"
+                ),
+                if filter_model.as_ref().is_some_and(|f| f.derated.is_some()) {
+                    "; upstream filter capacitors are derated in the same corner"
+                } else {
+                    ""
+                }
+            )
+        } else {
+            "DC-bias derating is not applied: the part declares its parasitics".to_owned()
         }
     ));
     lines.push(format!(
@@ -1077,22 +1190,32 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     // Assumptions.
     let mut assumptions: Vec<String> = report.assumptions.clone();
     assumptions.push(
-        "load current is the switch current limit (current_peak), not an operating current: levels are a worst case and scale as 20 log10(I / current_peak) dB".to_owned(),
+        "load current is the switch current limit (current_peak), not an operating current: the headline levels are the worst case; the low end of each band is at 0.4 x the limit (a rule of thumb: limit about 1.5 x rated output, operation about 0.6 x rated), about 8 dB lower".to_owned(),
     );
     assumptions.push(
         "datasheet 10-90 % edge times are converted to the 0-100 % ramp of the trapezoid by dividing by 0.8 (linear ramp)".to_owned(),
     );
-    if assumed_edge {
-        assumptions.push(format!(
-            "edge time not declared: 10 ns (10-90 %) assumed; harmonics above {} (1 / (10 pi t_assumed)) are not reported because they depend on the true edge",
-            si(assumed_limit, "Hz")
-        ));
+    match edge.basis {
+        EdgeBasis::RuleOfThumb => assumptions.push(format!(
+            "edge time not declared (no rise_time, fall_time or slew_rate): the default slew band applies, {}; every harmonic to 30 MHz is reported with its band, which collapses below the edge corner",
+            defaults::edge_rule()
+        )),
+        EdgeBasis::SlewRate => assumptions
+            .push("edge time derived from the declared slew_rate: t(10-90 %) = 0.8 V_swing / slew, exact for a linear ramp".to_owned()),
+        EdgeBasis::Declared => {}
     }
     if hot.defaulted {
         assumptions.push(format!(
             "default capacitor parasitics ({}): ESR {} for a ceramic and ESL by package (0402 0.4 nH, 0603 0.5 nH, 0805 0.6 nH, 1206 0.8 nH, 1210 0.9 nH) where the part declares none",
             hot.component,
             si(DEFAULT_ESR, "ohm")
+        ));
+    }
+    if dc_band {
+        assumptions.push(format!(
+            "ceramic DC-bias loss is a rule of thumb ({}); the band takes the minimum and maximum level over the capacitance with and without it, the nominal is the {} value",
+            defaults::dc_bias_rule(hot.package.unwrap_or("0805")),
+            if nominal_derated { "derated" } else { "un-derated" }
         ));
     }
     assumptions.push(format!("common mode is not modelled: {COMMON_MODE_REASON}"));
@@ -1116,17 +1239,31 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         ));
     }
     assumptions.push(filter_text.clone());
+    assumptions.push(format!(
+        "bands: each harmonic's high end is the largest level over {} case(s) (edge fast/slow x capacitance un-derated/derated where those are rule-of-thumb bands) at the current limit and drives the headline and margin; the low end is the smallest level over them at 0.4 x the limit",
+        cases.len()
+    ));
 
     // Message.
     let level_part = match worst_margin {
         Some(m) => format!(
-            "{:.1} dBuV ({:+.1} dB to the {} line, uncertainty {} dB)",
+            "{:.1} dBuV (band [{:.1} .. {:.1}] dBuV, nominal {:.1}; {:+.1} dB to the {} line from the high end, uncertainty {} dB)",
+            worst.high,
+            worst.low,
+            worst.high,
             worst.total,
             m,
             detector_text(worst_detector),
             uncertainty(worst.f)
         ),
-        None => format!("{:.1} dBuV (uncertainty {} dB)", worst.total, uncertainty(worst.f)),
+        None => format!(
+            "{:.1} dBuV (band [{:.1} .. {:.1}] dBuV, nominal {:.1}; uncertainty {} dB)",
+            worst.high,
+            worst.low,
+            worst.high,
+            worst.total,
+            uncertainty(worst.f)
+        ),
     };
     let mut message = format!(
         "{}: conducted emission at the input (differential mode only, 50 uH V-network): {} {} {}",
@@ -1136,45 +1273,57 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         level_part
     );
     if let Some(f) = fundamental {
-        message.push_str(&format!("; fundamental {} {:.1} dBuV", si(f.f, "Hz"), f.total));
+        message.push_str(&format!(
+            "; fundamental {} {:.1} dBuV (band [{:.1} .. {:.1}])",
+            si(f.f, "Hz"),
+            f.high,
+            f.low,
+            f.high
+        ));
     } else {
         message.push_str(&format!("; fundamental {} is below the 150 kHz band edge", si(drive.frequency, "Hz")));
     }
     if has_margins {
         message.push_str(&format!(
-            "; {over_qp} of {} harmonics above the quasi-peak line, {over_avg} above the average line",
+            "; {over_qp} of {} harmonics above the quasi-peak line, {over_avg} above the average line (high ends)",
             rows.len()
         ));
     } else {
         message.push_str("; levels only, no conducted limit applied");
     }
     message.push_str(&format!(
-        "; load current {} is the switch current LIMIT (worst case): a level changes by 20 log10(I / {}) dB at another current",
+        "; the band rests on rule-of-thumb inputs ({}): the high end is the worst case at the current limit {}, the low end is at {} x the limit ({:.1} dB)",
+        {
+            let mut which = vec!["operating current"];
+            if edge.banded() {
+                which.insert(0, "edge time");
+            }
+            if dc_band {
+                which.push("ceramic DC-bias loss");
+            }
+            which.join(", ")
+        },
         si(current, "A"),
-        si(current, "A")
+        defaults::OPERATING_CURRENT_FRACTION,
+        offset_db
     ));
     message.push_str(&format!(
-        "; Vin {} Vout {} duty {:.3}, {} {}, hot capacitor {} ({} ESR, {} ESL{}), hot loop {} ({}), {}, no DC-bias derating, common mode not modelled",
+        "; Vin {} Vout {} duty {:.3}, {} {}, edge {}, hot capacitor {} ({} ESR, {} ESL{}), hot loop {} ({}), {}, {}, common mode not modelled",
         si(vin, "V"),
         si(vout, "V"),
         vout / vin,
         si(drive.frequency, "Hz"),
         if drive.frequency_note == "fixed" { "fixed".to_owned() } else { format!("{} of the range", drive.frequency_note) },
-        si(hot.capacitor.capacitance, "F"),
+        edge.describe(Some(vin)),
+        si(hot_nominal.capacitance, "F"),
         si(hot.capacitor.esr, "ohm"),
         si(hot.capacitor.esl, "H"),
         if hot.defaulted { ", package defaults" } else { "" },
         si(loop_inductance, "H"),
         summary.basis,
-        filter_text
+        filter_text,
+        if dc_band { "DC-bias loss a rule-of-thumb band" } else { "no DC-bias derating" }
     ));
-    if assumed_edge {
-        message.push_str(&format!(
-            "; edge time ASSUMED {} (not declared), harmonics limited to below {}",
-            si(ASSUMED_EDGE, "s"),
-            si(assumed_limit, "Hz")
-        ));
-    }
 
     let mut objects = vec![cell.controller.clone(), hot.component.clone()];
     let mut nets: Vec<String> = cell.hot_supply_net.iter().chain(cell.hot_return_net.iter()).cloned().collect();
@@ -1194,23 +1343,28 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     dedup(&mut finding.tags);
     finding.subjects.extend(subjects);
     dedup(&mut finding.subjects);
-    finding.rank = worst.total;
+    finding.rank = worst.high;
     let method = format!(
         "linear-network prediction (copper_emi::conducted): trapezoidal input-current harmonics of a buck, amplitude {} \
          (current_peak, the switch current limit), through the hot capacitor branch with {} loop inductance{} into the 50 uH V-network; \
-         level is the RMS dBuV of the {} harmonic at the worst LISN port (peak = quasi-peak = average for isolated lines); differential mode only; uncertainty 6 dB below 5 MHz, 10 dB above",
+         level is the RMS dBuV of the {} harmonic at the worst LISN port (peak = quasi-peak = average for isolated lines); differential mode only; \
+         the value is the HIGH end of a band over rule-of-thumb inputs (largest level over {} corner case(s) at the current limit; the low end is at 0.4 x the limit), the margin is the high end's; \
+         uncertainty 6 dB below 5 MHz, 10 dB above, on top of the band",
         si(current, "A"),
         si(loop_inductance, "H"),
         if filter_model.is_some() { " and the recognised input filter" } else { "" },
         if has_margins { "least-margin" } else { "highest-level" },
+        cases.len()
     );
     finding.estimate = Some(Estimate {
         quantity: "conducted_emission".to_owned(),
-        value: rounded(worst.total, 2),
+        value: rounded(worst.high, 2),
         unit: "dBuV".to_owned(),
         method,
         uncertainty_db: uncertainty(worst.f),
         frequency_hz: Some(rounded(worst.f, 0)),
+        band_db: Some([rounded(worst.low, 2), rounded(worst.high, 2)]),
+        basis: Some(defaults::BASIS.to_owned()),
     });
     finding.margin_db = worst_margin.map(|m| rounded(m, 2));
 
@@ -1223,19 +1377,68 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     put(m, "duty", num(vout / vin, 6));
     put(m, "switching_frequency_hz", num(drive.frequency, 0));
     put(m, "frequency_basis", Value::from(drive.frequency_note));
-    put(m, "edge_time_assumed", Value::Bool(assumed_edge));
+    put(
+        m,
+        "edge_basis",
+        Value::from(match edge.basis {
+            EdgeBasis::Declared => "declared",
+            EdgeBasis::SlewRate => "slew_rate",
+            EdgeBasis::RuleOfThumb => "rule_of_thumb",
+        }),
+    );
     put(m, "rise_time_10_90_ns", num(rise_10_90 * 1e9, 4));
     put(m, "fall_time_10_90_ns", num(fall_10_90 * 1e9, 4));
     put(m, "ramp_time_0_100_ns", num(rise * 1e9, 4));
-    put(m, "assumed_edge_frequency_limit_hz", if assumed_edge { num(assumed_limit, 0) } else { Value::Null });
+    put(
+        m,
+        "edge_time_band_ns",
+        if edge.banded() { Value::Array(vec![num(edge.fast * 1e9, 4), num(edge.slow * 1e9, 4)]) } else { Value::Null },
+    );
+    put(m, "slew_rate_v_per_ns", edge.slew.map_or(Value::Null, |s| num(s, 4)));
     put(m, "current_amplitude_a", num(current, 4));
-    put(m, "current_basis", Value::from("switch pin current_peak (current limit, worst case)"));
+    put(
+        m,
+        "current_band_a",
+        Value::Array(vec![num(current * defaults::OPERATING_CURRENT_FRACTION, 4), num(current, 4)]),
+    );
+    put(m, "current_low_offset_db", num(offset_db, 3));
+    put(
+        m,
+        "current_basis",
+        Value::from(
+            "switch pin current_peak (current limit, worst case); band low end 0.4 x the limit (rule of thumb)",
+        ),
+    );
     put(m, "hot_capacitor", Value::from(hot.component.as_str()));
-    put(m, "hot_capacitor_uf", num(hot.capacitor.capacitance * 1e6, 6));
+    put(m, "hot_capacitor_uf", num(hot_nominal.capacitance * 1e6, 6));
+    put(
+        m,
+        "hot_capacitor_band_uf",
+        match hot_derated {
+            Some(derated) => {
+                Value::Array(vec![num(derated.capacitance * 1e6, 6), num(hot.capacitor.capacitance * 1e6, 6)])
+            }
+            None => Value::Null,
+        },
+    );
     put(m, "hot_capacitor_esr_mohm", num(hot.capacitor.esr * 1e3, 4));
     put(m, "hot_capacitor_esl_nh", num(hot.capacitor.esl * 1e9, 4));
     put(m, "hot_capacitor_sources", Value::Array(hot.sources.iter().map(|s| Value::from(s.as_str())).collect()));
-    put(m, "dc_bias_derating", Value::from("not applied"));
+    put(
+        m,
+        "dc_bias_derating",
+        Value::from(if dc_band {
+            if nominal_derated {
+                "rule of thumb band; nominal derated"
+            } else {
+                "rule of thumb band; nominal not derated"
+            }
+        } else {
+            "not applied"
+        }),
+    );
+    put(m, "dc_bias_loss", loss.map_or(Value::Null, |l| num(l, 3)));
+    put(m, "band_cases", Value::from(cases.len() as i64));
     put(m, "ignored_parallel_capacitors", Value::Array(other_names.iter().map(|n| Value::from(n.as_str())).collect()));
     put(m, "hot_loop_inductance_nh", num(loop_inductance * 1e9, 4));
     put(m, "hot_loop_inductance_basis", Value::from(summary.basis.as_str()));
@@ -1291,6 +1494,8 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         put(&mut item, "dm_dbuv", num(r.dm, 2));
         put(&mut item, "cm_dbuv", Value::Null);
         put(&mut item, "total_dbuv", num(r.total, 2));
+        put(&mut item, "low_dbuv", num(r.low, 2));
+        put(&mut item, "high_dbuv", num(r.high, 2));
         put(&mut item, "limit_qp", r.qp.map_or(Value::Null, |v| num(v, 2)));
         put(&mut item, "limit_avg", r.avg.map_or(Value::Null, |v| num(v, 2)));
         put(&mut item, "margin_qp_db", r.margin_qp.map_or(Value::Null, |v| num(v, 2)));
@@ -1308,7 +1513,7 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     // Coverage.
     let mut detail = lines.join("; ");
     detail.push_str(&format!(
-        "; {} harmonic(s) reported, screening evidence with {UNCERTAINTY_LOW_DB} dB uncertainty below 5 MHz and {UNCERTAINTY_HIGH_DB} dB above, never a pass or fail",
+        "; {} harmonic(s) reported as bands (high end at the current limit, low end at 0.4 x the limit), screening evidence with {UNCERTAINTY_LOW_DB} dB uncertainty below 5 MHz and {UNCERTAINTY_HIGH_DB} dB above on top of the band, never a pass or fail",
         rows.len()
     ));
     cx.cover(check.clone(), CoverageStatus::Executed, detail);

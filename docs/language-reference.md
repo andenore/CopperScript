@@ -310,8 +310,9 @@ Switching converters, clock drivers and their passives can carry optional EMI
 facts as flat attributes; nothing is required, and a library without them
 compiles to the same IR and produces no new diagnostics. Pins and device pads
 take `emi_role` (`switch`, `hot_supply`, `hot_return`, `bootstrap`,
-`gate_drive`, `feedback` or `sense`), `rise_time`, `fall_time` and
-`current_peak`; parts take `switching_frequency` or
+`gate_drive`, `feedback` or `sense`), `rise_time`, `fall_time`, `slew_rate`
+(the switch-node dv/dt, written with a slash unit: `3V/ns`, `500V/us` or `2kV/us`)
+and `current_peak`; parts take `switching_frequency` or
 `switching_frequency_min`/`_max`, `topology`, `shielding`, `esl`, `esr`,
 `self_resonance`, `output_capacitance` and `external_cable`. A component may
 fix `switching_frequency` inside the part's range.
@@ -325,6 +326,16 @@ part Buck {
               emi_role = switch; rise_time = 5ns; current_peak = 4.5A; }
 }
 ```
+
+`slew_rate` is a positive voltage slew rate; it classifies the device (a value
+of 20 V/ns or more is reported as wide-bandgap class) and gives the edge time
+`0.8 V_swing / slew_rate` when no `rise_time`/`fall_time` is declared. When both
+are declared `rise_time` wins for the timing and `emi-check` notes a
+disagreement of more than a factor 3. Edge time, device capacitance, ceramic
+DC-bias loss and operating current that the language leaves open are filled by
+rule-of-thumb defaults of `copper emi-check` (see the EMI specification, section
+10.1): declared values always win, a default is tagged and printed with its
+rule, and a result that rests on one is reported as a band.
 
 Invalid values are `CMP130`. `constraint emission(J1) { standard = "cispr32_class_b"; }`
 names cable connectors (`CMP131`; at most one per board) and
@@ -2112,14 +2123,21 @@ For each `buck` cell it also predicts the conducted emission at the input
 (`EMI-CONDUCTED`, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential
 mode only; common mode is not modelled) from the declared supply voltages of
 the hot-supply and output nets, the switching frequency, the switch pin's
-`rise_time`/`fall_time` and `current_peak` (used as the load current, so a
-worst case, tagged `worst_case_current`), the hot capacitor's value and its
-part's `esr`/`esl`/`self_resonance` (package defaults, tagged
-`default_capacitor_parasitics`, otherwise), the hot-loop inductance and a
+`rise_time`/`fall_time` or `slew_rate` and `current_peak` (the current limit,
+used as the load current, so the worst case and the headline, tagged
+`worst_case_current`; the low end of each band is 0.4 x the limit, tagged
+`rule_of_thumb_current`), the hot capacitor's value and its part's
+`esr`/`esl`/`self_resonance` (package defaults, tagged
+`default_capacitor_parasitics`, otherwise, together with a ceramic DC-bias loss
+band, tagged `rule_of_thumb_dc_bias`), the hot-loop inductance and a
 recognised series input filter (one inductor or ferrite between the hot-supply
 net and an upstream net with capacitors to the hot return). A missing edge time
-is assumed to be 10 ns and only harmonics below 3 MHz are reported
-(`assumed_edge_time`); other missing inputs skip the prediction with the reason
+becomes a default slew band (3 V/ns nominal, 10 V/ns fast, 1 V/ns slow on the
+hot-supply voltage, tagged `rule_of_thumb_edge`) and every harmonic to 30 MHz
+is reported with `low_dbuv` and `high_dbuv`; the headline and the margin use
+the high end. The radiated estimates (`EMI-HOT-LOOP`, `EMI-SWITCH-NODE`) use
+the same band: the nominal level with `band_db` `[slow, fast]` and the margin
+from the fast bound. Other missing inputs skip the prediction with the reason
 as coverage. With a `cispr32_class_a` or `cispr32_class_b` `emission`
 constraint the worst harmonic carries a margin to the quasi-peak and average
 lines; uncertainty is 6 dB below 5 MHz and 10 dB above, and conducted

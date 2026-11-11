@@ -30,6 +30,7 @@ Accepted on `pin` in a `part` and on `pad` in a `device`:
 | `emi_role` | name | The pin's part in a switching cell or its sensitivity; see below |
 | `rise_time` | time | 10-90 % output rise time of the pin's edge, datasheet typical |
 | `fall_time` | time | 10-90 % fall time; defaults to `rise_time` when only one is given |
+| `slew_rate` | slew rate | Switch-node dv/dt, datasheet or measured (`50V/ns`); gives the edge time and classifies the device |
 | `current_peak` | current | Peak pulsed current through the pin (switch current limit or rated peak) |
 
 `emi_role` values:
@@ -60,15 +61,31 @@ part TPS54360DDAR {
 ```
 
 Compile-time validation (new code `CMP130`): unknown `emi_role`; `rise_time`,
-`fall_time` not a positive time; `current_peak` not a positive current;
-`rise_time`/`fall_time`/`current_peak` given without `emi_role` being one of
-the aggressor roles is allowed (a clock output may declare an edge rate).
+`fall_time` not a positive time; `slew_rate` not a positive slew rate;
+`current_peak` not a positive current; `rise_time`/`fall_time`/`slew_rate`/
+`current_peak` given without `emi_role` being one of the aggressor roles is
+allowed (a clock output may declare an edge rate).
 
-IR: `profile.emi = { "role", "rise_time", "fall_time", "current_peak" }`, each
+`slew_rate` is a quantity written with a slash unit: `V/ns`, `V/us` or `kV/us`
+(base unit V/s; `Dimension::SlewRate` in `copper-units`). The lexer yields
+`50V` and `/ns` as separate tokens already, so the parser joins an adjacent `/`
+and identifier to the unit of a number when, and only when, the joined text is
+one of those three units (`3mV/ns` stays a parse error, and `/` elsewhere is
+unchanged); this is a few lines in one parser function and needs no lexer
+change, which is why the quoted micro-syntax (`"50V/ns"`) was not used. It is
+not an enum of device technologies: a silicon or wide-bandgap class is inferred
+from the value (20 V/ns or more is reported as wide-bandgap class by
+`emi-check`, information only). Declaring both `slew_rate` and `rise_time` on
+one pin is allowed: `rise_time` wins for the timing and `slew_rate` still
+classifies the device. The compiler cannot know the swing, so it does nothing
+when they disagree; `emi-check` knows the hot-supply voltage and notes a
+disagreement of more than a factor 3 in the `input:` lines.
+
+IR: `profile.emi = { "role", "rise_time", "fall_time", "slew_rate", "current_peak" }`, each
 key present only when declared; the whole object absent when nothing is. The
 `fall_time` default is applied by readers (`EmiProfile::fall`), not stored.
 The `emi_role` value is a bare name or a string; time attributes accept `s`,
-`ms`, `us` and `ns`. Only the EMI attributes take time units: the general
+`ms`, `us` and `ns`, and `slew_rate` accepts `V/s`, `V/us`, `kV/us` and `V/ns`. Only the EMI attributes take time units: the general
 quantity grammar (`quantity_dimension`) is unchanged.
 
 ## 3. Part attributes
@@ -181,7 +198,7 @@ findings and `EMI-ACCEPT-UNUSED` are implemented with phase 1.
 
 The Rust types (`copper_lang::emi::{EmiModel, SwitchingCell, ...}`) carry the
 component reference and `component.pin` endpoints of every role pin, magnetic,
-diode and capacitor, plus the first declared `rise_time`, `fall_time` and
+diode and capacitor, plus the first declared `rise_time`, `fall_time`, `slew_rate` and
 `current_peak` of the switch pins, so a layout checker needs no second lookup.
 `EmiModel::to_json` prints the cells and nets as
 `copperscript.emi-model/v0.1` (keys sorted, absent facts `null`).
@@ -288,8 +305,8 @@ hard macro contributes copper.
 
 A finding is the `copper_drc::Finding` shape (code, severity, message,
 objects, nets, layers, `required_nm`, `measured_nm`) plus
-`{ cell, provenance, tags, estimate: { quantity, value, unit, method, uncertainty_db, frequency_hz } | null, margin_db?, accepted?: { reason }, measures }`.
-`measures` holds the further numbers of the finding by name. `tags` carry
+`{ cell, provenance, tags, estimate: { quantity, value, unit, method, uncertainty_db, frequency_hz, band_db?, basis? } | null, margin_db?, accepted?: { reason }, measures }`.
+`band_db` (`[low, high]`) and `basis` (`rule_of_thumb`) are present only when the estimate rests on a rule-of-thumb default (section 10.1). `measures` holds the further numbers of the finding by name, and `measures.inputs_text` the `input:` lines printed with the finding. `tags` carry
 `placement_estimate`, `traced_copper`, `partially_traced`, `unrouted_leg`, `plane_shortcut`, `pads_only`, `inferred` (the cell comes from the
 structural fallback), `provisional_placement` (a position involved is the
 prototype placement, not fixed by a `fixed_placement` constraint or a fixed
@@ -388,7 +405,10 @@ each with the missing input when skipped.
   path length. The pad chosen at each loop position is the one with the
   shortest pad-centre cycle, not re-optimised for the traced path.
 - **Radiated estimate.** Frequency: the fixed value, else the upper bound of
-  a declared range; edge: the faster of `rise_time`/`fall_time`; amplitude:
+  a declared range; edge: the faster of `rise_time`/`fall_time`, else the edge
+  from a declared `slew_rate` (`0.8 V_swing / slew`, exact), else the default
+  slew band of section 10.1 (nominal, fast and slow, on the hot-supply voltage
+  as the swing); amplitude:
   `current_peak` (an upper bound for the pulsed current); duty: Vout/Vin when
   the hot-supply net and the magnetic's output net both have a declared supply,
   else 0.5. The envelope `trapezoid_envelope` is swept on a log grid over
@@ -397,12 +417,23 @@ each with the missing input when skipped.
   without one, at the standard's distance (10 m for CISPR 32, 3 m or 10 m for
   FCC 15 per the table; 3 m without a standard). Free-space value; the +6 dB
   ground-plane factor is not applied. Peak envelope against quasi-peak limits.
-  Skipped with a reason when the frequency, an edge time or `current_peak` is
-  missing.
-- **Ringing.** With `output_capacitance` declared on the controller part
-  and/or the catch diode part and a computed inductance: `ring_frequency`,
-  `ring_overshoot` (needs `current_peak`); ring energy `0.5 L I^2` needs only
-  the inductance and `current_peak`.
+  Skipped with a reason when the frequency, the edge (no edge declared and no
+  hot-supply voltage for the swing) or `current_peak` is missing. With a default
+  edge the sweep is made at the nominal, fast and slow edge: the finding reports
+  the nominal level, `estimate.band_db = [low, high]` (slow to fast) and
+  `estimate.basis = "rule_of_thumb"`, and the margin is the one at the fast
+  bound, the unfavourable end; the stated uncertainty of 15 dB stays on top of
+  the band. The voltage-driven common-mode field of `EMI-SWITCH-NODE` is banded
+  the same way (it is flat in frequency above the edge corner, so its band
+  collapses when the least-margin point lies below every corner).
+- **Ringing.** With a computed inductance: `ring_frequency`, `ring_overshoot`
+  (needs `current_peak`); ring energy `0.5 L I^2` needs only the inductance and
+  `current_peak`. The capacitance is the sum of the controller's and the catch
+  diode's `output_capacitance`; a device that declares none gets the default
+  capacitance band of section 10.1 (tag `rule_of_thumb_capacitance`), and the
+  ring frequency and overshoot are then reported as bands
+  (`ring_frequency_band_mhz`, `ring_overshoot_band_v`,
+  `switch_node_capacitance_band_pf`) beside the nominal.
 - **Switch node.** Per switch net: pads, tracks (arcs by chord), polygons and
   zones summed; capacitance is the sum of `island_capacitance` of each element
   over its own layer's nearest ground plane (dielectric height from the
@@ -516,14 +547,16 @@ prediction".
 writes one panel per cell with an `EMI-CONDUCTED` finding (renderer:
 `copper_report::emi_plot`, data read from `measures.harmonics`): a log
 frequency axis from 150 kHz to 30 MHz (decade and 2/5 gridlines), dBuV with a
-gridline every 10 dB, one stem and dot per harmonic at its total level (the
-differential-mode series is the total while common mode is not modelled; with
-common mode present DM and CM are added as markers), the quasi-peak and average
+gridline every 10 dB, one stem and dot per harmonic at the high end of its band (its total level
+when it has none; the differential-mode series is the total while common mode
+is not modelled; with common mode present DM and CM are added as markers), a
+translucent whisker from the low to the high end behind each stem for a banded
+harmonic (legend `band: rule-of-thumb inputs`), the quasi-peak and average
 lines as polylines through the per-harmonic `limit_qp`/`limit_avg` when an
 `emission` standard with a conducted table is declared, harmonics above the
 average line in the warning colour, a band and whisker for the stated
 uncertainty of the worst harmonic, and the finding's tags (`worst_case_current`,
-`assumed_edge_time`, `differential_mode_only`, ...) under the title. A board
+`rule_of_thumb_edge`, `differential_mode_only`, ...) under the title. A board
 without an `EMI-CONDUCTED` finding writes nothing and exits 2 with the reason.
 
 **Magnetic near field.** `copper emi-check BOARD [--run RUN] --plot-field OUT.svg
@@ -550,8 +583,10 @@ The field is computed by `copper_emi::field` from data the finding carries:
   `measures.field_victims` (`[{kind, name, pads: ["R1.2", ...]}]`, names only:
   the map looks the pads up on the board it draws).
 - The amplitude is the cell's `current_peak` (the same worst case as
-  `EMI-CONDUCTED`, tag `worst_case_current`); without one the map is
-  normalised to 1 A and says "per ampere".
+  `EMI-CONDUCTED`, tag `worst_case_current`; the map stays at the limit and its
+  note states the typical operating current of 0.4 x the limit, a rule of thumb
+  that is not applied); without one the map is normalised to 1 A and says "per
+  ampere".
 - Biot-Savart for each straight filament, `H = I/(4 pi d) (sin a2 - sin a1)`
   around the segment axis (zero on the axis, linear inside a 50 um core), summed
   over the loop; an ideal infinite ground plane at the reference plane's z by
@@ -599,12 +634,14 @@ the board does not declare). Inputs, each recorded with its source in
 | --- | --- |
 | Vin, Vout, duty | declared `supply` voltage of the hot-supply net and of the magnetic's output net; duty is Vout / Vin |
 | Frequency | the fixed value; for a range the upper bound, tagged `frequency_range_bound` |
-| Edge time | the switch pin `rise_time`/`fall_time` (10-90 %), divided by 0.8 for the 0-100 % ramp of the trapezoid; if undeclared, an assumed 10 ns (10-90 %) with only harmonics below `1 / (10 pi 10 ns)` = 3.18 MHz reported, tag `assumed_edge_time` (below that frequency the level changes by under 1 dB between 5 ns and 20 ns edges: tested) |
-| Current | the switch pin `current_peak`, the current LIMIT used as the on-time amplitude (no load current exists in the language): a worst case, tag `worst_case_current`, level change `20 log10(I / current_peak)` dB at another current |
-| Hot capacitor | the hot-loop analysis' selected capacitor: value from the component; `esr`, `esl`, `self_resonance` (ESL derived) from its part; otherwise 5 mohm and ESL by package from the footprint name (0402 0.4, 0603 0.5, 0805 0.6, 1206 0.8, 1210 0.9 nH), tag `default_capacitor_parasitics`; an unrecognised package without declared values skips the prediction. No DC-bias derating. Parallel hot capacitors are not modelled (`parallel_capacitors_not_modelled`, listed in `measures.ignored_parallel_capacitors`) |
+| Edge time | the switch pin `rise_time`/`fall_time` (10-90 %), else the edge of a declared `slew_rate` (`0.8 V_swing / slew`, tag `edge_from_slew_rate`), else the default slew band (section 10.1, tag `rule_of_thumb_edge`); divided by 0.8 for the 0-100 % ramp of the trapezoid. Every harmonic to 30 MHz is reported: with a default edge the level is evaluated at the fast and the slow edge and the band collapses below the edge corner (the former 3.183 MHz restriction and the tag `assumed_edge_time` are gone) |
+| Current | the switch pin `current_peak`, the current LIMIT used as the on-time amplitude (no load current exists in the language): a worst case, tag `worst_case_current`, the headline. The low end of every band is at 0.4 x the limit (about -8 dB, section 10.1, tag `rule_of_thumb_current`) |
+| Hot capacitor | the hot-loop analysis' selected capacitor: value from the component; `esr`, `esl`, `self_resonance` (ESL derived) from its part; otherwise 5 mohm and ESL by package from the footprint name (0402 0.4, 0603 0.5, 0805 0.6, 1206 0.8, 1210 0.9 nH), tag `default_capacitor_parasitics`; an unrecognised package without declared values skips the prediction. A capacitor that takes these package defaults also gets the ceramic DC-bias loss band of section 10.1 (tag `rule_of_thumb_dc_bias`); one whose part declares its parasitics gets no derating. Parallel hot capacitors are not modelled (`parallel_capacitors_not_modelled`, listed in `measures.ignored_parallel_capacitors`) |
 | Hot-loop inductance | `EMI-HOT-LOOP` (traced or placement estimate), in series with the capacitor with the supply feed at the switch end (pessimistic) |
 | Input filter | walks from the hot-supply net toward the supply (at most 4 series parts) through the elements that FEED it. A filter inductor is a `passive.inductor*` or `passive.ferrite*` part, or an uncategorized two-pin part whose value is an inductance; any other two-pin `dc_power_path` part (fuse, jumper, 0-ohm link, load switch) is a transparent DC feed that is followed through with its resistance unknown and taken as 0 (tag `feed_resistance_not_modelled`; "through fuse F_MAIN, resistance not modelled"). Direction comes from the far net: a declared `external` or sourced supply (or, failing that, a connector with no other load) means upstream; other loads there mean the element feeds them downstream and it is ignored (listed in the `:filter` note); if neither decides, the filter is left out and the note says the direction cannot be decided. Exactly one filter inductor may be on the path; its value, `esr` (DCR) and `self_resonance` (winding capacitance) plus the capacitors to the hot return beyond it are lumped in parallel. A path with fuses but no inductor reads "fed through fuse F1 from VIN_IN; no filter inductor on the feed path". Capacitors to the hot return on the hot-supply net count as hot capacitors; resistors above 1 kohm and diodes to the hot return (TVS, enable divider) are ignored with a note; anything else on the path nets (a load, a resistor of 1 kohm or less, a connector or source before the end of the path) leaves the filter out with a `:filter` coverage note. A filter inductor without `self_resonance` is ideal (`filter_inductor_ideal`: attenuation above its real resonance is overstated) |
 | Common mode | not modelled (`:common_mode` is `not_applicable`). The island capacitance of `EMI-SWITCH-NODE` is to the board's own ground plane, which is the converter's return: its current closes without entering the LISN, so using it as the capacitance to the LISN reference would overstate common mode by the plane's shielding. The real path is board-to-reference capacitance (heat sink, chassis, cable), geometry outside the board model. Levels are differential mode only and tagged `differential_mode_only`; common mode often dominates above a few MHz |
+
+Upstream filter capacitors that take the package defaults are derated in the same corner as the hot capacitor.
 
 Levels are RMS dBuV of each harmonic at the worst LISN port; for a fixed
 frequency above twice the 9 kHz RBW peak, quasi-peak and average coincide. The
@@ -613,11 +650,63 @@ CISPR 32 mains-port quasi-peak and average lines are the reference limit
 give levels only). Uncertainty: 6 dB below 5 MHz, 10 dB above (literature
 envelope 5 dB at low MHz, 7 to 12 dB above); margins are never pass or fail.
 `measures.harmonics` lists `harmonic`, `frequency_hz`, `source_current_a`,
-`dm_dbuv`, `cm_dbuv` (null), `total_dbuv`, `limit_qp`, `limit_avg`,
-`margin_qp_db`, `margin_avg_db`, `margin_db`, `uncertainty_db`; `measures.assumptions`
+`dm_dbuv`, `cm_dbuv` (null), `total_dbuv` (the nominal case at the current
+limit), `low_dbuv`, `high_dbuv`, `limit_qp`, `limit_avg`, `margin_qp_db`,
+`margin_avg_db`, `margin_db` (from the high end), `uncertainty_db`; `measures.assumptions`
 holds the `predict` assumptions and the tool's. Tests:
 `crates/copper-drc/tests/emi_check.rs` against a hand calculation on
 `examples/emi_buck` and `examples/emi_buck_filter`.
+
+
+### 10.1 Rule-of-thumb defaults and bands
+
+Where the language leaves an input open, `copper emi-check` fills the gap with
+a default from one table (`crates/copper-drc/src/emi/defaults.rs`, named
+constants with doc comments). **Every entry is a rule of thumb; none is
+verified against a datasheet or a published source**, and none is ever shown as
+a datasheet value. The rules of the output:
+
+1. A declared value always wins; a default only fills a gap.
+2. A default is tagged (`rule_of_thumb_*`), and its value and rule are printed
+   like every other input, as an `input:` line "... (rule of thumb: <rule>;
+   declare <attribute> to replace it)" and in the coverage detail. The summary
+   counts the findings that rest on a rule (`summary.rule_of_thumb`, a line in
+   `limits.notes`, a clause in the text summary).
+3. A result that rests on a default is a BAND with the nominal, not one number:
+   `estimate.band_db = [low, high]` with `estimate.basis = "rule_of_thumb"`
+   (radiated: slow to fast edge; conducted: `low_dbuv`/`high_dbuv` per
+   harmonic). The unfavourable end drives the margin: the fast bound for the
+   radiated estimates, the high end for the conducted headline and margin. The
+   stated uncertainty (15 dB radiated; 6 dB below 5 MHz and 10 dB above for
+   conducted) stays on top of the band.
+4. The silicon or wide-bandgap distinction is not an enum: it is inferred from
+   an optional declared `slew_rate` (20 V/ns or more is reported as
+   wide-bandgap class in the `input:` lines, information only).
+
+| # | Rule | Nominal | Band | Tag | Replaced by |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Edge time of an integrated silicon switch node, t(10-90 %) = 0.8 V_swing / slew with V_swing the hot-supply voltage; resolution order: declared `rise_time`/`fall_time`, then declared `slew_rate` (exact, tag `edge_from_slew_rate`, no band), then the default slew. Skipped when the swing is unknown | 3 V/ns (24 V: 6.4 ns) | 10 V/ns fast to 1 V/ns slow | `rule_of_thumb_edge` | `rise_time`, `fall_time` or `slew_rate` on the switch pin |
+| 2a | Switch-node capacitance of an integrated converter FET, for ringing, when the controller part declares no `output_capacitance` | 250 pF | 100 to 500 pF | `rule_of_thumb_capacitance` | `output_capacitance` on the controller part |
+| 2b | Switch-node capacitance of a Schottky catch diode, when the diode part declares no `output_capacitance`; the cell's `current_peak` stands in for the diode rating; times 1/3 when the reverse voltage (hot-supply voltage) is 12 V or more, and the band keeps the un-derated value as its high end | 75 pF per ampere | 50 to 100 pF per ampere | `rule_of_thumb_capacitance` | `output_capacitance` on the diode part |
+| 3 | Ceramic DC-bias loss of the hot capacitor (and upstream filter capacitors) whose part declares no parasitics: 0402, 0603 and 0805 lose 50 %, 1206 35 %, 1210 and larger 25 % | the derated value when the hot-supply voltage is 5 V or more, else the un-derated value | no loss to the package loss | `rule_of_thumb_dc_bias` | `esr` and `esl` (or `self_resonance`) on the capacitor part, which also removes the package defaults |
+| 4 | Operating current: `current_peak` is the current limit, about 1.5 x the rated output, and typical operation is about 0.6 x the rating | the limit (the headline) | 0.4 x the limit (-7.96 dB) to the limit | `rule_of_thumb_current` | nothing: the language has no load current |
+| 5 | Capacitor ESR 5 mohm and ESL by package (0402 0.4, 0603 0.5, 0805 0.6, 1206 0.8, 1210 0.9 nH) | as listed | none | `default_capacitor_parasitics` | `esr`, `esl`, `self_resonance` |
+
+Band semantics. The conducted band of each harmonic is the minimum and maximum
+over the corner cases {edge fast, slow} x {capacitance un-derated, derated}
+(only the corners whose input is a rule of thumb), plus the nominal case; the
+current scaling is analytic: the high end is evaluated at the current limit,
+the low end at 0.4 x the limit (20 log10 0.4 = -7.96 dB). `total_dbuv` is the
+nominal case at the limit. Below the edge corner the edge and DC-bias bands
+collapse (the level hardly depends on the edge) and only the current offset
+remains. The radiated estimate keeps the current at the limit (it is a
+declared `current_peak`); the typical operating current is stated in the
+`input:` line. The near-field map also stays at the limit.
+
+No default can make a headline number more favourable than the behaviour
+before the defaults existed: the high end includes the un-derated capacitance,
+the fast edge and the full limit, and a missing edge time no longer restricts
+the reported harmonics.
 
 
 Module `copper_emi::spectrum`: trapezoid and sampled-waveform spectra;

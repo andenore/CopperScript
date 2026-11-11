@@ -413,7 +413,11 @@ pub fn field_picture(map: &FieldMap, scene_source: &str) -> FieldPicture {
         n(map.height_mm)
     ));
     let amplitude = match map.current_a {
-        Some(i) => format!("{} A (the cell's current_peak, worst case, tag worst_case_current)", n(i)),
+        Some(i) => format!(
+            "{} A (the cell's current_peak, the limit, worst case, tag worst_case_current; typical operation is about {} A, 0.4 x the limit, a rule of thumb that is not applied to the map)",
+            n(i),
+            n(i * 0.4)
+        ),
         None => "1 A: the cell declares no current_peak, so levels are per ampere".to_owned(),
     };
     let plane = match map.plane_z_mm {

@@ -434,7 +434,7 @@ fn emi_name<T>(
     })
 }
 
-/// `emi_role`, `rise_time`, `fall_time` and `current_peak`; `None` when none is declared.
+/// `emi_role`, `rise_time`, `fall_time`, `slew_rate` and `current_peak`; `None` when none is declared.
 fn emi_profile(attributes: &Attributes, location: &Location) -> Result<Option<EmiProfile>> {
     let role = attributes
         .get("emi_role")
@@ -455,6 +455,7 @@ fn emi_profile(attributes: &Attributes, location: &Location) -> Result<Option<Em
         role,
         rise_time: quantity_of("rise_time", Dimension::Time)?,
         fall_time: quantity_of("fall_time", Dimension::Time)?,
+        slew_rate: quantity_of("slew_rate", Dimension::SlewRate)?,
         current_peak: quantity_of("current_peak", Dimension::Current)?,
     };
     Ok((!profile.is_empty()).then_some(profile))
@@ -657,6 +658,7 @@ pub fn compile_device(document: &Document, qualified_name: &str) -> Result<Devic
                         "emi_role",
                         "rise_time",
                         "fall_time",
+                        "slew_rate",
                         "current_peak",
                         "when",
                     ],
@@ -1087,6 +1089,7 @@ pub fn compile_part(
                         "emi_role",
                         "rise_time",
                         "fall_time",
+                        "slew_rate",
                         "current_peak",
                         "connection",
                         "required_net_traits",
@@ -1117,6 +1120,7 @@ pub fn compile_part(
                     "emi_role",
                     "rise_time",
                     "fall_time",
+                    "slew_rate",
                     "current_peak",
                 ]
                 .iter()

@@ -7,6 +7,7 @@
 use std::str::FromStr;
 
 use copper_json::{python_decimal, python_str_repr};
+use copper_units::Dimension;
 use indexmap::IndexMap;
 use num_bigint::BigInt;
 
@@ -786,13 +787,37 @@ impl Parser {
             .ok_or_else(|| self.error_at("PAR010", format!("expected number, found {}", repr(&token.text)), token))
     }
 
+    /// The unit identifier after a number. A slew-rate unit is written with an
+    /// adjacent slash (`3V/ns`): `V/ns`, `V/us` and `kV/us` are the only
+    /// compound units, joined here so that no other `/` is affected.
+    fn quantity_unit(&mut self) -> String {
+        let unit = self.advance().text;
+        let slash = self.current();
+        let adjacent = slash.kind == TokenKind::Symbol
+            && slash.text == "/"
+            && slash.location.offset == self.previous(1).end_offset;
+        if adjacent
+            && let Some(next) = self.tokens.get(self.index + 1)
+            && next.kind == TokenKind::Identifier
+            && next.location.offset == slash.end_offset
+        {
+            let joined = format!("{unit}/{}", next.text);
+            if Dimension::SlewRate.units().iter().any(|(name, _)| *name == joined) {
+                self.advance();
+                self.advance();
+                return joined;
+            }
+        }
+        unit
+    }
+
     fn scalar(&mut self) -> Result<Scalar> {
         if self.at_symbol("-") || self.at_symbol("+") {
             let sign = self.advance().text;
             let token = self.expect(TokenKind::Number, "number after sign")?;
             let number = format!("{sign}{}", token.text);
             if self.current().kind == TokenKind::Identifier {
-                return Ok(Scalar::Quantity { value: number, unit: self.advance().text });
+                return Ok(Scalar::Quantity { value: number, unit: self.quantity_unit() });
             }
             return self.number_at(&number, &token);
         }
@@ -801,7 +826,7 @@ impl Parser {
             TokenKind::Number => {
                 let token = self.advance();
                 if self.current().kind == TokenKind::Identifier {
-                    return Ok(Scalar::Quantity { value: token.text, unit: self.advance().text });
+                    return Ok(Scalar::Quantity { value: token.text, unit: self.quantity_unit() });
                 }
                 self.number_at(&token.text, &token)
             }

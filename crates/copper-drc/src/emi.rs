@@ -41,6 +41,7 @@ use crate::signal_integrity::copper_layer_depths_nm;
 use crate::{Coverage, CoverageStatus, Finding, Severity};
 
 mod conducted;
+pub mod defaults;
 mod field;
 
 /// The `schema` of [`EmiCheckReport::json`].
@@ -98,6 +99,11 @@ pub struct Estimate {
     pub uncertainty_db: f64,
     /// The frequency the level was evaluated at, Hz.
     pub frequency_hz: Option<f64>,
+    /// `[low, high]` level in the estimate's unit when an input is a rule of thumb: `value` is the
+    /// nominal, `high` the unfavourable end (the one a margin is computed from).
+    pub band_db: Option<[f64; 2]>,
+    /// `rule_of_thumb` when the estimate rests on a default band.
+    pub basis: Option<String>,
 }
 
 /// A [`Finding`] with the EMI additions of the spec: cell, provenance,
@@ -805,10 +811,123 @@ fn sweep(low: f64, high: f64, line: Option<&limits::LimitLine>, field: impl Fn(f
 // Cell inputs
 // ---------------------------------------------------------------------------
 
+/// Where the edge time of a cell comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EdgeBasis {
+    /// The switch pin's `rise_time`/`fall_time`.
+    Declared,
+    /// The switch pin's `slew_rate` and the hot-supply swing: exact, no band.
+    SlewRate,
+    /// The default slew band of [`defaults`]: nominal, fast and slow.
+    RuleOfThumb,
+}
+
+/// Which end of an edge band a computation uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Corner {
+    Nominal,
+    Fast,
+    Slow,
+}
+
+/// The 10-90 % edge of the switch node.
+#[derive(Clone, Debug)]
+struct Edge {
+    basis: EdgeBasis,
+    /// The edge a single-number estimate uses, s (the faster of rise and fall when declared).
+    nominal: f64,
+    fast: f64,
+    slow: f64,
+    /// Rise and fall times of the nominal edge, s.
+    rise: f64,
+    fall: f64,
+    /// The slew rate the edge came from or is classified by, V/ns.
+    slew: Option<f64>,
+}
+
+impl Edge {
+    fn banded(&self) -> bool {
+        self.basis == EdgeBasis::RuleOfThumb
+    }
+
+    /// The edge time of a single-number estimate at this end of the band (the same for all ends unless banded).
+    fn time(&self, corner: Corner) -> f64 {
+        match (self.banded(), corner) {
+            (true, Corner::Fast) => self.fast,
+            (true, Corner::Slow) => self.slow,
+            _ => self.nominal,
+        }
+    }
+
+    /// Rise and fall (10-90 %) at this end of the band.
+    fn rise_fall(&self, corner: Corner) -> (f64, f64) {
+        if self.banded() {
+            let t = self.time(corner);
+            (t, t)
+        } else {
+            (self.rise, self.fall)
+        }
+    }
+
+    /// The tag of a result that uses this edge.
+    fn tag(&self) -> Option<&'static str> {
+        match self.basis {
+            EdgeBasis::Declared => None,
+            EdgeBasis::SlewRate => Some(defaults::TAG_EDGE_FROM_SLEW),
+            EdgeBasis::RuleOfThumb => Some(defaults::TAG_EDGE),
+        }
+    }
+
+    /// One sentence for `input:` lines and coverage.
+    fn describe(&self, swing: Option<f64>) -> String {
+        let ns = |t: f64| format!("{} ns", rounded(t * 1e9, 4));
+        match self.basis {
+            EdgeBasis::Declared => {
+                format!("{} (10-90 %, switch pin rise_time/fall_time)", ns(self.nominal))
+            }
+            EdgeBasis::SlewRate => format!(
+                "{} (10-90 %) from the declared slew_rate {} V/ns on a {} V swing: t = 0.8 V / slew",
+                ns(self.nominal),
+                rounded(self.slew.unwrap_or(0.0), 4),
+                rounded(swing.unwrap_or(0.0), 4)
+            ),
+            EdgeBasis::RuleOfThumb => format!(
+                "{} nominal (fast {}, slow {}; 10-90 %) from a default slew of {} V/ns ({} V/ns fast, {} V/ns slow) on a {} V swing",
+                ns(self.nominal),
+                ns(self.fast),
+                ns(self.slow),
+                defaults::SLEW_NOMINAL,
+                defaults::SLEW_FAST,
+                defaults::SLEW_SLOW,
+                rounded(swing.unwrap_or(0.0), 4)
+            ),
+        }
+    }
+
+    /// The rule behind a default edge, worded for an `input:` line; `None` for a declared edge.
+    fn rule_note(&self) -> Option<String> {
+        self.banded().then(|| defaults::rule_text(&defaults::edge_rule(), "slew_rate or rise_time"))
+    }
+
+    /// The `input:` line of this edge.
+    fn input_line(&self, swing: Option<f64>) -> String {
+        match self.rule_note() {
+            Some(rule) => format!("edge time {} {rule}", self.describe(swing)),
+            None => format!("edge time {}", self.describe(swing)),
+        }
+    }
+}
+
 struct Drive {
     frequency: f64,
     frequency_note: &'static str,
-    edge: Option<f64>,
+    edge: Option<Edge>,
+    /// Why there is no edge, when there is none.
+    edge_missing: String,
+    /// The hot-supply voltage: the switch-node swing, V.
+    swing: Option<f64>,
+    /// Information about the edge inputs (wide-bandgap class, slew rate and rise time disagreeing).
+    edge_notes: Vec<String>,
     current: Option<f64>,
     duty: f64,
     duty_note: String,
@@ -817,6 +936,11 @@ struct Drive {
 fn supply_voltage(view: &FlatElectricalView, net: Option<&String>) -> Option<f64> {
     let net = net?;
     view.supplies.iter().find(|supply| &supply.net == net).map(|supply| quantity(&supply.voltage))
+}
+
+/// The slew rate of a quantity in V/ns.
+fn slew_v_per_ns(value: &Quantity) -> f64 {
+    quantity(value) * 1e-9
 }
 
 fn drive_of(view: &FlatElectricalView, cell: &SwitchingCell) -> Result<Drive, String> {
@@ -829,22 +953,110 @@ fn drive_of(view: &FlatElectricalView, cell: &SwitchingCell) -> Result<Drive, St
         },
         None => return Err("no switching frequency is declared".to_owned()),
     };
-    let edge = [cell.rise_time.as_ref(), cell.fall_time.as_ref()]
-        .into_iter()
-        .flatten()
-        .map(quantity)
-        .filter(|t| *t > 0.0)
-        .reduce(f64::min);
+    let positive = |q: &Option<Quantity>| q.as_ref().map(quantity).filter(|t| *t > 0.0);
+    let swing = supply_voltage(view, cell.hot_supply_net.as_ref()).filter(|v| *v > 0.0);
+    let slew = cell.slew_rate.as_ref().map(slew_v_per_ns).filter(|s| *s > 0.0);
+    let mut edge_notes = Vec::new();
+    if let Some(slew) = slew
+        && slew >= defaults::WIDE_BANDGAP_SLEW
+    {
+        edge_notes.push(format!(
+            "the declared slew_rate {} V/ns is wide-bandgap class (at or above {} V/ns; information only)",
+            rounded(slew, 4),
+            defaults::WIDE_BANDGAP_SLEW
+        ));
+    }
+    let declared = match (positive(&cell.rise_time), positive(&cell.fall_time)) {
+        (Some(r), Some(f)) => Some((r, f)),
+        (Some(t), None) | (None, Some(t)) => Some((t, t)),
+        (None, None) => None,
+    };
+    let mut edge_missing = String::new();
+    let edge = if let Some((rise, fall)) = declared {
+        if let (Some(slew), Some(swing)) = (slew, swing) {
+            let implied = defaults::edge_10_90(swing, slew);
+            let declared_edge = rise.min(fall);
+            let factor = (declared_edge / implied).max(implied / declared_edge);
+            if factor > 3.0 {
+                edge_notes.push(format!(
+                    "the declared rise_time/fall_time {} ns and the declared slew_rate {} V/ns imply {} ns on the {} V swing \
+                     (a factor {:.1} apart); rise_time/fall_time is used",
+                    rounded(declared_edge * 1e9, 4),
+                    rounded(slew, 4),
+                    rounded(implied * 1e9, 4),
+                    rounded(swing, 4),
+                    factor
+                ));
+            }
+        }
+        let nominal = rise.min(fall);
+        Some(Edge { basis: EdgeBasis::Declared, nominal, fast: nominal, slow: nominal, rise, fall, slew })
+    } else if let (Some(slew), Some(swing)) = (slew, swing) {
+        let t = defaults::edge_10_90(swing, slew);
+        Some(Edge { basis: EdgeBasis::SlewRate, nominal: t, fast: t, slow: t, rise: t, fall: t, slew: Some(slew) })
+    } else if let Some(swing) = swing {
+        let (nominal, fast, slow) = defaults::default_edge_band(swing);
+        Some(Edge {
+            basis: EdgeBasis::RuleOfThumb,
+            nominal,
+            fast,
+            slow,
+            rise: nominal,
+            fall: nominal,
+            slew: Some(defaults::SLEW_NOMINAL),
+        })
+    } else {
+        edge_missing = if slew.is_some() {
+            "the switch pin declares a slew_rate but the hot supply net declares no supply voltage for the swing"
+                .to_owned()
+        } else {
+            "the switch pin declares no rise_time, fall_time or slew_rate and the hot supply net declares no supply voltage for the default slew"
+                .to_owned()
+        };
+        None
+    };
     let current = cell.current_peak.as_ref().map(quantity).filter(|i| *i > 0.0);
-    let vin = supply_voltage(view, cell.hot_supply_net.as_ref());
     let vout = supply_voltage(view, cell.magnetic.as_ref().and_then(|m| m.output_net.as_ref()));
-    let (duty, duty_note) = match (vin, vout) {
+    let (duty, duty_note) = match (swing, vout) {
         (Some(vin), Some(vout)) if vin > 0.0 && vout > 0.0 && vout < vin => {
             ((vout / vin).clamp(0.02, 0.98), format!("duty {:.2} from {vout} V / {vin} V", vout / vin))
         }
         _ => (DEFAULT_DUTY, format!("duty {DEFAULT_DUTY} assumed (input and output voltage not both declared)")),
     };
-    Ok(Drive { frequency, frequency_note, edge, current, duty, duty_note })
+    Ok(Drive { frequency, frequency_note, edge, edge_missing, swing, edge_notes, current, duty, duty_note })
+}
+
+/// The result of sweeping an estimate over the edge band.
+struct Banded {
+    /// The worst point at the nominal edge.
+    nominal: Worst,
+    /// `[low, high]` of the worst levels over the nominal, fast and slow edge; `None` without a band.
+    band: Option<[f64; 2]>,
+    /// The margin the finding reports: from the fast bound when banded (the unfavourable end).
+    margin_db: Option<f64>,
+}
+
+/// [`sweep`] of `field(frequency, edge_time)` at the nominal edge and, when the edge is a
+/// rule-of-thumb band, at the fast and slow edge as well.
+fn sweep_edge(
+    edge: &Edge,
+    low: f64,
+    high: f64,
+    line: Option<&limits::LimitLine>,
+    field: impl Fn(f64, f64) -> f64,
+) -> Option<Banded> {
+    let nominal = sweep(low, high, line, |f| field(f, edge.time(Corner::Nominal)))?;
+    if !edge.banded() {
+        return Some(Banded { nominal, band: None, margin_db: nominal.margin_db });
+    }
+    let fast = sweep(low, high, line, |f| field(f, edge.time(Corner::Fast)))?;
+    let slow = sweep(low, high, line, |f| field(f, edge.time(Corner::Slow)))?;
+    let levels = [nominal.level_dbuvpm, fast.level_dbuvpm, slow.level_dbuvpm];
+    let band = [
+        levels.iter().copied().fold(f64::INFINITY, f64::min),
+        levels.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+    ];
+    Some(Banded { nominal, band: Some(band), margin_db: fast.margin_db })
 }
 
 // ---------------------------------------------------------------------------
@@ -1995,6 +2207,37 @@ fn analyze_loop(cx: &mut Context, cell: &SwitchingCell, spec: &LoopSpec) {
     cx.findings.push(finding);
 }
 
+/// Append an `input:` line to the finding's `measures.inputs_text`.
+fn push_input(finding: &mut EmiFinding, line: String) {
+    match finding.measures.get_mut("inputs_text") {
+        Some(Value::Array(lines)) => lines.push(Value::from(line)),
+        _ => put(&mut finding.measures, "inputs_text", Value::Array(vec![Value::from(line)])),
+    }
+}
+
+/// Add a tag once.
+fn add_tag(finding: &mut EmiFinding, tag: &str) {
+    if !finding.tags.iter().any(|t| t == tag) {
+        finding.tags.push(tag.to_owned());
+    }
+}
+
+/// The `input:` lines, tag and coverage text that describe the edge a finding used.
+fn record_edge(finding: &mut EmiFinding, drive: &Drive, edge: &Edge) {
+    if let Some(tag) = edge.tag() {
+        add_tag(finding, tag);
+    }
+    push_input(finding, edge.input_line(drive.swing));
+    for note in &drive.edge_notes {
+        push_input(finding, note.clone());
+    }
+}
+
+/// Text of a level band: `[low .. high] dBuV/m`.
+fn band_text(band: [f64; 2], unit: &str) -> String {
+    format!("[{:.1} .. {:.1}] {unit}", band[0], band[1])
+}
+
 fn radiated_estimate(
     cx: &mut Context,
     cell: &SwitchingCell,
@@ -2012,27 +2255,28 @@ fn radiated_estimate(
             return;
         }
     };
-    let (Some(edge), Some(current)) = (drive.edge, drive.current) else {
-        let missing: Vec<&str> =
-            [(drive.edge.is_none(), "rise_time or fall_time"), (drive.current.is_none(), "current_peak")]
-                .iter()
-                .filter(|(absent, _)| *absent)
-                .map(|(_, name)| *name)
-                .collect();
+    let (Some(edge), Some(current)) = (drive.edge.as_ref(), drive.current) else {
+        let mut missing: Vec<&str> = Vec::new();
+        if drive.edge.is_none() {
+            missing.push(&drive.edge_missing);
+        }
+        if drive.current.is_none() {
+            missing.push("the switch pin declares no current_peak");
+        }
         cx.cover(
             check,
             CoverageStatus::NotApplicable,
-            format!("differential-mode field skipped: the switch pin declares no {}", missing.join(" and ")),
+            format!("differential-mode field skipped: {}", missing.join("; ")),
         );
         return;
     };
     let period = 1.0 / drive.frequency;
     let high = BAND.1.min(copper_emi::C0 / (SMALL_LOOP_FRACTION * best.length));
-    let field = |f: f64| {
-        let amplitude = estimate::trapezoid_envelope(current, drive.duty, period, edge, f);
+    let field = |f: f64, t: f64| {
+        let amplitude = estimate::trapezoid_envelope(current, drive.duty, period, t, f);
         estimate::differential_mode_field(amplitude, f, best.area, cx.standard.distance)
     };
-    let Some(worst) = sweep(BAND.0, high, cx.standard.line.as_ref(), field) else {
+    let Some(banded) = sweep_edge(edge, BAND.0, high, cx.standard.line.as_ref(), field) else {
         cx.cover(
             check,
             CoverageStatus::NotApplicable,
@@ -2043,15 +2287,21 @@ fn radiated_estimate(
         );
         return;
     };
+    let worst = banded.nominal;
     let method = format!(
         "small-loop formula E = 1.316e-14 I f^2 A / r on the trapezoid envelope of the switch current \
-         (amplitude current_peak, {} Hz {}, edge {:.2} ns, {}), worst point of 30 MHz to {:.0} MHz at {} m",
+         (amplitude current_peak, {} Hz {}, edge {}, {}), worst point of 30 MHz to {:.0} MHz at {} m{}",
         rounded(drive.frequency, 0),
         drive.frequency_note,
-        edge * 1e9,
+        edge.describe(drive.swing),
         drive.duty_note,
         high * 1e-6,
-        cx.standard.distance
+        cx.standard.distance,
+        if banded.band.is_some() {
+            "; the value is the nominal edge, the band covers the fast and slow bound and the margin is the fast bound's"
+        } else {
+            ""
+        }
     );
     finding.estimate = Some(Estimate {
         quantity: "dm_radiated_field".to_owned(),
@@ -2060,25 +2310,50 @@ fn radiated_estimate(
         method,
         uncertainty_db: UNCERTAINTY_DB,
         frequency_hz: Some(rounded(worst.frequency, 0)),
+        band_db: banded.band.map(|b| [rounded(b[0], 2), rounded(b[1], 2)]),
+        basis: banded.band.map(|_| defaults::BASIS.to_owned()),
     });
-    finding.margin_db = worst.margin_db.map(|m| rounded(m, 2));
+    finding.margin_db = banded.margin_db.map(|m| rounded(m, 2));
     finding.finding.message.push_str(&format!(
         "; differential-mode field about {:.1} dBuV/m at {:.0} MHz, {} m",
         worst.level_dbuvpm,
         worst.frequency * 1e-6,
         cx.standard.distance
     ));
-    if let Some(margin) = worst.margin_db {
+    if let Some(band) = banded.band {
         finding.finding.message.push_str(&format!(
-            " ({:+.1} dB to the {} line, uncertainty {UNCERTAINTY_DB} dB)",
-            margin,
-            cx.standard.name.as_deref().unwrap_or("")
+            " (band {} for the slow .. fast edge of a rule-of-thumb slew rate, nominal shown)",
+            band_text(band, "dBuV/m")
         ));
     }
+    if let Some(margin) = banded.margin_db {
+        finding.finding.message.push_str(&format!(
+            " ({:+.1} dB to the {} line{}, uncertainty {UNCERTAINTY_DB} dB on top of the band)",
+            margin,
+            cx.standard.name.as_deref().unwrap_or(""),
+            if banded.band.is_some() { " at the fast bound" } else { "" }
+        ));
+    }
+    record_edge(finding, drive, edge);
+    push_input(
+        finding,
+        format!(
+            "current amplitude {} A = current_peak, the current limit (worst case); typical operation would be {} A, -8.0 dB, not applied to this estimate {}",
+            rounded(current, 4),
+            rounded(current * defaults::OPERATING_CURRENT_FRACTION, 4),
+            defaults::rule_text_unreplaceable(&defaults::current_rule())
+        ),
+    );
     cx.cover(
         check,
         CoverageStatus::Executed,
-        format!("{}; free-space value, the +6 dB ground-plane reflection is not applied", drive.duty_note),
+        format!(
+            "{}; edge time {}{}; free-space value, the +6 dB ground-plane reflection is not applied{}",
+            drive.duty_note,
+            edge.describe(drive.swing),
+            edge.rule_note().map(|r| format!(" {r}")).unwrap_or_default(),
+            drive.edge_notes.iter().map(|n| format!("; {n}")).collect::<String>()
+        ),
     );
 }
 
@@ -2096,16 +2371,36 @@ fn ringing_estimate(
         let instance = view.components.iter().find(|c| c.reference == component)?;
         view.library.get(&instance.part)?.emi.as_ref()?.output_capacitance.as_ref().map(quantity)
     };
-    let mut parts: Vec<(String, f64)> = Vec::new();
-    if let Some(c) = capacitance_of(&cell.controller) {
-        parts.push((cell.controller.clone(), c));
-    }
-    if let Some(diode) = &cell.catch_diode
-        && let Some(c) = capacitance_of(&diode.component)
-    {
-        parts.push((diode.component.clone(), c));
-    }
     let current = drive.as_ref().ok().and_then(|d| d.current).or_else(|| cell.current_peak.as_ref().map(quantity));
+    let reverse_voltage = supply_voltage(view, cell.hot_supply_net.as_ref());
+    // (device, capacitance band, rule text when the band is a default)
+    let mut parts: Vec<(String, defaults::CapacitanceBand, Option<String>)> = Vec::new();
+    let mut unavailable: Vec<String> = Vec::new();
+    match capacitance_of(&cell.controller) {
+        Some(c) => {
+            parts.push((cell.controller.clone(), defaults::CapacitanceBand { low: c, nominal: c, high: c }, None))
+        }
+        None => parts.push((cell.controller.clone(), defaults::fet_capacitance(), Some(defaults::fet_rule()))),
+    }
+    if let Some(diode) = &cell.catch_diode {
+        match (capacitance_of(&diode.component), current) {
+            (Some(c), _) => {
+                parts.push((diode.component.clone(), defaults::CapacitanceBand { low: c, nominal: c, high: c }, None));
+            }
+            (None, Some(i)) => {
+                let derated = reverse_voltage.is_some_and(|v| v >= defaults::DIODE_HIGH_VOLTAGE);
+                parts.push((
+                    diode.component.clone(),
+                    defaults::diode_capacitance(i, reverse_voltage),
+                    Some(defaults::diode_rule(derated)),
+                ));
+            }
+            (None, None) => unavailable.push(format!(
+                "{} declares no output_capacitance and the default needs current_peak as the diode rating proxy",
+                diode.component
+            )),
+        }
+    }
     let mut notes = Vec::new();
     if let (Some(l), Some(i)) = (best.inductance, current) {
         let energy = estimate::ring_energy(l, i);
@@ -2115,14 +2410,11 @@ fn ringing_estimate(
     } else {
         notes.push("ring energy needs the loop inductance and current_peak".to_owned());
     }
-    if parts.is_empty() {
+    if !unavailable.is_empty() {
         cx.cover(
             check,
             CoverageStatus::NotApplicable,
-            format!(
-                "ringing frequency skipped: no output_capacitance is declared on the controller or catch diode; {}",
-                notes.join("; ")
-            ),
+            format!("ringing frequency skipped: {}; {}", unavailable.join("; "), notes.join("; ")),
         );
         return;
     }
@@ -2130,21 +2422,86 @@ fn ringing_estimate(
         cx.cover(check, CoverageStatus::NotApplicable, "ringing frequency skipped: no loop inductance was computed");
         return;
     };
-    let total: f64 = parts.iter().map(|(_, c)| c).sum();
-    let ring = estimate::ring_frequency(l, total);
-    put(&mut finding.measures, "switch_node_capacitance_pf", num(total * 1e12, 3));
+    let total = parts
+        .iter()
+        .map(|(_, band, _)| *band)
+        .reduce(defaults::CapacitanceBand::plus)
+        .expect("the controller is always a part");
+    let defaulted = parts.iter().any(|(_, _, rule)| rule.is_some());
+    let ring = estimate::ring_frequency(l, total.nominal);
+    put(&mut finding.measures, "switch_node_capacitance_pf", num(total.nominal * 1e12, 3));
     put(&mut finding.measures, "ring_frequency_mhz", num(ring * 1e-6, 2));
-    finding.finding.message.push_str(&format!("; ringing about {:.0} MHz with {:.0} pF", ring * 1e-6, total * 1e12));
+    finding.finding.message.push_str(&format!(
+        "; ringing about {:.0} MHz with {:.0} pF",
+        ring * 1e-6,
+        total.nominal * 1e12
+    ));
+    if defaulted {
+        // A larger capacitance rings lower and overshoots less: the high capacitance is the low end of both.
+        let ring_band = [estimate::ring_frequency(l, total.high), estimate::ring_frequency(l, total.low)];
+        put(
+            &mut finding.measures,
+            "switch_node_capacitance_band_pf",
+            Value::Array(vec![num(total.low * 1e12, 3), num(total.high * 1e12, 3)]),
+        );
+        put(
+            &mut finding.measures,
+            "ring_frequency_band_mhz",
+            Value::Array(vec![num(ring_band[0] * 1e-6, 2), num(ring_band[1] * 1e-6, 2)]),
+        );
+        put(&mut finding.measures, "ring_basis", Value::from(defaults::BASIS));
+        finding.finding.message.push_str(&format!(
+            " (rule-of-thumb capacitance band [{:.0} .. {:.0}] pF gives [{:.0} .. {:.0}] MHz)",
+            total.low * 1e12,
+            total.high * 1e12,
+            ring_band[0] * 1e-6,
+            ring_band[1] * 1e-6
+        ));
+        add_tag(finding, defaults::TAG_CAPACITANCE);
+        for (name, band, rule) in &parts {
+            if let Some(rule) = rule {
+                push_input(
+                    finding,
+                    format!(
+                        "switch-node capacitance of {name} {:.0} pF nominal [{:.0} .. {:.0}] pF {}",
+                        band.nominal * 1e12,
+                        band.low * 1e12,
+                        band.high * 1e12,
+                        defaults::rule_text(rule, "output_capacitance on the part")
+                    ),
+                );
+            }
+        }
+    }
     if let Some(i) = current {
-        let overshoot = estimate::ring_overshoot(l, total, i);
+        let overshoot = estimate::ring_overshoot(l, total.nominal, i);
         put(&mut finding.measures, "ring_overshoot_v", num(overshoot, 2));
         finding.finding.message.push_str(&format!(", overshoot up to {overshoot:.1} V"));
+        if defaulted {
+            let band = [estimate::ring_overshoot(l, total.high, i), estimate::ring_overshoot(l, total.low, i)];
+            put(&mut finding.measures, "ring_overshoot_band_v", Value::Array(vec![num(band[0], 2), num(band[1], 2)]));
+            finding.finding.message.push_str(&format!(" [{:.1} .. {:.1}] V", band[0], band[1]));
+        }
     }
-    let names = parts.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>().join(" + ");
+    let names = parts.iter().map(|(name, _, _)| name.as_str()).collect::<Vec<_>>().join(" + ");
+    let basis = if defaulted {
+        format!(
+            "; capacitance of {} is a rule of thumb ({}), the ring frequency and overshoot are bands",
+            parts
+                .iter()
+                .filter(|(_, _, rule)| rule.is_some())
+                .map(|(name, _, _)| name.as_str())
+                .collect::<Vec<_>>()
+                .join(" + "),
+            parts.iter().filter_map(|(_, _, rule)| rule.as_deref()).collect::<Vec<_>>().join("; ")
+        )
+    } else {
+        String::new()
+    };
     cx.cover(
         check,
         CoverageStatus::Executed,
-        format!("L C resonance with the output_capacitance of {names}; {}", notes.join("; ")),
+        format!("L C resonance with the switch-node capacitance of {names}; {}{basis}", notes.join("; ")),
     );
 }
 
@@ -2327,12 +2684,12 @@ fn switch_node(cx: &mut Context, cell: &SwitchingCell) {
                 CoverageStatus::NotApplicable,
                 format!("voltage-driven common mode skipped: {reason}"),
             ),
-            (Ok(drive), swing) => match (drive.edge, swing) {
+            (Ok(drive), swing) => match (drive.edge.as_ref(), swing) {
                 (Some(edge), Some(swing)) if swing > 0.0 => {
                     let period = 1.0 / drive.frequency;
                     let scale = 3.0 / cx.standard.distance;
-                    let field = |f: f64| {
-                        let amplitude = estimate::trapezoid_envelope(swing, drive.duty, period, edge, f);
+                    let field = |f: f64, t: f64| {
+                        let amplitude = estimate::trapezoid_envelope(swing, drive.duty, period, t, f);
                         scale
                             * estimate::voltage_driven_cm_field(
                                 f,
@@ -2341,49 +2698,70 @@ fn switch_node(cx: &mut Context, cell: &SwitchingCell) {
                                 estimate::VOLTAGE_CM_COEFFICIENT_3M,
                             )
                     };
-                    if let Some(worst) = sweep(BAND.0, BAND.1, cx.standard.line.as_ref(), field) {
+                    if let Some(banded) = sweep_edge(edge, BAND.0, BAND.1, cx.standard.line.as_ref(), field) {
+                        let worst = banded.nominal;
                         finding.estimate = Some(Estimate {
                             quantity: "voltage_driven_cm_field".to_owned(),
                             value: rounded(worst.level_dbuvpm, 2),
                             unit: "dBuV/m".to_owned(),
                             method: format!(
                                 "E = 115 f C V at 3 m scaled to {} m, V the trapezoid envelope of a {swing} V swing \
-                                 ({} Hz {}, edge {:.2} ns, {}), C the island capacitance to the ground plane; the constant is \
-                                 not independently verified, use for ranking",
+                                 ({} Hz {}, edge {}, {}), C the island capacitance to the ground plane; the constant is \
+                                 not independently verified, use for ranking{}",
                                 cx.standard.distance,
                                 rounded(drive.frequency, 0),
                                 drive.frequency_note,
-                                edge * 1e9,
-                                drive.duty_note
+                                edge.describe(drive.swing),
+                                drive.duty_note,
+                                if banded.band.is_some() {
+                                    "; the value is the nominal edge, the band covers the fast and slow bound and the margin is the fast bound's"
+                                } else {
+                                    ""
+                                }
                             ),
                             uncertainty_db: UNCERTAINTY_DB,
                             frequency_hz: Some(rounded(worst.frequency, 0)),
+                            band_db: banded.band.map(|b| [rounded(b[0], 2), rounded(b[1], 2)]),
+                            basis: banded.band.map(|_| defaults::BASIS.to_owned()),
                         });
-                        finding.margin_db = worst.margin_db.map(|m| rounded(m, 2));
+                        finding.margin_db = banded.margin_db.map(|m| rounded(m, 2));
                         finding.finding.message.push_str(&format!(
                             "; voltage-driven common-mode field about {:.1} dBuV/m at {:.0} MHz, {} m",
                             worst.level_dbuvpm,
                             worst.frequency * 1e-6,
                             cx.standard.distance
                         ));
-                        if let Some(margin) = worst.margin_db {
+                        if let Some(band) = banded.band {
                             finding.finding.message.push_str(&format!(
-                                " ({:+.1} dB to the {} line, uncertainty {UNCERTAINTY_DB} dB)",
-                                margin,
-                                cx.standard.name.as_deref().unwrap_or("")
+                                " (band {} for the slow .. fast edge of a rule-of-thumb slew rate, nominal shown)",
+                                band_text(band, "dBuV/m")
                             ));
                         }
+                        if let Some(margin) = banded.margin_db {
+                            finding.finding.message.push_str(&format!(
+                                " ({:+.1} dB to the {} line{}, uncertainty {UNCERTAINTY_DB} dB on top of the band)",
+                                margin,
+                                cx.standard.name.as_deref().unwrap_or(""),
+                                if banded.band.is_some() { " at the fast bound" } else { "" }
+                            ));
+                        }
+                        record_edge(&mut finding, drive, edge);
                         cx.cover(
                             cm_check,
                             CoverageStatus::Executed,
-                            "island capacitance to the nearest ground plane; the constant 115 is unverified".to_owned(),
+                            format!(
+                                "island capacitance to the nearest ground plane; edge time {}{}; the constant 115 is unverified{}",
+                                edge.describe(drive.swing),
+                                edge.rule_note().map(|r| format!(" {r}")).unwrap_or_default(),
+                                drive.edge_notes.iter().map(|n| format!("; {n}")).collect::<String>()
+                            ),
                         );
                     }
                 }
                 (None, _) => cx.cover(
                     cm_check,
                     CoverageStatus::NotApplicable,
-                    "voltage-driven common mode skipped: the switch pin declares no rise_time or fall_time",
+                    format!("voltage-driven common mode skipped: {}", drive.edge_missing),
                 ),
                 (_, _) => cx.cover(
                     cm_check,
@@ -2681,6 +3059,7 @@ fn cell_summary(cx: &Context, cell: &SwitchingCell, drive: &Result<Drive, String
     put(&mut item, "frequency_basis", drive.as_ref().map_or(Value::Null, |d| Value::from(d.frequency_note)));
     put(&mut item, "rise_time", q(&cell.rise_time));
     put(&mut item, "fall_time", q(&cell.fall_time));
+    put(&mut item, "slew_rate", q(&cell.slew_rate));
     put(&mut item, "current_peak", q(&cell.current_peak));
     put(&mut item, "switch_nets", Value::Array(cell.switch_nets.iter().map(|n| Value::from(n.as_str())).collect()));
     put(&mut item, "hot_supply_net", cell.hot_supply_net.as_ref().map_or(Value::Null, |n| Value::from(n.as_str())));
@@ -2834,6 +3213,13 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
         "differential-mode loop field is free space; the radiated sweep is the upper envelope of the trapezoid, peak against quasi-peak limits".to_owned(),
         "limit tables are transcribed from the published numbers and must be verified against the standards".to_owned(),
     ];
+    let on_rules = findings.iter().filter(|f| f.tags.iter().any(|t| defaults::is_rule_tag(t))).count();
+    if on_rules > 0 {
+        notes.push(format!(
+            "{on_rules} of {} finding(s) rest on rule-of-thumb defaults (tags rule_of_thumb_edge, rule_of_thumb_capacitance, rule_of_thumb_dc_bias, rule_of_thumb_current):              their levels are bands with the nominal or the unfavourable end stated, the defaults are listed as `input:` lines and none is a datasheet value;              declare the attribute named in each line to replace a default, and the uncertainty of {UNCERTAINTY_DB} dB stays on top of every band",
+            findings.len()
+        ));
+    }
     if !cx.stack.declared() {
         notes.push(format!("no stack-up is declared: copper layers are spread evenly over the board thickness, relative permittivity {DEFAULT_ER} assumed"));
     }
@@ -2891,6 +3277,12 @@ impl EmiFinding {
                 put(&mut estimate, "method", Value::from(e.method.as_str()));
                 put(&mut estimate, "uncertainty_db", Value::from(e.uncertainty_db));
                 put(&mut estimate, "frequency_hz", e.frequency_hz.map_or(Value::Null, Value::from));
+                if let Some([low, high]) = e.band_db {
+                    put(&mut estimate, "band_db", Value::Array(vec![Value::from(low), Value::from(high)]));
+                }
+                if let Some(basis) = &e.basis {
+                    put(&mut estimate, "basis", Value::from(basis.as_str()));
+                }
                 Value::Object(estimate)
             }),
         );
@@ -2926,6 +3318,11 @@ impl EmiCheckReport {
     /// Findings not acknowledged by `emi_accept`.
     pub fn open_findings(&self) -> usize {
         self.findings.iter().filter(|f| f.accepted.is_none()).count()
+    }
+
+    /// Open findings whose numbers rest on a rule-of-thumb default (a `rule_of_thumb_*` tag).
+    pub fn rule_of_thumb_findings(&self) -> usize {
+        self.findings.iter().filter(|f| f.accepted.is_none() && f.tags.iter().any(|t| defaults::is_rule_tag(t))).count()
     }
 
     pub fn accepted_findings(&self) -> usize {
@@ -2976,6 +3373,7 @@ impl EmiCheckReport {
         put(&mut summary, "cells", Value::from(self.cells.len() as i64));
         put(&mut summary, "findings", Value::from(self.open_findings() as i64));
         put(&mut summary, "accepted", Value::from(self.accepted_findings() as i64));
+        put(&mut summary, "rule_of_thumb", Value::from(self.rule_of_thumb_findings() as i64));
         put(
             &mut summary,
             "conducted",
@@ -3026,9 +3424,7 @@ impl EmiCheckReport {
                         estimate.quantity, estimate.value, estimate.unit, estimate.method
                     ));
                 }
-                if finding.finding.code == "EMI-CONDUCTED"
-                    && let Some(Value::Array(inputs)) = finding.measures.get("inputs_text")
-                {
+                if let Some(Value::Array(inputs)) = finding.measures.get("inputs_text") {
                     for input in inputs.iter().filter_map(Value::as_str) {
                         lines.push(format!("     input: {input}"));
                     }
@@ -3055,6 +3451,12 @@ impl EmiCheckReport {
             self.open_findings(),
             self.accepted_findings()
         );
+        let on_rules = self.rule_of_thumb_findings();
+        if on_rules > 0 {
+            summary.push_str(&format!(
+                "; {on_rules} finding(s) rest on rule-of-thumb defaults (their levels are bands, see the input: lines)"
+            ));
+        }
         if conducted > 0 {
             summary.push_str(&format!(
                 "; {conducted} conducted estimate(s) are dBuV at a LISN, the other estimates are dBuV/m and not comparable with them"

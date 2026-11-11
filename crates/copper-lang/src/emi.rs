@@ -125,6 +125,8 @@ pub struct SwitchingCell {
     /// First declared edge data among the switch pins.
     pub rise_time: Option<Quantity>,
     pub fall_time: Option<Quantity>,
+    /// First declared switch-node slew rate (dv/dt) among the switch pins.
+    pub slew_rate: Option<Quantity>,
     pub current_peak: Option<Quantity>,
     pub switch_pins: Vec<Endpoint>,
     pub hot_supply_pins: Vec<Endpoint>,
@@ -327,6 +329,7 @@ fn cell_value(cell: &SwitchingCell) -> Value {
         ("frequency", frequency_value(cell.frequency.as_ref())),
         ("rise_time", optional_quantity(cell.rise_time.as_ref())),
         ("fall_time", optional_quantity(cell.fall_time.as_ref())),
+        ("slew_rate", optional_quantity(cell.slew_rate.as_ref())),
         ("current_peak", optional_quantity(cell.current_peak.as_ref())),
         ("switch_pins", endpoints_value(&cell.switch_pins)),
         ("hot_supply_pins", endpoints_value(&cell.hot_supply_pins)),
@@ -561,6 +564,7 @@ struct Roles {
     bootstrap: Vec<Endpoint>,
     rise_time: Option<Quantity>,
     fall_time: Option<Quantity>,
+    slew_rate: Option<Quantity>,
     current_peak: Option<Quantity>,
 }
 
@@ -603,6 +607,7 @@ fn build_cell(context: &Context, component: &ComponentInstance, part: &PartDefin
         frequency: cell_frequency(component, part),
         rise_time: roles.rise_time,
         fall_time: roles.fall_time,
+        slew_rate: roles.slew_rate,
         current_peak: roles.current_peak,
         switch_pins: roles.switch,
         hot_supply_pins: roles.supply,
@@ -652,6 +657,7 @@ fn declared_roles(context: &Context, component: &ComponentInstance, part: &PartD
         bootstrap: Vec::new(),
         rise_time: None,
         fall_time: None,
+        slew_rate: None,
         current_peak: None,
     };
     for pin in part.pins.values() {
@@ -661,6 +667,7 @@ fn declared_roles(context: &Context, component: &ComponentInstance, part: &PartD
             Some(EmiRole::Switch) => {
                 roles.rise_time = roles.rise_time.or_else(|| emi.rise_time.clone());
                 roles.fall_time = roles.fall_time.or_else(|| emi.fall_time.clone());
+                roles.slew_rate = roles.slew_rate.or_else(|| emi.slew_rate.clone());
                 roles.current_peak = roles.current_peak.or_else(|| emi.current_peak.clone());
                 roles.switch.push(endpoint);
             }
@@ -691,6 +698,7 @@ fn inferred_roles(context: &Context, component: &ComponentInstance, part: &PartD
         bootstrap: Vec::new(),
         rise_time: None,
         fall_time: None,
+        slew_rate: None,
         current_peak: None,
     };
     for pin in part.pins.values() {

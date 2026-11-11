@@ -236,12 +236,18 @@ pub struct EmiProfile {
     pub role: Option<EmiRole>,
     pub rise_time: Option<Quantity>,
     pub fall_time: Option<Quantity>,
+    /// Switch-node dv/dt (datasheet or measured); classifies the device and gives the edge when no time is declared.
+    pub slew_rate: Option<Quantity>,
     pub current_peak: Option<Quantity>,
 }
 
 impl EmiProfile {
     pub fn is_empty(&self) -> bool {
-        self.role.is_none() && self.rise_time.is_none() && self.fall_time.is_none() && self.current_peak.is_none()
+        self.role.is_none()
+            && self.rise_time.is_none()
+            && self.fall_time.is_none()
+            && self.slew_rate.is_none()
+            && self.current_peak.is_none()
     }
 
     /// The fall time, which defaults to the rise time.

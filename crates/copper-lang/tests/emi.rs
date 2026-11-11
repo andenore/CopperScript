@@ -677,3 +677,75 @@ fn query_emi_prints_the_model() {
     assert_eq!(result.get("cells").and_then(|v| v.as_array()).map(<[_]>::len), Some(1));
     assert!(copper_lang::query::render_query(&result).contains("\"controller\": \"U1\""));
 }
+
+#[test]
+fn slew_rate_parses_with_a_slash_unit_and_reaches_the_ir_and_the_cell() {
+    let with_slew = PARTS.replace("rise_time = 5ns;", "slew_rate = 50V/ns;");
+    let compiled = design("slew", &with_slew, BUCK);
+    let parts: Vec<_> = compiled.electrical.library.values().collect();
+    let buck = parts.iter().find(|part| part.name.ends_with("Buck")).expect("Buck");
+    let sw = buck.pins["SW"].profile.as_ref().unwrap().emi.clone().unwrap();
+    assert_eq!(sw.slew_rate.as_ref().map(ToString::to_string).as_deref(), Some("50 V/ns"));
+    assert_eq!(sw.slew_rate.as_ref().unwrap().base_value().decimal_text(), "50000000000");
+    assert!(sw.rise_time.is_none());
+    let json = part_value(buck);
+    let pins = json.get("pins").and_then(|pins| pins.as_array()).expect("pins");
+    let pin = pins.iter().find(|pin| pin.get("name").and_then(|v| v.as_str()) == Some("SW")).unwrap();
+    let emi = pin.get("profile").and_then(|v| v.get("emi")).expect("emi");
+    assert_eq!(emi.get("slew_rate").and_then(|v| v.get("unit")).and_then(|v| v.as_str()), Some("V/ns"));
+    assert!(emi.get("rise_time").is_none());
+    let cell = model(&compiled).cells.remove(0);
+    assert_eq!(cell.slew_rate.as_ref().map(ToString::to_string).as_deref(), Some("50 V/ns"));
+    assert!(model(&compiled).to_json().to_string().contains("slew_rate"));
+    assert!(emi_diagnostics(&compiled).is_empty());
+    // The other slew units, and both attributes on one pin.
+    for unit in ["3V/us", "2kV/us"] {
+        let parts = PARTS.replace("rise_time = 5ns;", &format!("slew_rate = {unit}; rise_time = 5ns;"));
+        let compiled = design("slew-units", &parts, BUCK);
+        let cell = model(&compiled).cells.remove(0);
+        assert!(cell.slew_rate.is_some() && cell.rise_time.is_some(), "{unit}");
+        assert!(emi_diagnostics(&compiled).is_empty(), "{unit}");
+    }
+}
+
+#[test]
+fn slew_rate_errors_are_cmp130() {
+    for (name, value) in [
+        ("zero-slew", "slew_rate = 0V/ns;"),
+        ("negative-slew", "slew_rate = -3V/ns;"),
+        ("bare-slew", "slew_rate = 3;"),
+        ("time-slew", "slew_rate = 3ns;"),
+        ("voltage-slew", "slew_rate = 3V;"),
+        ("name-slew", "slew_rate = fast;"),
+    ] {
+        expect_error(name, &PARTS.replace("rise_time = 5ns;", value), BUCK, "CMP130");
+    }
+    // Only the slew-rate units join a slash; any other quantity with a slash stays a parse error.
+    match compile("slew-mv", &PARTS.replace("rise_time = 5ns;", "slew_rate = 3mV/ns;"), BUCK) {
+        Ok(_) => panic!("3mV/ns must not parse"),
+        Err(failure) => assert!(failure.contains("PAR"), "{failure}"),
+    }
+}
+
+#[test]
+fn slew_rate_reaches_the_device_pad() {
+    let parts = r#"
+device DevBuck {
+    pad VIN { domains = "power"; directions = "input"; emi_role = hot_supply; }
+    pad SW { domains = "power"; directions = "output"; emi_role = switch; slew_rate = 2V/ns; current_peak = 3A; }
+    pad GND { domains = "ground"; directions = "input"; emi_role = hot_return; }
+}
+part Packaged {
+    category = "power.regulator.buck";
+    device = DevBuck;
+    switching_frequency = 1MHz;
+    pin VIN { number = "1"; bond = VIN; }
+    pin SW { number = "2"; bond = SW; }
+    pin GND { number = "3"; bond = GND; }
+}
+"#;
+    let board = "    component U1: p.Packaged;\n    net SW {\n        U1.SW;\n    }\n";
+    let compiled = design("slew-pad", parts, board);
+    let cell = model(&compiled).cells.remove(0);
+    assert_eq!(cell.slew_rate.as_ref().map(ToString::to_string).as_deref(), Some("2 V/ns"));
+}
