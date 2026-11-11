@@ -407,7 +407,7 @@ unknown name is `CMP120`. Both are optional and appear in the IR as
 | Condition | Diagnostic |
 | --- | --- |
 | a pin with `requires_pull` is on a net with neither that pull nor a direct tie | error `MISSING_PULL` |
-| every pin on a net is a digital or clock input and nothing drives or pulls it | error `UNDRIVEN_INPUT` |
+| every pin on a net is a digital or clock input and nothing drives or pulls it | error `UNDRIVEN_INPUT` (warning when the net has a single pin) |
 | every pin that can drive a net is open-drain and the net has no pull-up | warning `OPEN_DRAIN_NO_PULLUP` |
 
 A net has a pull-up when a resistor joins it to a net with a declared non-zero
@@ -423,7 +423,9 @@ domain. Any output, bidirectional, passive, power or analog pin, or a pin the
 library does not model, counts as a driver, as it does in KiCad, so a connector
 or switch contact keeps a net clean. A pull resistor to a supply or ground, or
 an `internal_pull` on any pin of the net, also satisfies it. A net with a
-single input pin is reported. There is one diagnostic per net.
+single input pin is reported as a warning, like an unmarked pin. A net with an
+endpoint that does not resolve gets no `OPEN_DRAIN_NO_PULLUP`. There is one
+diagnostic per net.
 
 `OPEN_DRAIN_NO_PULLUP` looks only at nets without a declared supply. A driver
 is a pin with direction `output` or `bidirectional` in a `digital` or `clock`

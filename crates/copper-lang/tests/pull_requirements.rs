@@ -224,7 +224,7 @@ fn a_net_of_only_inputs_is_undriven() {
 fn a_single_input_net_is_undriven() {
     let rx = input("");
     let found = pull_diagnostics("single", &[("rx", &rx)], &board("    component U1: p.In;\n    net SIG { U1.IN; }"));
-    only(&found, "UNDRIVEN_INPUT", Severity::Error);
+    only(&found, "UNDRIVEN_INPUT", Severity::Warning);
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn a_clock_input_is_checked_like_a_digital_one() {
     let clock = "part Clk {\n    pin CLK { number = \"1\"; domains = \"clock\"; directions = \"input\"; }\n}";
     let found =
         pull_diagnostics("clock", &[("clk", clock)], &board("    component U1: p.Clk;\n    net SIG { U1.CLK; }"));
-    only(&found, "UNDRIVEN_INPUT", Severity::Error);
+    only(&found, "UNDRIVEN_INPUT", Severity::Warning);
 }
 
 #[test]

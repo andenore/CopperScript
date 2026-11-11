@@ -1319,12 +1319,16 @@ fn check_pull_requirements(context: &Context) -> Vec<Diagnostic> {
         let internal_pull = profiles.iter().any(|(_, profile)| !profile.internal_pull.is_empty());
         if only_inputs && !pulled_up && !pulled_down && !internal_pull {
             let names: Vec<String> = pins.iter().map(|(endpoint, _)| endpoint.to_string()).collect();
+            let message =
+                format!("net {} has only input pins ({}) and nothing drives or pulls it", net.name, names.join(", "));
+            // A net with one pin is an unconnected pin with a name: a warning, like UNMARKED_PIN.
+            let diagnostic = if pins.len() > 1 {
+                Diagnostic::error("UNDRIVEN_INPUT", message, net.name.clone())
+            } else {
+                Diagnostic::warning("UNDRIVEN_INPUT", message, net.name.clone())
+            };
             diagnostics.push(
-                Diagnostic::error(
-                    "UNDRIVEN_INPUT",
-                    format!("net {} has only input pins ({}) and nothing drives or pulls it", net.name, names.join(", ")),
-                    net.name.clone(),
-                )
+                diagnostic
                 .hint(Some(
                     "connect an output, add a pull resistor to a supply or ground, or declare an internal pull on the pin"
                         .to_owned(),
@@ -1334,7 +1338,9 @@ fn check_pull_requirements(context: &Context) -> Vec<Diagnostic> {
 
         // OPEN_DRAIN_NO_PULLUP: every driver is open-drain and nothing pulls the net up.
         // I2C nets are covered by I2C_MISSING_PULLUP and `requires_pull = up` by MISSING_PULL.
-        if requires_up || pulled_up || i2c_nets.contains(net.name.as_str()) {
+        // An endpoint that does not resolve may be the pull-up; it has its own diagnostic.
+        let unresolved = pins.iter().any(|(_, profile)| profile.is_none());
+        if requires_up || pulled_up || unresolved || i2c_nets.contains(net.name.as_str()) {
             continue;
         }
         let drivers: Vec<&Endpoint> = profiles
