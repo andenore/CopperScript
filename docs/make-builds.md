@@ -35,7 +35,7 @@ Targets:
 | `compile` | Hierarchical electrical/mechanical JSON IR |
 | `layout` | Placement draft and report, not a routed board |
 | `edit` | Mechanical/floorplan editor |
-| `route` | Rust package escape/routing, saved copper fill and native DRC |
+| `route` | `copper build`: package escape/routing, saved copper fill and DRC (CopperScript's own; KiCad's with `KICAD_CLI`) |
 | `release` | Checksummed bundle of a board's order export, its route run and BOM for manual archiving (see [Release bundles](#release-bundles)) |
 | `compile-examples` (root only) | Compile the registered examples and compatibility fixtures |
 | `check-examples` (root only) | Run `check`, `compile`, and a dry-run of `route` for every registered complete example |
@@ -63,23 +63,28 @@ routing runs in the separate `ladder` job (`copper bench bench/ladder.json`).
 Compilation/placement outputs live under ignored `build/<board-name>/`.
 Each route gets a fresh `build/<board-name>/runs/<UTC-id>/`; open its
 `board.kicad_pcb` alongside its generated `.kicad_pro`, `fp-lib-table` and local
-`.pretty` library. The directory also contains the route/native reports, `routing.log` and
+`.pretty` library. The directory also contains the route and DRC reports, `routing.log` and
 `run.json` with the input and output hashes. No recursive clean target deletes
 past evidence. Set `RUN_DIR` to a **new/empty path below project `build/`** if a
 fixed CI destination is needed.
 
-The `route` target runs `bash make/route-build.sh`. It runs `copper check
+The `route` target runs [`copper build`](#copper-build-the-same-build-without-make).
+With `KICAD_CLI` empty (the default) it refills and checks the board with
+CopperScript itself and needs no KiCad; `make route KICAD_CLI=/path/to/kicad-cli`
+selects KiCad's refill and DRC (`--verify kicad`). It runs `copper check
 --macro-inputs` to resolve this board's imports and physical macro assets
 through its nearest manifest (fetching only pinned URL dependencies; `run.json`
 records the SHA-256 of every macro input the board binds), then routes offline:
 
-1. `copper route-board SOURCE ... --offline --verify-plane-fill KICAD_CLI
-   --report RUN/route-report.json -o RUN/board.kicad_pcb`;
-2. `kicad-cli pcb drc --refill-zones --save-board` on the routed board, which
-   saves the filled copper in the deliverable and writes `kicad-drc.json`;
-3. a `jq` completion check: success needs report status `pass`, ERC pass,
-   complete routing, native fill verification, no unrouted ordinary nets, and
-   zero native violations and unconnected items;
+1. `copper route-board SOURCE ... --offline --verify-plane-fill native
+   --report RUN/route-report.json -o RUN/board.kicad_pcb` (the kicad-cli path
+   instead of `native` with `KICAD_CLI`);
+2. a refill of the routed board saved in the deliverable, and a DRC of it:
+   CopperScript's filler and DRC writing `native-drc.json`, or `kicad-cli pcb
+   drc --refill-zones --save-board` writing `kicad-drc.json`;
+3. a completion check: success needs report status `pass`, ERC pass,
+   complete routing, fill verification, no unrouted ordinary nets, and
+   zero DRC violations and unconnected items;
 4. `run.json` with commands, provenance and the SHA-256 bindings
    `editor_intent_sha256`, `draft_board_sha256`, `filled_board_sha256` and
    `native_drc_sha256` that `copper editor-overlay` checks.
@@ -96,9 +101,9 @@ underlying routing exit code. No failure is suppressed with `-` or `|| true`.
 
 ## `copper build`: the same build without Make
 
-`copper build SOURCE [options] -- [ROUTE-BOARD OPTIONS...]` is the native
-equivalent of `make/route-build.sh`: it needs neither GNU Make, bash, `jq`,
-`sha256sum` nor KiCad, and runs `check`, `route-board`, the refill and DRC in
+`copper build SOURCE [options] -- [ROUTE-BOARD OPTIONS...]` is what `make route`
+runs (it replaced the bash script `make/route-build.sh`): it needs neither GNU
+Make, bash, `jq`, `sha256sum` nor KiCad, and runs `check`, `route-board`, the refill and DRC in
 the `copper` binary. It prints its step plan first (`--dry-run` prints it,
 checks the source offline and writes nothing), uses the same options
 (`--project-root`, `--output-root`, `--output-dir`, `--kicad-cli`,
@@ -121,8 +126,7 @@ native result. `run.json` records the mode (`verify`) and, besides the
 script's fields, a `schema` and the name of the DRC report (`drc_report`).
 `copper editor-overlay` reads the report `drc_report` names (`kicad-drc.json` when
 the manifest has none, as the script's runs do), so it accepts either mode.
-`make/release-build.sh` still expects `kicad-drc.json`, so a release today needs
-a `--verify kicad` build (or the script).
+`make/release-build.sh` bundles the report the run names.
 
 A native build passes a footprint root to `route-board` only when you give
 `--kicad-footprints` (or `--footprint-root` after `--`), so it resolves
@@ -131,12 +135,9 @@ Boards that use KiCad footprint ids therefore need one of the two; boards whose
 footprints come from pinned packages need neither. A `--kicad-cli` or
 `--kicad-footprints` path that does not exist is an error in both modes.
 
-Keep the Make route for builds that already go through `make/board.mk`
-(`make route`), for CI that pins the script, and when you want the runner to
-be a file you can read and edit; both write the same directory layout and
-neither replaces the other. Press Ctrl-C on a `copper build` and the process
-ends at once, leaving `run.json` with status `running`; the script has the
-same gap when it is killed rather than interrupted.
+`make route` only adds the shared variables of `make/board.mk`; the run
+directory is the same either way. Press Ctrl-C on a `copper build` and the
+process ends at once, leaving `run.json` with status `running`.
 
 ## Overrides
 
@@ -172,7 +173,7 @@ make SOURCE=path/to/my_board.copper route FAB_PROFILE=jlcpcb-four-layer
 
 Use the default `EXAMPLE=valid` when overriding `SOURCE` to avoid carrying
 another example's optional physical scenes. For an independent repository,
-include or copy the shared `make/board.mk` and `make/route-build.sh`, install
+include or copy the shared `make/board.mk`, install
 `copper` and use a
 settings-only Makefile such as:
 
@@ -191,8 +192,7 @@ stackups, planes and net rules belong in `.copper`; fabrication-preset selection
 and solver budgets remain build settings until their source syntax is supported.
 
 The independent project owns its manifest/lock and `build/` gitignore entry;
-it needs no example-specific script. `COPPER` selects the executable, and
-`make/route-build.sh` must be next to `board.mk`. Unsupported features fail
+it needs no example-specific script. `COPPER` selects the executable. Unsupported features fail
 explicitly (exit 3). `KICAD_PYTHON` selects KiCad's own Python for
 `make editor-overlay` (`copper editor-overlay --kicad-python`). In this checkout the CM4 local
 Makefile also includes the shared recipes: `make -C examples/cm4_baseboard route`.

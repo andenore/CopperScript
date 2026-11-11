@@ -36,7 +36,7 @@ Ordinary area routing emits `detailed_pass` and `detailed_net` start/finish
 events. Within-pair maze progress and reusable serialized stage geometry are
 not exposed by this telemetry.
 
-The full-run wrapper (`make/route-build.sh`) saves these events in
+The full-run wrapper (`copper build`) saves these events in
 `routing.log`; it does not function-profile. See
 [routing performance](routing-performance.md) for profiling the binary,
 ladder comparisons and the optimization assessment.

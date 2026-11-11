@@ -415,9 +415,9 @@ separate gates; local escape witnesses alone do not prove board closure.
 Exact component/internal-contact and coupled-winding evidence is required even
 when copper DRC passes. See [routing invariants](filled-copper-feedback.md).
 
-Install Git, a Rust toolchain ([rustup](https://rustup.rs/)), Git Bash (for
-`make/route-build.sh`, with `jq`) and KiCad 10 with its footprint libraries
-first. The latest closure run used KiCad 10.0.6. Only CopperScript needs
+Install Git, a Rust toolchain ([rustup](https://rustup.rs/)), GNU Make
+first. KiCad 10 is optional: `make route KICAD_CLI=PATH` selects its refill and
+DRC in place of CopperScript's own. The latest KiCad closure run used KiCad 10.0.6. Only CopperScript needs
 checking out:
 
 ```powershell
@@ -455,11 +455,11 @@ verification and saves native filled copper. Each run writes a fresh `build/full
 by Git. Errors/interruption may leave only logs/partial artifacts; file existence
 does not imply routing success. No Gerbers are generated.
 
-The runner (`make/route-build.sh`) uses `copper` on PATH (override with
+The runner (`copper build`, through `make route`) uses `copper` on PATH (override with
 `COPPER=PATH`) and downloads the locked dependencies if uncached; it never updates `copper.lock`. Set `RESOLVE_ARGS="--locked --offline"`
-to prohibit fetching. It discovers `kicad-cli` on PATH or the standard Windows
-KiCad 10 installation. Managed Git footprints are resolved from the lock; the
-optional `KICAD_FOOTPRINTS` setting is used for native KiCad verification.
+to prohibit fetching. It verifies with CopperScript's own refill and DRC unless `KICAD_CLI` names a
+`kicad-cli`. Managed Git footprints are resolved from the lock; the
+optional `KICAD_FOOTPRINTS` setting names KiCad's footprint folder.
 Override paths when needed, preview without routing using `BUILD_ARGS=--dry-run`, or
 select a new/empty directory inside `build/`:
 

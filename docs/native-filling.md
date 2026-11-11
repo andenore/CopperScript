@@ -14,7 +14,7 @@ Together with [native plotting](native-plotting.md), this gives fabrication
 files without KiCad installed. `fill` itself runs no DRC and no CAM check;
 [`copper drc`](native-drc.md) does. `copper build` and `export-manufacturing`
 fill with it by default and gate on the native DRC; KiCad's refill stays
-available (`copper build --kicad-cli PATH`, `export-manufacturing --drc kicad`).
+available (`copper build --verify kicad`, `export-manufacturing --drc kicad`).
 
 ## Algorithm
 

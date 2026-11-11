@@ -1274,7 +1274,7 @@ make EXAMPLE=full-vertical route
 
 Each fresh ignored `build/full-vertical/runs/<run-id>/` contains
 `routing.log` (the router's output, with progress events under `--progress`),
-`route-report.json`, `drc.json` (`kicad-drc.json` for a KiCad run) and `run.json` (routing and fill
+`route-report.json`, `native-drc.json` (`kicad-drc.json` for a KiCad run) and `run.json` (routing and fill
 commands, compiler path and SHA-256, Git commit and tracked-diff hash, input
 hashes and exit status). See [Make builds](make-builds.md).
 

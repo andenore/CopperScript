@@ -97,12 +97,12 @@ and detailed routing, then **saves the ground fills**
 and runs CopperScript's own DRC on that exact output board (KiCad's, with `KICAD_CLI`). No rule relaxation or
 via-in-pad permission is added. Default outputs go in a timestamped directory
 under ignored `build/cm4-baseboard/runs/`; open its `board.kicad_pcb` in KiCad.
-`route-report.json`, `drc.json`, `routing.log` and `run.json` with the
+`route-report.json`, `native-drc.json`, `routing.log` and `run.json` with the
 input/output hashes are retained together. Success requires zero native violations and
 zero unconnected items; a failed build returns nonzero and retains diagnostics.
 
 No KiCad is needed. To refill and check with KiCad instead, as a cross-check (it
-writes `kicad-drc.json` instead of `drc.json`), supply its paths:
+writes `kicad-drc.json` instead of `native-drc.json`), supply its paths:
 
 ```sh
 make EXAMPLE=cm4 route \

@@ -13,9 +13,9 @@ copper drc build/board.filled.kicad_pcb --report build/drc.json --cam build/nati
 ```
 
 `copper build` runs the fill and this check after routing and writes the
-report as `drc.json`, and `copper export-manufacturing` uses both as its release
+report as `native-drc.json`, and `copper export-manufacturing` uses both as its release
 gate in place of `kicad-cli pcb drc` (see [manufacturing files](manufacturing-files.md)).
-KiCad's DRC stays available as the cross-check (`copper build --kicad-cli PATH`,
+KiCad's DRC stays available as the cross-check (`copper build --verify kicad`,
 `export-manufacturing --drc kicad`). The native check is narrower than KiCad's:
 what it does not check is listed below, in every report and in the export
 manifest. A board can therefore pass here and fail in KiCad, for example on
