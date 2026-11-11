@@ -71,6 +71,8 @@ text_enum!(Direction { Input = "input", Output = "output", Bidirectional = "bidi
 
 text_enum!(DriveMode { PushPull = "push_pull", OpenDrain = "open_drain", HighImpedance = "high_impedance" });
 
+text_enum!(Pull { Up = "up", Down = "down" });
+
 text_enum!(UnpoweredBehavior {
     Unknown = "unknown",
     HighImpedance = "high_impedance",
@@ -254,6 +256,10 @@ pub struct ElectricalProfile {
     pub io_supply: Option<String>,
     /// Logic thresholds; `None` when none is declared.
     pub logic_levels: Option<LogicLevels>,
+    /// The datasheet demands an external pull resistor in this direction.
+    pub requires_pull: Option<Pull>,
+    /// Built-in or firmware-selectable pulls.
+    pub internal_pull: BTreeSet<Pull>,
 }
 
 impl ElectricalProfile {
@@ -268,6 +274,8 @@ impl ElectricalProfile {
             absolute_voltage: None,
             io_supply: None,
             logic_levels: None,
+            requires_pull: None,
+            internal_pull: BTreeSet::new(),
         }
     }
 

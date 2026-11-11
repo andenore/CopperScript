@@ -208,6 +208,10 @@ impl Context {
             vol: levels(|l| &l.vol),
         };
         merged.logic_levels = (!merged_levels.is_empty()).then_some(merged_levels);
+        merged.requires_pull = profiles.iter().find_map(|profile| profile.requires_pull);
+        for profile in &profiles {
+            merged.internal_pull.extend(profile.internal_pull.iter().copied());
+        }
         Some(merged)
     }
 
@@ -1212,6 +1216,161 @@ fn logic_level_text(level: &LogicLevel) -> String {
     }
 }
 
+/// Whether a declared supply on the net itself holds it at the polarity of `pull`
+/// (non-zero for up, 0 V for down).
+fn tied_to_supply(context: &Context, net: &Net, pull: Pull) -> bool {
+    context
+        .board
+        .supplies
+        .iter()
+        .any(|supply| supply.net == net.name && supply.voltage.base_value().is_zero() == (pull == Pull::Down))
+}
+
+/// Whether a resistor joins the net to a net with a declared supply of the
+/// polarity of `pull`. The resistor value is not checked.
+fn has_pull_resistor(context: &Context, net: &Net, pull: Pull) -> bool {
+    context.board.supplies.iter().any(|supply| {
+        supply.net != net.name
+            && supply.voltage.base_value().is_zero() == (pull == Pull::Down)
+            && has_resistor_between(context, &net.name, &supply.net)
+    })
+}
+
+/// One resolved pin of a net with its merged profile; `None` when the pin does
+/// not resolve or has no profile.
+type NetPin = (Endpoint, Option<ElectricalProfile>);
+
+/// The pins of a net, once each.
+fn net_pins(context: &Context, net: &Net) -> Vec<NetPin> {
+    let mut seen: BTreeSet<Endpoint> = BTreeSet::new();
+    let mut pins = Vec::new();
+    for endpoint in &net.endpoints {
+        match context.resolve_pin(endpoint) {
+            None => pins.push((endpoint.clone(), None)),
+            Some((component, part, pin)) => {
+                let canonical = Endpoint::new(&component.reference, &pin.name);
+                if seen.insert(canonical.clone()) {
+                    pins.push((canonical, context.pin_profile(component, part, pin)));
+                }
+            }
+        }
+    }
+    pins
+}
+
+fn is_digital_or_clock(profile: &ElectricalProfile) -> bool {
+    profile.domains.contains(&SignalDomain::Digital) || profile.domains.contains(&SignalDomain::Clock)
+}
+
+/// Pull resistors that datasheets demand and inputs nothing drives.
+fn check_pull_requirements(context: &Context) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let i2c_nets: BTreeSet<&str> = context
+        .board
+        .interfaces
+        .iter()
+        .filter(|interface| interface.type_name == "std.i2c")
+        .flat_map(|interface| ["sda", "scl"].into_iter().filter_map(|signal| interface.signals.get(signal)))
+        .map(String::as_str)
+        .collect();
+    for net in &context.board.nets {
+        let pins = net_pins(context, net);
+        let profiles: Vec<(&Endpoint, &ElectricalProfile)> =
+            pins.iter().filter_map(|(endpoint, profile)| profile.as_ref().map(|profile| (endpoint, profile))).collect();
+        let declared_supply = context.board.supplies.iter().any(|supply| supply.net == net.name);
+        let pulled_up = declared_supply || has_pull_resistor(context, net, Pull::Up);
+        let pulled_down = has_pull_resistor(context, net, Pull::Down);
+
+        // MISSING_PULL: the datasheet demands an external pull resistor.
+        let mut requires_up = false;
+        for (endpoint, profile) in &profiles {
+            let Some(pull) = profile.requires_pull else { continue };
+            requires_up |= pull == Pull::Up;
+            if tied_to_supply(context, net, pull) || has_pull_resistor(context, net, pull) {
+                continue;
+            }
+            let (direction, target) = match pull {
+                Pull::Up => ("up", "a declared supply rail"),
+                Pull::Down => ("down", "a declared 0 V ground net"),
+            };
+            diagnostics.push(
+                Diagnostic::error(
+                    "MISSING_PULL",
+                    format!(
+                        "{endpoint} requires an external pull-{direction} resistor, but net {} has no resistor to {target} and is not tied to one",
+                        net.name
+                    ),
+                    endpoint.to_string(),
+                )
+                .hint(Some(format!("add a pull-{direction} resistor from {} to {target}", net.name))),
+            );
+        }
+
+        if declared_supply || net.endpoints.is_empty() {
+            continue;
+        }
+
+        // UNDRIVEN_INPUT: only inputs, nothing pulls or ties the net.
+        let only_inputs = pins.iter().all(|(_, profile)| {
+            profile.as_ref().is_some_and(|profile| {
+                profile.directions == BTreeSet::from([Direction::Input]) && is_digital_or_clock(profile)
+            })
+        });
+        let internal_pull = profiles.iter().any(|(_, profile)| !profile.internal_pull.is_empty());
+        if only_inputs && !pulled_up && !pulled_down && !internal_pull {
+            let names: Vec<String> = pins.iter().map(|(endpoint, _)| endpoint.to_string()).collect();
+            diagnostics.push(
+                Diagnostic::error(
+                    "UNDRIVEN_INPUT",
+                    format!("net {} has only input pins ({}) and nothing drives or pulls it", net.name, names.join(", ")),
+                    net.name.clone(),
+                )
+                .hint(Some(
+                    "connect an output, add a pull resistor to a supply or ground, or declare an internal pull on the pin"
+                        .to_owned(),
+                )),
+            );
+        }
+
+        // OPEN_DRAIN_NO_PULLUP: every driver is open-drain and nothing pulls the net up.
+        // I2C nets are covered by I2C_MISSING_PULLUP and `requires_pull = up` by MISSING_PULL.
+        if requires_up || pulled_up || i2c_nets.contains(net.name.as_str()) {
+            continue;
+        }
+        let drivers: Vec<&Endpoint> = profiles
+            .iter()
+            .filter(|(_, profile)| {
+                (profile.directions.contains(&Direction::Output)
+                    || profile.directions.contains(&Direction::Bidirectional))
+                    && is_digital_or_clock(profile)
+            })
+            .map(|(endpoint, _)| *endpoint)
+            .collect();
+        let all_open_drain = profiles.iter().all(|(endpoint, profile)| {
+            !drivers.contains(endpoint) || profile.drive_modes == BTreeSet::from([DriveMode::OpenDrain])
+        });
+        let internal_up = profiles.iter().any(|(_, profile)| profile.internal_pull.contains(&Pull::Up));
+        if !drivers.is_empty() && all_open_drain && !internal_up {
+            let names: Vec<String> = drivers.iter().map(|endpoint| endpoint.to_string()).collect();
+            diagnostics.push(
+                Diagnostic::warning(
+                    "OPEN_DRAIN_NO_PULLUP",
+                    format!(
+                        "net {} is driven only by open-drain pins ({}) and has no pull-up",
+                        net.name,
+                        names.join(", ")
+                    ),
+                    net.name.clone(),
+                )
+                .hint(Some(
+                    "add a pull-up resistor to a supply, or rely on a pin with a declared internal pull-up".to_owned(),
+                )),
+            );
+        }
+    }
+    diagnostics
+}
+
 fn check_power_inputs(context: &Context) -> Vec<Diagnostic> {
     let mut powered: BTreeSet<String> = context
         .board
@@ -1982,6 +2141,7 @@ pub fn check_view(view: FlatElectricalView, unmarked: bool) -> Vec<Diagnostic> {
     diagnostics.extend(check_output_conflicts(&context));
     diagnostics.extend(check_supplies(&context));
     diagnostics.extend(check_logic_levels(&context));
+    diagnostics.extend(check_pull_requirements(&context));
     diagnostics.extend(check_power_inputs(&context));
     for interface in &context.board.interfaces {
         if interface.type_name == "std.i2c" {

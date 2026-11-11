@@ -460,6 +460,31 @@ pub fn electrical_profile(attributes: &Attributes, location: &Location) -> Resul
     let absolute_voltage = absolute_voltage_range(attributes, operating.as_ref(), location)?;
     let io_supply = optional_string(attributes.get("io_supply"), "io_supply", location)?;
     let logic_levels = logic_levels(attributes, location)?;
+    let requires_pull = match attributes.get("requires_pull") {
+        None => None,
+        Some(value) => {
+            let text = string_value(value, "requires_pull", location)?;
+            match Pull::parse(text) {
+                Some(pull) => Some(pull),
+                None => {
+                    return Err(error(
+                        "CMP120",
+                        format!("requires_pull must be up or down, not {}", repr(text)),
+                        location,
+                    ));
+                }
+            }
+        }
+    };
+    let internal_pull = csv_names(attributes.get("internal_pull").unwrap_or(&empty()), "internal pulls", location)?;
+    let internal_pull = internal_pull
+        .iter()
+        .map(|name| {
+            Pull::parse(name).ok_or_else(|| {
+                error("CMP120", format!("internal_pull must list up and down, not {}", repr(name)), location)
+            })
+        })
+        .collect::<Result<BTreeSet<Pull>>>()?;
     Ok(ElectricalProfile {
         domains: domains.into_iter().collect(),
         directions: directions.into_iter().collect(),
@@ -470,6 +495,8 @@ pub fn electrical_profile(attributes: &Attributes, location: &Location) -> Resul
         absolute_voltage,
         io_supply,
         logic_levels,
+        requires_pull,
+        internal_pull,
     })
 }
 
@@ -566,6 +593,8 @@ pub fn compile_device(document: &Document, qualified_name: &str) -> Result<Devic
                         "vil",
                         "voh",
                         "vol",
+                        "requires_pull",
+                        "internal_pull",
                         "when",
                     ],
                     location,
@@ -1006,6 +1035,8 @@ pub fn compile_part(
                         "vil",
                         "voh",
                         "vol",
+                        "requires_pull",
+                        "internal_pull",
                         "connection",
                         "required_net_traits",
                         "parallel_power_group",
@@ -1037,6 +1068,8 @@ pub fn compile_part(
                     "vil",
                     "voh",
                     "vol",
+                    "requires_pull",
+                    "internal_pull",
                 ]
                 .iter()
                 .any(|name| attributes.contains_key(*name));

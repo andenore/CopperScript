@@ -108,6 +108,12 @@ fn profile_value(profile: Option<&ElectricalProfile>) -> Value {
     if let Some(levels) = &profile.logic_levels {
         result.push(("logic_levels", logic_levels_value(levels)));
     }
+    if let Some(pull) = profile.requires_pull {
+        result.push(("requires_pull", text(pull.value())));
+    }
+    if !profile.internal_pull.is_empty() {
+        result.push(("internal_pull", sorted_texts(profile.internal_pull.iter().map(|item| item.value()))));
+    }
     object(result)
 }
 
