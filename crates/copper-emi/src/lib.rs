@@ -10,17 +10,26 @@
 //! | [`spectrum`] | complex numbers, radix-2 FFT, windows, amplitude-correct spectra |
 //! | [`lisn`] | CISPR 16-1-2 50 uH V-network impedance and noise-current to measured-voltage transfer |
 //! | [`receiver`] | EMI receiver emulation: Gaussian IF filter, peak, quasi-peak and average detectors |
+//! | [`circuit`] | linear circuit solver: modified nodal analysis in the frequency domain (R, L, C, mutual coupling, sources, VCCS), impedance and sweeps |
+//! | [`harmonic`] | periodic steady state of a circuit from Fourier coefficients; complex Fourier series of trapezoidal pulse trains and triangular ripple; waveform reconstruction |
+//! | [`conducted`] | conducted-emission (CISPR Band B) prediction for a switching cell's input side: DM and CM paths, input filter, LISN, limits and margins |
 //!
 //! **Every result is screening evidence, not EMC qualification.** Absolute
 //! radiated levels from the closed-form estimators carry 10 to 20 dB of
 //! uncertainty; limit-line tables are transcribed from the published numbers
 //! as remembered and MUST be verified against the purchased standards before
 //! any compliance use. Compare estimates by rank and margin, never as
-//! pass/fail.
+//! pass/fail. The conducted-emission pipeline ([`conducted`]) has a literature
+//! accuracy envelope of about 5 dB at low MHz and 7 to 12 dB above, limited by
+//! the component and source models, and its LISN component values and limit
+//! tables are likewise unverified against CISPR 16-1-2 and CISPR 32.
 
 #![forbid(unsafe_code)]
 
+pub mod circuit;
+pub mod conducted;
 pub mod estimate;
+pub mod harmonic;
 pub mod inductance;
 pub mod lisn;
 pub mod receiver;

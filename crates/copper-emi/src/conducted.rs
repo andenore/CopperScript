@@ -1,0 +1,1133 @@
+//! Conducted-emission prediction for the input side of a switching converter
+//! (CISPR Band B, 150 kHz to 30 MHz).
+//!
+//! **Screening evidence only.** The literature accuracy envelope of this kind
+//! of linear-network prediction is about 5 dB at low MHz and 7 to 12 dB above,
+//! and it is limited by the component and source models (parasitics, layout
+//! coupling, non-ideal edges), not by the solver. The LISN component values
+//! ([`crate::lisn`]) and the limit tables ([`crate::estimate::limits`]) are
+//! transcribed as remembered and are UNVERIFIED against CISPR 16-1-2 and
+//! CISPR 32. Use the numbers to rank design choices and to see how far a
+//! design is from a limit, never as a compliance statement. Every
+//! simplification is also returned in [`ConductedReport::assumptions`].
+//!
+//! # Model
+//!
+//! ```text
+//!  LISN (+)                                                   converter
+//!  terminal        CM choke      supply-side      filter        hot loop
+//!  T+ o---+--[W1]--+--------+-----------+--[ L_f ]--+----X----+-----------+
+//!         |   :K    |        |           |  (DCR,    |         |           |
+//!         |  [W2]   |       ===C_s       |   C_par)  |       === C_hot     v I_dm(t)
+//!  T- o---+--[ ]----+--------+-----------+-----------+----Y----+ (ESR,ESL,  |
+//!         |                                                      L_loop)    |
+//!   each LISN: T --50uH-- mains, mains --1uF-- gnd,            |            |
+//!              T --0.1uF-- P, P --1k||50-- gnd                 +------------+
+//!   (P = measurement port, one per line)
+//!
+//!  common mode:       V_sw(t) o--[ C_par ]--- X      (V_sw referenced to ground)
+//! ```
+//!
+//! * The converter draws a current `I_dm(t)` from node `X` and returns it to
+//!   node `Y`. For a buck stage it is a trapezoidal pulse train between 0 and
+//!   the output current `I_out`, duty `D = V_out / V_in` (measured between
+//!   50 % points) and edges equal to the switch current rise and fall times:
+//!   during the on-time the high-side switch carries the inductor current, and
+//!   the inductor ripple is neglected (flat top). A caller can pass any
+//!   harmonic source instead ([`ConductedInput::custom_current`]).
+//! * The hot capacitor `C_hot` (with its `ESR` and `ESL`) is in series with
+//!   the hot-loop inductance `L_loop`; this series branch sits between `X`
+//!   and `Y`. The supply feed attaches at `X`, the switch end of the loop, so
+//!   `L_loop` adds to the capacitor's `ESL` as seen by the switching current.
+//!   (If the supply feed attaches at the capacitor pads instead, set
+//!   `hot_loop_inductance = 0`: an ideal current source in series with an
+//!   inductor is not affected by it.)
+//! * Optional input filter: a series inductor `L_f` (with `DCR` and a parallel
+//!   winding capacitance, hence a self-resonance) in the positive line and an
+//!   optional capacitor `C_s` across the lines on the supply side of `L_f`.
+//!   `L_f` with `C_hot` alone is a first-order divider against the LISN
+//!   impedance; the second-order `40 dB/decade` roll-off needs `C_s`.
+//! * Optional common-mode choke: two windings `W1`, `W2` (one per line)
+//!   coupled with coefficient `k`. Equal currents in the same direction (CM)
+//!   see `L (1 + k)` per winding, opposite currents (DM) see the leakage
+//!   `L (1 - k)`. Absent unless given.
+//! * Each line terminates in one V-network ([`crate::lisn::VNetwork`], built
+//!   into the circuit by [`crate::circuit::Circuit::add_v_network`]); the supply
+//!   impedance behind the LISN is neglected. The measured voltage is the
+//!   voltage of port `P` on each line.
+//!
+//! The common-mode source is the switch-node voltage `V_sw(t)`: a trapezoid of
+//! amplitude `V_in`, the same duty, driving the parasitic capacitance
+//! `C_par` to the reference (heat sink, chassis). The CM current `V_sw` pushes
+//! through `C_par` into node `X`, returns to the converter through both supply
+//! lines (the hot capacitor ties `Y` to `X`), and closes through the two
+//! LISNs in parallel to the reference. Without a filter this is the textbook
+//! `I_cm = V_sw,n / (1/(j w C_par) + Z_lisn / 2)`.
+//!
+//! # Equations
+//!
+//! For harmonic `n` of the fundamental `f0 = f_sw`, `f_n = n f0`:
+//!
+//! 1. Source phasors from [`PeriodicSpectrum::trapezoid`] (peak). The DM source
+//!    drives the current source `X -> Y`; the CM source drives `V_sw`.
+//! 2. The linear network is solved for each source separately
+//!    ([`harmonic_steady_state`]): the other source is switched off (current
+//!    source open, voltage source short).
+//! 3. Per-line port voltage `V_P(n)`, `V_N(n)` for each solve. The DM level is
+//!    `max(|V_P|, |V_N|)` of the DM solve and the CM level the same of the CM
+//!    solve (for a symmetric network these are `|V_dm|` and `|V_cm|` with
+//!    `V_dm = (V_P - V_N)/2`, `V_cm = (V_P + V_N)/2`; the max over lines also
+//!    counts mode conversion in an asymmetric filter).
+//! 4. Reported level in dBuV is the RMS of the harmonic,
+//!    `20 log10(|V| / sqrt 2 / 1 uV)`, since receivers are RMS calibrated.
+//! 5. TOTAL = DM + CM added as magnitudes (the worst case over the unknown
+//!    relative phase; the real line voltage is `V_P,dm + V_P,cm` with a
+//!    relative phase this model does not predict reliably, so the sum of
+//!    magnitudes bounds it from above).
+//!
+//! # Detector handling
+//!
+//! For a fixed-frequency converter whose harmonic spacing `f0` exceeds the
+//! receiver resolution bandwidth (9 kHz in Band B; this module requires
+//! `f0 > 2 RBW` for the claim below, and warns in the assumptions otherwise),
+//! each harmonic is an isolated narrowband line: the IF envelope is constant,
+//! so peak = quasi-peak = average = the RMS level of that harmonic. The fast
+//! path therefore compares the one RMS level with both the quasi-peak and the
+//! average limit. [`receiver_check`] verifies the claim by reconstructing the
+//! LISN port waveform over many periods and running it through
+//! [`crate::receiver::scan`]. Spread-spectrum clocking or jitter, which break
+//! the claim, are not modelled.
+
+use crate::circuit::{Circuit, CircuitError, ElementId, Node};
+use crate::estimate::limits::{Class, Detector, LimitLine, cispr32_conducted};
+use crate::estimate::volts_to_dbuv;
+use crate::harmonic::{HarmonicError, HarmonicResponse, PeriodicSpectrum, harmonic_steady_state};
+use crate::lisn::VNetwork;
+use crate::receiver::{Band, Reading, scan};
+use crate::spectrum::Complex;
+use std::f64::consts::SQRT_2;
+
+/// A real capacitor: capacitance in series with `ESR` and `ESL`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Capacitor {
+    /// Capacitance at the operating point, F (apply DC-bias derating yourself).
+    pub capacitance: f64,
+    /// Equivalent series resistance, ohm (0 for none).
+    pub esr: f64,
+    /// Equivalent series inductance, H (0 for none).
+    pub esl: f64,
+}
+
+impl Capacitor {
+    /// A lossless capacitor without parasitics.
+    pub const fn ideal(capacitance: f64) -> Self {
+        Self { capacitance, esr: 0.0, esl: 0.0 }
+    }
+}
+
+/// Series input-filter inductor with an optional supply-side capacitor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InputFilter {
+    /// Series inductance in the positive line, H.
+    pub inductance: f64,
+    /// DC resistance, ohm (0 for none).
+    pub dcr: f64,
+    /// Parallel winding capacitance, F (0 for none); sets the self-resonance
+    /// `1 / (2 pi sqrt(L C))`.
+    pub parallel_capacitance: f64,
+    /// Capacitor across the lines on the supply side of the inductor.
+    pub supply_capacitor: Option<Capacitor>,
+}
+
+/// Two-winding common-mode choke (one winding per line).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CommonModeChoke {
+    /// Self inductance of each winding, H.
+    pub inductance: f64,
+    /// Coupling coefficient `0 < k <= 1`; CM inductance `L (1 + k)`, DM leakage `L (1 - k)` per winding.
+    pub coupling: f64,
+    /// Winding resistance per winding, ohm (0 for none).
+    pub winding_resistance: f64,
+    /// Winding capacitance across each winding, F (0 for none).
+    pub winding_capacitance: f64,
+}
+
+/// Inputs of [`predict`]. All fields are plain SI units.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConductedInput {
+    /// Converter input voltage, V (also the switch-node swing for CM).
+    pub input_voltage: f64,
+    /// Output voltage, V (buck duty `D = V_out / V_in`).
+    pub output_voltage: f64,
+    /// Output (inductor) current, A: the amplitude of the buck input current pulses.
+    pub output_current: f64,
+    /// Switching frequency `f0`, Hz.
+    pub switching_frequency: f64,
+    /// Rise time (0-100 %) of the switch/input current, s.
+    pub current_rise_time: f64,
+    /// Fall time (0-100 %) of the switch/input current, s.
+    pub current_fall_time: f64,
+    /// Replace the buck-derived input current by this harmonic source
+    /// (current drawn from `X`, peak phasors). Its fundamental must equal
+    /// `switching_frequency`. The CM source still uses the duty and the
+    /// `input_voltage`.
+    pub custom_current: Option<PeriodicSpectrum>,
+    /// Hot input capacitor next to the switches.
+    pub hot_capacitor: Capacitor,
+    /// Hot-loop inductance in series with the hot capacitor, H (0 for none).
+    pub hot_loop_inductance: f64,
+    /// Optional input filter between the hot capacitor and the supply lines.
+    pub filter: Option<InputFilter>,
+    /// Optional common-mode choke between the LISN and the filter.
+    pub common_mode_choke: Option<CommonModeChoke>,
+    /// V-network model for both lines.
+    pub lisn: VNetwork,
+    /// Parasitic capacitance from the switch node to the reference, F. `None`
+    /// disables the common-mode path.
+    pub switch_node_capacitance: Option<f64>,
+    /// Switch-node voltage rise time, s (`None`: `current_rise_time`).
+    pub switch_node_rise_time: Option<f64>,
+    /// Switch-node voltage fall time, s (`None`: `current_fall_time`).
+    pub switch_node_fall_time: Option<f64>,
+    /// Limit class used for the margins.
+    pub limit_class: Class,
+    /// Lowest reported frequency, Hz (CISPR Band B starts at 150 kHz).
+    pub min_frequency: f64,
+    /// Highest reported frequency, Hz (30 MHz). Raise it only for studies of
+    /// the source spectrum: the LISN model is not meaningful above 30 MHz and
+    /// there is no limit there (margins read `None`).
+    pub max_frequency: f64,
+}
+
+impl ConductedInput {
+    /// A buck converter input stage with equal current edges, no loop
+    /// inductance, filter, choke or common-mode path, the CISPR 50 uH LISN,
+    /// Class B limits and the 150 kHz to 30 MHz band.
+    pub fn buck(
+        input_voltage: f64,
+        output_voltage: f64,
+        output_current: f64,
+        switching_frequency: f64,
+        edge_time: f64,
+        hot_capacitor: Capacitor,
+    ) -> Self {
+        Self {
+            input_voltage,
+            output_voltage,
+            output_current,
+            switching_frequency,
+            current_rise_time: edge_time,
+            current_fall_time: edge_time,
+            custom_current: None,
+            hot_capacitor,
+            hot_loop_inductance: 0.0,
+            filter: None,
+            common_mode_choke: None,
+            lisn: VNetwork::cispr_50uh(),
+            switch_node_capacitance: None,
+            switch_node_rise_time: None,
+            switch_node_fall_time: None,
+            limit_class: Class::B,
+            min_frequency: 150e3,
+            max_frequency: 30e6,
+        }
+    }
+
+    /// Duty cycle `V_out / V_in`.
+    pub fn duty(&self) -> f64 {
+        self.output_voltage / self.input_voltage
+    }
+}
+
+/// Errors of this module.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConductedError {
+    /// An input value is out of range.
+    InvalidInput(String),
+    /// Waveform synthesis failed.
+    Harmonic(HarmonicError),
+    /// The network could not be solved.
+    Circuit(CircuitError),
+}
+
+impl std::fmt::Display for ConductedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConductedError::InvalidInput(s) => write!(f, "invalid input: {s}"),
+            ConductedError::Harmonic(e) => write!(f, "{e}"),
+            ConductedError::Circuit(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ConductedError {}
+
+impl From<HarmonicError> for ConductedError {
+    fn from(e: HarmonicError) -> Self {
+        ConductedError::Harmonic(e)
+    }
+}
+impl From<CircuitError> for ConductedError {
+    fn from(e: CircuitError) -> Self {
+        ConductedError::Circuit(e)
+    }
+}
+
+/// Predicted level of one harmonic (all levels RMS, dBuV; margins in dB,
+/// limit minus level, positive = below the limit).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HarmonicLevel {
+    /// Harmonic number `n`.
+    pub harmonic: u32,
+    /// Frequency `n f0`, Hz.
+    pub frequency: f64,
+    /// Peak amplitude of the DM source current at this harmonic, A.
+    pub source_current_peak: f64,
+    /// Differential-mode level at the worst LISN port.
+    pub dm_dbuv: f64,
+    /// Common-mode level at the worst LISN port (`None` without a CM path).
+    pub cm_dbuv: Option<f64>,
+    /// DM + CM added as magnitudes (worst case), dBuV.
+    pub total_dbuv: f64,
+    /// Quasi-peak limit, dBuV (`None` outside 150 kHz to 30 MHz).
+    pub limit_quasi_peak_dbuv: Option<f64>,
+    /// Average limit, dBuV.
+    pub limit_average_dbuv: Option<f64>,
+    /// Margin of the total level to the quasi-peak limit, dB.
+    pub margin_quasi_peak_db: Option<f64>,
+    /// Margin of the total level to the average limit, dB.
+    pub margin_average_db: Option<f64>,
+}
+
+/// The harmonic with the smallest margin.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorstHarmonic {
+    /// Index into [`ConductedReport::harmonics`].
+    pub index: usize,
+    /// Harmonic number.
+    pub harmonic: u32,
+    /// Frequency, Hz.
+    pub frequency: f64,
+    /// Total level, dBuV.
+    pub total_dbuv: f64,
+    /// Limit it is measured against, dBuV.
+    pub limit_dbuv: f64,
+    /// Margin, dB (negative = over the limit).
+    pub margin_db: f64,
+    /// Detector whose limit gives the smallest margin.
+    pub detector: Detector,
+}
+
+/// Result of [`predict`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConductedReport {
+    /// One entry per harmonic in the reported band.
+    pub harmonics: Vec<HarmonicLevel>,
+    /// Harmonic with the smallest margin to either limit (`None` if no
+    /// harmonic has a limit).
+    pub worst: Option<WorstHarmonic>,
+    /// Every simplification behind the numbers, for printing.
+    pub assumptions: Vec<String>,
+}
+
+/// The assembled network and its handles.
+struct Network {
+    circuit: Circuit,
+    dm_source: ElementId,
+    cm_source: Option<ElementId>,
+    port_p: Node,
+    port_n: Node,
+}
+
+fn finite_pos(name: &str, x: f64) -> Result<(), ConductedError> {
+    if x.is_finite() && x > 0.0 {
+        Ok(())
+    } else {
+        Err(ConductedError::InvalidInput(format!("{name} must be positive and finite (got {x})")))
+    }
+}
+
+fn finite_nonneg(name: &str, x: f64) -> Result<(), ConductedError> {
+    if x.is_finite() && x >= 0.0 {
+        Ok(())
+    } else {
+        Err(ConductedError::InvalidInput(format!("{name} must be non-negative and finite (got {x})")))
+    }
+}
+
+fn validate(input: &ConductedInput) -> Result<(), ConductedError> {
+    finite_pos("input_voltage", input.input_voltage)?;
+    finite_pos("output_voltage", input.output_voltage)?;
+    finite_nonneg("output_current", input.output_current)?;
+    finite_pos("switching_frequency", input.switching_frequency)?;
+    finite_pos("current_rise_time", input.current_rise_time)?;
+    finite_pos("current_fall_time", input.current_fall_time)?;
+    finite_pos("hot_capacitor.capacitance", input.hot_capacitor.capacitance)?;
+    finite_nonneg("hot_capacitor.esr", input.hot_capacitor.esr)?;
+    finite_nonneg("hot_capacitor.esl", input.hot_capacitor.esl)?;
+    finite_nonneg("hot_loop_inductance", input.hot_loop_inductance)?;
+    finite_pos("min_frequency", input.min_frequency)?;
+    finite_pos("max_frequency", input.max_frequency)?;
+    let d = input.duty();
+    if !(d > 0.0 && d < 1.0) {
+        return Err(ConductedError::InvalidInput(format!("buck duty V_out/V_in must be in (0, 1) (got {d})")));
+    }
+    if let Some(f) = &input.filter {
+        finite_pos("filter.inductance", f.inductance)?;
+        finite_nonneg("filter.dcr", f.dcr)?;
+        finite_nonneg("filter.parallel_capacitance", f.parallel_capacitance)?;
+        if let Some(c) = &f.supply_capacitor {
+            finite_pos("filter.supply_capacitor.capacitance", c.capacitance)?;
+            finite_nonneg("filter.supply_capacitor.esr", c.esr)?;
+            finite_nonneg("filter.supply_capacitor.esl", c.esl)?;
+        }
+    }
+    if let Some(c) = &input.common_mode_choke {
+        finite_pos("common_mode_choke.inductance", c.inductance)?;
+        finite_nonneg("common_mode_choke.winding_resistance", c.winding_resistance)?;
+        finite_nonneg("common_mode_choke.winding_capacitance", c.winding_capacitance)?;
+        if !(c.coupling > 0.0 && c.coupling <= 1.0) {
+            return Err(ConductedError::InvalidInput(format!("choke coupling must be in (0, 1] (got {})", c.coupling)));
+        }
+    }
+    if let Some(c) = input.switch_node_capacitance {
+        finite_pos("switch_node_capacitance", c)?;
+    }
+    if let Some(t) = input.switch_node_rise_time {
+        finite_pos("switch_node_rise_time", t)?;
+    }
+    if let Some(t) = input.switch_node_fall_time {
+        finite_pos("switch_node_fall_time", t)?;
+    }
+    if let Some(s) = &input.custom_current
+        && (s.fundamental - input.switching_frequency).abs() > 1e-9 * input.switching_frequency
+    {
+        return Err(ConductedError::InvalidInput(format!(
+            "custom_current fundamental {} Hz differs from switching_frequency {} Hz",
+            s.fundamental, input.switching_frequency
+        )));
+    }
+    Ok(())
+}
+
+fn build(input: &ConductedInput) -> Network {
+    let mut c = Circuit::new();
+    let tp = c.node("lisn_p_terminal");
+    let tn = c.node("lisn_n_terminal");
+    let lp = c.add_v_network(&input.lisn, tp);
+    let ln = c.add_v_network(&input.lisn, tn);
+    // Common-mode choke between the LISN terminals and the supply-side nodes.
+    let (ap, an) = if let Some(ch) = &input.common_mode_choke {
+        let (ap, an) = (c.new_node(), c.new_node());
+        let w1 = c.real_inductor(tp, ap, ch.inductance, ch.winding_resistance, ch.winding_capacitance).inductor;
+        let w2 = c.real_inductor(tn, an, ch.inductance, ch.winding_resistance, ch.winding_capacitance).inductor;
+        c.mutual(w1, w2, ch.coupling);
+        (ap, an)
+    } else {
+        (tp, tn)
+    };
+    // Filter.
+    let x = if let Some(f) = &input.filter {
+        if let Some(cs) = &f.supply_capacitor {
+            c.real_capacitor(ap, an, cs.capacitance, cs.esr, cs.esl);
+        }
+        let x = c.new_node();
+        c.real_inductor(ap, x, f.inductance, f.dcr, f.parallel_capacitance);
+        x
+    } else {
+        ap
+    };
+    let y = an;
+    // Hot capacitor branch: X - L_loop - (ESL, ESR, C) - Y.
+    let hc = &input.hot_capacitor;
+    let branch_top = if input.hot_loop_inductance > 0.0 {
+        let m = c.new_node();
+        c.inductor(x, m, input.hot_loop_inductance);
+        m
+    } else {
+        x
+    };
+    c.real_capacitor(branch_top, y, hc.capacitance, hc.esr, hc.esl);
+    // DM source: draws current from X, returns it into Y.
+    let dm_source = c.current_source(x, y, Complex::ZERO);
+    // CM source: V_sw (to ground) through C_par into X.
+    let cm_source = input.switch_node_capacitance.map(|cpar| {
+        let s = c.new_node();
+        let src = c.voltage_source(s, 0, Complex::ZERO);
+        c.capacitor(s, x, cpar);
+        src
+    });
+    Network { circuit: c, dm_source, cm_source, port_p: lp.port, port_n: ln.port }
+}
+
+/// Highest and lowest harmonic number in the reported band.
+fn harmonic_range(input: &ConductedInput) -> (u32, u32) {
+    let f0 = input.switching_frequency;
+    let lo = ((input.min_frequency / f0) - 1e-9).ceil().max(1.0);
+    let hi = ((input.max_frequency / f0) + 1e-9).floor().max(0.0);
+    (lo as u32, hi as u32)
+}
+
+fn dm_spectrum(input: &ConductedInput, n_max: u32) -> Result<PeriodicSpectrum, ConductedError> {
+    if let Some(s) = &input.custom_current {
+        return Ok(s.clone());
+    }
+    Ok(PeriodicSpectrum::trapezoid(
+        input.output_current,
+        input.duty(),
+        1.0 / input.switching_frequency,
+        input.current_rise_time,
+        input.current_fall_time,
+        n_max,
+    )?)
+}
+
+fn cm_spectrum(input: &ConductedInput, n_max: u32) -> Result<PeriodicSpectrum, ConductedError> {
+    Ok(PeriodicSpectrum::trapezoid(
+        input.input_voltage,
+        input.duty(),
+        1.0 / input.switching_frequency,
+        input.switch_node_rise_time.unwrap_or(input.current_rise_time),
+        input.switch_node_fall_time.unwrap_or(input.current_fall_time),
+        n_max,
+    )?)
+}
+
+fn worst_port_peak(resp: &HarmonicResponse, net: &Network, n: u32) -> f64 {
+    let s = &resp.harmonics[n as usize - 1];
+    s.voltage(net.port_p).abs().max(s.voltage(net.port_n).abs())
+}
+
+fn to_dbuv_rms(peak: f64) -> f64 {
+    volts_to_dbuv(peak / SQRT_2)
+}
+
+/// Predict the conducted-emission spectrum of `input` (see the module docs
+/// for the model, the equations and the detector assumption).
+pub fn predict(input: &ConductedInput) -> Result<ConductedReport, ConductedError> {
+    validate(input)?;
+    let (n_lo, n_hi) = harmonic_range(input);
+    let net = build(input);
+    let mut harmonics = Vec::new();
+    let mut worst: Option<WorstHarmonic> = None;
+    if n_hi >= n_lo {
+        let dm_spec = dm_spectrum(input, n_hi)?;
+        let dm = harmonic_steady_state(&net.circuit, &[(net.dm_source, &dm_spec)], n_hi)?;
+        let cm = match net.cm_source {
+            Some(id) => {
+                let spec = cm_spectrum(input, n_hi)?;
+                Some(harmonic_steady_state(&net.circuit, &[(id, &spec)], n_hi)?)
+            }
+            None => None,
+        };
+        let qp: Option<LimitLine> = cispr32_conducted(input.limit_class, Detector::QuasiPeak);
+        let avg: Option<LimitLine> = cispr32_conducted(input.limit_class, Detector::Average);
+        for n in n_lo..=n_hi {
+            let f = f64::from(n) * input.switching_frequency;
+            let dm_peak = worst_port_peak(&dm, &net, n);
+            let cm_peak = cm.as_ref().map(|r| worst_port_peak(r, &net, n));
+            let total = to_dbuv_rms(dm_peak + cm_peak.unwrap_or(0.0));
+            let lim_qp = qp.as_ref().and_then(|l| l.at(f));
+            let lim_avg = avg.as_ref().and_then(|l| l.at(f));
+            let level = HarmonicLevel {
+                harmonic: n,
+                frequency: f,
+                source_current_peak: dm_spec.harmonic(n).abs(),
+                dm_dbuv: to_dbuv_rms(dm_peak),
+                cm_dbuv: cm_peak.map(to_dbuv_rms),
+                total_dbuv: total,
+                limit_quasi_peak_dbuv: lim_qp,
+                limit_average_dbuv: lim_avg,
+                margin_quasi_peak_db: lim_qp.map(|l| l - total),
+                margin_average_db: lim_avg.map(|l| l - total),
+            };
+            for (margin, limit, detector) in [
+                (level.margin_quasi_peak_db, lim_qp, Detector::QuasiPeak),
+                (level.margin_average_db, lim_avg, Detector::Average),
+            ] {
+                if let (Some(m), Some(l)) = (margin, limit)
+                    && worst.as_ref().is_none_or(|w| m < w.margin_db)
+                {
+                    worst = Some(WorstHarmonic {
+                        index: harmonics.len(),
+                        harmonic: n,
+                        frequency: f,
+                        total_dbuv: total,
+                        limit_dbuv: l,
+                        margin_db: m,
+                        detector,
+                    });
+                }
+            }
+            harmonics.push(level);
+        }
+    }
+    Ok(ConductedReport { harmonics, worst, assumptions: assumptions(input) })
+}
+
+fn assumptions(input: &ConductedInput) -> Vec<String> {
+    let mut a = vec![
+        "Results are screening evidence: literature accuracy of this kind of prediction is about 5 dB at low MHz and 7-12 dB above, limited by component and source models.".to_string(),
+        "Linear time-invariant network: all passives are linear; capacitor and inductor parasitics are single-element ESR/ESL/parallel-C models with no frequency dependence (no skin or proximity effect, no ferrite or dielectric dispersion).".to_string(),
+        "No DC-bias or temperature derating of capacitance (MLCC capacitance can fall by more than half at rated bias; apply the derating to the inputs).".to_string(),
+        "The converter is an ideal harmonic current source (infinite source impedance): no control-loop effects, no negative input resistance, no interaction with filter resonances beyond the linear network.".to_string(),
+        "Hot-loop inductance is in series with the hot capacitor, with the supply feed attached at the switch end of the loop.".to_string(),
+        "Each line ends in one V-network model; the supply impedance behind the LISN is neglected. The LISN component values and topology are unverified against CISPR 16-1-2.".to_string(),
+        "Limit lines (CISPR 32 / EN 55032 AC mains port, quasi-peak and average) are transcribed as remembered and are unverified against the standard.".to_string(),
+        "Levels are RMS of each harmonic (peak / sqrt 2) in dBuV, as RMS-calibrated receivers read.".to_string(),
+        "Detector model: fixed switching frequency with harmonic spacing above twice the 9 kHz Band B RBW, so each harmonic is an isolated line and peak = quasi-peak = average = its RMS level. Spread-spectrum clocking, jitter and burst modes are not modelled.".to_string(),
+        "Total = DM + CM added as magnitudes (worst case over their unknown relative phase); DM and CM are computed on the worst of the two LISN ports.".to_string(),
+    ];
+    if input.custom_current.is_some() {
+        a.push("Differential-mode source is the caller's harmonic spectrum, used as given.".to_string());
+    } else {
+        a.push(format!(
+            "Differential-mode source is an ideal piecewise-linear trapezoid 0 to {} A, duty V_out/V_in = {:.4} (ideal lossless buck, continuous conduction), edges {} s / {} s; inductor ripple, ringing and reverse-recovery spikes are not included.",
+            input.output_current,
+            input.duty(),
+            input.current_rise_time,
+            input.current_fall_time
+        ));
+    }
+    match input.switch_node_capacitance {
+        Some(c) => a.push(format!(
+            "Common mode: ideal trapezoidal switch-node voltage of amplitude V_in through a single {c} F capacitance to the reference; no other CM path (cables, load, transformer interwinding capacitance) is modelled."
+        )),
+        None => a.push("Common mode is not evaluated (no switch-node capacitance given).".to_string()),
+    }
+    if input.common_mode_choke.is_none() {
+        a.push("No common-mode choke is modelled.".to_string());
+    }
+    if input.filter.is_none() {
+        a.push("No input filter: only the hot capacitor sits between the switch and the LISN.".to_string());
+    }
+    let rbw = Band::B.rbw();
+    if input.switching_frequency <= 2.0 * rbw {
+        a.push(format!(
+            "WARNING: switching frequency {} Hz is not above twice the Band B RBW ({} Hz): adjacent harmonics fall inside the IF filter, the isolated-line detector assumption does not hold and the reported levels are line RMS values, not detector readings.",
+            input.switching_frequency,
+            2.0 * rbw
+        ));
+    }
+    if input.max_frequency > 30e6 {
+        a.push("max_frequency exceeds 30 MHz: the LISN model and the limits are not valid there.".to_string());
+    }
+    a
+}
+
+/// Which supply line's measurement port to look at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Line {
+    /// The line carrying the input filter inductor (positive supply line).
+    Positive,
+    /// The return line.
+    Negative,
+}
+
+fn port_response(input: &ConductedInput, max_harmonic: u32) -> Result<(Network, HarmonicResponse), ConductedError> {
+    validate(input)?;
+    let net = build(input);
+    let dm_spec = dm_spectrum(input, max_harmonic)?;
+    let cm_spec = match net.cm_source {
+        Some(_) => Some(cm_spectrum(input, max_harmonic)?),
+        None => None,
+    };
+    let mut drives = vec![(net.dm_source, &dm_spec)];
+    if let (Some(id), Some(spec)) = (net.cm_source, cm_spec.as_ref()) {
+        drives.push((id, spec));
+    }
+    let resp = harmonic_steady_state(&net.circuit, &drives, max_harmonic)?;
+    Ok((net, resp))
+}
+
+/// Voltage waveform at the measurement port of `line` (DM and CM sources
+/// acting together), `periods` periods of `samples_per_period` samples each,
+/// and its sample rate in Hz. `samples_per_period` must be a power of two;
+/// harmonics up to `samples_per_period / 2 - 1` are synthesised (for the
+/// receiver check, use at least 128 samples per period at 500 kHz so the
+/// 30 MHz band is covered).
+pub fn port_waveform(
+    input: &ConductedInput,
+    line: Line,
+    periods: usize,
+    samples_per_period: usize,
+) -> Result<(Vec<f64>, f64), ConductedError> {
+    let nmax = (samples_per_period / 2).saturating_sub(1) as u32;
+    let (net, resp) = port_response(input, nmax)?;
+    let node = match line {
+        Line::Positive => net.port_p,
+        Line::Negative => net.port_n,
+    };
+    let one = resp.node_waveform(node, samples_per_period)?;
+    let mut out = Vec::with_capacity(one.len() * periods);
+    for _ in 0..periods {
+        out.extend_from_slice(&one);
+    }
+    Ok((out, input.switching_frequency * samples_per_period as f64))
+}
+
+/// One harmonic compared between the analytic line level and the receiver
+/// emulation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReceiverCheck {
+    /// Harmonic number.
+    pub harmonic: u32,
+    /// Frequency, Hz.
+    pub frequency: f64,
+    /// RMS level of the harmonic at the port (DM and CM acting together, with
+    /// their phases), dBuV: what the fast path reports for a line.
+    pub analytic_dbuv: f64,
+    /// Peak, quasi-peak and average readings of [`receiver::scan`](crate::receiver::scan).
+    pub reading: Reading,
+}
+
+/// Validation of the fast detector path: reconstruct the positive-line port
+/// waveform over `periods` periods and run [`scan`] (Band B) at the listed
+/// harmonics. For the isolated-line assumption the three readings should
+/// equal `analytic_dbuv` within a small fraction of a dB.
+///
+/// `samples_per_period` must be a power of two larger than twice the highest
+/// harmonic requested, and `periods * samples_per_period` should be a power
+/// of two holding a record of at least 0.5 ms (see [`scan`]).
+pub fn receiver_check(
+    input: &ConductedInput,
+    harmonics: &[u32],
+    periods: usize,
+    samples_per_period: usize,
+) -> Result<Vec<ReceiverCheck>, ConductedError> {
+    let nmax = (samples_per_period / 2).saturating_sub(1) as u32;
+    let (net, resp) = port_response(input, nmax)?;
+    let one = resp.node_waveform(net.port_p, samples_per_period)?;
+    let mut wave = Vec::with_capacity(one.len() * periods);
+    for _ in 0..periods {
+        wave.extend_from_slice(&one);
+    }
+    let fs = input.switching_frequency * samples_per_period as f64;
+    let freqs: Vec<f64> = harmonics.iter().map(|&n| f64::from(n) * input.switching_frequency).collect();
+    let readings = scan(&wave, fs, &freqs, Band::B);
+    Ok(harmonics
+        .iter()
+        .zip(readings)
+        .map(|(&n, reading)| {
+            let v = resp.harmonics.get(n as usize - 1).map_or(0.0, |s| s.voltage(net.port_p).abs());
+            ReceiverCheck {
+                harmonic: n,
+                frequency: f64::from(n) * input.switching_frequency,
+                analytic_dbuv: to_dbuv_rms(v),
+                reading,
+            }
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::estimate::{trapezoid_envelope, trapezoid_harmonic};
+    use std::f64::consts::PI;
+
+    fn w(f: f64) -> f64 {
+        2.0 * PI * f
+    }
+
+    /// Capacitor impedance `ESR + j w ESL + 1/(j w C)`.
+    fn z_cap(c: &Capacitor, f: f64) -> Complex {
+        Complex::new(c.esr, w(f) * c.esl) + Complex::new(0.0, w(f) * c.capacitance).recip()
+    }
+
+    fn buck(hot: Capacitor) -> ConductedInput {
+        ConductedInput::buck(12.0, 5.0, 2.0, 500e3, 5e-9, hot)
+    }
+
+    fn level(r: &ConductedReport, n: u32) -> &HarmonicLevel {
+        r.harmonics.iter().find(|h| h.harmonic == n).unwrap()
+    }
+
+    #[test]
+    fn fundamental_equals_hand_computed_current_divider() {
+        // Hand derivation (independent of the circuit solver and of the
+        // complex Fourier coefficients). With an ideal hot capacitor
+        // (Z_c = 1/(j w C)) and no filter, the DM loop is
+        //   I_sw  ->  { capacitor Z_c }  ||  { LISN+ in series with LISN-, 2 Z_eut }.
+        // The LISN branch carries I_lisn = I_sw * Z_c / (Z_c + 2 Z_eut), and
+        // the port voltage is I_lisn * Z_t (Z_t = V-network transfer impedance
+        // for a current injected at its terminal). I_sw is the peak of
+        // harmonic 1 from estimate::trapezoid_harmonic. Level = |V|/sqrt2.
+        let cap = Capacitor::ideal(10e-6);
+        let input = buck(cap);
+        let f = input.switching_frequency;
+        let i1 = trapezoid_harmonic(2.0, 5.0 / 12.0, 1.0 / f, 5e-9, 5e-9, 1);
+        let zc = z_cap(&cap, f);
+        let z_eut = input.lisn.eut_impedance(f);
+        let i_lisn = Complex::new(i1, 0.0) * zc / (zc + z_eut.scale(2.0));
+        let v_peak = i_lisn.abs() * input.lisn.transfer_impedance(f).abs();
+        let expect = volts_to_dbuv(v_peak / SQRT_2);
+        let report = predict(&input).unwrap();
+        let h = level(&report, 1);
+        println!("fundamental: hand {expect:.4} dBuV, model {:.4} dBuV", h.dm_dbuv);
+        assert!((h.dm_dbuv - expect).abs() < 1e-6, "{} vs {expect}", h.dm_dbuv);
+        assert!((h.source_current_peak - i1).abs() < 1e-12);
+        assert!(h.cm_dbuv.is_none());
+        assert!((h.total_dbuv - h.dm_dbuv).abs() < 1e-12);
+    }
+
+    #[test]
+    fn lc_filter_gives_forty_db_per_decade_and_matches_hand_insertion_loss() {
+        // Pi-type LC: C_hot 10 uF | L_f 10 uH | C_s 10 uF on the supply side,
+        // all ideal (corner 1/(2 pi sqrt(L C)) = 15.9 kHz, below the band).
+        // Hand derivation of the insertion loss relative to no filter.
+        // Z_c = hot cap, Z_s = supply cap, Z_L = jwL, Z_l = 2 Z_eut (DM LISN pair).
+        //   Without filter:  I_l0 = I Z_c / (Z_c + Z_l)
+        //   With filter:     I_l  = I Z_c/(Z_c + Z_L + Z_p) * Z_s/(Z_s + Z_l),
+        //                    Z_p = Z_s Z_l / (Z_s + Z_l)
+        // (current divider at X, then at the supply node). Both feed the same
+        // LISN, so IL = 20 log |I_l0 / I_l| is the level difference. For
+        // w L >> |Z_c|, |Z_s| this tends to w^2 L C_s: 40 dB/decade.
+        let cap = Capacitor::ideal(10e-6);
+        let plain = buck(cap);
+        let mut filtered = plain.clone();
+        filtered.filter = Some(InputFilter {
+            inductance: 10e-6,
+            dcr: 0.0,
+            parallel_capacitance: 0.0,
+            supply_capacitor: Some(Capacitor::ideal(10e-6)),
+        });
+        let rp = predict(&plain).unwrap();
+        let rf = predict(&filtered).unwrap();
+        let mut il_by_n = Vec::new();
+        for n in [1u32, 2, 4, 10, 20, 40, 59] {
+            let f = f64::from(n) * 500e3;
+            let (zc, zs) = (z_cap(&cap, f), z_cap(&cap, f));
+            let zl = Complex::new(0.0, w(f) * 10e-6);
+            let zlisn = plain.lisn.eut_impedance(f).scale(2.0);
+            let zp = zs * zlisn / (zs + zlisn);
+            let ratio = (zc / (zc + zl + zp)) * (zs / (zs + zlisn)) / (zc / (zc + zlisn));
+            let il_hand = -20.0 * ratio.abs().log10();
+            let il_model = level(&rp, n).dm_dbuv - level(&rf, n).dm_dbuv;
+            // 1e-4 dB: at 110 dB of attenuation the answer is 3e-6 of the
+            // source current and the dense elimination (capacitor
+            // admittances of hundreds of siemens beside 1 mS resistors) keeps
+            // about 7 significant digits of it, observed 3e-6 dB.
+            assert!((il_hand - il_model).abs() < 1e-4, "n {n}: hand {il_hand} model {il_model}");
+            // Asymptote w^2 L C: within 0.6 dB over the whole band.
+            let il_asym = 20.0 * (w(f).powi(2) * 10e-6 * 10e-6).log10();
+            assert!((il_asym - il_model).abs() < 0.6, "n {n}: asymptote {il_asym} model {il_model}");
+            il_by_n.push((n, il_model));
+        }
+        // Slope: n = 2 (1 MHz) -> n = 20 (10 MHz) is one decade: +40 dB.
+        let il = |n: u32| il_by_n.iter().find(|x| x.0 == n).unwrap().1;
+        println!("insertion loss: 1 MHz {:.2} dB, 10 MHz {:.2} dB", il(2), il(20));
+        assert!((il(20) - il(2) - 40.0).abs() < 0.3, "{} -> {}", il(2), il(20));
+        // Every reported harmonic is lower with the filter.
+        for (a, b) in rp.harmonics.iter().zip(&rf.harmonics) {
+            assert!(b.dm_dbuv < a.dm_dbuv - 40.0, "n {}", a.harmonic);
+        }
+    }
+
+    #[test]
+    fn larger_esl_raises_high_frequency_harmonics_only() {
+        // ESL 0.5 nH -> 5 nH. At 30 MHz the capacitor impedance is dominated
+        // by w ESL (0.094 -> 0.94 ohm, both << the 94 ohm LISN pair), so the
+        // LISN current share scales with |Z_c|: about +20 dB. At the
+        // fundamental the ESL is BELOW its self-resonance (5 nH with 10 uF
+        // resonates at 0.71 MHz) and its reactance subtracts from the
+        // capacitive one: |Z_c| = |5 mohm + j(15.7 - 31.8) mohm| = 16.9 mohm
+        // instead of 30.6 mohm, i.e. the harmonic gets about 5 dB LOWER. The
+        // hand value is the ratio |Z_c|_hi / |Z_c|_lo (the LISN pair, 94 ohm,
+        // dominates the divider denominator to 3e-4).
+        let lo = predict(&buck(Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 })).unwrap();
+        let hi = predict(&buck(Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 5e-9 })).unwrap();
+        let diff = |n: u32| level(&hi, n).dm_dbuv - level(&lo, n).dm_dbuv;
+        println!("ESL x10: n=1 {:+.2} dB, n=20 {:+.2} dB, n=59 {:+.2} dB", diff(1), diff(20), diff(59));
+        let zc = |esl: f64, f: f64| z_cap(&Capacitor { capacitance: 10e-6, esr: 5e-3, esl }, f).abs();
+        for n in [1u32, 20, 59] {
+            let f = f64::from(n) * 500e3;
+            let hand = 20.0 * (zc(5e-9, f) / zc(0.5e-9, f)).log10();
+            assert!((diff(n) - hand).abs() < 0.05, "n {n}: hand {hand} model {}", diff(n));
+        }
+        assert!(diff(1) < -4.0, "below self-resonance more ESL helps: {}", diff(1));
+        for n in [20u32, 40, 59] {
+            assert!(diff(n) > 18.0 && diff(n) < 20.5, "n {n}: {}", diff(n));
+        }
+        // Above 3x the larger ESL's self-resonance (0.71 MHz), i.e. from
+        // 2.5 MHz up, more ESL is never better.
+        assert!(
+            lo.harmonics
+                .iter()
+                .zip(&hi.harmonics)
+                .filter(|(a, _)| a.frequency >= 2.5e6)
+                .all(|(a, b)| b.dm_dbuv > a.dm_dbuv)
+        );
+    }
+
+    #[test]
+    fn twelve_to_five_volt_buck_without_and_with_filter() {
+        // 12 V -> 5 V, 2 A, 500 kHz, 5 ns current edges, 10 uF / 5 mohm /
+        // 0.5 nH hot capacitor, no filter. Hand estimate of the fundamental:
+        // peak I1 = 2 A d |sinc(pi d)| * 2 = 1.23 A (d = 5/12); |Z_c| =
+        // 32.2 mohm; I_lisn = 1.23 * 0.0322 / 94 = 0.42 mA; |Z_t| ~ 45 ohm
+        // -> 19 mV peak -> 13 mV RMS = 82.5 dBuV, vs 56 dBuV QP and 46 dBuV
+        // average limits: ~26 dB / ~36 dB over.
+        let hot = Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 };
+        let r = predict(&buck(hot)).unwrap();
+        let h = level(&r, 1);
+        println!(
+            "unfiltered buck, fundamental 500 kHz: {:.2} dBuV, QP limit {:.1}, avg limit {:.1}, margins {:.2} / {:.2} dB",
+            h.total_dbuv,
+            h.limit_quasi_peak_dbuv.unwrap(),
+            h.limit_average_dbuv.unwrap(),
+            h.margin_quasi_peak_db.unwrap(),
+            h.margin_average_db.unwrap()
+        );
+        assert!((h.total_dbuv - 82.5).abs() < 1.0, "hand estimate: {}", h.total_dbuv);
+        let m = h.margin_quasi_peak_db.unwrap();
+        assert!((-45.0..-10.0).contains(&m), "plausible excess over QP limit: {m}");
+        assert!(h.margin_average_db.unwrap() < m - 9.0);
+        let wst = r.worst.as_ref().unwrap();
+        println!(
+            "unfiltered worst: n={} {:.2} MHz level {:.2} limit {:.1} margin {:.2} ({:?})",
+            wst.harmonic,
+            wst.frequency / 1e6,
+            wst.total_dbuv,
+            wst.limit_dbuv,
+            wst.margin_db,
+            wst.detector
+        );
+        assert!(wst.margin_db < 0.0);
+
+        // 10 uH inductor (20 mohm DCR, 5 pF winding capacitance) with a
+        // 10 uF (5 mohm, 0.5 nH) capacitor on the supply side.
+        let mut filtered = buck(hot);
+        filtered.filter = Some(InputFilter {
+            inductance: 10e-6,
+            dcr: 20e-3,
+            parallel_capacitance: 5e-12,
+            supply_capacitor: Some(Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 }),
+        });
+        let rf = predict(&filtered).unwrap();
+        let hf = level(&rf, 1);
+        println!(
+            "filtered buck, fundamental: {:.2} dBuV, margins {:.2} (QP) / {:.2} (avg) dB",
+            hf.total_dbuv,
+            hf.margin_quasi_peak_db.unwrap(),
+            hf.margin_average_db.unwrap()
+        );
+        assert!(hf.margin_average_db.unwrap() > 0.0, "fundamental under the average limit");
+        let wf = rf.worst.as_ref().unwrap();
+        println!(
+            "filtered worst: n={} {:.2} MHz level {:.2} limit {:.1} margin {:.2} ({:?})",
+            wf.harmonic,
+            wf.frequency / 1e6,
+            wf.total_dbuv,
+            wf.limit_dbuv,
+            wf.margin_db,
+            wf.detector
+        );
+        // Without the supply capacitor (10 uH + the hot capacitor only) the
+        // series inductor barely helps at 500 kHz: w L = 31 ohm against the
+        // 94 ohm LISN pair. Hand value: |Z_c + Z_l| / |Z_c + Z_L + Z_l|.
+        let mut l_only = buck(hot);
+        l_only.filter =
+            Some(InputFilter { inductance: 10e-6, dcr: 0.0, parallel_capacitance: 0.0, supply_capacitor: None });
+        let ro = predict(&l_only).unwrap();
+        let f = 500e3;
+        let zl_pair = buck(hot).lisn.eut_impedance(f).scale(2.0);
+        let zc = z_cap(&hot, f);
+        let hand = 20.0 * ((zc + Complex::new(0.0, w(f) * 10e-6) + zl_pair).abs() / (zc + zl_pair).abs()).log10();
+        let got = level(&r, 1).dm_dbuv - level(&ro, 1).dm_dbuv;
+        println!("series L only at 500 kHz: hand {hand:.3} dB, model {got:.3} dB");
+        assert!((hand - got).abs() < 1e-6);
+        assert!(got < 1.5, "series L alone is a weak filter against a 94 ohm LISN pair");
+    }
+
+    #[test]
+    fn common_mode_spectrum_is_flat_then_rolls_off_and_matches_hand_value() {
+        // 10 pF switch-node capacitance, 12 V swing, 10 ns edges, f0 = 500 kHz,
+        // duty 5/12. V_n = trapezoid_harmonic; I_n = V_n / (1/(jwC) + Z_eut/2)
+        // (the two LISNs in parallel see the CM source); each line carries
+        // I_n/2, so V_port = I_n/2 * Z_t. Studied up to 300 MHz (limits and
+        // the LISN model end at 30 MHz; the maths does not).
+        let hot = Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 };
+        let mut input = ConductedInput::buck(12.0, 5.0, 2.0, 500e3, 10e-9, hot);
+        input.switch_node_capacitance = Some(10e-12);
+        input.max_frequency = 300e6;
+        let r = predict(&input).unwrap();
+        let d = 5.0 / 12.0;
+        let t = 1.0 / 500e3;
+        // Hand value at n = 10 (5 MHz).
+        let n = 10;
+        let f = 5e6;
+        let v_n = trapezoid_harmonic(12.0, d, t, 10e-9, 10e-9, n);
+        let z_eut = input.lisn.eut_impedance(f);
+        let i_n = Complex::new(v_n, 0.0) / (Complex::new(0.0, w(f) * 10e-12).recip() + z_eut.scale(0.5));
+        let vport = i_n.scale(0.5).abs() * input.lisn.transfer_impedance(f).abs();
+        let hand = volts_to_dbuv(vport / SQRT_2);
+        let got = level(&r, n).cm_dbuv.unwrap();
+        println!("CM at 5 MHz: hand {hand:.3} dBuV, model {got:.3} dBuV (I_cm {:.1} uA peak)", i_n.abs() * 1e6);
+        assert!((got - hand).abs() < 0.01, "{got} vs {hand}");
+        // Total = DM + CM magnitudes (0.01 dB: the hand value ignores the
+        // sub-ohm hot-capacitor path in the second line).
+        assert!((level(&r, n).total_dbuv - volts_to_dbuv((vport + level_dm_peak(&r, n)) / SQRT_2)).abs() < 0.01);
+
+        // Spectrum shape against the analytic envelope. Envelope of the CM
+        // port voltage: w C * trapezoid_envelope(V) * |Z_t| / 2 (|1/(jwC) +
+        // Z/2| ~ 1/(w C) while w C |Z|/2 << 1).
+        let env_db = |f: f64| {
+            let v = trapezoid_envelope(12.0, d, t, 10e-9, f);
+            let i = w(f) * 10e-12 * v;
+            volts_to_dbuv(i * 0.5 * input.lisn.transfer_impedance(f).abs() / SQRT_2)
+        };
+        let max_in = |a: f64, b: f64| {
+            r.harmonics
+                .iter()
+                .filter(|h| h.frequency >= a && h.frequency <= b)
+                .map(|h| h.cm_dbuv.unwrap())
+                .fold(f64::NEG_INFINITY, f64::max)
+        };
+        for h in &r.harmonics {
+            if h.frequency > 1e6 {
+                assert!(h.cm_dbuv.unwrap() <= env_db(h.frequency) + 0.1, "n {} above envelope", h.harmonic);
+            }
+        }
+        // Flat region: the envelope is flat between 1/(pi t_on) = 0.38 MHz and
+        // 1/(pi t_r) = 31.8 MHz because I_n ~ w C V_n and V_n ~ 1/f.
+        let (a, b, c) = (max_in(2e6, 6e6), max_in(6e6, 15e6), max_in(15e6, 30e6));
+        println!(
+            "CM maxima: 2-6 MHz {a:.1}, 6-15 MHz {b:.1}, 15-30 MHz {c:.1} dBuV; 100-150 MHz {:.1}, 200-300 MHz {:.1}",
+            max_in(100e6, 150e6),
+            max_in(200e6, 300e6)
+        );
+        assert!((a - c).abs() < 3.0 && (a - b).abs() < 3.0, "flat-ish");
+        // Roll-off above 31.8 MHz: -20 dB/decade of the envelope, so the
+        // envelope drops by 20 log(150/30) = 14 dB; require at least 10 dB.
+        assert!(max_in(100e6, 150e6) < c - 10.0);
+        assert!(max_in(200e6, 300e6) < max_in(100e6, 150e6) - 3.0);
+        // The analytic envelope itself bends at 1/(pi t_r): slope -20 dB/dec above.
+        let slope = env_db(300e6) - env_db(100e6);
+        assert!((slope + 20.0 * 3f64.log10()).abs() < 0.2, "envelope slope {slope}");
+    }
+
+    fn level_dm_peak(r: &ConductedReport, n: u32) -> f64 {
+        crate::estimate::dbuv_to_volts(level(r, n).dm_dbuv) * SQRT_2
+    }
+
+    #[test]
+    fn common_mode_choke_attenuates_cm_by_the_hand_value() {
+        // Choke L = 1 mH per winding, k = 0.95: each line sees
+        // jw L (1 + k) in series with its LISN for CM. CM current
+        // I = V_n / (1/(jwC) + (Z_eut + jwL(1+k))/2), V_port = I/2 * Z_t
+        // (the transfer impedance is for the current entering the LISN
+        // terminal; the choke is in series with it).
+        let hot = Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 };
+        let mut input = ConductedInput::buck(12.0, 5.0, 2.0, 500e3, 10e-9, hot);
+        input.switch_node_capacitance = Some(10e-12);
+        let plain = predict(&input).unwrap();
+        input.common_mode_choke = Some(CommonModeChoke {
+            inductance: 1e-3,
+            coupling: 0.95,
+            winding_resistance: 0.0,
+            winding_capacitance: 0.0,
+        });
+        let r = predict(&input).unwrap();
+        let n = 10;
+        let f = 5e6;
+        let v_n = trapezoid_harmonic(12.0, 5.0 / 12.0, 2e-6, 10e-9, 10e-9, n);
+        let z_line = input.lisn.eut_impedance(f) + Complex::new(0.0, w(f) * 1e-3 * 1.95);
+        let i = Complex::new(v_n, 0.0) / (Complex::new(0.0, w(f) * 10e-12).recip() + z_line.scale(0.5));
+        let hand = volts_to_dbuv(i.scale(0.5).abs() * input.lisn.transfer_impedance(f).abs() / SQRT_2);
+        let got = level(&r, n).cm_dbuv.unwrap();
+        println!(
+            "CM with choke at 5 MHz: hand {hand:.3}, model {got:.3}; without choke {:.3}",
+            level(&plain, n).cm_dbuv.unwrap()
+        );
+        assert!((got - hand).abs() < 0.01, "{got} vs {hand}");
+        // The 10 pF switch-node capacitance (3.2 kohm at 5 MHz) already
+        // limits the CM current, so the 30 kohm of choke (half of 61 kohm per
+        // line pair) buys about 20 log(1 + 30.6/3.2) ~ 20 dB minus the
+        // quadrature sum, observed 18.7 dB.
+        assert!(level(&plain, n).cm_dbuv.unwrap() - got > 15.0);
+        // DM sees only the leakage: the opposite winding currents give
+        // 2 L (1 - k) = 100 uH in the loop, in series with the 2 Z_eut LISN
+        // pair. DM current share = Z_c / (Z_c + Z_loop), so the drop is
+        // 20 log(|Z_c + 2 Z_eut + jw 2L(1-k)| / |Z_c + 2 Z_eut|). It is larger
+        // than the CM drop because the 10 pF already limits the CM current.
+        let zc = z_cap(&hot, f);
+        let zl = input.lisn.eut_impedance(f).scale(2.0);
+        let hand_drop =
+            20.0 * ((zc + zl + Complex::new(0.0, w(f) * 2.0 * 1e-3 * 0.05)).abs() / (zc + zl).abs()).log10();
+        // (Evaluated without the switch-node capacitance: with it present
+        // the 10 pF to the reference is a small extra DM-to-ground shunt at
+        // node X and shifts the drop by 0.24 dB, a real mode-conversion
+        // effect that the hand formula leaves out.)
+        let mut dm_only = input.clone();
+        dm_only.switch_node_capacitance = None;
+        let with_choke = predict(&dm_only).unwrap();
+        dm_only.common_mode_choke = None;
+        let without = predict(&dm_only).unwrap();
+        let dm_drop = level(&without, n).dm_dbuv - level(&with_choke, n).dm_dbuv;
+        println!("DM drop through the choke leakage at 5 MHz: hand {hand_drop:.3} dB, model {dm_drop:.3} dB");
+        assert!((dm_drop - hand_drop).abs() < 0.01);
+    }
+
+    #[test]
+    fn fast_path_agrees_with_receiver_emulation_within_one_db() {
+        // 500 kHz buck with DM and CM sources acting together on the positive
+        // line. 128 samples/period (64 MHz) x 256 periods = 32768 samples =
+        // 0.512 ms record, bin spacing 1.95 kHz (harmonics fall on bins).
+        let hot = Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 };
+        let mut input = ConductedInput::buck(12.0, 5.0, 2.0, 500e3, 5e-9, hot);
+        input.switch_node_capacitance = Some(10e-12);
+        let checks = receiver_check(&input, &[1, 2, 3, 5, 7, 10, 20, 40], 256, 128).unwrap();
+        let mut worst: f64 = 0.0;
+        for c in &checks {
+            let r = c.reading;
+            println!(
+                "n {:>2} {:>5.1} MHz analytic {:.3}  peak {:.3}  qp {:.3}  avg {:.3} dBuV",
+                c.harmonic,
+                c.frequency / 1e6,
+                c.analytic_dbuv,
+                r.peak,
+                r.quasi_peak,
+                r.average
+            );
+            for v in [r.peak, r.quasi_peak, r.average] {
+                worst = worst.max((v - c.analytic_dbuv).abs());
+            }
+        }
+        println!("largest deviation {worst:.4} dB");
+        assert!(worst < 1.0, "{worst}");
+        // The waveform helper returns what the check used.
+        let (wave, fs) = port_waveform(&input, Line::Positive, 2, 128).unwrap();
+        assert_eq!(wave.len(), 256);
+        assert!((fs - 64e6).abs() < 1.0);
+    }
+
+    #[test]
+    fn invalid_inputs_are_rejected_and_assumptions_are_listed() {
+        let hot = Capacitor::ideal(10e-6);
+        let mut bad = buck(hot);
+        bad.output_voltage = 13.0;
+        assert!(matches!(predict(&bad), Err(ConductedError::InvalidInput(_))));
+        let mut bad = buck(hot);
+        bad.hot_capacitor.capacitance = 0.0;
+        assert!(matches!(predict(&bad), Err(ConductedError::InvalidInput(_))));
+        let mut bad = buck(hot);
+        bad.custom_current = Some(PeriodicSpectrum::zero(123.0));
+        assert!(matches!(predict(&bad), Err(ConductedError::InvalidInput(_))));
+        let mut slow = buck(hot);
+        slow.switching_frequency = 10e3;
+        let r = predict(&slow).unwrap();
+        assert!(r.assumptions.iter().any(|a| a.starts_with("WARNING")));
+        let ok = predict(&buck(hot)).unwrap();
+        assert!(ok.assumptions.len() >= 10 && !ok.assumptions.iter().any(|a| a.starts_with("WARNING")));
+        assert_eq!(ok.harmonics.first().unwrap().harmonic, 1);
+        assert_eq!(ok.harmonics.last().unwrap().harmonic, 60);
+        // Custom source: a 1 mA sine at the fundamental only.
+        let mut custom = buck(hot);
+        custom.custom_current =
+            Some(PeriodicSpectrum { fundamental: 500e3, dc: 0.0, harmonics: vec![Complex::new(1e-3, 0.0)] });
+        let rc = predict(&custom).unwrap();
+        assert!((level(&rc, 1).source_current_peak - 1e-3).abs() < 1e-15);
+        assert!(level(&rc, 2).dm_dbuv == f64::NEG_INFINITY);
+    }
+}
