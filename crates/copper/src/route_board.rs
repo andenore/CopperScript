@@ -473,6 +473,31 @@ impl Arguments {
 /// `--verify-plane-fill none`: write the board without checking its fills.
 const NO_PLANE_CHECKER: &str = "none";
 
+/// The console line for a plane checker that never produced a result: the
+/// report records the reason, but without this line the run only shows the
+/// open zone nets that no fill joined.
+fn checker_failure_line(
+    feedback: &copper_route::filled_feedback::FilledCopperFeedbackResult,
+    checker: &str,
+) -> Option<String> {
+    let reason = feedback.stop_reason.as_str();
+    if !matches!(reason, "missing_tool" | "unsupported_tool" | "invalid_native_result") {
+        return None;
+    }
+    let detail = feedback.diagnostic.as_deref().unwrap_or(reason);
+    let tail = "zone nets stay open because no fill joined them";
+    if copper_route::plane_verify::is_native_checker(std::path::Path::new(checker)) {
+        return Some(format!("PLANE CHECK NOT RUN: CopperScript's fill and DRC failed: {detail}; {tail}"));
+    }
+    let advice = if reason == "missing_tool" {
+        "pass the full path of kicad-cli to --verify-plane-fill, or leave the option out to use \
+         CopperScript's own fill and DRC"
+    } else {
+        "leave --verify-plane-fill out to use CopperScript's own fill and DRC"
+    };
+    Some(format!("PLANE CHECK NOT RUN: kicad-cli {checker} failed: {detail}; {tail}; {advice}"))
+}
+
 const INTS: [(&str, i64, IntKind); 13] = [
     ("--candidates", 1, IntKind::Any),
     ("--escape-transit-lanes", 1, IntKind::Any),
@@ -2100,6 +2125,9 @@ fn finish(
         decision,
         if verified { "pass" } else { "not passed" }
     ));
+    if let (Some(feedback), Some(checker)) = (&filled_feedback, &native_cli) {
+        lines.extend(checker_failure_line(feedback, checker));
+    }
     lines.extend(lane_line);
     lines.push(format!("Report -> {}", paths::display(&report_path)));
     lines.extend(summary);
