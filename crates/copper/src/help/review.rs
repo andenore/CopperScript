@@ -51,6 +51,14 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt { flag: "--filled", help: "draw the run's saved native (refilled) board; does not refill" },
             Opt {
+                flag: "--emi-field",
+                help: "with --issue of an EMI-HOT-LOOP finding: draw the quasi-static magnetic near-field map of the loop (|H| in dB(uA/m) in a plane above the board, level at sensitive pads) instead of the layer panels; a screening estimate, the inductor's own field is not included",
+            },
+            Opt {
+                flag: "--field-height FIELD_HEIGHT",
+                help: "with --emi-field: height of the map plane above the top copper, e.g. 1mm (default: 1mm)",
+            },
+            Opt {
                 flag: "--reference REFERENCE",
                 help: "overlay a second .kicad_pcb as magenta outlines, matched by KiCad layer name; needs --align",
             },

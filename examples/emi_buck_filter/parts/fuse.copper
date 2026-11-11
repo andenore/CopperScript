@@ -1,0 +1,6 @@
+// A fuse: a two-pin DC feed with no category and no inductance value, like a vendor fuse part.
+part Fuse {
+    dc_power_path = "A,B";
+    pin A { number = "1"; domains = "power"; directions = "passive"; }
+    pin B { number = "2"; domains = "power"; directions = "passive"; }
+}

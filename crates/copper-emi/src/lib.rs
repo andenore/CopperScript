@@ -6,6 +6,7 @@
 //! | Module | Contents |
 //! | --- | --- |
 //! | [`estimate`] | trapezoid spectrum and envelope, small-loop and common-mode radiation estimators, ringing, island capacitance, dB helpers, [`estimate::limits`] tables |
+//! | [`field`] | quasi-static Biot-Savart magnetic near field of a current path (finite filament closed form, ideal ground plane by images), field maps |
 //! | [`inductance`] | partial self and mutual inductance of straight bars, loop inductance with optional ground-plane images, via barrel, trace resistance |
 //! | [`spectrum`] | complex numbers, radix-2 FFT, windows, amplitude-correct spectra |
 //! | [`lisn`] | CISPR 16-1-2 50 uH V-network impedance and noise-current to measured-voltage transfer |
@@ -29,6 +30,7 @@
 pub mod circuit;
 pub mod conducted;
 pub mod estimate;
+pub mod field;
 pub mod harmonic;
 pub mod inductance;
 pub mod lisn;

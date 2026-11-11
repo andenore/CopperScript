@@ -196,77 +196,370 @@ struct FilterModel {
 
 enum FilterOutcome {
     Modelled(FilterModel),
-    /// No series inductor or ferrite on the hot supply net.
-    NoneRecognised,
+    /// No series element on the feed path of the hot supply net (the note lists ignored downstream feeds).
+    NoneRecognised(Option<String>),
+    /// The hot supply net is fed through transparent `dc_power_path` parts only: no filter inductor.
+    NoInductor(String),
     /// Something is there but the model cannot represent it.
     NotModelled(String),
 }
 
-fn is_filter_series_part(part: &copper_lang::model::PartDefinition) -> bool {
-    part.pins.len() == 2
-        && (part.category.starts_with("passive.inductor")
-            || part.category.starts_with("passive.ferrite")
-            || !part.dc_power_path.is_empty())
+/// Longest chain of series elements followed from the hot supply net toward the supply.
+const MAX_FEED_HOPS: usize = 4;
+/// Resistors above this are high impedance next to the converter's input current and are ignored, ohm.
+const HIGH_IMPEDANCE: f64 = 1e3;
+
+#[derive(Clone, Copy, PartialEq)]
+enum SeriesKind {
+    /// `passive.inductor*`, `passive.ferrite*` or an uncategorized two-pin part whose value is an inductance.
+    Inductor,
+    /// A `dc_power_path` part that is none of those (fuse, jumper, 0-ohm link, load switch): a DC feed.
+    Transparent,
+}
+
+fn series_kind(component: &ComponentInstance, part: &copper_lang::model::PartDefinition) -> Option<SeriesKind> {
+    if part.pins.len() != 2 {
+        return None;
+    }
+    let inductance =
+        matches!(&component.value, Some(ComponentValue::Quantity(v)) if v.dimension() == Dimension::Inductance);
+    if part.category.starts_with("passive.inductor")
+        || part.category.starts_with("passive.ferrite")
+        || (part.category == "component.generic" && inductance)
+    {
+        Some(SeriesKind::Inductor)
+    } else if !part.dc_power_path.is_empty() {
+        Some(SeriesKind::Transparent)
+    } else {
+        None
+    }
+}
+
+/// What a series part is called in messages.
+fn series_word(component: &ComponentInstance, part: &copper_lang::model::PartDefinition) -> &'static str {
+    let name = format!("{} {}", part.category, component.part).to_lowercase();
+    if part.category.starts_with("passive.ferrite") {
+        "ferrite bead"
+    } else if part.category.starts_with("passive.inductor") {
+        "inductor"
+    } else if name.contains("fuse") {
+        "fuse"
+    } else if name.contains("jumper") {
+        "jumper"
+    } else if part.category.starts_with("passive.resistor") {
+        "zero-ohm link"
+    } else if name.contains("switch") {
+        "load switch"
+    } else {
+        "series part"
+    }
 }
 
 fn net_of(view: &FlatElectricalView, endpoint: &Endpoint) -> Option<String> {
     view.nets.iter().find(|n| n.endpoints.contains(endpoint)).map(|n| n.name.clone())
 }
 
-fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutcome {
-    let (Some(hot), Some(ret)) = (cell.hot_supply_net.as_ref(), cell.hot_return_net.as_ref()) else {
-        return FilterOutcome::NotModelled("the cell has no hot supply or hot return net".to_owned());
+fn other_net(
+    view: &FlatElectricalView,
+    part: &copper_lang::model::PartDefinition,
+    endpoint: &Endpoint,
+) -> Option<String> {
+    let pin = part.pins.keys().find(|pin| **pin != endpoint.pin)?;
+    net_of(view, &Endpoint::new(&endpoint.component, pin))
+}
+
+fn members_of(view: &FlatElectricalView, net: &str) -> Vec<Endpoint> {
+    view.nets.iter().find(|n| n.name == net).map(|n| n.endpoints.clone()).unwrap_or_default()
+}
+
+/// A declared supply on `net` that is driven from outside the board or has a source pin.
+fn supply_end(view: &FlatElectricalView, net: &str) -> bool {
+    view.supplies.iter().any(|s| s.net == net && (s.externally_driven || s.source.is_some()))
+}
+
+fn is_diode_like(part: &copper_lang::model::PartDefinition) -> bool {
+    part.category.starts_with("semiconductor.diode")
+        || part.category.contains("tvs")
+        || (part.pins.len() == 2 && part.pins.contains_key("A") && part.pins.contains_key("K"))
+}
+
+#[derive(PartialEq)]
+enum Direction {
+    Upstream,
+    Downstream,
+    Unknown,
+}
+
+/// Which way the series element `via` (whose far side is `start`) points, looking at most [`MAX_FEED_HOPS`]
+/// series parts beyond. A declared external or sourced supply decides upstream; otherwise other loads on the
+/// far side mean the element feeds them (downstream); a connector alone is taken as the supply entry.
+fn direction(view: &FlatElectricalView, visited: &[String], ret: &str, start: &str, via: &str) -> Direction {
+    let mut seen: Vec<String> = visited.to_vec();
+    seen.push(start.to_owned());
+    let mut frontier = vec![start.to_owned()];
+    let (mut load, mut connector) = (false, false);
+    for _ in 0..=MAX_FEED_HOPS {
+        let mut next: Vec<String> = Vec::new();
+        for net in &frontier {
+            if supply_end(view, net) {
+                return Direction::Upstream;
+            }
+            for endpoint in members_of(view, net) {
+                if endpoint.component == via {
+                    continue;
+                }
+                let Some(component) = view.components.iter().find(|c| c.reference == endpoint.component) else {
+                    continue;
+                };
+                let Some(part) = view.library.get(&component.part) else { continue };
+                if series_kind(component, part).is_some() {
+                    if let Some(far) = other_net(view, part, &endpoint)
+                        && far != ret
+                        && !seen.contains(&far)
+                    {
+                        seen.push(far.clone());
+                        next.push(far);
+                    }
+                } else if is_capacitor_part(view, component) {
+                    continue;
+                } else if part.category.starts_with("connector") {
+                    connector = true;
+                } else {
+                    load = true;
+                }
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    if load {
+        Direction::Downstream
+    } else if connector {
+        Direction::Upstream
+    } else {
+        Direction::Unknown
+    }
+}
+
+/// The members of one net of the feed path, sorted by role.
+struct NetScan {
+    candidates: Vec<(Endpoint, SeriesKind)>,
+    capacitors: Vec<String>,
+    /// Connectors and declared source pins.
+    ends: Vec<String>,
+    strangers: Vec<String>,
+    notes: Vec<String>,
+}
+
+fn scan_net(
+    view: &FlatElectricalView,
+    cell: &SwitchingCell,
+    ret: &str,
+    net: &str,
+    came_through: Option<&str>,
+    is_hot: bool,
+) -> NetScan {
+    let mut scan = NetScan {
+        candidates: Vec::new(),
+        capacitors: Vec::new(),
+        ends: Vec::new(),
+        strangers: Vec::new(),
+        notes: Vec::new(),
     };
-    let members = view.nets.iter().find(|n| &n.name == hot).map(|n| n.endpoints.clone()).unwrap_or_default();
-    let mut series: Vec<Endpoint> = Vec::new();
-    let mut others: Vec<String> = Vec::new();
-    for endpoint in &members {
+    for endpoint in members_of(view, net) {
         let reference = &endpoint.component;
-        if *reference == cell.controller || cell.hot_capacitors.iter().any(|c| &c.component == reference) {
+        if *reference == cell.controller
+            || cell.hot_capacitors.iter().any(|c| &c.component == reference)
+            || came_through == Some(reference.as_str())
+        {
             continue;
         }
         let Some(component) = view.components.iter().find(|c| &c.reference == reference) else { continue };
         let Some(part) = view.library.get(&component.part) else { continue };
+        let to_ret = other_net(view, part, &endpoint).is_some_and(|n| n == ret);
         if cell.magnetic.as_ref().is_some_and(|m| &m.component == reference) {
-            others.push(reference.clone());
-        } else if is_filter_series_part(part) {
-            series.push(endpoint.clone());
+            scan.strangers.push(reference.clone());
+        } else if let Some(kind) = series_kind(component, part) {
+            if !scan.candidates.iter().any(|(e, _)| e.component == *reference) {
+                scan.candidates.push((endpoint.clone(), kind));
+            }
+        } else if is_capacitor_part(view, component) {
+            if !to_ret {
+                scan.strangers.push(reference.clone());
+            } else if is_hot {
+                scan.notes.push(format!(
+                    "capacitor {reference} to {ret} on {net} is part of the hot capacitance, not modelled separately"
+                ));
+            } else {
+                scan.capacitors.push(reference.clone());
+            }
+        } else if !is_hot
+            && (part.category.starts_with("connector")
+                || view.supplies.iter().any(|s| s.net == net && s.source.as_ref() == Some(&endpoint)))
+        {
+            scan.ends.push(reference.clone());
+        } else if part.pins.len() == 2
+            && let Some(ComponentValue::Quantity(value)) = &component.value
+            && value.dimension() == Dimension::Resistance
+            && quantity(value) > HIGH_IMPEDANCE
+        {
+            scan.notes
+                .push(format!("{reference} ({}) on {net} is high impedance, ignored", si(quantity(value), "ohm")));
+        } else if part.pins.len() == 2 && to_ret && is_diode_like(part) {
+            scan.notes.push(format!("{reference} (diode to {ret}) on {net} carries no series current, ignored"));
         } else {
-            others.push(reference.clone());
+            scan.strangers.push(reference.clone());
         }
     }
-    if series.is_empty() {
-        return FilterOutcome::NoneRecognised;
+    for list in [&mut scan.capacitors, &mut scan.ends, &mut scan.strangers, &mut scan.notes] {
+        list.sort();
+        list.dedup();
     }
-    if series.len() > 1 {
-        let names: Vec<&str> = series.iter().map(|e| e.component.as_str()).collect();
+    scan
+}
+
+/// One series element of the feed path.
+struct Element {
+    reference: String,
+    kind: SeriesKind,
+    word: &'static str,
+    near: String,
+    far: String,
+}
+
+fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutcome {
+    let (Some(hot), Some(ret)) = (cell.hot_supply_net.as_ref(), cell.hot_return_net.as_ref()) else {
+        return FilterOutcome::NotModelled("the cell has no hot supply or hot return net".to_owned());
+    };
+    // Walk from the hot supply net toward the supply through the series elements that FEED it.
+    let mut path: Vec<String> = vec![hot.clone()];
+    let mut scans: Vec<NetScan> = Vec::new();
+    let mut elements: Vec<Element> = Vec::new();
+    let mut downstream: Vec<String> = Vec::new();
+    loop {
+        let net = path.last().expect("path").clone();
+        let came = elements.last().map(|e| e.reference.clone());
+        let mut scan = scan_net(view, cell, ret, &net, came.as_deref(), scans.is_empty());
+        let mut up: Vec<Element> = Vec::new();
+        for (endpoint, kind) in std::mem::take(&mut scan.candidates) {
+            let component = view.components.iter().find(|c| c.reference == endpoint.component).expect("component");
+            let part = view.library.get(&component.part).expect("part of a series element");
+            let word = series_word(component, part);
+            let Some(far) = other_net(view, part, &endpoint) else {
+                return FilterOutcome::NotModelled(format!(
+                    "the far side of {} ({word}) is not on a net",
+                    endpoint.component
+                ));
+            };
+            if far == *hot || far == *ret || far == net {
+                return FilterOutcome::NotModelled(format!(
+                    "the far side of {} is not on a net distinct from the hot supply and return nets",
+                    endpoint.component
+                ));
+            }
+            if path.contains(&far) {
+                continue;
+            }
+            match direction(view, &path, ret, &far, &endpoint.component) {
+                Direction::Upstream => {
+                    up.push(Element { reference: endpoint.component.clone(), kind, word, near: net.clone(), far });
+                }
+                Direction::Downstream => downstream.push(format!("{} {}", word, endpoint.component)),
+                Direction::Unknown => {
+                    return FilterOutcome::NotModelled(format!(
+                        "cannot tell whether {word} {} between {net} and {far} feeds {net} or is fed from it: the far net {far} \
+                         leads to no declared external or sourced supply, connector or load within {MAX_FEED_HOPS} series parts",
+                        endpoint.component
+                    ));
+                }
+            }
+        }
+        scans.push(scan);
+        if up.is_empty() {
+            break;
+        }
+        if up.len() > 1 {
+            let names: Vec<&str> = up.iter().map(|e| e.reference.as_str()).collect();
+            return FilterOutcome::NotModelled(format!(
+                "several series elements ({}) feed {net} from the supply side: parallel feed paths are not modelled",
+                names.join(", ")
+            ));
+        }
+        if elements.len() >= MAX_FEED_HOPS {
+            return FilterOutcome::NotModelled(format!(
+                "the feed path of {hot} has more than {MAX_FEED_HOPS} series elements"
+            ));
+        }
+        let element = up.pop().expect("one element");
+        path.push(element.far.clone());
+        elements.push(element);
+    }
+    downstream.sort();
+    downstream.dedup();
+    let downstream_note =
+        (!downstream.is_empty()).then(|| format!("downstream feeds from {hot} ignored: {}", downstream.join(", ")));
+    if elements.is_empty() {
+        return FilterOutcome::NoneRecognised(downstream_note);
+    }
+    // End-of-feed markers (connector, source pin) on a net the path continues from bypass the elements beyond it.
+    let last = scans.len() - 1;
+    for (i, scan) in scans.iter_mut().enumerate() {
+        if i < last {
+            let ends = std::mem::take(&mut scan.ends);
+            scan.strangers.extend(ends);
+        }
+    }
+    let mut notes: Vec<String> = scans.iter().flat_map(|s| s.notes.iter().cloned()).collect();
+    notes.extend(downstream_note);
+    let transparent: Vec<&Element> = elements.iter().filter(|e| e.kind == SeriesKind::Transparent).collect();
+    let through_parts: Vec<String> = transparent.iter().map(|e| format!("{} {}", e.word, e.reference)).collect();
+    let through = if transparent.is_empty() {
+        String::new()
+    } else {
+        format!("through {}, resistance not modelled (taken as 0)", through_parts.join(", "))
+    };
+    let inductors: Vec<&Element> = elements.iter().filter(|e| e.kind == SeriesKind::Inductor).collect();
+    if inductors.is_empty() {
+        let tail = if notes.is_empty() { String::new() } else { format!("; {}", notes.join("; ")) };
+        return FilterOutcome::NoInductor(format!(
+            "fed through {} from {}; no filter inductor on the feed path (resistance not modelled, taken as 0){tail}",
+            through_parts.join(", "),
+            path.last().expect("path"),
+        ));
+    }
+    if inductors.len() > 1 {
+        let names: Vec<&str> = inductors.iter().map(|e| e.reference.as_str()).collect();
         return FilterOutcome::NotModelled(format!(
-            "several series elements ({}) on the hot supply net {hot}: more than one inductor or ferrite",
+            "several series elements ({}) on the feed path of the hot supply net {hot}: more than one inductor or ferrite",
             names.join(", ")
         ));
     }
-    let s = &series[0];
-    if !others.is_empty() {
-        others.sort();
-        others.dedup();
-        return FilterOutcome::NotModelled(format!(
-            "the hot supply net {hot} also connects {}: the converter is not the only load behind {}",
-            others.join(", "),
-            s.component
-        ));
+    let s = inductors[0];
+    let k = elements.iter().position(|e| e.reference == s.reference).expect("inductor position");
+    // Everything else on the path nets could carry current in parallel with the modelled path.
+    for (i, scan) in scans.iter().enumerate() {
+        if scan.strangers.is_empty() {
+            continue;
+        }
+        let names = scan.strangers.join(", ");
+        return FilterOutcome::NotModelled(if i == 0 {
+            format!(
+                "the hot supply net {hot} also connects {names}: the converter is not the only load behind {}",
+                s.reference
+            )
+        } else {
+            format!(
+                "the upstream net {} of {} also connects {names}: the topology is more than one series element \
+                 and capacitors to {ret}",
+                path[i], s.reference
+            )
+        });
     }
-    let component = view.components.iter().find(|c| c.reference == s.component).expect("component of an endpoint");
+    let component = view.components.iter().find(|c| c.reference == s.reference).expect("component of an endpoint");
     let part = view.library.get(&component.part).expect("part of a series element");
-    let Some(other_pin) = part.pins.keys().find(|pin| **pin != s.pin) else {
-        return FilterOutcome::NotModelled(format!("{} has no second pin", s.component));
-    };
-    let other = Endpoint::new(&s.component, other_pin);
-    let Some(upstream) = net_of(view, &other).filter(|n| n != hot && n != ret) else {
-        return FilterOutcome::NotModelled(format!(
-            "the far side of {} is not on a net distinct from the hot supply and return nets",
-            s.component
-        ));
-    };
+    let upstream = s.far.clone();
     // Inductance of the series element: its value (an impedance-rated ferrite bead does not give one).
     let inductance = match &component.value {
         Some(ComponentValue::Quantity(value)) if value.dimension() == Dimension::Inductance => quantity(value),
@@ -274,7 +567,7 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
             return FilterOutcome::NotModelled(format!(
                 "{} ({}) declares no inductance value: a ferrite bead rated by impedance or a series part without an \
                  inductance cannot be represented",
-                s.component, part.category
+                s.reference, part.category
             ));
         }
     };
@@ -282,54 +575,28 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
     let dcr = emi.and_then(|e| e.esr.as_ref()).map(quantity);
     let srf = emi.and_then(|e| e.self_resonance.as_ref()).map(quantity).filter(|f| *f > 0.0);
     let parallel_capacitance = srf.map_or(0.0, |f| 1.0 / ((2.0 * PI * f).powi(2) * inductance));
-    // Upstream net: only the series element, capacitors to the hot return, connectors and a declared source.
-    let upstream_members =
-        view.nets.iter().find(|n| n.name == upstream).map(|n| n.endpoints.clone()).unwrap_or_default();
+    // Capacitors beyond the inductor form the supply capacitor; those between it and the hot net are parallel
+    // hot-side capacitance behind a transparent feed.
     let mut capacitors: Vec<String> = Vec::new();
-    let mut strangers: Vec<String> = Vec::new();
-    for endpoint in &upstream_members {
-        if endpoint.component == s.component {
-            continue;
+    for (i, scan) in scans.iter().enumerate() {
+        if i > k {
+            capacitors.extend(scan.capacitors.iter().cloned());
+        } else if !scan.capacitors.is_empty() {
+            notes.push(format!(
+                "{} on {} sit between the hot supply net and {} behind a transparent feed: hot-side capacitance, not modelled",
+                scan.capacitors.join(", "),
+                path[i],
+                s.reference
+            ));
         }
-        let Some(item) = view.components.iter().find(|c| c.reference == endpoint.component) else { continue };
-        let Some(item_part) = view.library.get(&item.part) else { continue };
-        if is_capacitor_part(view, item) {
-            let returns = item_part
-                .pins
-                .keys()
-                .find(|pin| **pin != endpoint.pin)
-                .map(|pin| Endpoint::new(&endpoint.component, pin))
-                .and_then(|pin| net_of(view, &pin));
-            if returns.as_deref() == Some(ret.as_str()) {
-                if !capacitors.contains(&endpoint.component) {
-                    capacitors.push(endpoint.component.clone());
-                }
-                continue;
-            }
-        }
-        let declared_source = view.supplies.iter().any(|s| s.net == upstream && s.source.as_ref() == Some(endpoint));
-        if item_part.category.starts_with("connector") || declared_source {
-            continue;
-        }
-        strangers.push(endpoint.component.clone());
     }
-    if !strangers.is_empty() {
-        strangers.sort();
-        strangers.dedup();
-        return FilterOutcome::NotModelled(format!(
-            "the upstream net {upstream} of {} also connects {}: the topology is more than one series element \
-             and capacitors to {ret}",
-            s.component,
-            strangers.join(", ")
-        ));
-    }
-    let mut notes: Vec<String> = Vec::new();
+    let mut series_notes: Vec<String> = Vec::new();
     let mut tags = vec!["input_filter_modelled".to_owned()];
     let mut models: Vec<CapacitorModel> = Vec::new();
     for reference in &capacitors {
         match capacitor_model(view, reference) {
             Ok(model) => models.push(model),
-            Err(reason) => notes.push(format!("upstream capacitor skipped: {reason}")),
+            Err(reason) => series_notes.push(format!("upstream capacitor skipped: {reason}")),
         }
     }
     if models.iter().any(|m| m.defaulted) {
@@ -337,8 +604,8 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
     }
     let supply_capacitor = (!models.is_empty()).then(|| parallel(&models));
     let mut description = format!(
-        "{} {} (DCR {}, {}) from {hot} to {upstream}",
-        s.component,
+        "{} {} (DCR {}, {}) from {} to {upstream}",
+        s.reference,
         si(inductance, "H"),
         dcr.map_or("not declared, taken as 0".to_owned(), |d| si(d, "ohm")),
         srf.map_or("self-resonance not declared: no winding capacitance, an ideal inductor".to_owned(), |f| format!(
@@ -346,6 +613,7 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
             si(f, "Hz"),
             si(parallel_capacitance, "F")
         )),
+        s.near,
     );
     if srf.is_none() {
         tags.push("filter_inductor_ideal".to_owned());
@@ -363,13 +631,18 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
             "; no upstream capacitor to the hot return recognised, so the filter is a series inductor only (first order)",
         ),
     }
-    for note in notes {
+    if !through.is_empty() {
+        description.push_str(&format!("; {through}"));
+        tags.push("feed_resistance_not_modelled".to_owned());
+    }
+    for note in series_notes.into_iter().chain(notes) {
         description.push_str(&format!("; {note}"));
     }
-    let mut components = vec![s.component.clone()];
+    let mut components = vec![s.reference.clone()];
     components.extend(models.iter().map(|m| m.component.clone()));
+    components.extend(transparent.iter().map(|e| e.reference.clone()));
     FilterOutcome::Modelled(FilterModel {
-        inductor: s.component.clone(),
+        inductor: s.reference.clone(),
         upstream_net: upstream,
         filter: InputFilter { inductance, dcr: dcr.unwrap_or(0.0), parallel_capacitance, supply_capacitor },
         components,
@@ -515,7 +788,17 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
             let text = model.description.clone();
             (Some(model), text, CoverageStatus::Executed)
         }
-        FilterOutcome::NoneRecognised => (None, "no input filter recognised".to_owned(), CoverageStatus::NotApplicable),
+        FilterOutcome::NoneRecognised(note) => (
+            None,
+            match note {
+                Some(note) => format!("no input filter recognised; {note}"),
+                None => "no input filter recognised".to_owned(),
+            },
+            CoverageStatus::NotApplicable,
+        ),
+        FilterOutcome::NoInductor(reason) => {
+            (None, format!("no input filter recognised: {reason}"), CoverageStatus::NotApplicable)
+        }
         FilterOutcome::NotModelled(reason) => {
             (None, format!("no input filter modelled: {reason}"), CoverageStatus::NotApplicable)
         }

@@ -114,10 +114,8 @@ fn scalar_measures(measures: Option<&Value>) -> Value {
     Value::Object(kept)
 }
 
-/// One issue per finding of the report's `emi` section, grouped by cell (report order inside a
-/// cell), ids `M1`, `M2`, ... in that order.
-pub(super) fn emi_issues(report: &Value, scene: Option<&Scene>) -> Vec<RunIssue> {
-    let Some(section) = report.get("emi") else { return Vec::new() };
+/// The findings of an `emi` section in issue order: grouped by cell (report order inside a cell).
+fn ordered_findings(section: &Value) -> Vec<&Value> {
     let Some(findings) = section.get("findings").and_then(Value::as_array) else { return Vec::new() };
     let cells: Vec<String> = section
         .get("cells")
@@ -133,6 +131,21 @@ pub(super) fn emi_issues(report: &Value, scene: Option<&Scene>) -> Vec<RunIssue>
         let cell = cell_of(finding);
         cells.iter().position(|known| *known == cell).unwrap_or(cells.len())
     });
+    ordered
+}
+
+/// The finding behind issue `id` (`M1`, `M2`, ...) of the report's `emi` section.
+pub fn emi_finding<'a>(report: &'a Value, id: &str) -> Option<&'a Value> {
+    let index: usize = id.strip_prefix('M')?.parse().ok()?;
+    ordered_findings(report.get("emi")?).get(index.checked_sub(1)?).copied()
+}
+
+/// One issue per finding of the report's `emi` section, grouped by cell (report order inside a
+/// cell), ids `M1`, `M2`, ... in that order.
+pub(super) fn emi_issues(report: &Value, scene: Option<&Scene>) -> Vec<RunIssue> {
+    let Some(section) = report.get("emi") else { return Vec::new() };
+    let ordered = ordered_findings(section);
+    let cell_of = |finding: &Value| finding.get("cell").and_then(Value::as_str).unwrap_or("").to_owned();
     let mut issues = Vec::new();
     for (index, finding) in ordered.into_iter().enumerate() {
         let text = |key: &str| finding.get(key).and_then(Value::as_str).unwrap_or("").to_owned();

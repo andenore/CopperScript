@@ -229,6 +229,7 @@ dependencies = [
 name = "copper-report"
 version = "0.1.0"
 dependencies = [
+ "copper-emi",
  "copper-json",
  "copper-lang",
  "copper-pcb",

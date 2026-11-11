@@ -41,6 +41,7 @@ use crate::signal_integrity::copper_layer_depths_nm;
 use crate::{Coverage, CoverageStatus, Finding, Severity};
 
 mod conducted;
+mod field;
 
 /// The `schema` of [`EmiCheckReport::json`].
 pub const SCHEMA: &str = "copperscript-emi-check/v0.1";
@@ -635,6 +636,14 @@ impl<'a> Stack<'a> {
         self.depths.get(&layer).copied()
     }
 
+    /// Height of the layer's centre above the top copper layer's centre, m (negative below it; 0 without a stack-up).
+    fn z(&self, layer: CopperLayer) -> f64 {
+        match (self.depths.get(&CopperLayer::Front), self.depths.get(&layer)) {
+            (Some(top), Some(depth)) => nm_to_m(top - depth),
+            _ => 0.0,
+        }
+    }
+
     /// The copper layers in stack-up order with their depth in nm.
     fn layer_list(&self) -> Vec<(CopperLayer, i64)> {
         self.board.stackup.copper_layers.iter().map(|l| (*l, self.depths.get(l).copied().unwrap_or(0))).collect()
@@ -1005,6 +1014,10 @@ struct LoopCandidate {
     segments: Vec<LoopSegment>,
     /// Via barrels of the traced path: (height, diameter), metres.
     vias: Vec<(f64, f64)>,
+    /// The loop as a closed 3D polyline, metres: z up from the top copper layer (see [`Stack::z`]).
+    path_3d: Vec<[f64; 3]>,
+    /// z of the reference plane layer, metres, when the loop has one.
+    plane_z: Option<f64>,
 }
 
 impl LoopCandidate {
@@ -1297,6 +1310,25 @@ fn height_over_plane(stack: &Stack, plane: &Plane, pad_layer: CopperLayer, layer
         .then(|| nm_to_m((depth - plane_depth).abs()))
 }
 
+/// The traced bars in path order as a 3D polyline: each bar's ends at its layer's z, consecutive
+/// duplicates dropped (a via is the vertical step between two bars on different layers).
+fn traced_path_3d(stack: &Stack, segments: &[LoopSegment]) -> Vec<[f64; 3]> {
+    let mut path: Vec<[f64; 3]> = Vec::new();
+    for bar in segments {
+        let z = stack.z(bar.layer);
+        for end in [bar.a, bar.b] {
+            let vertex = [end[0], end[1], z];
+            if path.last().is_none_or(|last| (0..3).map(|k| (last[k] - vertex[k]).powi(2)).sum::<f64>() > 1e-18) {
+                path.push(vertex);
+            }
+        }
+    }
+    if path.len() > 1 && path.first() == path.last() {
+        path.pop();
+    }
+    path
+}
+
 fn build_candidate(
     cx: &Context,
     cell: &SwitchingCell,
@@ -1325,6 +1357,13 @@ fn build_candidate(
     let labels: Vec<String> =
         chosen.iter().zip(&labels).map(|(pad, label)| format!("{label} {}.{}", pad.component, pad.number)).collect();
     let (area, length) = (polygon_area(&points), closed_length(&points));
+    let path_3d: Vec<[f64; 3]> = chosen
+        .iter()
+        .map(|pad| {
+            let c = pad.shape.center();
+            [c[0], c[1], pad.layers.first().map_or(0.0, |layer| cx.stack.z(*layer))]
+        })
+        .collect();
 
     let sides: BTreeSet<BoardSide> = chosen.iter().filter_map(|p| cx.layout.side(&p.component)).collect();
     let mut candidate = LoopCandidate {
@@ -1336,6 +1375,7 @@ fn build_candidate(
         pad_points: points,
         area,
         length,
+        path_3d,
         ..LoopCandidate::default()
     };
 
@@ -1359,6 +1399,7 @@ fn build_candidate(
             candidate.length = closed_length(&candidate.points);
             candidate.segments = result.segments.clone();
             candidate.vias = result.vias.clone();
+            candidate.path_3d = traced_path_3d(&cx.stack, &result.segments);
             traced = Some(result);
         }
     }
@@ -1370,6 +1411,7 @@ fn build_candidate(
     }
     let layer = copper_layer(*sides.iter().next().expect("one side"));
     candidate.plane = nearest_plane(cx.layout.board, &cx.stack, grounds, layer);
+    candidate.plane_z = candidate.plane.as_ref().map(|plane| cx.stack.z(plane.layer));
 
     if traced.is_some() {
         // Bars with their real widths, each at its layer's height over the plane; via barrels in series.
@@ -1782,6 +1824,21 @@ fn analyze_loop(cx: &mut Context, cell: &SwitchingCell, spec: &LoopSpec) {
         "loop_polygon_mm",
         Value::Array(best.points.iter().map(|p| Value::Array(vec![num(mm(p[0]), 4), num(mm(p[1]), 4)])).collect()),
     );
+    // The loop as a 3D polyline for the near-field map (`copper emi-check --plot-field`): millimetres,
+    // z = 0 at the centre of the top copper layer and negative below it, the reference plane's z when
+    // the loop has one.
+    put(
+        &mut finding.measures,
+        "loop_path_3d_mm",
+        Value::Array(
+            best.path_3d
+                .iter()
+                .map(|p| Value::Array(vec![num(mm(p[0]) + 0.0, 4), num(mm(p[1]) + 0.0, 4), num(mm(p[2]) + 0.0, 4)]))
+                .collect(),
+        ),
+    );
+    put(&mut finding.measures, "loop_reference_plane_z_mm", best.plane_z.map_or(Value::Null, |z| num(mm(z) + 0.0, 4)));
+    put(&mut finding.measures, "field_victims", field::victims(cx, cell));
     put(
         &mut finding.measures,
         "candidates",
@@ -2720,6 +2777,13 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
         CoverageStatus::Unsupported,
         "needs routed copper: the copper path length from each decoupling capacitor pad to its target pin and return via is not traced",
     );
+    if !model.cells.is_empty() {
+        cx.cover(
+            "EMI-FIELD:inductor".to_owned(),
+            CoverageStatus::Unsupported,
+            "the near-field map (`copper emi-check --plot-field`) covers the hot-loop current path only: the field of the power inductor itself, usually the largest low-frequency source for an unshielded inductor, is not included",
+        );
+    }
     if cx.trace_legs_traced > 0 {
         let detail = format!(
             "{} of {} copper leg(s) traced as shortest copper paths in {} of {} hot loop(s) ({} unrouted leg(s) kept straight); traced length, enclosed area, via count, layer changes, narrowest width and inductance per loop are in the EMI-HOT-LOOP findings; only the hot loops are traced (not the switch node, return paths or decoupling links)",

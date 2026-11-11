@@ -505,6 +505,73 @@ stays the single file of a run (there is no sidecar):
   names it as a screening estimate. Other emi issues are marked at their pad
   centres like the other stages. `view` has no stage filter of its own.
 
+### Visualization
+
+Two hand-written, deterministic SVGs (no dependencies, explicit white
+background, fixed palette), both labelled as screening estimates and both
+ending in "screening estimate, not EMC qualification" or "not a field
+prediction".
+
+**Conducted spectrum.** `copper emi-check BOARD [--run RUN] --plot-spectrum OUT.svg`
+writes one panel per cell with an `EMI-CONDUCTED` finding (renderer:
+`copper_report::emi_plot`, data read from `measures.harmonics`): a log
+frequency axis from 150 kHz to 30 MHz (decade and 2/5 gridlines), dBuV with a
+gridline every 10 dB, one stem and dot per harmonic at its total level (the
+differential-mode series is the total while common mode is not modelled; with
+common mode present DM and CM are added as markers), the quasi-peak and average
+lines as polylines through the per-harmonic `limit_qp`/`limit_avg` when an
+`emission` standard with a conducted table is declared, harmonics above the
+average line in the warning colour, a band and whisker for the stated
+uncertainty of the worst harmonic, and the finding's tags (`worst_case_current`,
+`assumed_edge_time`, `differential_mode_only`, ...) under the title. A board
+without an `EMI-CONDUCTED` finding writes nothing and exits 2 with the reason.
+
+**Magnetic near field.** `copper emi-check BOARD [--run RUN] --plot-field OUT.svg
+[--field-height 1mm]` and `copper view RUN --issue M<n> --emi-field
+[--field-height 1mm]` (an `EMI-HOT-LOOP` issue) draw `|H|` in a plane
+`--field-height` above the top copper (default 1 mm) as a heat map in
+dB(uA/m) over the loop window, with the loop outline, the pads of the cell's
+loop components, the top-layer copper of the board scene under the map, a colour
+bar and, for every pad of a `sensitive` net outside the cell and of every cable
+connector, a marker with the field level at the pad centre (the useful number:
+the field at the victim), also listed beside the map with the distance from the
+loop. The colour scale is a fixed 16-step viridis-like table over 40 dB below
+the map maximum; cells below it are transparent. Grid cells are 0.25 mm, with a
+larger step when the window would exceed 200 cells a side; runs of equal colour
+in a row are one rect.
+
+The field is computed by `copper_emi::field` from data the finding carries:
+
+- `measures.loop_path_3d_mm`: the closed loop as `[x, y, z]` vertices in mm
+  (z = 0 at the centre of the top copper layer, negative below it, from the
+  stack-up; a traced loop has a vertex per bar end, so a via is a vertical
+  step; the pad centres otherwise), `measures.loop_reference_plane_z_mm`
+  (z of the nearest ground plane layer, null without one) and
+  `measures.field_victims` (`[{kind, name, pads: ["R1.2", ...]}]`, names only:
+  the map looks the pads up on the board it draws).
+- The amplitude is the cell's `current_peak` (the same worst case as
+  `EMI-CONDUCTED`, tag `worst_case_current`); without one the map is
+  normalised to 1 A and says "per ampere".
+- Biot-Savart for each straight filament, `H = I/(4 pi d) (sin a2 - sin a1)`
+  around the segment axis (zero on the axis, linear inside a 50 um core), summed
+  over the loop; an ideal infinite ground plane at the reference plane's z by
+  image currents (mirrored segments, reversed current: zero normal field at the
+  plane, zero field behind it).
+
+Limits, which the legend and footer repeat: a ranking and placement aid, not a
+field prediction. The model is quasi-static (valid where the region is much
+smaller than a wavelength: fine up to a few hundred MHz over a few cm), uses the
+peak switch current as the amplitude of a single current, and only the hot loop
+carries current. **The inductor's own field, usually the largest low-frequency
+source for an unshielded inductor, is not included** (coverage
+`unsupported EMI-FIELD:inductor`). The plane is ideal and infinite, no other
+copper shields, and a loop on the far side of the plane from the map shows
+nothing. Pads, copper and the loop are drawn schematically from the board scene
+(the placed board built in memory, or the routed run's board); components that
+a rigid cluster moves are drawn at their placement, not at the cluster pose the
+check used. A report written before `loop_path_3d_mm` existed gives an error
+telling to rerun `copper emi-check BOARD --run RUN --write`.
+
 ## 9. Quasi-static extraction (phase 2)
 
 Module `copper_emi::inductance`: partial inductance of rectangular bars
@@ -536,7 +603,7 @@ the board does not declare). Inputs, each recorded with its source in
 | Current | the switch pin `current_peak`, the current LIMIT used as the on-time amplitude (no load current exists in the language): a worst case, tag `worst_case_current`, level change `20 log10(I / current_peak)` dB at another current |
 | Hot capacitor | the hot-loop analysis' selected capacitor: value from the component; `esr`, `esl`, `self_resonance` (ESL derived) from its part; otherwise 5 mohm and ESL by package from the footprint name (0402 0.4, 0603 0.5, 0805 0.6, 1206 0.8, 1210 0.9 nH), tag `default_capacitor_parasitics`; an unrecognised package without declared values skips the prediction. No DC-bias derating. Parallel hot capacitors are not modelled (`parallel_capacitors_not_modelled`, listed in `measures.ignored_parallel_capacitors`) |
 | Hot-loop inductance | `EMI-HOT-LOOP` (traced or placement estimate), in series with the capacitor with the supply feed at the switch end (pessimistic) |
-| Input filter | exactly one series inductor, `passive.ferrite*` or `dc_power_path` part with an inductance `value` on the hot-supply net (the net carrying only the controller and the hot capacitors otherwise) and, on its far net, only capacitors to the hot return, connectors and a declared supply source: its value, `esr` (DCR) and `self_resonance` (winding capacitance) plus the upstream capacitors lumped in parallel. Anything else leaves the filter out with a `:filter` coverage note; no series part gives "no input filter recognised". A filter inductor without `self_resonance` is ideal (`filter_inductor_ideal`: attenuation above its real resonance is overstated) |
+| Input filter | walks from the hot-supply net toward the supply (at most 4 series parts) through the elements that FEED it. A filter inductor is a `passive.inductor*` or `passive.ferrite*` part, or an uncategorized two-pin part whose value is an inductance; any other two-pin `dc_power_path` part (fuse, jumper, 0-ohm link, load switch) is a transparent DC feed that is followed through with its resistance unknown and taken as 0 (tag `feed_resistance_not_modelled`; "through fuse F_MAIN, resistance not modelled"). Direction comes from the far net: a declared `external` or sourced supply (or, failing that, a connector with no other load) means upstream; other loads there mean the element feeds them downstream and it is ignored (listed in the `:filter` note); if neither decides, the filter is left out and the note says the direction cannot be decided. Exactly one filter inductor may be on the path; its value, `esr` (DCR) and `self_resonance` (winding capacitance) plus the capacitors to the hot return beyond it are lumped in parallel. A path with fuses but no inductor reads "fed through fuse F1 from VIN_IN; no filter inductor on the feed path". Capacitors to the hot return on the hot-supply net count as hot capacitors; resistors above 1 kohm and diodes to the hot return (TVS, enable divider) are ignored with a note; anything else on the path nets (a load, a resistor of 1 kohm or less, a connector or source before the end of the path) leaves the filter out with a `:filter` coverage note. A filter inductor without `self_resonance` is ideal (`filter_inductor_ideal`: attenuation above its real resonance is overstated) |
 | Common mode | not modelled (`:common_mode` is `not_applicable`). The island capacitance of `EMI-SWITCH-NODE` is to the board's own ground plane, which is the converter's return: its current closes without entering the LISN, so using it as the capacitance to the LISN reference would overstate common mode by the plane's shielding. The real path is board-to-reference capacitance (heat sink, chassis, cable), geometry outside the board model. Levels are differential mode only and tagged `differential_mode_only`; common mode often dominates above a few MHz |
 
 Levels are RMS dBuV of each harmonic at the worst LISN port; for a fixed

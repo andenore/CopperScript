@@ -645,6 +645,18 @@ pub const COMMANDS: &[Command] = &[
                 flag: "--write",
                 help: "with --run: also store the result as the emi section of the run's route-report.json (written atomically,                        report_sha256 of the summary beside it updated); `copper issues RUN --stage emi` then lists it",
             },
+            Opt {
+                flag: "--plot-spectrum PLOT_SPECTRUM",
+                help: "write the conducted-emission spectrum as a self-contained SVG: one panel per cell with an EMI-CONDUCTED finding, harmonic stems 150 kHz to 30 MHz, quasi-peak and average limit lines when an emission standard is declared, the uncertainty of the worst harmonic; a screening estimate",
+            },
+            Opt {
+                flag: "--plot-field PLOT_FIELD",
+                help: "write the quasi-static magnetic near-field map of each hot loop (|H| in dB(uA/m) in a plane above the board, with the level at sensitive pads and connectors) as an SVG; the hot-loop current path only, the inductor's own field is not included; a screening estimate",
+            },
+            Opt {
+                flag: "--field-height FIELD_HEIGHT",
+                help: "with --plot-field: height of the map plane above the top copper, e.g. 1mm (default: 1mm)",
+            },
             Opt { flag: "--json", help: "emit deterministic JSON (schema copperscript-emi-check/v0.1)" },
         ],
         actions: &[],

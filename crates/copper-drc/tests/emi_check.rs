@@ -1132,3 +1132,202 @@ fn emi_accept_acknowledges_a_conducted_finding() {
     assert_eq!(finding.finding.severity, Severity::Info);
     assert!(find(&report, "EMI-ACCEPT-UNUSED").is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Input-filter detection with fuses and other non-filter parts on the supply path.
+// ---------------------------------------------------------------------------
+
+const FILTER_PLACEMENT: &str = "    constraint fixed_placement(J1)";
+
+/// Rows of the two findings agree within `tolerance` dB at every harmonic.
+fn same_levels(a: &EmiFinding, b: &EmiFinding, tolerance: f64) {
+    let (a, b) = (harmonic_rows(a), harmonic_rows(b));
+    assert_eq!(a.len(), b.len());
+    for (x, y) in a.iter().zip(&b) {
+        assert!((x.1 - y.1).abs() < tolerance, "{x:?} against {y:?}");
+    }
+}
+
+/// `examples/emi_buck_filter` with its filter inductor LF replaced by a fuse F1 between VIN and VIN_IN.
+fn fuse_instead_of_inductor() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("LF", "F1"),
+        (
+            "component F1: p.FilterInductor { value = 4.7uH; footprint = \"L_1210\"; }",
+            "component F1: p.Fuse { footprint = \"R_0402\"; }",
+        ),
+    ]
+}
+
+#[test]
+fn a_fuse_alone_on_the_feed_is_not_a_filter_and_the_message_names_it() {
+    let plain = run("fuse-plain", &[]);
+    let fused = run_board("emi_buck_filter", "fuse-only", &fuse_instead_of_inductor(), |_| {});
+    let finding = conducted(&fused);
+    assert!(!finding.tags.contains(&"input_filter_modelled".to_owned()), "{:?}", finding.tags);
+    let filter = coverage(&fused, "EMI-CONDUCTED:U1:filter");
+    assert_eq!(filter.status, CoverageStatus::NotApplicable);
+    assert!(
+        filter.detail.contains("fed through fuse F1 from VIN_IN; no filter inductor on the feed path")
+            && filter.detail.contains("resistance not modelled"),
+        "{}",
+        filter.detail
+    );
+    assert!(
+        !filter.detail.contains("several") && !filter.detail.contains("more than one inductor"),
+        "{}",
+        filter.detail
+    );
+    // The capacitor behind the fuse is not a modelled filter capacitor: the prediction is the unfiltered one.
+    same_levels(conducted(&plain), finding, 0.01);
+    let text = finding.measures.get("input_filter").and_then(Value::as_str).unwrap_or_default();
+    assert!(text.contains("fuse F1"), "{text}");
+}
+
+#[test]
+fn a_fuse_in_front_of_the_filter_is_followed_through() {
+    let reference = run_board("emi_buck_filter", "fuse-ref", &[], |_| {});
+    // Supply side: VIN24 -- F1 -- VIN_IN (LF, CUP) -- LF -- VIN.
+    let upstream = run_board(
+        "emi_buck_filter",
+        "fuse-upstream",
+        &[
+            ("    component J1:", "    component F1: p.Fuse { footprint = \"R_0402\"; }\n    component J1:"),
+            ("net VIN_IN { LF.A; CUP.A; }", "net VIN_IN { LF.A; CUP.A; F1.B; }\n    net VIN24 { F1.A; }"),
+            (
+                "    supply VIN_IN {",
+                "    supply VIN24 { net = VIN24; voltage = 12V; external = true; }\n    supply VIN_IN {",
+            ),
+            (
+                FILTER_PLACEMENT,
+                "    constraint fixed_placement(F1) { x = 4mm; y = 29mm; rotation = 0; }\n    constraint fixed_placement(J1)",
+            ),
+        ],
+        |_| {},
+    );
+    let finding = conducted(&upstream);
+    assert!(finding.tags.contains(&"input_filter_modelled".to_owned()), "{:?}", finding.tags);
+    same_levels(conducted(&reference), finding, 0.1);
+    let filter = coverage(&upstream, "EMI-CONDUCTED:U1:filter");
+    assert_eq!(filter.status, CoverageStatus::Executed);
+    assert!(
+        filter.detail.contains("through fuse F1, resistance not modelled")
+            && filter.detail.contains("LF")
+            && filter.detail.contains("CUP"),
+        "{}",
+        filter.detail
+    );
+    assert!(!filter.detail.contains("inductor F1"), "{}", filter.detail);
+
+    // Converter side: VIN -- F1 -- VIN_FUSED -- LF -- VIN_IN (CUP).
+    let between = run_board(
+        "emi_buck_filter",
+        "fuse-between",
+        &[
+            ("    component J1:", "    component F1: p.Fuse { footprint = \"R_0402\"; }\n    component J1:"),
+            ("net VIN { U1.VIN; CIN.A; LF.B; }", "net VIN { U1.VIN; CIN.A; F1.A; }\n    net VIN_FUSED { F1.B; LF.B; }"),
+            (
+                FILTER_PLACEMENT,
+                "    constraint fixed_placement(F1) { x = 20mm; y = 29mm; rotation = 0; }\n    constraint fixed_placement(J1)",
+            ),
+        ],
+        |_| {},
+    );
+    let finding = conducted(&between);
+    assert!(finding.tags.contains(&"input_filter_modelled".to_owned()), "{:?}", finding.tags);
+    same_levels(conducted(&reference), finding, 0.1);
+    let filter = coverage(&between, "EMI-CONDUCTED:U1:filter");
+    assert_eq!(filter.status, CoverageStatus::Executed);
+    assert!(filter.detail.contains("through fuse F1, resistance not modelled"), "{}", filter.detail);
+}
+
+#[test]
+fn downstream_fuses_feeding_other_rails_do_not_affect_the_filter() {
+    let reference = run_board("emi_buck_filter", "down-ref", &[], |_| {});
+    let edits = [
+        (
+            "    component J1:",
+            "    component F2: p.Fuse { footprint = \"R_0402\"; }\n    component F3: p.Fuse { footprint = \"R_0402\"; }\n    \
+             component RL: p.Res { value = 10kohm; footprint = \"R_0402\"; }\n    \
+             component RM: p.Res { value = 10kohm; footprint = \"R_0402\"; }\n    component J1:",
+        ),
+        ("net VIN { U1.VIN; CIN.A; LF.B; }", "net VIN { U1.VIN; CIN.A; LF.B; F2.A; F3.A; }"),
+        ("R2.B; J1.B;", "R2.B; J1.B; RL.B; RM.B;"),
+        ("    net FB {", "    net DOWN { F2.B; RL.A; }\n    net DOWN2 { F3.B; RM.A; }\n    net FB {"),
+        ("    supply VOUT {", "    supply DOWN { net = DOWN; voltage = 12V; }\n    supply VOUT {"),
+        (
+            FILTER_PLACEMENT,
+            "    constraint fixed_placement(F2) { x = 40mm; y = 50mm; rotation = 0; }\n    \
+             constraint fixed_placement(F3) { x = 45mm; y = 50mm; rotation = 0; }\n    \
+             constraint fixed_placement(RL) { x = 40mm; y = 55mm; rotation = 0; }\n    \
+             constraint fixed_placement(RM) { x = 45mm; y = 55mm; rotation = 0; }\n    constraint fixed_placement(J1)",
+        ),
+    ];
+    let report = run_board("emi_buck_filter", "down-fuses", &edits, |_| {});
+    let finding = conducted(&report);
+    assert!(finding.tags.contains(&"input_filter_modelled".to_owned()), "{:?}", finding.tags);
+    same_levels(conducted(&reference), finding, 0.01);
+    let filter = coverage(&report, "EMI-CONDUCTED:U1:filter");
+    assert_eq!(filter.status, CoverageStatus::Executed);
+    assert!(
+        filter.detail.contains("downstream feeds") && filter.detail.contains("F2") && filter.detail.contains("F3"),
+        "{}",
+        filter.detail
+    );
+    assert!(!filter.detail.contains("through fuse"), "{}", filter.detail);
+}
+
+#[test]
+fn a_tvs_diode_and_an_enable_divider_on_the_hot_supply_net_do_not_disable_the_filter() {
+    let reference = run_board("emi_buck_filter", "tvs-ref", &[], |_| {});
+    let edits = [
+        (
+            "    component J1:",
+            "    component D2: p.Diode { footprint = \"SOD-123\"; }\n    \
+             component R3: p.Res { value = 523kohm; footprint = \"R_0402\"; }\n    \
+             component R4: p.Res { value = 100kohm; footprint = \"R_0402\"; }\n    component J1:",
+        ),
+        ("net VIN { U1.VIN; CIN.A; LF.B; }", "net VIN { U1.VIN; CIN.A; LF.B; D2.K; R3.A; }"),
+        ("R2.B; J1.B;", "R2.B; J1.B; D2.A; R4.B;"),
+        ("    net FB {", "    net EN { R3.B; R4.A; }\n    net FB {"),
+        (
+            FILTER_PLACEMENT,
+            "    constraint fixed_placement(D2) { x = 20mm; y = 33mm; rotation = 0; }\n    \
+             constraint fixed_placement(R3) { x = 40mm; y = 50mm; rotation = 0; }\n    \
+             constraint fixed_placement(R4) { x = 45mm; y = 50mm; rotation = 0; }\n    constraint fixed_placement(J1)",
+        ),
+    ];
+    let report = run_board("emi_buck_filter", "tvs-divider", &edits, |_| {});
+    let finding = conducted(&report);
+    assert!(finding.tags.contains(&"input_filter_modelled".to_owned()), "{:?}", finding.tags);
+    same_levels(conducted(&reference), finding, 0.01);
+    let filter = coverage(&report, "EMI-CONDUCTED:U1:filter");
+    assert_eq!(filter.status, CoverageStatus::Executed);
+    assert!(
+        filter.detail.contains("D2") && filter.detail.contains("R3") && filter.detail.contains("ignored"),
+        "{}",
+        filter.detail
+    );
+
+    // A low-value resistor from the hot supply net could carry current in parallel: the strictness stays.
+    let strict = run_board(
+        "emi_buck_filter",
+        "tvs-strict",
+        &[
+            (
+                "    component J1:",
+                "    component RX: p.Res { value = 100ohm; footprint = \"R_0402\"; }\n    component J1:",
+            ),
+            ("net VIN { U1.VIN; CIN.A; LF.B; }", "net VIN { U1.VIN; CIN.A; LF.B; RX.A; }"),
+            ("R2.B; J1.B;", "R2.B; J1.B; RX.B;"),
+            (
+                FILTER_PLACEMENT,
+                "    constraint fixed_placement(RX) { x = 40mm; y = 50mm; rotation = 0; }\n    constraint fixed_placement(J1)",
+            ),
+        ],
+        |_| {},
+    );
+    let filter = coverage(&strict, "EMI-CONDUCTED:U1:filter");
+    assert_eq!(filter.status, CoverageStatus::NotApplicable);
+    assert!(filter.detail.contains("RX"), "{}", filter.detail);
+}

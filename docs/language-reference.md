@@ -2092,7 +2092,8 @@ fabricator's calculator or a field solver and record it in
 ### EMI screening
 
 `copper emi-check BOARD [--locked] [--offline] [--layers N] [--fab-profile P]
-[--footprint-root R] [--allow-proxy-footprints] [--run RUN] [--json]`
+[--footprint-root R] [--allow-proxy-footprints] [--run RUN] [--plot-spectrum OUT.svg]
+[--plot-field OUT.svg [--field-height MM]] [--json]`
 physicalizes the board like `si-check` and screens every switching cell of the
 EMI model (`copper query BOARD emi`; see [the EMI specification](emi-noise-analysis.md))
 for `EMI-HOT-LOOP`, `EMI-SWITCH-NODE` and `EMI-PROXIMITY`, applies `emi_accept`
@@ -2136,6 +2137,19 @@ inductance of the traced bars. `--run RUN` analyses the routed board of a
 directory holding it) instead of the placed prototype; a run that holds only a
 `.kicad_pcb` cannot be loaded. Positions that no `fixed_placement` fixes are
 marked `provisional_placement`.
+
+`--plot-spectrum OUT.svg` writes the conducted spectrum of every cell with an
+`EMI-CONDUCTED` finding as an SVG (harmonic stems 150 kHz to 30 MHz in dBuV, the
+quasi-peak and average limit lines when a conducted `emission` standard is
+declared, the uncertainty of the worst harmonic and the assumption tags).
+`--plot-field OUT.svg [--field-height 1mm]` (and `copper view RUN --issue ID
+--emi-field` for an `EMI-HOT-LOOP` issue of a run) draws the quasi-static
+magnetic near field `|H|` of the hot-loop current path, in dB(uA/m) in a plane
+above the top copper, over the layout, with the level at the pads of `sensitive`
+nets and cable connectors. Both are screening estimates: the field uses the
+loop's `current_peak` (per ampere without one) with an ideal ground plane by
+images, and does not include the power inductor's own field (coverage
+`unsupported EMI-FIELD:inductor`). See [the EMI specification](emi-noise-analysis.md).
 
 ### Native copper connectivity and package escape
 

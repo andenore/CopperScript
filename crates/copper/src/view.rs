@@ -1,6 +1,7 @@
 //! `copper view TARGET (--issue ID | --net NET... | --pad REF.PAD | --component REF
 //! | --window X0,Y0,X1,Y1) [--highlight NET]... [--layers LAYERS] [--margin MM]
-//! [--cluster-mm MM] [--filled] [--reference PCB --align REF[:REF]] [-o OUTPUT] [--json]`.
+//! [--cluster-mm MM] [--filled] [--emi-field [--field-height MM]] [--reference PCB --align REF[:REF]]
+//! [-o OUTPUT] [--json]`.
 
 use std::io::Write;
 
@@ -39,6 +40,8 @@ struct Options {
     margin: f64,
     cluster_mm: f64,
     filled: bool,
+    emi_field: bool,
+    field_height_mm: f64,
     reference: Option<String>,
     align: Option<String>,
     output: Option<String>,
@@ -176,6 +179,66 @@ fn unique(values: Vec<Value>) -> Py<Vec<Value>> {
     Ok(kept)
 }
 
+/// `--emi-field`: the near-field map of the hot loop behind `issue`, in place of the layer panels.
+fn emi_field_view(
+    run: &mut Run,
+    scene: &Scene,
+    issue: &copper_report::issues::RunIssue,
+    options: &Options,
+) -> Py<(String, Vec<String>)> {
+    let fail = |message: String| PyErr::value_error(message);
+    if issue.stage != "emi" || !py::eq_str(&issue.code, "EMI-HOT-LOOP") {
+        return Err(fail(format!(
+            "--emi-field needs an EMI-HOT-LOOP issue; {} is {} (list them with `copper issues RUN --stage emi`)",
+            issue.id,
+            py::text(&issue.code)
+        )));
+    }
+    let report = run.report()?;
+    let section = report.get("emi").ok_or_else(|| fail("the report has no emi section".to_owned()))?;
+    let finding = copper_report::issues::emi_finding(report, &issue.id)
+        .ok_or_else(|| fail(format!("issue {} is not in the report's emi section", issue.id)))?;
+    let map = copper_report::emi_field::hot_loop_field(
+        finding,
+        section,
+        scene,
+        options.field_height_mm,
+        copper_report::emi_field::DEFAULT_STEP_MM,
+    )
+    .map_err(fail)?;
+    let svg = copper_report::emi_field::field_svg(
+        &issue.id,
+        &[copper_report::emi_field::field_picture(&map, &format!("{} of the run", paths::name(&scene.source)))],
+    );
+    let output = match &options.output {
+        Some(output) => output.clone(),
+        None => paths::join(&paths::join("build", "views"), &format!("{}_field.svg", safe_label(&issue.id))),
+    };
+    make_directories(&paths::parent(&output))?;
+    let output = with_svg_suffix(&output)?;
+    copper_json::text::write_text(std::path::Path::new(&output), &svg)
+        .map_err(|error| paths::os_error(&error, &output))?;
+    let mut lines = vec![
+        format!("issue {}: {}", issue.id, py::text(&issue.title)),
+        format!(
+            "emi near-field map of the hot loop of {}: |H| in dB(uA/m) {} mm above the top copper, maximum {:.1} dB(uA/m), {} cells of {:.2} mm; screening estimate, not a field prediction",
+            map.cell,
+            copper_report::scene::fixed(map.height_mm, 2),
+            map.max_db,
+            map.grid.nx * map.grid.ny,
+            map.grid.step * 1e3
+        ),
+        "quasi-static, hot-loop current only (peak switch current as amplitude, or per ampere when undeclared); the inductor's own field is NOT included (coverage unsupported EMI-FIELD:inductor); ideal ground plane by images".to_owned(),
+    ];
+    for victim in map.victims.iter().take(8) {
+        lines.push(format!(
+            "field at {} pad {}: {:.1} dB(uA/m), {:.1} mm from the loop",
+            victim.name, victim.pad, victim.level_db, victim.distance_mm
+        ));
+    }
+    Ok((output, lines))
+}
+
 fn view(options: &Options) -> Py<(String, Vec<String>)> {
     let target = &options.target;
     let as_run = (paths::is_dir(target) || paths::suffix(target) == ".json") && !is_state_file(target);
@@ -203,6 +266,9 @@ fn view(options: &Options) -> Py<(String, Vec<String>)> {
         };
         let issues = run_issues(run, options.cluster_mm)?;
         let issue = find_issue(&issues, issue_id)?;
+        if options.emi_field {
+            return emi_field_view(run, &scene, issue, options);
+        }
         if issue.stage == "native" && run.filled_board_path.is_some() && !options.filled {
             // Native findings describe the refilled board.
             scene = run.scene(true)?;
@@ -407,6 +473,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--margin"),
         value("--cluster-mm"),
         flag("--filled"),
+        flag("--emi-field"),
+        value("--field-height"),
         value("--reference"),
         value("--align"),
         short_value("--output", "-o"),
@@ -450,6 +518,27 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         (Ok(margin), Ok(cluster)) => (margin, cluster),
         (Err(message), _) | (_, Err(message)) => return usage_error(err, &message),
     };
+    let field_height_mm = match parsed.value("--field-height") {
+        None => copper_report::emi_field::DEFAULT_HEIGHT_MM,
+        Some(_) if !parsed.flag("--emi-field") => {
+            return usage_error(err, "argument --field-height: needs --emi-field");
+        }
+        Some(text) => match text
+            .trim()
+            .strip_suffix("mm")
+            .unwrap_or(text.trim())
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite() && *v > 0.0)
+        {
+            Some(height) => height,
+            None => return usage_error(err, &format!("argument --field-height: invalid length: '{text}' (e.g. 1mm)")),
+        },
+    };
+    if parsed.flag("--emi-field") && parsed.value("--issue").is_none() {
+        return usage_error(err, "argument --emi-field: needs --issue ID (an EMI-HOT-LOOP issue of a run)");
+    }
     let target = match parsed.positionals.as_slice() {
         [target] => pypath::display(target),
         [] => return usage_error(err, "the following arguments are required: target"),
@@ -468,6 +557,8 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         margin,
         cluster_mm,
         filled: parsed.flag("--filled"),
+        emi_field: parsed.flag("--emi-field"),
+        field_height_mm,
         reference: parsed.value("--reference").map(pypath::display),
         align: parsed.value("--align").map(str::to_owned),
         output: parsed.value("--output").map(pypath::display),
