@@ -1,0 +1,15 @@
+// A four-switch buck-boost regulator (TPS63020 style) with its switching behaviour annotated.
+// L1 and L2 are the two switch nodes, joined by the external inductor; VIN with PGND is the buck
+// leg's input loop, VOUT with PGND the boost leg's output loop.
+part BuckBoost {
+    category = "power.regulator.buck_boost";
+    topology = buck_boost;
+    switching_frequency = 2.4MHz;
+    output_capacitance = 150pF;
+    pin L1   { number = "1"; domains = "power"; directions = "output"; emi_role = switch; rise_time = 3ns; current_peak = 4A; }
+    pin L2   { number = "2"; domains = "power"; directions = "output"; emi_role = switch; rise_time = 3ns; current_peak = 4A; }
+    pin VIN  { number = "3"; domains = "power"; directions = "input"; emi_role = hot_supply; }
+    pin VOUT { number = "4"; domains = "power"; directions = "output"; }
+    pin PGND { number = "5"; domains = "ground"; directions = "input"; emi_role = hot_return; }
+    pin FB   { number = "6"; domains = "analog"; directions = "input"; emi_role = feedback; }
+}

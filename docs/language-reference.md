@@ -2092,9 +2092,9 @@ fabricator's calculator or a field solver and record it in
 ### EMI screening
 
 `copper emi-check BOARD [--locked] [--offline] [--layers N] [--fab-profile P]
-[--footprint-root R] [--allow-proxy-footprints] [--json]` physicalizes the
-board like `si-check` and screens every switching cell of the EMI model
-(`copper query BOARD emi`; see [the EMI specification](emi-noise-analysis.md))
+[--footprint-root R] [--allow-proxy-footprints] [--run RUN] [--json]`
+physicalizes the board like `si-check` and screens every switching cell of the
+EMI model (`copper query BOARD emi`; see [the EMI specification](emi-noise-analysis.md))
 for `EMI-HOT-LOOP`, `EMI-SWITCH-NODE` and `EMI-PROXIMITY`, applies `emi_accept`
 constraints (`EMI-ACCEPT-UNUSED` for a stale one) and lists what it could not
 measure as coverage. It prints one block per cell with ranked findings and the
@@ -2102,10 +2102,23 @@ measured numbers, or JSON (`copperscript-emi-check/v0.1`), and always exits 0
 when the board loads. Every result is screening evidence; absolute levels
 carry about 15 dB of uncertainty and margins against an `emission` standard
 are never a pass or a fail. Cells whose roles come from the structural
-fallback are marked `inferred`. Geometry is the polygon through pad centres of
-the placed components; positions that no `fixed_placement` fixes are marked
-`provisional_placement`. Routed copper is not traced and `--routed` is not
-implemented.
+fallback are marked `inferred`. A four-switch buck-boost cell
+(`topology = buck_boost`) gets an `input loop` and an `output loop` finding;
+the output pins are the controller's `VOUT*` pins. Among a cell's hot
+capacitors one that declares `decouples` of a hot-supply pin is preferred.
+
+The hot loop is the polygon through pad centres (`placement_estimate`) until
+copper is present on its nets. Where tracks, arcs, vias, polygons or the copper
+of hard macros join the loop's pads, each copper leg is replaced by the
+shortest copper path (`traced_copper` when every copper leg is traced,
+`partially_traced` with `unrouted_leg` otherwise; a path through a polygon or
+zone is a straight line, `plane_shortcut`), and the finding reports traced
+length, enclosed area, via count, layer changes, narrowest width and the
+inductance of the traced bars. `--run RUN` analyses the routed board of a
+`route-board --checkpoint-dir` run (`final-board.state.json`, a file or the
+directory holding it) instead of the placed prototype; a run that holds only a
+`.kicad_pcb` cannot be loaded. Positions that no `fixed_placement` fixes are
+marked `provisional_placement`.
 
 ### Native copper connectivity and package escape
 

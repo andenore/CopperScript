@@ -637,6 +637,10 @@ pub const COMMANDS: &[Command] = &[
                 flag: "--allow-proxy-footprints",
                 help: "use generated inspection-only proxy footprints instead of resolving real ones",
             },
+            Opt {
+                flag: "--run RUN",
+                help: "analyse the routed board of a route-board run: a final-board.state.json file, or a directory holding it (also in checkpoint/)",
+            },
             Opt { flag: "--json", help: "emit deterministic JSON (schema copperscript-emi-check/v0.1)" },
         ],
         actions: &[],

@@ -253,7 +253,7 @@ Status: implemented in `copper_drc::emi` (`emi_check(board, view, model)`) and
 is listed below.
 
 ```
-copper emi-check BOARD [--json] [build options as for si-check]
+copper emi-check BOARD [--json] [--run RUN] [build options as for si-check]
 ```
 
 The build options are those of `si-check` (`--locked`, `--offline`,
@@ -264,18 +264,33 @@ and measures the placed layout. Exit 0 unless the command itself fails
 JSON schema `copperscript-emi-check/v0.1`:
 `{ schema, board, evidence_grade, cells, findings, coverage, limits, summary }`.
 
-`--routed PCB` is **not implemented**: the physical board that `physicalize`
-returns has no routed copper, and the routed-board readers (`copper drc`, the
-route-run state) produce other models. The checks use any copper the
-`PhysicalBoard` carries (tracks, vias, polygons, zones, and the copper of hard
-macros moved to the pose their cluster anchor gives), but no copper path is
-traced; see the coverage entries below.
+```
+copper emi-check BOARD --run RUN [--json]
+```
+
+`--run RUN` replaces the placed prototype by a routed board: `RUN` is a
+`copperscript.state/v1` file holding a `pcbir.physical:PhysicalBoard`, or a
+directory holding `final-board.state.json` (or `checkpoint/final-board.state.json`),
+which `route-board --checkpoint-dir DIR` writes for its final board. The board
+is decoded with `copper_route::state_codec::physical_board`; the electrical view
+still comes from compiling `BOARD`, and the command stops with exit 2 when the
+routed board places a reference the design does not have. A run directory that
+holds only `board.kicad_pcb` (and `route-report.json`) is rejected with a
+message: `copper_cam::board::Board` and the report scene (`copper issues`,
+`copper view`) are drawing models, and no converter from them to a
+`PhysicalBoard` (footprint pads with numbers and nets, stack-up, zones) exists.
+Writing one is the way to analyse a board routed by other tools.
+
+The checks use the copper the `PhysicalBoard` carries (tracks, arcs, vias,
+polygons, zones, and the copper of hard macros moved to the pose their cluster
+anchor gives). `physicalize` itself produces none, so without `--run` only a
+hard macro contributes copper.
 
 A finding is the `copper_drc::Finding` shape (code, severity, message,
 objects, nets, layers, `required_nm`, `measured_nm`) plus
 `{ cell, provenance, tags, estimate: { quantity, value, unit, method, uncertainty_db, frequency_hz } | null, margin_db?, accepted?: { reason }, measures }`.
 `measures` holds the further numbers of the finding by name. `tags` carry
-`placement_estimate`, `pads_only`, `inferred` (the cell comes from the
+`placement_estimate`, `traced_copper`, `partially_traced`, `unrouted_leg`, `plane_shortcut`, `pads_only`, `inferred` (the cell comes from the
 structural fallback), `provisional_placement` (a position involved is the
 prototype placement, not fixed by a `fixed_placement` constraint or a fixed
 macro anchor) and `macro_relative_placement` (the loop lies in one rigid macro
@@ -283,7 +298,7 @@ cluster: its geometry is fixed, the cluster's position is not).
 
 | Code | Status | What is measured | Ranked by |
 | --- | --- | --- | --- |
-| `EMI-HOT-LOOP` | implemented, placement estimate | Per cell, the loop capacitor -> hot-supply pad -> switch pad -> catch diode (switch side -> rail side) or, without a diode, hot-return pad -> capacitor return, as the polygon through pad centres: enclosed area (shoelace), path length, partial-inductance estimate of the straight segments over the nearest inner ground plane (free space without one), differential-mode field, ringing, ring energy; vias on the loop nets counted | differential-mode field in dBuV/m, then loop area |
+| `EMI-HOT-LOOP` | implemented; placement estimate, traced where copper joins the pads | Per cell (per `input loop` and `output loop` for a four-switch buck-boost), the loop capacitor -> hot-supply pad -> switch pad -> catch diode (switch side -> rail side) or, without a diode, hot-return pad -> capacitor return. The legs between pads of one net follow the shortest copper path when copper exists, else the straight pad-to-pad segment. Enclosed area (shoelace), path length, partial inductance over the nearest inner ground plane (free space without one), differential-mode field, ringing, ring energy; traced length, vias, layer changes, narrowest width | differential-mode field in dBuV/m, then loop area |
 | `EMI-SWITCH-NODE` | implemented, pads only unless copper exists | Per switch net: copper area of the pads (and of tracks, polygons, zones and macro copper when present), island capacitance to the nearest ground plane, distance to the board edge and to each cable connector, voltage-driven common-mode field | voltage-driven common-mode field in dBuV/m, then copper area |
 | `EMI-PROXIMITY` | implemented | Inductor and switch-node pads against pads of `sensitive` nets and of cable connectors, closer than a threshold in units of the inductor size | threshold / distance |
 | `EMI-ACCEPT-UNUSED` | implemented | An `emi_accept` that matched no finding | listed last |
@@ -294,7 +309,7 @@ Every check that cannot run on the given input gets a coverage entry with
 status (`executed`, `not_applicable`, `unsupported`) and reason; nothing is
 reported as a pass for what was not measured. Standing entries:
 `EMI-RETURN-PATH` and `EMI-DECOUPLING-PATH` (unsupported),
-`EMI-COPPER-TRACE` (traced copper path, unsupported), `EMI-CABLE-COMMON-MODE`
+`EMI-COPPER-TRACE` (traced copper path: `executed` when at least one copper leg of a hot loop is traced, else `unsupported` with the reason), `EMI-CABLE-COMMON-MODE`
 (current-driven common mode on cables, unsupported), `EMI-MARGIN` (whether an
 `emission` constraint with a limit table gave margins). Per cell or net:
 `EMI-HOT-LOOP:<cell>` (and `:radiated`, `:ringing`, `:copper`),
@@ -309,20 +324,67 @@ with the missing input when skipped.
   contributes all of them; the loop takes the combination of one pad per role
   with the shortest closed path (dynamic programming), and among the cell's
   hot capacitors the one with the least inductance.
-- **Hot loop.** Topologies `buck` (and unknown) and `boost` are supported; the
-  others are coverage `not_applicable`. Buck with catch diode:
-  `C.supply, hot-supply pad, switch pad, D.switch side, D.rail side,
-  C.return`; without a diode (synchronous): `C.supply, hot-supply, hot-return,
-  C.return`, because the switch pad is not on the commutation path of a
-  monolithic converter. Boost with a diode: `C.supply, D.rail side, D.switch
-  side, switch pad, hot-return, C.return`. The closing segment crosses the
-  capacitor body; its ESL is not added. Segment width is the smaller pad
-  dimension clamped to 0.2 to 1 mm; thickness the outer copper thickness of the
-  stack-up (35 um when undeclared). Inductance is
-  `copper_emi::inductance::loop_inductance_over_plane` with the segments at the
-  centre-to-centre height above the nearest other layer that holds a
-  `copper_zone` of the cell's hot-return or a 0 V supply net, else
-  `loop_inductance`. Loops with pads on both board sides get no inductance.
+- **Hot loop.** Topologies `buck` (and unknown), `boost` and four-switch
+  `buck_boost` are supported; the others are coverage `not_applicable`. Buck
+  with catch diode: `C.supply, hot-supply pad, switch pad, D.switch side,
+  D.rail side, C.return`; without a diode (synchronous): `C.supply,
+  hot-supply, hot-return, C.return`, because the switch pad is not on the
+  commutation path of a monolithic converter. Boost with a diode: `C.supply,
+  D.rail side, D.switch side, switch pad, hot-return, C.return`. Buck-boost
+  (two switch nets joined by one inductor, e.g. TPS63020 `L1`/`L2`): the
+  `input loop` is `C.supply, hot-supply, hot-return, C.return` over the cell's
+  hot capacitors; the `output loop` is `C.supply, output pin, hot-return,
+  C.return` over the capacitors between the output net and the hot return net.
+  The output pins are the controller's pins whose name starts with `VOUT` (the
+  EMI model of `copper-lang` records the inductor's far net but not the
+  controller's output pins, so `copper-drc` derives them and the capacitors
+  from the flat view; a missing pin or capacitor is coverage
+  `EMI-HOT-LOOP:<cell>:output` `not_applicable`). The closing segment crosses
+  the capacitor body; its ESL is not added. **Capacitor choice:** among the
+  cell's hot capacitors, those declaring `decouples` of a hot-supply pin
+  (input loop) or of an output pin (output loop) are preferred and the least
+  inductance among them wins; only when none is declared, the least inductance
+  among the undeclared ones (`capacitor_selection` says which rule applied).
+  Pad-centre version: segment width is the smaller pad dimension clamped to 0.2
+  to 1 mm; thickness the outer copper thickness of the stack-up (35 um when
+  undeclared); inductance is `copper_emi::inductance::loop_inductance_over_plane`
+  with the segments at the centre-to-centre height above the nearest other
+  layer that holds a `copper_zone` of the cell's hot-return or a 0 V supply
+  net, else `loop_inductance`. Loops with pads on both board sides get no
+  inductance.
+- **Traced copper** (module `copper_drc::emi_trace`). For each pair of
+  consecutive loop pads on one net the shortest path through that net's
+  copper replaces the straight segment; legs between pads of different nets
+  (through the switch, diode or capacitor body) stay straight and are listed
+  as `component` legs. The graph (integer nm): nodes are `(layer, point)` at
+  track and arc end points, via positions on every layer of the span and pad
+  centres on every layer of the pad; a track is cut where another conductor's
+  end point, via centre or pad centre lies inside its copper (a point beyond
+  an end does not connect); an arc is one edge (a junction inside an arc is not
+  seen); a via joins consecutive layers of its span, weighted by the stack-up
+  distance; a pad centre joins every track end or via on its layer inside the
+  pad shape by a stub; a polygon or zone joins every node it contains on its
+  layer, pairwise, by a straight line (`plane_shortcut`; holes of the zone are
+  honoured, fill and other nets' cutouts are not known). A leg without a path
+  keeps the straight segment and is flagged `unrouted_leg`. The finding is
+  tagged `traced_copper` when every copper leg is traced, `partially_traced`
+  when some are, and stays `placement_estimate` when none is (copper that
+  joins nothing still lists the unrouted legs; a zone outline alone is not
+  routed copper). Reported: `traced_path_length_mm` (copper legs, via barrels
+  included), `loop_area_mm2` and `loop_polygon_mm` of the traced polyline of
+  all layers projected to the plane (pad polygon kept as `pad_polygon_mm`),
+  `trace_via_count`, `trace_layer_changes`, `trace_narrowest_width_mm`
+  (tracks and arcs only), per-leg `legs`. Inductance: every traced bar with
+  its real width and the layer's copper thickness at its layer's centre height
+  over the reference plane (bars on the plane layer or beyond it make the
+  whole loop fall back to free space at the true layer heights, stated in
+  `inductance_method`); via barrels are added in series with
+  `via_inductance(height, drill)` (no mutual terms with the bars; a barrel with
+  height under a quarter of its diameter is omitted and counted). Plane
+  shortcuts get a bar width of the straight length clamped to 1 to 5 mm. An
+  arc contributes its chord chain to the polygon and its arc length to the
+  path length. The pad chosen at each loop position is the one with the
+  shortest pad-centre cycle, not re-optimised for the traced path.
 - **Radiated estimate.** Frequency: the fixed value, else the upper bound of
   a declared range; edge: the faster of `rise_time`/`fall_time`; amplitude:
   `current_peak` (an upper bound for the pulsed current); duty: Vout/Vin when
@@ -387,11 +449,25 @@ source):
 Stated uncertainty of every absolute level: 10 to 20 dB (15 dB is used).
 Margins are reported with that figure and never as pass/fail.
 
-Not implemented from the original plan: `--routed`, the traced copper path
-(via counts and layer changes of the loop beyond a count of the vias on the
-loop nets), `EMI-RETURN-PATH`, `EMI-DECOUPLING-PATH`, current-driven common
-mode on cables, and the `copper issues` stage and `copper view --issue`
-highlighting (the finding's `loop_polygon_mm` gives the vertices).
+Not implemented from the original plan: the routed-board reader for a
+`.kicad_pcb` (see `--run` above), traced copper beyond the hot loop (switch
+node copper is counted, not traced), `EMI-RETURN-PATH`, `EMI-DECOUPLING-PATH`,
+current-driven common mode on cables, and the `copper issues` stage and
+`copper view --issue` highlighting.
+
+**Extension points for `copper issues` / `copper view`.** The findings'
+`measures.loop_polygon_mm` and `nets` map directly to a `RunIssue`
+(`crates/copper-report/src/issues.rs`: `RunIssue::new(id, "emi", code, title)`
+with `.nets()`, `.layers()`, `.objects()` and `.points()`, whose bounding box
+`RunIssue::window` frames). It was not wired in because the run report is the
+source of the issues: `run_issues` reads only `route-report.json`, whose
+digest the route summary records, so adding a stage means either storing the
+EMI document inside the report (changing the digest contract) or having
+`load_run` read a sidecar `emi-check.json` next to it; plus a new `emi` entry
+in the fixed `STAGES` array of `crates/copper/src/issues.rs` (and the stage
+list of its `USAGE` and help text, which tests compare) and in the stage
+filters of `view.rs`. A sidecar written by `emi-check --run` is the smaller
+change, about 60 lines and tests; it needs a decision on where the file lives.
 
 ## 9. Quasi-static extraction (phase 2)
 
@@ -435,9 +511,13 @@ Observed with `copper emi-check` (phase 1):
 - `examples/emi_buck`: annotated asynchronous buck with fixed placements and
   proxy footprints; the reference board of the tests
   (`crates/copper-drc/tests/emi_check.rs`).
+- `examples/emi_buck_boost`: a TPS63020-style four-switch buck-boost with
+  `L1`/`L2`, `VIN`, `VOUT` and `PGND`, giving an input loop and an output loop.
 - `examples/tps62130a_macro`: one inferred cell (the part declares no
   `emi_role`, frequency or edge data), so the radiated and ringing estimates
-  are skipped with a reason; loop and switch-node geometry are measured.
+  are skipped with a reason; loop and switch-node geometry are measured, and
+  the hot loop is `traced_copper` from the macro's copper (with a
+  `plane_shortcut` on the ground leg).
 - CopperOrgan: the pinned `TPS54360DDAR` declares no `category`, so the
   structural fallback (which needs `power.regulator.*`) finds no cell and the
   report is coverage only. Annotating the part or giving it the category is the

@@ -1,0 +1,6 @@
+part Conn {
+    category = "connector.header";
+    external_cable = true;
+    pin A { number = "1"; domains = "power"; directions = "passive"; }
+    pin B { number = "2"; domains = "ground"; directions = "passive"; }
+}

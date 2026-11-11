@@ -76,3 +76,81 @@ fn every_emi_check_code_has_an_explanation() {
         assert!(stdout(&output).contains(code), "{code}: {}", stdout(&output));
     }
 }
+
+/// The physical board of `examples/emi_buck` (proxy footprints) with tracks along the hot loop,
+/// saved the way `route-board --checkpoint-dir DIR` saves its final board.
+fn write_routed_run(name: &str) -> PathBuf {
+    use copper_pcb::board::TrackSegment;
+    use copper_physical::{CopperLayer, Point};
+    let design = copper_lang::compiler::compile_design_file(&workspace().join(BOARD), false, false).expect("compiles");
+    let options =
+        copper_pcb::configuration::physical_options(&design, (100.0, 80.0), None, "generic", false, false).unwrap();
+    let mut board = copper_pcb::physicalize::physicalize(
+        &design,
+        copper_pcb::physicalize::Footprints::Proxy,
+        &options,
+        false,
+        false,
+    )
+    .expect("physicalizes");
+    let mm = |x: f64, y: f64| Point { x_nm: (x * 1e6).round() as i64, y_nm: (y * 1e6).round() as i64 };
+    let mut track = |net: &str, a: (f64, f64), b: (f64, f64)| {
+        board.tracks.push(TrackSegment {
+            net: net.to_owned(),
+            start: mm(a.0, a.1),
+            end: mm(b.0, b.1),
+            width_nm: 400_000,
+            layer: CopperLayer::Front,
+        });
+    };
+    track("VIN", (25.5, 29.0), (25.5, 28.73));
+    track("VIN", (25.5, 28.73), (27.5, 28.73));
+    track("SW", (27.5, 31.27), (25.0, 31.27));
+    track("SW", (25.0, 31.27), (25.0, 34.0));
+    track("GND", (23.0, 34.0), (23.5, 34.0));
+    track("GND", (23.5, 34.0), (23.5, 29.0));
+    let directory = match std::env::var("EMI_RUN_DIR") {
+        Ok(fixed) if name == "manual" => PathBuf::from(fixed),
+        _ => std::env::temp_dir().join(format!("copper-emi-run-{name}-{}", std::process::id())),
+    };
+    let _ = std::fs::remove_dir_all(&directory);
+    std::fs::create_dir_all(directory.join("checkpoint")).unwrap();
+    let state = copper_state::StateDocument::new(
+        "pcbir.physical:PhysicalBoard",
+        copper_json::Object::new(),
+        copper_route::state_codec::encode_board(&board),
+    );
+    std::fs::write(directory.join("checkpoint").join("final-board.state.json"), state.to_text()).unwrap();
+    directory
+}
+
+#[test]
+fn run_analyses_the_routed_board_of_a_route_board_run() {
+    let directory = write_routed_run("routed");
+    let run = directory.to_str().unwrap();
+    let output = copper(&["emi-check", BOARD, "--run", run, "--json"]);
+    assert_eq!(output.status.code(), Some(0), "{}{}", stdout(&output), String::from_utf8_lossy(&output.stderr));
+    let Ok(Value::Object(report)) = copper_json::parse(&stdout(&output)) else { panic!("an object") };
+    let findings = report.get("findings").and_then(Value::as_array).unwrap();
+    let hot = findings
+        .iter()
+        .filter_map(Value::as_object)
+        .find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-HOT-LOOP"))
+        .expect("a hot-loop finding");
+    let tags: Vec<&str> = hot.get("tags").and_then(Value::as_array).unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(tags.contains(&"traced_copper"), "{tags:?}");
+    let _ = std::fs::remove_dir_all(&directory);
+    // A directory without a saved board is an error, not an empty report.
+    let missing = std::env::temp_dir().join(format!("copper-emi-run-missing-{}", std::process::id()));
+    std::fs::create_dir_all(&missing).unwrap();
+    let output = copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--run", missing.to_str().unwrap()]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stdout(&output).contains("no final-board.state.json"), "{}", stdout(&output));
+    let _ = std::fs::remove_dir_all(&missing);
+}
+
+#[test]
+#[ignore = "writes the routed run to $EMI_RUN_DIR for `copper emi-check --run` by hand"]
+fn write_the_example_run_for_manual_inspection() {
+    let _ = write_routed_run("manual");
+}

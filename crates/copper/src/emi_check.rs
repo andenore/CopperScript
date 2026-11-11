@@ -21,7 +21,7 @@ use crate::pypath;
 
 const USAGE: &str = "usage: copper emi-check [-h] [--locked] [--offline] [--layers {2,4,6}] \
 [--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}] [--footprint-root FOOTPRINT_ROOT] \
-[--allow-proxy-footprints] [--json] board";
+[--allow-proxy-footprints] [--run RUN] [--json] board";
 
 fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
     let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: emi-check ({what})");
@@ -40,6 +40,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--fab-profile"),
         value("--footprint-root"),
         flag("--allow-proxy-footprints"),
+        value("--run"),
         flag("--json"),
     ];
     let parsed = match option_parser::parse(arguments, &specs) {
@@ -85,7 +86,20 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return 2;
         }
     };
+    let routed = match parsed.value("--run") {
+        Some(run) => match routed_board(&pypath::display(run)) {
+            Ok(board) => Some(board),
+            Err(message) => {
+                let _ = text::print(out, &format!("EMI CHECK ERROR: {message}"));
+                return 2;
+            }
+        },
+        None => None,
+    };
     let physical = (|| {
+        if let Some(routed) = routed {
+            return Ok(routed);
+        }
         let options =
             copper_pcb::configuration::physical_options(&design, (100.0, 80.0), layers, profile, locked, offline)?;
         if parsed.flag("--allow-proxy-footprints") {
@@ -113,6 +127,15 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return 2;
         }
     };
+    if let Some(extra) = unknown_placements(&physical, &view) {
+        let _ = text::print(
+            out,
+            &format!(
+                "EMI CHECK ERROR: the routed board places components the design does not have ({extra});                  --run must hold the board of this design"
+            ),
+        );
+        return 2;
+    }
     let model = copper_lang::emi::analyze(&view);
     let report = emi_check(&physical, &view, &model);
     if parsed.flag("--json") {
@@ -124,4 +147,42 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     }
     // Screening findings never fail the command.
     0
+}
+
+/// The routed `PhysicalBoard` of a run: a `copperscript.state/v1` file holding one (as written by
+/// `route-board --checkpoint-dir DIR` to `DIR/final-board.state.json`), or a directory holding
+/// `final-board.state.json` itself or in `checkpoint/`.
+fn routed_board(run: &str) -> Result<copper_pcb::board::PhysicalBoard, String> {
+    let path = Path::new(run);
+    let file = if path.is_file() {
+        path.to_path_buf()
+    } else {
+        ["final-board.state.json", "checkpoint/final-board.state.json"]
+            .iter()
+            .map(|name| path.join(name))
+            .find(|candidate| candidate.is_file())
+            .ok_or_else(|| {
+                format!(
+                    "{run}: no final-board.state.json (route-board --checkpoint-dir writes one); a run that holds only                      board.kicad_pcb cannot be loaded because no converter from a KiCad board to the physical board exists"
+                )
+            })?
+    };
+    let text = std::fs::read_to_string(&file).map_err(|error| format!("{}: {error}", file.display()))?;
+    let document = copper_state::StateDocument::read(&text).map_err(|error| format!("{}: {error}", file.display()))?;
+    copper_route::state_codec::physical_board(&document.value)
+        .map_err(|error| format!("{}: not a PhysicalBoard state ({error})", file.display()))
+}
+
+/// Placement references of `board` that are no component of the design, joined; `None` when all match.
+fn unknown_placements(
+    board: &copper_pcb::board::PhysicalBoard,
+    view: &copper_lang::model::FlatElectricalView,
+) -> Option<String> {
+    let unknown: Vec<&str> = board
+        .placements
+        .iter()
+        .map(|placement| placement.reference.as_str())
+        .filter(|reference| !view.components.iter().any(|component| component.reference == *reference))
+        .collect();
+    (!unknown.is_empty()).then(|| unknown.join(", "))
 }

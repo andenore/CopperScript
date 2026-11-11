@@ -1,0 +1,5 @@
+part Cap {
+    category = "passive.capacitor";
+    pin A { number = "1"; domains = "power"; directions = "passive"; }
+    pin B { number = "2"; domains = "power"; directions = "passive"; }
+}

@@ -25,7 +25,7 @@ use std::f64::consts::PI;
 use copper_emi::estimate::{self, limits};
 use copper_emi::inductance::{self, Segment};
 use copper_json::{Dumps, Object, Value};
-use copper_lang::emi::{EmiModel, Provenance, SwitchingCell};
+use copper_lang::emi::{EmiModel, HotCapacitor, Provenance, SwitchingCell};
 use copper_lang::model::{
     ComponentInstance, ConstraintKind, Endpoint, FlatElectricalView, ParameterValue, Shielding, SwitchingFrequency,
     Topology,
@@ -36,6 +36,7 @@ use copper_pcb::transform::{placed_pad_shape, transformed_local_point};
 use copper_physical::{BoardSide, CopperLayer};
 use copper_units::Quantity;
 
+use crate::emi_trace::{StepKind, TraceArc, TraceCopper, TraceGraph, TracePad, TracePolygon, TraceTrack, TraceVia};
 use crate::signal_integrity::copper_layer_depths_nm;
 use crate::{Coverage, CoverageStatus, Finding, Severity};
 
@@ -353,6 +354,12 @@ pub struct PadGeom {
     pub component: String,
     pub number: String,
     pub shape: Shape,
+    /// The placed outline in integer nanometres.
+    pub raw: copper_physical::RoundedConvexShape,
+    /// Copper layers the pad exists on.
+    pub layers: Vec<CopperLayer>,
+    /// Hole diameter of a through-hole pad, nm.
+    pub drill_nm: Option<i64>,
 }
 
 /// How firmly the placement of some components is fixed.
@@ -386,6 +393,8 @@ struct Layout<'a> {
     fixed: BTreeSet<&'a str>,
     cluster_of: BTreeMap<&'a str, &'a str>,
     anchors: BTreeMap<&'a str, &'a str>,
+    /// The net of each `(component, pad number)`.
+    pad_nets: BTreeMap<(&'a str, &'a str), &'a str>,
 }
 
 impl<'a> Layout<'a> {
@@ -421,7 +430,18 @@ impl<'a> Layout<'a> {
             fixed,
             cluster_of,
             anchors,
+            pad_nets: board
+                .nets
+                .iter()
+                .flat_map(|net| {
+                    net.pads.iter().map(move |pad| ((pad.component.as_str(), pad.pad.as_str()), net.name.as_str()))
+                })
+                .collect(),
         }
+    }
+
+    fn net_of_pad(&self, component: &str, number: &str) -> Option<String> {
+        self.pad_nets.get(&(component, number)).map(|net| (*net).to_owned())
     }
 
     fn absolutely_fixed(&self, component: &str) -> bool {
@@ -453,10 +473,19 @@ impl<'a> Layout<'a> {
             .filter(|pad| pad.number == number)
             .map(|pad| {
                 let at = transformed_local_point(placement, pad.position);
+                let raw = placed_pad_shape(at, pad, placement);
+                let layers = if pad.kind == copper_physical::footprint::PadKind::Smd {
+                    vec![copper_layer(placement.side)]
+                } else {
+                    self.board.stackup.copper_layers.clone()
+                };
                 PadGeom {
                     component: component.to_owned(),
                     number: number.to_owned(),
-                    shape: Shape::from_nm(&placed_pad_shape(at, pad, placement)),
+                    shape: Shape::from_nm(&raw),
+                    raw,
+                    layers,
+                    drill_nm: pad.drill.map(|d| d.width_nm.min(d.height_nm)),
                 }
             })
             .collect()
@@ -597,6 +626,16 @@ impl<'a> Stack<'a> {
     /// Centre-to-centre distance of two copper layers, m.
     fn height(&self, a: CopperLayer, b: CopperLayer) -> Option<f64> {
         Some(nm_to_m((self.depths.get(&a)? - self.depths.get(&b)?).abs()))
+    }
+
+    /// Depth of the layer's centre below the top surface, nm.
+    fn depth(&self, layer: CopperLayer) -> Option<i64> {
+        self.depths.get(&layer).copied()
+    }
+
+    /// The copper layers in stack-up order with their depth in nm.
+    fn layer_list(&self) -> Vec<(CopperLayer, i64)> {
+        self.board.stackup.copper_layers.iter().map(|l| (*l, self.depths.get(l).copied().unwrap_or(0))).collect()
     }
 
     fn copper_thickness(&self, layer: CopperLayer) -> f64 {
@@ -809,6 +848,12 @@ struct Context<'a> {
     connectors: BTreeSet<String>,
     findings: Vec<EmiFinding>,
     coverage: Vec<Coverage>,
+    /// Loops analysed, loops with at least one traced leg, copper legs traced and unrouted, copper seen on a loop net.
+    trace_loops: usize,
+    trace_loops_traced: usize,
+    trace_legs_traced: usize,
+    trace_legs_unrouted: usize,
+    trace_copper_seen: bool,
 }
 
 impl Context<'_> {
@@ -862,29 +907,141 @@ fn dedup(items: &mut Vec<String>) {
 // EMI-HOT-LOOP
 // ---------------------------------------------------------------------------
 
+/// How much of the loop's copper legs the traced path covers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum TraceState {
+    /// No routed copper on the loop nets: the pad-centre polygon is the loop.
+    #[default]
+    NoCopper,
+    /// Copper exists on the loop nets but joins no pad pair of the loop.
+    NotConnected,
+    /// Some copper legs are traced, the others stay straight (`unrouted_leg`).
+    Partial,
+    /// Every copper leg is traced.
+    Full,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LegKind {
+    /// Both pads on one net and a copper path joins them.
+    Traced,
+    /// Both pads on one net, no copper path: kept as the straight pad-to-pad segment.
+    Unrouted,
+    /// The pads are on different nets: the current crosses a component (switch, diode, capacitor body).
+    Component,
+}
+
+impl LegKind {
+    fn value(self) -> &'static str {
+        match self {
+            LegKind::Traced => "traced",
+            LegKind::Unrouted => "unrouted",
+            LegKind::Component => "component",
+        }
+    }
+}
+
+/// One side of the loop polygon, between two consecutive pads of the sequence.
+#[derive(Clone, Debug)]
+struct Leg {
+    from: String,
+    to: String,
+    net: Option<String>,
+    kind: LegKind,
+    /// Centre-line length, m: along the copper (via barrels included) for a traced leg, else straight.
+    length: f64,
+    vias: usize,
+    layer_changes: usize,
+    narrowest: Option<f64>,
+    layers: Vec<String>,
+    plane_shortcut: bool,
+}
+
+/// A straight bar of the loop on a copper layer, metres.
+#[derive(Clone, Debug)]
+struct LoopSegment {
+    a: P2,
+    b: P2,
+    width: f64,
+    layer: CopperLayer,
+}
+
+#[derive(Clone, Debug, Default)]
 struct LoopCandidate {
     capacitor: String,
+    /// The capacitor declares `decouples` of a hot-supply pin.
+    declared: bool,
     labels: Vec<String>,
+    /// The loop polygon: the traced path where it exists, else the pad centres.
     points: Vec<P2>,
+    /// Nominal trace width at each pad, for the pad-centre version.
     widths: Vec<f64>,
+    /// The pad-centre polygon.
+    pad_points: Vec<P2>,
     area: f64,
     length: f64,
     inductance: Option<f64>,
     plane: Option<Plane>,
     inductance_note: String,
+    state: TraceState,
+    legs: Vec<Leg>,
+    /// The bars of the traced version (empty when nothing is traced).
+    segments: Vec<LoopSegment>,
+    /// Via barrels of the traced path: (height, diameter), metres.
+    vias: Vec<(f64, f64)>,
+}
+
+impl LoopCandidate {
+    fn traced_legs(&self) -> usize {
+        self.legs.iter().filter(|leg| leg.kind == LegKind::Traced).count()
+    }
+
+    fn unrouted_legs(&self) -> usize {
+        self.legs.iter().filter(|leg| leg.kind == LegKind::Unrouted).count()
+    }
+}
+
+/// Which loop of a cell is analysed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoopKind {
+    /// The topology's single hot loop (buck, boost).
+    Standard,
+    /// Four-switch buck-boost, buck leg: capacitor on the hot supply -> hot supply pad -> hot return pad.
+    Input,
+    /// Four-switch buck-boost, boost leg: capacitor on the output net -> output pin pad -> hot return pad.
+    Output,
+}
+
+struct LoopSpec {
+    kind: LoopKind,
+    /// `input loop` or `output loop` for a cell with two loops.
+    name: Option<&'static str>,
+    /// Coverage and check suffix of a cell with two loops.
+    key: Option<&'static str>,
+    capacitors: Vec<HotCapacitor>,
+    nets: Vec<String>,
+    output_pins: Vec<Endpoint>,
 }
 
 /// The ordered pad groups of the cell's hot loop for one capacitor, or the
 /// reason the topology is not supported.
 fn loop_groups<'a>(
     cell: &'a SwitchingCell,
-    capacitor: &'a copper_lang::emi::HotCapacitor,
+    capacitor: &'a HotCapacitor,
+    spec: &'a LoopSpec,
 ) -> Result<Vec<(String, Vec<&'a Endpoint>)>, String> {
     let supply = |role: &str, pins: &'a [Endpoint]| (role.to_owned(), pins.iter().collect::<Vec<_>>());
     let cap_supply = (format!("{} supply", capacitor.component), vec![&capacitor.supply_pin]);
     let cap_return = (format!("{} return", capacitor.component), vec![&capacitor.return_pin]);
     let hot_supply = supply("hot supply", &cell.hot_supply_pins);
     let hot_return = supply("hot return", &cell.hot_return_pins);
+    match spec.kind {
+        LoopKind::Input => return Ok(vec![cap_supply, hot_supply, hot_return, cap_return]),
+        LoopKind::Output => {
+            return Ok(vec![cap_supply, supply("output pin", &spec.output_pins), hot_return, cap_return]);
+        }
+        LoopKind::Standard => {}
+    }
     let switch = supply("switch", &cell.switch_pins);
     match (cell.topology, cell.catch_diode.as_ref()) {
         (Some(Topology::Buck) | None, Some(diode)) => Ok(vec![
@@ -909,6 +1066,7 @@ fn loop_groups<'a>(
     }
 }
 
+/// The bars of a pad-centre candidate (straight between the pads, at the plane height).
 fn segments_of(candidate: &LoopCandidate, thickness: f64) -> Vec<Segment> {
     let n = candidate.points.len();
     let z = candidate.plane.as_ref().map_or(0.0, |plane| plane.height);
@@ -925,13 +1083,213 @@ fn segments_of(candidate: &LoopCandidate, thickness: f64) -> Vec<Segment> {
         .collect()
 }
 
+fn to_m(point: copper_physical::Point) -> P2 {
+    [nm_to_m(point.x_nm), nm_to_m(point.y_nm)]
+}
+
+/// The routed copper of one net in the input form of the path graph.
+fn trace_copper(board: &PhysicalBoard, copper: &NetCopper, net: &str) -> TraceCopper {
+    let order = &board.stackup.copper_layers;
+    let span = |from: CopperLayer, to: CopperLayer| -> Vec<CopperLayer> {
+        match (order.iter().position(|l| *l == from), order.iter().position(|l| *l == to)) {
+            (Some(a), Some(b)) => order[a.min(b)..=a.max(b)].to_vec(),
+            _ => vec![from, to],
+        }
+    };
+    let mut input = TraceCopper::default();
+    for track in copper.tracks.iter().filter(|t| t.net == net) {
+        input.tracks.push(TraceTrack {
+            start: track.start,
+            end: track.end,
+            width_nm: track.width_nm,
+            layer: track.layer,
+        });
+    }
+    for arc in copper.arcs.iter().filter(|a| a.net == net) {
+        input.arcs.push(TraceArc {
+            start: arc.start,
+            end: arc.end,
+            chords: arc.chord_points(),
+            length_nm: arc.length_nm(),
+            width_nm: arc.width_nm,
+            layer: arc.layer,
+        });
+    }
+    for via in copper.vias.iter().filter(|v| v.net == net) {
+        input.vias.push(TraceVia {
+            position: via.position,
+            size_nm: via.size_nm,
+            drill_nm: via.drill_nm,
+            layers: span(via.from_layer, via.to_layer),
+        });
+    }
+    for polygon in copper.polygons.iter().filter(|p| p.net == net) {
+        input.polygons.push(TracePolygon {
+            layers: vec![polygon.layer],
+            outer: polygon.vertices.clone(),
+            holes: Vec::new(),
+        });
+    }
+    for zone in copper.zones.iter().filter(|z| z.net == net) {
+        input.polygons.push(TracePolygon {
+            layers: zone.layers.clone(),
+            outer: zone.outer.clone(),
+            holes: zone.holes.clone(),
+        });
+    }
+    input
+}
+
+/// The path graph of one net with the pads it was built over.
+struct NetGraph {
+    graph: TraceGraph,
+    pads: Vec<PadGeom>,
+}
+
+/// The traced loop: polygon, legs, bars and via barrels.
+struct TracedLoop {
+    points: Vec<P2>,
+    legs: Vec<Leg>,
+    segments: Vec<LoopSegment>,
+    vias: Vec<(f64, f64)>,
+}
+
+/// Barrel diameter assumed when a path crosses a through-hole pad without a hole size, m.
+const DEFAULT_BARREL: f64 = 0.3e-3;
+/// Bounds of the width given to the straight line of a plane shortcut, m.
+const SHORTCUT_WIDTH: (f64, f64) = (1.0e-3, 5.0e-3);
+/// Narrowest width given to a traced bar, m (a guard against zero-width input).
+const MIN_TRACED_WIDTH: f64 = 20e-6;
+
+/// Trace every leg of the loop through the copper of its net. `chosen` are
+/// the loop pads in sequence order.
+fn trace_loop(cx: &Context, copper: &NetCopper, chosen: &[&PadGeom], labels: &[String]) -> TracedLoop {
+    let layers = cx.stack.layer_list();
+    let mut graphs: BTreeMap<String, NetGraph> = BTreeMap::new();
+    let mut result = TracedLoop { points: Vec::new(), legs: Vec::new(), segments: Vec::new(), vias: Vec::new() };
+    let n = chosen.len();
+    for i in 0..n {
+        let (a, b) = (chosen[i], chosen[(i + 1) % n]);
+        let (net_a, net_b) =
+            (cx.layout.net_of_pad(&a.component, &a.number), cx.layout.net_of_pad(&b.component, &b.number));
+        let net = match (&net_a, &net_b) {
+            (Some(x), Some(y)) if x == y => Some(x.clone()),
+            _ => None,
+        };
+        let mut leg = Leg {
+            from: labels[i].clone(),
+            to: labels[(i + 1) % n].clone(),
+            net: net.clone(),
+            kind: LegKind::Component,
+            length: dist(a.shape.center(), b.shape.center()),
+            vias: 0,
+            layer_changes: 0,
+            narrowest: None,
+            layers: Vec::new(),
+            plane_shortcut: false,
+        };
+        let mut path = None;
+        if let Some(net) = &net {
+            let entry = graphs.entry(net.clone()).or_insert_with(|| {
+                let pads = cx.layout.pads_of_net(net);
+                let trace_pads: Vec<TracePad> =
+                    pads.iter().map(|p| TracePad::new(p.raw.clone(), p.layers.clone(), p.drill_nm)).collect();
+                let input = trace_copper(cx.layout.board, copper, net);
+                NetGraph { graph: TraceGraph::build(&trace_pads, &input, &layers), pads }
+            });
+            let find = |pad: &PadGeom| {
+                entry
+                    .pads
+                    .iter()
+                    .position(|p| p.component == pad.component && p.number == pad.number && p.raw == pad.raw)
+            };
+            path = match (find(a), find(b)) {
+                (Some(from), Some(to)) if from != to => entry.graph.shortest_path(from, to),
+                _ => None,
+            };
+            leg.kind = if path.is_some() { LegKind::Traced } else { LegKind::Unrouted };
+        }
+        let mut leg_points: Vec<P2> = vec![a.shape.center(), b.shape.center()];
+        match &path {
+            Some(path) => {
+                leg.length = path.length_nm() * 1e-9;
+                leg.vias = path.via_count();
+                leg.layer_changes = path.layer_changes();
+                leg.narrowest = path.narrowest_width_nm().map(nm_to_m);
+                leg.layers = path.layers().iter().map(|l| l.value().to_owned()).collect();
+                leg.plane_shortcut = path.plane_shortcut();
+                leg_points = path.points().into_iter().map(to_m).collect();
+                for step in &path.steps {
+                    match step.kind {
+                        StepKind::Via => {
+                            let diameter = step.drill_nm.map(nm_to_m).filter(|d| *d > 0.0).unwrap_or(DEFAULT_BARREL);
+                            result.vias.push((step.length_nm * 1e-9, diameter));
+                        }
+                        kind => {
+                            let step_length = step.length_nm * 1e-9;
+                            for pair in step.polyline.windows(2) {
+                                let width = match (kind, step.width_nm) {
+                                    (StepKind::PadStub, Some(w)) => nm_to_m(w).clamp(WIDTH_BOUNDS.0, WIDTH_BOUNDS.1),
+                                    (StepKind::PlaneShortcut, _) => {
+                                        step_length.clamp(SHORTCUT_WIDTH.0, SHORTCUT_WIDTH.1)
+                                    }
+                                    (_, Some(w)) => nm_to_m(w).max(MIN_TRACED_WIDTH),
+                                    (_, None) => WIDTH_BOUNDS.0,
+                                };
+                                result.segments.push(LoopSegment {
+                                    a: to_m(pair[0]),
+                                    b: to_m(pair[1]),
+                                    width,
+                                    layer: step.layer,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            None => {
+                let (pa, pb) = (a.shape.center(), b.shape.center());
+                let width =
+                    a.shape.small_dimension().min(b.shape.small_dimension()).clamp(WIDTH_BOUNDS.0, WIDTH_BOUNDS.1);
+                let layer = a.layers.first().copied().unwrap_or(CopperLayer::Front);
+                result.segments.push(LoopSegment { a: pa, b: pb, width, layer });
+            }
+        }
+        for point in leg_points {
+            if result.points.last().is_none_or(|last| dist(*last, point) > 1e-9) {
+                result.points.push(point);
+            }
+        }
+        result.legs.push(leg);
+    }
+    // The last leg closes on the first pad.
+    if result.points.len() > 1
+        && let (Some(first), Some(last)) = (result.points.first(), result.points.last())
+        && dist(*first, *last) <= 1e-9
+    {
+        result.points.pop();
+    }
+    result
+}
+
+/// Height of a copper layer over the reference plane, when the layer is on the
+/// same side of the plane as the loop's pads, m.
+fn height_over_plane(stack: &Stack, plane: &Plane, pad_layer: CopperLayer, layer: CopperLayer) -> Option<f64> {
+    let (depth, plane_depth, pad_depth) = (stack.depth(layer)?, stack.depth(plane.layer)?, stack.depth(pad_layer)?);
+    let side = |d: i64| (d - plane_depth).signum();
+    (layer != plane.layer && side(depth) == side(pad_depth) && side(depth) != 0)
+        .then(|| nm_to_m((depth - plane_depth).abs()))
+}
+
 fn build_candidate(
     cx: &Context,
     cell: &SwitchingCell,
-    capacitor: &copper_lang::emi::HotCapacitor,
+    spec: &LoopSpec,
+    capacitor: &HotCapacitor,
     grounds: &BTreeSet<String>,
+    copper: &NetCopper,
 ) -> Result<LoopCandidate, String> {
-    let sequence = loop_groups(cell, capacitor)?;
+    let sequence = loop_groups(cell, capacitor, spec)?;
     let mut labels = Vec::new();
     let mut pads: Vec<Vec<PadGeom>> = Vec::new();
     for (label, endpoints) in &sequence {
@@ -955,23 +1313,119 @@ fn build_candidate(
     let sides: BTreeSet<BoardSide> = chosen.iter().filter_map(|p| cx.layout.side(&p.component)).collect();
     let mut candidate = LoopCandidate {
         capacitor: capacitor.component.clone(),
-        labels,
-        points,
+        declared: capacitor.declared,
+        labels: labels.clone(),
+        points: points.clone(),
         widths,
+        pad_points: points,
         area,
         length,
-        inductance: None,
-        plane: None,
-        inductance_note: String::new(),
+        ..LoopCandidate::default()
     };
+
+    // Copper path of every leg whose two pads share a net.
+    let mut traced = None;
+    // A zone outline alone (no track, arc, via or polygon) is declared intent, not routed copper:
+    // such a loop stays a placement estimate and carries no unrouted-leg claim.
+    let routed =
+        !(copper.tracks.is_empty() && copper.arcs.is_empty() && copper.vias.is_empty() && copper.polygons.is_empty());
+    if routed {
+        let result = trace_loop(cx, copper, &chosen, &labels);
+        candidate.legs = result.legs.clone();
+        candidate.state = match (candidate.traced_legs(), candidate.unrouted_legs()) {
+            (0, _) => TraceState::NotConnected,
+            (_, 0) => TraceState::Full,
+            _ => TraceState::Partial,
+        };
+        if candidate.traced_legs() > 0 {
+            candidate.points = result.points.clone();
+            candidate.area = polygon_area(&candidate.points);
+            candidate.length = closed_length(&candidate.points);
+            candidate.segments = result.segments.clone();
+            candidate.vias = result.vias.clone();
+            traced = Some(result);
+        }
+    }
+
     if sides.len() != 1 {
         candidate.inductance_note =
             "loop pads are on both board sides; the planar inductance model does not apply".to_owned();
         return Ok(candidate);
     }
     let layer = copper_layer(*sides.iter().next().expect("one side"));
-    let thickness = cx.stack.copper_thickness(layer);
     candidate.plane = nearest_plane(cx.layout.board, &cx.stack, grounds, layer);
+
+    if traced.is_some() {
+        // Bars with their real widths, each at its layer's height over the plane; via barrels in series.
+        let mut bars = Vec::new();
+        let mut off_side = false;
+        for bar in &candidate.segments {
+            if dist(bar.a, bar.b) < 1e-9 {
+                continue;
+            }
+            let z = match &candidate.plane {
+                Some(plane) => match height_over_plane(&cx.stack, plane, layer, bar.layer) {
+                    Some(h) => h,
+                    None => {
+                        off_side = true;
+                        0.0
+                    }
+                },
+                None => cx.stack.depth(bar.layer).map_or(0.0, nm_to_m),
+            };
+            bars.push(Segment {
+                start: [bar.a[0], bar.a[1], z],
+                end: [bar.b[0], bar.b[1], z],
+                width: bar.width,
+                thickness: cx.stack.copper_thickness(bar.layer),
+            });
+        }
+        let use_plane = candidate.plane.is_some() && !off_side;
+        if off_side {
+            // Segments on the plane layer or beyond it cannot be imaged: fall back to free space at true heights.
+            for (bar, source) in bars.iter_mut().zip(candidate.segments.iter().filter(|b| dist(b.a, b.b) >= 1e-9)) {
+                let z = cx.stack.depth(source.layer).map_or(0.0, nm_to_m);
+                bar.start[2] = z;
+                bar.end[2] = z;
+            }
+        }
+        let planar = if use_plane {
+            inductance::loop_inductance_over_plane(&bars, 0.0)
+        } else {
+            inductance::loop_inductance(&bars)
+        };
+        let (mut via_total, mut skipped) = (0.0, 0usize);
+        for (height, diameter) in &candidate.vias {
+            if *diameter > 0.0 && *height > diameter / 4.0 {
+                via_total += inductance::via_inductance(*height, *diameter);
+            } else {
+                skipped += 1;
+            }
+        }
+        let reference = match (&candidate.plane, use_plane) {
+            (Some(plane), true) => format!(
+                "each bar at its layer's height over the {} ground plane ({:.3} mm from the pad layer)",
+                plane.layer.value(),
+                mm(plane.height)
+            ),
+            (Some(plane), false) => format!(
+                "free space at the true layer heights: the path uses the {} plane layer or the far side of it",
+                plane.layer.value()
+            ),
+            (None, _) => "free space at the true layer heights (no ground copper_zone on another layer)".to_owned(),
+        };
+        candidate.inductance_note = format!(
+            "partial inductance of the traced copper: {} bars with their real widths, {reference}; {} via barrel(s) added in series \
+             (Johnson-Graham estimate{})",
+            bars.len(),
+            candidate.vias.len() - skipped,
+            if skipped > 0 { format!(", {skipped} too short to model and omitted") } else { String::new() }
+        );
+        candidate.inductance = Some(planar + via_total).filter(|l| l.is_finite() && *l > 0.0);
+        return Ok(candidate);
+    }
+
+    let thickness = cx.stack.copper_thickness(layer);
     let segments = segments_of(&candidate, thickness);
     let value = match &candidate.plane {
         Some(plane) => {
@@ -993,53 +1447,225 @@ fn build_candidate(
     Ok(candidate)
 }
 
+/// The output stage of a four-switch buck-boost: the controller's `VOUT*`
+/// pins, their net and the capacitors from that net to the hot return.
+struct OutputStage {
+    pins: Vec<Endpoint>,
+    net: String,
+    capacitors: Vec<HotCapacitor>,
+}
+
+fn is_capacitor_part(view: &FlatElectricalView, component: &ComponentInstance) -> bool {
+    let Some(part) = view.library.get(&component.part) else { return false };
+    part.category.starts_with("passive.capacitor")
+        || (part.category == "component.generic"
+            && part.pins.len() == 2
+            && matches!(&component.value, Some(copper_lang::model::ComponentValue::Quantity(v)) if v.dimension() == copper_units::Dimension::Capacitance))
+}
+
+/// Derived from the flat view: the phase-0 model records the inductor's far
+/// net but not the controller's output pins.
+fn output_stage(view: &FlatElectricalView, cell: &SwitchingCell) -> Result<OutputStage, String> {
+    let Some(part) = view.library.get(&cell.part) else {
+        return Err(format!("part {} is not in the library", cell.part));
+    };
+    let nets_of: BTreeMap<Endpoint, Vec<&str>> = {
+        let mut map: BTreeMap<Endpoint, Vec<&str>> = BTreeMap::new();
+        for net in &view.nets {
+            for endpoint in &net.endpoints {
+                map.entry(endpoint.clone()).or_default().push(net.name.as_str());
+            }
+        }
+        map
+    };
+    let excluded: BTreeSet<&str> = cell
+        .hot_supply_net
+        .iter()
+        .chain(cell.hot_return_net.iter())
+        .chain(cell.switch_nets.iter())
+        .map(String::as_str)
+        .collect();
+    let named: Vec<Endpoint> = part
+        .pins
+        .keys()
+        .filter(|pin| pin.to_ascii_uppercase().starts_with("VOUT"))
+        .map(|pin| Endpoint::new(&cell.controller, pin))
+        .collect();
+    if named.is_empty() {
+        return Err(
+            "the controller has no pin whose name starts with VOUT: the output loop cannot be located".to_owned()
+        );
+    }
+    let net = named
+        .iter()
+        .find_map(|pin| nets_of.get(pin).and_then(|nets| nets.iter().find(|n| !excluded.contains(**n)).copied()))
+        .ok_or_else(|| "the VOUT pins are not connected to an output net".to_owned())?
+        .to_owned();
+    let pins: Vec<Endpoint> =
+        named.into_iter().filter(|pin| nets_of.get(pin).is_some_and(|nets| nets.iter().any(|n| **n == net))).collect();
+    let Some(ret) = cell.hot_return_net.clone() else {
+        return Err("the cell has no hot return net".to_owned());
+    };
+    let mut capacitors: Vec<HotCapacitor> = Vec::new();
+    let members = view.nets.iter().find(|n| n.name == net).map(|n| n.endpoints.as_slice()).unwrap_or_default();
+    for endpoint in members {
+        let Some(component) = view.components.iter().find(|c| c.reference == endpoint.component) else { continue };
+        if endpoint.component == cell.controller
+            || !is_capacitor_part(view, component)
+            || capacitors.iter().any(|c| c.component == endpoint.component)
+        {
+            continue;
+        }
+        let Some(capacitor_part) = view.library.get(&component.part) else { continue };
+        let Some(other) = capacitor_part.pins.keys().find(|pin| **pin != endpoint.pin) else { continue };
+        let other = Endpoint::new(&endpoint.component, other);
+        if !nets_of.get(&other).is_some_and(|nets| nets.iter().any(|n| **n == ret)) {
+            continue;
+        }
+        let declared = component
+            .properties
+            .get("decouples")
+            .and_then(|target| Endpoint::parse(target).ok())
+            .is_some_and(|target| pins.contains(&target));
+        capacitors.push(HotCapacitor {
+            component: endpoint.component.clone(),
+            supply_pin: endpoint.clone(),
+            return_pin: other,
+            declared,
+        });
+    }
+    capacitors.sort_by_key(|capacitor| !capacitor.declared);
+    Ok(OutputStage { pins, net, capacitors })
+}
+
 fn hot_loop(cx: &mut Context, cell: &SwitchingCell) {
     let check = format!("EMI-HOT-LOOP:{}", cell.controller);
     if cell.hot_supply_pins.is_empty() || cell.hot_return_pins.is_empty() {
         cx.cover(check, CoverageStatus::NotApplicable, "the cell has no hot supply or no hot return pin");
         return;
     }
-    if cell.hot_capacitors.is_empty() {
-        cx.cover(
-            check,
-            CoverageStatus::NotApplicable,
-            "no capacitor joins the hot supply and hot return nets (see EMI_HOT_LOOP_NO_CAPACITOR); the loop cannot be formed",
-        );
+    if cell.topology == Some(Topology::BuckBoost) {
+        // Four-switch buck-boost: the buck leg's input loop and the boost leg's output loop.
+        let mut nets: Vec<String> = cell.hot_supply_net.iter().chain(cell.hot_return_net.iter()).cloned().collect();
+        dedup(&mut nets);
+        let input = LoopSpec {
+            kind: LoopKind::Input,
+            name: Some("input loop"),
+            key: Some("input"),
+            capacitors: cell.hot_capacitors.clone(),
+            nets,
+            output_pins: Vec::new(),
+        };
+        analyze_loop(cx, cell, &input);
+        match output_stage(cx.layout.view, cell) {
+            Ok(stage) => {
+                let mut nets = vec![stage.net.clone()];
+                nets.extend(cell.hot_return_net.iter().cloned());
+                dedup(&mut nets);
+                let output = LoopSpec {
+                    kind: LoopKind::Output,
+                    name: Some("output loop"),
+                    key: Some("output"),
+                    capacitors: stage.capacitors,
+                    nets,
+                    output_pins: stage.pins,
+                };
+                analyze_loop(cx, cell, &output);
+            }
+            Err(reason) => {
+                cx.cover(format!("{check}:output"), CoverageStatus::NotApplicable, format!("output loop: {reason}"));
+            }
+        }
+        return;
+    }
+    let mut nets: Vec<String> = Vec::new();
+    nets.extend(cell.hot_supply_net.iter().cloned());
+    nets.extend(cell.hot_return_net.iter().cloned());
+    nets.extend(cell.switch_nets.iter().cloned());
+    dedup(&mut nets);
+    let standard = LoopSpec {
+        kind: LoopKind::Standard,
+        name: None,
+        key: None,
+        capacitors: cell.hot_capacitors.clone(),
+        nets,
+        output_pins: Vec::new(),
+    };
+    analyze_loop(cx, cell, &standard);
+}
+
+fn analyze_loop(cx: &mut Context, cell: &SwitchingCell, spec: &LoopSpec) {
+    let check = match spec.key {
+        Some(key) => format!("EMI-HOT-LOOP:{}:{key}", cell.controller),
+        None => format!("EMI-HOT-LOOP:{}", cell.controller),
+    };
+    let what = spec.name.map_or(String::new(), |name| format!("{name}: "));
+    if spec.capacitors.is_empty() {
+        let reason = match spec.kind {
+            LoopKind::Output => "no capacitor joins the output net and the hot return net; the loop cannot be formed",
+            _ => {
+                "no capacitor joins the hot supply and hot return nets (see EMI_HOT_LOOP_NO_CAPACITOR); the loop cannot be formed"
+            }
+        };
+        cx.cover(check, CoverageStatus::NotApplicable, format!("{what}{reason}"));
         return;
     }
     let grounds = ground_nets(cx.layout.view, cell);
-    let mut candidates = Vec::new();
-    let mut failures = Vec::new();
-    for capacitor in &cell.hot_capacitors {
-        match build_candidate(cx, cell, capacitor, &grounds) {
-            Ok(candidate) => candidates.push(candidate),
-            Err(reason) => failures.push(format!("{}: {reason}", capacitor.component)),
-        }
-    }
-    let key = |c: &LoopCandidate| c.inductance.unwrap_or(c.area * 1e3);
-    let Some(best) = candidates.iter().min_by(|a, b| key(a).total_cmp(&key(b))) else {
-        cx.cover(check, CoverageStatus::NotApplicable, format!("no loop could be built: {}", failures.join("; ")));
-        return;
-    };
-
-    let mut loop_nets: Vec<String> = Vec::new();
-    loop_nets.extend(cell.hot_supply_net.iter().cloned());
-    loop_nets.extend(cell.hot_return_net.iter().cloned());
-    loop_nets.extend(cell.switch_nets.iter().cloned());
-    dedup(&mut loop_nets);
-    let net_refs: Vec<&str> = loop_nets.iter().map(String::as_str).collect();
+    let net_refs: Vec<&str> = spec.nets.iter().map(String::as_str).collect();
     let copper = NetCopper::collect(&cx.layout, &net_refs);
     let routed =
         !(copper.tracks.is_empty() && copper.arcs.is_empty() && copper.vias.is_empty() && copper.polygons.is_empty());
 
+    let mut candidates = Vec::new();
+    let mut failures = Vec::new();
+    for capacitor in &spec.capacitors {
+        match build_candidate(cx, cell, spec, capacitor, &grounds, &copper) {
+            Ok(candidate) => candidates.push(candidate),
+            Err(reason) => failures.push(format!("{}: {reason}", capacitor.component)),
+        }
+    }
+    // A capacitor that declares `decouples` of a hot-supply pin is preferred; the least inductance
+    // among undeclared ones is the fallback when no declared capacitor can be placed.
+    let key = |c: &LoopCandidate| c.inductance.unwrap_or(c.area * 1e3);
+    let declared_available = candidates.iter().any(|c| c.declared);
+    let Some(best) =
+        candidates.iter().filter(|c| c.declared || !declared_available).min_by(|a, b| key(a).total_cmp(&key(b)))
+    else {
+        cx.cover(
+            check,
+            CoverageStatus::NotApplicable,
+            format!("{what}no loop could be built: {}", failures.join("; ")),
+        );
+        return;
+    };
+    let selection = if declared_available {
+        "declared: the capacitor declares decouples of a hot-supply pin; least inductance among the declared ones"
+    } else {
+        "fallback: no capacitor declares decouples of a hot-supply pin; least inductance among the undeclared ones"
+    };
+
+    let loop_nets = spec.nets.clone();
     let mut components: Vec<String> = vec![cell.controller.clone(), best.capacitor.clone()];
-    if let Some(diode) = &cell.catch_diode {
+    if let Some(diode) = &cell.catch_diode
+        && spec.kind == LoopKind::Standard
+    {
         components.push(diode.component.clone());
     }
     let refs: Vec<&str> = components.iter().map(String::as_str).collect();
     let state = cx.layout.placement_state(&refs);
     let provisional = state == PlacementState::Provisional;
-    let mut tags = vec!["placement_estimate".to_owned()];
+    let mut tags = Vec::new();
+    match best.state {
+        TraceState::Full => tags.push("traced_copper".to_owned()),
+        TraceState::Partial => tags.push("partially_traced".to_owned()),
+        TraceState::NoCopper | TraceState::NotConnected => tags.push("placement_estimate".to_owned()),
+    }
+    if best.unrouted_legs() > 0 {
+        tags.push("unrouted_leg".to_owned());
+    }
+    if best.legs.iter().any(|leg| leg.plane_shortcut) {
+        tags.push("plane_shortcut".to_owned());
+    }
     if state == PlacementState::ClusterRelative {
         tags.push("macro_relative_placement".to_owned());
     }
@@ -1049,8 +1675,9 @@ fn hot_loop(cx: &mut Context, cell: &SwitchingCell) {
 
     let loop_side = cx.layout.side(&cell.controller).map_or(CopperLayer::Front, copper_layer);
     let mut message = format!(
-        "{}: hot loop {} area {:.2} mm2, path {:.1} mm",
+        "{}: {} {} area {:.2} mm2, path {:.1} mm",
         cell.controller,
+        spec.name.unwrap_or("hot loop"),
         best.capacitor,
         best.area * 1e6,
         mm(best.length)
@@ -1059,7 +1686,30 @@ fn hot_loop(cx: &mut Context, cell: &SwitchingCell) {
         Some(l) => message.push_str(&format!(", about {:.1} nH", l * 1e9)),
         None => message.push_str(", inductance not computed"),
     }
-    message.push_str(" (pad-centre polygon, placement estimate");
+    let traced_vias: usize = best.legs.iter().map(|l| l.vias).sum();
+    match best.state {
+        TraceState::Full => message.push_str(&format!(
+            " (traced copper: {} leg(s), {} via(s), {} layer change(s){}",
+            best.traced_legs(),
+            traced_vias,
+            best.legs.iter().map(|l| l.layer_changes).sum::<usize>(),
+            best.legs
+                .iter()
+                .filter_map(|l| l.narrowest)
+                .reduce(f64::min)
+                .map_or(String::new(), |w| format!(", narrowest {:.2} mm", mm(w)))
+        )),
+        TraceState::Partial => message.push_str(&format!(
+            " (partially traced: {} of {} copper legs traced, {} unrouted and kept straight",
+            best.traced_legs(),
+            best.traced_legs() + best.unrouted_legs(),
+            best.unrouted_legs()
+        )),
+        TraceState::NotConnected => message.push_str(
+            " (pad-centre polygon, placement estimate; routed copper exists on the loop nets but joins no pad pair of the loop",
+        ),
+        TraceState::NoCopper => message.push_str(" (pad-centre polygon, placement estimate"),
+    }
     if provisional {
         message.push_str("; positions are provisional, not fixed by a placement constraint");
     }
@@ -1079,9 +1729,14 @@ fn hot_loop(cx: &mut Context, cell: &SwitchingCell) {
     finding.subjects.extend(endpoint_names(&cell.hot_supply_pins));
     finding.subjects.extend(endpoint_names(&cell.hot_return_pins));
     finding.subjects.extend(endpoint_names(&cell.switch_pins));
+    finding.subjects.extend(endpoint_names(&spec.output_pins));
     dedup(&mut finding.subjects);
 
+    if let Some(name) = spec.name {
+        put(&mut finding.measures, "loop", Value::from(name));
+    }
     put(&mut finding.measures, "loop_capacitor", Value::from(best.capacitor.as_str()));
+    put(&mut finding.measures, "capacitor_selection", Value::from(selection));
     put(&mut finding.measures, "loop_area_mm2", num(best.area * 1e6, 4));
     put(&mut finding.measures, "path_length_mm", num(mm(best.length), 4));
     put(
@@ -1103,6 +1758,7 @@ fn hot_loop(cx: &mut Context, cell: &SwitchingCell) {
                 .map(|c| {
                     let mut item = Object::new();
                     put(&mut item, "capacitor", Value::from(c.capacitor.as_str()));
+                    put(&mut item, "declared", Value::Bool(c.declared));
                     put(&mut item, "loop_area_mm2", num(c.area * 1e6, 4));
                     put(&mut item, "inductance_nh", c.inductance.map_or(Value::Null, |l| num(l * 1e9, 3)));
                     Value::Object(item)
@@ -1112,10 +1768,8 @@ fn hot_loop(cx: &mut Context, cell: &SwitchingCell) {
     );
     if let Some(l) = best.inductance {
         put(&mut finding.measures, "loop_inductance_nh", num(l * 1e9, 3));
-        put(&mut finding.measures, "inductance_method", Value::from(best.inductance_note.as_str()));
-    } else {
-        put(&mut finding.measures, "inductance_method", Value::from(best.inductance_note.as_str()));
     }
+    put(&mut finding.measures, "inductance_method", Value::from(best.inductance_note.as_str()));
     put(
         &mut finding.measures,
         "reference_plane",
@@ -1125,37 +1779,128 @@ fn hot_loop(cx: &mut Context, cell: &SwitchingCell) {
     put(&mut finding.measures, "vias_on_loop_nets", Value::from(via_count as i64));
     put(&mut finding.measures, "routed_copper_on_loop_nets", Value::Bool(routed));
     put(&mut finding.measures, "placement", Value::from(state.value()));
+    let trace_text = match best.state {
+        TraceState::NoCopper => "no_copper",
+        TraceState::NotConnected => "not_connected",
+        TraceState::Partial => "partially_traced",
+        TraceState::Full => "traced_copper",
+    };
+    put(&mut finding.measures, "trace_status", Value::from(trace_text));
+    if !best.legs.is_empty() {
+        let traced_length: f64 = best.legs.iter().filter(|l| l.kind == LegKind::Traced).map(|l| l.length).sum();
+        put(&mut finding.measures, "traced_path_length_mm", num(mm(traced_length), 4));
+        put(&mut finding.measures, "trace_via_count", Value::from(traced_vias as i64));
+        put(
+            &mut finding.measures,
+            "trace_layer_changes",
+            Value::from(best.legs.iter().map(|l| l.layer_changes).sum::<usize>() as i64),
+        );
+        put(
+            &mut finding.measures,
+            "trace_narrowest_width_mm",
+            best.legs.iter().filter_map(|l| l.narrowest).reduce(f64::min).map_or(Value::Null, |w| num(mm(w), 4)),
+        );
+        put(&mut finding.measures, "trace_unrouted_legs", Value::from(best.unrouted_legs() as i64));
+        put(
+            &mut finding.measures,
+            "pad_polygon_mm",
+            Value::Array(
+                best.pad_points.iter().map(|p| Value::Array(vec![num(mm(p[0]), 4), num(mm(p[1]), 4)])).collect(),
+            ),
+        );
+        put(
+            &mut finding.measures,
+            "legs",
+            Value::Array(
+                best.legs
+                    .iter()
+                    .map(|leg| {
+                        let mut item = Object::new();
+                        put(&mut item, "from", Value::from(leg.from.as_str()));
+                        put(&mut item, "to", Value::from(leg.to.as_str()));
+                        put(&mut item, "net", leg.net.as_ref().map_or(Value::Null, |n| Value::from(n.as_str())));
+                        put(&mut item, "kind", Value::from(leg.kind.value()));
+                        put(&mut item, "length_mm", num(mm(leg.length), 4));
+                        put(&mut item, "vias", Value::from(leg.vias as i64));
+                        put(&mut item, "layer_changes", Value::from(leg.layer_changes as i64));
+                        put(&mut item, "narrowest_width_mm", leg.narrowest.map_or(Value::Null, |w| num(mm(w), 4)));
+                        put(
+                            &mut item,
+                            "layers",
+                            Value::Array(leg.layers.iter().map(|l| Value::from(l.as_str())).collect()),
+                        );
+                        put(&mut item, "plane_shortcut", Value::Bool(leg.plane_shortcut));
+                        Value::Object(item)
+                    })
+                    .collect(),
+            ),
+        );
+    }
 
     let mut detail = format!(
-        "{} pads, {} candidate capacitor(s) of {} tried; loop polygon area and length from pad centres{}",
-        best.points.len(),
+        "{what}{} pads, {} candidate capacitor(s) of {} tried ({}); loop polygon area and length from {}{}",
+        best.pad_points.len(),
         candidates.len(),
-        cell.hot_capacitors.len(),
+        spec.capacitors.len(),
+        if declared_available { "declared capacitor preferred" } else { "no declared capacitor: least inductance" },
+        match best.state {
+            TraceState::Full | TraceState::Partial => "the traced copper path",
+            _ => "pad centres",
+        },
         if failures.is_empty() { String::new() } else { format!("; skipped {}", failures.join("; ")) }
     );
     if provisional {
         detail.push_str("; positions are the prototype placement, not a layout decision");
     }
-    cx.cover(check, CoverageStatus::Executed, detail);
+    cx.cover(check.clone(), CoverageStatus::Executed, detail);
     if routed {
-        cx.cover(
-            format!("EMI-HOT-LOOP:{}:copper", cell.controller),
-            CoverageStatus::Unsupported,
-            format!(
-                "routed or hard-macro copper exists on the loop nets ({} vias, {} tracks, {} polygons, {} zones) but its path is not traced; \
-                 the polygon through pad centres is still used",
-                via_count,
-                copper.tracks.len() + copper.arcs.len(),
-                copper.polygons.len(),
-                copper.zones.len()
-            ),
+        let counts = format!(
+            "{} vias, {} tracks, {} polygons, {} zones",
+            via_count,
+            copper.tracks.len() + copper.arcs.len(),
+            copper.polygons.len(),
+            copper.zones.len()
         );
+        let trace_check = format!("{check}:copper");
+        match best.state {
+            TraceState::Full | TraceState::Partial => cx.cover(
+                trace_check,
+                CoverageStatus::Executed,
+                format!(
+                    "{what}routed or hard-macro copper on the loop nets ({counts}); {} of {} copper leg(s) traced as the shortest copper path, \
+                     {} unrouted leg(s) keep the straight pad-to-pad segment; {} leg(s) cross a component and stay straight; \
+                     traced length {:.2} mm, {} via(s), {} layer change(s); a copper leg through a polygon or zone is a straight line (plane_shortcut)",
+                    best.traced_legs(),
+                    best.traced_legs() + best.unrouted_legs(),
+                    best.unrouted_legs(),
+                    best.legs.iter().filter(|l| l.kind == LegKind::Component).count(),
+                    mm(best.legs.iter().filter(|l| l.kind == LegKind::Traced).map(|l| l.length).sum::<f64>()),
+                    traced_vias,
+                    best.legs.iter().map(|l| l.layer_changes).sum::<usize>()
+                ),
+            ),
+            _ => cx.cover(
+                trace_check,
+                CoverageStatus::Unsupported,
+                format!(
+                    "{what}routed or hard-macro copper exists on the loop nets ({counts}) but no copper path joins a pad pair of the loop; \
+                     the polygon through pad centres is used"
+                ),
+            ),
+        }
+    }
+    cx.trace_loops += 1;
+    cx.trace_copper_seen |= routed;
+    cx.trace_legs_traced += best.traced_legs();
+    cx.trace_legs_unrouted += best.unrouted_legs();
+    if best.traced_legs() > 0 {
+        cx.trace_loops_traced += 1;
     }
 
     // Radiated differential-mode estimate, ringing, ring energy.
     let drive = drive_of(cx.layout.view, cell);
-    radiated_estimate(cx, cell, best, &drive, &mut finding);
-    ringing_estimate(cx, cell, best, &drive, &mut finding);
+    radiated_estimate(cx, cell, best, &check, &drive, &mut finding);
+    ringing_estimate(cx, cell, best, &check, &drive, &mut finding);
     finding.cell = Some(cell.controller.clone());
     cx.findings.push(finding);
 }
@@ -1164,10 +1909,12 @@ fn radiated_estimate(
     cx: &mut Context,
     cell: &SwitchingCell,
     best: &LoopCandidate,
+    base: &str,
     drive: &Result<Drive, String>,
     finding: &mut EmiFinding,
 ) {
-    let check = format!("EMI-HOT-LOOP:{}:radiated", cell.controller);
+    let _ = cell;
+    let check = format!("{base}:radiated");
     let drive = match drive {
         Ok(drive) => drive,
         Err(reason) => {
@@ -1249,10 +1996,11 @@ fn ringing_estimate(
     cx: &mut Context,
     cell: &SwitchingCell,
     best: &LoopCandidate,
+    base: &str,
     drive: &Result<Drive, String>,
     finding: &mut EmiFinding,
 ) {
-    let check = format!("EMI-HOT-LOOP:{}:ringing", cell.controller);
+    let check = format!("{base}:ringing");
     let view = cx.layout.view;
     let capacitance_of = |component: &str| {
         let instance = view.components.iter().find(|c| c.reference == component)?;
@@ -1883,6 +2631,11 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
         connectors,
         findings: Vec::new(),
         coverage: Vec::new(),
+        trace_loops: 0,
+        trace_loops_traced: 0,
+        trace_legs_traced: 0,
+        trace_legs_unrouted: 0,
+        trace_copper_seen: false,
     };
     let mut cells = Vec::new();
     if model.cells.is_empty() {
@@ -1929,11 +2682,24 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
         CoverageStatus::Unsupported,
         "needs routed copper: the copper path length from each decoupling capacitor pad to its target pin and return via is not traced",
     );
-    cx.cover(
-        "EMI-COPPER-TRACE".to_owned(),
-        CoverageStatus::Unsupported,
-        "traced copper path: via counts and layer changes of the hot loop are not measured; routed copper in the board is counted but the loop uses pad centres",
-    );
+    if cx.trace_legs_traced > 0 {
+        let detail = format!(
+            "{} of {} copper leg(s) traced as shortest copper paths in {} of {} hot loop(s) ({} unrouted leg(s) kept straight); traced length, enclosed area, via count, layer changes, narrowest width and inductance per loop are in the EMI-HOT-LOOP findings; only the hot loops are traced (not the switch node, return paths or decoupling links)",
+            cx.trace_legs_traced,
+            cx.trace_legs_traced + cx.trace_legs_unrouted,
+            cx.trace_loops_traced,
+            cx.trace_loops,
+            cx.trace_legs_unrouted
+        );
+        cx.cover("EMI-COPPER-TRACE".to_owned(), CoverageStatus::Executed, detail);
+    } else {
+        let reason = if cx.trace_copper_seen {
+            "routed copper exists on the loop nets but no copper path joins a pad pair of a hot loop; loops use the pad-centre polygon"
+        } else {
+            "no routed copper (tracks, arcs, vias or polygons, macro copper included; zone outlines alone are not routed copper) on the nets of any hot loop: loops use the pad-centre polygon"
+        };
+        cx.cover("EMI-COPPER-TRACE".to_owned(), CoverageStatus::Unsupported, reason);
+    }
     cx.cover(
         "EMI-CABLE-COMMON-MODE".to_owned(),
         CoverageStatus::Unsupported,
@@ -1956,7 +2722,7 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
     let mut notes = vec![
         "screening evidence: ranks likely noise sources, never establishes EMC qualification".to_owned(),
         format!("every absolute level carries about {UNCERTAINTY_DB} dB of uncertainty; margins are not pass or fail"),
-        "geometry is the pad-centre polygon of the placed components; routed copper is not traced".to_owned(),
+        "hot-loop geometry is the traced copper path where routed copper joins the loop pads (traced_copper, partially_traced) and the pad-centre polygon elsewhere (placement_estimate)".to_owned(),
         "differential-mode loop field is free space; the radiated sweep is the upper envelope of the trapezoid, peak against quasi-peak limits".to_owned(),
         "limit tables are transcribed from the published numbers and must be verified against the standards".to_owned(),
     ];
@@ -2247,14 +3013,11 @@ mod tests {
             let points = [[0.0, 0.0], [w, 0.0], [w, 3e-3], [0.0, 3e-3]];
             let candidate = LoopCandidate {
                 capacitor: "C".to_owned(),
-                labels: Vec::new(),
                 points: points.to_vec(),
                 widths: vec![0.5e-3; 4],
                 area: polygon_area(&points),
                 length: closed_length(&points),
-                inductance: None,
-                plane: None,
-                inductance_note: String::new(),
+                ..LoopCandidate::default()
             };
             inductance::loop_inductance(&segments_of(&candidate, 35e-6))
         };
