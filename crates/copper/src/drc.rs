@@ -23,7 +23,7 @@ fn read(path: &Path) -> Result<String, String> {
 /// a `copper panelize` report's `expected_open_ends`, or a route report's
 /// `plane_verification.expected_open_ends` (synthesized antennas' radiator
 /// ends, found by the route's native verification).
-fn expected_open_ends(path: &Path) -> Result<Vec<(f64, f64, String, String)>, String> {
+pub(crate) fn expected_open_ends(path: &Path) -> Result<Vec<(f64, f64, String, String)>, String> {
     let report = copper_json::parse(&read(path)?).map_err(|e| format!("{}: {e:?}", paths::display(path)))?;
     let copper_json::Value::Object(object) = report else {
         return Err(format!("{} is not a report", paths::display(path)));
@@ -121,19 +121,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let mut report = copper_cam::drc::check(&board, &rules)?;
         if let Some(path) = &open_ends_path {
             let ends = expected_open_ends(path)?;
-            let before = report.violations.len();
-            report.violations.retain(|v| {
-                !(v.kind == "track_dangling"
-                    && ends.iter().any(|(x, y, net, layer)| {
-                        (v.at.0 - x).hypot(v.at.1 - y) <= 1_000.0
-                            && v.items.iter().any(|i| {
-                                i.starts_with("track ")
-                                    && i.contains(&format!("[{net}]"))
-                                    && i.ends_with(&format!(" on {layer}"))
-                            })
-                    }))
-            });
-            waived = before - report.violations.len();
+            waived = report.excuse_open_ends(&ends);
         }
         if let Some(directory) = &cam {
             let (mut gerbers, mut drills) = (Vec::new(), Vec::new());

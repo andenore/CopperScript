@@ -237,3 +237,21 @@ fn the_json_report_states_its_coordinate_unit() {
     assert_eq!(json.get("coordinate_units"), Some(&copper_json::Value::from("mm")));
     assert!(json.get("violations").is_some() && json.get("unconnected_items").is_some());
 }
+
+#[test]
+fn expected_open_ends_excuse_only_the_named_track_end() {
+    let board = "(segment (start 8 5) (end 8 7) (width 0.2) (layer \"F.Cu\") (net \"SIG\"))";
+    let dangling = |report: &Report| report.violations.iter().filter(|v| v.kind == "track_dangling").count();
+    let end = |x: f64, y: f64, net: &str, layer: &str| vec![(x * 1e6, y * 1e6, net.to_owned(), layer.to_owned())];
+    let before = dangling(&checked(board));
+    assert!(before >= 1);
+    // Another net, another layer or another point excuses nothing.
+    for ends in [end(8.0, 5.0, "GND", "F.Cu"), end(8.0, 5.0, "SIG", "B.Cu"), end(8.0, 5.1, "SIG", "F.Cu")] {
+        let mut report = checked(board);
+        assert_eq!(report.excuse_open_ends(&ends), 0);
+        assert_eq!(dangling(&report), before);
+    }
+    let mut report = checked(board);
+    assert_eq!(report.excuse_open_ends(&end(8.0, 5.0, "SIG", "F.Cu")), 1);
+    assert_eq!(dangling(&report), before - 1);
+}

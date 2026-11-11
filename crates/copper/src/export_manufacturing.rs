@@ -1,6 +1,6 @@
 //! `copper export-manufacturing PCB --skip-independent-cam -o OUTPUT
 //! [--kicad-cli PATH] [--drc native|kicad] [--plotter native|kicad]
-//! [--bom BOM] [--replace]`: native-DRC-clean manufacturing files without
+//! [--expected-open-ends REPORT] [--bom BOM] [--replace]`: native-DRC-clean manufacturing files without
 //! independent CAM qualification, refilled, checked and plotted by
 //! CopperScript itself (the default) or by KiCad on request.
 
@@ -15,7 +15,7 @@ use crate::option_parser::{self, flag, short_value, value};
 use crate::pypath;
 
 const USAGE: &str = "usage: copper export-manufacturing [-h] [--kicad-cli KICAD_CLI] --skip-independent-cam \
-[--drc {native,kicad}] [--plotter {native,kicad}] [--bom BOM] [--replace] -o OUTPUT pcb";
+[--drc {native,kicad}] [--plotter {native,kicad}] [--expected-open-ends REPORT] [--bom BOM] [--replace] -o OUTPUT pcb";
 
 /// The plotter and the checker: CopperScript's own unless `kicad` is named.
 fn choices(plotter: Option<&str>, checker: Option<&str>) -> Result<(Plotter, Checker), String> {
@@ -45,6 +45,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         flag("--skip-independent-cam"),
         value("--plotter"),
         value("--drc"),
+        value("--expected-open-ends"),
         value("--bom"),
         flag("--replace"),
         short_value("--output", "-o"),
@@ -74,6 +75,20 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         Ok(choices) => choices,
         Err(message) => return usage_error(err, &message),
     };
+    // KiCad's DRC has no such excuse, so the option is refused rather than ignored.
+    let open_ends = match parsed.value("--expected-open-ends") {
+        Some(_) if checker == Checker::Kicad => {
+            return usage_error(err, "argument --expected-open-ends: not supported with --drc kicad");
+        }
+        Some(report) => match crate::drc::expected_open_ends(&PathBuf::from(pypath::display(report))) {
+            Ok(ends) => ends,
+            Err(message) => {
+                let _ = text::print(out, &format!("MANUFACTURING EXPORT ERROR: {message}"));
+                return 2;
+            }
+        },
+        None => Vec::new(),
+    };
     let kicad_cli = pypath::display(parsed.value("--kicad-cli").unwrap_or("kicad-cli"));
     let bom = parsed.value("--bom").map(|bom| {
         let shown = pypath::display(bom);
@@ -87,6 +102,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         replace_existing: parsed.flag("--replace"),
         plotter,
         checker,
+        expected_open_ends: &open_ends,
     };
     match export_manufacturing_files(&request) {
         Ok(published) => {
@@ -127,6 +143,20 @@ mod tests {
         assert_eq!(choices(Some("kicad"), Some("kicad")), Ok((Plotter::Kicad, Checker::Kicad)));
         assert_eq!(choices(Some("native"), Some("native")), Ok((Plotter::Native, Checker::Native)));
         assert!(choices(Some("gerbv"), None).is_err() && choices(None, Some("x")).is_err());
+    }
+
+    #[test]
+    fn expected_open_ends_are_refused_with_kicad_drc() {
+        let args: Vec<String> =
+            ["b.kicad_pcb", "--skip-independent-cam", "--drc", "kicad", "--expected-open-ends", "r.json", "-o", "out"]
+                .iter()
+                .map(|arg| arg.to_string())
+                .collect();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(run(&args, &mut out, &mut err), 2);
+        let err = String::from_utf8(err).unwrap();
+        assert!(err.contains("argument --expected-open-ends: not supported with --drc kicad"), "{err}");
+        assert!(out.is_empty());
     }
 
     #[test]

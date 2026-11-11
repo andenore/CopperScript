@@ -29,6 +29,14 @@ not run and need not be installed. Two options select KiCad instead:
   is checked against the board netlist. `--drc kicad` refills and checks with
   `kicad-cli pcb drc` instead.
 
+A board with synthesized antennas has track ends that are open by design; the
+route report lists them under `plane_verification.expected_open_ends`. Pass
+that report as `--expected-open-ends build/.../route-report.json` and the
+native DRC excuses a dangling track end at exactly those points, on that net
+and layer; every other finding still stops the export. The manifest records the
+count as `expected_open_ends_excused`. The option is refused with `--drc kicad`,
+whose DRC has no such excuse.
+
 `--kicad-cli PATH` only names the `kicad-cli` program (default: `kicad-cli` on
 PATH) that `--drc kicad` or `--plotter kicad` run; it does not switch anything
 by itself. The manifest records the choices: `drc`, `plotter`, `cam_readback`

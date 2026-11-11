@@ -172,9 +172,14 @@ pub const COMMANDS: &[Command] = &[
                 help: "required acknowledgement that the files are not independently CAM-qualified",
             },
             Opt {
-                flag: "--drc {kicad,native}",
-                help: "refill and check with kicad-cli, or with copper fill and copper drc plus a read-back of the \
-                       plotted files (default: kicad)",
+                flag: "--drc {native,kicad}",
+                help: "refill and check with copper fill and copper drc plus a read-back of the plotted files, or \
+                       with kicad-cli (default: native)",
+            },
+            Opt {
+                flag: "--expected-open-ends REPORT",
+                help: "excuse the dangling track ends a route report (synthesized antennas) or a copper panelize \
+                       report lists, at that exact point on that net and layer only; native DRC only",
             },
             Opt {
                 flag: "--plotter {native,kicad}",
