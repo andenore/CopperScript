@@ -1,6 +1,7 @@
 //! `copper emi-check BOARD [--locked] [--offline] [--layers {2,4,6}]
 //! [--fab-profile PROFILE] [--footprint-root DIR]... [--allow-proxy-footprints] [--run RUN [--write]]
-//! [--plot-spectrum OUT.svg] [--plot-field OUT.svg [--field-height MM]] [--json]`:
+//! [--plot-spectrum OUT.svg] [--plot-field OUT.svg [--field-height MM]]
+//! [--fullwave [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM]] [--json]`:
 //! screen the placed switching cells for noise sources (hot loop, switch node,
 //! proximity). Screening evidence only; findings never change the exit status.
 
@@ -22,7 +23,7 @@ use crate::pypath;
 
 const USAGE: &str = "usage: copper emi-check [-h] [--locked] [--offline] [--layers {2,4,6}] \
 [--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}] [--footprint-root FOOTPRINT_ROOT] \
-[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] [--json] board";
+[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--json] board";
 
 fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
     let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: emi-check ({what})");
@@ -46,6 +47,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--plot-spectrum"),
         value("--plot-field"),
         value("--field-height"),
+        flag("--fullwave"),
+        value("--fullwave-fidelity"),
+        value("--fullwave-budget"),
+        value("--fullwave-margin"),
         flag("--json"),
     ];
     let parsed = match option_parser::parse(arguments, &specs) {
@@ -56,7 +61,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(
             out,
             "{USAGE}\n\nscreen the placed switching cells for noise sources (hot-loop area and inductance, switch-node copper, \
-             inductor and switch-node proximity); screening evidence, not EMC qualification"
+             inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (one solver run, tens of seconds to minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer, \n             --fullwave-margin MM sets the window margin around the loop)"
         );
         crate::help::options(out, "emi-check");
         return 0;
@@ -89,6 +94,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             Some(height) => height,
             None => return usage_error(err, &format!("argument --field-height: invalid length: '{text}' (e.g. 1mm)")),
         },
+    };
+    let fullwave = match fullwave_options(&parsed) {
+        Ok(options) => options,
+        Err(message) => return usage_error(err, &message),
     };
     let (locked, offline) = (parsed.flag("--locked"), parsed.flag("--offline"));
     let design = match load_design(Path::new(&board), locked, offline) {
@@ -158,7 +167,10 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         return 2;
     }
     let model = copper_lang::emi::analyze(&view);
-    let report = emi_check(&physical, &view, &model);
+    let mut report = emi_check(&physical, &view, &model);
+    if let Some(options) = &fullwave {
+        crate::emi_fullwave::apply(&physical, &mut report, options, err);
+    }
     // `--write`: the run's report keeps one copy of the result (`emi` section) for `copper issues`.
     let written = match (parsed.flag("--write"), parsed.value("--run")) {
         (true, Some(run)) => match write_section(&pypath::display(run), report.to_value()) {
@@ -217,6 +229,45 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     }
     // Screening findings never fail the command.
     0
+}
+
+/// The `--fullwave*` options: `None` without `--fullwave`; a usage error when a sub-option is given without it.
+fn fullwave_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_fullwave::Options>, String> {
+    let (fidelity, budget, margin) =
+        (parsed.value("--fullwave-fidelity"), parsed.value("--fullwave-budget"), parsed.value("--fullwave-margin"));
+    if !parsed.flag("--fullwave") {
+        for (name, given) in
+            [("--fullwave-fidelity", fidelity), ("--fullwave-budget", budget), ("--fullwave-margin", margin)]
+        {
+            if given.is_some() {
+                return Err(format!("argument {name}: needs --fullwave"));
+            }
+        }
+        return Ok(None);
+    }
+    let fidelity = match fidelity.map(str::trim) {
+        None | Some("coarse") => copper_fullwave::Fidelity::Coarse,
+        Some("fine") => copper_fullwave::Fidelity::Fine,
+        Some(other) => {
+            return Err(format!("argument --fullwave-fidelity: invalid choice: '{other}' (choose from coarse, fine)"));
+        }
+    };
+    let positive = |name: &str, text: Option<&str>| -> Result<Option<f64>, String> {
+        match text.map(str::trim) {
+            None => Ok(None),
+            Some(text) => text
+                .parse::<f64>()
+                .ok()
+                .filter(|v| v.is_finite() && *v > 0.0)
+                .map(Some)
+                .ok_or_else(|| format!("argument {name}: invalid positive number: '{text}'")),
+        }
+    };
+    Ok(Some(crate::emi_fullwave::Options {
+        fidelity,
+        budget_seconds: positive("--fullwave-budget", budget)?,
+        margin_mm: positive("--fullwave-margin", margin)?,
+    }))
 }
 
 /// `1`, `1mm`, `0.5 mm` as millimetres; `None` unless positive.

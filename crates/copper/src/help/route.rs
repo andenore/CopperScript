@@ -657,6 +657,22 @@ pub const COMMANDS: &[Command] = &[
                 flag: "--field-height FIELD_HEIGHT",
                 help: "with --plot-field: height of the map plane above the top copper, e.g. 1mm (default: 1mm)",
             },
+            Opt {
+                flag: "--fullwave",
+                help: "add, per buck cell, the hot-loop inductance from a region full-wave (FDTD) model of the loop on the pinned ems solver (measures.fullwave, an EMI-FULLWAVE:<cell> coverage entry); slow (tens of seconds to minutes per cell), never part of the default run; screening evidence",
+            },
+            Opt {
+                flag: "--fullwave-fidelity {coarse,fine}",
+                help: "with --fullwave: mesh density (default: coarse; fine is about 16 times the work)",
+            },
+            Opt {
+                flag: "--fullwave-budget FULLWAVE_BUDGET",
+                help: "with --fullwave: refuse a model whose estimated run time exceeds this many seconds (default: 1800); the check runs before the solver starts",
+            },
+            Opt {
+                flag: "--fullwave-margin FULLWAVE_MARGIN",
+                help: "with --fullwave: window margin around the loop in millimetres (default: 5, at least ten dielectric heights)",
+            },
             Opt { flag: "--json", help: "emit deterministic JSON (schema copperscript-emi-check/v0.1)" },
         ],
         actions: &[],

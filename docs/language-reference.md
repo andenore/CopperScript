@@ -2104,7 +2104,8 @@ fabricator's calculator or a field solver and record it in
 
 `copper emi-check BOARD [--locked] [--offline] [--layers N] [--fab-profile P]
 [--footprint-root R] [--allow-proxy-footprints] [--run RUN] [--plot-spectrum OUT.svg]
-[--plot-field OUT.svg [--field-height MM]] [--json]`
+[--plot-field OUT.svg [--field-height MM]] [--fullwave [--fullwave-fidelity coarse|fine]
+[--fullwave-budget SECONDS] [--fullwave-margin MM]] [--json]`
 physicalizes the board like `si-check` and screens every switching cell of the
 EMI model (`copper query BOARD emi`; see [the EMI specification](emi-noise-analysis.md))
 for `EMI-HOT-LOOP`, `EMI-SWITCH-NODE` and `EMI-PROXIMITY`, applies `emi_accept`
@@ -2142,6 +2143,17 @@ as coverage. With a `cispr32_class_a` or `cispr32_class_b` `emission`
 constraint the worst harmonic carries a margin to the quasi-peak and average
 lines; uncertainty is 6 dB below 5 MHz and 10 dB above, and conducted
 levels (dBuV) are not comparable with the radiated ones (dBuV/m).
+
+`--fullwave` adds, for each `buck` cell (asynchronous or synchronous), the hot-loop
+inductance from a region full-wave (FDTD) model of the loop on the pinned `ems`
+solver (`copper-fullwave`): the finding gains a `fullwave:` line and
+`measures.fullwave` (`inductance_nh`, `closed_form_nh`, `ratio`, `band_mhz`,
+`flatness`, `cells`, `steps`, `seconds`, `flags`, `solver`, ...), and coverage
+`EMI-FULLWAVE:<cell>` says `executed`, `not_applicable` (other topologies) or
+`failed` with the reason (for example a model over `--fullwave-budget`, which is
+checked before the solver starts). It is never part of the default run and
+takes tens of seconds to minutes per cell; `--fullwave-fidelity fine` is about
+eight times the work. Screening evidence, see [the EMI specification](emi-noise-analysis.md#11-region-of-interest-full-wave-phase-4).
 
 The hot loop is the polygon through pad centres (`placement_estimate`) until
 copper is present on its nets. Where tracks, arcs, vias, polygons or the copper

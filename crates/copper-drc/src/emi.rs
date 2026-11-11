@@ -3429,6 +3429,10 @@ impl EmiCheckReport {
                         lines.push(format!("     input: {input}"));
                     }
                 }
+                // Added by `copper emi-check --fullwave` (the region full-wave model of the hot loop).
+                if let Some(text) = finding.measures.get("fullwave_text").and_then(Value::as_str) {
+                    lines.push(format!("     fullwave: {text}"));
+                }
             }
         }
         if !global.is_empty() {
