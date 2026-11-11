@@ -2107,6 +2107,23 @@ fallback are marked `inferred`. A four-switch buck-boost cell
 the output pins are the controller's `VOUT*` pins. Among a cell's hot
 capacitors one that declares `decouples` of a hot-supply pin is preferred.
 
+For each `buck` cell it also predicts the conducted emission at the input
+(`EMI-CONDUCTED`, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential
+mode only; common mode is not modelled) from the declared supply voltages of
+the hot-supply and output nets, the switching frequency, the switch pin's
+`rise_time`/`fall_time` and `current_peak` (used as the load current, so a
+worst case, tagged `worst_case_current`), the hot capacitor's value and its
+part's `esr`/`esl`/`self_resonance` (package defaults, tagged
+`default_capacitor_parasitics`, otherwise), the hot-loop inductance and a
+recognised series input filter (one inductor or ferrite between the hot-supply
+net and an upstream net with capacitors to the hot return). A missing edge time
+is assumed to be 10 ns and only harmonics below 3 MHz are reported
+(`assumed_edge_time`); other missing inputs skip the prediction with the reason
+as coverage. With a `cispr32_class_a` or `cispr32_class_b` `emission`
+constraint the worst harmonic carries a margin to the quasi-peak and average
+lines; uncertainty is 6 dB below 5 MHz and 10 dB above, and conducted
+levels (dBuV) are not comparable with the radiated ones (dBuV/m).
+
 The hot loop is the polygon through pad centres (`placement_estimate`) until
 copper is present on its nets. Where tracks, arcs, vias, polygons or the copper
 of hard macros join the loop's pads, each copper leg is replaced by the

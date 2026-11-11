@@ -72,3 +72,10 @@ older versions, as `copperscript-assembly-lock` does.
 | `copperscript.routing-playground/v1` | `copper-web-route` | `copper-web-route/src/lib.rs` |
 | `copperscript.run-issues/v1` | `copper-report` | `copper-report/src/issues.rs` |
 | `copperscript.state/v1` | `copper-state` | `copper-state/src/lib.rs` |
+
+The route report (`copperscript-route-board/v0.1`) may carry one optional
+top-level key, `emi`: a `copperscript-emi-check/v0.1` document, or
+`{ "evidence_grade", "error" }` when the check could not run. `route-board`
+writes it for designs with a switching cell and `copper emi-check BOARD --run RUN
+--write` adds it to an existing run (`copper/src/emi_section.rs`); `copper
+issues` reads it as stage `emi`. See [EMI noise analysis](emi-noise-analysis.md).

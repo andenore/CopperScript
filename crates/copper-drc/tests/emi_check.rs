@@ -58,7 +58,24 @@ fn run_board(
     edits: &[(&str, &str)],
     mutate: impl FnOnce(&mut PhysicalBoard),
 ) -> EmiCheckReport {
+    run_full(example_name, name, edits, &[], mutate)
+}
+
+/// [`run_board`] with `(file, from, to)` replacements in the copied `parts` directory as well.
+fn run_full(
+    example_name: &str,
+    name: &str,
+    edits: &[(&str, &str)],
+    part_edits: &[(&str, &str, &str)],
+    mutate: impl FnOnce(&mut PhysicalBoard),
+) -> EmiCheckReport {
     let dir = project_of(example_name, name, edits);
+    for (file, from, to) in part_edits {
+        let path = dir.join("parts").join(file);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(from), "{file} has no {from:?}");
+        fs::write(&path, text.replace(from, to)).unwrap();
+    }
     let design = compile_design_file(&dir.join("board.copper"), false, false).unwrap_or_else(|e| panic!("{e}"));
     let options = copper_pcb::configuration::physical_options(&design, (100.0, 80.0), None, "generic", false, false)
         .unwrap_or_else(|e| panic!("{e:?}"));
@@ -286,8 +303,17 @@ fn missing_edge_data_skips_the_radiated_estimate_with_a_reason() {
 #[test]
 fn findings_are_ranked_by_level_and_the_json_has_the_schema() {
     let report = run("ranking", &[]);
-    let levels: Vec<f64> = report.findings.iter().filter_map(|f| f.estimate.as_ref().map(|e| e.value)).collect();
-    assert!(levels.windows(2).all(|pair| pair[0] >= pair[1]), "{levels:?}");
+    // Radiated estimates (dBuV/m) are ranked by level; the conducted estimate (dBuV at a LISN) is a different
+    // quantity and follows them.
+    let radiated: Vec<f64> = report
+        .findings
+        .iter()
+        .filter_map(|f| f.estimate.as_ref().filter(|e| e.unit == "dBuV/m").map(|e| e.value))
+        .collect();
+    assert!(radiated.windows(2).all(|pair| pair[0] >= pair[1]), "{radiated:?}");
+    let units: Vec<&str> =
+        report.findings.iter().filter_map(|f| f.estimate.as_ref().map(|e| e.unit.as_str())).collect();
+    assert_eq!(units.iter().position(|u| *u == "dBuV"), Some(units.len() - 1), "{units:?}");
     let first_without = report.findings.iter().position(|f| f.estimate.is_none()).expect("proximity findings");
     assert!(report.findings[..first_without].iter().all(|f| f.estimate.is_some()));
     let json = report.json();
@@ -581,4 +607,528 @@ fn a_route_through_vias_counts_them_and_the_layer_changes() {
     assert!(legs[4].get("layers").and_then(Value::as_array).unwrap().len() >= 2);
     let method = text(hot, "inductance_method");
     assert!(method.contains("traced copper") && method.contains("via barrel"), "{method}");
+}
+
+// ---------------------------------------------------------------------------
+// EMI-CONDUCTED
+// ---------------------------------------------------------------------------
+
+/// A complex number for the hand calculations (kept apart from `copper_emi` on purpose).
+#[derive(Clone, Copy, Debug)]
+struct Z(f64, f64);
+
+impl std::ops::Add for Z {
+    type Output = Z;
+    fn add(self, o: Z) -> Z {
+        Z(self.0 + o.0, self.1 + o.1)
+    }
+}
+impl std::ops::Mul for Z {
+    type Output = Z;
+    fn mul(self, o: Z) -> Z {
+        Z(self.0 * o.0 - self.1 * o.1, self.0 * o.1 + self.1 * o.0)
+    }
+}
+impl std::ops::Div for Z {
+    type Output = Z;
+    fn div(self, o: Z) -> Z {
+        let d = o.0 * o.0 + o.1 * o.1;
+        Z((self.0 * o.0 + self.1 * o.1) / d, (self.1 * o.0 - self.0 * o.1) / d)
+    }
+}
+impl Z {
+    fn abs(self) -> f64 {
+        self.0.hypot(self.1)
+    }
+}
+
+fn par(a: Z, b: Z) -> Z {
+    a * b / (a + b)
+}
+
+/// `R + j w L + 1 / (j w C)`.
+fn rlc(w: f64, r: f64, l: f64, c: f64) -> Z {
+    Z(r, w * l - 1.0 / (w * c))
+}
+
+/// A real capacitor branch (C, ESR, ESL) of the hand calculation.
+#[derive(Clone, Copy)]
+struct HandCap {
+    c: f64,
+    esr: f64,
+    esl: f64,
+}
+
+struct HandFilter {
+    l: f64,
+    dcr: f64,
+    cp: f64,
+    cap: HandCap,
+}
+
+struct Hand {
+    ipk: f64,
+    duty: f64,
+    f0: f64,
+    /// Ramp time 0 to 100 %, s.
+    ramp: f64,
+    cap: HandCap,
+    loop_l: f64,
+    filter: Option<HandFilter>,
+}
+
+fn sinc(x: f64) -> f64 {
+    if x.abs() < 1e-12 { 1.0 } else { x.sin() / x }
+}
+
+/// Level of harmonic `n` in dBuV (RMS) at one port of the 50 uH V-network, derived on paper:
+///
+/// 1. Peak harmonic current of the 0..`ipk` trapezoid with duty `D` at the 50 % points and ramp `t_r`
+///    (both edges): `I_n = 2 ipk D sinc(n pi D) sinc(n pi f0 t_r)`.
+/// 2. The capacitor branch `Z_c = ESR + j w (ESL + L_loop) + 1 / (j w C)` shares `I_n` with the path through
+///    the two V-networks, which are in series for the differential current (through the ground node):
+///    `I_lisn = I_n Z_c / (Z_c + 2 Z_eut)`.
+/// 3. One V-network seen from the converter: `Z_a = j w 50 uH + 1 / (j w 1 uF)` (mains side) in parallel with
+///    `Z_b = 1 / (j w 0.1 uF) + (1 kohm || 50 ohm)` (measurement side), `Z_eut = Z_a || Z_b`; the port voltage is
+///    the terminal voltage divided by `Z_b` onto the 47.6 ohm port resistance: `Z_t = Z_eut 47.62 / Z_b`.
+/// 4. `V_port = I_lisn Z_t`, level `20 log10(|V| / sqrt 2 / 1 uV)`.
+///
+/// With a filter (series `L_f` with DCR and winding capacitance `C_p`, and a capacitor `Z_s` across the lines on
+/// the supply side) the converter current first divides between `Z_c` and `Z_f + (Z_s || 2 Z_eut)`, and the
+/// part reaching the node behind `L_f` divides again between `Z_s` and `2 Z_eut`.
+fn hand_dbuv(h: &Hand, n: u32) -> f64 {
+    let pi = std::f64::consts::PI;
+    let f = f64::from(n) * h.f0;
+    let w = 2.0 * pi * f;
+    let i_n = 2.0 * h.ipk * h.duty * sinc(f64::from(n) * pi * h.duty).abs() * sinc(pi * f * h.ramp).abs();
+    let z_a = rlc(w, 0.0, 50e-6, 1e-6);
+    let rp = 1000.0 * 50.0 / 1050.0;
+    let z_b = Z(rp, -1.0 / (w * 0.1e-6));
+    let z_eut = par(z_a, z_b);
+    let z_t = z_eut * Z(rp, 0.0) / z_b;
+    let z_c = rlc(w, h.cap.esr, h.cap.esl + h.loop_l, h.cap.c);
+    let i_lisn = match &h.filter {
+        None => Z(i_n, 0.0) * z_c / (z_c + z_eut + z_eut),
+        Some(flt) => {
+            let z_l = par(Z(flt.dcr, w * flt.l), Z(0.0, -1.0 / (w * flt.cp)));
+            let z_s = rlc(w, flt.cap.esr, flt.cap.esl, flt.cap.c);
+            let load = par(z_s, z_eut + z_eut);
+            let i_f = Z(i_n, 0.0) * z_c / (z_c + z_l + load);
+            let v_a = i_f * load;
+            v_a / (z_eut + z_eut)
+        }
+    };
+    let v = (i_lisn * z_t).abs();
+    20.0 * (v / std::f64::consts::SQRT_2 / 1e-6).log10()
+}
+
+fn conducted(report: &EmiCheckReport) -> &EmiFinding {
+    let found = find(report, "EMI-CONDUCTED");
+    assert_eq!(found.len(), 1, "{:?}", report.findings.iter().map(|f| &f.finding.code).collect::<Vec<_>>());
+    found[0]
+}
+
+fn number(value: &Value) -> f64 {
+    match value {
+        Value::Float(v) => *v,
+        Value::Int(v) => v.to_string().parse().unwrap(),
+        other => panic!("not a number: {other:?}"),
+    }
+}
+
+/// `(frequency_hz, total_dbuv)` of every harmonic row.
+fn harmonic_rows(finding: &EmiFinding) -> Vec<(f64, f64)> {
+    finding
+        .measures
+        .get("harmonics")
+        .and_then(Value::as_array)
+        .expect("harmonics")
+        .iter()
+        .map(|row| {
+            let Value::Object(row) = row else { panic!("row") };
+            (number(row.get("frequency_hz").unwrap()), number(row.get("total_dbuv").unwrap()))
+        })
+        .collect()
+}
+
+fn first_row(finding: &EmiFinding) -> &copper_json::Object {
+    match finding.measures.get("harmonics").and_then(Value::as_array).map(|a| &a[0]) {
+        Some(Value::Object(row)) => row,
+        other => panic!("row {other:?}"),
+    }
+}
+
+fn coverage<'a>(report: &'a EmiCheckReport, check: &str) -> &'a copper_drc::Coverage {
+    report.coverage.iter().find(|c| c.check == check).unwrap_or_else(|| panic!("no coverage {check}"))
+}
+
+/// The example's numbers: 12 V to 5 V (D = 5/12), 500 kHz, 5 ns edges (10-90 %, so a 6.25 ns ramp), 4.5 A,
+/// CIN 10 uF in an 0805 (defaults 5 mohm, 0.6 nH), and the hot-loop inductance the loop analysis measured.
+fn hand_for(report: &EmiCheckReport) -> Hand {
+    let hot = find(report, "EMI-HOT-LOOP").remove(0);
+    Hand {
+        ipk: 4.5,
+        duty: 5.0 / 12.0,
+        f0: 500e3,
+        ramp: 5e-9 / 0.8,
+        cap: HandCap { c: 10e-6, esr: 5e-3, esl: 0.6e-9 },
+        loop_l: measure(hot, "loop_inductance_nh") * 1e-9,
+        filter: None,
+    }
+}
+
+#[test]
+fn the_conducted_levels_match_the_hand_calculation() {
+    let report = run("conducted", &[]);
+    let finding = conducted(&report);
+    assert_eq!(finding.cell.as_deref(), Some("U1"));
+    let hand = hand_for(&report);
+    // Fundamental by hand (see `hand_dbuv`): I_1 = 2 * 4.5 * 0.41667 * sinc(75 deg) * sinc(pi * 0.5e6 * 6.25e-9)
+    // = 3.75 * 0.7379 * 0.99998 = 2.767 A. The branch Z_c = 5 mohm + j (w 5.57 nH - 1 / (w 10 uF)) =
+    // 5 mohm - j 14 mohm; one V-network is Z_eut = 45.3 + j10.8 ohm at 500 kHz, so 2 Z_eut = 90.5 + j21.6 ohm and
+    // I_lisn = I_1 Z_c / (Z_c + 2 Z_eut) is about 0.4 mA; Z_t = Z_eut 47.6 / Z_b is about 46 ohm, so the peak
+    // port voltage is about 19 mV, 13 mV RMS, about 82 dBuV. The code carries the full precision.
+    let rows = harmonic_rows(finding);
+    assert_eq!(rows.len(), 60, "500 kHz to 30 MHz");
+    assert_eq!(rows[0].0, 500e3, "the fundamental is the first row");
+    for n in [1u32, 2, 3, 6, 11, 30, 59] {
+        let expected = hand_dbuv(&hand, n);
+        let got = rows[n as usize - 1].1;
+        assert!((got - expected).abs() < 0.5, "harmonic {n}: model {got} dBuV, hand {expected} dBuV");
+    }
+    let fundamental = hand_dbuv(&hand, 1);
+    assert!((80.0..86.0).contains(&fundamental), "{fundamental}");
+    // The fundamental is reported on its own as well.
+    let Some(Value::Object(f1)) = finding.measures.get("fundamental") else { panic!("fundamental") };
+    assert_eq!(number(f1.get("frequency_hz").unwrap()), 500e3);
+    assert!((number(f1.get("total_dbuv").unwrap()) - fundamental).abs() < 0.5);
+    // Provenance and tags.
+    for tag in ["worst_case_current", "default_capacitor_parasitics", "placement_estimate", "differential_mode_only"] {
+        assert!(finding.tags.contains(&tag.to_owned()), "{tag} in {:?}", finding.tags);
+    }
+    assert!(!finding.tags.contains(&"assumed_edge_time".to_owned()));
+    let inputs = match finding.measures.get("inputs") {
+        Some(Value::Object(inputs)) => inputs,
+        other => panic!("inputs {other:?}"),
+    };
+    for key in [
+        "vin",
+        "vout",
+        "duty",
+        "switching_frequency",
+        "rise_time_10_90",
+        "load_current",
+        "hot_capacitor",
+        "hot_capacitor_esr",
+        "hot_capacitor_esl",
+        "hot_loop_inductance",
+        "input_filter",
+    ] {
+        assert!(inputs.contains_key(key), "input {key}");
+    }
+    let message = &finding.finding.message;
+    assert!(message.contains("switch current LIMIT"), "{message}");
+    assert!(message.contains("20 log10(I / 4.5 A)"), "{message}");
+    assert!(message.contains("no input filter recognised"));
+    assert!(message.contains("no DC-bias derating"));
+    assert_eq!(text(finding, "input_filter"), "no input filter recognised");
+    // Estimate, margin and uncertainty.
+    let estimate = finding.estimate.as_ref().expect("estimate");
+    assert_eq!(estimate.quantity, "conducted_emission");
+    assert_eq!(estimate.unit, "dBuV");
+    assert!(estimate.uncertainty_db == 6.0 || estimate.uncertainty_db == 10.0);
+    assert!(finding.margin_db.is_some(), "the emission constraint (cispr32_class_b) gives a margin");
+    assert!(message.contains("dB to the") && !message.to_lowercase().contains("pass"));
+    // Class B limits at 500 kHz: quasi-peak 56, average 46 dBuV; margin of the fundamental to the average line.
+    let row = first_row(finding);
+    assert_eq!(number(row.get("limit_qp").unwrap()), 56.0);
+    assert_eq!(number(row.get("limit_avg").unwrap()), 46.0);
+    assert!((number(row.get("margin_avg_db").unwrap()) - (46.0 - fundamental)).abs() < 0.5);
+    // The common-mode path is declared not applicable, with the reason, and the coverage lists the inputs.
+    assert_eq!(coverage(&report, "EMI-CONDUCTED:U1").status, CoverageStatus::Executed);
+    assert!(coverage(&report, "EMI-CONDUCTED:U1").detail.contains("Vin 12 V"));
+    let cm = coverage(&report, "EMI-CONDUCTED:U1:common_mode");
+    assert_eq!(cm.status, CoverageStatus::NotApplicable);
+    assert!(cm.detail.contains("ground plane"), "{}", cm.detail);
+    assert_eq!(coverage(&report, "EMI-CONDUCTED:U1:filter").status, CoverageStatus::NotApplicable);
+    assert!(report.lines().iter().any(|l| l.contains("conducted estimate(s) are dBuV at a LISN")));
+}
+
+#[test]
+fn an_input_filter_lowers_the_fundamental_by_the_hand_calculated_amount() {
+    let plain = run("no-filter", &[]);
+    let filtered = run_board("emi_buck_filter", "filter", &[], |_| {});
+    let (plain_finding, filtered_finding) = (conducted(&plain), conducted(&filtered));
+    assert!(filtered_finding.tags.contains(&"input_filter_modelled".to_owned()), "{:?}", filtered_finding.tags);
+    assert!(!plain_finding.tags.contains(&"input_filter_modelled".to_owned()));
+    let mut hand = hand_for(&filtered);
+    // LF 4.7 uH, DCR 50 mohm, self-resonance 40 MHz (C_p = 1 / ((2 pi 40 MHz)^2 4.7 uH) = 3.368 pF) and CUP
+    // 10 uF in an 0805 (5 mohm, 0.6 nH defaults) from VIN_IN to ground. At 500 kHz the LC corner is 23 kHz,
+    // so the second-order attenuation is about (500 / 23)^2 = 470, 53 dB, less the peaking of the divider.
+    let cp = 1.0 / ((2.0 * std::f64::consts::PI * 40e6).powi(2) * 4.7e-6);
+    hand.filter = Some(HandFilter { l: 4.7e-6, dcr: 0.05, cp, cap: HandCap { c: 10e-6, esr: 5e-3, esl: 0.6e-9 } });
+    let with_filter = harmonic_rows(filtered_finding)[0].1;
+    let without = harmonic_rows(plain_finding)[0].1;
+    let hand_with = hand_dbuv(&hand, 1);
+    assert!((with_filter - hand_with).abs() < 0.5, "model {with_filter}, hand {hand_with}");
+    let mut bare = hand_for(&plain);
+    bare.filter = None;
+    let expected_drop = hand_dbuv(&bare, 1) - hand_with;
+    let drop = without - with_filter;
+    assert!((drop - expected_drop).abs() < 1.0, "model drop {drop} dB, hand drop {expected_drop} dB");
+    assert!(drop > 45.0, "a 4.7 uH / 10 uF filter removes roughly 50 dB at 500 kHz, got {drop}");
+    // Higher harmonics too (the winding capacitance flattens the attenuation).
+    for n in [4u32, 10, 40] {
+        let got = harmonic_rows(filtered_finding)[n as usize - 1].1;
+        let want = hand_dbuv(&hand, n);
+        assert!((got - want).abs() < 0.5, "harmonic {n}: model {got}, hand {want}");
+    }
+    let filter = coverage(&filtered, "EMI-CONDUCTED:U1:filter");
+    assert_eq!(filter.status, CoverageStatus::Executed);
+    assert!(filter.detail.contains("LF") && filter.detail.contains("CUP"), "{}", filter.detail);
+    assert!(filtered_finding.finding.objects.contains(&"LF".to_owned()));
+}
+
+#[test]
+fn a_complicated_upstream_net_leaves_the_filter_out_with_a_note() {
+    let report = run_board(
+        "emi_buck_filter",
+        "complicated",
+        &[
+            (
+                "    component J1:",
+                "    component RX: p.Res { value = 1kohm; footprint = \"R_0402\"; }\n    component J1:",
+            ),
+            ("net VIN_IN { LF.A; CUP.A; }", "net VIN_IN { LF.A; CUP.A; RX.A; }"),
+            ("D1.A; COUT.B;", "D1.A; RX.B; COUT.B;"),
+        ],
+        |_| {},
+    );
+    let finding = conducted(&report);
+    assert!(!finding.tags.contains(&"input_filter_modelled".to_owned()));
+    let filter = coverage(&report, "EMI-CONDUCTED:U1:filter");
+    assert_eq!(filter.status, CoverageStatus::NotApplicable);
+    assert!(filter.detail.contains("no input filter modelled") && filter.detail.contains("RX"), "{}", filter.detail);
+}
+
+#[test]
+fn a_missing_edge_time_is_assumed_and_the_harmonics_are_restricted() {
+    let report = run_full("emi_buck", "no-edge", &[], &[("buck.copper", "rise_time = 5ns; ", "")], |_| {});
+    let finding = conducted(&report);
+    assert!(finding.tags.contains(&"assumed_edge_time".to_owned()), "{:?}", finding.tags);
+    assert!(finding.finding.message.contains("ASSUMED"), "{}", finding.finding.message);
+    let limit = 1.0 / (std::f64::consts::PI * 10.0 * 10e-9);
+    assert!((measure(finding, "assumed_edge_frequency_limit_hz") - limit).abs() < 1.0);
+    let rows = harmonic_rows(finding);
+    assert_eq!(rows.len(), 6, "500 kHz to 3 MHz: {rows:?}");
+    assert!(rows.iter().all(|(f, _)| *f < limit));
+    // The levels agree with the declared 5 ns edge to well under 1 dB in that range.
+    let declared = harmonic_rows(conducted(&run("declared-edge", &[])));
+    for (assumed, real) in rows.iter().zip(&declared) {
+        assert!((assumed.1 - real.1).abs() < 1.0, "{assumed:?} vs {real:?}");
+    }
+    let detail = &coverage(&report, "EMI-CONDUCTED:U1").detail;
+    assert!(detail.contains("ASSUMED") && detail.contains("below 3.183 MHz"), "{detail}");
+    assert_eq!(finding.measures.get("edge_time_assumed"), Some(&Value::Bool(true)));
+}
+
+#[test]
+fn the_low_harmonics_are_insensitive_to_the_edge_time() {
+    // The claim behind the 10 ns assumption: below 1 / (10 pi t) = 3.18 MHz the level changes by less than 1 dB
+    // between 5 ns and 20 ns edges (sinc(pi f t_r) with a 25 ns ramp at 3 MHz is 0.991, -0.08 dB).
+    let limit = 1.0 / (std::f64::consts::PI * 10.0 * 10e-9);
+    let fast = run("edge-5", &[]);
+    let slow = run_full("emi_buck", "edge-20", &[], &[("buck.copper", "rise_time = 5ns", "rise_time = 20ns")], |_| {});
+    let (fast, slow) = (harmonic_rows(conducted(&fast)), harmonic_rows(conducted(&slow)));
+    assert_eq!(fast.len(), slow.len());
+    let mut compared = 0;
+    for ((f, a), (_, b)) in fast.iter().zip(&slow) {
+        if *f < limit {
+            compared += 1;
+            assert!((a - b).abs() < 1.0, "{f} Hz: {a} vs {b} dBuV");
+        }
+    }
+    assert_eq!(compared, 6);
+    // Above that range the edge matters: this is why the harmonics are restricted when the edge is assumed.
+    let (top_fast, top_slow) = (fast.last().unwrap().1, slow.last().unwrap().1);
+    assert!(top_fast - top_slow > 3.0, "30 MHz: {top_fast} vs {top_slow}");
+}
+
+#[test]
+fn missing_inputs_skip_the_prediction_with_a_reason() {
+    type Case<'a> = (&'a str, Vec<(&'a str, &'a str)>, Vec<(&'a str, &'a str, &'a str)>, &'a str);
+    let cases: Vec<Case> = vec![
+        (
+            "no-frequency",
+            vec![],
+            vec![("buck.copper", "    switching_frequency = 500kHz;\n", "")],
+            "no switching frequency",
+        ),
+        (
+            "no-vin",
+            vec![("    supply VIN { net = VIN; voltage = 12V; external = true; }\n", "")],
+            vec![],
+            "declares no supply voltage (Vin)",
+        ),
+        (
+            "no-vout",
+            vec![("    supply VOUT { net = VOUT; voltage = 5V; external = true; }\n", "")],
+            vec![],
+            "declares no supply voltage (Vout)",
+        ),
+        ("no-current", vec![], vec![("buck.copper", " current_peak = 4.5A;", "")], "no current_peak"),
+    ];
+    for (name, edits, part_edits, reason) in cases {
+        let report = run_full("emi_buck", name, &edits, &part_edits, |_| {});
+        assert!(find(&report, "EMI-CONDUCTED").is_empty(), "{name}");
+        let entry = coverage(&report, "EMI-CONDUCTED:U1");
+        assert_eq!(entry.status, CoverageStatus::NotApplicable, "{name}");
+        assert!(entry.detail.contains(reason), "{name}: {}", entry.detail);
+    }
+}
+
+#[test]
+fn other_topologies_are_not_applicable() {
+    let report = buck_boost("conducted-buck-boost", &[]);
+    assert!(find(&report, "EMI-CONDUCTED").is_empty());
+    let entry = coverage(&report, "EMI-CONDUCTED:U1");
+    assert_eq!(entry.status, CoverageStatus::NotApplicable);
+    assert!(entry.detail.contains("buck-boost"), "{}", entry.detail);
+}
+
+#[test]
+fn declared_parasitics_and_self_resonance_replace_the_defaults() {
+    let category = "category = \"passive.capacitor\";";
+    let declared = run_full(
+        "emi_buck",
+        "declared-esl",
+        &[],
+        &[("capacitor.copper", category, &format!("{category} esr = 0.003ohm; esl = 0.7nH;"))],
+        |_| {},
+    );
+    let finding = conducted(&declared);
+    assert!(!finding.tags.contains(&"default_capacitor_parasitics".to_owned()), "{:?}", finding.tags);
+    assert!((measure(finding, "hot_capacitor_esr_mohm") - 3.0).abs() < 1e-6);
+    assert!((measure(finding, "hot_capacitor_esl_nh") - 0.7).abs() < 1e-6);
+    let mut hand = hand_for(&declared);
+    hand.cap = HandCap { c: 10e-6, esr: 3e-3, esl: 0.7e-9 };
+    assert!((harmonic_rows(finding)[0].1 - hand_dbuv(&hand, 1)).abs() < 0.5);
+    // ESL from the self-resonance: 1 / ((2 pi 2 MHz)^2 10 uF) = 0.6333 nH.
+    let srf = run_full(
+        "emi_buck",
+        "declared-srf",
+        &[],
+        &[("capacitor.copper", category, &format!("{category} esr = 0.003ohm; self_resonance = 2MHz;"))],
+        |_| {},
+    );
+    let derived = 1.0 / ((2.0 * std::f64::consts::PI * 2e6).powi(2) * 10e-6) * 1e9;
+    assert!((measure(conducted(&srf), "hot_capacitor_esl_nh") - derived).abs() < 1e-3);
+}
+
+#[test]
+fn an_unrecognised_package_without_declared_parasitics_skips_the_prediction() {
+    let report = run(
+        "odd-package",
+        &[(
+            "component CIN: p.Cap { value = 10uF; footprint = \"C_0805\";",
+            "component CIN: p.Cap { value = 10uF; footprint = \"C_1812\";",
+        )],
+    );
+    assert!(find(&report, "EMI-CONDUCTED").is_empty());
+    let entry = coverage(&report, "EMI-CONDUCTED:U1");
+    assert_eq!(entry.status, CoverageStatus::NotApplicable);
+    assert!(entry.detail.contains("not a recognised SMD package"), "{}", entry.detail);
+}
+
+#[test]
+fn parallel_hot_capacitors_are_listed_as_not_modelled() {
+    let report = run(
+        "parallel",
+        &[
+            (
+                "    component CBOOT:",
+                "    component CIN2: p.Cap { value = 10uF; footprint = \"C_0805\"; }\n    component CBOOT:",
+            ),
+            ("net VIN { U1.VIN; CIN.A; }", "net VIN { U1.VIN; CIN.A; CIN2.A; }"),
+            ("D1.A; COUT.B;", "D1.A; CIN2.B; COUT.B;"),
+            (
+                "    constraint fixed_placement(J1)",
+                "    constraint fixed_placement(CIN2) { x = 20.5mm; y = 29mm; rotation = 180; }\n    constraint fixed_placement(J1)",
+            ),
+        ],
+    );
+    let finding = conducted(&report);
+    assert!(finding.tags.contains(&"parallel_capacitors_not_modelled".to_owned()), "{:?}", finding.tags);
+    let ignored = finding.measures.get("ignored_parallel_capacitors").and_then(Value::as_array).unwrap();
+    assert_eq!(ignored.iter().filter_map(Value::as_str).collect::<Vec<_>>(), ["CIN2"]);
+    assert_eq!(text(finding, "hot_capacitor"), "CIN");
+}
+
+#[test]
+fn a_frequency_range_is_evaluated_at_its_upper_bound() {
+    let report = run_full(
+        "emi_buck",
+        "range",
+        &[],
+        &[(
+            "buck.copper",
+            "switching_frequency = 500kHz;",
+            "switching_frequency_min = 400kHz; switching_frequency_max = 600kHz;",
+        )],
+        |_| {},
+    );
+    let finding = conducted(&report);
+    assert!(finding.tags.contains(&"frequency_range_bound".to_owned()));
+    assert_eq!(harmonic_rows(finding)[0].0, 600e3);
+    assert_eq!(text(finding, "frequency_basis"), "range upper bound");
+    assert!(finding.finding.message.contains("range upper bound of the range"), "{}", finding.finding.message);
+}
+
+#[test]
+fn without_an_emission_constraint_the_conducted_levels_carry_no_margin() {
+    let report =
+        run("conducted-no-limit", &[("    constraint emission(J1) { standard = \"cispr32_class_b\"; }\n", "")]);
+    let finding = conducted(&report);
+    assert!(finding.margin_db.is_none());
+    assert_eq!(finding.measures.get("margins_available"), Some(&Value::Bool(false)));
+    assert!(finding.finding.message.contains("levels only"), "{}", finding.finding.message);
+    // Without limits the worst harmonic is the highest level.
+    let rows = harmonic_rows(finding);
+    let highest = rows.iter().map(|r| r.1).fold(f64::MIN, f64::max);
+    assert_eq!(finding.estimate.as_ref().unwrap().value, (highest * 100.0).round() / 100.0);
+    let row = first_row(finding);
+    assert_eq!(row.get("limit_qp"), Some(&Value::Null));
+    assert_eq!(row.get("margin_db"), Some(&Value::Null));
+}
+
+#[test]
+fn the_json_carries_the_harmonics_and_the_assumptions() {
+    let report = run("conducted-json", &[]);
+    let json = report.json();
+    for key in ["\"harmonics\"", "\"assumptions\"", "\"limit_qp\"", "\"cm_dbuv\": null", "\"conducted\": 1"] {
+        assert!(json.contains(key), "{key}");
+    }
+    let finding = conducted(&report);
+    let assumptions = finding.measures.get("assumptions").and_then(Value::as_array).unwrap();
+    assert!(assumptions.len() >= 10);
+    let all: Vec<&str> = assumptions.iter().filter_map(Value::as_str).collect();
+    assert!(all.iter().any(|a| a.contains("current limit")));
+    assert!(all.iter().any(|a| a.contains("common mode is not modelled")));
+    assert!(all.iter().any(|a| a.contains("DC-bias")));
+}
+
+#[test]
+fn emi_accept_acknowledges_a_conducted_finding() {
+    let report = run(
+        "conducted-accept",
+        &[(
+            "    constraint fixed_placement(J1) { x = 70mm; y = 30mm; rotation = 0; }\n}",
+            "    constraint fixed_placement(J1) { x = 70mm; y = 30mm; rotation = 0; }\n    \
+             constraint emi_accept(U1) { code = \"EMI-CONDUCTED\"; reason = \"input filter planned\"; }\n}",
+        )],
+    );
+    let finding = conducted(&report);
+    assert_eq!(finding.accepted.as_deref(), Some("input filter planned"));
+    assert_eq!(finding.finding.severity, Severity::Info);
+    assert!(find(&report, "EMI-ACCEPT-UNUSED").is_empty());
 }

@@ -40,6 +40,8 @@ use crate::emi_trace::{StepKind, TraceArc, TraceCopper, TraceGraph, TracePad, Tr
 use crate::signal_integrity::copper_layer_depths_nm;
 use crate::{Coverage, CoverageStatus, Finding, Severity};
 
+mod conducted;
+
 /// The `schema` of [`EmiCheckReport::json`].
 pub const SCHEMA: &str = "copperscript-emi-check/v0.1";
 
@@ -854,6 +856,20 @@ struct Context<'a> {
     trace_legs_traced: usize,
     trace_legs_unrouted: usize,
     trace_copper_seen: bool,
+    /// The standard hot loop chosen for each cell (by controller), for `EMI-CONDUCTED`.
+    loops: BTreeMap<String, LoopSummary>,
+}
+
+/// What `EMI-CONDUCTED` needs from the hot-loop analysis of a cell.
+#[derive(Clone, Debug)]
+struct LoopSummary {
+    capacitor: String,
+    inductance: Option<f64>,
+    /// `traced copper path`, `placement estimate (pad-centre polygon)` ...
+    basis: String,
+    /// The loop's trace and placement tags.
+    tags: Vec<String>,
+    layer: String,
 }
 
 impl Context<'_> {
@@ -1674,6 +1690,23 @@ fn analyze_loop(cx: &mut Context, cell: &SwitchingCell, spec: &LoopSpec) {
     }
 
     let loop_side = cx.layout.side(&cell.controller).map_or(CopperLayer::Front, copper_layer);
+    if spec.kind == LoopKind::Standard {
+        let basis = match best.state {
+            TraceState::Full => "traced copper path",
+            TraceState::Partial => "partially traced copper path, unrouted legs straight",
+            TraceState::NoCopper | TraceState::NotConnected => "placement estimate from pad centres",
+        };
+        cx.loops.insert(
+            cell.controller.clone(),
+            LoopSummary {
+                capacitor: best.capacitor.clone(),
+                inductance: best.inductance,
+                basis: basis.to_owned(),
+                tags: tags.clone(),
+                layer: loop_side.value().to_owned(),
+            },
+        );
+    }
     let mut message = format!(
         "{}: {} {} area {:.2} mm2, path {:.1} mm",
         cell.controller,
@@ -2636,6 +2669,7 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
         trace_legs_traced: 0,
         trace_legs_unrouted: 0,
         trace_copper_seen: false,
+        loops: BTreeMap::new(),
     };
     let mut cells = Vec::new();
     if model.cells.is_empty() {
@@ -2649,6 +2683,7 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
         let drive = drive_of(view, cell);
         cells.push(cell_summary(&cx, cell, &drive));
         hot_loop(&mut cx, cell);
+        conducted::conducted(&mut cx, cell);
         switch_node(&mut cx, cell);
         proximity(&mut cx, cell);
     }
@@ -2668,7 +2703,10 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
             cx.cover(
                 "EMI-MARGIN".to_owned(),
                 CoverageStatus::Executed,
-                format!("margin against the {name} radiated line ({source}) at {} m, uncertainty {UNCERTAINTY_DB} dB, never a pass or fail", cx.standard.distance),
+                format!(
+                    "margin against the {name} radiated line ({source}) at {} m, uncertainty {UNCERTAINTY_DB} dB, never a pass or fail; EMI-CONDUCTED margins (dBuV at the LISN, uncertainty 6 dB below 5 MHz and 10 dB above) use the CISPR 32 mains-port quasi-peak and average lines for cispr32_class_a and cispr32_class_b only",
+                    cx.standard.distance
+                ),
             );
         }
     }
@@ -2708,11 +2746,17 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
 
     let mut findings = std::mem::take(&mut cx.findings);
     findings.sort_by(|a, b| {
+        // Radiated estimates (dBuV/m) by level, then conducted estimates (dBuV at a LISN, a different
+        // quantity that is never compared with them) by margin when margins exist, else by level.
         let key = |f: &EmiFinding| {
             if f.finding.code == "EMI-ACCEPT-UNUSED" {
-                (2, 0.0)
+                (3, 0.0)
             } else {
-                f.estimate.as_ref().map_or((1, 0.0), |e| (0, -e.value))
+                match f.estimate.as_ref() {
+                    None => (2, 0.0),
+                    Some(e) if e.unit == "dBuV" => (1, f.margin_db.unwrap_or(-e.value)),
+                    Some(e) => (0, -e.value),
+                }
             }
         };
         let (ka, kb) = (key(a), key(b));
@@ -2868,6 +2912,14 @@ impl EmiCheckReport {
         put(&mut summary, "cells", Value::from(self.cells.len() as i64));
         put(&mut summary, "findings", Value::from(self.open_findings() as i64));
         put(&mut summary, "accepted", Value::from(self.accepted_findings() as i64));
+        put(
+            &mut summary,
+            "conducted",
+            Value::from(
+                self.findings.iter().filter(|f| f.finding.code == "EMI-CONDUCTED" && f.accepted.is_none()).count()
+                    as i64,
+            ),
+        );
         put(&mut document, "summary", Value::Object(summary));
         Value::Object(document)
     }
@@ -2910,6 +2962,13 @@ impl EmiCheckReport {
                         estimate.quantity, estimate.value, estimate.unit, estimate.method
                     ));
                 }
+                if finding.finding.code == "EMI-CONDUCTED"
+                    && let Some(Value::Array(inputs)) = finding.measures.get("inputs_text")
+                {
+                    for input in inputs.iter().filter_map(Value::as_str) {
+                        lines.push(format!("     input: {input}"));
+                    }
+                }
             }
         }
         if !global.is_empty() {
@@ -2924,12 +2983,20 @@ impl EmiCheckReport {
             lines.push(format!("  {} {}: {}", status_text(entry.status), entry.check, entry.detail));
         }
         lines.push(String::new());
-        lines.push(format!(
+        let conducted =
+            self.findings.iter().filter(|f| f.finding.code == "EMI-CONDUCTED" && f.accepted.is_none()).count();
+        let mut summary = format!(
             "EMI check: {} cell(s), {} finding(s), {} accepted (screening evidence; exit status does not reflect findings)",
             self.cells.len(),
             self.open_findings(),
             self.accepted_findings()
-        ));
+        );
+        if conducted > 0 {
+            summary.push_str(&format!(
+                "; {conducted} conducted estimate(s) are dBuV at a LISN, the other estimates are dBuV/m and not comparable with them"
+            ));
+        }
+        lines.push(summary);
         lines
     }
 }

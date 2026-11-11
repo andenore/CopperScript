@@ -641,6 +641,10 @@ pub const COMMANDS: &[Command] = &[
                 flag: "--run RUN",
                 help: "analyse the routed board of a route-board run: a final-board.state.json file, or a directory holding it (also in checkpoint/)",
             },
+            Opt {
+                flag: "--write",
+                help: "with --run: also store the result as the emi section of the run's route-report.json (written atomically,                        report_sha256 of the summary beside it updated); `copper issues RUN --stage emi` then lists it",
+            },
             Opt { flag: "--json", help: "emit deterministic JSON (schema copperscript-emi-check/v0.1)" },
         ],
         actions: &[],

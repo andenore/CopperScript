@@ -17,6 +17,8 @@ pub const PALETTE: [&str; 8] = ["#d1495b", "#2e86ab", "#3c9d5d", "#e08e0b", "#8e
 const OTHER: &str = "#b9c0c8";
 const GROUND: &str = "#7f8c99";
 const MARKER: &str = "#e00000";
+/// `SceneArea::kind` of an overlay outline that is no copper: an EMI hot loop of an issue.
+pub const EMI_LOOP: &str = "emi_loop";
 pub const SVG_NOTE: &str = "SVG view: saved fills are translucent; unfilled zones are dashed outlines. No refill or clearance check; rule-area keepouts are not shown.";
 
 pub type Window = [f64; 4];
@@ -334,8 +336,11 @@ pub fn legend(
         .filter(|t| request.layers.contains(&t.layer) && segment_hits(t.start, t.end, window))
         .collect();
     lines.push(format!("in window: {} pads, {} vias, {} track segments", pads.len(), vias.len(), tracks.len()));
-    let areas: Vec<_> =
-        scene.areas.iter().filter(|a| request.layers.contains(&a.layer) && poly_hits(&a.outer, window)).collect();
+    let (loops, areas): (Vec<_>, Vec<_>) = scene
+        .areas
+        .iter()
+        .filter(|a| request.layers.contains(&a.layer) && poly_hits(&a.outer, window))
+        .partition(|a| a.kind == EMI_LOOP);
     let fills = areas.iter().filter(|a| a.kind == "fill").count();
     lines.push(format!("in window: {fills} saved fill polygons, {} unfilled zone outlines", areas.len() - fills));
     let mut area_counts = indexmap::IndexMap::new();
@@ -350,6 +355,13 @@ pub fn legend(
     }
     if area_rows.len() > limit {
         lines.push(format!("  ... {} more visible net/layer/area groups", area_rows.len() - limit));
+    }
+    if !loops.is_empty() {
+        let layers: Vec<&str> = loops.iter().map(|a| a.layer.as_str()).collect();
+        lines.push(format!(
+            "emi hot-loop outline (red, screening estimate of the traced loop, not EMC qualification): {}",
+            layers.join(", ")
+        ));
     }
     let focus: Vec<_> = if request.highlight.is_empty() {
         pads.clone()
@@ -495,7 +507,7 @@ pub fn svg(
             r(x0), r(y0), r(x1 - x0), r(y1 - y0)
         ));
         for area in &scene.areas {
-            if &area.layer == layer && poly_hits(&area.outer, window) {
+            if &area.layer == layer && area.kind != EMI_LOOP && poly_hits(&area.outer, window) {
                 let paint = if area.kind == "fill" {
                     format!("fill=\"{}\" fill-opacity=\"0.25\"", color(&area.net, colors))
                 } else {
@@ -598,6 +610,15 @@ pub fn svg(
                 }
             }
             parts.push("</g>".to_owned());
+        }
+        // An issue's overlay outline lies over the copper it explains.
+        for area in scene.areas.iter().filter(|a| a.kind == EMI_LOOP && &a.layer == layer) {
+            if poly_hits(&area.outer, window) {
+                parts.push(format!(
+                    "<path class=\"{EMI_LOOP}\" d=\"{}\" fill=\"{MARKER}\" fill-opacity=\"0.12\" stroke=\"{MARKER}\" stroke-width=\"0.06\"/>",
+                    area_path(&area.outer, &area.holes)
+                ));
+            }
         }
         for (x, y) in &request.markers {
             parts.push(format!(

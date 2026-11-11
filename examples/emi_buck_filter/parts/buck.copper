@@ -1,0 +1,11 @@
+// An asynchronous buck regulator with its switching behaviour annotated.
+part Buck {
+    category = "power.regulator.buck";
+    switching_frequency = 500kHz;
+    output_capacitance = 100pF;
+    pin VIN  { number = "1"; domains = "power"; directions = "input"; emi_role = hot_supply; }
+    pin BOOT { number = "2"; domains = "power"; directions = "passive"; emi_role = bootstrap; }
+    pin SW   { number = "3"; domains = "power"; directions = "output"; emi_role = switch; rise_time = 5ns; current_peak = 4.5A; }
+    pin FB   { number = "4"; domains = "analog"; directions = "input"; emi_role = feedback; }
+    pin GND  { number = "5"; domains = "ground"; directions = "input"; emi_role = hot_return; }
+}

@@ -16,6 +16,8 @@ use crate::py::{self, NONE, Py, PyErr, get, get_or, truthy};
 use crate::pysort;
 use crate::scene::{Point, Scene, fixed, round3, scene_from_kicad_text, scene_from_physical};
 
+mod emi;
+
 pub const ISSUES_SCHEMA: &str = "copperscript.run-issues/v1";
 pub const FIXED_PREFIX_VIEW_SOURCE: &str = "PhysicalBoard with declared fixed prefix (view only)";
 
@@ -126,6 +128,8 @@ pub struct RunIssue {
     pub layers: Vec<Value>,
     pub objects: Vec<String>,
     pub points: Vec<Point>,
+    /// A closed outline in mm that the issue is about (an EMI hot loop); `copper view` draws it.
+    pub outline: Vec<Point>,
     /// Observational solver records; not findings on the retained board.
     pub details: Value,
     native_projection: Option<NativeIssueProjection>,
@@ -143,6 +147,7 @@ impl RunIssue {
             layers: Vec::new(),
             objects: Vec::new(),
             points: Vec::new(),
+            outline: Vec::new(),
             details: Value::Null,
             native_projection: None,
         }
@@ -1699,6 +1704,7 @@ pub fn run_issues(run: &mut Run, cluster_mm: f64) -> Py<Vec<RunIssue>> {
     }
     unrouted.extend(open_nets);
     issues.extend(escape_issues(report, scene, &unrouted)?);
+    issues.extend(emi::emi_issues(report, scene));
     Ok(issues)
 }
 
@@ -2122,6 +2128,12 @@ pub fn render_issues(document: &IssuesDocument) -> Py<String> {
     }
     if truthy(field("omitted")) {
         lines.push(format!("... {} more (use --limit)", py::text(field("omitted"))));
+    }
+    if document.issues.iter().any(|issue| py::eq_str(py::at(issue, "stage"), "emi")) {
+        lines.push(
+            "emi: screening estimates with a stated uncertainty (about 15 dB), not EMC qualification; ACCEPTED findings are emi_accept acknowledgements and count as 0"
+                .to_owned(),
+        );
     }
     lines.push("View one: copper view RUN --issue ID".to_owned());
     Ok(lines.join("\n"))

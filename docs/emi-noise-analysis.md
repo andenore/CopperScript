@@ -265,7 +265,7 @@ JSON schema `copperscript-emi-check/v0.1`:
 `{ schema, board, evidence_grade, cells, findings, coverage, limits, summary }`.
 
 ```
-copper emi-check BOARD --run RUN [--json]
+copper emi-check BOARD --run RUN [--write] [--json]
 ```
 
 `--run RUN` replaces the placed prototype by a routed board: `RUN` is a
@@ -301,6 +301,7 @@ cluster: its geometry is fixed, the cluster's position is not).
 | `EMI-HOT-LOOP` | implemented; placement estimate, traced where copper joins the pads | Per cell (per `input loop` and `output loop` for a four-switch buck-boost), the loop capacitor -> hot-supply pad -> switch pad -> catch diode (switch side -> rail side) or, without a diode, hot-return pad -> capacitor return. The legs between pads of one net follow the shortest copper path when copper exists, else the straight pad-to-pad segment. Enclosed area (shoelace), path length, partial inductance over the nearest inner ground plane (free space without one), differential-mode field, ringing, ring energy; traced length, vias, layer changes, narrowest width | differential-mode field in dBuV/m, then loop area |
 | `EMI-SWITCH-NODE` | implemented, pads only unless copper exists | Per switch net: copper area of the pads (and of tracks, polygons, zones and macro copper when present), island capacitance to the nearest ground plane, distance to the board edge and to each cable connector, voltage-driven common-mode field | voltage-driven common-mode field in dBuV/m, then copper area |
 | `EMI-PROXIMITY` | implemented | Inductor and switch-node pads against pads of `sensitive` nets and of cable connectors, closer than a threshold in units of the inductor size | threshold / distance |
+| `EMI-CONDUCTED` | implemented for `buck` cells (section 10) | Per buck cell: the conducted level at the input, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential mode only. Worst harmonic (frequency, level, quasi-peak and average margin with a `cispr32_class_a`/`cispr32_class_b` `emission` constraint), the fundamental, harmonics above each line, and every harmonic in `measures.harmonics` | margin when margins exist, else level; after the radiated findings (a different quantity, dBuV against dBuV/m) |
 | `EMI-ACCEPT-UNUSED` | implemented | An `emi_accept` that matched no finding | listed last |
 | `EMI-RETURN-PATH` | coverage `unsupported` | needs filled copper and traced routed copper | - |
 | `EMI-DECOUPLING-PATH` | coverage `unsupported` | needs routed copper | - |
@@ -313,8 +314,9 @@ reported as a pass for what was not measured. Standing entries:
 (current-driven common mode on cables, unsupported), `EMI-MARGIN` (whether an
 `emission` constraint with a limit table gave margins). Per cell or net:
 `EMI-HOT-LOOP:<cell>` (and `:radiated`, `:ringing`, `:copper`),
-`EMI-SWITCH-NODE:<net>` (and `:common_mode`) and `EMI-PROXIMITY:<cell>`, each
-with the missing input when skipped.
+`EMI-SWITCH-NODE:<net>` (and `:common_mode`), `EMI-PROXIMITY:<cell>` and
+`EMI-CONDUCTED:<cell>` (with `:common_mode` always `not_applicable` and `:filter`),
+each with the missing input when skipped.
 
 ### How the numbers are made
 
@@ -451,23 +453,57 @@ Margins are reported with that figure and never as pass/fail.
 
 Not implemented from the original plan: the routed-board reader for a
 `.kicad_pcb` (see `--run` above), traced copper beyond the hot loop (switch
-node copper is counted, not traced), `EMI-RETURN-PATH`, `EMI-DECOUPLING-PATH`,
-current-driven common mode on cables, and the `copper issues` stage and
-`copper view --issue` highlighting.
+node copper is counted, not traced), `EMI-RETURN-PATH`, `EMI-DECOUPLING-PATH`
+and current-driven common mode on cables.
 
-**Extension points for `copper issues` / `copper view`.** The findings'
-`measures.loop_polygon_mm` and `nets` map directly to a `RunIssue`
-(`crates/copper-report/src/issues.rs`: `RunIssue::new(id, "emi", code, title)`
-with `.nets()`, `.layers()`, `.objects()` and `.points()`, whose bounding box
-`RunIssue::window` frames). It was not wired in because the run report is the
-source of the issues: `run_issues` reads only `route-report.json`, whose
-digest the route summary records, so adding a stage means either storing the
-EMI document inside the report (changing the digest contract) or having
-`load_run` read a sidecar `emi-check.json` next to it; plus a new `emi` entry
-in the fixed `STAGES` array of `crates/copper/src/issues.rs` (and the stage
-list of its `USAGE` and help text, which tests compare) and in the stage
-filters of `view.rs`. A sidecar written by `emi-check --run` is the smaller
-change, about 60 lines and tests; it needs a decision on where the file lives.
+**In the run report, `copper issues` and `copper view`.** The findings are
+screening evidence and are read from the run report, `route-report.json`, which
+stays the single file of a run (there is no sidecar):
+
+- *The `emi` section.* The report gains an optional top-level `emi` key holding
+  the `copperscript-emi-check/v0.1` document (cells, findings with their
+  `measures`, including `loop_polygon_mm`, estimate, margin, `accepted`, tags,
+  `coverage`, `limits`, `summary`) of the final routed board. A report without
+  the key is valid and unchanged.
+- *`route-board` writes it.* In its report stage (`crates/copper/src/route_board.rs`,
+  after `routing_quality`, before the report is serialised) it runs
+  `emi_check` on the final board with the electrical view of the design
+  (`crates/copper/src/emi_section.rs`). The report is then written once and the
+  summary's `report_sha256` is taken over those bytes, so the digest contract is
+  as before. The step is report-only (it does not touch the board), costs the
+  elaboration of the design and one pass over the cells, and never fails a
+  route: an elaboration error or a panic is recorded as
+  `emi: { "evidence_grade": "screening", "error": "..." }`. A design without a
+  switching cell gets no `emi` key, so its report is byte-identical to what it
+  was before.
+- *`copper emi-check BOARD --run RUN --write`* adds or replaces the section of an
+  existing run. `RUN` is the run directory (or a state file in it) and must hold
+  the `route-report.json` of a finished run next to `final-board.state.json`
+  (`route-board --checkpoint-dir`); the report is rewritten in the format
+  `route-board` uses (sorted keys, indent 2) through a temporary file and a
+  rename, and `report_sha256` of `route-report.summary.json`, the only place the
+  report's digest is recorded, is replaced the same way (a missing summary is not
+  created). The result equals what `route-board` embeds for the same board;
+  repeating the command changes nothing. Without `--write` the command stays
+  read-only. Nothing checks that the board in `RUN` is the one the report
+  describes beyond the references of the design.
+- *`copper issues RUN`* lists the section as stage `emi`, ids `M1`, `M2`, ...,
+  findings grouped by cell and in the report's ranking inside a cell. The title
+  starts with `screening estimate`, the details carry the estimate with its
+  uncertainty, margin, tags and the scalar measures, and the text output ends
+  with a line saying the issues are screening estimates, not EMC qualification.
+  An accepted finding (`emi_accept`) is listed as `ACCEPTED (reason)` with
+  count 0, so it does not add to `finding_counts`. Windows: `EMI-HOT-LOOP` the
+  bounding box of its `loop_polygon_mm`; every other finding the pad centres of
+  its objects as found on the run's board (a proximity finding: the closest pair
+  of source and victim pads, the cell's own controller aside; a switch-node
+  finding: every pad of the net). `--stage emi` filters; an `error` section or
+  an empty one lists nothing.
+- *`copper view RUN --issue M2`* frames the window, highlights the issue's nets
+  and draws the hot loop as a red outline over the copper (`SceneArea` of kind
+  `emi_loop`, SVG class `emi_loop`, on the layers of the finding); the legend
+  names it as a screening estimate. Other emi issues are marked at their pad
+  centres like the other stages. `view` has no stage filter of its own.
 
 ## 9. Quasi-static extraction (phase 2)
 
@@ -483,6 +519,39 @@ starts as parallel-plate plus fringe and is replaced by a proper electrostatic
 solve later.
 
 ## 10. Conducted-emission prediction (phase 3)
+
+Status: the linear-network prediction of `copper_emi::conducted` is wired into
+`copper emi-check` as the finding `EMI-CONDUCTED` (module
+`crates/copper-drc/src/emi/conducted.rs`), one per `buck` cell; other
+topologies and cells whose inputs are missing get a `not_applicable` coverage
+entry with the reason (a four-switch buck-boost needs the operating mode, which
+the board does not declare). Inputs, each recorded with its source in
+`measures.inputs` and in the coverage detail:
+
+| Input | Source |
+| --- | --- |
+| Vin, Vout, duty | declared `supply` voltage of the hot-supply net and of the magnetic's output net; duty is Vout / Vin |
+| Frequency | the fixed value; for a range the upper bound, tagged `frequency_range_bound` |
+| Edge time | the switch pin `rise_time`/`fall_time` (10-90 %), divided by 0.8 for the 0-100 % ramp of the trapezoid; if undeclared, an assumed 10 ns (10-90 %) with only harmonics below `1 / (10 pi 10 ns)` = 3.18 MHz reported, tag `assumed_edge_time` (below that frequency the level changes by under 1 dB between 5 ns and 20 ns edges: tested) |
+| Current | the switch pin `current_peak`, the current LIMIT used as the on-time amplitude (no load current exists in the language): a worst case, tag `worst_case_current`, level change `20 log10(I / current_peak)` dB at another current |
+| Hot capacitor | the hot-loop analysis' selected capacitor: value from the component; `esr`, `esl`, `self_resonance` (ESL derived) from its part; otherwise 5 mohm and ESL by package from the footprint name (0402 0.4, 0603 0.5, 0805 0.6, 1206 0.8, 1210 0.9 nH), tag `default_capacitor_parasitics`; an unrecognised package without declared values skips the prediction. No DC-bias derating. Parallel hot capacitors are not modelled (`parallel_capacitors_not_modelled`, listed in `measures.ignored_parallel_capacitors`) |
+| Hot-loop inductance | `EMI-HOT-LOOP` (traced or placement estimate), in series with the capacitor with the supply feed at the switch end (pessimistic) |
+| Input filter | exactly one series inductor, `passive.ferrite*` or `dc_power_path` part with an inductance `value` on the hot-supply net (the net carrying only the controller and the hot capacitors otherwise) and, on its far net, only capacitors to the hot return, connectors and a declared supply source: its value, `esr` (DCR) and `self_resonance` (winding capacitance) plus the upstream capacitors lumped in parallel. Anything else leaves the filter out with a `:filter` coverage note; no series part gives "no input filter recognised". A filter inductor without `self_resonance` is ideal (`filter_inductor_ideal`: attenuation above its real resonance is overstated) |
+| Common mode | not modelled (`:common_mode` is `not_applicable`). The island capacitance of `EMI-SWITCH-NODE` is to the board's own ground plane, which is the converter's return: its current closes without entering the LISN, so using it as the capacitance to the LISN reference would overstate common mode by the plane's shielding. The real path is board-to-reference capacitance (heat sink, chassis, cable), geometry outside the board model. Levels are differential mode only and tagged `differential_mode_only`; common mode often dominates above a few MHz |
+
+Levels are RMS dBuV of each harmonic at the worst LISN port; for a fixed
+frequency above twice the 9 kHz RBW peak, quasi-peak and average coincide. The
+CISPR 32 mains-port quasi-peak and average lines are the reference limit
+(`cispr32_class_a`, `cispr32_class_b` only; other standards and no constraint
+give levels only). Uncertainty: 6 dB below 5 MHz, 10 dB above (literature
+envelope 5 dB at low MHz, 7 to 12 dB above); margins are never pass or fail.
+`measures.harmonics` lists `harmonic`, `frequency_hz`, `source_current_a`,
+`dm_dbuv`, `cm_dbuv` (null), `total_dbuv`, `limit_qp`, `limit_avg`,
+`margin_qp_db`, `margin_avg_db`, `margin_db`, `uncertainty_db`; `measures.assumptions`
+holds the `predict` assumptions and the tool's. Tests:
+`crates/copper-drc/tests/emi_check.rs` against a hand calculation on
+`examples/emi_buck` and `examples/emi_buck_filter`.
+
 
 Module `copper_emi::spectrum`: trapezoid and sampled-waveform spectra;
 `copper_emi::lisn`: 50 uH / 5 uH LISN transfer; `copper_emi::receiver`:

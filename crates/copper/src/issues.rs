@@ -12,11 +12,11 @@ use crate::option_parser::{self, flag, python_float, python_int, value};
 use crate::pypath;
 
 const USAGE: &str = "usage: copper issues [-h] [--issue ID] [--net NET] \
-[--stage {global,access,critical,native,physical,routing,layout,placement,review,error}] [--code CODE] \
+[--stage {global,access,critical,native,physical,routing,layout,placement,review,emi,error}] [--code CODE] \
 [--limit LIMIT] [--cluster-mm CLUSTER_MM] [--json] target";
 
-pub const STAGES: [&str; 10] =
-    ["global", "access", "critical", "native", "physical", "routing", "layout", "placement", "review", "error"];
+pub const STAGES: [&str; 11] =
+    ["global", "access", "critical", "native", "physical", "routing", "layout", "placement", "review", "emi", "error"];
 
 /// How the Python command ends on `error`: a reported line, or an uncaught
 /// exception (reported here as an error line too).

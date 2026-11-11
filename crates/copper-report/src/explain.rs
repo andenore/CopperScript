@@ -155,6 +155,11 @@ pub const EXPLANATIONS: &[(&str, &str, &str)] = &[
         "Keep the switch-node copper as small as the current and thermal needs allow, away from the board edge and cable connectors, with no ground plane under a large pour that is not needed. Acknowledge a reviewed result with `emi_accept(U1.SW)`.",
     ),
     (
+        "EMI-CONDUCTED",
+        "`copper emi-check` predicted the conducted emission of a buck cell at its input (dBuV at a 50 uH V-network, 150 kHz to 30 MHz, differential mode only): the harmonic currents of the input pulse train pushed through the hot capacitor, the hot-loop inductance and a recognised series input filter. The load current is the switch current limit (a worst case, level change = 20 log10(I / current_peak) dB), capacitor parasitics default by package when the part declares none, DC-bias derating is not applied, and common mode is not modelled. A missing edge time is replaced by an assumed 10 ns and only harmonics below about 3 MHz are reported (`assumed_edge_time`). With a cispr32 `emission` standard the margins are against the mains-port quasi-peak and average lines; uncertainty 6 dB below 5 MHz, 10 dB above, never a pass or fail.",
+        "Put a ceramic capacitor with low ESL against the hot-supply and hot-return pins, keep the hot loop small, add an input filter (a series inductor with a capacitor on its supply side), and declare `esr`, `esl` or `self_resonance` on the capacitor parts and the filter inductor. Acknowledge a reviewed result with `constraint emi_accept(U1) { code = \"EMI-CONDUCTED\"; reason = \"...\"; }`.",
+    ),
+    (
         "EMI-PROXIMITY",
         "`copper emi-check` found an inductor or switch-node pad closer to a sensitive net (feedback, sense, RF feed) or a cable connector than the screening distance, a multiple of the inductor's size that depends on its `shielding`.",
         "Move the sensitive pads or the connector away, choose a shielded inductor (`shielding = shielded` on the part), or put the sensitive trace on the far side of a ground plane. Acknowledge a reviewed result with `emi_accept`.",

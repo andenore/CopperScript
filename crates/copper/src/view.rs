@@ -11,10 +11,10 @@ use copper_report::issues::{
 };
 use copper_report::paths;
 use copper_report::py::{self, Py, PyErr};
-use copper_report::scene::{Point, Scene, python_float};
+use copper_report::scene::{Point, Scene, SceneArea, python_float};
 use copper_report::view::{
-    SVG_NOTE, ViewRequest, Window, align_reference, inside, layers_in_window, legend, net_colors, segment_hits, svg,
-    window_around,
+    EMI_LOOP, SVG_NOTE, ViewRequest, Window, align_reference, inside, layers_in_window, legend, net_colors,
+    segment_hits, svg, window_around,
 };
 
 use crate::issues::report_failure;
@@ -208,8 +208,10 @@ fn view(options: &Options) -> Py<(String, Vec<String>)> {
             scene = run.scene(true)?;
             notes.push("note: native finding drawn on the run's refilled board".to_owned());
         }
-        markers = issue.points.clone();
-        let route_frame = budget_frame(&scene, issue);
+        // An outline (an EMI hot loop) is drawn as an area; its vertices are no markers.
+        markers = if issue.outline.is_empty() { issue.points.clone() } else { Vec::new() };
+        let route_frame =
+            budget_frame(&scene, issue).or_else(|| (!issue.outline.is_empty()).then(|| issue.outline.clone()));
         if markers.is_empty() && route_frame.is_none() {
             if issue.nets.len() > 8 {
                 return Err(PyErr::value_error(format!(
@@ -257,6 +259,23 @@ fn view(options: &Options) -> Py<(String, Vec<String>)> {
             .filter(|layer| scene.copper_layers.iter().any(|c| py::eq_str(layer, c)))
             .cloned()
             .collect();
+        if !issue.outline.is_empty() {
+            let drawn: Vec<&String> = if issue.layers.is_empty() {
+                scene.copper_layers.iter().collect()
+            } else {
+                scene.copper_layers.iter().filter(|c| issue.layers.iter().any(|l| py::eq_str(l, c))).collect()
+            };
+            let drawn = if drawn.is_empty() { scene.copper_layers.iter().collect() } else { drawn };
+            for layer in drawn {
+                scene.areas.push(SceneArea {
+                    net: String::new(),
+                    layer: layer.clone(),
+                    outer: issue.outline.clone(),
+                    holes: Vec::new(),
+                    kind: EMI_LOOP,
+                });
+            }
+        }
         notes.insert(0, format!("issue {}: {}", issue.id, py::text(&issue.title)));
         label = issue.id.clone();
     } else if let Some(text) = &options.window {

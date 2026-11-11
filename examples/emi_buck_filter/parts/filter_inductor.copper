@@ -1,0 +1,9 @@
+// The input-filter inductor with declared DCR and self-resonance.
+part FilterInductor {
+    category = "passive.inductor";
+    shielding = shielded;
+    esr = 0.05ohm;
+    self_resonance = 40MHz;
+    pin A { number = "1"; domains = "power"; directions = "passive"; }
+    pin B { number = "2"; domains = "power"; directions = "passive"; }
+}

@@ -11,7 +11,7 @@ pub const COMMANDS: &[Command] = &[
             Opt { flag: "--issue ID", help: "show only the issue with this id" },
             Opt { flag: "--net NET", help: "only issues on this net" },
             Opt {
-                flag: "--stage {global,access,critical,native,physical,routing,layout,placement,review,error}",
+                flag: "--stage {global,access,critical,native,physical,routing,layout,placement,review,emi,error}",
                 help: "only issues from this stage",
             },
             Opt { flag: "--code CODE", help: "only issues with this code (case-insensitive)" },

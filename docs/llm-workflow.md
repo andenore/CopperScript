@@ -36,7 +36,11 @@ kinds (dangling copper, clearance) per type (`N`). Connected copper over a decla
 length or skew budget is a `review` issue (`B`), not an open: decide by
 placement or manual review. Layout reports list failed gates (`L`)
 and non-passing findings (`F`). `--cluster-mm` changes grouping and ids, so
-pass the same value to `view`. Lists are balanced across stages; use
+pass the same value to `view`. When the run report carries an `emi` section
+(`route-board` writes it for designs with a switching converter; `copper
+emi-check BOARD --run RUN --write` adds it to an older run), its findings are
+`emi` issues (`M`): screening estimates, not EMC qualification, and
+`copper view RUN --issue ID` draws a hot loop's outline. Lists are balanced across stages; use
 `--stage`, `--net`, `--code` or `--limit 0`. `--json` emits
 `copperscript.run-issues/v1`, including the SHA-256 of the run's board and
 refilled board; CopperReview's **Load issues** draws those issues on the

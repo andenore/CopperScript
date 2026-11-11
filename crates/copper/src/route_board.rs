@@ -2022,6 +2022,12 @@ fn finish(
         "routing_quality".to_owned(),
         copper_route::routing_metrics::routing_quality(&output_board, plane_verification.as_ref())?,
     );
+    // EMI screening of the final board, inside the report so that it is written once and its digest
+    // (recorded in the summary) covers it. Report-only: it never changes the board and never fails
+    // the route; a design without a switching cell keeps its report as it was.
+    if let Some(section) = crate::emi_section::for_route_report(context.design, &output_board) {
+        report.insert(crate::emi_section::KEY.to_owned(), section);
+    }
     let lines = Vec::new();
     emit(progress, "export", "started", Vec::new());
     let exported = (|| -> Result<(PathBuf, Vec<String>), String> {

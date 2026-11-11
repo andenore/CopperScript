@@ -21,7 +21,7 @@ use crate::pypath;
 
 const USAGE: &str = "usage: copper emi-check [-h] [--locked] [--offline] [--layers {2,4,6}] \
 [--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}] [--footprint-root FOOTPRINT_ROOT] \
-[--allow-proxy-footprints] [--run RUN] [--json] board";
+[--allow-proxy-footprints] [--run RUN [--write]] [--json] board";
 
 fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
     let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: emi-check ({what})");
@@ -41,6 +41,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--footprint-root"),
         flag("--allow-proxy-footprints"),
         value("--run"),
+        flag("--write"),
         flag("--json"),
     ];
     let parsed = match option_parser::parse(arguments, &specs) {
@@ -86,6 +87,12 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return 2;
         }
     };
+    if parsed.flag("--write") && parsed.value("--run").is_none() {
+        return usage_error(
+            err,
+            "argument --write: needs --run RUN (the run whose route-report.json receives the section)",
+        );
+    }
     let routed = match parsed.value("--run") {
         Some(run) => match routed_board(&pypath::display(run)) {
             Ok(board) => Some(board),
@@ -138,6 +145,17 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     }
     let model = copper_lang::emi::analyze(&view);
     let report = emi_check(&physical, &view, &model);
+    // `--write`: the run's report keeps one copy of the result (`emi` section) for `copper issues`.
+    let written = match (parsed.flag("--write"), parsed.value("--run")) {
+        (true, Some(run)) => match write_section(&pypath::display(run), report.to_value()) {
+            Ok(message) => Some(message),
+            Err(message) => {
+                let _ = text::print(out, &format!("EMI CHECK ERROR: {message}"));
+                return 2;
+            }
+        },
+        _ => None,
+    };
     if parsed.flag("--json") {
         let _ = out.write_all(report.json().as_bytes());
     } else {
@@ -145,8 +163,34 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             let _ = text::print(out, &line);
         }
     }
+    if let Some(message) = written {
+        // The JSON document owns stdout.
+        if parsed.flag("--json") {
+            let _ = writeln!(err, "{message}");
+        } else {
+            let _ = text::print(out, &message);
+        }
+    }
     // Screening findings never fail the command.
     0
+}
+
+/// Embed `section` in the route report of `run` (a run directory, or a state file inside one) and
+/// say where.
+fn write_section(run: &str, section: copper_json::Value) -> Result<String, String> {
+    let path = Path::new(run);
+    let directory = if path.is_dir() { path } else { path.parent().unwrap_or(Path::new(".")) };
+    let located = copper_report::issues::load_run(&pypath::display(&directory.to_string_lossy()))
+        .map_err(|error| error.message.clone())?;
+    let report = located.report_path.ok_or_else(|| {
+        format!("{run}: no route-report.json beside the run's board; --write needs the report of a finished run")
+    })?;
+    let written = crate::emi_section::write_into_report(Path::new(&report), section)?;
+    let summary = written.summary.as_ref().map_or_else(
+        || "no summary beside it".to_owned(),
+        |path| format!("report_sha256 updated in {}", path.display()),
+    );
+    Ok(format!("emi section written to {} ({summary}; sha256 {})", written.report.display(), written.digest))
 }
 
 /// The routed `PhysicalBoard` of a run: a `copperscript.state/v1` file holding one (as written by
