@@ -50,6 +50,7 @@ older versions, as `copperscript-assembly-lock` does.
 | `copperscript-route-timings/v1` | `copper-route` | `copper-route/src/iteration_checkpoints.rs` |
 | `copperscript-routing-acceptance/v0.1` | `copper-route` | `copper-route/src/routing_acceptance.rs` |
 | `copperscript-routing-quality/v0.1` | `copper-route` | `copper-route/src/routing_metrics.rs` |
+| `copperscript-emi-check/v0.1` | `copper-drc` | `copper-drc/src/emi.rs` |
 | `copperscript-si-check/v0.1` | `copper-drc` | `copper-drc/src/signal_integrity.rs` |
 | `copperscript-signoff/v0.1` | `copper-route` | `copper-route/src/drc_report.rs` |
 | `copperscript-source-macro/v0.1` | `copper-place` | `copper-place/src/requirements.rs` |
@@ -58,6 +59,7 @@ older versions, as `copperscript-assembly-lock` does.
 | `copperscript.body-input/v1` | `copper-web` | `copper-web/src/body.rs` |
 | `copperscript.body/v1` | `copper-web` | `copper-web/src/body.rs` |
 | `copperscript.check/v1` | `copper-lang` | `copper-lang/src/diagnostics.rs` |
+| `copperscript.emi-model/v0.1` | `copper-lang` | `copper-lang/src/emi.rs` |
 | `copperscript.escape-diagnostics/v0.1` | `copper-route` | `copper-route/src/escape_plan.rs` |
 | `copperscript.library-context/v1` | `copper-lang` | `copper-lang/src/library_context.rs` |
 | `copperscript.library-index/v1` | `copper-lang` | `copper-lang/src/library_context.rs` |

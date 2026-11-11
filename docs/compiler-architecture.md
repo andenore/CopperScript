@@ -92,6 +92,11 @@ checks from the remaining production-layout work.
 - Functional-unit endpoint resolution to canonical physical pins
 - Differential-pair completeness and finite device-mode selections
 - Parametric route-rule pad membership and power-domain operating ranges
+- EMI screening warnings on declared switching cells (`EMI_HOT_LOOP_NO_CAPACITOR`,
+  `EMI_HOT_CAPACITOR_UNDECLARED`, `EMI_SWITCH_NODE_NO_MAGNETIC`,
+  `EMI_BOOTSTRAP_NO_CAPACITOR`, `EMI_SENSITIVE_ON_SWITCH_NODE`,
+  `EMI_SWITCH_NODE_EXTERNAL`, `EMI_SWITCHING_FREQUENCY_UNKNOWN`); unannotated
+  designs report none ([EMI analysis](emi-noise-analysis.md))
 
 `power-check` separately evaluates named rail states and warns when a driven net
 may back-power an I/O domain declared off. It is intentionally a conservative

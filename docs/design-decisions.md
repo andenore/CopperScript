@@ -1119,3 +1119,32 @@ arcs. `tuning_group` (CS-173) requires octilinear corners in this step.
 Boards without the property MUST route byte-identically; KiCad exports arcs
 as native `(arc ...)` tracks, and the DRC digest, saved states and scenes
 carry them. See [arched routing](language-reference.md#arched-corners).
+
+## CS-175 — EMI roles and switching metadata (Proposed)
+
+Pins and device pads MAY declare `emi_role` (`switch`, `hot_supply`,
+`hot_return`, `bootstrap`, `gate_drive`, `feedback`, `sense`) with
+`rise_time`, `fall_time` and `current_peak`; parts MAY declare a fixed or
+ranged `switching_frequency`, `topology`, `shielding`, `esl`, `esr`,
+`self_resonance`, `output_capacitance` and `external_cable`; a component MAY
+fix `switching_frequency` inside the part's range. Values are datasheet facts
+with units, never tool settings, and invalid ones are `CMP130`. The
+constraints `emission` (cable connectors, a limit `standard`, an optional
+`cable_length`; at most one per board, `CMP131`) and `emi_accept` (one
+component or pin, a `code` and a nonempty `reason`, `CMP132`) are validated
+and ignored by physical lowering.
+
+`copper_lang::emi::analyze` derives switching cells (controller, topology,
+frequency, role pins, switch nets, magnetic, catch diode, hot capacitors with
+declared decoupling first, bootstrap capacitor, provenance) and per-net
+classes (`switch_node`, `pulsed_power`, `bootstrap`, `gate_drive`,
+`fast_edge`; victim `sensitive`; `external`) from the roles alone, never from
+net names. A regulator without any `emi_role` is examined structurally and
+yields a cell marked `inferred`, which produces no source diagnostics. `copper
+check` warns only about declared cells, and every result is screening input:
+a missing input is never a pass.
+
+Unannotated sources MUST compile to byte-identical IR and report no new
+diagnostics; `profile.emi` and `part.emi` are serialized only when declared.
+See the [EMI noise-source analysis](emi-noise-analysis.md) and the
+[language reference](language-reference.md#emi-roles-and-switching-metadata).

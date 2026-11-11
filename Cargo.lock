@@ -100,6 +100,7 @@ dependencies = [
 name = "copper-drc"
 version = "0.1.0"
 dependencies = [
+ "copper-emi",
  "copper-json",
  "copper-lang",
  "copper-pcb",
@@ -129,6 +130,10 @@ dependencies = [
  "num-traits",
  "sha2",
 ]
+
+[[package]]
+name = "copper-emi"
+version = "0.1.0"
 
 [[package]]
 name = "copper-json"

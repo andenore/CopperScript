@@ -106,7 +106,47 @@ text_enum!(ConstraintKind {
     LengthMatch = "length_match",
     HoleClearance = "hole_clearance",
     Antenna = "antenna",
+    Emission = "emission",
+    EmiAccept = "emi_accept",
 });
+
+text_enum!(
+    /// A pin's part in a switching cell (aggressor roles) or its sensitivity (victim roles).
+    EmiRole {
+        Switch = "switch",
+        HotSupply = "hot_supply",
+        HotReturn = "hot_return",
+        Bootstrap = "bootstrap",
+        GateDrive = "gate_drive",
+        Feedback = "feedback",
+        Sense = "sense",
+    }
+);
+
+impl EmiRole {
+    /// Whether the role makes the pin a noise source (otherwise a victim).
+    pub fn is_aggressor(self) -> bool {
+        !matches!(self, EmiRole::Feedback | EmiRole::Sense)
+    }
+}
+
+text_enum!(
+    /// Converter topology, from `topology` or implied by the part category.
+    Topology {
+        Buck = "buck",
+        Boost = "boost",
+        BuckBoost = "buck_boost",
+        Inverting = "inverting",
+        Flyback = "flyback",
+        ChargePump = "charge_pump",
+    }
+);
+
+text_enum!(Shielding { Shielded = "shielded", SemiShielded = "semi_shielded", Unshielded = "unshielded" });
+
+/// Accepted `standard` values of an `emission` constraint.
+pub const EMISSION_STANDARDS: [&str; 5] =
+    ["cispr32_class_a", "cispr32_class_b", "cispr25_class_5", "fcc15_class_a", "fcc15_class_b"];
 
 text_enum!(ConstraintMode { Require = "require", Target = "target", Prefer = "prefer", Assume = "assume", External = "external" });
 
@@ -185,6 +225,73 @@ pub struct ElectricalProfile {
     pub current: Option<QuantityRange>,
     /// Absolute-maximum ratings; `voltage` stays the operating range.
     pub absolute_voltage: Option<QuantityRange>,
+    /// EMI role and edge data; `None` when none is declared.
+    pub emi: Option<EmiProfile>,
+}
+
+/// Declared EMI facts of a pin or pad. `fall_time` is stored as declared; see
+/// [`EmiProfile::fall`] for the default.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EmiProfile {
+    pub role: Option<EmiRole>,
+    pub rise_time: Option<Quantity>,
+    pub fall_time: Option<Quantity>,
+    pub current_peak: Option<Quantity>,
+}
+
+impl EmiProfile {
+    pub fn is_empty(&self) -> bool {
+        self.role.is_none() && self.rise_time.is_none() && self.fall_time.is_none() && self.current_peak.is_none()
+    }
+
+    /// The fall time, which defaults to the rise time.
+    pub fn fall(&self) -> Option<&Quantity> {
+        self.fall_time.as_ref().or(self.rise_time.as_ref())
+    }
+
+    /// The rise time, which defaults to the fall time.
+    pub fn rise(&self) -> Option<&Quantity> {
+        self.rise_time.as_ref().or(self.fall_time.as_ref())
+    }
+}
+
+/// A converter's switching frequency: one value, or the adjustable range.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SwitchingFrequency {
+    Fixed(Quantity),
+    Range { minimum: Option<Quantity>, maximum: Option<Quantity> },
+}
+
+impl SwitchingFrequency {
+    /// Whether `frequency` lies inside the range (a fixed value is its own range).
+    pub fn contains(&self, frequency: &Quantity) -> bool {
+        match self {
+            SwitchingFrequency::Fixed(value) => value == frequency,
+            SwitchingFrequency::Range { minimum, maximum } => {
+                minimum.as_ref().is_none_or(|low| low.base_value() <= frequency.base_value())
+                    && maximum.as_ref().is_none_or(|high| frequency.base_value() <= high.base_value())
+            }
+        }
+    }
+}
+
+/// Part-level EMI facts; every field is optional.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PartEmi {
+    pub switching_frequency: Option<SwitchingFrequency>,
+    pub topology: Option<Topology>,
+    pub shielding: Option<Shielding>,
+    pub esl: Option<Quantity>,
+    pub esr: Option<Quantity>,
+    pub self_resonance: Option<Quantity>,
+    pub output_capacitance: Option<Quantity>,
+    pub external_cable: Option<bool>,
+}
+
+impl PartEmi {
+    pub fn is_empty(&self) -> bool {
+        *self == PartEmi::default()
+    }
 }
 
 impl ElectricalProfile {
@@ -197,6 +304,7 @@ impl ElectricalProfile {
             voltage: None,
             current: None,
             absolute_voltage: None,
+            emi: None,
         }
     }
 
@@ -424,6 +532,8 @@ pub struct PartDefinition {
     pub metadata: IndexMap<String, String>,
     pub internal_pad_groups: Vec<InternalPadGroup>,
     pub dc_power_path: Vec<String>,
+    /// Declared EMI facts; `None` when none is declared.
+    pub emi: Option<PartEmi>,
 }
 
 impl PartDefinition {
@@ -441,6 +551,7 @@ impl PartDefinition {
             metadata: IndexMap::new(),
             internal_pad_groups: Vec::new(),
             dc_power_path: Vec::new(),
+            emi: None,
         }
     }
 

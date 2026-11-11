@@ -87,6 +87,60 @@ fn profile_value(profile: Option<&ElectricalProfile>) -> Value {
     if profile.absolute_voltage.is_some() {
         result.push(("absolute_voltage", range_value(&profile.absolute_voltage)));
     }
+    if let Some(emi) = &profile.emi {
+        result.push(("emi", emi_profile_value(emi)));
+    }
+    object(result)
+}
+
+fn emi_profile_value(emi: &EmiProfile) -> Value {
+    let mut result = Vec::new();
+    if let Some(role) = emi.role {
+        result.push(("role", text(role.value())));
+    }
+    for (name, quantity) in
+        [("rise_time", &emi.rise_time), ("fall_time", &emi.fall_time), ("current_peak", &emi.current_peak)]
+    {
+        if let Some(quantity) = quantity {
+            result.push((name, quantity_value(quantity)));
+        }
+    }
+    object(result)
+}
+
+fn part_emi_value(emi: &PartEmi) -> Value {
+    let mut result = Vec::new();
+    match &emi.switching_frequency {
+        None => {}
+        Some(SwitchingFrequency::Fixed(value)) => result.push(("switching_frequency", quantity_value(value))),
+        Some(SwitchingFrequency::Range { minimum, maximum }) => {
+            if let Some(minimum) = minimum {
+                result.push(("switching_frequency_min", quantity_value(minimum)));
+            }
+            if let Some(maximum) = maximum {
+                result.push(("switching_frequency_max", quantity_value(maximum)));
+            }
+        }
+    }
+    if let Some(topology) = emi.topology {
+        result.push(("topology", text(topology.value())));
+    }
+    if let Some(shielding) = emi.shielding {
+        result.push(("shielding", text(shielding.value())));
+    }
+    for (name, quantity) in [
+        ("esl", &emi.esl),
+        ("esr", &emi.esr),
+        ("self_resonance", &emi.self_resonance),
+        ("output_capacitance", &emi.output_capacitance),
+    ] {
+        if let Some(quantity) = quantity {
+            result.push((name, quantity_value(quantity)));
+        }
+    }
+    if let Some(cable) = emi.external_cable {
+        result.push(("external_cable", Value::Bool(cable)));
+    }
     object(result)
 }
 
@@ -128,7 +182,7 @@ pub fn part_value(part: &PartDefinition) -> Value {
             object(entries)
         })
         .collect();
-    object(vec![
+    let mut entries = vec![
         ("name", text(&part.name)),
         ("category", text(&part.category)),
         ("traits", sorted_texts(part.traits.iter().map(String::as_str))),
@@ -143,7 +197,11 @@ pub fn part_value(part: &PartDefinition) -> Value {
         ),
         ("metadata", string_map(&part.metadata)),
         ("pins", Value::Array(pins)),
-    ])
+    ];
+    if let Some(emi) = &part.emi {
+        entries.push(("emi", part_emi_value(emi)));
+    }
+    object(entries)
 }
 
 pub fn device_value(device: &DeviceDefinition) -> Value {

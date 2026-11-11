@@ -1369,7 +1369,10 @@ fn lower_physical_constraints(
                 routing.push(rule);
                 continue;
             }
-            ConstraintKind::LengthMatch | ConstraintKind::HoleClearance => continue,
+            ConstraintKind::LengthMatch
+            | ConstraintKind::HoleClearance
+            | ConstraintKind::Emission
+            | ConstraintKind::EmiAccept => continue,
             _ => {}
         }
         let courtyard = constraint.kind == ConstraintKind::CourtyardGap

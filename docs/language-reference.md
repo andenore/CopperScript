@@ -304,6 +304,40 @@ errors. The serialized IR carries the absolute range as
 `profile.absolute_voltage` (`rating = "absolute"`); a relative bound is
 `{"reference", "offset", "limit"}`.
 
+### EMI roles and switching metadata
+
+Switching converters, clock drivers and their passives can carry optional EMI
+facts as flat attributes; nothing is required, and a library without them
+compiles to the same IR and produces no new diagnostics. Pins and device pads
+take `emi_role` (`switch`, `hot_supply`, `hot_return`, `bootstrap`,
+`gate_drive`, `feedback` or `sense`), `rise_time`, `fall_time` and
+`current_peak`; parts take `switching_frequency` or
+`switching_frequency_min`/`_max`, `topology`, `shielding`, `esl`, `esr`,
+`self_resonance`, `output_capacitance` and `external_cable`. A component may
+fix `switching_frequency` inside the part's range.
+
+```copper
+part Buck {
+    category = "power.regulator.buck";
+    switching_frequency = 500kHz;
+    pin VIN { number = "2"; domains = "power"; directions = "input"; emi_role = hot_supply; }
+    pin SW  { number = "8"; domains = "power"; directions = "output";
+              emi_role = switch; rise_time = 5ns; current_peak = 4.5A; }
+}
+```
+
+Invalid values are `CMP130`. `constraint emission(J1) { standard = "cispr32_class_b"; }`
+names cable connectors (`CMP131`; at most one per board) and
+`constraint emi_accept(U1.SW) { code = "..."; reason = "..."; }` acknowledges a
+reviewed finding (`CMP132`). The compiler derives switching cells and net
+classes (`copper query BOARD emi`) and `copper check` warns about declared
+cells only: `EMI_HOT_LOOP_NO_CAPACITOR`, `EMI_HOT_CAPACITOR_UNDECLARED`,
+`EMI_SWITCH_NODE_NO_MAGNETIC`, `EMI_BOOTSTRAP_NO_CAPACITOR`,
+`EMI_SENSITIVE_ON_SWITCH_NODE`, `EMI_SWITCH_NODE_EXTERNAL` and
+`EMI_SWITCHING_FREQUENCY_UNKNOWN`. The serialized IR carries `profile.emi` and
+`part.emi` only when declared. All of this is screening input, never EMC
+evidence; see [EMI noise-source analysis](emi-noise-analysis.md).
+
 Part and device provenance is optional. Definitions may use
 `source_document`, `source_revision`, `source_location`, `source_url`, and
 `source_checksum`; none is required to compile.
@@ -2054,6 +2088,24 @@ fabricator's calculator or a field solver and record it in
   `signal_integrity.layer_group_report` lists each member's routed layers and
   main layer (the layer with the most track length) and warns when members'
   main runs differ.
+
+### EMI screening
+
+`copper emi-check BOARD [--locked] [--offline] [--layers N] [--fab-profile P]
+[--footprint-root R] [--allow-proxy-footprints] [--json]` physicalizes the
+board like `si-check` and screens every switching cell of the EMI model
+(`copper query BOARD emi`; see [the EMI specification](emi-noise-analysis.md))
+for `EMI-HOT-LOOP`, `EMI-SWITCH-NODE` and `EMI-PROXIMITY`, applies `emi_accept`
+constraints (`EMI-ACCEPT-UNUSED` for a stale one) and lists what it could not
+measure as coverage. It prints one block per cell with ranked findings and the
+measured numbers, or JSON (`copperscript-emi-check/v0.1`), and always exits 0
+when the board loads. Every result is screening evidence; absolute levels
+carry about 15 dB of uncertainty and margins against an `emission` standard
+are never a pass or a fail. Cells whose roles come from the structural
+fallback are marked `inferred`. Geometry is the polygon through pad centres of
+the placed components; positions that no `fixed_placement` fixes are marked
+`provisional_placement`. Routed copper is not traced and `--routed` is not
+implemented.
 
 ### Native copper connectivity and package escape
 

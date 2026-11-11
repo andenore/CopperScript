@@ -197,6 +197,7 @@ impl Context {
         }
         merged.voltage = profiles.iter().find_map(|profile| profile.voltage.clone());
         merged.absolute_voltage = profiles.iter().find_map(|profile| profile.absolute_voltage.clone());
+        merged.emi = profiles.iter().find_map(|profile| profile.emi.clone());
         Some(merged)
     }
 
@@ -1365,7 +1366,7 @@ fn check_no_connects(context: &Context) -> Vec<Diagnostic> {
     diagnostics
 }
 
-const COMPONENT_TARGET_CONSTRAINTS: [ConstraintKind; 10] = [
+const COMPONENT_TARGET_CONSTRAINTS: [ConstraintKind; 12] = [
     ConstraintKind::MaxDistance,
     ConstraintKind::MinDistance,
     ConstraintKind::PlacementRegion,
@@ -1376,6 +1377,8 @@ const COMPONENT_TARGET_CONSTRAINTS: [ConstraintKind; 10] = [
     ConstraintKind::PlacementGroup,
     ConstraintKind::ViaInPad,
     ConstraintKind::Antenna,
+    ConstraintKind::Emission,
+    ConstraintKind::EmiAccept,
 ];
 
 fn check_constraint_targets(context: &Context) -> Vec<Diagnostic> {
@@ -1565,6 +1568,7 @@ pub fn check_view(view: FlatElectricalView, unmarked: bool) -> Vec<Diagnostic> {
     diagnostics.extend(check_modes_and_groups(&context));
     diagnostics.extend(check_no_connects(&context));
     diagnostics.extend(check_constraint_targets(&context));
+    diagnostics.extend(crate::emi::check(&context));
     if unmarked {
         diagnostics.extend(check_unmarked_pins(&context));
     }

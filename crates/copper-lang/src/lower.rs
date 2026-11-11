@@ -389,6 +389,7 @@ pub fn electrical_profile(attributes: &Attributes, location: &Location) -> Resul
     let operating = voltage_range(attributes, location)?;
     let traits = csv_names(attributes.get("traits").unwrap_or(&empty()), "electrical traits", location)?;
     let absolute_voltage = absolute_voltage_range(attributes, operating.as_ref(), location)?;
+    let emi = emi_profile(attributes, location)?;
     Ok(ElectricalProfile {
         domains: domains.into_iter().collect(),
         directions: directions.into_iter().collect(),
@@ -397,7 +398,172 @@ pub fn electrical_profile(attributes: &Attributes, location: &Location) -> Resul
         voltage: operating,
         current: None,
         absolute_voltage,
+        emi,
     })
+}
+
+/// A positive quantity of `dimension` for an EMI attribute (`CMP130`).
+fn emi_quantity(value: &Scalar, dimension: Dimension, label: &str, location: &Location) -> Result<Quantity> {
+    let units: Vec<&str> = dimension.units().iter().map(|(name, _)| *name).collect();
+    let usage = format!("{label} must be a positive {} in {}", dimension.name().to_lowercase(), units.join(", "));
+    let Scalar::Quantity { value, unit } = value else { return Err(error("CMP130", usage, location)) };
+    if !units.contains(&unit.as_str()) {
+        return Err(error("CMP130", usage, location));
+    }
+    let Ok(number) = Decimal::parse(value) else { return Err(error("CMP130", usage, location)) };
+    let Ok(compiled) = Quantity::of(dimension, &number, unit) else { return Err(error("CMP130", usage, location)) };
+    if compiled.base_value() <= &Decimal::zero() {
+        return Err(error("CMP130", usage, location));
+    }
+    Ok(compiled)
+}
+
+/// A name from a closed list for an EMI attribute (`CMP130`).
+fn emi_name<T>(
+    value: &Scalar,
+    label: &str,
+    parse: fn(&str) -> Option<T>,
+    names: Vec<&str>,
+    location: &Location,
+) -> Result<T> {
+    let Scalar::Str(text) = value else {
+        return Err(error("CMP130", format!("{label} must be one of: {}", names.join(", ")), location));
+    };
+    parse(text).ok_or_else(|| {
+        error("CMP130", format!("unknown {label} {}; expected: {}", repr(text), names.join(", ")), location)
+    })
+}
+
+/// `emi_role`, `rise_time`, `fall_time` and `current_peak`; `None` when none is declared.
+fn emi_profile(attributes: &Attributes, location: &Location) -> Result<Option<EmiProfile>> {
+    let role = attributes
+        .get("emi_role")
+        .map(|value| {
+            emi_name(
+                value,
+                "emi_role",
+                EmiRole::parse,
+                EmiRole::ALL.iter().map(|item| item.value()).collect(),
+                location,
+            )
+        })
+        .transpose()?;
+    let quantity_of = |name: &str, dimension: Dimension| {
+        attributes.get(name).map(|value| emi_quantity(value, dimension, name, location)).transpose()
+    };
+    let profile = EmiProfile {
+        role,
+        rise_time: quantity_of("rise_time", Dimension::Time)?,
+        fall_time: quantity_of("fall_time", Dimension::Time)?,
+        current_peak: quantity_of("current_peak", Dimension::Current)?,
+    };
+    Ok((!profile.is_empty()).then_some(profile))
+}
+
+/// The component property holding a board-chosen switching frequency.
+pub const SWITCHING_FREQUENCY: &str = "switching_frequency";
+
+/// The part-level EMI attributes (`switching_frequency`, `topology`, ...); `None` when none is declared.
+fn part_emi(properties: &IndexMap<String, Scalar>, location: &Location) -> Result<Option<PartEmi>> {
+    let quantity_of = |name: &str, dimension: Dimension| {
+        properties.get(name).map(|value| emi_quantity(value, dimension, name, location)).transpose()
+    };
+    let fixed = quantity_of(SWITCHING_FREQUENCY, Dimension::Frequency)?;
+    let minimum = quantity_of("switching_frequency_min", Dimension::Frequency)?;
+    let maximum = quantity_of("switching_frequency_max", Dimension::Frequency)?;
+    let switching_frequency = match (fixed, minimum, maximum) {
+        (None, None, None) => None,
+        (Some(value), None, None) => Some(SwitchingFrequency::Fixed(value)),
+        (Some(_), _, _) => {
+            return Err(error(
+                "CMP130",
+                "switching_frequency is exclusive with switching_frequency_min and switching_frequency_max",
+                location,
+            ));
+        }
+        (None, minimum, maximum) => {
+            if let (Some(low), Some(high)) = (&minimum, &maximum)
+                && low.base_value() > high.base_value()
+            {
+                return Err(error(
+                    "CMP130",
+                    format!("switching_frequency_min {low} exceeds switching_frequency_max {high}"),
+                    location,
+                ));
+            }
+            Some(SwitchingFrequency::Range { minimum, maximum })
+        }
+    };
+    let topology = properties
+        .get("topology")
+        .map(|value| {
+            emi_name(
+                value,
+                "topology",
+                Topology::parse,
+                Topology::ALL.iter().map(|item| item.value()).collect(),
+                location,
+            )
+        })
+        .transpose()?;
+    let shielding = properties
+        .get("shielding")
+        .map(|value| {
+            emi_name(
+                value,
+                "shielding",
+                Shielding::parse,
+                Shielding::ALL.iter().map(|item| item.value()).collect(),
+                location,
+            )
+        })
+        .transpose()?;
+    let external_cable = match properties.get("external_cable") {
+        None => None,
+        Some(Scalar::Bool(flag)) => Some(*flag),
+        Some(_) => return Err(error("CMP130", "external_cable must be true or false", location)),
+    };
+    let emi = PartEmi {
+        switching_frequency,
+        topology,
+        shielding,
+        esl: quantity_of("esl", Dimension::Inductance)?,
+        esr: quantity_of("esr", Dimension::Resistance)?,
+        self_resonance: quantity_of("self_resonance", Dimension::Frequency)?,
+        output_capacitance: quantity_of("output_capacitance", Dimension::Capacitance)?,
+        external_cable,
+    };
+    Ok((!emi.is_empty()).then_some(emi))
+}
+
+/// Inverse of a quantity's display text (`500 kHz`).
+pub fn parse_quantity_text(text: &str, dimension: Dimension) -> Option<Quantity> {
+    let (number, unit) = text.split_once(' ')?;
+    Quantity::of(dimension, &Decimal::parse(number).ok()?, unit).ok()
+}
+
+/// A component's `switching_frequency` must lie inside its part's declared range (`CMP130`).
+pub fn check_component_frequency(
+    component: &ComponentInstance,
+    part: Option<&PartDefinition>,
+    location: &Location,
+) -> Result<()> {
+    let Some(text) = component.properties.get(SWITCHING_FREQUENCY) else { return Ok(()) };
+    let declared = part.and_then(|part| part.emi.as_ref()).and_then(|emi| emi.switching_frequency.as_ref());
+    let (Some(declared), Some(frequency)) = (declared, parse_quantity_text(text, Dimension::Frequency)) else {
+        return Ok(());
+    };
+    if !declared.contains(&frequency) {
+        return Err(error(
+            "CMP130",
+            format!(
+                "switching_frequency {frequency} of {} is outside its part's declared switching frequency",
+                component.reference
+            ),
+            location,
+        ));
+    }
+    Ok(())
 }
 
 /// `_profile_for_pin_type`.
@@ -488,6 +654,10 @@ pub fn compile_device(document: &Document, qualified_name: &str) -> Result<Devic
                         "voltage_max",
                         "absolute_min",
                         "absolute_max",
+                        "emi_role",
+                        "rise_time",
+                        "fall_time",
+                        "current_peak",
                         "when",
                     ],
                     location,
@@ -914,6 +1084,10 @@ pub fn compile_part(
                         "voltage_max",
                         "absolute_min",
                         "absolute_max",
+                        "emi_role",
+                        "rise_time",
+                        "fall_time",
+                        "current_peak",
                         "connection",
                         "required_net_traits",
                         "parallel_power_group",
@@ -940,6 +1114,10 @@ pub fn compile_part(
                     "voltage_max",
                     "absolute_min",
                     "absolute_max",
+                    "emi_role",
+                    "rise_time",
+                    "fall_time",
+                    "current_peak",
                 ]
                 .iter()
                 .any(|name| attributes.contains_key(*name));
@@ -1016,6 +1194,16 @@ pub fn compile_part(
             "model_license",
             "model_redistributable",
             "height",
+            SWITCHING_FREQUENCY,
+            "switching_frequency_min",
+            "switching_frequency_max",
+            "topology",
+            "shielding",
+            "esl",
+            "esr",
+            "self_resonance",
+            "output_capacitance",
+            "external_cable",
         ],
         location,
     )?;
@@ -1124,6 +1312,7 @@ pub fn compile_part(
     part.assembled = assembled;
     part.source = source_reference(&properties, location)?;
     part.internal_pad_groups = groups;
+    part.emi = part_emi(&properties, location)?;
     match properties.get("model") {
         None => {}
         Some(Scalar::Str(path)) if copper_physical::model3d::FootprintModel::storable(path) => {
@@ -1220,7 +1409,11 @@ fn height_nm(value: &Scalar) -> std::result::Result<i64, String> {
 pub fn component(declaration: &ComponentDecl, part: &str) -> Result<ComponentInstance> {
     let location = &declaration.location;
     let attributes = &declaration.attributes;
-    reject_unknown(attributes.keys(), &["value", "footprint", "modes", "role", "decouples"], location)?;
+    reject_unknown(
+        attributes.keys(),
+        &["value", "footprint", "modes", "role", "decouples", SWITCHING_FREQUENCY],
+        location,
+    )?;
     let value = match attributes.get("value") {
         Some(raw @ Scalar::Quantity { .. }) => Some(ComponentValue::Quantity(quantity(raw, location)?)),
         Some(Scalar::Str(text)) => Some(ComponentValue::Text(text.clone())),
@@ -1254,6 +1447,10 @@ pub fn component(declaration: &ComponentDecl, part: &str) -> Result<ComponentIns
         Endpoint::parse(target).map_err(|message| error("CMP005", message, location))?;
         properties.insert("role".to_owned(), role.clone());
         properties.insert("decouples".to_owned(), target.clone());
+    }
+    if let Some(frequency) = attributes.get(SWITCHING_FREQUENCY) {
+        let frequency = emi_quantity(frequency, Dimension::Frequency, SWITCHING_FREQUENCY, location)?;
+        properties.insert(SWITCHING_FREQUENCY.to_owned(), frequency.to_string());
     }
     Ok(ComponentInstance {
         reference: declaration.reference.clone(),
@@ -1589,6 +1786,65 @@ fn validate_hole_clearance(declaration: &ConstraintDecl, parameters: &IndexMap<S
     Ok(())
 }
 
+/// `emission`: connector components, a limit `standard`, an optional `cable_length` (`CMP131`).
+fn validate_emission(declaration: &ConstraintDecl, parameters: &IndexMap<String, ParameterValue>) -> Result<()> {
+    let location = &declaration.location;
+    if let Some(target) = declaration.targets.iter().find(|target| target.contains('.')) {
+        return Err(error(
+            "CMP131",
+            format!("emission targets connector components, not pins ({})", repr(target)),
+            location,
+        ));
+    }
+    let mut unknown: Vec<&String> =
+        parameters.keys().filter(|name| *name != "standard" && *name != "cable_length").collect();
+    unknown.sort();
+    if let Some(name) = unknown.first() {
+        return Err(error("CMP131", format!("unknown emission parameter {}", repr(name)), location));
+    }
+    match parameters.get("standard") {
+        Some(ParameterValue::Text(standard)) if EMISSION_STANDARDS.contains(&standard.as_str()) => {}
+        Some(_) => {
+            return Err(error(
+                "CMP131",
+                format!("emission parameter 'standard' must be one of: {}", EMISSION_STANDARDS.join(", ")),
+                location,
+            ));
+        }
+        None => return Err(error("CMP131", "emission requires 'standard'", location)),
+    }
+    if let Some(length) = parameters.get("cable_length")
+        && !parameter_length(Some(length)).is_some_and(|length| *length.base_value() > Decimal::zero())
+    {
+        return Err(error("CMP131", "emission parameter 'cable_length' must be a positive length", location));
+    }
+    Ok(())
+}
+
+/// `emi_accept`: one component or `component.pin`, with `code` and `reason` (`CMP132`).
+fn validate_emi_accept(declaration: &ConstraintDecl, parameters: &IndexMap<String, ParameterValue>) -> Result<()> {
+    let location = &declaration.location;
+    if declaration.targets.len() != 1 {
+        return Err(error("CMP132", "emi_accept requires exactly one component or component.pin target", location));
+    }
+    let mut unknown: Vec<&String> = parameters.keys().filter(|name| *name != "code" && *name != "reason").collect();
+    unknown.sort();
+    if let Some(name) = unknown.first() {
+        return Err(error("CMP132", format!("unknown emi_accept parameter {}", repr(name)), location));
+    }
+    for name in ["code", "reason"] {
+        match parameters.get(name) {
+            Some(ParameterValue::Text(text)) if !blank(text) => {}
+            Some(_) => {
+                let message = format!("emi_accept parameter {} must be a nonempty string", repr(name));
+                return Err(error("CMP132", message, location));
+            }
+            None => return Err(error("CMP132", format!("emi_accept requires {}", repr(name)), location)),
+        }
+    }
+    Ok(())
+}
+
 /// `_constraint`.
 pub fn constraint(declaration: &ConstraintDecl) -> Result<Constraint> {
     let location = &declaration.location;
@@ -1643,6 +1899,8 @@ pub fn constraint(declaration: &ConstraintDecl) -> Result<Constraint> {
         ConstraintKind::HoleClearance => validate_hole_clearance(declaration, &parameters)?,
         ConstraintKind::Antenna => crate::antenna::validate_antenna(declaration, &parameters)?,
         ConstraintKind::CourtyardGap => validate_courtyard_gap(declaration, &parameters, mode)?,
+        ConstraintKind::Emission => validate_emission(declaration, &parameters)?,
+        ConstraintKind::EmiAccept => validate_emi_accept(declaration, &parameters)?,
         ConstraintKind::PlacementRegion if parameters.contains_key("courtyard_gap") => {
             validate_courtyard_gap(declaration, &parameters, mode)?
         }

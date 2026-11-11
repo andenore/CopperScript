@@ -109,6 +109,71 @@ pub const EXPLANATIONS: &[(&str, &str, &str)] = &[
         "A pin voltage limit could not be evaluated (often relative to an unknown rail).",
         "Connect the reference pin to a declared supply.",
     ),
+    (
+        "EMI_HOT_LOOP_NO_CAPACITOR",
+        "A switching cell declares a hot supply and a hot return, but no capacitor joins their nets, so the pulsed switch current has no local loop and flows through the supply.",
+        "Add a ceramic input (or output, for a boost) capacitor between the hot supply and hot return pins, and declare it with `role = decoupling; decouples = U.PIN;`.",
+    ),
+    (
+        "EMI_HOT_CAPACITOR_UNDECLARED",
+        "Capacitors join the hot supply and hot return of a switching cell, but none declares `decouples` of the hot-supply pin, so placement and routing cannot treat the hot loop as a priority.",
+        "On the capacitor nearest the pins, add `role = decoupling; decouples = U.PIN;` naming the hot-supply pin.",
+    ),
+    (
+        "EMI_SWITCH_NODE_NO_MAGNETIC",
+        "A pin declared emi_role = switch is on a net that reaches no inductor or transformer terminal (charge pumps are excluded).",
+        "Connect the inductor or transformer, or correct the pin's emi_role or the part's topology (charge_pump).",
+    ),
+    (
+        "EMI_BOOTSTRAP_NO_CAPACITOR",
+        "A pin declared emi_role = bootstrap has no capacitor between its net and a switch net of the same component.",
+        "Add the bootstrap capacitor between the BOOT pin and the switch pin.",
+    ),
+    (
+        "EMI_SENSITIVE_ON_SWITCH_NODE",
+        "A pin declared emi_role = feedback or sense is directly on a switch-node net, which swings rail to rail.",
+        "Take the feedback or sense connection from the output side of the inductor, not from the switch node.",
+    ),
+    (
+        "EMI_SWITCH_NODE_EXTERNAL",
+        "A switch-node net also reaches a cable connector directly or through a series resistor, ferrite or dc_power_path part, so the unfiltered switching waveform can leave the board.",
+        "Separate the nets, or filter after the inductor and output capacitor; the switch node should stay on the board.",
+    ),
+    (
+        "EMI_SWITCHING_FREQUENCY_UNKNOWN",
+        "A declared switching cell has no fixed switching frequency on its part or component (a range alone does not fix it), so emission estimates cannot use a single frequency.",
+        "Declare `switching_frequency` on the part, or on the component when the part gives only a range or an external resistor sets it.",
+    ),
+    (
+        "EMI-HOT-LOOP",
+        "`copper emi-check` found the pulsed-current loop of a switching cell (hot capacitor, hot-supply pin, switch pin, catch diode or hot-return pin, back to the capacitor) and reports its area, path length, a partial-inductance estimate and the radiated-field estimate; larger area and inductance mean more differential-mode emission and a higher ringing energy. Screening evidence from pad centres, about 15 dB uncertainty.",
+        "Place the hot capacitor against the hot-supply and hot-return pins, keep the diode on the same side, and close the loop on the layer next to a ground plane. Review with `copper emi-check`; acknowledge a reviewed result with `constraint emi_accept(U1) { code = \"EMI-HOT-LOOP\"; reason = \"...\"; }`.",
+    ),
+    (
+        "EMI-SWITCH-NODE",
+        "`copper emi-check` measured the copper of a switch net: its area, the estimated capacitance to the nearest ground plane, the distance to the board edge and to cable connectors, and the voltage-driven common-mode level this island can radiate. A pads-only result is a lower bound until the net is routed.",
+        "Keep the switch-node copper as small as the current and thermal needs allow, away from the board edge and cable connectors, with no ground plane under a large pour that is not needed. Acknowledge a reviewed result with `emi_accept(U1.SW)`.",
+    ),
+    (
+        "EMI-PROXIMITY",
+        "`copper emi-check` found an inductor or switch-node pad closer to a sensitive net (feedback, sense, RF feed) or a cable connector than the screening distance, a multiple of the inductor's size that depends on its `shielding`.",
+        "Move the sensitive pads or the connector away, choose a shielded inductor (`shielding = shielded` on the part), or put the sensitive trace on the far side of a ground plane. Acknowledge a reviewed result with `emi_accept`.",
+    ),
+    (
+        "EMI-ACCEPT-UNUSED",
+        "An `emi_accept` constraint matched no `copper emi-check` finding: the finding is gone, or the target pin or component does not take part in it.",
+        "Remove the constraint, or correct its target and `code` to the finding it acknowledges.",
+    ),
+    (
+        "EMI-RETURN-PATH",
+        "Coverage entry of `copper emi-check`: the return-path check needs filled copper and traced routed copper and is not implemented, so no result says anything about plane gaps or layer changes.",
+        "Review reference-plane continuity under aggressor and sensitive tracks in the filled board.",
+    ),
+    (
+        "EMI-DECOUPLING-PATH",
+        "Coverage entry of `copper emi-check`: the copper path length from each decoupling capacitor to its pin and return via needs routed copper and is not implemented.",
+        "Check the decoupling paths after routing.",
+    ),
     ("I2C_MISSING_SIGNAL", "An I2C interface does not map SDA or SCL.", "Add `sda = NET; scl = NET;`."),
     ("I2C_TOO_FEW_PARTICIPANTS", "An I2C interface binds fewer than two components.", "Bind the host and each target."),
     ("I2C_MISSING_BINDING", "A bound component has no SDA or SCL pin binding.", "Add the pin to its `bind` block."),

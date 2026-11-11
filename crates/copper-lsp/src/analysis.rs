@@ -50,7 +50,7 @@ const SILKSCREEN_ITEMS: [&str; 8] = ["branding", "text", "logo", "line", "rectan
 /// `PROPERTIES[kind]`.
 fn properties(kind: &str) -> &'static [&'static str] {
     match kind {
-        "component" => &["value", "footprint", "role", "decouples"],
+        "component" => &["value", "footprint", "role", "decouples", "switching_frequency"],
         "supply" => &["voltage", "net", "source", "external"],
         "no_connect" => &["reason"],
         "pin" => &[
@@ -60,6 +60,10 @@ fn properties(kind: &str) -> &'static [&'static str] {
             "drive_modes",
             "voltage_min",
             "voltage_max",
+            "emi_role",
+            "rise_time",
+            "fall_time",
+            "current_peak",
             "bond",
             "connection",
             "traits",

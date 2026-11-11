@@ -69,7 +69,7 @@ their extra layer needs require an explicit compatible count or source
 stackup. Boards with no layer requirements continue to use two layers.
 
 This applies to `export-kicad-pcb`, `plan-layout`, `route-global`,
-`route-board`, `si-check`, `synthesize-antenna`, the editor and panel source
+`route-board`, `si-check`, `emi-check`, `synthesize-antenna`, the editor and panel source
 intent loading. The bounded browser routing prototype deliberately retains
 its explicit two-layer limit. Low-level `PhysicalOptions::new` callers still
 select an explicit stack.

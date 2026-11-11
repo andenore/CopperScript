@@ -1,0 +1,6 @@
+part Diode {
+    category = "semiconductor.diode.schottky";
+    output_capacitance = 150pF;
+    pin A { number = "1"; domains = "power"; directions = "passive"; }
+    pin K { number = "2"; domains = "power"; directions = "passive"; }
+}

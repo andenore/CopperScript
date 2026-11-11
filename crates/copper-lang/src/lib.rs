@@ -10,6 +10,7 @@ pub mod antenna;
 pub mod compiler;
 pub mod diagnostics;
 pub mod elaborate;
+pub mod emi;
 pub mod erc;
 mod error;
 pub mod footprints;

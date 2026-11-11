@@ -12,6 +12,7 @@ default-members = [
     "crates/copper-cam",
     "crates/copper-drc",
     "crates/copper-editor",
+    "crates/copper-emi",
     "crates/copper-json",
     "crates/copper-lang",
     "crates/copper-lsp",
@@ -53,6 +54,7 @@ copper-cam = { path = "crates/copper-cam" }
 copper-lsp = { path = "crates/copper-lsp" }
 copper-drc = { path = "crates/copper-drc" }
 copper-editor = { path = "crates/copper-editor" }
+copper-emi = { path = "crates/copper-emi" }
 copper-pcb = { path = "crates/copper-pcb" }
 copper-panel = { path = "crates/copper-panel" }
 copper-place = { path = "crates/copper-place" }

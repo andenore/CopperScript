@@ -1,0 +1,41 @@
+// An asynchronous TPS54360-style buck with fixed placements, for `copper emi-check`.
+// Run: copper emi-check examples/emi_buck/board.copper --allow-proxy-footprints
+// The input capacitor CIN, the catch diode D1 and the feedback divider are placed so that
+// the hot loop, the switch node and the inductor proximity all produce numbers.
+board EmiBuck {
+    import p "./parts";
+
+    component U1: p.Buck { footprint = "QFN-5"; }
+    component L1: p.Inductor { value = 4.7uH; footprint = "L_1210"; }
+    component D1: p.Diode { footprint = "SOD-123"; }
+    component CIN: p.Cap { value = 10uF; footprint = "C_0805"; role = decoupling; decouples = U1.VIN; }
+    component CBOOT: p.Cap { value = 100nF; footprint = "C_0402"; }
+    component COUT: p.Cap { value = 22uF; footprint = "C_0805"; }
+    component R1: p.Res { value = 100kohm; footprint = "R_0402"; }
+    component R2: p.Res { value = 33kohm; footprint = "R_0402"; }
+    component J1: p.Conn { footprint = "PinHeader_1x02"; }
+
+    supply VIN { net = VIN; voltage = 12V; external = true; }
+    supply VOUT { net = VOUT; voltage = 5V; external = true; }
+    supply GND { net = GND; voltage = 0V; external = true; }
+
+    net VIN { U1.VIN; CIN.A; }
+    net GND { U1.GND; CIN.B; D1.A; COUT.B; R2.B; J1.B; }
+    net SW { U1.SW; L1.A; D1.K; CBOOT.B; }
+    net BOOT { U1.BOOT; CBOOT.A; }
+    net VOUT { L1.B; COUT.A; R1.A; J1.A; }
+    net FB { U1.FB; R1.B; R2.A; }
+
+    constraint copper_zone(GND) { layers = "In1.Cu"; }
+    constraint emission(J1) { standard = "cispr32_class_b"; }
+
+    constraint fixed_placement(U1) { x = 30mm; y = 30mm; rotation = 0; }
+    constraint fixed_placement(CIN) { x = 24.5mm; y = 29mm; rotation = 180; }
+    constraint fixed_placement(D1) { x = 24mm; y = 34mm; rotation = 0; }
+    constraint fixed_placement(CBOOT) { x = 24mm; y = 25mm; rotation = 0; }
+    constraint fixed_placement(L1) { x = 30mm; y = 38mm; rotation = 0; }
+    constraint fixed_placement(COUT) { x = 36mm; y = 38mm; rotation = 0; }
+    constraint fixed_placement(R1) { x = 33mm; y = 40mm; rotation = 0; }
+    constraint fixed_placement(R2) { x = 60mm; y = 60mm; rotation = 0; }
+    constraint fixed_placement(J1) { x = 70mm; y = 30mm; rotation = 0; }
+}

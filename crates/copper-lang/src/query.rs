@@ -5,7 +5,7 @@
 
 use indexmap::{IndexMap, IndexSet};
 
-use copper_json::{Object, Value, python_isspace, python_str_repr as repr};
+use copper_json::{Dumps, Object, Value, python_isspace, python_str_repr as repr};
 
 use crate::erc::{Context, build_context, is_power_input, no_connect_endpoints, unmarked_pins};
 use crate::model::{
@@ -15,7 +15,7 @@ use crate::model::{
 use crate::suggest::close_match;
 
 pub const QUERY_SCHEMA: &str = "copperscript.query/v1";
-pub const QUERY_KINDS: [&str; 6] = ["components", "component", "pins", "nets", "net", "unconnected"];
+pub const QUERY_KINDS: [&str; 7] = ["components", "component", "pins", "nets", "net", "unconnected", "emi"];
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -55,6 +55,9 @@ pub fn run_query(board: FlatElectricalView, kind: &str, name: Option<&str>) -> R
     if ["component", "pins", "net"].contains(&kind) && name.is_empty() {
         let what = if kind == "net" { "net name" } else { "component reference" };
         return Err(format!("`query {kind}` needs a {what}"));
+    }
+    if kind == "emi" {
+        return Ok(crate::emi::analyze_context(&context).to_value());
     }
     let facts = facts(&context);
     let body: (&str, Value) = match kind {
@@ -463,6 +466,9 @@ fn pin_table(pins: &[Value]) -> String {
 
 /// `render_query`: the text form of a query result.
 pub fn render_query(result: &Value) -> String {
+    if show(get(result, "schema")) == crate::emi::SCHEMA {
+        return Dumps::new().indent(2).sort_keys(true).dumps(result);
+    }
     let kind = show(get(result, "query"));
     match kind.as_str() {
         "pins" => format!("{} pins\n{}", show(get(result, "component")), pin_table(items(get(result, "pins")))),

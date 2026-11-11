@@ -13,6 +13,7 @@ pub mod arcs;
 pub mod breakout;
 pub mod connectivity;
 pub mod digest;
+pub mod emi;
 pub mod legality;
 pub mod macros;
 pub mod signal_integrity;

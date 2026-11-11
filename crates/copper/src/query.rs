@@ -12,7 +12,7 @@ use copper_lang::query::{QUERY_KINDS, render_query, run_query};
 use crate::commands::{NOT_IMPLEMENTED_EXIT, NOT_IMPLEMENTED_MARKER};
 use crate::option_parser::{self, flag};
 
-const USAGE: &str = "usage: copper query [-h] [--json] [--locked] [--offline] board {components,component,pins,nets,net,unconnected} [name]";
+const USAGE: &str = "usage: copper query [-h] [--json] [--locked] [--offline] board {components,component,pins,nets,net,unconnected,emi} [name]";
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let parsed = match option_parser::parse(arguments, &[flag("--json"), flag("--locked"), flag("--offline")]) {

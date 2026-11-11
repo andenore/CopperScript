@@ -615,6 +615,33 @@ pub const COMMANDS: &[Command] = &[
         actions: &[],
     },
     Command {
+        name: "emi-check",
+        group: Group::Layout,
+        summary: "screen switching cells for noise sources: hot-loop area and inductance, switch-node copper, proximity (screening evidence)",
+        options: &[
+            Opt { flag: "--locked", help: "require copper.lock to match every package byte" },
+            Opt { flag: "--offline", help: "reject remote package cache misses" },
+            Opt {
+                flag: "--layers {2,4,6}",
+                help: "copper-layer count; default derives from source requirements; must match a declared stackup",
+            },
+            Opt {
+                flag: "--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}",
+                help: "fabrication-rule profile (default: generic)",
+            },
+            Opt {
+                flag: "--footprint-root FOOTPRINT_ROOT",
+                help: "extra KiCad footprint root for footprint identifiers the source does not bind; may repeat",
+            },
+            Opt {
+                flag: "--allow-proxy-footprints",
+                help: "use generated inspection-only proxy footprints instead of resolving real ones",
+            },
+            Opt { flag: "--json", help: "emit deterministic JSON (schema copperscript-emi-check/v0.1)" },
+        ],
+        actions: &[],
+    },
+    Command {
         name: "bench",
         group: Group::Benchmark,
         summary: "benchmark ladder: route a fixed set of boards and compare completion and time",

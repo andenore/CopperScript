@@ -18,6 +18,7 @@ mod completions;
 mod drc;
 mod edit_mechanical;
 mod editor_overlay;
+mod emi_check;
 mod explain;
 mod export_kicad;
 mod export_kicad_pcb;

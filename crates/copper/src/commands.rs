@@ -4,10 +4,10 @@ use std::io::Write;
 
 use crate::{
     agent_guide, assembly, audit_footprints, benchmark_routing, check, check_footprint, compare_cam, compile,
-    compile_macro, completions, drc, edit_mechanical, editor_overlay, explain, export_kicad, export_kicad_pcb,
-    export_manufacturing, fill, help, init, issues, library, lock, lsp, models, plan_layout, plot, power_check, query,
-    render, replay_critical, replay_unified, route_board, route_global, si_check, state, summarize, synthesize_antenna,
-    view,
+    compile_macro, completions, drc, edit_mechanical, editor_overlay, emi_check, explain, export_kicad,
+    export_kicad_pcb, export_manufacturing, fill, help, init, issues, library, lock, lsp, models, plan_layout, plot,
+    power_check, query, render, replay_critical, replay_unified, route_board, route_global, si_check, state, summarize,
+    synthesize_antenna, view,
 };
 
 /// Exit status of behaviour a command does not implement.
@@ -40,6 +40,7 @@ pub const COMMANDS: &[&str] = &[
     "editor-overlay",
     "synthesize-antenna",
     "si-check",
+    "emi-check",
     "issues",
     "view",
     "summarize",
@@ -116,6 +117,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
         "summarize" => summarize::run(rest, out, err),
         "assembly" => assembly::run(rest, out, err),
         "si-check" => si_check::run(rest, out, err),
+        "emi-check" => emi_check::run(rest, out, err),
         "route-board" => route_board::run(rest, out, err),
         "build" => crate::build::run(rest, out, err),
         "replay-critical" => replay_critical::run(rest, out, err),

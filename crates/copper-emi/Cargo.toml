@@ -1,0 +1,13 @@
+[package]
+name = "copper-emi"
+description = "Pure-numerics EMI/EMC screening estimators: spectra, limit lines, partial inductance, LISN and CISPR receiver detectors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

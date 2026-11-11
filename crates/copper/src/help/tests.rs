@@ -44,6 +44,7 @@ fn source(name: &str) -> &'static str {
         "replay-unified" => include_str!("../replay_unified.rs"),
         "route-board" => include_str!("../route_board.rs"),
         "route-global" => include_str!("../route_global.rs"),
+        "emi-check" => include_str!("../emi_check.rs"),
         "si-check" => include_str!("../si_check.rs"),
         "state" => include_str!("../state.rs"),
         "summarize" => include_str!("../summarize.rs"),

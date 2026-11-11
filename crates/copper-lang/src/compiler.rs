@@ -618,7 +618,9 @@ fn lower_unit(
                         &component.location,
                     ));
                 }
-                board.components.push(lower::component(component, &resolve_part(&component.part))?);
+                let instance = lower::component(component, &resolve_part(&component.part))?;
+                lower::check_component_frequency(&instance, library.get(&instance.part), &component.location)?;
+                board.components.push(instance);
                 board.sources.components.entry(component.reference.clone()).or_insert_with(|| at(&component.location));
             }
             Declaration::Port(port) => {
@@ -661,7 +663,15 @@ fn lower_unit(
                 board.sources.supplies.entry(supply.name.clone()).or_insert_with(|| at(&supply.location));
             }
             Declaration::Interface(interface) => board.interfaces.push(lower::interface(interface)?),
-            Declaration::Constraint(constraint) => board.constraints.push(lower::constraint(constraint)?),
+            Declaration::Constraint(constraint) => {
+                let lowered = lower::constraint(constraint)?;
+                if lowered.kind == ConstraintKind::Emission
+                    && board.constraints.iter().any(|item| item.kind == ConstraintKind::Emission)
+                {
+                    return Err(error("CMP131", "a board takes at most one emission constraint", &constraint.location));
+                }
+                board.constraints.push(lowered);
+            }
             Declaration::Configuration(configuration) => configurations.push(configuration),
             Declaration::PowerState(state) => board.power_states.push(lower::power_state(state)?),
             _ => {}
