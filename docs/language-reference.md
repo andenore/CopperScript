@@ -386,6 +386,58 @@ not model timing, hysteresis, current or the signal's rise time. Pins without
 `io_supply`, power domain or thresholds are not checked, so unannotated
 libraries stay quiet.
 
+### Pull resistors and undriven inputs
+
+A pin or pad can record what its datasheet says about pulls:
+
+```copper
+pin NRST {
+    number = "7";
+    domains = "digital"; directions = "input";
+    requires_pull = up;           // the datasheet demands an external pull-up
+    internal_pull = "up,down";    // a built-in or firmware-selectable pull
+}
+```
+
+`requires_pull` is `up` or `down`; any other value is `CMP120`. `internal_pull`
+is a comma-separated list of `up` and `down`, parsed like `drive_modes`; an
+unknown name is `CMP120`. Both are optional and appear in the IR as
+`profile.requires_pull` and `profile.internal_pull` only when declared.
+
+| Condition | Diagnostic |
+| --- | --- |
+| a pin with `requires_pull` is on a net with neither that pull nor a direct tie | error `MISSING_PULL` |
+| every pin on a net is a digital or clock input and nothing drives or pulls it | error `UNDRIVEN_INPUT` |
+| every pin that can drive a net is open-drain and the net has no pull-up | warning `OPEN_DRAIN_NO_PULLUP` |
+
+A net has a pull-up when a resistor joins it to a net with a declared non-zero
+supply, and a pull-down when a resistor joins it to a net with a declared 0 V
+supply. A net that itself carries a declared supply counts as tied high or low.
+`MISSING_PULL` is satisfied only by a resistor or a tie of the required
+direction; `internal_pull` does not satisfy it, because the datasheet asks for
+an external part. A pin that is on no net is left to the unconnected-pin checks.
+
+`UNDRIVEN_INPUT` looks only at nets without a declared supply. Every resolved
+pin must be input-only (direction exactly `input`) in a `digital` or `clock`
+domain. Any output, bidirectional, passive, power or analog pin, or a pin the
+library does not model, counts as a driver, as it does in KiCad, so a connector
+or switch contact keeps a net clean. A pull resistor to a supply or ground, or
+an `internal_pull` on any pin of the net, also satisfies it. A net with a
+single input pin is reported. There is one diagnostic per net.
+
+`OPEN_DRAIN_NO_PULLUP` looks only at nets without a declared supply. A driver
+is a pin with direction `output` or `bidirectional` in a `digital` or `clock`
+domain; the check applies when every driver has exactly the `open_drain` drive
+mode. A pull-up resistor, or any pin with `internal_pull` containing `up`,
+satisfies it. The `sda` and `scl` nets of an `i2c` interface are skipped
+because `I2C_MISSING_PULLUP` covers them, and a net with a `requires_pull = up`
+pin gets only `MISSING_PULL`.
+
+Limits: the resistor value is not checked, and an `internal_pull` is a
+firmware obligation that ERC does not verify. `UNDRIVEN_INPUT` and
+`OPEN_DRAIN_NO_PULLUP` need only `domains`, `directions` and `drive_modes`, so
+they also apply to libraries that declare no pull properties.
+
 Part and device provenance is optional. Definitions may use
 `source_document`, `source_revision`, `source_location`, `source_url`, and
 `source_checksum`; none is required to compile.

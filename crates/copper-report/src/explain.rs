@@ -129,6 +129,21 @@ pub const EXPLANATIONS: &[(&str, &str, &str)] = &[
         "A pin's explicit io_supply or rail-relative logic threshold could not be evaluated.",
         "Connect the named reference pin to a declared supply, or fix the reference.",
     ),
+    (
+        "MISSING_PULL",
+        "A pin declares requires_pull, but its net has no resistor to a declared supply (pull-up) or 0 V net (pull-down) and is not tied to one directly. The resistor value is not checked.",
+        "Add the pull resistor the datasheet demands, or tie the net to the rail if that is allowed.",
+    ),
+    (
+        "UNDRIVEN_INPUT",
+        "Every pin on the net is a digital or clock input, and nothing drives it: no declared supply, no pull resistor to a supply or ground, and no pin with an internal_pull. Passive, bidirectional, output, power and unmodeled pins count as drivers.",
+        "Connect an output, add a pull resistor, or declare internal_pull on the pin if firmware enables it.",
+    ),
+    (
+        "OPEN_DRAIN_NO_PULLUP",
+        "Every pin that can drive the net is open-drain, but the net has no pull-up resistor to a declared supply and no pin declares an internal pull-up. I2C nets are covered by I2C_MISSING_PULLUP.",
+        "Add a pull-up resistor, or declare internal_pull on a pin that has a pull-up you will enable in firmware.",
+    ),
     ("I2C_MISSING_SIGNAL", "An I2C interface does not map SDA or SCL.", "Add `sda = NET; scl = NET;`."),
     ("I2C_TOO_FEW_PARTICIPANTS", "An I2C interface binds fewer than two components.", "Bind the host and each target."),
     ("I2C_MISSING_BINDING", "A bound component has no SDA or SCL pin binding.", "Add the pin to its `bind` block."),
