@@ -7,34 +7,38 @@ board from electrical IR or bypass DRC.
 
 ```sh
 copper export-manufacturing build/board.kicad_pcb \
-  --kicad-cli kicad-cli --skip-independent-cam -o build/manufacturing
+  --skip-independent-cam -o build/manufacturing
 # Optional: include a reviewed BOM and matching JLCPCB placement file.
 copper assembly bom board.copper --locked --offline --lock assembly.lock -o build/bom.csv
 copper export-manufacturing build/board.kicad_pcb \
   --skip-independent-cam --bom build/bom.csv -o build/assembly-manufacturing
 ```
 
-KiCad is the default for every step, and stays available. Two options replace
-steps with CopperScript's own implementations:
+CopperScript's own implementations are the default for every step, so KiCad is
+not run and need not be installed. Two options select KiCad instead:
 
-- `--plotter native` writes the Gerbers, drills, IPC-D-356 netlist and
-  positions with CopperScript's own plotter ([native plotting](native-plotting.md)).
-  The files sit in the same places, except that positions are `positions.csv`
-  instead of `positions-kicad.csv`.
-- `--drc native` refills the zones with [`copper fill`](native-filling.md) and
-  gates the export on [`copper drc`](native-drc.md) instead of `kicad-cli pcb
-  drc`. Its report is `drc.json`. The plotted Gerbers and drills, from either
-  plotter, are then read back, and their connectivity is checked against the
-  board netlist.
+- `--plotter native` (the default) writes the Gerbers, drills, IPC-D-356
+  netlist and positions with CopperScript's own plotter
+  ([native plotting](native-plotting.md)). The files sit in the same places,
+  except that positions are `positions.csv` instead of `positions-kicad.csv`.
+  `--plotter kicad` plots with `kicad-cli`.
+- `--drc native` (the default) refills the zones with
+  [`copper fill`](native-filling.md) and gates the export on
+  [`copper drc`](native-drc.md). Its report is `drc.json`. The plotted Gerbers
+  and drills, from either plotter, are then read back, and their connectivity
+  is checked against the board netlist. `--drc kicad` refills and checks with
+  `kicad-cli pcb drc` instead.
 
-With `--drc native --plotter native`, KiCad is not run and need not be
-installed. The manifest records the choices: `drc`, `plotter`, `cam_readback`
+`--kicad-cli PATH` only names the `kicad-cli` program (default: `kicad-cli` on
+PATH) that `--drc kicad` or `--plotter kicad` run; it does not switch anything
+by itself. The manifest records the choices: `drc`, `plotter`, `cam_readback`
 and `drc_not_checked` (the KiCad checks the native DRC does not make).
 `kicad_version` is `null` when KiCad was not used.
 
 ```sh
+# The same export, refilled, checked and plotted by KiCad.
 copper export-manufacturing build/board.kicad_pcb --skip-independent-cam \
-  --drc native --plotter native -o build/manufacturing
+  --drc kicad --plotter kicad --kicad-cli kicad-cli -o build/manufacturing-kicad
 ```
 
 The explicit acknowledgement is mandatory. This is **manufacturing-file

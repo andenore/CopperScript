@@ -163,7 +163,10 @@ pub const COMMANDS: &[Command] = &[
         group: Group::Manufacture,
         summary: "export native-DRC-clean KiCad manufacturing files without independent CAM qualification",
         options: &[
-            Opt { flag: "--kicad-cli KICAD_CLI", help: "the kicad-cli program to run (default: kicad-cli)" },
+            Opt {
+                flag: "--kicad-cli KICAD_CLI",
+                help: "the kicad-cli program, used only with --drc kicad or --plotter kicad (default: kicad-cli)",
+            },
             Opt {
                 flag: "--skip-independent-cam",
                 help: "required acknowledgement that the files are not independently CAM-qualified",
@@ -174,8 +177,8 @@ pub const COMMANDS: &[Command] = &[
                        plotted files (default: kicad)",
             },
             Opt {
-                flag: "--plotter {kicad,native}",
-                help: "plot with kicad-cli or with CopperScript's own plotter (default: kicad)",
+                flag: "--plotter {native,kicad}",
+                help: "plot with CopperScript's own plotter or with kicad-cli (default: native)",
             },
             Opt {
                 flag: "--bom BOM",

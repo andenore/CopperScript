@@ -1,8 +1,8 @@
 //! `copper export-manufacturing PCB --skip-independent-cam -o OUTPUT
-//! [--kicad-cli PATH] [--drc kicad|native] [--plotter kicad|native]
+//! [--kicad-cli PATH] [--drc native|kicad] [--plotter native|kicad]
 //! [--bom BOM] [--replace]`: native-DRC-clean manufacturing files without
-//! independent CAM qualification, refilled, checked and plotted by KiCad or
-//! by CopperScript itself.
+//! independent CAM qualification, refilled, checked and plotted by
+//! CopperScript itself (the default) or by KiCad on request.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -15,7 +15,25 @@ use crate::option_parser::{self, flag, short_value, value};
 use crate::pypath;
 
 const USAGE: &str = "usage: copper export-manufacturing [-h] [--kicad-cli KICAD_CLI] --skip-independent-cam \
-[--drc {kicad,native}] [--plotter {kicad,native}] [--bom BOM] [--replace] -o OUTPUT pcb";
+[--drc {native,kicad}] [--plotter {native,kicad}] [--bom BOM] [--replace] -o OUTPUT pcb";
+
+/// The plotter and the checker: CopperScript's own unless `kicad` is named.
+fn choices(plotter: Option<&str>, checker: Option<&str>) -> Result<(Plotter, Checker), String> {
+    let invalid = |option: &str, other: &str| {
+        format!("argument {option}: invalid choice: '{other}' (choose from 'native', 'kicad')")
+    };
+    let plotter = match plotter {
+        None | Some("native") => Plotter::Native,
+        Some("kicad") => Plotter::Kicad,
+        Some(other) => return Err(invalid("--plotter", other)),
+    };
+    let checker = match checker {
+        None | Some("native") => Checker::Native,
+        Some("kicad") => Checker::Kicad,
+        Some(other) => return Err(invalid("--drc", other)),
+    };
+    Ok((plotter, checker))
+}
 
 pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
     let usage_error = |err: &mut dyn Write, message: &str| {
@@ -38,7 +56,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
     if parsed.flag("--help") {
         let _ = writeln!(
             out,
-            "{USAGE}\n\nexport native-DRC-clean KiCad manufacturing files without independent CAM qualification;\n--drc native refills and checks the board with CopperScript (and reads the plotted files back)\ninstead of kicad-cli; --plotter native writes the files with CopperScript's own plotter;\nwith both, KiCad is not needed"
+            "{USAGE}\n\nexport native-DRC-clean KiCad manufacturing files without independent CAM qualification;\nby default CopperScript refills and checks the board (and reads the plotted files back) and\nwrites the files with its own plotter, so KiCad is not needed; --drc kicad and --plotter kicad\nselect kicad-cli instead, and --kicad-cli names that program only when one of them is used"
         );
         crate::help::options(out, "export-manufacturing");
         return 0;
@@ -52,25 +70,9 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
             return usage_error(err, "the following arguments are required: pcb, --skip-independent-cam, -o/--output");
         }
     };
-    let plotter = match parsed.value("--plotter") {
-        None | Some("kicad") => Plotter::Kicad,
-        Some("native") => Plotter::Native,
-        Some(other) => {
-            return usage_error(
-                err,
-                &format!("argument --plotter: invalid choice: '{other}' (choose from 'kicad', 'native')"),
-            );
-        }
-    };
-    let checker = match parsed.value("--drc") {
-        None | Some("kicad") => Checker::Kicad,
-        Some("native") => Checker::Native,
-        Some(other) => {
-            return usage_error(
-                err,
-                &format!("argument --drc: invalid choice: '{other}' (choose from 'kicad', 'native')"),
-            );
-        }
+    let (plotter, checker) = match choices(parsed.value("--plotter"), parsed.value("--drc")) {
+        Ok(choices) => choices,
+        Err(message) => return usage_error(err, &message),
     };
     let kicad_cli = pypath::display(parsed.value("--kicad-cli").unwrap_or("kicad-cli"));
     let bom = parsed.value("--bom").map(|bom| {
@@ -118,6 +120,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn copperscript_plots_and_checks_unless_kicad_is_named() {
+        assert_eq!(choices(None, None), Ok((Plotter::Native, Checker::Native)));
+        assert_eq!(choices(Some("kicad"), None), Ok((Plotter::Kicad, Checker::Native)));
+        assert_eq!(choices(None, Some("kicad")), Ok((Plotter::Native, Checker::Kicad)));
+        assert_eq!(choices(Some("kicad"), Some("kicad")), Ok((Plotter::Kicad, Checker::Kicad)));
+        assert_eq!(choices(Some("native"), Some("native")), Ok((Plotter::Native, Checker::Native)));
+        assert!(choices(Some("gerbv"), None).is_err() && choices(None, Some("x")).is_err());
+    }
+
+    #[test]
     fn plotter_choice_is_validated_before_any_export() {
         let args: Vec<String> = ["board.kicad_pcb", "--skip-independent-cam", "--plotter", "gerbv", "-o", "out"]
             .iter()
@@ -126,7 +138,7 @@ mod tests {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         assert_eq!(run(&args, &mut out, &mut err), 2);
         let err = String::from_utf8(err).unwrap();
-        assert!(err.contains("invalid choice: 'gerbv' (choose from 'kicad', 'native')"), "{err}");
+        assert!(err.contains("invalid choice: 'gerbv' (choose from 'native', 'kicad')"), "{err}");
         assert!(out.is_empty());
         let args: Vec<String> = ["board.kicad_pcb", "--skip-independent-cam", "--drc", "freerouting", "-o", "out"]
             .iter()
