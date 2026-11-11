@@ -106,7 +106,10 @@ mkdir "$bundle/route" "$bundle/bom" "$bundle/orders" || die "cannot create $bund
 # partial copy.
 cp -a "$fab_dir" "$bundle/fab" || die "cannot copy $fab_dir"
 diff -rq "$fab_dir" "$bundle/fab" > /dev/null || die "the copy of $fab_dir differs from it"
-for file in run.json route-report.summary.json kicad-drc.json routing.log fill.log; do
+# The run names its DRC report (native-drc.json, or kicad-drc.json for a KiCad
+# run and for runs from before the field existed).
+drc_report="$(jq -r '.drc_report // "kicad-drc.json"' "$run/run.json")"
+for file in run.json route-report.summary.json "$drc_report" routing.log fill.log; do
   if [ -f "$run/$file" ]; then cp "$run/$file" "$bundle/route/" || die "cannot copy $run/$file"; fi
 done
 for file in "$run"/*.via-process.json "$order_dir"/*.csv "$order_dir"/assembly-report.json; do

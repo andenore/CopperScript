@@ -70,6 +70,8 @@ draft and its report. Add `--offline` after the URL package cache is populated.
 To attempt package escapes and detailed signal routing with native ground refill:
 
 ```powershell
+make EXAMPLE=round-led-ring route
+# Or refill and check with KiCad instead (writes kicad-drc.json):
 make EXAMPLE=round-led-ring route KICAD_CLI="C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"
 ```
 
@@ -88,7 +90,7 @@ the physical IR intentionally retains only fill intent.
 
 Exit 1 from `--route` means the routing/native gates did not all pass (including
 when native verification was not requested). Inspect `summary.json`,
-`fanout.json`, `detailed-route.json` and `kicad-drc.json`; do not infer completion
+`fanout.json`, `detailed-route.json` and `drc.json` (or `kicad-drc.json`); do not infer completion
 from the presence of a PCB file. Native zero opens/violations is distinct from
 manufacturing qualification and from native filled-zone polygons in the IR.
 Each rerun resets the summary to `running` before generation, so an interrupted

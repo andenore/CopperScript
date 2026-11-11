@@ -131,7 +131,7 @@ subsequent copper change invalidates it.
 `copper_route::flow::run_routing_pipeline` composes placement feedback, global
 guides, critical routing, general routing, and physical DRC without translating
 through a backend format. `copper export-manufacturing` then takes the final
-routed KiCad board, refills it, reruns native KiCad DRC and exports Gerber X2,
+routed KiCad board, refills it and reruns the DRC natively (KiCad's with `--drc kicad`), and exports Gerber X2,
 metric Excellon and IPC-D-356 files with a manifest and SHA-256 checksums; see
 [manufacturing files](manufacturing-files.md). The Python release API with its
 structural CAM parser was removed with the Python implementation. See `docs/routing-manufacturing-research.md` for the

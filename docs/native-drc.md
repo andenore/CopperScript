@@ -12,11 +12,14 @@ copper plot build/board.filled.kicad_pcb -o build/native-plot
 copper drc build/board.filled.kicad_pcb --report build/drc.json --cam build/native-plot
 ```
 
-`copper export-manufacturing --drc native` uses both as its release gate in
-place of `kicad-cli pcb drc` (see [manufacturing files](manufacturing-files.md)).
-KiCad's DRC remains the default and stays available. The native check is
-narrower than KiCad's: what it does not check is listed below, in every
-report and in the export manifest.
+`copper build` runs the fill and this check after routing and writes the
+report as `drc.json`, and `copper export-manufacturing` uses both as its release
+gate in place of `kicad-cli pcb drc` (see [manufacturing files](manufacturing-files.md)).
+KiCad's DRC stays available as the cross-check (`copper build --kicad-cli PATH`,
+`export-manufacturing --drc kicad`). The native check is narrower than KiCad's:
+what it does not check is listed below, in every report and in the export
+manifest. A board can therefore pass here and fail in KiCad, for example on
+`silk_over_copper`.
 
 ## Design-rule check
 
@@ -135,9 +138,9 @@ overlapping copper included. The native report has 2 to 15 more. These are
 real violations that KiCad does not list, because `kicad-cli` reports only
 the first error per track per layer unless "report all track errors" is set.
 
-`export-manufacturing --drc native --plotter native` on BysseControl-32 ran
-without KiCad (with `--kicad-cli` pointing at a missing program) in 10 s,
-against 27 s for the KiCad path. Compared with the KiCad export:
+`export-manufacturing --drc native --plotter native` (now the defaults) on
+BysseControl-32 ran without KiCad (with `--kicad-cli` pointing at a missing
+program) in 10 s, against 27 s for the KiCad path. Compared with the KiCad export:
 
 - mask, paste, silkscreen and profile layers match;
 - drills, netlist connectivity and positions match;

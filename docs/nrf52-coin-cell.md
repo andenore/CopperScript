@@ -56,6 +56,8 @@ placed on the back near the lower edge to clear the SWD header's silk and pads.
 native refill and DRC:
 
 ```sh
+make EXAMPLE=nrf52 route
+# Or refill and check with KiCad instead:
 make EXAMPLE=nrf52 route KICAD_CLI="C:/Program Files/KiCad/10.0/bin/kicad-cli.exe"
 ```
 

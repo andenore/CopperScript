@@ -181,8 +181,10 @@ The standard `route-board` pipeline owns bounded placement/package feedback,
 ordinary routing and native-filled copper repair. Supply the board's actual
 layers, fabrication profile, footprints and macro assets. See
 [routing profiles and invariants](docs/filled-copper-feedback.md) and
-[build configuration](docs/make-builds.md). KiCad 10 is needed for the qualified
-native refill adapter. Outputs and reports go into fresh build directories;
+[build configuration](docs/make-builds.md). Fill and DRC are CopperScript's own,
+so a run needs no KiCad; KiCad 10 is the optional cross-check (`KICAD_CLI` for
+`make route`, `--verify-plane-fill KICAD_CLI` for `route-board`). Outputs and
+reports go into fresh build directories;
 failed runs remain review drafts.
 
 ## Qualification and outputs

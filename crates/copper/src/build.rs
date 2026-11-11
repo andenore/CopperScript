@@ -1,5 +1,6 @@
 //! `copper build SOURCE [options] -- [ROUTE-BOARD OPTIONS...]`: the atomic
-//! board build of `make/route-build.sh`, run inside the binary.
+//! board build behind `make route`, run inside the binary (it replaced the bash
+//! script `make/route-build.sh`).
 //!
 //! One build runs `check` (which resolves the board's imports and physical
 //! macro assets), `route-board`, a saved refill of the routed board with a
@@ -259,8 +260,8 @@ fn parse(arguments: &[String], out: &mut dyn Write) -> Result<Option<Settings>, 
              gate, in order, into a new directory below the project's build/. Everything after -- goes to\n\
              route-board; the output, report, verification and resolution options are set by the build and\n\
              rejected there. The plan is printed first. run.json records the inputs and their hashes, the\n\
-             commands, the verification mode, the status and the exit code. This is the in-process equivalent\n\
-             of make/route-build.sh, which stays available.\n\n\
+             commands, the verification mode, the status and the exit code. make route runs this\n\
+             command.\n\n\
              exit status: 0 passed, 1 unmet completion gates, 2 setup or runner error, 3 unsupported"
         );
         crate::help::options(out, "build");

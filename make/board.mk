@@ -13,9 +13,12 @@ OUT ?= $(PROJECT_ROOT)/build/$(BOARD_NAME)
 LAYERS ?=
 FAB_PROFILE ?= generic
 RESOLVE_ARGS ?= --locked
+# Empty (the default): `route` refills zones and checks the board with
+# CopperScript itself and needs no KiCad. Set it to a kicad-cli path to refill
+# and check with KiCad instead (`copper build --verify kicad`).
 KICAD_CLI ?=
-# Optional native KiCad path for independent refill/DRC; CopperScript resolves
-# managed footprints from the Git dependencies declared by each example.
+# KiCad's footprint folder, for boards that use KiCad footprint ids without a
+# pinned footprint package; managed footprints resolve from copper.mod.
 KICAD_FOOTPRINTS ?= $(KICAD10_FOOTPRINT_DIR)
 PHYSICAL_ARGS ?=
 PLACEMENT_TEMPLATES ?=
@@ -29,7 +32,7 @@ BUILD_ARGS ?=
 EDITOR_ARGS ?=
 KICAD_PYTHON ?= /usr/bin/python3
 
-_paths = $(if $(strip $(KICAD_CLI)),--kicad-cli "$(KICAD_CLI)") $(if $(strip $(KICAD_FOOTPRINTS)),--kicad-footprints "$(KICAD_FOOTPRINTS)")
+_paths = $(if $(strip $(KICAD_CLI)),--verify kicad --kicad-cli "$(KICAD_CLI)") $(if $(strip $(KICAD_FOOTPRINTS)),--kicad-footprints "$(KICAD_FOOTPRINTS)")
 _layer_args = $(if $(strip $(LAYERS)),--layers $(LAYERS))
 _physical_common = $(_layer_args) --fab-profile $(FAB_PROFILE) \
  $(if $(strip $(PLACEMENT_TEMPLATES)),--placement-templates "$(PLACEMENT_TEMPLATES)") \
@@ -51,10 +54,11 @@ edit:
 editor-overlay:
 	$(if $(strip $(RUN_DIR)),,$(error Set RUN_DIR to an existing completed routing run))
 	$(COPPER) editor-overlay "$(RUN_DIR)/run.json" --kicad-python "$(KICAD_PYTHON)" -o "$(RUN_DIR)/editor-overlay.json"
-# Atomic route + saved fill + native DRC. Every default run has a fresh directory.
-# RUN_DIR selects a new/empty path; intentionally no recursive clean target.
+# Atomic route + saved fill + DRC (CopperScript's own, or KiCad's with KICAD_CLI).
+# Every default run has a fresh directory. RUN_DIR selects a new/empty path;
+# intentionally no recursive clean target.
 route:
-	bash "$(BOARD_MK_DIR)/route-build.sh" "$(SOURCE)" --copper "$(COPPER)" --project-root "$(PROJECT_ROOT)" --output-root "$(OUT)/runs" $(if $(strip $(RUN_DIR)),--output-dir "$(RUN_DIR)") $(RESOLVE_ARGS) $(_paths) $(BUILD_ARGS) -- $(_physical) $(ROUTE_ARGS) $(EXTRA_ROUTE_ARGS)
+	$(COPPER) build "$(SOURCE)" --project-root "$(PROJECT_ROOT)" --output-root "$(OUT)/runs" $(if $(strip $(RUN_DIR)),--output-dir "$(RUN_DIR)") $(RESOLVE_ARGS) $(_paths) $(BUILD_ARGS) -- $(_physical) $(ROUTE_ARGS) $(EXTRA_ROUTE_ARGS)
 # Release bundle for manual archiving: the `order` export, the route run that
 # produced it and the BOM, checksummed and zipped under build/release/RELEASE.
 # Set RELEASE (e.g. make release RELEASE=123456-1); the project's `bom` target
