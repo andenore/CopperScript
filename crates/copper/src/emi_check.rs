@@ -23,7 +23,7 @@ use crate::pypath;
 
 const USAGE: &str = "usage: copper emi-check [-h] [--locked] [--offline] [--layers {2,4,6}] \
 [--fab-profile {generic,jlcpcb-four-layer,jlcpcb-six-layer}] [--footprint-root FOOTPRINT_ROOT] \
-[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--json] board";
+[--allow-proxy-footprints] [--run RUN [--write]] [--plot-spectrum PLOT_SPECTRUM] [--plot-field PLOT_FIELD] [--field-height FIELD_HEIGHT] \n[--fullwave] [--fullwave-fidelity {coarse,fine}] [--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh] [--json] board";
 
 fn not_implemented(err: &mut dyn Write, what: &str) -> u8 {
     let _ = writeln!(err, "copper: {NOT_IMPLEMENTED_MARKER}: emi-check ({what})");
@@ -51,6 +51,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         value("--fullwave-fidelity"),
         value("--fullwave-budget"),
         value("--fullwave-margin"),
+        flag("--fullwave-single-mesh"),
         flag("--json"),
     ];
     let parsed = match option_parser::parse(arguments, &specs) {
@@ -61,7 +62,7 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         let _ = writeln!(
             out,
             "{USAGE}\n\nscreen the placed switching cells for noise sources (hot-loop area and inductance, switch-node copper, \
-             inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (one solver run, tens of seconds to minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer, \n             --fullwave-margin MM sets the window margin around the loop)"
+             inductor and switch-node proximity); screening evidence, not EMC qualification. --fullwave adds, per buck cell, the \n             hot-loop inductance from a region full-wave (FDTD) model of the loop (two meshes, a standard one and one refined by 1.5 around the port and pads, when the budget allows: minutes; \n             --fullwave-fidelity coarse|fine, --fullwave-budget SECONDS refuses a model estimated to run longer and stops one that overruns it by half, \n             --fullwave-margin MM sets the window margin around the loop, --fullwave-single-mesh runs one mesh only)"
         );
         crate::help::options(out, "emi-check");
         return 0;
@@ -236,9 +237,12 @@ fn fullwave_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_
     let (fidelity, budget, margin) =
         (parsed.value("--fullwave-fidelity"), parsed.value("--fullwave-budget"), parsed.value("--fullwave-margin"));
     if !parsed.flag("--fullwave") {
-        for (name, given) in
-            [("--fullwave-fidelity", fidelity), ("--fullwave-budget", budget), ("--fullwave-margin", margin)]
-        {
+        for (name, given) in [
+            ("--fullwave-fidelity", fidelity),
+            ("--fullwave-budget", budget),
+            ("--fullwave-margin", margin),
+            ("--fullwave-single-mesh", parsed.flag("--fullwave-single-mesh").then_some("")),
+        ] {
             if given.is_some() {
                 return Err(format!("argument {name}: needs --fullwave"));
             }
@@ -267,6 +271,7 @@ fn fullwave_options(parsed: &option_parser::Parsed) -> Result<Option<crate::emi_
         fidelity,
         budget_seconds: positive("--fullwave-budget", budget)?,
         margin_mm: positive("--fullwave-margin", margin)?,
+        single_mesh: parsed.flag("--fullwave-single-mesh"),
     }))
 }
 

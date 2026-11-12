@@ -15,6 +15,8 @@ pub enum Error {
     Budget(String),
     /// The solver failed.
     Solver(String),
+    /// The wall-clock guard stopped the run after it exceeded its budget by the margin.
+    BudgetExceeded(crate::solve::PartialRun),
     /// The case is outside what this slice models.
     NotSupported(String),
 }
@@ -23,6 +25,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Invalid(m) | Error::Budget(m) | Error::Solver(m) | Error::NotSupported(m) => f.write_str(m),
+            Error::BudgetExceeded(p) => write!(f, "{p}"),
         }
     }
 }
@@ -108,15 +111,23 @@ pub struct PortSpec {
     pub kind: PortKind,
     /// Reference impedance and termination resistance, ohm.
     pub z_ref: f64,
+    /// Join a gap port to its pads by straps even where the pads face each other across free space.
+    pub strap: bool,
 }
 
 impl PortSpec {
     pub fn gap(name: &str, from: Terminal, to: Terminal) -> PortSpec {
-        PortSpec { name: name.to_owned(), kind: PortKind::Gap { from, to }, z_ref: 50.0 }
+        PortSpec { name: name.to_owned(), kind: PortKind::Gap { from, to }, z_ref: 50.0, strap: false }
     }
 
     pub fn to_plane(name: &str, top: Terminal, plane: CopperLayer) -> PortSpec {
-        PortSpec { name: name.to_owned(), kind: PortKind::ToPlane { top, plane }, z_ref: 50.0 }
+        PortSpec { name: name.to_owned(), kind: PortKind::ToPlane { top, plane }, z_ref: 50.0, strap: false }
+    }
+
+    /// Make a gap port a strap port (see [`PortSpec::strap`]).
+    pub fn with_strap(mut self) -> PortSpec {
+        self.strap = true;
+        self
     }
 
     pub fn with_z_ref(mut self, z_ref: f64) -> PortSpec {
@@ -146,6 +157,20 @@ pub struct ExtraTrace {
     pub width_nm: i64,
 }
 
+/// A rectangle of the board where the mesh is finer than elsewhere (the ports,
+/// the bridges and the pads of a loop). Cells are `cell_nm` inside, grow by
+/// 0.3 per unit of distance outside (neighbouring cells stay within 1.5) and
+/// the 1/3 edge rule uses the local cell. Because the mesh is a tensor
+/// product, the rectangle's x range is fine for every y and the y range for
+/// every x.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RefineBox {
+    pub name: String,
+    /// `[x0, y0, x1, y1]` in board nanometres.
+    pub rect_nm: [i64; 4],
+    pub cell_nm: i64,
+}
+
 /// Limits on what a run may cost. Both are checked before the time loop.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Budget {
@@ -158,11 +183,14 @@ pub struct Budget {
     /// low end of the rates measured on the 6-core laptop in
     /// `docs/antenna-synthesis-performance.md` (135 to 350 M/s).
     pub assumed_rate: f64,
+    /// A run is stopped by the wall-clock guard when its time loop has taken
+    /// `max_seconds x wall_margin` seconds (the estimate is only an estimate).
+    pub wall_margin: f64,
 }
 
 impl Default for Budget {
     fn default() -> Self {
-        Budget { max_cell_updates: 4.0e11, max_seconds: 1800.0, assumed_rate: 1.5e8 }
+        Budget { max_cell_updates: 4.0e11, max_seconds: 1800.0, assumed_rate: 1.5e8, wall_margin: 1.5 }
     }
 }
 
@@ -188,6 +216,16 @@ pub struct RegionSpec {
     /// Override of the copper-region cell, nm (otherwise derived from the
     /// narrowest copper feature and the fidelity).
     pub cell_nm: Option<i64>,
+    /// Local refinement: rectangles with their own, smaller cell.
+    pub refine: Vec<RefineBox>,
+    /// Smooth the x and y meshes (see `AxisPlan::smooth`): grade into gaps smaller than the cell, ramp
+    /// cells up after a small one, relax jumps between neighbouring cells, and take conductors of
+    /// different nets closer than 0.075 mm to overlap. Always on with refinement zones. Off by default
+    /// so that the validation meshes keep the original cutting.
+    pub smooth_mesh: bool,
+    /// Multiplier of every refinement cell (1 by default; 1/1.5 makes the
+    /// refined second mesh of a convergence estimate). The general cell is unchanged.
+    pub refine_scale: f64,
     /// Air between the modelled window and the PML, nm (default: the larger
     /// of 8 mm and half the window's longer side).
     pub air_margin_nm: Option<i64>,
@@ -207,6 +245,9 @@ pub struct RegionSpec {
     pub include_pads: bool,
     /// Include copper zones (as their outline minus holes; fills are unknown).
     pub include_zones: bool,
+    /// The excitation pulse is a baseband Gaussian with 20 dB at `band_hz.1 x pulse_scale` (default 1).
+    /// A larger scale makes the pulse, which sets the shortest run, proportionally shorter.
+    pub pulse_scale: f64,
     /// Stop when the field energy has decayed this far (dB, negative).
     pub decay_db: f64,
     /// Simulated-time cap, ns; `None` derives it from the window.
@@ -230,11 +271,15 @@ impl RegionSpec {
             band_hz: (100e6, 1e9),
             fidelity: Fidelity::Coarse,
             cell_nm: None,
+            refine: Vec::new(),
+            smooth_mesh: false,
+            refine_scale: 1.0,
             air_margin_nm: None,
             extend_planes: false,
             edge_inset: 1.0 / 3.0,
             include_pads: true,
             include_zones: true,
+            pulse_scale: 1.0,
             decay_db: -35.0,
             max_time_ns: None,
             threads: 0,

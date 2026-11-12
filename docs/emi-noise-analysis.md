@@ -719,8 +719,8 @@ to ngspice as an optional external process.
 
 ## 11. Region-of-interest full wave (phase 4)
 
-Status: first slice implemented in `crates/copper-fullwave`. Screening evidence
-only: nothing here qualifies a design.
+Status: second iteration implemented in `crates/copper-fullwave`. Screening
+evidence only: nothing here qualifies a design.
 
 **What it is.** `RegionModel::build(board, &RegionSpec)` translates the part of a
 `PhysicalBoard` inside an axis-aligned window into a model for the pinned
@@ -729,8 +729,9 @@ port, the others terminated in their reference impedance) and return Z, S and
 Touchstone text. `describe()` states the mesh, the cost estimate, the flags and
 every approximation before anything runs. `hotloop::extract_hot_loop` builds
 the region of a buck cell's hot loop from its `EMI-HOT-LOOP` finding and
-returns the loop inductance; `copper emi-check --fullwave` attaches it to the
-finding (see the language reference).
+returns the loop inductance, from two meshes when the budget allows;
+`copper emi-check --fullwave` attaches it to the finding (see the language
+reference).
 
 **Model contents.**
 
@@ -742,123 +743,310 @@ finding (see the language reference).
 - Copper as zero-thickness PEC sheets on mesh planes (optionally the solver's
   `ConductingSheet` per net, default PEC): placed pads (a rounded pad is the hull
   of 12-gons of equal area), tracks at any angle (a rectangle with square
-  ends), arcs (chord chains), copper polygons, zones (the outline minus its
-  declared holes, as one keyhole ring; fills are unknown, flag
-  `zone_outline_used`) and the copper of hard macros. Zones get an octagonal
-  antipad where a via or plated hole of another net crosses them; foreign
-  same-layer copper under a zone outline is not cut (flag
-  `zone_overlaps_foreign_copper`).
+  ends), arcs (chord chains), copper polygons, zones and the copper of hard macros. A zone is its
+  outline minus its declared holes, an octagonal antipad where a via or plated hole of another net
+  crosses it and, new in iteration 2, the zone clearance around the copper of other nets on the same
+  layer (pads, tracks, bridges, legs: a polygon difference with `copper_cam::poly`, one keyhole sheet
+  per piece that remains; flag `zone_cut_around_foreign_copper`). Fills are unknown (flag
+  `zone_outline_used`): thermal reliefs, minimum widths and islands are not applied. Without the cut, a
+  pour on the layer of the loop's pads shorted the switch node to ground in the CopperOrgan model
+  (flag `zone_overlaps_foreign_copper` now means a pour is still over foreign copper).
 - Vias and plated holes as one-cell vertical PEC wires between the layers they span,
   on the mesh line the mesher puts at their centre (no barrel radius, no annular
   rings).
 - Bridges (the hull of two pads as a PEC strap, for a capacitor or diode),
-  added traces (the straight legs of a placed, unrouted loop) and lumped ports:
-  in-plane between two facing pads or rectangles, or from a pad down to a
-  plane layer. `solve_all` gives S; `PortMatrix::z_at` gives Z for real
+  added traces (the straight legs of a placed, unrouted loop), port straps (below)
+  and lumped ports: in-plane between two pads or rectangles, or from a pad down to
+  a plane layer. `solve_all` gives S; `PortMatrix::z_at` gives Z for real
   reference impedances; `touchstone()` writes `.sNp`.
 - Copper is cut at the window edge (flag `copper_cut_at_window`) and planes end
   there (flag `planes_truncated`) unless `extend_planes` continues plane-like
   copper and the dielectric through the air into the PML. Keep the margin
   generous.
 
+**Ports.** An in-plane port is a lumped element in a box between two terminals
+on one layer.
+
+- *Facing pads.* When the two terminals overlap in one axis and are separated
+  in the other, with no copper of another net crossing the gap, the port spans the gap
+  between the (inset) pad edges, as wide as the overlap. This is the
+  asynchronous buck's port across the high-side switch. Copper of the
+  terminals' own nets that reaches into the gap (the square end of a placed leg) does not
+  block it.
+- *Pads that do not face each other* (diagonal, or an obstructed gap: a
+  QFN's pads on different sides, the common case on synchronous bucks): a strap port
+  (flag `port_strap`). PEC straps of width equal to the narrowest pad dimension
+  (0.2 to 1 mm, the closed form's bar width) run from the nearest edge of each pad, as one
+  straight bar when the pads overlap in one axis and as an L (horizontal out of one pad, vertical
+  into the other) when they overlap in neither, and the port sits at the middle of the longest leg
+  with a gap of two cells (at least 0.4 mm). `PortSpec::with_strap()` forces this for
+  facing pads. The strap is not in the real loop, so its inductance is a known bias that the
+  result includes and does not subtract: `port_strap_nh` is the closed form of the
+  strap bars over the nearest plane below (partial inductances with the image; free space when
+  there is none), and it is stated in the notes. The straps cross whatever lies between the
+  pads. Where foreign copper lies under that path (the exposed pad of a QFN or HSOIC between the pads
+  of two sides: the strap would short it to the switch node, and the port box on it has no usable
+  edge), the strap runs in the air, `AIR_BRIDGE_HEIGHT_MM` = 0.3 mm above the layer on two vertical
+  PEC posts at the pads (flag `port_strap_in_air`): the package's lead frame, with the port in its middle.
+  The bias is then larger and less certain; the closed form uses the bars at that height over the plane
+  (the posts are not in the estimate).
+- *Synchronous buck.* The finding's four-pad loop (capacitor, hot supply, hot return,
+  capacitor) does not name the switch node; `copper emi-check` looks up the controller's pad on a
+  switch net nearest the hot supply pad. With it, the port is across the high-side switch (hot supply
+  pad to switch pad, a strap port when they do not face each other) and the low-side switch is a bridge
+  from the switch pad to the hot return pad (the hull of the two pads), so the model carries the
+  loop capacitor, high-side switch, low-side switch and capacitor in series. Without a switch pad the
+  port is directly across the hot supply and hot return pads (the earlier model). The hull of two
+  distant pads is a copper blob that covers whatever lies between them; the
+  flag for that is not yet raised (see next steps).
+
 **Mesher.** Every line is chosen by the crate. Lines at copper edges (the
 axis-parallel edges and bounding box of each ring), ports, vias and the window;
-lines within 0.4 of the cell merge into the higher rank (port > copper > via >
-window), lines of different nets never merge unless closer than a tenth of a
-cell, and every move is reported. The copper cell is half (coarse) or a quarter
-(fine) of the narrowest modelled feature, clamped; cells grow by 1.3 outside the
-fine zone, at most 1 mm in the window and 3 mm in air; z has at least two
-(three fine) cells per dielectric; neighbouring cells are split until their
-ratio is at most 1.5 (the report states any pair left above). **The 1/3
-rule.** A PEC edge on a mesh line behaves as if the metal reached about half a
-cell further, which made a w/h = 2 microstrip 9 % (cell 0.5 mm) and 6 %
-(0.25 mm) low in impedance and converged roughly as the 0.7 power of the cell; every outward
-edge is therefore moved a third of a cell into the metal (`edge_inset`).
-Before the solver starts the model reports cells, the time step, the expected
-steps and the run time at an assumed 150 M cell updates per second, and a run
-above `Budget` (cell updates or seconds) is refused.
+lines within 0.4 of the local cell merge into the higher rank (port > copper > via >
+window), lines of different nets never merge unless closer than a quarter of the minimum cell
+(0.075 mm with smoothing: see below), and every move is reported. The general
+copper cell is half (coarse) or a quarter (fine) of the narrowest modelled feature,
+clamped to 0.15-0.5 mm (coarse) and 0.075-0.25 mm (fine); z has at least two (three fine) cells per
+dielectric; cells grow by 1.3 outside the fine zone, at most 1 mm in the window and
+3 mm in air.
+
+- *Local refinement* (`RegionSpec::refine`, `RefineBox`). A rectangle of the
+  board gets its own cell, `min(box cell, general cell) x refine_scale`; outside it
+  cells grow by 0.3 per unit of distance, so neighbours stay within 1.3 to 1.5. The mesh is a
+  tensor product, so the x range of a box is fine for every y. The hot loop refines the whole
+  loop window (pads, legs, bridges, port, polygon, plus 0.3 mm) at a quarter of the narrowest
+  loop pad, 0.2 to 0.25 mm (up to 200 mm2, else only around the port, the bridges and the
+  pads); the rest stays at the general cell. The z cells follow the finest cell.
+- *The 1/3 rule* (unchanged): every outward-facing copper edge moves a third of the
+  local cell into the metal, because a PEC edge on a mesh line behaves as if the metal reached
+  about half a cell further (it made a w/h = 2 microstrip 9 % low in impedance at
+  a 0.5 mm cell). The local cell is that of the edge's normal axis at the edge, so a pad inside
+  a refinement box is insetted by a third of the refined cell, and a plane's edge by a third
+  of the coarse one.
+- *Smooth meshes* (`RegionSpec::smooth_mesh`, always on for the hot loop and with refinement
+  zones; off for the validation models, which keep the original cutting). In iteration 1
+  the grading pass split the larger of two cells whose ratio exceeded 1.5 into equal pieces, up
+  to 24 times. A jump of 1.55 at one kept line therefore cascaded outwards, halving every cell
+  to the boundary: the coarse emi_buck mesh had 3 violations and many more cells than its features
+  needed. Now a gap between kept lines narrower than 0.9 of the target becomes a refinement
+  zone of its own (cells grow from its size by 1.3), a gap starts with at most 1.3 times the cell
+  before it and ends in cells rounded to the target, free lines are relaxed where neighbours differ by
+  more than 1.4, and the splitting pass never cuts a piece below 0.9 of the smallest cell the
+  features need (the time step follows the smallest cell; 0.029 mm cells had cost the CopperOrgan
+  model 1.5 times the steps). What remains is reported, with positions and where they are (window,
+  air or PML) in `describe()`; the remaining pairs sit in crowded corners of dense copper
+  or in the air.
+- Before the solver starts the model reports cells, the time step, the expected steps and the
+  run time at an assumed 150 M cell updates per second (the measured rate is 250-300 M/s
+  on the 6-core laptop), and a run above `Budget` (cell updates or seconds) is refused.
+
+**Run control.** The excitation is a baseband Gaussian with 20 dB at the top of the band
+(1 GHz); its support is 3.6 / 1 GHz = 3.6 ns, and the solver does not look at the energy
+before the pulse has ended. On the validation loops over a plane the energy was 55 to 65 dB below
+its maximum when the pulse ended, so the run ends at
+the first energy check after 3.6 ns (13,451 steps of 0.268 ps on the 6 x 4 mm loop; 13,601 steps of 0.264 ps
+on the placed emi_buck); the loop in free space, which radiates and rings longer, needed 4.14 ns (-34 dB at
+4.05 ns), and the CopperOrgan loop, which resonates at 348 MHz, had not reached -35 dB when the cap ended
+it (below).
+The pre-run estimate is now `3.6 ns + 8 diagonals / c` in simulated time over the Courant step
+(iteration 1 used 8 dielectric transits, which put it 24 to 39 % above the run on the four plane cases
+measured here and 3 % above the free-space one; the one fine placed run of iteration 1 took twice the expected
+steps, most likely because slivers of 0.04 mm in its mesh set a time step that the estimate did not see (the mesher no longer produces them; not re-run on the old code):
+the fine placed run now takes 13,751 steps against 16,123 expected). It is 15 to 18 % above the run on all
+seven decaying hot-loop runs of this section (placed, fine, routed and TPS62130A meshes), and 3.0 times below it
+on the CopperOrgan loop, which rings: the solver's cap of three times the expected time ended that run with the
+energy above -35 dB (`energy_not_converged`). **A finite record cannot replace the decayed one:** truncating the V and
+I records of the loops at 80 % of their length (no window) changes L by -2.2 % (6 x 4 mm loop), -4.6 % (10 x 6 mm
+over a plane) and -8.7 % (free space); a Hann taper over the last half of the record by -10 to -13 %
+at full length and -26 to -29 % at 80 %, because the product of Z with the window is not Z times the
+window's spectrum when the loop's memory is not short against the window; so the decay-based end
+criterion stays, and so does the 35 dB threshold. A shorter pulse is the other lever:
+scaling its bandwidth by 1.5 / 2 / 3 shortens the run by 33 / 50 / 61 % over a plane
+(19 / 29 / 38 % in free space) and changes L by -0.5 / -1.8 / -2.4 % (-0.5 / -0.85 / -1.3 %), so
+`pulse_scale` exists (`RegionSpec`, default 1) and is not used. **Wall-clock guard:** a run whose time loop
+takes longer than `Budget::max_seconds x wall_margin` (1.5) seconds is stopped from the
+solver's progress callback and reported as `Error::BudgetExceeded` with the steps done
+against the steps expected, the simulated time, the energy level and the seconds
+(`measures.fullwave.status = "budget_exceeded"`, coverage `failed` with the same
+text); the check on the estimate before the run is unchanged.
+
+**Convergence estimate.** `extract_hot_loop` runs the standard mesh and, unless
+`convergence` is off or the budget is short, a second one with the refinement cells divided by
+1.5 (or, if that does not fit what is left of the budget at the update rate measured by the first run,
+multiplied by 1.5, which is cheaper; a mesh identical to the standard one is not run). `inductance_nh` is the
+finer mesh's; `mesh_error_estimate_pct` is |L2 - L1| / L(finer) in percent; `meshes` lists both runs; a single
+mesh gives `mesh_error_estimate_pct: null` and the flag `single_mesh`. **What the estimate is.** With a
+first-order law (below), the error of the finer value is the difference divided by (1.5 - 1), twice the estimate:
+4.78 % on the placed emi_buck, whose finer value is 10.6 % above the extrapolated limit and 4.8 % above the 0.1 mm run. The
+extrapolation itself is reported next to it, `inductance_extrapolated_nh` = L2 + (L2 - L1) / 0.5, only for a
+refined second mesh with a falling L, and never as `inductance_nh`: the law was observed on three series (below)
+but each of them has mesh-to-mesh noise of 0.3 % and a pair of nearly equal cells would amplify it.
 
 **Validation** (synthetic boards, `crates/copper-fullwave/tests/validation.rs`;
-debug build with the optimised solver, 6 threads; every number measured):
+debug build with the optimised solver, 6 threads; every number measured; "iteration 1"
+is the table this section replaced, "now" the same tests re-run after the mesher,
+port and run-control changes of iteration 2, which leave these models' meshes as they
+were: smoothing and refinement are off for them):
 
-| Case | Target | Measured | Result | Run time |
-| --- | --- | --- | --- | --- |
-| 3a microstrip w/h = 2, h 0.5 mm, er 4.3: Z0 from S | Hammerstad-Jensen 49.40 ohm, 5 % | 50.54 ohm (+2.3 %) | pass | 3 s |
-| 3a h 0.2 mm, w 0.4 mm | 5 % | 50.29 ohm (+1.8 %) | pass | 43 s |
-| 3a h 1.5 mm, w 3.0 mm | 5 % | 49.09 ohm (-0.6 %) | pass | 8 s |
-| 3a terminated in 50.54 ohm | S11 < -15 dB, S21 near 0 dB | worst S11 -33.5 dB, worst S21 -0.01 dB, 0.5-3 GHz | pass | 3 s |
-| 3b 10 x 6 mm loop of 0.5 mm trace, 0.2 mm over a plane | closed form 8.110 nH, 15 % | 8.255 nH (+1.8 %), flat to 0.23 % over 50-150 MHz | pass | 33 s |
-| 3b same, free space | closed form 21.701 nH, 15 % | 21.144 nH (-2.6 %), flat to 0.95 % | pass | 14 s |
-| 3c bottom bar on In1.Cu through two vias | closed form 10.784 nH (bars 10.625 + vias 0.158), direction and 15 % | 10.926 nH (+1.3 %); all on F.Cu 11.811 nH (closed form 11.787); change -0.885 nH against -1.003 nH. The via term the model implies is about 0.28 nH against the 0.16 nH estimate: an order of magnitude check only | pass | 67 s |
-| 3d 6 x 4 mm loop, coarse against fine | 5 % | 5.036 nH against 4.926 nH (+2.2 %); closed form 4.987 nH | pass | 10 s + 79 s |
-| 3e reciprocity and passivity of 3a | 0.1 dB, a few degrees, |S11|^2+|S21|^2 <= 1 | 0.006 dB, 0.008 deg, 1.00007 | pass | shared with 3a |
+| Case | Target | Iteration 1 | Now | Result | Run time now |
+| --- | --- | --- | --- | --- | --- |
+| 3a microstrip w/h = 2, h 0.5 mm, er 4.3: Z0 from S | Hammerstad-Jensen 49.40 ohm, 5 % | 50.54 ohm (+2.3 %) | 50.53 ohm (+2.3 %) | pass | 5 s |
+| 3a h 0.2 mm, w 0.4 mm | 5 % | 50.29 ohm (+1.8 %) | 50.29 ohm (+1.8 %) | pass | 30 s |
+| 3a h 1.5 mm, w 3.0 mm | 5 % | 49.09 ohm (-0.6 %) | 49.09 ohm (-0.6 %) | pass | 8 s |
+| 3a terminated in its Z0 | S11 < -15 dB, S21 near 0 dB | -33.5 dB, -0.01 dB | -33.6 dB, -0.01 dB, 0.5-3 GHz | pass | 5 s |
+| 3b 10 x 6 mm loop of 0.5 mm trace, 0.2 mm over a plane | closed form 8.110 nH, 15 % | 8.255 nH (+1.8 %), flat to 0.23 % over 50-150 MHz | 8.255 nH (+1.8 %), flat to 0.23 % | pass | 32 s |
+| 3b same, free space | closed form 21.701 nH, 15 % | 21.144 nH (-2.6 %), flat to 0.95 % | 21.144 nH (-2.6 %), flat to 0.95 % | pass | 13 s |
+| 3c bottom bar on In1.Cu through two vias | closed form 10.784 nH (bars 10.625 + vias 0.158), direction and 15 % | 10.926 nH (+1.3 %); all on F.Cu 11.811 nH (closed form 11.787); change -0.885 nH against -1.003 nH | the same | pass | 34 s + 35 s |
+| 3d 6 x 4 mm loop, coarse against fine | 5 % | 5.036 nH against 4.926 nH (+2.2 %); closed form 4.987 nH | the same | pass | 9 s + 75 s |
+| 3e reciprocity and passivity of 3a | 0.1 dB, a few degrees, \|S11\|^2+\|S21\|^2 <= 1 | 0.006 dB, 0.008 deg, 1.00007 | 0.006 dB, 0.008 deg, 1.00007 | pass | shared with 3a |
 
-Where inductance is read: L = Im(Z)/(2 pi f) at 50 to 150 MHz (3:1), far below
-the loop's first resonance (L rises 3 % by 500 MHz and 14 % by 1 GHz in 3b,
-which puts the self-resonance near 3 GHz). The excitation is a baseband
-Gaussian, so the low frequencies carry energy. The run is deterministic for a
-fixed thread count; the solver's results were bit-identical across thread counts in
-the antenna work, not re-checked here.
+New tests of iteration 2: `a_run_that_outlasts_its_wall_clock_budget_is_stopped_with_partial_statistics`
+(the guard stops the 3a model after 1 s with `budget_exceeded`), `strap_port_against_direct_port`
+(10 x 6 mm loop with a 3 mm gap: a direct port gives 8.327 nH, the same port at the middle of
+straps 8.885 nH, a difference of +0.559 nH against the 0.870 nH closed form of the straps),
+`extend_planes_against_truncated`, `thread_determinism` (the 6 x 4 mm loop solved with 1, 2 and 6
+threads: 14,301 steps each, the impedance bit-identical at all 181 frequencies, 28 s, 23 s and 10 s),
+`termination_study`, `pulse_scale_study`, `convergence_order` and the mesher's unit tests
+(refinement zones, graded small gaps) and the spec tests of `tests/hotloop_spec.rs` (synchronous port and
+strap, refinement boxes of a compact and a large loop).
 
-**Hot loop of `examples/emi_buck`** (`copper emi-check --fullwave`; the placed
-board has no copper, so the unrouted legs are the straight traces the closed
-form assumes; port across the hot-supply pad `U1.1` and the switch pad
-`U1.3`, capacitor and diode shorted):
+**Convergence of the placed hot loop** (`examples/emi_buck`, `--fullwave-single-mesh`,
+the loop window refined at the cell in the first column, general cell 0.5 mm; every row one
+run, 6 threads, 30-1000 MHz band read at 50-150 MHz; the closed form is 4.973 nH):
 
-| Board | Fidelity | Window margin | Cells | Steps (dt) | Run | L (50-150 MHz) | Flat to | Closed form | Ratio |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| placed | coarse | 5.33 mm | 749 k | 14,051 (0.256 ps) | 46 s | 5.731 nH | 0.06 % | 4.973 nH | 1.15 |
-| placed | coarse | 8 mm | 821 k | 14,051 | 63 s | 5.729 nH | 0.06 % | 4.973 nH | 1.15 |
-| placed | fine | 5.33 mm | 2.22 M | 151,764 | 1240 s | 5.046 nH | 0.05 % | 4.973 nH | 1.02 |
-| routed (`write_routed_run`: three short 0.4 mm legs) | coarse | 5.33 mm | 1.88 M | 46,051 | 322 s | 6.167 nH | 0.07 % | 6.712 nH | 0.92 |
-| routed | coarse | 8 mm | 2.74 M | 46,051 | 427 s | 6.167 nH | 0.07 % | 6.712 nH | 0.92 |
-| routed | fine | - | 5.19 M | 64,531 est. | refused: about 2234 s against the 1800 s budget | - | - | 6.712 nH | - |
+| Refinement cell | Cells | Steps | Run | L | Against the 0.1 mm run |
+| --- | --- | --- | --- | --- | --- |
+| none (general cell 0.5 mm) | 437,880 | 14,301 | 19 s | 5.616 nH | +25 % |
+| 0.35 mm | 340,560 | 16,351 | 16 s | 5.380 nH | +20 % |
+| 0.25 mm (the standard mesh) | 386,880 | 13,601 | 15 s | 4.920 nH | +9.8 % |
+| 0.167 mm (the refined mesh of the pair) | 448,800 | 15,951 | 23 s | 4.695 nH | +4.8 % |
+| 0.20 mm | 419,760 | 12,901 | 17 s | 4.736 nH | +5.7 % |
+| 0.15 mm | 548,640 | 16,851 | 36 s | 4.751 nH | +6.0 % |
+| 0.10 mm | 857,680 | 42,701 | 193 s | 4.482 nH | 0 |
 
-The margin is the larger of 5 mm and ten dielectric heights (here 0.533 mm
-between `F.Cu` and the `In1.Cu` ground plane), hence 5.33 mm. No resonance
-falls inside 30 MHz to 1 GHz (L rises 0.8 % by 500 MHz), and the
-resistance is not reported (PEC, nothing dissipates). The run with fine
-fidelity and an 8 mm margin was not made (about 35 minutes).
+Iteration 1's coarse mesh (cell 0.5 mm everywhere) read 5.731 nH on 748,800 cells and its fine mesh
+(0.25 mm everywhere, three cells per dielectric) 5.046 nH on 2.22 M cells in 1240 s: the standard mesh
+here is 2.5 % under that fine value in 15 s, and the fine value is itself 12.6 % above the 0.1 mm run.
+**The curve is not converged.** L falls by 20 % between a 0.5 mm and a 0.1 mm cell and still falls
+(about 3 nH per mm of cell between 0.1 and 0.25 mm; the 0.15 mm point sits 0.3 % above the 0.2 mm one,
+which is the size of the mesh-to-mesh noise: a line merged or moved by a few hundredths of a millimetre).
+So the standard mesh's 4.92 nH is 9.8 % above the 0.1 mm value and the refined mesh's 4.70 nH 4.8 % above it;
+`mesh_error_estimate_pct`, the difference of those two (4.78 %), is about the error of the finer one against
+the 0.1 mm run, and half of the error of the standard one: it is a difference, not a bound. The first-order
+law below puts the limit at 4.25 nH, 15 % under the closed form, and the placed standard mesh 16 % above it.
+The cause of the first-order term was looked for and not found: the 1/3 rule keeps the loop
+cases within a few percent of each other from cell to cell, but the placed loop has 1 mm bars, 1 mm pads
+and a 1.7 mm port gap against the synthetic loop's 0.5 mm traces and gap, and the port gap, the pad edges
+and the bars all move with the cell through the inset. About 1.4 nH of the loop's 4.9 nH is the field in
+the port gap (mu0 h gap / width, 0.533 mm over the plane), so a term that moves with the inset is plausible;
+it was not isolated.
 
-Reading the numbers. The window margin does not matter (5.731 against 5.729,
-6.167 against 6.167 nH). Fidelity does on the placed board: coarse is 13.6 %
-above fine, because the coarse cell is 0.5 mm (half the narrowest pad, 1 mm)
-across a 1.9 mm port gap and 0.17 mm edge insets, so the coarse placed value is
-not converged and the fine value, 1.5 % above the closed form, is the one to
-believe; the routed coarse cell is 0.2 mm (0.4 mm tracks) and no fine
-run fits the default budget, so its 0.92 carries an unmeasured mesh error. The
-routed closed form is 6.7 nH, not the 10 nH of the task statement: this example's
-routed copper is three short legs, 13 mm of path. Why the full wave can differ
-from the closed form: the closed form is straight bars between pad centres at the
-plane height, one width for all, no pads; the model has the real pads (1 mm wide
-ones lower the inductance of the legs they overlap), the hull bridges over the
-capacitor and diode, a 1.9 mm port gap across the controller where the bar was,
-a plane that ends 5 mm beyond the loop, and the `In1.Cu` plane at 0.533 mm. Placed
-fine agrees with the closed form to 1.5 %, which says the two descriptions of the
-same straight-leg loop are consistent; the routed 0.92 is the model's real pads
-against the bars (a reading from the geometry, not separately verified). No via
-is in either loop, so via modelling does not enter.
+*Synthetic check of the order* (`convergence_order`, the 6 x 4 mm loop over a plane, cell 0.25 / 0.167 /
+0.125 / 0.083 mm, smooth meshes): The two edge rules
+give, for the 1/3 rule, 5.073 / 4.925 / 4.847 / 4.748 nH (246 k, 426 k, 650 k and 1.23 M cells; 9, 26, 50 and 124 s)
+and, for an inset of half a cell, 5.564 / 5.273 / 5.093 / 4.910 nH. Both fall monotonically with differences in the
+ratio of first order (the cell steps are 0.083, 0.042 and 0.042 mm; the 1/3 series falls 1.8, 1.9 and 2.4 nH per mm, the
+half-cell series 3.5, 4.3 and 4.4). A first-order extrapolation of each consecutive pair gives 4.63, 4.61, 4.55 nH (1/3 rule) and 4.69, 4.56, 4.55 nH
+(half cell): the two edge treatments, 0.5 nH apart at a 0.25 mm cell, agree to 0.1 % at the finest pair and the first-order law
+fitted through the coarsest pair (0.25, 0.167 mm) predicts the 0.125 and 0.083 mm runs of the 1/3 series to 0.07 % and 0.6 %. On the placed
+emi_buck the same fit through the standard and the refined mesh (4.245 nH at zero, 2.7 nH per mm) predicts the 0.1 mm run at 4.514 nH
+against 4.482 nH measured (0.7 %), and the pair (0.2, 0.1 mm) gives 4.228 nH. Against the limit 4.55 nH of the synthetic loop,
+the raw value on the 0.167 mm mesh is 8 % high (1/3 rule) or 16 % high (half cell); the extrapolation from the coarsest pair
+is 1.7 % and 3.1 % high. **The extrapolated value is therefore the better number, and the
+finer mesh's value is an upper bound in practice (L falls with the cell).** The closed form of the synthetic loop,
+4.987 nH, is 10 % above its converged value 4.55 nH: the closed form is not the converged answer
+for it either, and the 3d agreement of coarse and fine (2.2 %) is not convergence: they are 10.7 % and 8.3 % above the limit.
 
+
+**Hot loops** (`copper emi-check --fullwave`, debug build with the optimised solver, 6 threads,
+the default two meshes unless stated; the reported L is the finer mesh's, read at 50-150 MHz):
+
+| Board | Meshes (cell in the refinement zones) | Cells | Steps (expected) | Run | L | Mesh error estimate | Closed form | Ratio |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `examples/emi_buck` placed (straight legs) | standard 0.25 mm: 4.920 nH; refined 0.167 mm: 4.695 nH | 387 k; 449 k | 13,601 (15,950); 15,951 (18,743) | 16 s + 23 s | 4.695 nH, flat to 0.1 % | 4.78 % | 4.973 nH | 0.94 |
+| the same, fine fidelity (0.25 mm everywhere, one mesh) | one mesh | 554 k | 13,751 (16,123) | 33 s | 5.055 nH | none (`single_mesh`) | 4.973 nH | 1.02 |
+| the same, 0.1 mm refinement cell (one mesh) | one mesh | 858 k | 42,701 | 193 s | 4.482 nH | none | 4.973 nH | 0.90 |
+| `emi_buck` routed (three 0.4 mm legs, `write_routed_run`) | standard 0.2 mm: 6.049 nH; refined 0.133 mm: 5.969 nH | 720 k; 1.04 M | 14,901 (17,522); 20,301 (23,863) | 54 s + 82 s | 5.969 nH, flat to 0.1 % | 1.34 % | 6.712 nH | 0.89 |
+| `examples/tps62130a_macro`, `--fab-profile jlcpcb-six-layer` (synchronous; strap port in the air) | standard 0.15 mm: 2.817 nH; refined 0.1 mm: 2.832 nH | 1.78 M; 2.78 M | 39,101 (45,106); 50,201 (57,903) | 234 s + 412 s | 2.832 nH, flat to 0.03 %, of which 0.948 nH is the strap | 0.53 % | 1.69 nH | 1.68 (1.12 without the strap bias) |
+| CopperOrgan routed board (`--fullwave-budget 3600`; asynchronous, air-bridge port) | standard 0.15 mm, one mesh (the coarser one was estimated at 999 s against 799 s left) | 6.26 M | 151,539 (50,513) | 2801 s | 7.317 nH, **flat only to 18.6 %**, energy not converged | none (`single_mesh`) | 9.889 nH | 0.74 |
+
+Iteration 1's placed rows were 5.731 nH (coarse, 749 k cells, 46 s), 5.046 nH (fine, 2.22 M cells, 151,764
+steps, 1240 s), routed 6.167 nH (1.88 M cells, 322 s). The standard mesh now is 2.5 % under the old fine value in
+15 s, and the fine mesh gives the same 5.055 nH in 33 s, 38 times faster, because the mesh no longer carries
+the cascade-halved outer cells and the 0.04 mm slivers that set the time step. The routed standard mesh
+(6.049 nH, 720 k cells, 54 s against 6.167 nH, 1.88 M cells, 322 s) differs by 1.9 %. The default run
+(two meshes) costs 38 s on the placed board, 135 s on the routed one, 647 s on the TPS62130A. Estimates of
+the step count were 15 to 18 % above the run on all decaying loops (table), and 3.0 times below it on the
+CopperOrgan loop (below).
+
+**The TPS62130A** loads (87 s) with its hard macro: 6 copper layers (an assumed stack-up, flag
+`assumed_stackup`, the board declares none), 21 pads, 27 tracks, 2 polygons, 3 zones, 11 vias; its
+four-pad loop gets a strap port in the air, 1.95 mm of 0.2 mm wide bar 0.3 mm above the top layer
+from the VIN pad (B/U.12) to the nearest switch pad (B/U.1), because the exposed pad lies between them,
+the low-side switch is a hull bridge from that pad to the hot return pad (B/U.15). The result, 2.83 nH,
+is 1.14 nH over the 1.69 nH of the closed form, and 1.88 nH (1.11 times the closed form) without the strap
+bias: the closed form is the pad-centre polygon with the loop closed through the component bodies, the
+model closes it through a 0.95 nH air bridge (closed form) and a hull of two pads. Without the pour cuts (the first run, 1.59 nH) the
+pours short the loop (flag `zone_overlaps_foreign_copper`): 1.59 nH is a short circuit, not an inductance.
+Mesh: 2.78 M cells for the refined mesh, 647 s for both, inside the 30 minute budget; a 0.03 mm
+smallest cell (dense macro copper) sets dt = 0.075 ps.
+
+**CopperOrgan** (`board.copper --run build/ci/emi-check-20261111T161807`; the closed form is 9.889 nH, a
+54.4 mm path with 2 vias, a 0.20 mm neck and a plane shortcut; D_BUCK is in the loop). At the default
+budget (1800 s) the model is refused before the solver starts: 6.26 M cells x 50,513 steps = 316 G
+cell updates, 2108 s at the assumed 150 M/s; the cells are dominated by the 0.15 mm cell the 0.2 mm
+neck forces over the fine zone of a 36 x 19 mm window (the margin cannot go below ten dielectric heights,
+5.33 mm), a 0.04 mm smallest cell sets dt. With `--fullwave-budget 3600` it runs 2801 s at 6.26 M cells x
+151,539 steps (the measured rate is 340 M cell updates per second). **The run did not converge.** The loop
+is the lossless PEC loop with the capacitor and diode bridged, and rings: first parallel resonance
+348 MHz, the energy still above -35 dB when the 3x time cap ended the run (`energy_not_converged`); L(f)
+rises across the reading band by 18.6 %, which is what a resonance at 348 MHz predicts (the factor
+1/(1 - (f/348 MHz)^2) averages 1.10 over 50-150 MHz and spans 1.02 to 1.23, 18.8 %, against 18.6 % measured),
+so the band mean 7.317 nH is 1.10 x the static inductance, about 6.6 nH (computed from the band mean here;
+the binary now reports it as `inductance_static_nh` and flags `band_near_resonance`, but that run was not repeated for
+47 minutes). Of that 1.76 nH is the air bridge between the VIN pad (U_BUCK.2) and the SW pad
+(U_BUCK.8) on the other side of the exposed pad, a bias the model includes: the loop without it is about
+4.9 nH (static) to 5.6 nH (band mean), 50 to 57 % of the closed form. The direction is the one the
+description of the closed form gives: it models the plane-shortcut leg as a 1-5 mm wide bar and ignores the
+via-to-bar mutuals, and the model sees the real pour outlines (wide pours carry the current with less
+inductance); but this reading is not isolated: the stack-up is assumed (flag `assumed_stackup`, so the height of
+the planes under the loop is a guess), the record is not decayed, the strap bias is a closed-form estimate of an
+arbitrary geometry (4.4 mm bar, 0.3 mm high), the pours are outlines minus clearances, not fills (thermal
+reliefs, minimum widths), and 6 pairs of neighbouring cells exceed a ratio of 1.5 (up to 2.0, in the window
+at the crowded corners and in the air). Treat 4.9-5.6 nH as the model's number and 9.9 nH as the
+closed form's, not as a verdict on either. The first attempts show what the new checks catch: with the strap in
+the plane (iteration 1's only option) the port box sat on the exposed pad and the solver ignored the
+port (29 minutes lost before the check for ports without usable edges was added to `solve_port`); with the
+pours uncut the result was 1.76 nH, the strap alone, a short circuit.
 
 **Limitations.** Components are not modelled (the capacitor and diode are
 copper; the switch is a port; their ESL, ESR, package and the controller's
-bond wires are absent), copper is lossless, zone fills and foreign clearances
-are unknown, vias are wires without radius, the window cuts every net, there is
-no enclosure or cable, and no near-field export or radiated estimate. A
+bond wires are absent), copper is lossless, zone fills are unknown (the
+outline minus clearances, no thermal reliefs or minimum widths), vias are wires without radius, the window
+cuts every net, there is no enclosure or cable, and no near-field export or radiated estimate. A
 placed board's straight legs may cross foreign pads (the closed form has the
-same blind spot); overlapping lines of different nets within a tenth of a cell merge
-(flag `nets_merged_below_floor`). Round pads are chamfered. FDTD is
-slow: the coarse hot loop takes a minute on the placed board and minutes on the
-routed one, fine is about 16 times that.
+same blind spot); overlapping lines of different nets within 0.075 mm (a tenth of the cell without
+smoothing) merge (flag `nets_merged_below_floor`). Round pads are chamfered. A strap port adds
+a strap that the real loop does not have (`port_strap_nh`; 0.95 nH of the TPS62130A's 2.83 nH and 1.76 nH of
+the CopperOrgan loop). A package's exposed pad is bridged in the air at an assumed height of 0.3 mm. The hull
+bridge of a low-side switch covers whatever lies between two distant pads. The stack-up of a board
+that declares none is assumed. Re-reading the band with the static inductance and a lossless PEC loop
+that rings is not a substitute for a decayed record. FDTD is slow: the standard mesh takes 15 s on the placed
+emi_buck, a minute on a routed loop with narrow traces, minutes on a macro board and 47 minutes on the
+CopperOrgan board; the two-mesh default two to three times the standard run.
 
-**Next steps.** (1) Component models as lumped R/L/C and a switch with an
-on-resistance and a gate edge, to simulate the ringing the 143 MHz estimate
-predicts. (2) Zone fills from the CAM fill and per-layer antipads, so planes
-carry their real slots. (3) Synchronous and boost cells with ports that do not
-face each other (a strap from the pad edge). (4) Near-field export and
-radiated estimates by per-port superposition. (5) A converged-by-extrapolation
-time cap and a wall-clock guard. (6) A coarse-mesh error estimate from two
-fidelities in one run. (7) Re-check thread-count determinism.
+**Next steps.** (1) Components as lumped R/L/C and a switch with an on-resistance and a
+gate edge, to simulate the ringing the 143 MHz estimate predicts (the CopperOrgan loop rings at
+348 MHz with the capacitor and diode shorted). (2) Zone fills from the CAM fill (`copper_cam::fill`)
+instead of the outline minus clearances, and per-layer antipads, so planes carry their real slots.
+(3) Near-field export and radiated estimates by per-port superposition. (4) The placed emi_buck
+inductance falls with the cell at first order (about 3 nH per mm of refinement cell, 4.92 nH at 0.25 mm,
+4.48 nH at 0.1 mm, 4.25 nH extrapolated): find out whether the port gap, the pad edges or the bars carry it, and what
+edge treatment makes the curve flat; until then read `inductance_extrapolated_nh`. (5) A package
+model for the switch (die, bond wires and lead frame, so that the strap port stops carrying a
+bias of 1-2 nH) and a check of the hull bridge against foreign copper. (6) A decay-aware end for
+rings: a record of the Prony/matrix-pencil kind, or a damping resistor in the loop, so that a high-Q loop
+neither runs 3 times its estimate nor ends undecayed.
 
 ## 12. Test boards
 

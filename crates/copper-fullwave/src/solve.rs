@@ -8,7 +8,7 @@ use ems::csx::{ContinuousStructure, Material, Primitive, Property};
 use ems::engine::StopReason;
 use ems::prelude::*;
 
-use crate::model::{PML_CELLS, RegionModel, excitation_of};
+use crate::model::{PML_CELLS, RegionModel};
 use crate::spec::{Error, NetTreatment, Result};
 
 /// The solver identity recorded in every report.
@@ -42,6 +42,110 @@ pub struct RunStats {
     /// The field energy decayed to the threshold before the time cap.
     pub converged: bool,
     pub warnings: Vec<String>,
+    /// Steps the pre-run estimate expected (the energy criterion and the time cap decide the real number).
+    pub expected_steps: u64,
+    /// `(simulated ns, energy relative to its maximum in dB)` every energy check, thinned to at most 400 points.
+    pub trace: Vec<(f64, f64)>,
+    /// Wall time of the time loop alone, seconds.
+    pub loop_seconds: f64,
+}
+
+/// A run stopped by the wall-clock guard: what it had done by then.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartialRun {
+    pub cells: usize,
+    pub steps: u64,
+    pub expected_steps: u64,
+    pub simulated_ns: f64,
+    pub seconds: f64,
+    /// Energy relative to its maximum at the abort, dB.
+    pub energy_db: f64,
+    /// The wall-clock limit that was exceeded, seconds.
+    pub limit_seconds: f64,
+}
+
+impl std::fmt::Display for PartialRun {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "budget_exceeded: stopped after {:.0} s (limit {:.0} s) at step {} of an expected {} ({:.2} ns simulated, field energy {:.1} dB below its maximum), {} cells",
+            self.seconds,
+            self.limit_seconds,
+            self.steps,
+            self.expected_steps,
+            self.simulated_ns,
+            -self.energy_db,
+            self.cells
+        )
+    }
+}
+
+/// The excited port's voltage and current records, kept for re-analysis with a shorter record or a window.
+#[derive(Clone, Debug)]
+pub struct Record {
+    pub dt: f64,
+    pub t0_v: f64,
+    pub t0_i: f64,
+    pub v: Vec<f64>,
+    pub i: Vec<f64>,
+}
+
+/// How a truncated record is weighted before the transform.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Window {
+    /// Cut at the end time.
+    Rectangular,
+    /// A Hann half-window falling to zero over the last `tail` fraction of the record.
+    Taper(f64),
+}
+
+impl Record {
+    /// `Z(f) = V(f)/I(f)` from the samples before `t_end` seconds (`None`: all), weighted by `window`.
+    pub fn z_at(&self, freqs: &[f64], t_end: Option<f64>, window: Window) -> Vec<Complex64> {
+        let t_end = t_end.unwrap_or(f64::INFINITY);
+        let weight = |t: f64| match window {
+            Window::Rectangular => 1.0,
+            Window::Taper(tail) => {
+                let start = t_end * (1.0 - tail);
+                if !t_end.is_finite() || t <= start {
+                    1.0
+                } else {
+                    0.5 * (1.0 + (std::f64::consts::PI * (t - start) / (t_end - start)).cos())
+                }
+            }
+        };
+        let cut = |t0: f64, x: &[f64]| -> Vec<f64> {
+            x.iter()
+                .enumerate()
+                .map(|(n, v)| {
+                    let t = t0 + n as f64 * self.dt;
+                    if t > t_end { 0.0 } else { v * weight(t) }
+                })
+                .collect()
+        };
+        let (v, i) = (cut(self.t0_v, &self.v), cut(self.t0_i, &self.i));
+        let fv = ems::post::dft(self.t0_v, self.dt, &v, freqs);
+        let fi = ems::post::dft(self.t0_i, self.dt, &i, freqs);
+        fv.into_iter().zip(fi).map(|(a, b)| a / b).collect()
+    }
+}
+
+/// `L = Im(Z)/(2 pi f)` averaged over `lo..=hi`, and the spread, from `z` at `freqs`.
+pub fn inductance_of(freqs: &[f64], z: &[Complex64], lo: f64, hi: f64) -> Option<(f64, f64)> {
+    let ls: Vec<f64> = freqs
+        .iter()
+        .zip(z)
+        .filter(|(f, _)| **f >= lo && **f <= hi)
+        .map(|(f, z)| z.im / (2.0 * std::f64::consts::PI * f))
+        .collect();
+    if ls.is_empty() {
+        return None;
+    }
+    let mean = ls.iter().sum::<f64>() / ls.len() as f64;
+    let spread = (ls.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        - ls.iter().copied().fold(f64::INFINITY, f64::min))
+        / mean;
+    Some((mean, spread))
 }
 
 /// The response to exciting one port with the others terminated in their
@@ -55,6 +159,7 @@ pub struct PortColumn {
     /// `s[i][f]` = `S_{i,excited}`.
     pub s: Vec<Vec<Complex64>>,
     pub stats: RunStats,
+    pub record: Record,
 }
 
 /// All columns: the full S matrix over the grid.
@@ -113,6 +218,26 @@ impl PortColumn {
         let dev = rs.iter().map(|r| (r.0 - mean).abs()).fold(0.0, f64::max);
         Some((mean, dev / mag.max(1e-30)))
     }
+}
+
+/// The static inductance of a loop whose L(f) rises towards a first parallel resonance `f_res`:
+/// `Im(Z)/(2 pi f) = L0 / (1 - (f/f_res)^2)` for L0 in parallel with a capacitance, so
+/// `L0 = L(f) (1 - (f/f_res)^2)`, averaged over `lo..=hi` (which must lie below `f_res`), with its spread.
+pub fn static_inductance(freqs: &[f64], z: &[Complex64], f_res: f64, lo: f64, hi: f64) -> Option<(f64, f64)> {
+    let ls: Vec<f64> = freqs
+        .iter()
+        .zip(z)
+        .filter(|(f, _)| **f >= lo && **f <= hi && **f < f_res)
+        .map(|(f, z)| z.im / (2.0 * std::f64::consts::PI * f) * (1.0 - (f / f_res).powi(2)))
+        .collect();
+    if ls.is_empty() {
+        return None;
+    }
+    let mean = ls.iter().sum::<f64>() / ls.len() as f64;
+    let spread = (ls.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+        - ls.iter().copied().fold(f64::INFINITY, f64::min))
+        / mean;
+    Some((mean, spread))
 }
 
 impl RegionModel {
@@ -204,7 +329,7 @@ impl RegionModel {
         let started = Instant::now();
         let (structure, ports) = self.structure(excited)?;
         let freqs = self.frequencies();
-        let (f0, fc) = excitation_of(self.spec.band_hz.0, self.spec.band_hz.1);
+        let (f0, fc) = self.excitation();
         let estimate = self.estimate();
         let threads = if self.spec.threads == 0 { auto_threads(structure.grid.num_lines()) } else { self.spec.threads };
         let max_time = self.spec.max_time_ns.map_or(3.0 * estimate.sim_time, |t| t * 1e-9);
@@ -215,6 +340,16 @@ impl RegionModel {
             .max_time(max_time)
             .threads(threads);
         let mut sim = Simulation::new(&structure, &fdtd).map_err(|e| Error::Solver(e.to_string()))?;
+        // A port box that lies under copper has no usable edge: the solver ignores it and a long run would
+        // end with nothing to analyse. Say so before the time loop.
+        let dead: Vec<&String> = sim.warnings().iter().filter(|w| w.contains("no usable edges")).collect();
+        if !dead.is_empty() {
+            let shorted = sim.warnings().iter().filter(|w| w.contains("is PEC (shorted)")).count();
+            return Err(Error::Invalid(format!(
+                "the lumped port has no usable edge ({shorted} of its edges lie in PEC; copper of another net or a strap covers the port box): {}",
+                dead.iter().map(|w| w.as_str()).collect::<Vec<_>>().join("; ")
+            )));
+        }
         let dt = sim.engine().dt();
         let expected_steps = (estimate.sim_time / dt).ceil();
         let updates = self.mesh.cells as f64 * expected_steps;
@@ -234,7 +369,32 @@ impl RegionModel {
             )));
         }
         let warnings: Vec<String> = sim.warnings().to_vec();
-        let results = sim.run().map_err(|e| Error::Solver(e.to_string()))?;
+        let wall_limit = budget.max_seconds * budget.wall_margin;
+        let mut trace: Vec<(f64, f64)> = Vec::new();
+        let mut exceeded: Option<(u64, f64, f64)> = None;
+        let loop_started = Instant::now();
+        let results = sim
+            .run_with(|p| {
+                trace.push((p.time * 1e9, p.energy_db));
+                if p.elapsed.as_secs_f64() > wall_limit {
+                    exceeded = Some((p.steps, p.time * 1e9, p.energy_db));
+                    return std::ops::ControlFlow::Break(());
+                }
+                std::ops::ControlFlow::Continue(())
+            })
+            .map_err(|e| Error::Solver(e.to_string()))?;
+        let loop_seconds = loop_started.elapsed().as_secs_f64();
+        if let Some((steps, simulated_ns, energy_db)) = exceeded {
+            return Err(Error::BudgetExceeded(PartialRun {
+                cells: self.mesh.cells,
+                steps,
+                expected_steps: expected_steps as u64,
+                simulated_ns,
+                seconds: started.elapsed().as_secs_f64(),
+                energy_db,
+                limit_seconds: wall_limit,
+            }));
+        }
         let outcome = results.outcome().cloned();
         let converged = matches!(outcome.as_ref().map(|o| &o.reason), Some(StopReason::EnergyDecay { .. }));
         let steps = outcome.as_ref().map_or(0, |o| o.steps);
@@ -247,6 +407,25 @@ impl RegionModel {
             .collect::<Result<_>>()?;
         let z_in = analysed[excited].z_in();
         let s = analysed.iter().map(|out| ems::post::port::s_param(out, &analysed[excited])).collect();
+        let record = {
+            let props =
+                ports[excited].properties().ok_or_else(|| Error::Solver("port without properties".to_owned()))?;
+            let v = results.probe(&props.voltage.0).ok_or_else(|| Error::Solver("no voltage probe".to_owned()))?;
+            let i = results
+                .lumped_current(&props.element.0)
+                .ok_or_else(|| Error::Solver("no element current".to_owned()))?;
+            let p = &self.ports[excited];
+            let sign = if p.stop[p.axis] >= p.start[p.axis] { -1.0 } else { 1.0 };
+            Record {
+                dt: v.dt(),
+                t0_v: v.times().first().copied().unwrap_or(0.0),
+                t0_i: i.times().first().copied().unwrap_or(0.0),
+                v: v.scalar().unwrap_or(&[]).to_vec(),
+                i: i.scalar().unwrap_or(&[]).iter().map(|x| x * sign).collect(),
+            }
+        };
+        let keep = (trace.len() / 400).max(1);
+        let trace: Vec<(f64, f64)> = trace.into_iter().step_by(keep).collect();
         Ok(PortColumn {
             excited,
             freqs,
@@ -262,7 +441,11 @@ impl RegionModel {
                 threads,
                 converged,
                 warnings,
+                expected_steps: expected_steps as u64,
+                trace,
+                loop_seconds,
             },
+            record,
         })
     }
 
@@ -425,6 +608,24 @@ mod tests {
 
     fn c(re: f64, im: f64) -> Complex64 {
         Complex64::new(re, im)
+    }
+
+    #[test]
+    fn the_static_inductance_of_a_parallel_lc_is_recovered_below_its_resonance() {
+        let (l, cap): (f64, f64) = (7.0e-9, 30.0e-12);
+        let f_res = 1.0 / (2.0 * std::f64::consts::PI * (l * cap).sqrt());
+        let freqs: Vec<f64> = (0..=100).map(|i| 50e6 + 1e6 * f64::from(i)).collect();
+        let z: Vec<Complex64> = freqs
+            .iter()
+            .map(|f| {
+                let w = 2.0 * std::f64::consts::PI * f;
+                c(0.0, w * l / (1.0 - w * w * l * cap))
+            })
+            .collect();
+        let (raw, raw_spread) = inductance_of(&freqs, &z, 50e6, 150e6).expect("band");
+        let (stat, stat_spread) = static_inductance(&freqs, &z, f_res, 50e6, 150e6).expect("band");
+        assert!(raw_spread > 0.05, "the raw L must rise: {raw_spread}");
+        assert!((stat / l - 1.0).abs() < 1e-9 && stat_spread < 1e-9, "{stat} {stat_spread} {raw}");
     }
 
     #[test]

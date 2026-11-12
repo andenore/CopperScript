@@ -117,6 +117,26 @@ fn an_over_budget_run_is_refused_not_started() {
     assert!(matches!(err, copper_fullwave::Error::Budget(_)), "{err}");
 }
 
+/// The wall-clock guard stops a run that outlasts its budget and reports what it had done.
+#[test]
+fn a_run_that_outlasts_its_wall_clock_budget_is_stopped_with_partial_statistics() {
+    let mut model = microstrip(500_000, 1_000_000, 20 * MM, "4.3", Fidelity::Coarse, 50.0);
+    // An optimistic rate lets the pre-run check pass; the guard then holds the run to one second.
+    model.spec.budget.assumed_rate = 1.0e13;
+    model.spec.budget.max_seconds = 1.0;
+    model.spec.budget.wall_margin = 1.0;
+    let started = std::time::Instant::now();
+    match model.solve_port(0) {
+        Err(copper_fullwave::Error::BudgetExceeded(p)) => {
+            println!("{p}");
+            assert!(p.steps > 0 && p.seconds >= 1.0 && p.cells == model.mesh.cells);
+            assert!(started.elapsed().as_secs_f64() < 30.0);
+            assert!(p.to_string().starts_with("budget_exceeded"));
+        }
+        other => panic!("expected the guard to stop the run, got {:?}", other.map(|c| c.stats.steps)),
+    }
+}
+
 /// 3a: impedance of a microstrip from the simulated S parameters against Hammerstad-Jensen.
 #[test]
 fn microstrip_impedance_matches_hammerstad_jensen() {
@@ -206,6 +226,7 @@ mod loops {
     pub struct Loop {
         pub model: RegionModel,
         pub closed_form: f64,
+        pub board: copper_pcb::board::PhysicalBoard,
     }
 
     /// Options of the loop board.
@@ -222,6 +243,16 @@ mod loops {
         pub air: Option<i64>,
         pub extend: bool,
         pub plane_margin: Option<i64>,
+        /// Override of the copper cell, nm.
+        pub cell: Option<i64>,
+        /// Override of the 1/3 edge rule fraction.
+        pub inset: Option<f64>,
+        /// Join the port to the bars' ends by straps (a strap port).
+        pub strap: bool,
+        /// Scale of the excitation pulse's bandwidth.
+        pub pulse: f64,
+        /// Smooth meshes (as the hot loop uses).
+        pub smooth: bool,
     }
 
     pub fn default_opts() -> Opts {
@@ -237,6 +268,11 @@ mod loops {
             air: None,
             extend: false,
             plane_margin: None,
+            cell: None,
+            inset: None,
+            strap: false,
+            pulse: 1.0,
+            smooth: false,
         }
     }
 
@@ -276,11 +312,18 @@ mod loops {
         spec.fidelity = o.fidelity;
         spec.air_margin_nm = o.air;
         spec.extend_planes = o.extend;
-        spec.ports = vec![PortSpec::gap(
+        spec.cell_nm = o.cell;
+        spec.pulse_scale = o.pulse;
+        spec.smooth_mesh = o.smooth;
+        if let Some(f) = o.inset {
+            spec.edge_inset = f;
+        }
+        let port = PortSpec::gap(
             "loop",
             Terminal::rect(l, [gl - w, y1 - w / 2, gl, y1 + w / 2]),
             Terminal::rect(l, [gr, y1 - w / 2, gr + w, y1 + w / 2]),
-        )];
+        );
+        spec.ports = vec![if o.strap { port.with_strap() } else { port }];
         let model = RegionModel::build(&board, &spec).expect("model");
         let m = 1e-9;
         let seg = |p: (i64, i64), q: (i64, i64)| Segment {
@@ -291,7 +334,7 @@ mod loops {
         };
         let bars = [seg((x0, y0), (x1, y0)), seg((x1, y0), (x1, y1)), seg((x1, y1), (x0, y1)), seg((x0, y1), (x0, y0))];
         let closed_form = if o.plane { loop_inductance_over_plane(&bars, 0.0) } else { loop_inductance(&bars) };
-        Loop { model, closed_form }
+        Loop { model, closed_form, board }
     }
 
     /// The same loop on F.Cu / In1.Cu / B.Cu (0.2 mm each), plane on B.Cu, with the bottom bar
@@ -457,4 +500,251 @@ fn mesh_convergence() {
     let (lf, _) = report_loop("3d fine", &fine, &cf);
     println!("3d: coarse/fine differ by {:+.2} %", 100.0 * (lc / lf - 1.0));
     assert!((lc / lf - 1.0).abs() < 0.05);
+}
+
+/// Convergence of L with the cell on the 6 x 4 mm loop, and its dependence on the edge rule.
+#[test]
+#[ignore = "about 10 min; run with `cargo test -p copper-fullwave --test validation -- --ignored convergence_order --nocapture`"]
+fn convergence_order() {
+    let base =
+        loops::Opts { a: 6 * MM, b: 4 * MM, margin: 3 * MM, air: Some(5 * MM), smooth: true, ..loops::default_opts() };
+    for inset in [Some(1.0 / 3.0), Some(0.5)] {
+        let mut values = Vec::new();
+        for cell in [250_000_i64, 167_000, 125_000, 83_000] {
+            let lp = loops::build(loops::Opts { cell: Some(cell), inset, ..base });
+            let col = lp.model.solve_port(0).expect("solve");
+            let (l, _) = inductance_band(&col, 50e6, 150e6);
+            println!(
+                "inset {:?} cell {:.3} mm: L {:.4} nH, closed form {:.4} nH, {} cells, {} steps, {:.0} s",
+                inset,
+                cell as f64 * 1e-6,
+                l * 1e9,
+                lp.closed_form * 1e9,
+                lp.model.mesh.cells,
+                col.stats.steps,
+                col.stats.seconds
+            );
+            values.push((cell as f64 * 1e-6, l * 1e9));
+        }
+        // Observed order from three cells with ratios 1.5 and 1.336.
+        let (h0, h1, h2) = (values[0].0, values[1].0, values[2].0);
+        let (d01, d12) = (values[0].1 - values[1].1, values[1].1 - values[2].1);
+        println!(
+            "inset {:?}: differences {:+.4} and {:+.4} nH over h {:.3} -> {:.3} -> {:.3} mm",
+            inset, d01, d12, h0, h1, h2
+        );
+    }
+}
+
+/// The meshes of the convergence sweep, without running them.
+#[test]
+#[ignore = "diagnostic: prints the mesh of the 6 x 4 mm loop at three cells"]
+fn mesh_report_by_cell() {
+    let base = loops::Opts { a: 6 * MM, b: 4 * MM, margin: 3 * MM, air: Some(5 * MM), ..loops::default_opts() };
+    for cell in [250_000_i64, 167_000, 125_000] {
+        let lp = loops::build(loops::Opts { cell: Some(cell), ..base });
+        println!("cell {cell}:");
+        if std::env::var("MESH_DUMP").is_ok() {
+            let a = &lp.model.axes[0];
+            println!("  kept {:?}", a.kept.iter().map(|v| (v * 1000.0).round() / 1000.0).collect::<Vec<_>>());
+            println!("  cells {:?}", a.cells().iter().map(|v| (v * 1000.0).round() / 1000.0).collect::<Vec<_>>());
+        }
+        for line in lp.model.describe().lines().filter(|l| {
+            l.starts_with("mesh") || l.starts_with("geometry") || l.starts_with("sliver") || l.starts_with("estimate")
+        }) {
+            println!("  {line}");
+        }
+    }
+}
+
+/// Strap port against direct port on the same loop (gap 3 mm): the strap fills most of the gap with PEC and
+/// puts the port in its middle, so L changes by about the closed-form strap inductance less the gap's own.
+#[test]
+#[ignore = "about 1 min (two runs); run with `cargo test -p copper-fullwave --test validation -- --ignored strap_port --nocapture`"]
+fn strap_port_against_direct_port() {
+    let o = loops::Opts { gap: 3 * MM, ..loops::default_opts() };
+    let direct = loops::build(o);
+    let strapped = loops::build(loops::Opts { strap: true, ..o });
+    assert!(!strapped.model.straps.is_empty() && direct.model.straps.is_empty());
+    let (l0, _) = inductance_band(&direct.model.solve_port(0).expect("solve"), 50e6, 150e6);
+    let (l1, _) = inductance_band(&strapped.model.solve_port(0).expect("solve"), 50e6, 150e6);
+    let bias = copper_fullwave::hotloop::strap_inductance_nh(&strapped.board, &strapped.model).expect("estimate");
+    println!(
+        "strap port: direct {:.3} nH, strapped {:.3} nH (difference {:+.3} nH), closed-form strap {bias:.3} nH, closed form of the loop {:.3} nH; {}",
+        l0 * 1e9,
+        l1 * 1e9,
+        (l1 - l0) * 1e9,
+        direct.closed_form * 1e9,
+        strapped.model.ports[0].description
+    );
+    // The difference stays inside the strap's closed-form inductance (the direct port already has the gap's own).
+    assert!(
+        ((l1 - l0) * 1e9).abs() < bias.max(0.1 * l0 * 1e9),
+        "difference {} nH against strap {bias} nH",
+        (l1 - l0) * 1e9
+    );
+}
+
+/// 6: the plane that ends 5 mm beyond the loop, whole in a window with a 5 mm margin (the reference), cut by a
+/// window with a 3 mm margin, and cut by that window but continued through the air into the PML.
+#[test]
+#[ignore = "about 2 min (three runs); run with `cargo test -p copper-fullwave --test validation -- --ignored extend_planes --nocapture`"]
+fn extend_planes_against_truncated() {
+    let o = loops::Opts { plane_margin: Some(5 * MM), margin: 5 * MM, ..loops::default_opts() };
+    let cases = [
+        ("plane ends 5 mm beyond the loop, window margin 5 mm (whole plane)", o),
+        ("window margin 3 mm, plane cut at the window edge", loops::Opts { margin: 3 * MM, ..o }),
+        ("window margin 3 mm, plane continued into the PML", loops::Opts { margin: 3 * MM, extend: true, ..o }),
+    ];
+    let mut reference = 0.0;
+    for (name, opts) in cases {
+        let lp = loops::build(opts);
+        let (l, s) = inductance_band(&lp.model.solve_port(0).expect("solve"), 50e6, 150e6);
+        if reference == 0.0 {
+            reference = l;
+        }
+        println!(
+            "extend_planes: {name}: {:.3} nH ({:+.2} % against the whole plane), spread {:.2} %, flags {:?}",
+            l * 1e9,
+            100.0 * (l / reference - 1.0),
+            100.0 * s,
+            lp.model.flags
+        );
+    }
+}
+
+/// 6: the same model at 1, 2 and 6 threads.
+#[test]
+#[ignore = "about 1 min; run with `cargo test -p copper-fullwave --test validation -- --ignored thread_determinism --nocapture`"]
+fn thread_determinism() {
+    let o = loops::Opts { a: 6 * MM, b: 4 * MM, margin: 3 * MM, air: Some(5 * MM), ..loops::default_opts() };
+    let mut model = loops::build(o).model;
+    let mut results = Vec::new();
+    for threads in [1, 2, 6] {
+        model.spec.threads = threads;
+        let col = model.solve_port(0).expect("solve");
+        println!(
+            "threads {threads}: {} steps, {:.1} s, threads used {}",
+            col.stats.steps, col.stats.seconds, col.stats.threads
+        );
+        results.push(col);
+    }
+    for k in 1..results.len() {
+        let identical = results[0]
+            .z_in
+            .iter()
+            .zip(&results[k].z_in)
+            .all(|(a, b)| a.re.to_bits() == b.re.to_bits() && a.im.to_bits() == b.im.to_bits());
+        let worst = results[0]
+            .z_in
+            .iter()
+            .zip(&results[k].z_in)
+            .map(|(a, b)| (*a - *b).norm() / a.norm())
+            .fold(0.0_f64, f64::max);
+        let (l0, _) = inductance_band(&results[0], 50e6, 150e6);
+        let (lk, _) = inductance_band(&results[k], 50e6, 150e6);
+        println!(
+            "1 thread against {} threads: Z bit-identical {identical}, steps {} / {}, worst relative difference of Z {worst:.3e}, L {:.6} / {:.6} nH",
+            [1, 2, 6][k],
+            results[0].stats.steps,
+            results[k].stats.steps,
+            l0 * 1e9,
+            lk * 1e9
+        );
+    }
+}
+
+/// 3: how the run ends. Energy against time and L(f) from truncated, windowed records against the full one.
+fn termination_report(name: &str, lp: &loops::Loop, col: &PortColumn) {
+    use copper_fullwave::solve::{Window, inductance_of};
+    let est = lp.model.estimate();
+    println!(
+        "{name}: {} cells, dt {:.4} ps, {} steps ({:.2} ns) against {} expected ({:.2} ns), converged {}",
+        lp.model.mesh.cells,
+        col.stats.dt_ps,
+        col.stats.steps,
+        col.stats.simulated_ns,
+        est.steps,
+        est.sim_time * 1e9,
+        col.stats.converged
+    );
+    let marks: Vec<String> = col
+        .stats
+        .trace
+        .iter()
+        .step_by((col.stats.trace.len() / 14).max(1))
+        .map(|(t, d)| format!("{t:.2}ns:{d:.0}dB"))
+        .collect();
+    println!("  energy: {}", marks.join(" "));
+    let full = col.record.z_at(&col.freqs, None, Window::Rectangular);
+    let (lf, _) = inductance_of(&col.freqs, &full, 50e6, 150e6).expect("band");
+    let end = col.stats.simulated_ns * 1e-9;
+    let mut row = format!("  L full {:.4} nH; truncated at (fraction of the record):", lf * 1e9);
+    for frac in [0.3, 0.45, 0.6, 0.8, 1.0] {
+        for (tag, w) in [("rect", Window::Rectangular), ("taper", Window::Taper(0.5))] {
+            let z = col.record.z_at(&col.freqs, Some(end * frac), w);
+            let (l, _) = inductance_of(&col.freqs, &z, 50e6, 150e6).expect("band");
+            row.push_str(&format!(" {:.1}ns/{tag} {:+.2} %;", end * frac * 1e9, 100.0 * (l / lf - 1.0)));
+        }
+    }
+    println!("{row}");
+}
+
+#[test]
+#[ignore = "about 3 min (four runs); run with `cargo test -p copper-fullwave --test validation -- --ignored termination_study --nocapture`"]
+fn termination_study() {
+    let cases = [
+        ("3b over plane", loops::default_opts()),
+        ("3b free space", loops::Opts { plane: false, ..loops::default_opts() }),
+        ("3d coarse", loops::Opts { a: 6 * MM, b: 4 * MM, margin: 3 * MM, air: Some(5 * MM), ..loops::default_opts() }),
+        (
+            "3d fine",
+            loops::Opts {
+                a: 6 * MM,
+                b: 4 * MM,
+                margin: 3 * MM,
+                air: Some(5 * MM),
+                fidelity: Fidelity::Fine,
+                ..loops::default_opts()
+            },
+        ),
+    ];
+    for (name, o) in cases {
+        let lp = loops::build(o);
+        let col = lp.model.solve_port(0).expect("solve");
+        termination_report(name, &lp, &col);
+    }
+}
+
+/// The excitation's bandwidth sets the shortest run: L against the pulse scale.
+#[test]
+#[ignore = "about 3 min; run with `cargo test -p copper-fullwave --test validation -- --ignored pulse_scale --nocapture`"]
+fn pulse_scale_study() {
+    let cases = [
+        ("3b over plane", loops::default_opts()),
+        ("3b free space", loops::Opts { plane: false, ..loops::default_opts() }),
+        ("3d coarse", loops::Opts { a: 6 * MM, b: 4 * MM, margin: 3 * MM, air: Some(5 * MM), ..loops::default_opts() }),
+    ];
+    for (name, o) in cases {
+        let mut reference = 0.0;
+        for scale in [1.0, 1.5, 2.0, 3.0] {
+            let lp = loops::build(loops::Opts { pulse: scale, ..o });
+            let col = lp.model.solve_port(0).expect("solve");
+            let (l, spread) = inductance_band(&col, 50e6, 150e6);
+            let l500 = inductance_band(&col, 450e6, 550e6).0;
+            if scale == 1.0 {
+                reference = l;
+            }
+            println!(
+                "{name}: pulse x{scale}: L {:.4} nH ({:+.2} % against x1), 500 MHz {:.3} nH, spread {:.2} %, {} steps, {:.1} s, converged {}",
+                l * 1e9,
+                100.0 * (l / reference - 1.0),
+                l500 * 1e9,
+                100.0 * spread,
+                col.stats.steps,
+                col.stats.seconds,
+                col.stats.converged
+            );
+        }
+    }
 }

@@ -125,6 +125,8 @@ pub struct RegionModel {
     pub sheets: Vec<Sheet>,
     pub wires: Vec<Wire>,
     pub ports: Vec<ResolvedPort>,
+    /// The PEC straps between strap ports and their pads (see [`Strap`]).
+    pub straps: Vec<Strap>,
     pub axes: [AxisMesh; 3],
     pub counts: Counts,
     pub mesh: MeshReport,
@@ -209,6 +211,35 @@ pub(crate) fn placed_pads(board: &PhysicalBoard, poses: &IndexMap<String, Placem
     out
 }
 
+/// The 1/3 rule with a local cell: the fraction of the cell by which an edge is moved into the metal,
+/// where the cell is the general copper cell or, near a refinement box, the refined one.
+#[derive(Clone, Debug)]
+pub(crate) struct InsetRule {
+    pub(crate) fraction: f64,
+    pub(crate) cell: f64,
+    /// Refinement intervals `(lo, hi, cell)` of x and y, millimetres.
+    pub(crate) zones: [Vec<(f64, f64, f64)>; 2],
+}
+
+impl InsetRule {
+    /// The mesher's target cell along `axis` at `v`: the general cell, or the smallest refinement cell grown by 0.3 per mm of distance.
+    pub(crate) fn cell_at(&self, axis: usize, v: f64) -> f64 {
+        self.zones[axis].iter().map(|(lo, hi, c)| c + 0.3 * (lo - v).max(v - hi).max(0.0)).fold(self.cell, f64::min)
+    }
+
+    pub(crate) fn delta(&self, mid: Pt, inward: Pt) -> f64 {
+        let (wx, wy) = (inward.0.abs(), inward.1.abs());
+        self.fraction * (wx * self.cell_at(0, mid.0) + wy * self.cell_at(1, mid.1)) / (wx + wy).max(1e-12)
+    }
+
+    pub(crate) fn ring(&self, ring: &[Pt], fixed: [f64; 4]) -> Option<Vec<Pt>> {
+        if self.fraction <= 0.0 {
+            return Some(ring.to_vec());
+        }
+        geom::inset_ring_by(ring, &|m, n| self.delta(m, n), fixed)
+    }
+}
+
 pub(crate) fn mm_point(p: Point) -> Pt {
     (nm_to_mm(p.x_nm), nm_to_mm(p.y_nm))
 }
@@ -238,8 +269,8 @@ struct Builder<'a> {
     counts: Counts,
     flags: Vec<String>,
     notes: Vec<String>,
-    /// Edge inset in millimetres (the 1/3 rule).
-    inset: f64,
+    /// The 1/3 rule.
+    inset: InsetRule,
 }
 
 impl Builder<'_> {
@@ -257,10 +288,10 @@ impl Builder<'_> {
     /// The 1/3 rule: move the ring's edges into the metal; a ring too small
     /// for it keeps its drawn edges.
     fn inset_ring(&mut self, ring: Vec<Pt>) -> Vec<Pt> {
-        if self.inset <= 0.0 {
+        if self.inset.fraction <= 0.0 {
             return ring;
         }
-        match geom::inset_ring(&ring, self.inset, self.region) {
+        match self.inset.ring(&ring, self.region) {
             Some(r) => r,
             None => {
                 self.flag("edge_inset_skipped_small_feature");
@@ -344,7 +375,13 @@ impl Builder<'_> {
         self.flag("arcs_as_chord_chains");
     }
 
-    fn zone(&mut self, board: &PhysicalBoard, zone: &CopperZone, barrels: &[Barrel]) {
+    fn zone(
+        &mut self,
+        board: &PhysicalBoard,
+        zone: &CopperZone,
+        barrels: &[Barrel],
+        foreign: &[(CopperLayer, String, Vec<Pt>)],
+    ) {
         if !self.spec.includes(&zone.net) || !self.spec.include_zones {
             return;
         }
@@ -369,6 +406,18 @@ impl Builder<'_> {
                 }
             }
             self.counts.antipads += antipads;
+            // Foreign copper on this layer (pads, tracks, bridges, legs of other nets) is cut out of the pour with
+            // the zone clearance (polygon difference, `copper_cam::poly`): the outline minus what must be
+            // absent, not the CAM fill (thermal reliefs, minimum widths and islands are not applied).
+            let others: Vec<&Vec<Pt>> =
+                foreign.iter().filter(|(l, n, _)| l == layer && *n != zone.net).map(|(_, _, r)| r).collect();
+            if !others.is_empty() {
+                self.flag("zone_cut_around_foreign_copper");
+                for ring in self.cut_zone(&outer, &holes, &others, clearance) {
+                    self.push_zone_sheet(board, zone, *layer, z, ring);
+                }
+                continue;
+            }
             let clipped_outer = geom::clip_rect(&outer, self.region);
             if clipped_outer.len() < 3 {
                 continue;
@@ -386,27 +435,59 @@ impl Builder<'_> {
                     clipped_outer.clone()
                 }
             };
-            let net_id = self.net_id(&zone.net);
-            let treatment = self.spec.treatment(&zone.net);
-            let touches_edge = ring.iter().any(|p| {
-                (p.0 - self.region[0]).abs() < 1e-9
-                    || (p.0 - self.region[2]).abs() < 1e-9
-                    || (p.1 - self.region[1]).abs() < 1e-9
-                    || (p.1 - self.region[3]).abs() < 1e-9
-            });
-            let thickness_m = self.thickness_m(board, *layer);
-            self.sheets.push(Sheet {
-                kind: "zone",
-                net: zone.net.clone(),
-                net_id,
-                layer: *layer,
-                z,
-                ring,
-                treatment,
-                thickness_m,
-                touches_edge,
-            });
+            self.push_zone_sheet(board, zone, *layer, z, ring);
         }
+    }
+
+    /// The zone's outline minus its holes and the clearance around `others`, clipped to the window: one
+    /// keyhole ring (millimetres) per piece that remains.
+    fn cut_zone(&self, outer: &[Pt], holes: &[Vec<Pt>], others: &[&Vec<Pt>], clearance: f64) -> Vec<Vec<Pt>> {
+        use copper_cam::poly;
+        let nm = |ring: &[Pt]| -> Vec<(f64, f64)> { ring.iter().map(|p| (p.0 * 1e6, p.1 * 1e6)).collect() };
+        let window = [
+            (self.region[0], self.region[1]),
+            (self.region[2], self.region[1]),
+            (self.region[2], self.region[3]),
+            (self.region[0], self.region[3]),
+        ];
+        let subject = poly::intersection(&poly::polygon(&nm(outer)), &poly::polygon(&nm(&window)));
+        let mut clip: poly::Shapes = Vec::new();
+        for h in holes {
+            clip.extend(poly::polygon(&nm(h)));
+        }
+        let mut copper: poly::Shapes = Vec::new();
+        for r in others {
+            copper.extend(poly::polygon(&nm(r)));
+        }
+        clip.extend(poly::offset(&poly::union(&copper), (clearance * 1e6).round() as i64, false, 5_000.0));
+        poly::difference(&subject, &clip)
+            .iter()
+            .filter(|shape| poly::shape_area(shape) > 1e6)
+            .map(|shape| poly::fracture(shape).iter().map(|p| (p.x as f64 * 1e-6, p.y as f64 * 1e-6)).collect())
+            .collect()
+    }
+
+    fn push_zone_sheet(&mut self, board: &PhysicalBoard, zone: &CopperZone, layer: CopperLayer, z: f64, ring: Vec<Pt>) {
+        let net_id = self.net_id(&zone.net);
+        let treatment = self.spec.treatment(&zone.net);
+        let touches_edge = ring.iter().any(|p| {
+            (p.0 - self.region[0]).abs() < 1e-9
+                || (p.0 - self.region[2]).abs() < 1e-9
+                || (p.1 - self.region[1]).abs() < 1e-9
+                || (p.1 - self.region[3]).abs() < 1e-9
+        });
+        let thickness_m = self.thickness_m(board, layer);
+        self.sheets.push(Sheet {
+            kind: "zone",
+            net: zone.net.clone(),
+            net_id,
+            layer,
+            z,
+            ring,
+            treatment,
+            thickness_m,
+            touches_edge,
+        });
     }
 }
 
@@ -425,10 +506,10 @@ fn terminal_info(
     t: &Terminal,
     pads: &[PlacedPad],
     stack: &Stack,
-    inset: f64,
+    inset: Option<&InsetRule>,
     region: [f64; 4],
 ) -> Result<(CopperLayer, Vec<Pt>, Option<String>)> {
-    let shrink = |ring: Vec<Pt>| geom::inset_ring(&ring, inset, region).unwrap_or(ring);
+    let shrink = |ring: Vec<Pt>| inset.and_then(|rule| rule.ring(&ring, region)).unwrap_or(ring);
     match t {
         Terminal::Pad { component, pad } => {
             let found = pads
@@ -449,17 +530,220 @@ fn terminal_info(
     }
 }
 
+/// A short PEC strap that joins a port that does not face its pads to them.
+#[derive(Clone, Debug)]
+pub struct Strap {
+    pub net: String,
+    pub layer: CopperLayer,
+    pub z: f64,
+    /// The rectangle, millimetres (already moved in by the 1/3 rule across its width).
+    pub ring: Vec<Pt>,
+    /// The centre line, millimetres: for the inductance estimate.
+    pub from: Pt,
+    pub to: Pt,
+    pub width: f64,
+    /// The strap runs in the air above the copper layer (an air bridge over foreign copper such as a
+    /// package's exposed pad), joined to the pads by vertical posts.
+    pub in_air: bool,
+}
+
+/// How far above the top copper an air-bridge strap runs, millimetres: a lead frame inside a package.
+pub const AIR_BRIDGE_HEIGHT_MM: f64 = 0.3;
+
+/// A vertical post of an air bridge: `(x, y, z bottom, z top)` millimetres and the net.
+#[derive(Clone, Debug)]
+pub struct Post {
+    pub net: String,
+    pub at: Pt,
+    pub z_bottom: f64,
+    pub z_top: f64,
+}
+
+/// Whether `ring` covers more than 1 % of the rectangle `r` (a shared edge or a sliver of a slanted
+/// trace passing close does not count).
+fn covers(ring: &[Pt], r: [f64; 4]) -> bool {
+    let clipped = geom::clip_rect(ring, r);
+    clipped.len() >= 3 && geom::area(&clipped) > 0.01 * (r[2] - r[0]) * (r[3] - r[1])
+}
+
+/// The terminals of a strap port, as `resolve_port` found them.
+struct StrapEnds<'a> {
+    spec: &'a PortSpec,
+    from: &'a Terminal,
+    to: &'a Terminal,
+    ring_from: &'a [Pt],
+    ring_to: &'a [Pt],
+    net_from: String,
+    net_to: String,
+    layer: CopperLayer,
+    z: f64,
+    obstacles: &'a [(CopperLayer, &'a str, &'a [Pt])],
+}
+
+/// A gap port that joins pads which do not face each other across free space: the port sits at the
+/// middle of a PEC strap from each pad's nearest edge. Facing pads whose gap is crossed by other
+/// copper get a straight strap; pads that overlap neither in x nor in y get an L.
+fn strap_port(e: StrapEnds, inset: &InsetRule) -> Result<(ResolvedPort, Vec<Strap>, Vec<Post>)> {
+    let StrapEnds { spec, from, to, ring_from, ring_to, net_from, net_to, layer, z, obstacles } = e;
+    let (a, b) = (geom::bbox(ring_from).expect("ring"), geom::bbox(ring_to).expect("ring"));
+    let eps = 1e-9;
+    let x_over = (a[0].max(b[0]), a[2].min(b[2]));
+    let y_over = (a[1].max(b[1]), a[3].min(b[3]));
+    if x_over.1 > x_over.0 + eps && y_over.1 > y_over.0 + eps {
+        return Err(Error::NotSupported(format!(
+            "port {}: the terminals {} and {} overlap; a port needs separate pads",
+            spec.name,
+            from.label(),
+            to.label()
+        )));
+    }
+    let cell = inset.cell_at(0, (a[0] + a[2]) / 2.0).min(inset.cell_at(1, (a[1] + a[3]) / 2.0));
+    let gap_len = (2.0 * cell).max(0.4);
+    // Strap width: the narrowest pad dimension, 0.2 to 1 mm (the closed form's bar width).
+    let dims = [a[2] - a[0], a[3] - a[1], b[2] - b[0], b[3] - b[1]];
+    let narrowest = dims.iter().copied().fold(f64::INFINITY, f64::min);
+    let width = narrowest.clamp(0.2, 1.0);
+    let delta = inset.fraction * cell;
+    let into = cell.min(0.5 * narrowest);
+    // The centre line from the pad A to the pad B: axis-aligned legs.
+    let b_right = b[0] >= a[2] - eps;
+    let b_left = a[0] >= b[2] - eps;
+    let b_above = b[1] >= a[3] - eps;
+    let b_below = a[1] >= b[3] - eps;
+    let mut path: Vec<Pt> = Vec::new();
+    if (b_right || b_left) && (b_above || b_below) {
+        // Diagonal: horizontal out of A along its edge nearest B, vertical into B at its edge nearest A.
+        let yh = if b_above { a[3] - width / 2.0 } else { a[1] + width / 2.0 };
+        let xv = if b_right { b[0] + width / 2.0 } else { b[2] - width / 2.0 };
+        let x_start = if b_right { a[2] - into } else { a[0] + into };
+        let y_end = if b_above { b[1] + into } else { b[3] - into };
+        path.extend([(x_start, yh), (xv, yh), (xv, y_end)]);
+    } else if b_right || b_left {
+        let yc = (y_over.0 + y_over.1) / 2.0;
+        let (x_start, x_end) = if b_right { (a[2] - into, b[0] + into) } else { (a[0] + into, b[2] - into) };
+        path.extend([(x_start, yc), (x_end, yc)]);
+    } else {
+        let xc = (x_over.0 + x_over.1) / 2.0;
+        let (y_start, y_end) = if b_above { (a[3] - into, b[1] + into) } else { (a[1] + into, b[3] - into) };
+        path.extend([(xc, y_start), (xc, y_end)]);
+    }
+    // The port sits in the middle of the longest leg.
+    let leg_len = |i: usize| (path[i + 1].0 - path[i].0).hypot(path[i + 1].1 - path[i].1);
+    let k = (0..path.len() - 1).max_by(|&i, &j| leg_len(i).total_cmp(&leg_len(j))).expect("a leg");
+    let lk = leg_len(k);
+    if lk < 2.0 * gap_len {
+        return Err(Error::NotSupported(format!(
+            "port {}: the pads {} and {} are only {lk:.2} mm apart along their strap, too close for a strap port",
+            spec.name,
+            from.label(),
+            to.label()
+        )));
+    }
+    let d = ((path[k + 1].0 - path[k].0) / lk, (path[k + 1].1 - path[k].1) / lk);
+    // Foreign copper under the strap (the exposed pad of a package, a neighbouring pad) would be
+    // shorted to the strap and would short the port: run the strap in the air instead, on posts.
+    let half = width / 2.0;
+    let crosses_foreign = path.windows(2).any(|seg| {
+        let (lo_x, hi_x) = (seg[0].0.min(seg[1].0) - half, seg[0].0.max(seg[1].0) + half);
+        let (lo_y, hi_y) = (seg[0].1.min(seg[1].1) - half, seg[0].1.max(seg[1].1) + half);
+        obstacles
+            .iter()
+            .any(|(l, n, o)| *l == layer && *n != net_from && *n != net_to && covers(o, [lo_x, lo_y, hi_x, hi_y]))
+    });
+    let in_air = crosses_foreign;
+    let z_strap = if in_air { z + AIR_BRIDGE_HEIGHT_MM } else { z };
+    let centre = ((path[k].0 + path[k + 1].0) / 2.0, (path[k].1 + path[k + 1].1) / 2.0);
+    let p_start = (centre.0 - d.0 * gap_len / 2.0, centre.1 - d.1 * gap_len / 2.0);
+    let p_stop = (centre.0 + d.0 * gap_len / 2.0, centre.1 + d.1 * gap_len / 2.0);
+    let axis = if d.0.abs() > 0.5 { 0 } else { 1 };
+    // Strap rectangles: path[0..=k] then p_start (net A); p_stop then path[k+1..] (net B).
+    let mut first: Vec<Pt> = path[..=k].to_vec();
+    first.push(p_start);
+    let mut second: Vec<Pt> = vec![p_stop];
+    second.extend_from_slice(&path[k + 1..]);
+    let w_eff = (width - 2.0 * delta).max(0.05);
+    let rect = |p: Pt, q: Pt, grow_p: bool, grow_q: bool| -> Vec<Pt> {
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        let len = dx.hypot(dy).max(1e-12);
+        let (ux, uy) = (dx / len, dy / len);
+        let h = w_eff / 2.0;
+        let p = if grow_p { (p.0 - ux * h, p.1 - uy * h) } else { p };
+        let q = if grow_q { (q.0 + ux * h, q.1 + uy * h) } else { q };
+        let (nx, ny) = (-uy * h, ux * h);
+        vec![(p.0 + nx, p.1 + ny), (q.0 + nx, q.1 + ny), (q.0 - nx, q.1 - ny), (p.0 - nx, p.1 - ny)]
+    };
+    let (first_net, second_net) = (net_from.clone(), net_to.clone());
+    let mut straps = Vec::new();
+    for (pts, net) in [(&first, net_from), (&second, net_to)] {
+        let n = pts.len();
+        for i in 0..n - 1 {
+            // A leg grows by half a width at a bend so that the corner is filled; the ends stay put.
+            straps.push(Strap {
+                net: net.clone(),
+                layer,
+                z: z_strap,
+                ring: rect(pts[i], pts[i + 1], i > 0, i + 2 < n),
+                from: pts[i],
+                to: pts[i + 1],
+                width,
+                in_air,
+            });
+        }
+    }
+    let (start, stop) = if axis == 0 {
+        ([p_start.0, centre.1 - w_eff / 2.0, z_strap], [p_stop.0, centre.1 + w_eff / 2.0, z_strap])
+    } else {
+        ([centre.0 - w_eff / 2.0, p_start.1, z_strap], [centre.0 + w_eff / 2.0, p_stop.1, z_strap])
+    };
+    let posts = if in_air {
+        vec![
+            Post { net: first_net.clone(), at: path[0], z_bottom: z, z_top: z_strap },
+            Post { net: second_net.clone(), at: path[path.len() - 1], z_bottom: z, z_top: z_strap },
+        ]
+    } else {
+        Vec::new()
+    };
+    let strap_len: f64 = straps.iter().map(|s| (s.to.0 - s.from.0).hypot(s.to.1 - s.from.1)).sum();
+    let how = if in_air {
+        format!("an air bridge {AIR_BRIDGE_HEIGHT_MM} mm above the layer (foreign copper lies between the pads)")
+    } else {
+        "the pads' nearest edges".to_owned()
+    };
+    let description = format!(
+        "{} Ohm lumped port {} on {}: {} to {}, a {gap_len:.3} mm gap along {} in the middle of {strap_len:.2} mm of {width:.2} mm wide strap along {how} (strap port)",
+        spec.z_ref,
+        spec.name,
+        layer.value(),
+        from.label(),
+        to.label(),
+        ["x", "y"][axis]
+    );
+    Ok((ResolvedPort { spec: spec.clone(), start, stop, axis, description }, straps, posts))
+}
+
 fn resolve_port(
     spec: &PortSpec,
     pads: &[PlacedPad],
     stack: &Stack,
-    inset: f64,
+    inset: &InsetRule,
     region: [f64; 4],
-) -> Result<ResolvedPort> {
+    obstacles: &[(CopperLayer, &str, &[Pt])],
+) -> Result<(ResolvedPort, Vec<Strap>, Vec<Post>)> {
     match &spec.kind {
         PortKind::Gap { from, to } => {
-            let (la, ra, _) = terminal_info(from, pads, stack, inset, region)?;
-            let (lb, rb, _) = terminal_info(to, pads, stack, inset, region)?;
+            let (la, ra, na) = terminal_info(from, pads, stack, Some(inset), region)?;
+            let (lb, rb, nb) = terminal_info(to, pads, stack, Some(inset), region)?;
+            // A rectangle terminal has no net of its own: it takes that of the copper under its centre.
+            let net_under = |ring: &[Pt], layer: CopperLayer| -> Option<String> {
+                let bb = geom::bbox(ring)?;
+                let centre = ((bb[0] + bb[2]) / 2.0, (bb[1] + bb[3]) / 2.0);
+                obstacles
+                    .iter()
+                    .find(|(l, _, o)| *l == layer && geom::contains(o, centre))
+                    .map(|(_, n, _)| (*n).to_owned())
+            };
+            let na = na.or_else(|| net_under(&ra, la));
+            let nb = nb.or_else(|| net_under(&rb, lb));
             if la != lb {
                 return Err(Error::NotSupported(format!(
                     "port {}: its terminals are on different layers ({} and {}); use a plane port",
@@ -485,46 +769,62 @@ fn resolve_port(
                     to.label()
                 )
             };
+            // A direct port needs the gap free of other copper on the layer.
+            // Copper of the terminals' own nets that reaches into the gap (the square end of a leg, a bridge)
+            // does not block a port; copper of any other net does.
+            let (net_a, net_b) = (na.clone().unwrap_or_default(), nb.clone().unwrap_or_default());
+            let free =
+                |r: [f64; 4]| !obstacles.iter().any(|(l, n, o)| *l == la && *n != net_a && *n != net_b && covers(o, r));
+            let strap = || {
+                strap_port(
+                    StrapEnds {
+                        spec,
+                        from,
+                        to,
+                        ring_from: &ra,
+                        ring_to: &rb,
+                        net_from: na.clone().unwrap_or_default(),
+                        net_to: nb.clone().unwrap_or_default(),
+                        layer: la,
+                        z,
+                        obstacles,
+                    },
+                    inset,
+                )
+            };
+            if spec.strap {
+                return strap();
+            }
             if x_gap && y_over.1 > y_over.0 + eps {
                 let (from_left, lo, hi) = if a[2] <= b[0] { (true, a[2], b[0]) } else { (false, b[2], a[0]) };
+                if !free([lo, y_over.0, hi, y_over.1]) {
+                    return strap();
+                }
                 let (start, stop) = if from_left {
                     ([lo, y_over.0, z], [hi, y_over.1, z])
                 } else {
                     ([hi, y_over.0, z], [lo, y_over.1, z])
                 };
-                Ok(ResolvedPort {
-                    spec: spec.clone(),
-                    start,
-                    stop,
-                    axis: 0,
-                    description: describe("x", hi - lo, y_over.1 - y_over.0),
-                })
+                let description = describe("x", hi - lo, y_over.1 - y_over.0);
+                Ok((ResolvedPort { spec: spec.clone(), start, stop, axis: 0, description }, Vec::new(), Vec::new()))
             } else if y_gap && x_over.1 > x_over.0 + eps {
                 let (from_low, lo, hi) = if a[3] <= b[1] { (true, a[3], b[1]) } else { (false, b[3], a[1]) };
+                if !free([x_over.0, lo, x_over.1, hi]) {
+                    return strap();
+                }
                 let (start, stop) = if from_low {
                     ([x_over.0, lo, z], [x_over.1, hi, z])
                 } else {
                     ([x_over.0, hi, z], [x_over.1, lo, z])
                 };
-                Ok(ResolvedPort {
-                    spec: spec.clone(),
-                    start,
-                    stop,
-                    axis: 1,
-                    description: describe("y", hi - lo, x_over.1 - x_over.0),
-                })
+                let description = describe("y", hi - lo, x_over.1 - x_over.0);
+                Ok((ResolvedPort { spec: spec.clone(), start, stop, axis: 1, description }, Vec::new(), Vec::new()))
             } else {
-                Err(Error::NotSupported(format!(
-                    "port {}: the terminals {} and {} do not face each other across a gap (their outlines overlap, or are diagonal); \
-                     an in-plane port needs facing edges",
-                    spec.name,
-                    from.label(),
-                    to.label()
-                )))
+                strap()
             }
         }
         PortKind::ToPlane { top, plane } => {
-            let (layer, ring, _) = terminal_info(top, pads, stack, inset, region)?;
+            let (layer, ring, _) = terminal_info(top, pads, stack, Some(inset), region)?;
             let z_top = stack.z(layer).expect("layer in stack");
             let z_plane = stack.z(*plane).ok_or_else(|| {
                 Error::Invalid(format!("port {}: plane layer {} is not in the stack-up", spec.name, plane.value()))
@@ -538,23 +838,27 @@ fn resolve_port(
                 )));
             }
             let b = geom::bbox(&ring).expect("ring");
-            Ok(ResolvedPort {
-                spec: spec.clone(),
-                start: [b[0], b[1], z_top],
-                stop: [b[2], b[3], z_plane],
-                axis: 2,
-                description: format!(
-                    "{} Ohm lumped port {} from {} on {} down to {} ({:.3} mm), {:.3} x {:.3} mm",
-                    spec.z_ref,
-                    spec.name,
-                    top.label(),
-                    layer.value(),
-                    plane.value(),
-                    z_top - z_plane,
-                    b[2] - b[0],
-                    b[3] - b[1]
-                ),
-            })
+            Ok((
+                ResolvedPort {
+                    spec: spec.clone(),
+                    start: [b[0], b[1], z_top],
+                    stop: [b[2], b[3], z_plane],
+                    axis: 2,
+                    description: format!(
+                        "{} Ohm lumped port {} from {} on {} down to {} ({:.3} mm), {:.3} x {:.3} mm",
+                        spec.z_ref,
+                        spec.name,
+                        top.label(),
+                        layer.value(),
+                        plane.value(),
+                        z_top - z_plane,
+                        b[2] - b[0],
+                        b[3] - b[1]
+                    ),
+                },
+                Vec::new(),
+                Vec::new(),
+            ))
         }
     }
 }
@@ -641,8 +945,10 @@ impl RegionModel {
         for extra in &spec.extra_traces {
             narrowest = narrowest.min(nm_to_mm(extra.width_nm));
         }
-        let cell = copper_cell(spec, narrowest);
-        let inset = spec.edge_inset.max(0.0) * cell;
+        let base_cell = copper_cell(spec, narrowest);
+        // A coarser mesh (refine_scale above 1) coarsens the general cell too; a finer one only the zones.
+        let cell = base_cell * spec.refine_scale.max(1.0);
+        let inset = InsetRule { fraction: spec.edge_inset.max(0.0), cell, zones: refine_zones(spec, base_cell, cell) };
         let mut b = Builder {
             spec,
             stack: stack.clone(),
@@ -749,9 +1055,6 @@ impl RegionModel {
                 b.push_sheet(board, "polygon", &p.net, p.layer, ring);
             }
         }
-        for z in &zones {
-            b.zone(board, z, &barrels);
-        }
         let mut rounded_pads = 0;
         for pad in &pads {
             let wanted = pad.net.as_ref().is_some_and(|n| spec.includes(n))
@@ -777,18 +1080,69 @@ impl RegionModel {
         for bridge in &spec.bridges {
             b.add_bridge(board, bridge, &pads)?;
         }
+        // Zones last: they are cut around the copper of other nets that exists by now.
+        let foreign: Vec<(CopperLayer, String, Vec<Pt>)> =
+            b.sheets.iter().filter(|s| s.kind != "zone").map(|s| (s.layer, s.net.clone(), s.ring.clone())).collect();
+        for z in &zones {
+            b.zone(board, z, &barrels, &foreign);
+        }
         if !spec.include_pads && !pads.is_empty() {
             b.flag("pads_omitted");
         }
 
         // Ports.
         let mut ports = Vec::new();
+        let mut straps: Vec<Strap> = Vec::new();
+        let mut posts: Vec<Post> = Vec::new();
+        // Copper a direct port would cross: every sheet but planes and zones.
+        let obstacles: Vec<(CopperLayer, &str, &[Pt])> = b
+            .sheets
+            .iter()
+            .filter(|s| s.kind != "zone" && s.kind != "polygon")
+            .map(|s| (s.layer, s.net.as_str(), s.ring.as_slice()))
+            .collect();
         for p in &spec.ports {
-            let resolved = resolve_port(p, &pads, &b.stack, b.inset, b.region)?;
+            let (resolved, port_straps, port_posts) = resolve_port(p, &pads, &b.stack, &b.inset, b.region, &obstacles)?;
             if ports.iter().any(|q: &ResolvedPort| q.spec.name == p.name) {
                 return Err(Error::Invalid(format!("two ports are named {}", p.name)));
             }
             ports.push(resolved);
+            straps.extend(port_straps);
+            posts.extend(port_posts);
+        }
+        for post in &posts {
+            let net_id = b.net_id(&post.net);
+            b.wires.push(Wire {
+                kind: "post",
+                net: post.net.clone(),
+                net_id,
+                x: post.at.0,
+                y: post.at.1,
+                z_top: post.z_top,
+                z_bottom: post.z_bottom,
+                radius: 0.05,
+            });
+        }
+        if straps.iter().any(|s| s.in_air) {
+            b.flag("port_strap_in_air");
+        }
+        if !straps.is_empty() {
+            b.flag("port_strap");
+            for st in &straps {
+                let net_id = b.net_id(&st.net);
+                let thickness_m = b.thickness_m(board, st.layer);
+                b.sheets.push(Sheet {
+                    kind: "strap",
+                    net: st.net.clone(),
+                    net_id,
+                    layer: st.layer,
+                    z: st.z,
+                    ring: st.ring.clone(),
+                    treatment: NetTreatment::Pec,
+                    thickness_m,
+                    touches_edge: false,
+                });
+            }
         }
         for p in &ports {
             let (lo, hi) = (p.start[0].min(p.stop[0]), p.start[0].max(p.stop[0]));
@@ -812,11 +1166,12 @@ impl RegionModel {
         if b.sheets.iter().any(|s| s.treatment == NetTreatment::Conducting) {
             b.flag("conducting_sheet_used");
         }
-        // Zones over foreign same-layer copper: the outline is used, clearances are not cut.
+        // Zone sheets that still lie over foreign same-layer copper (a pour with no cuts, or a cut that failed).
         let foreign = b.sheets.iter().filter(|z| z.kind == "zone").any(|z| {
             b.sheets.iter().any(|s| {
                 s.kind != "zone"
                     && s.layer == z.layer
+                    && (s.z - z.z).abs() < 1e-9
                     && s.net != z.net
                     && s.ring.iter().any(|p| geom::contains(&z.ring, *p))
             })
@@ -825,6 +1180,7 @@ impl RegionModel {
             b.flag("zone_overlaps_foreign_copper");
         }
 
+        let inset_zones = b.inset.zones.clone();
         let Builder { sheets, wires, counts, flags, notes, net_ids, .. } = b;
         let mut net_names = vec![String::new(); net_ids.len()];
         for (n, id) in &net_ids {
@@ -837,6 +1193,7 @@ impl RegionModel {
             sheets,
             wires,
             ports,
+            straps,
             axes: [empty_axis(), empty_axis(), empty_axis()],
             counts,
             mesh: MeshReport {
@@ -858,10 +1215,26 @@ impl RegionModel {
             domain: [[0.0; 2]; 3],
             net_names,
         };
-        model.build_mesh(cell)?;
+        model.build_mesh(cell, inset_zones)?;
         model.describe_approximations();
         Ok(model)
     }
+}
+
+/// The refinement intervals of x and y in millimetres, with the cells scaled by `refine_scale` and never above the general cell.
+fn refine_zones(spec: &RegionSpec, base_cell: f64, cell: f64) -> [Vec<(f64, f64, f64)>; 2] {
+    let mut zones: [Vec<(f64, f64, f64)>; 2] = [Vec::new(), Vec::new()];
+    for r in &spec.refine {
+        // A zone cell is the box's cell or the general one, whichever is smaller, times the scale.
+        let c = (nm_to_mm(r.cell_nm).min(base_cell) * spec.refine_scale).max(0.02);
+        if c >= cell {
+            continue;
+        }
+        let rect = [nm_to_mm(r.rect_nm[0]), nm_to_mm(r.rect_nm[1]), nm_to_mm(r.rect_nm[2]), nm_to_mm(r.rect_nm[3])];
+        zones[0].push((rect[0], rect[2], c));
+        zones[1].push((rect[1], rect[3], c));
+    }
+    zones
 }
 
 /// The copper-region cell: from the override, else from the narrowest
@@ -907,8 +1280,8 @@ impl Builder<'_> {
     }
 
     fn add_bridge(&mut self, board: &PhysicalBoard, bridge: &Bridge, pads: &[PlacedPad]) -> Result<()> {
-        let (la, ra, na) = terminal_info(&bridge.a, pads, &self.stack, 0.0, self.region)?;
-        let (lb, rb, _) = terminal_info(&bridge.b, pads, &self.stack, 0.0, self.region)?;
+        let (la, ra, na) = terminal_info(&bridge.a, pads, &self.stack, None, self.region)?;
+        let (lb, rb, _) = terminal_info(&bridge.b, pads, &self.stack, None, self.region)?;
         if la != lb {
             return Err(Error::NotSupported(format!("bridge {} joins pads on different layers", bridge.name)));
         }
@@ -940,7 +1313,7 @@ impl Builder<'_> {
 }
 
 impl RegionModel {
-    fn build_mesh(&mut self, cell: f64) -> Result<()> {
+    fn build_mesh(&mut self, cell: f64, zones: [Vec<(f64, f64, f64)>; 2]) -> Result<()> {
         let spec = &self.spec;
         let (n_min, f_top) = match spec.fidelity {
             Fidelity::Coarse => (2usize, spec.band_hz.1),
@@ -953,6 +1326,7 @@ impl RegionModel {
         let region = self.region;
         let long_side = (region[2] - region[0]).max(region[3] - region[1]);
         let air = spec.air_margin_nm.map_or((long_side / 2.0).max(8.0), nm_to_mm);
+        let zones_cell = zones.iter().flatten().map(|z| z.2).fold(cell, f64::min);
         let min_cell = (0.4 * cell).max(0.04);
         let thinnest = self.stack.thinnest();
         let min_cell_z = if thinnest.is_finite() { min_cell.min(0.45 * thinnest) } else { min_cell };
@@ -996,9 +1370,12 @@ impl RegionModel {
                 }
             }
         }
-        // z: copper layers and slab edges.
+        // z: copper layers and slab edges, and sheets in the air (air-bridge straps).
         for (_, z) in &self.stack.copper {
             lines[2].push(Line::new(*z, Rank::Copper, None));
+        }
+        for s in self.sheets.iter().filter(|s| s.kind == "strap") {
+            lines[2].push(Line::new(s.z, Rank::Copper, None));
         }
         for s in &self.stack.slabs {
             lines[2].push(Line::new(s.top, Rank::Copper, None));
@@ -1007,12 +1384,18 @@ impl RegionModel {
         let mut gap_counts = Vec::new();
         for s in &self.stack.slabs {
             let t = s.top - s.bottom;
-            let n = (t / (1.25 * cell)).ceil().max(n_min as f64) as usize;
+            let n = (t / (1.25 * zones_cell)).ceil().max(n_min as f64) as usize;
             let n = n.min(((t / min_cell_z).floor() as usize).max(1));
             gap_counts.push((s.bottom, s.top, n));
         }
 
         // The fine zone of x and y: around every non-window line.
+        // With local refinement the merge distance shrinks with the cell, so the floor below which lines of
+        // different nets are taken to overlap stays at 0.075 mm: the 1/3 rule moves the edges of placed
+        // straight legs and of the pads they cross by a third of a cell, which leaves artefact slivers
+        // of that size, and a sliver sets the global time step.
+        let refined = self.spec.smooth_mesh || zones.iter().any(|z| !z.is_empty());
+        let net_floor_xy = if refined { (0.25 * min_cell).max(0.075) } else { 0.25 * min_cell };
         let mut plans: Vec<AxisPlan> = Vec::new();
         for (k, axis_lines) in lines.iter().enumerate() {
             let fine = {
@@ -1031,21 +1414,24 @@ impl RegionModel {
                     lines: axis_lines.clone(),
                     cell,
                     fine_zone: fine,
+                    zones: zones[k].clone(),
                     min_cell,
-                    net_floor: 0.25 * min_cell,
+                    net_floor: net_floor_xy,
                     max_inner,
                     max_outer,
                     air,
                     pml_cells: PML_CELLS,
                     gap_counts: Vec::new(),
+                    smooth: refined,
                 });
             } else {
                 let bottom = self.stack.bottom();
                 let top = self.stack.copper.iter().map(|c| c.1).fold(0.0, f64::max);
                 plans.push(AxisPlan {
                     lines: axis_lines.clone(),
-                    cell: cell.max(0.1),
-                    fine_zone: Some((bottom - 4.0 * cell, top + 4.0 * cell)),
+                    cell: zones_cell.max(0.1),
+                    fine_zone: Some((bottom - 4.0 * zones_cell, top + 4.0 * zones_cell)),
+                    zones: Vec::new(),
                     min_cell: min_cell_z,
                     net_floor: 0.25 * min_cell_z,
                     max_inner: max_inner.max(cell),
@@ -1053,6 +1439,7 @@ impl RegionModel {
                     air,
                     pml_cells: PML_CELLS,
                     gap_counts: gap_counts.clone(),
+                    smooth: false,
                 });
             }
         }
@@ -1197,16 +1584,22 @@ impl RegionModel {
     pub fn estimate(&self) -> Estimate {
         let cells = self.mesh.cells;
         let dt = self.mesh.dt_estimate;
-        let (lo, hi) = self.spec.band_hz;
-        let (f0, fc) = excitation_of(lo, hi);
-        let _ = f0;
+        let (_, fc) = self.excitation();
+        // The run ends when the pulse is over (3.6 / fc, the Gaussian truncated at twice its delay) and the
+        // energy has fallen 35 dB. On the validation loops over a plane the energy was already 45 to 60 dB
+        // down when the pulse ended, so the pulse alone sets the end; the loop in free space, which radiates
+        // and rings longer, needed 0.5 ns more (about 8 transits of the region's diagonal in air).
         let diag = ((self.region[2] - self.region[0]).powi(2) + (self.region[3] - self.region[1]).powi(2)).sqrt();
-        let transit = diag * self.stack.max_er().sqrt() / C0_MM_PER_S;
-        let sim_time = 3.6 / fc + 8.0 * transit;
+        let sim_time = 3.6 / fc + 8.0 * diag / C0_MM_PER_S;
         let steps = (sim_time / dt).ceil() as u64;
         let cell_updates = cells as f64 * steps as f64;
         let seconds = cell_updates / self.spec.budget.assumed_rate;
         Estimate { cells, dt, sim_time, steps, cell_updates, seconds }
+    }
+
+    /// The Gaussian `(f0, fc)` of the excitation: baseband with 20 dB at the band's top times `pulse_scale`.
+    pub fn excitation(&self) -> (f64, f64) {
+        excitation_of(self.spec.band_hz.0, self.spec.band_hz.1 * self.spec.pulse_scale.max(0.1))
     }
 
     /// A summary for reports: size, mesh, contents, approximations, flags.
@@ -1248,6 +1641,67 @@ impl RegionModel {
             m.max_move_mm,
             m.slivers.len()
         ));
+        for (k, a) in self.axes.iter().enumerate() {
+            let w = a.cells();
+            if let Some((i, c)) = w.iter().enumerate().min_by(|x, y| x.1.total_cmp(y.1)) {
+                let near: Vec<String> = a.lines[i.saturating_sub(3)..(i + 5).min(a.lines.len())]
+                    .iter()
+                    .map(|v| format!("{v:.3}"))
+                    .collect();
+                s.push_str(&format!(
+                    "smallest cell {:.3} mm at {}={:.3} (lines {}), ",
+                    c,
+                    ["x", "y", "z"][k],
+                    a.lines[i],
+                    near.join(" ")
+                ));
+            }
+            let worst = w.windows(2).enumerate().max_by(|x, y| {
+                (x.1[0] / x.1[1]).max(x.1[1] / x.1[0]).total_cmp(&(y.1[0] / y.1[1]).max(y.1[1] / y.1[0]))
+            });
+            if let Some((i, p)) = worst {
+                s.push_str(&format!(
+                    ", worst ratio {:.2} ({:.3} next to {:.3}) at {:.3}
+",
+                    (p[0] / p[1]).max(p[1] / p[0]),
+                    p[0],
+                    p[1],
+                    a.lines[i + 1]
+                ));
+            }
+        }
+        for (k, a) in self.axes.iter().enumerate() {
+            let w = a.cells();
+            let n = a.lines.len();
+            for i in 0..w.len().saturating_sub(1) {
+                let r = (w[i] / w[i + 1]).max(w[i + 1] / w[i]);
+                if r > 1.5 + 1e-6 {
+                    let at = a.lines[i + 1];
+                    let place = if i < PML_CELLS || i + 1 >= n - 1 - PML_CELLS {
+                        "in the PML"
+                    } else if k < 2 && at >= self.region[k] && at <= self.region[k + 2] {
+                        "inside the window"
+                    } else {
+                        "in the air"
+                    };
+                    s.push_str(&format!(
+                        "ratio {:.2} ({:.3} next to {:.3}) at {}={:.3} mm, {place}
+",
+                        r,
+                        w[i],
+                        w[i + 1],
+                        ["x", "y", "z"][k],
+                        at
+                    ));
+                }
+            }
+        }
+        for sliver in &m.slivers {
+            s.push_str(&format!(
+                "sliver: {sliver}
+"
+            ));
+        }
         s.push_str(&format!(
             "estimate before running: dt {:.4} ps, {} steps ({:.2} ns), {:.2} G cell updates, about {:.0} s at {:.0} M/s\n",
             e.dt * 1e12,

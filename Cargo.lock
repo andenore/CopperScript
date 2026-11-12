@@ -140,6 +140,7 @@ version = "0.1.0"
 name = "copper-fullwave"
 version = "0.1.0"
 dependencies = [
+ "copper-cam",
  "copper-drc",
  "copper-emi",
  "copper-json",

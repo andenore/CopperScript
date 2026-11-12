@@ -229,9 +229,12 @@ pub fn keyhole(outer: &[Pt], holes: &[Vec<Pt>]) -> Option<Vec<Pt>> {
 /// is no longer a polygon of positive area. Meant for simple rings (pads,
 /// tracks, polygons); a keyhole ring is not offset.
 pub fn inset_ring(ring: &[Pt], delta: f64, fixed: [f64; 4]) -> Option<Vec<Pt>> {
-    if delta <= 0.0 {
-        return Some(ring.to_vec());
-    }
+    inset_ring_by(ring, &|_, _| delta, fixed)
+}
+
+/// As [`inset_ring`], with the offset of each edge given by `delta(midpoint, inward normal)`.
+pub fn inset_ring_by(ring: &[Pt], delta: &dyn Fn(Pt, Pt) -> f64, fixed: [f64; 4]) -> Option<Vec<Pt>> {
+    let original = ring;
     let ccw = area_signed(ring) > 0.0;
     let ring: Vec<Pt> = if ccw { ring.to_vec() } else { ring.iter().rev().copied().collect() };
     let n = ring.len();
@@ -245,14 +248,26 @@ pub fn inset_ring(ring: &[Pt], delta: f64, fixed: [f64; 4]) -> Option<Vec<Pt>> {
             || ((a.1 - fixed[1]).abs() < eps && (b.1 - fixed[1]).abs() < eps)
             || ((a.1 - fixed[3]).abs() < eps && (b.1 - fixed[3]).abs() < eps)
     };
-    // Offset line of each edge: a point and a direction, plus the unit inward normal.
+    // Offset of each edge, and its offset line: a point and a direction, plus the unit inward normal.
+    let ds: Vec<f64> = (0..n)
+        .map(|i| {
+            let (a, b) = (ring[i], ring[(i + 1) % n]);
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let len = dx.hypot(dy).max(1e-30);
+            let normal = (-dy / len, dx / len);
+            if on_fixed(a, b) { 0.0 } else { delta(((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0), normal).max(0.0) }
+        })
+        .collect();
+    if ds.iter().all(|d| *d <= 0.0) {
+        return Some(original.to_vec());
+    }
     let lines: Vec<(Pt, Pt, Pt)> = (0..n)
         .map(|i| {
             let (a, b) = (ring[i], ring[(i + 1) % n]);
             let (dx, dy) = (b.0 - a.0, b.1 - a.1);
             let len = dx.hypot(dy).max(1e-30);
             let normal = (-dy / len, dx / len);
-            let d = if on_fixed(a, b) { 0.0 } else { delta };
+            let d = ds[i];
             ((a.0 + normal.0 * d, a.1 + normal.1 * d), (dx / len, dy / len), normal)
         })
         .collect();
@@ -271,8 +286,9 @@ pub fn inset_ring(ring: &[Pt], delta: f64, fixed: [f64; 4]) -> Option<Vec<Pt>> {
         // Keep a sharp corner's mitre within four deltas of the original vertex.
         let o = ring[i];
         let reach = (v.0 - o.0).hypot(v.1 - o.1);
-        let v = if reach > 4.0 * delta + 1e-12 {
-            let k = 4.0 * delta / reach;
+        let cap = 4.0 * ds[i].max(ds[(i + n - 1) % n]);
+        let v = if reach > cap + 1e-12 {
+            let k = cap / reach;
             (o.0 + (v.0 - o.0) * k, o.1 + (v.1 - o.1) * k)
         } else {
             v

@@ -2105,7 +2105,7 @@ fabricator's calculator or a field solver and record it in
 `copper emi-check BOARD [--locked] [--offline] [--layers N] [--fab-profile P]
 [--footprint-root R] [--allow-proxy-footprints] [--run RUN] [--plot-spectrum OUT.svg]
 [--plot-field OUT.svg [--field-height MM]] [--fullwave [--fullwave-fidelity coarse|fine]
-[--fullwave-budget SECONDS] [--fullwave-margin MM]] [--json]`
+[--fullwave-budget SECONDS] [--fullwave-margin MM] [--fullwave-single-mesh]] [--json]`
 physicalizes the board like `si-check` and screens every switching cell of the
 EMI model (`copper query BOARD emi`; see [the EMI specification](emi-noise-analysis.md))
 for `EMI-HOT-LOOP`, `EMI-SWITCH-NODE` and `EMI-PROXIMITY`, applies `emi_accept`
@@ -2147,13 +2147,31 @@ levels (dBuV) are not comparable with the radiated ones (dBuV/m).
 `--fullwave` adds, for each `buck` cell (asynchronous or synchronous), the hot-loop
 inductance from a region full-wave (FDTD) model of the loop on the pinned `ems`
 solver (`copper-fullwave`): the finding gains a `fullwave:` line and
-`measures.fullwave` (`inductance_nh`, `closed_form_nh`, `ratio`, `band_mhz`,
-`flatness`, `cells`, `steps`, `seconds`, `flags`, `solver`, ...), and coverage
-`EMI-FULLWAVE:<cell>` says `executed`, `not_applicable` (other topologies) or
-`failed` with the reason (for example a model over `--fullwave-budget`, which is
-checked before the solver starts). It is never part of the default run and
-takes tens of seconds to minutes per cell; `--fullwave-fidelity fine` is about
-eight times the work. Screening evidence, see [the EMI specification](emi-noise-analysis.md#11-region-of-interest-full-wave-phase-4).
+`measures.fullwave` (`inductance_nh`, `mesh_error_estimate_pct`,
+`inductance_extrapolated_nh`, `meshes`, `closed_form_nh`, `ratio`, `port_strap_nh`,
+`inductance_static_nh`, `band_mhz`, `flatness`, `cells`, `steps`, `seconds`, `flags`,
+`solver`, `model`, ...), and coverage `EMI-FULLWAVE:<cell>` says `executed`,
+`not_applicable` (other topologies) or `failed` with the reason (for example a model
+over `--fullwave-budget`, which is checked before the solver starts; a run that
+takes half as long again as the budget is stopped by a wall-clock guard and reported
+as `budget_exceeded` with its partial statistics, `measures.fullwave.status`). The
+mesh is refined (about 0.2 to 0.25 mm) around the loop and coarser elsewhere. Unless
+the budget is short, two meshes are run, the standard one and one with the refined
+cell divided by 1.5 (or, when that does not fit, multiplied by 1.5): the reported
+`inductance_nh` is that of the finer of the two and `mesh_error_estimate_pct` is their
+relative difference, a screening estimate of the discretisation error, not a bound.
+L falls with the cell at first order, so the error of the reported value is about
+twice the estimate, and `inductance_extrapolated_nh` is the first-order limit of the
+two meshes (never the reported value). `--fullwave-single-mesh`, or a budget that
+fits one mesh only, gives one mesh: `mesh_error_estimate_pct` is `null` and the flag
+`single_mesh` is set. A port whose pads do not face each other across free space is
+joined to them by short copper straps (`port_strap`; in the air above a package's
+exposed pad, `port_strap_in_air`); their closed-form inductance is `port_strap_nh`, a
+bias that the inductance includes. A loop that resonates under 750 MHz gets
+`band_near_resonance` and `inductance_static_nh`, L(f) with the resonance factor
+removed. It is never part of the default run and takes minutes per cell;
+`--fullwave-fidelity fine` halves the general copper cell: about twice the work on the placed example. Screening
+evidence, see [the EMI specification](emi-noise-analysis.md#11-region-of-interest-full-wave-phase-4).
 
 The hot loop is the polygon through pad centres (`placement_estimate`) until
 copper is present on its nets. Where tracks, arcs, vias, polygons or the copper

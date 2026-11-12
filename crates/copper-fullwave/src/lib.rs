@@ -29,10 +29,11 @@ pub mod stack;
 #[doc(hidden)]
 pub mod testing;
 
-pub use model::{Counts, Estimate, MeshReport, RegionModel, ResolvedPort, Sheet, Wire};
+pub use model::{Counts, Estimate, MeshReport, Post, RegionModel, ResolvedPort, Sheet, Strap, Wire};
 pub use solve::{PortColumn, PortMatrix, RunStats, SOLVER, auto_threads, db};
 pub use spec::{
-    Bridge, Budget, Error, ExtraTrace, Fidelity, NetTreatment, PortKind, PortSpec, RegionSpec, Result, Terminal,
+    Bridge, Budget, Error, ExtraTrace, Fidelity, NetTreatment, PortKind, PortSpec, RefineBox, RegionSpec, Result,
+    Terminal,
 };
 
 /// Vacuum permittivity, F/m.

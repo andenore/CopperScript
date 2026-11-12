@@ -7,7 +7,8 @@ use std::io::Write;
 
 use copper_drc::emi::{EmiCheckReport, EmiFinding};
 use copper_drc::{Coverage, CoverageStatus};
-use copper_fullwave::hotloop::{HotLoopInput, HotLoopOptions, HotLoopResult, extract_hot_loop};
+use copper_fullwave::hotloop::{HotLoopInput, HotLoopOptions, HotLoopResult, extract_hot_loop, find_switch_pad};
+use copper_fullwave::solve::PartialRun;
 use copper_fullwave::{Budget, Fidelity};
 use copper_json::{Object, Value};
 use copper_pcb::board::PhysicalBoard;
@@ -20,6 +21,8 @@ pub struct Options {
     pub budget_seconds: Option<f64>,
     /// Window margin around the loop, millimetres.
     pub margin_mm: Option<f64>,
+    /// Run one mesh only (no convergence estimate).
+    pub single_mesh: bool,
 }
 
 fn put(object: &mut Object, key: &str, value: Value) {
@@ -56,6 +59,53 @@ fn result_value(r: &HotLoopResult) -> Value {
     put(&mut o, "solver", Value::from(r.solver.as_str()));
     put(&mut o, "port", Value::from(r.port.as_str()));
     put(&mut o, "notes", strings(&r.notes));
+    let model: Vec<String> = r.description.lines().map(str::to_owned).collect();
+    put(&mut o, "model", strings(&model));
+    put(&mut o, "mesh_error_estimate_pct", r.mesh_error_estimate_pct.map_or(Value::Null, |v| Value::from(round(v, 2))));
+    put(
+        &mut o,
+        "inductance_extrapolated_nh",
+        r.inductance_extrapolated_nh.map_or(Value::Null, |v| Value::from(round(v, 3))),
+    );
+    put(&mut o, "inductance_static_nh", r.inductance_static_nh.map_or(Value::Null, |v| Value::from(round(v, 3))));
+    put(&mut o, "flatness_static", r.flatness_static.map_or(Value::Null, |v| Value::from(round(v, 4))));
+    put(&mut o, "port_strap_nh", r.port_strap_nh.map_or(Value::Null, |v| Value::from(round(v, 3))));
+    let meshes = r
+        .meshes
+        .iter()
+        .map(|m| {
+            let mut mo = Object::new();
+            put(&mut mo, "role", Value::from(m.role));
+            put(&mut mo, "refine_cell_mm", Value::from(round(m.refine_cell_mm, 3)));
+            put(&mut mo, "cells", Value::from(m.cells as i64));
+            put(&mut mo, "steps", Value::from(m.steps as i64));
+            put(&mut mo, "expected_steps", Value::from(m.expected_steps as i64));
+            put(&mut mo, "seconds", Value::from(round(m.seconds, 1)));
+            put(&mut mo, "converged", Value::Bool(m.converged));
+            put(&mut mo, "inductance_nh", Value::from(round(m.inductance_nh, 3)));
+            Value::Object(mo)
+        })
+        .collect();
+    put(&mut o, "meshes", Value::Array(meshes));
+    put(&mut o, "smallest_cell_mm", Value::from(round(r.smallest_cell_mm, 3)));
+    put(&mut o, "max_grading_ratio", Value::from(round(r.max_grading_ratio, 2)));
+    put(&mut o, "grading_ratio_violations", Value::from(r.ratio_violations as i64));
+    Value::Object(o)
+}
+
+/// `measures.fullwave` of a finding whose run the wall-clock guard stopped.
+fn exceeded_value(p: &PartialRun) -> Value {
+    let mut o = Object::new();
+    put(&mut o, "status", Value::from("budget_exceeded"));
+    put(&mut o, "inductance_nh", Value::Null);
+    put(&mut o, "cells", Value::from(p.cells as i64));
+    put(&mut o, "steps", Value::from(p.steps as i64));
+    put(&mut o, "expected_steps", Value::from(p.expected_steps as i64));
+    put(&mut o, "simulated_ns", Value::from(round(p.simulated_ns, 3)));
+    put(&mut o, "seconds", Value::from(round(p.seconds, 1)));
+    put(&mut o, "limit_seconds", Value::from(round(p.limit_seconds, 1)));
+    put(&mut o, "energy_db", Value::from(round(p.energy_db, 1)));
+    put(&mut o, "flags", strings(&["budget_exceeded".to_owned()]));
     Value::Object(o)
 }
 
@@ -67,6 +117,19 @@ fn text_line(r: &HotLoopResult) -> String {
         r.band_mhz[1],
         100.0 * r.flatness
     );
+    match r.mesh_error_estimate_pct {
+        Some(e) => text.push_str(&format!(" (mesh error estimate {e:.1} %, from {} meshes)", r.meshes.len())),
+        None => text.push_str(" (single mesh: no mesh error estimate)"),
+    }
+    if let Some(l) = r.inductance_extrapolated_nh {
+        text.push_str(&format!(", first-order extrapolation to a zero cell {l:.2} nH (not the reported value)"));
+    }
+    if let Some(l) = r.inductance_static_nh {
+        text.push_str(&format!(", static inductance (resonance factor removed) {l:.2} nH"));
+    }
+    if let Some(l) = r.port_strap_nh {
+        text.push_str(&format!(", port strap bias {l:.2} nH"));
+    }
     match (r.closed_form_nh, r.ratio) {
         (Some(c), Some(ratio)) => {
             text.push_str(&format!(", closed form {c:.2} nH (full wave / closed form {ratio:.2})"))
@@ -99,6 +162,19 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
         .iter()
         .map(|c| (c.controller.clone(), c.value.get("topology").and_then(Value::as_str).unwrap_or("").to_owned()))
         .collect();
+    let switch_nets: Vec<(String, Vec<String>)> = report
+        .cells
+        .iter()
+        .map(|c| {
+            let nets = c
+                .value
+                .get("switch_nets")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default();
+            (c.controller.clone(), nets)
+        })
+        .collect();
     let mut new_coverage = Vec::new();
     let mut seen_loops = 0;
     for finding in report.findings.iter_mut().filter(|f| f.finding.code == "EMI-HOT-LOOP") {
@@ -122,20 +198,35 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
             continue;
         }
         let input = match HotLoopInput::from_finding(finding, &topology) {
-            Ok(input) => input,
+            Ok(mut input) => {
+                // A synchronous cell's four-pad loop does not name the switch pad; the port needs it.
+                if let Some((_, nets)) = switch_nets.iter().find(|(c, _)| *c == cell) {
+                    input.switch_pad = find_switch_pad(board, &input, nets);
+                }
+                input
+            }
             Err(error) => {
                 new_coverage.push(key(CoverageStatus::Failed, error.to_string()));
                 continue;
             }
         };
-        let mut hot = HotLoopOptions { fidelity: options.fidelity, ..HotLoopOptions::default() };
+        let mut hot = HotLoopOptions {
+            fidelity: options.fidelity,
+            convergence: !options.single_mesh,
+            ..HotLoopOptions::default()
+        };
         if let Some(seconds) = options.budget_seconds {
             hot.budget = Budget { max_seconds: seconds, ..Budget::default() };
         }
         if let Some(mm) = options.margin_mm {
             hot.margin_nm = (mm * 1e6).round() as i64;
         }
-        let _ = writeln!(progress, "full-wave: cell {cell}, {} fidelity (one solver run)", options.fidelity.name());
+        let _ = writeln!(
+            progress,
+            "full-wave: cell {cell}, {} fidelity ({})",
+            options.fidelity.name(),
+            if options.single_mesh { "one mesh" } else { "two meshes when the budget allows" }
+        );
         match extract_hot_loop(board, &input, &hot) {
             Ok(result) => {
                 attach(finding, &result);
@@ -151,6 +242,10 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
             }
             Err(copper_fullwave::Error::NotSupported(reason)) => {
                 new_coverage.push(key(CoverageStatus::NotApplicable, reason));
+            }
+            Err(copper_fullwave::Error::BudgetExceeded(partial)) => {
+                finding.measures.insert("fullwave".to_owned(), exceeded_value(&partial));
+                new_coverage.push(key(CoverageStatus::Failed, partial.to_string()));
             }
             Err(error) => {
                 new_coverage.push(key(CoverageStatus::Failed, error.to_string()));

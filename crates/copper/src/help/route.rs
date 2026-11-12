@@ -659,15 +659,19 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--fullwave",
-                help: "add, per buck cell, the hot-loop inductance from a region full-wave (FDTD) model of the loop on the pinned ems solver (measures.fullwave, an EMI-FULLWAVE:<cell> coverage entry); slow (tens of seconds to minutes per cell), never part of the default run; screening evidence",
+                help: "add, per buck cell, the hot-loop inductance from a region full-wave (FDTD) model of the loop on the pinned ems solver (measures.fullwave, an EMI-FULLWAVE:<cell> coverage entry); two meshes when the budget allows, giving mesh_error_estimate_pct; slow (minutes per cell), never part of the default run; screening evidence",
             },
             Opt {
                 flag: "--fullwave-fidelity {coarse,fine}",
-                help: "with --fullwave: mesh density (default: coarse; fine is about 16 times the work)",
+                help: "with --fullwave: mesh density (default: coarse, with the loop refined to 0.2-0.25 mm; fine halves the general copper cell: about twice the work of the standard mesh on the placed example, up to eight times where the narrow features set the cell)",
             },
             Opt {
                 flag: "--fullwave-budget FULLWAVE_BUDGET",
-                help: "with --fullwave: refuse a model whose estimated run time exceeds this many seconds (default: 1800); the check runs before the solver starts",
+                help: "with --fullwave: refuse a model whose estimated run time exceeds this many seconds (default: 1800); the check runs before the solver starts, and a run that takes half as long again as the budget is stopped (budget_exceeded, with its partial statistics)",
+            },
+            Opt {
+                flag: "--fullwave-single-mesh",
+                help: "with --fullwave: run the standard mesh only (no second mesh, so no mesh_error_estimate_pct; flag single_mesh)",
             },
             Opt {
                 flag: "--fullwave-margin FULLWAVE_MARGIN",

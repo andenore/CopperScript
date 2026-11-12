@@ -27,7 +27,9 @@ const BOARD: &str = "examples/emi_buck/board.copper";
 #[test]
 fn help_names_the_fullwave_options_and_sub_options_need_the_flag() {
     let help = stdout(&copper(&["emi-check", "--help"]));
-    for option in ["--fullwave", "--fullwave-fidelity", "--fullwave-budget", "--fullwave-margin"] {
+    for option in
+        ["--fullwave", "--fullwave-fidelity", "--fullwave-budget", "--fullwave-margin", "--fullwave-single-mesh"]
+    {
         assert!(help.contains(option), "{option} in {help}");
     }
     for arguments in [
@@ -37,6 +39,7 @@ fn help_names_the_fullwave_options_and_sub_options_need_the_flag() {
     ] {
         assert_eq!(copper(&arguments).status.code(), Some(2), "{arguments:?}");
     }
+    assert_eq!(copper(&["emi-check", BOARD, "--fullwave-single-mesh"]).status.code(), Some(2));
     assert_eq!(copper(&["emi-check", BOARD, "--fullwave", "--fullwave-fidelity", "medium"]).status.code(), Some(2));
     assert_eq!(copper(&["emi-check", BOARD, "--fullwave", "--fullwave-budget", "-3"]).status.code(), Some(2));
 }
@@ -66,7 +69,7 @@ fn a_model_over_the_budget_is_refused_before_the_solver_runs() {
 }
 
 #[test]
-#[ignore = "about 2 minutes (one coarse FDTD run); run with `cargo test -p copper --test emi_fullwave_cli -- --ignored`"]
+#[ignore = "about 5 minutes (two coarse FDTD runs); run with `cargo test -p copper --test emi_fullwave_cli -- --ignored`"]
 fn the_buck_cell_gets_a_fullwave_inductance() {
     let output = copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--fullwave", "--json"]);
     let Ok(Value::Object(report)) = copper_json::parse(&stdout(&output)) else { panic!("an object") };
@@ -89,7 +92,36 @@ fn the_buck_cell_gets_a_fullwave_inductance() {
         "seconds",
         "flags",
         "solver",
+        "mesh_error_estimate_pct",
+        "meshes",
+        "port_strap_nh",
     ] {
         assert!(fullwave.contains_key(key), "{key}");
     }
+    // Two meshes ran, so the error estimate is a number and the single-mesh flag is absent.
+    let flags: Vec<&str> =
+        fullwave.get("flags").and_then(Value::as_array).unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(matches!(fullwave.get("mesh_error_estimate_pct"), Some(Value::Float(_))), "{flags:?}");
+    assert!(!flags.contains(&"single_mesh"), "{flags:?}");
+    assert_eq!(fullwave.get("meshes").and_then(Value::as_array).map(<[Value]>::len), Some(2));
+}
+
+#[test]
+#[ignore = "about 1 minute (one coarse FDTD run); run with `cargo test -p copper --test emi_fullwave_cli -- --ignored`"]
+fn a_single_mesh_run_says_so() {
+    let output =
+        copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--fullwave", "--fullwave-single-mesh", "--json"]);
+    let Ok(Value::Object(report)) = copper_json::parse(&stdout(&output)) else { panic!("an object") };
+    let findings = report.get("findings").and_then(Value::as_array).unwrap();
+    let hot = findings
+        .iter()
+        .filter_map(Value::as_object)
+        .find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-HOT-LOOP"))
+        .expect("a hot-loop finding");
+    let fullwave =
+        hot.get("measures").and_then(|m| m.get("fullwave")).and_then(Value::as_object).expect("measures.fullwave");
+    assert!(matches!(fullwave.get("mesh_error_estimate_pct"), Some(Value::Null)));
+    let flags: Vec<&str> =
+        fullwave.get("flags").and_then(Value::as_array).unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(flags.contains(&"single_mesh"), "{flags:?}");
 }
