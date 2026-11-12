@@ -719,11 +719,13 @@ to ngspice as an optional external process.
 
 ## 11. Region-of-interest full wave (phase 4)
 
-Status: third iteration implemented in `crates/copper-fullwave`. Screening
+Status: fourth iteration implemented in `crates/copper-fullwave`. Screening
 evidence only: nothing here qualifies a design. Iteration 3 found where the cell dependence of the
 loop inductance came from (the rule that moves copper edges, not the port), replaced the rule, completes
 the records of loops that ring instead of waiting for them to decay, and states an uncertainty next to
-the inductance.
+the inductance. Iteration 4 puts a floor under the cells that dense copper forces on the time step
+(a third fewer steps and half the run time on the TPS62130A), runs the validation models on the default edge
+rule, and found that the strap bias is not what its validation test measures (below).
 
 **What it is.** `RegionModel::build(board, &RegionSpec)` translates the part of a
 `PhysicalBoard` inside an axis-aligned window into a model for the pinned
@@ -841,6 +843,28 @@ dielectric; cells grow by 1.3 outside the fine zone, at most 1 mm in the window 
   model 1.5 times the steps). What remains is reported, with positions and where they are (window,
   air or PML) in `describe()`; the remaining pairs sit in crowded corners of dense copper
   or in the air.
+- *Cell floor* (`CELL_FLOOR_OF_SMALLEST_GAP` in `mesh.rs`, smooth meshes only). The time step follows the
+  smallest cell, and in dense copper the smallest cell was not a feature: a kept gap of 0.066 mm that followed a cell
+  of 0.040 mm was cut into two cells of 0.033 mm, and the grading pass spread cells of 0.03 mm around it. Now no cell
+  is cut below 0.92 of the smallest gap between two kept lines on the axis (nor below the merge distance of the
+  features' own refinement), and the last cells of a gap cannot be thinner than that; the smallest cell of an axis is then the
+  smallest real gap (at least 0.06 mm at the 0.15 mm cell, because lines closer than 0.4 of the cell merge, different nets
+  excepted). The merge distance itself stays at 0.4 of the cell: 0.5 gave a 2.4 % lower L on the TPS62130A and 0.6 a
+  5 % higher one on the placed emi_buck. The floor does nothing on boards without such gaps (emi_buck placed and routed, the
+  shorted lines: identical meshes, steps and L to the bit); it is `mesh::tests::grading_in_dense_copper_never_cuts_cells_far_below_the_smallest_gap`.
+  The factor 0.92 is a measurement, not a derivation (TPS62130A, one mesh of 0.15 mm, L against the run before the floor, 2.865 nH):
+
+  | Floor | Cells | Steps | Run | L |
+  | --- | --- | --- | --- | --- |
+  | none (iteration 3) | 2.37 M | 45,751 | 397 s | 2.865 nH |
+  | 0.85 | 1.80 M | 30,151 | 197 s | 2.838 nH (-0.9 %) |
+  | 0.92 (shipped) | 1.77 M | 28,601 | 189 s | 2.823 nH (-1.5 %) |
+  | 1.00 | 1.71 M | 27,751 | 177 s | 2.822 nH (-1.5 %) |
+  | 1.00 with merge 0.5 of the cell | 1.31 M | 23,251 | 114 s | 2.796 nH (-2.4 %) |
+
+  The mesh uncertainty of this loop (4 % floor) is larger than any of these moves. 0.92 was chosen as the smallest step
+  count whose L stayed inside the 1.5 % set as the limit (-1.47 %: the margin is thin, and 1.00 sits at -1.50 %); a value of
+  0.70 or less gives the sub-0.05 mm cells and most of the old step count back (estimated 45 k steps).
 - Before the solver starts the model reports cells, the time step, the expected steps and the
   run time at an assumed 150 M cell updates per second (the measured rate is 250-300 M/s
   on the 6-core laptop), and a run above `Budget` (cell updates or seconds) is refused.
@@ -890,11 +914,12 @@ the same loop (cells of 0.10 to 0.25 mm, merge distances of 0.1 to 0.4 of the ce
 assumed stack-up, the zone outlines, the bridged components and the strap bias are not in it.
 
 **Validation** (synthetic boards, `crates/copper-fullwave/tests/validation.rs` and `tests/shorted_line.rs`;
-debug build with the optimised solver, 6 threads; every number measured). The meshes of cases 3a-3e keep the
-edge rule they were validated with (a third of the lateral cell, nothing for the vertical; `validation_rule` in the
-test file), so that they stay as they were: re-run on the code of iteration 3 they reproduce the numbers of
-iteration 2 exactly (same cells, same steps, bit-identical L). `VALIDATION_RULE=default` runs them with the
-default rule of the model; those numbers are the "default rule" column.
+debug build with the optimised solver, 6 threads; every number measured). Until iteration 3 the meshes of cases 3a-3e
+were pinned to the rule they were validated with (a third of the lateral cell, nothing for the vertical), so the
+default rule had no always-run coverage. In iteration 4 the pin is gone: the tests run the default rule of the model
+(`VAL_INSET` and `VAL_INSETZ`, in thousandths, override it for the studies), and the cases below were re-run on the final
+code with it (the "default rule" column is the one that counts, and reproduces the column of iteration 3 exactly; the column
+"iteration 2" is the third-of-a-cell rule they were pinned to).
 
 | Case | Target | Iteration 2 (re-run, identical) | Default rule | Result |
 | --- | --- | --- | --- | --- |
@@ -908,11 +933,36 @@ default rule of the model; those numbers are the "default rule" column.
 | 3d 6 x 4 mm loop, coarse against fine | 5 % | 5.036 nH against 4.926 nH (+2.2 %); closed form 4.987 nH | 5.040 nH against 4.943 nH (+2.0 %) | pass |
 | 3e reciprocity and passivity of 3a | 0.1 dB, a few degrees, \|S11\|^2+\|S21\|^2 <= 1 | 0.006 dB, 0.008 deg, 1.00007 | 0.0074 dB, 0.015 deg, 1.00017 | pass |
 
-The default rule makes the S-parameter impedance of the 0.5 mm coarse microstrips 1.4 to 1.8 points worse (still
-inside 5 %) and leaves the inductance cases where they were. What it improves is the inductance of narrow
-copper as the cell changes (next subsection), which these cases do not test; the unsmoothed meshes of 3b also
-change a lot with a small move of the edges (564 k to 1.31 M cells for the plane case: the grading cascade of
-the original cutting, which the smooth mesher avoids), another reason to keep them pinned.
+The default rule makes the S-parameter impedance of the coarse default-cell microstrips 1.4 to 1.8 points worse in 3a (still
+inside 5 %) and leaves the inductance cases where they were. Why, measured (`z0_probe`, Z0 of the 20 mm line from S against
+Hammerstad-Jensen, default rule against a third of the lateral cell; 'coarse' is the default cell, half the narrowest feature up
+to 0.5 mm; the third is 333.3333 thousandths, and a third written as 0.333 moves some of these by 1.5 points, the size of the
+mesh-quantisation noise of this measurement):
+
+| Line (h, w) | 0.167 mm | 0.25 mm | 0.4 mm | coarse default |
+| --- | --- | --- | --- | --- |
+| 0.5, 1.0 (w/h 2) | -0.12 % / (-0.59 %) | -0.02 % / -2.03 % | -1.05 % / +0.09 % | +4.11 % / +2.30 % (0.5 mm) |
+| 0.5, 0.5 (w/h 1) | +0.91 % / +0.14 % | +0.59 % / -2.51 % (coarse) | +5.50 % / +7.61 % | as 0.25 mm |
+| 0.3, 1.5 (w/h 5) | +0.12 % / | +0.92 % / -0.15 % | | -2.29 % / +0.69 % (0.5 mm) |
+| 0.2, 0.4 (w/h 2) | | -1.86 % / +1.94 % | | +3.68 % / +1.79 % |
+| 1.5, 3.0 (w/h 2) | | | | +0.79 % / -0.62 % (0.5 mm) |
+
+Each cell is default rule / third; values in brackets used 0.333. The default rule is within 1.9 % at cells of 0.167 to 0.25 mm on all
+five lines (the range the rule was fitted in), and every error above 3 % is at a cell of 0.4 mm or more or at the coarse default
+(the 1 mm strip at 0.5 mm, the 0.4 mm strip at its coarse default, the 0.5 mm strip at 0.4 mm), for either rule. At the coarse cell the sign of the error changes between geometries (+4.1, +3.7, -2.3, +0.8 %), and the effective
+strip width after the rule and the merging (0.707 mm for the 1 mm strip against 0.667 mm for the third) does not order the
+errors (the narrower strip reads the lower Z0), so the capacitance side does not need a different effective width and one
+rule serves both within 2 % over the range it is fitted for; at the coarse cells the error looks like the quantisation of the strip's edge to the
+mesh (the lines move by merging), not a bias that a different fraction would remove, and no rule
+was changed (this is an interpretation: the cause was not isolated by a controlled mesh). The shorted line, whose inductance the rule was fitted on, at the
+coarse 0.5 mm cell reads 12 % low with every rule. The unsmoothed meshes of 3b change a lot with a small move of the edges (564 k to
+1.31 M cells for the plane case: the grading cascade of the original cutting, which the smooth mesher avoids).
+
+Always run in `cargo test -p copper-fullwave` (59 s for `validation`, 13 s for `shorted_line`, debug build with the optimised solver): 3a at the coarse cell (Z0 within 5 %,
+measured +4.1 %), 3a at 0.25 mm (within 1.5 %, measured -0.02 %; it reads -11.7 % without the rule), the terminated line, 3e,
+and `default_edge_rule_keeps_a_short_shorted_line_at_the_closed_form` (a 10 mm shorted line at 0.25 mm: +0.126 nH over the closed form,
+allowed between +0.03 and +0.25 nH and 6 %; the edges as drawn read -0.187 nH, a third +0.101 nH). 3b-3d stay `#[ignore]` (35 to 190 s each) and were re-run on the final
+code: 8.265, 20.907, 10.893 / 11.775 and 5.040 / 4.943 nH, as in the table.
 
 New in iteration 3: `shorted_line_against_the_closed_form` (the ground truth below),
 `ring_fit_against_decayed_run`, `fit::tests::a_truncated_ring_down_is_completed` and the unit tests of the edge
@@ -1030,7 +1080,10 @@ code of the day was run with a temporary override of the refinement cell, remove
 
 Measured: between 0.25 and 0.15 mm the curve is flat to 1.2 % (0.6 nH per mm, earlier rule 2.7), and the 0.25 mm
 value is 4.8 % above the 0.10 mm one (earlier rule 9.8 %). Below 0.15 mm L steps down, by 2.5 % to 0.125 mm and 3.5 % to 0.10 mm, at meshes whose
-number of steps rises 2 to 3 times because cells of 0.04 to 0.06 mm appear. Variations of the
+number of steps rises 2 to 3 times because cells of 0.04 to 0.06 mm appear. With the cell floor of iteration 4 (above) the
+same two runs read 4.741 nH at 0.133 mm (542,800 cells, 27,201 steps, 54 s, smallest cell 0.057 mm; before: 4.759 nH, 31,951 steps, 66 s)
+and 4.621 nH at 0.10 mm (874,720 cells, 36,601 steps, 153 s, smallest 0.041 mm; before: 4.618 nH, 46,251 steps, 198 s): L within 0.4 % and
+0.1 %, 15 % and 21 % fewer steps; the step count still rises with the refinement because the cells themselves are smaller. Variations of the
 mesh decisions (merge distance of 0.4, 0.2 and 0.1 of the cell: 4.841 / 4.904 / 4.869 nH at 0.25 mm and
 4.817 / 4.718 / 4.718 nH at 0.167 mm; one uniform cell and no refinement box with the earlier rule: 4.904, 4.843 and 4.746 nH at
 0.25, 0.167 and 0.125 mm; a refinement margin of 1.5 mm instead of 0.3 mm: 4.903 and 4.695 nH with the earlier
@@ -1047,15 +1100,17 @@ uncertainty with a floor replaced it (below).
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `examples/emi_buck` placed (straight legs) | standard 0.25 mm: 4.841 nH; refined 0.167 mm: 4.813 nH | 320 k; 422 k | 12,801 (15,009); 15,901 (18,685) | 12 s + 23 s | 4.813 nH, flat to 0.06 % | 0.6 %; 4 % | 4.973 nH | 0.97 |
 | `emi_buck` routed (three 0.4 mm legs, `write_routed_run`) | standard 0.2 mm: 6.067 nH; refined 0.133 mm: 5.974 nH | 720 k; 1.02 M | 15,101 (17,711); 19,951 (23,473) | 59 s + 79 s | 5.974 nH, flat to 0.07 % | 1.55 %; 4 % | 6.712 nH | 0.89 |
-| `examples/tps62130a_macro`, `--fab-profile jlcpcb-six-layer` (synchronous; strap port in the air), earlier build | standard 0.15 mm: 2.817 nH; refined 0.1 mm: 2.832 nH | 1.78 M; 2.78 M | 39,101 (45,106); 50,201 (57,903) | 234 s + 412 s | 2.832 nH, of which 0.948 nH is the strap | 0.53 % | 1.69 nH | 1.68 (1.12 without the strap bias) |
-| CopperOrgan routed board (`--fullwave-budget 3600`; asynchronous, air-bridge port), earlier build | standard 0.15 mm, one mesh | 6.26 M | 151,539 (50,513) | 2801 s | 7.317 nH, **flat only to 18.6 %**, energy not converged | none (`single_mesh`) | 9.889 nH | 0.74 |
+| `examples/tps62130a_macro`, `--fab-profile jlcpcb-six-layer` (synchronous; strap port in the air), final code | standard 0.15 mm: 2.823 nH; refined 0.1 mm: 2.830 nH | 1.77 M; 2.63 M | 28,601 (32,983); 40,601 (46,822) | 185 s + 334 s | 2.830 nH, of which 0.948 nH is the strap | 0.27 %; 4 % | 1.69 nH | 1.67 (1.11 without the strap bias) |
+| CopperOrgan routed board (default budget, `--fullwave` only; asynchronous, air-bridge port), final code | standard 0.15 mm, one mesh (the second did not fit the budget) | 5.19 M | 114,982 (38,328) = the 3x cap | 1879 s | 7.289 nH band mean, static 6.462 nH, **flat only to 51.7 %**, energy not converged, the ring fit did not stabilise | none (`single_mesh`) | 9.889 nH | 0.74 |
+
+The TPS62130A row of the iteration before (2.817 / 2.832 nH, 1.78 M and 2.78 M cells, 39,101 and 50,201 steps, 234 s + 412 s) was on
+the mesh of iteration 2; on the code of iteration 3 (before the cell floor) one mesh of 0.15 mm was 2.371 M cells, 45,751 steps, 397 s, 2.865 nH.
 
 On the earlier rule the placed emi_buck read 4.920 / 4.695 nH (mesh error 4.78 %, extrapolation 4.245 nH) and the routed
 one 6.049 / 5.969 nH (1.3 %); the standard-mesh values moved -1.6 % and +0.3 % and the finer-mesh values +2.5 % and +0.1 %. The stated
 uncertainty of the reported value is now 4 % on all three boards that have two meshes or one (the floor, see the
-convergence estimate); the TPS62130A and CopperOrgan rows are those of iteration 2 and were not re-run (the
-TPS62130A takes 11 minutes for two meshes and its dense copper is where the sub-0.05 mm slivers are, the item that
-is not done; CopperOrgan is estimated below).
+convergence estimate). The TPS62130A and CopperOrgan rows are on the final code (the two meshes of the TPS62130A,
+one mesh of CopperOrgan, below).
 
 **The TPS62130A** loads (87 s) with its hard macro: 6 copper layers (an assumed stack-up, flag
 `assumed_stackup`, the board declares none), 21 pads, 27 tracks, 2 polygons, 3 zones, 11 vias; its
@@ -1066,8 +1121,10 @@ is 1.14 nH over the 1.69 nH of the closed form, and 1.88 nH (1.11 times the clos
 bias: the closed form is the pad-centre polygon with the loop closed through the component bodies, the
 model closes it through a 0.95 nH air bridge (closed form) and a hull of two pads. Without the pour cuts (the first run, 1.59 nH) the
 pours short the loop (flag `zone_overlaps_foreign_copper`): 1.59 nH is a short circuit, not an inductance.
-Mesh: 2.78 M cells for the refined mesh, 647 s for both, inside the 30 minute budget; a 0.03 mm
-smallest cell (dense macro copper) sets dt = 0.075 ps.
+Mesh (final code): 2.63 M cells for the refined mesh, 554 s for both (the log of the run with both meshes), inside the 30 minute budget. The
+macro's copper has gaps down to 0.06 mm; before the cell floor of iteration 4 the grading around them cut cells of 0.030 to 0.040 mm and set
+dt = 0.075 ps for the first mesh (45,751 steps, 397 s); now the smallest cell is 0.060 / 0.055 mm (the 0.06 mm gaps) and dt is about 0.13 ps (28,601 steps, 185 s).
+The result moved from 2.865 to 2.823 nH (-1.5 %) on the first mesh.
 
 **CopperOrgan** (`board.copper --run build/ci/emi-check-20261111T161807`; the closed form is 9.889 nH, a
 54.4 mm path with 2 vias, a 0.20 mm neck and a plane shortcut; D_BUCK is in the loop). Iteration 2, at the default
@@ -1090,13 +1147,21 @@ the planes under the loop is a guess), the record is not decayed, the strap bias
 arbitrary geometry (4.4 mm bar, 0.3 mm high), the pours are outlines minus clearances, not fills (thermal
 reliefs, minimum widths), and 6 pairs of neighbouring cells exceed a ratio of 1.5 (up to 2.0, in the window
 at the crowded corners and in the air). Treat 4.9-5.6 nH as the model's number and 9.9 nH as the
-closed form's, not as a verdict on either. **What iteration 3 changes for it:** the run is no longer left undecayed. Its ring
-is the kind the fit completes (below: a loop of the same kind, a Q of 27, is completed to 0.2 % from a record 8 times shorter than the
-decayed one), and the run would end when the fit is stable, an estimated 12 ns of simulated time (160 k
-steps at the 0.075 ps step; two periods of the ring after the pulse and two agreeing checks) instead of the
-cap at 11.4 ns that left it undecayed. That is not faster: the time step, not the length of the ring, sets the cost, and the
-estimate is about 50 minutes, so the board was not re-run (the condition was under 15 minutes). The
-inductance it would report is the static one the fit gives, with the flags `ring_fitted` and `band_near_resonance`.
+closed form's, not as a verdict on either. **Iteration 4 run** (final code, `emi-check board.copper --locked --run build/ci/emi-check-20261111T161807 --fullwave --json` from the
+CopperOrgan checkout, nothing written; default budget). The cell floor takes the mesh from 6.26 M cells (smallest cell 0.040 mm, dt 0.075 ps)
+to 5.19 M cells (0.052 / 0.056 mm, dt 0.124 ps) and the expected steps from 50,513 to 38,328. The run took 1879 s (31 minutes; the estimate
+made from the mesh before the run had been 24.7) at 5.19 M cells x 114,982 steps, which is the 3x time cap, 14.2 ns, not a decayed record and not a stop of the
+ring fit: the flags are `energy_not_converged`, `inductance_not_flat`, `band_near_resonance`, `single_mesh` and no `ring_fitted`. Result: **L 7.289 nH over 50-150 MHz, flat
+only to 51.7 %** (the first resonance is now 314 MHz, was 348 MHz on the mesh of iteration 2, so a 10 % change of the
+resonance from a change of the mesh), static inductance 6.462 nH (resonance factor removed; the earlier estimate
+was about 6.6 nH from 7.317 nH), flatness of the static curve 46.5 %, 5.558 nH at 500 MHz, port strap 1.784 nH (closed form), ratio to the
+closed form 0.74, uncertainty reported 4 % (the floor, which does not cover an undecayed record). The band mean moved -0.4 %
+against iteration 2's 7.317 nH and the static value -2 %, which is inside what the
+mesh moves L on every other board, but a curve that is not flat to 51.7 % against a resonance factor that explains 27 % is not a
+loop inductance: the fit did not accept the record (its orders disagree by more than 5 %), the cause was not diagnosed (a loop with several close modes is the case the fit was
+not validated on). Treat 6.5-7.3 nH as the model's range and the record as undecayed, not as a result.
+What the fit saw at each of its checks is not in the output; adding it (orders, spread, ring frequency and Q) is the first thing to
+do before another 30 minute run. Of the 7.289 nH, 1.78 nH is the air bridge, as before, and the same caveats apply.
 The first attempts of iteration 2 show what the checks catch: with the strap in the plane the port box sat on the
 exposed pad and the solver ignored the port (29 minutes lost before the check for ports without usable edges was added to `solve_port`); with the
 pours uncut the result was 1.76 nH, the strap alone, a short circuit.
@@ -1135,13 +1200,14 @@ cuts every net, there is no enclosure or cable, and no near-field export or radi
 placed board's straight legs may cross foreign pads (the closed form has the
 same blind spot); overlapping lines of different nets within 0.075 mm (a tenth of the cell without
 smoothing) merge (flag `nets_merged_below_floor`). Round pads are chamfered. A strap port adds
-a strap that the real loop does not have (`port_strap_nh`; 0.95 nH of the TPS62130A's 2.83 nH and 1.76 nH of
-the CopperOrgan loop). A package's exposed pad is bridged in the air at an assumed height of 0.3 mm. The hull
+a strap that the real loop does not have (`port_strap_nh`, the closed-form inductance of the strap bar alone over its plane; 0.95 nH of the
+TPS62130A's 2.83 nH and 1.78 nH of the CopperOrgan loop). That closed form was not made trustworthy in iteration 4 (next steps). A package's exposed pad is bridged in the air at an assumed height of 0.3 mm. The hull
 bridge of a low-side switch covers whatever lies between two distant pads. The stack-up of a board
 that declares none is assumed. **Accuracy:** the edge rule is a fit on two geometries (0.2 and 0.5 mm of dielectric,
 0.5 and 1.0 mm strips) checked on three others and on the 20 mm lines of the table above; it is not derived, it
-is calibrated on lines at cells of 0.167 to 0.25 mm, and the S-parameter impedance of the coarse 0.5 mm microstrip of 3a gets
-1.4 to 1.8 points worse with it. The shorted lines are within 3 % of the closed form at the standard mesh and
+is calibrated on lines at cells of 0.167 to 0.25 mm. Its S-parameter impedance is within 1.1 % of Hammerstad-Jensen at cells of 0.167 to 0.4 mm (the 1 mm
+strip of 3a: -0.12, -0.02, -1.05 %; the geometries of the coarse table below, -1.9 to +0.9 %) and 4.1 % high at the coarse default cell of 0.5 mm, where the
+strip is two cells wide (the rule of a third: 2.3 %). The shorted lines are within 3 % of the closed form at the standard mesh and
 carry 0.05 to 0.2 nH of end effect, a stated 1.5 to 2.7 % excess that is real physics of the vertical
 transition and not a model error, but it means that a 5 nH loop with a 4 mm port gap is not known better
 than a few percent from this test alone. For a placed loop the mesh uncertainty is not below 4 %
@@ -1149,17 +1215,25 @@ than a few percent from this test alone. For a placed loop the mesh uncertainty 
 geometry move L by as much as the cell does; the closed form of the placed example (4.973 nH) is within
 3.2 % of the model (4.813 nH), but that is not independent evidence for either: the closed form of the 6 x 4 mm loop
 (4.987 nH) is 1.7 to 4 % above the default-rule series and 4 to 10 % above the earlier rule's limit. FDTD is slow: the
-standard mesh takes 12 s on the placed emi_buck, a minute on a routed loop with narrow traces, minutes on a macro board and about 50
-minutes on the CopperOrgan board; the two-mesh default two to three times the standard run.
+standard mesh takes 12 s on the placed emi_buck, a minute on a routed loop with narrow traces, minutes on a macro board (9 minutes for two meshes of the TPS62130A) and about 31
+minutes on the CopperOrgan board, which is single-mesh and did not decay; the two-mesh default two to three times the standard run.
 
 **Next steps.** (1) Components as lumped R/L/C and a switch with an on-resistance and a
 gate edge, to simulate the ringing the 143 MHz estimate predicts (the CopperOrgan loop rings at
 348 MHz with the capacitor and diode shorted). (2) Zone fills from the CAM fill (`copper_cam::fill`)
 instead of the outline minus clearances, and per-layer antipads, so planes carry their real slots.
 (3) Near-field export and radiated estimates by per-port superposition. (4) The mesh decisions on small geometry:
-a minimum-cell merge for the sub-0.05 mm slivers of dense copper (the TPS62130A and the 0.13 mm refinement of
-emi_buck, whose step count triples when cells of 0.04 mm appear) and a merge that does not move copper edges by up to
-0.4 of the cell; not done, no step counts before and after. (5) A package
+a merge that does not move copper edges by up to 0.4 of the cell
+(0.5 of the cell moved the TPS62130A by -2.4 % and 0.6 the placed emi_buck by +5 %: the merge distance is where the remaining
+mesh sensitivity sits); the floor under the cells is done (above), the sub-0.05 mm cells of the 0.10 mm refinement of emi_buck remain
+(0.041 mm: the gaps themselves). (5) The strap bias. `port_strap_nh` is the closed form of the strap bar alone over its plane
+and it was not made trustworthy: `strap_port_against_direct_port` does not measure it. The strapped model of that test is the loop with
+a continuous top bar (the strap fills the gap) and a port of 0.4 to 0.5 mm in its middle, so its inductance does not depend on the gap
+(8.635 nH at gaps of 2 and 3 mm), while the direct port spans the gap and carries the inductance of the gap's own field; the measured
+difference (+0.338 nH at 2 mm, +0.316 nH at 3 mm, against closed forms of 0.526 and 0.834 nH) is the strap bar, 0.36 mm wide, against the
+0.5 mm track it replaces, plus the direct port's gap, not the inductance of a strap that the real loop lacks. A bias that can be
+validated needs the reference of the real loop (a die path of known inductance, or a bridge shortened by moving its posts: the
+inductance extrapolated to a bridge of zero length, two more solves), and was not done. A package
 model for the switch (die, bond wires and lead frame, so that the strap port stops carrying a
 bias of 1-2 nH) and a check of the hull bridge against foreign copper. (6) The edge rule for
 curved and slanted edges, cells below 0.1 mm and the S-parameter impedance of coarse meshes, and the

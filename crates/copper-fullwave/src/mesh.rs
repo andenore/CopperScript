@@ -128,6 +128,14 @@ impl AxisMesh {
     }
 }
 
+/// The smallest cell a smooth mesh cuts, as a fraction of the smallest gap between two kept lines on the
+/// axis: grading toward a feature may shrink cells to this fraction of the feature's own gap and no
+/// further. Without it a gap of 0.066 mm next to a smaller one was cut into two cells of 0.033 mm, and
+/// the grading pass then spread cells of 0.03 mm over the neighbourhood; the time step follows the smallest cell.
+/// Measured on the TPS62130A hot loop (steps 45,751 -> 28,601 at this value, L -1.5 %; 0.85 gives -0.9 % at
+/// 30,151 steps, 0.7 gives back most of the steps).
+const CELL_FLOOR_OF_SMALLEST_GAP: f64 = 0.92;
+
 const GROWTH: f64 = 1.3;
 const RATIO: f64 = 1.5;
 
@@ -216,7 +224,7 @@ fn local_min_cell(plan: &AxisPlan, x: f64) -> f64 {
 /// first gap): the first cell may be at most 1.3 times it, so a gap that follows a small one ramps up
 /// instead of jumping, and the last cells are equal, rounded to the target, rather than the ceiling
 /// of the 1.25 rule (which left 0.108 next to 0.167, a ratio of 1.55, and set off the grading cascade).
-fn cut_gap(plan: &AxisPlan, a: f64, b: f64, prev: f64, out: &mut Vec<f64>) {
+fn cut_gap(plan: &AxisPlan, orig: &AxisPlan, gmin: f64, a: f64, b: f64, prev: f64, out: &mut Vec<f64>) {
     if let Some((_, _, n)) = plan.gap_counts.iter().find(|(lo, hi, _)| (lo - a).abs() < 1e-9 && (hi - b).abs() < 1e-9) {
         for i in 1..=*n {
             out.push(a + (b - a) * i as f64 / *n as f64);
@@ -230,16 +238,24 @@ fn cut_gap(plan: &AxisPlan, a: f64, b: f64, prev: f64, out: &mut Vec<f64>) {
         // The cell must not exceed the target at either end: take the smaller (the end nearer the fine zone).
         let h0 = target(plan, x);
         let h = h0.min(target(plan, x + h0));
-        let floor = local_min_cell(plan, x).min(rem);
+        // Smooth meshes: no cell below the merge distance of the features' own refinement (the zones that
+        // the gaps add for grading do not count) nor below `CELL_FLOOR_OF_SMALLEST_GAP` of the smallest gap
+        // between kept lines, unless this gap is itself smaller.
+        let fl = if plan.smooth {
+            local_min_cell(orig, x).min(CELL_FLOOR_OF_SMALLEST_GAP * gmin)
+        } else {
+            local_min_cell(plan, x)
+        };
+        let floor = fl.min(rem);
         let h = h.max(floor);
         let h = if plan.smooth && last > 0.0 { h.min(1.3 * last).max(floor) } else { h };
-        if rem <= 1.6 * h {
+        if rem <= if plan.smooth { (1.6 * h).max(h + fl) } else { 1.6 * h } {
             let n = if plan.smooth {
                 let mut n = (rem / h).round().max(1.0);
                 if rem / n > 1.25 * h {
                     n += 1.0;
                 }
-                n as usize
+                n.min((rem / fl).floor().max(1.0)) as usize
             } else {
                 (rem / (1.25 * h) - 1e-9).ceil().max(1.0) as usize
             };
@@ -310,6 +326,7 @@ pub fn axis_mesh(plan: &AxisPlan) -> Result<AxisMesh> {
     if kept.len() < 2 {
         return Err(Error::Invalid("an axis needs at least two mesh lines".to_owned()));
     }
+    let orig = plan;
     let graded;
     let plan = if plan.smooth && plan.gap_counts.is_empty() {
         let mut p = plan.clone();
@@ -324,10 +341,11 @@ pub fn axis_mesh(plan: &AxisPlan) -> Result<AxisMesh> {
     } else {
         plan
     };
+    let gmin = kept.windows(2).map(|w| w[1].pos - w[0].pos).fold(f64::INFINITY, f64::min);
     let mut inner = vec![kept[0].pos];
     for w in kept.windows(2) {
         let prev = if inner.len() >= 2 { inner[inner.len() - 1] - inner[inner.len() - 2] } else { 0.0 };
-        cut_gap(plan, w[0].pos, w[1].pos, prev, &mut inner);
+        cut_gap(plan, orig, gmin, w[0].pos, w[1].pos, prev, &mut inner);
     }
     let first_cell = inner[1] - inner[0];
     let last_cell = inner[inner.len() - 1] - inner[inner.len() - 2];
@@ -496,6 +514,31 @@ mod tests {
             m.lines.windows(2).filter(|w| w[0] >= 0.0 && w[1] <= 3.0).map(|w| w[1] - w[0]).fold(0.0, f64::max);
         assert!(regular > 0.15, "cells far from the gap must stay near 0.167, got {regular}");
         assert!(m.max_ratio <= 1.5 + 1e-6, "ratio {}", m.max_ratio);
+    }
+
+    #[test]
+    fn grading_in_dense_copper_never_cuts_cells_far_below_the_smallest_gap() {
+        // Forty kept lines with gaps between 0.06 and 0.3 mm in a 0.15 mm mesh (the dense copper of a
+        // package, a pseudo-random but fixed sequence): gaps next to smaller ones used to be cut into
+        // cells of half their size (0.033 mm from a gap of 0.066), which set the time step.
+        let mut lines = vec![Line::new(0.0, Rank::Window, None)];
+        let (mut x, mut state) = (5.0_f64, 12345_u64);
+        for _ in 0..40 {
+            lines.push(Line::new(x, Rank::Copper, Some(1)));
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let u = (state >> 33) as f64 / (1u64 << 31) as f64;
+            x += 0.06 + 0.24 * u * u;
+        }
+        lines.push(Line::new(x + 5.0, Rank::Window, None));
+        let mut p = plan(lines);
+        p.cell = 0.15;
+        p.min_cell = 0.06;
+        p.net_floor = 0.015;
+        p.smooth = true;
+        let m = axis_mesh(&p).expect("mesh");
+        let gmin = m.kept.windows(2).map(|w| w[1] - w[0]).fold(f64::INFINITY, f64::min);
+        let smallest = m.cells().into_iter().fold(f64::INFINITY, f64::min);
+        assert!(smallest >= 0.9 * 0.9 * gmin, "smallest cell {smallest} against the smallest gap {gmin}");
     }
 
     #[test]

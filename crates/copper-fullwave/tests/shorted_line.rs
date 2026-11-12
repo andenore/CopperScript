@@ -49,6 +49,8 @@ pub struct Out {
     pub l_ref: f64,
     pub spread: f64,
     pub cells: usize,
+    pub smallest: [f64; 3],
+    pub lines: [usize; 3],
     pub steps: u64,
     pub seconds: f64,
     pub port: String,
@@ -158,6 +160,10 @@ pub fn run(p: P) -> Out {
             });
         }
     }
+    if std::env::var("SL_XLINES").is_ok() {
+        let c: Vec<String> = model.axes[0].cells().iter().map(|c| format!("{c:.3}")).collect();
+        println!("XCELLS {}", c.join(" "));
+    }
     if std::env::var("SL_ZLINES").is_ok() {
         println!(
             "ZLINES {:?}
@@ -192,6 +198,8 @@ YLINES {:?}",
         l_ref: mean(&rs),
         spread,
         cells: model.mesh.cells,
+        smallest: model.mesh.smallest,
+        lines: model.mesh.lines,
         steps: col.stats.steps,
         seconds: col.stats.seconds,
         port: model.ports[0].description.clone(),
@@ -227,7 +235,7 @@ fn shorted_probe() {
     };
     let o = run(p);
     println!(
-        "SHORTED {:?}\n  L_fdtd {:.4} nH, L_ref {:.4} nH, diff {:+.4} nH ({:+.2} %), spread {:.2} %, Z0 {:.2}, {} cells, {} steps, {:.0} s\n  {}\n  wall x {:?}, port x {:?}",
+        "SHORTED {:?}\n  L_fdtd {:.4} nH, L_ref {:.4} nH, diff {:+.4} nH ({:+.2} %), spread {:.2} %, Z0 {:.2}, {} cells ({:?} lines, smallest {:.3?} mm), {} steps, {:.0} s\n  {}\n  wall x {:?}, port x {:?}",
         p,
         o.l_fdtd * 1e9,
         o.l_ref * 1e9,
@@ -236,6 +244,8 @@ fn shorted_probe() {
         100.0 * o.spread,
         o.z0,
         o.cells,
+        o.lines,
+        o.smallest,
         o.steps,
         o.seconds,
         o.port,
@@ -422,6 +432,25 @@ fn standard(h: i64, w: i64, l: i64, cell: i64, vertical: bool) -> P {
         ring_fit: false,
         cap_ns: None,
     }
+}
+
+/// The cheap regression test of the default edge rule (about 15 s): a 10 mm shorted line at the 0.25 mm cell the rule
+/// was fitted at. The line term is 2.92 nH; what the model adds is the end effect of the port and of the wall,
+/// +0.126 nH measured (+4.3 %), and the rule is what sets it: edges on the mesh lines as drawn read -0.187 nH (-6.4 %),
+/// the rule of a third +0.101 nH.
+#[test]
+fn default_edge_rule_keeps_a_short_shorted_line_at_the_closed_form() {
+    let o = run(standard(500_000, 1_000_000, 10 * MM, 250_000, true));
+    let diff = (o.l_fdtd - o.l_ref) * 1e9;
+    println!(
+        "short shorted line: {:.4} nH against {:.4} nH ({diff:+.4} nH), {} cells, {} steps",
+        o.l_fdtd * 1e9,
+        o.l_ref * 1e9,
+        o.cells,
+        o.steps
+    );
+    assert!(diff > 0.03 && diff < 0.25, "end effect {diff} nH");
+    assert!((o.l_fdtd / o.l_ref - 1.0).abs() < 0.06, "{} nH against {} nH", o.l_fdtd * 1e9, o.l_ref * 1e9);
 }
 
 /// The ground truth of the port and edge model: shorted lines of 20 mm against `Z0 tan(beta l)`, at the

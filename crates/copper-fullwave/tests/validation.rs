@@ -6,14 +6,17 @@ use copper_physical::CopperLayer;
 
 const MM: i64 = 1_000_000;
 
-/// The validation meshes of cases 3a-3e keep the edge rule they were validated with (a third of the lateral
-/// cell, nothing for the vertical) so that they stay as they were; `VALIDATION_RULE=default` runs them with
-/// the default rule of the model instead (the numbers of the section 11 table, column "default rule").
+/// The validation meshes use the default edge rule of the model. `VAL_INSET` and `VAL_INSETZ` (thousandths of the
+/// lateral and of the vertical cell; give 333.3333 for a third) override it for the studies (`z0_probe`).
 fn validation_rule(spec: &mut RegionSpec) {
-    if std::env::var("VALIDATION_RULE").as_deref() != Ok("default") {
-        spec.edge_inset = 1.0 / 3.0;
-        spec.edge_inset_z = 0.0;
+    if let Ok(v) = std::env::var("VAL_INSET") {
+        spec.edge_inset = v.parse::<f64>().expect("VAL_INSET") / 1000.0;
+        spec.edge_inset_z = env_i("VAL_INSETZ", 0) as f64 / 1000.0;
     }
+}
+
+fn env_i(name: &str, default: i64) -> i64 {
+    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
 }
 
 /// Hammerstad-Jensen microstrip impedance and effective permittivity, zero thickness.
@@ -116,7 +119,15 @@ fn describe_a_microstrip_model_before_running() {
     assert!(model.mesh.cells > 10_000 && model.mesh.cells < 2_000_000, "{}", model.mesh.cells);
     assert!(text.contains("estimate before running") && text.contains("flags:"));
     assert_eq!(model.ports.len(), 2);
-    assert_eq!(model.mesh.ratio_violations, 0);
+    // The unsmoothed mesher leaves one pair of neighbouring cells above the ratio of 1.5 with the default rule
+    // (none with the rule of a third); the report must say so.
+    assert!(
+        model.mesh.ratio_violations <= 1 && model.mesh.max_ratio <= 2.0 + 1e-6,
+        "{} pairs, max ratio {}",
+        model.mesh.ratio_violations,
+        model.mesh.max_ratio
+    );
+    assert!(model.mesh.ratio_violations == 0 || text.contains("pairs above 1.5"));
 }
 
 /// A model that costs more than its budget is refused before the time loop.
@@ -148,7 +159,11 @@ fn a_run_that_outlasts_its_wall_clock_budget_is_stopped_with_partial_statistics(
     }
 }
 
-/// 3a: impedance of a microstrip from the simulated S parameters against Hammerstad-Jensen.
+/// 3a: impedance of a microstrip from the simulated S parameters against Hammerstad-Jensen, at the coarse default
+/// cell (0.5 mm: the 1 mm strip is two cells wide, outside the range the edge rule was fitted in). Measured with
+/// the default rule: +4.1 % (the rule of a third: +2.3 %); the same line at cells of 0.167 to 0.4 mm is within 1.1 %
+/// (the next test), and the error at 0.5 mm changes sign between geometries (+4.1, +3.7, -2.3, +0.8 %), so it is
+/// the quantisation of a two-cell strip and not a bias that a different rule would remove.
 #[test]
 fn microstrip_impedance_matches_hammerstad_jensen() {
     let m = reference_line();
@@ -159,6 +174,19 @@ fn microstrip_impedance_matches_hammerstad_jensen() {
     // The line is nearly matched to 50 ohm: |S21| near 0 dB across the band.
     let worst = (0..m.freqs.len()).map(|f| db(m.s[1][0][f])).fold(f64::INFINITY, f64::min);
     assert!(worst > -0.5, "worst |S21| {worst} dB");
+}
+
+/// 3a at the cell the edge rule was fitted at (0.25 mm: the strip is four cells wide) and with the default rule:
+/// Z0 within 0.02 % of Hammerstad-Jensen (measured), 1.5 % allowed. With the edges on the mesh lines as drawn
+/// (`VAL_INSET=0`) it is 11.7 % low, with the rule of a third 0.6 %: the test fails if the rule regresses.
+#[test]
+fn microstrip_impedance_at_the_calibrated_cell() {
+    let model = microstrip_cell(500_000, 1_000_000, 20 * MM, "4.3", Fidelity::Coarse, 50.0, Some(250_000));
+    assert_eq!((model.spec.edge_inset, model.spec.edge_inset_z), (0.23, 0.11), "the default rule");
+    let z0 = extracted_z0(&model.solve_all().expect("solve"), 50.0);
+    let (z_hj, _) = hammerstad(2.0, 4.3);
+    println!("3a at 0.25 mm: Z0 {z0:.2} ohm, Hammerstad-Jensen {z_hj:.2} ohm ({:+.2} %)", 100.0 * (z0 / z_hj - 1.0));
+    assert!((z0 / z_hj - 1.0).abs() < 0.015, "Z0 {z0} against {z_hj}");
 }
 
 /// 3a, second half: terminated in the extracted impedance the line reflects less than -15 dB.
@@ -230,6 +258,34 @@ fn microstrip_heights() {
     }
 }
 
+/// One microstrip from the environment (`VAL_H`, `VAL_W`, `VAL_CELL`, `VAL_LEN` in nm, `VAL_INSET`/`VAL_INSETZ`
+/// in thousandths): Z0 of the S-parameter extraction against Hammerstad-Jensen.
+#[test]
+#[ignore = "study; parameters from VAL_* environment variables"]
+fn z0_probe() {
+    let (h, w) = (env_i("VAL_H", 500_000), env_i("VAL_W", 1_000_000));
+    let cell = std::env::var("VAL_CELL").ok().and_then(|v| v.parse::<i64>().ok());
+    let model = microstrip_cell(h, w, env_i("VAL_LEN", 20_000_000), "4.3", Fidelity::Coarse, 50.0, cell);
+    let strip = model.sheets.iter().filter(|s| s.kind == "track").map(|s| {
+        let ys: Vec<f64> = s.ring.iter().map(|p| p.1).collect();
+        (ys.iter().copied().fold(f64::INFINITY, f64::min), ys.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+    });
+    let widths: Vec<f64> = strip.map(|(a, b)| b - a).collect();
+    let m = model.solve_all().expect("solve");
+    let z0 = extracted_z0(&m, 50.0);
+    let (z_hj, _) = hammerstad(w as f64 / h as f64, 4.3);
+    println!("Z0PROBE strip width in the model {widths:.4?} mm (drawn {} mm)", w as f64 * 1e-6);
+    println!(
+        "Z0PROBE h {h} w {w} cell {cell:?} inset {}/{}: Z0 {z0:.2} vs {z_hj:.2} ({:+.2} %), {} cells, smallest {:.3?}, {} steps",
+        model.spec.edge_inset,
+        model.spec.edge_inset_z,
+        100.0 * (z0 / z_hj - 1.0),
+        model.mesh.cells,
+        model.mesh.smallest,
+        m.stats[0].steps
+    );
+}
+
 mod loops {
     use super::*;
     use copper_emi::inductance::{Segment, loop_inductance, loop_inductance_over_plane, via_inductance};
@@ -264,8 +320,6 @@ mod loops {
         pub pulse: f64,
         /// Smooth meshes (as the hot loop uses).
         pub smooth: bool,
-        /// Keep the edge rule the validation meshes were validated with (see `validation_rule`).
-        pub pinned: bool,
     }
 
     pub fn default_opts() -> Opts {
@@ -286,7 +340,6 @@ mod loops {
             strap: false,
             pulse: 1.0,
             smooth: false,
-            pinned: true,
         }
     }
 
@@ -321,9 +374,7 @@ mod loops {
             board.zones.push(zone("GND", &[CopperLayer::Back], r));
         }
         let mut spec = RegionSpec::new([x0 - w / 2, y0 - w / 2, x1 + w / 2, y1 + w / 2]);
-        if o.pinned {
-            validation_rule(&mut spec);
-        }
+        validation_rule(&mut spec);
         spec.margin_nm = o.margin;
         spec.band_hz = (50e6, 1.0e9);
         spec.fidelity = o.fidelity;
@@ -531,7 +582,7 @@ fn convergence_order() {
     for inset in [None, Some(1.0 / 3.0)] {
         let mut values = Vec::new();
         for cell in [250_000_i64, 167_000, 125_000, 83_000] {
-            let lp = loops::build(loops::Opts { cell: Some(cell), inset, pinned: false, ..base });
+            let lp = loops::build(loops::Opts { cell: Some(cell), inset, ..base });
             let col = lp.model.solve_port(0).expect("solve");
             let (l, _) = inductance_band(&col, 50e6, 150e6);
             println!(
@@ -560,10 +611,6 @@ fn convergence_order() {
     }
 }
 
-fn env_i(name: &str, default: i64) -> i64 {
-    std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
-}
-
 /// One loop from the environment (`LP_*`, nm), for the attribution study of the cell dependence.
 #[test]
 #[ignore = "study; parameters from LP_* environment variables"]
@@ -578,7 +625,6 @@ fn loop_probe() {
         air: Some(5 * MM),
         smooth: env_i("LP_SMOOTH", 1) == 1,
         cell: Some(env_i("LP_CELL", 250_000)),
-        pinned: false,
         inset: std::env::var("LP_INSET").ok().map(|v| v.parse::<f64>().unwrap() / 1000.0),
         ..loops::default_opts()
     };
@@ -629,7 +675,8 @@ fn mesh_report_by_cell() {
 #[test]
 #[ignore = "about 1 min (two runs); run with `cargo test -p copper-fullwave --test validation -- --ignored strap_port --nocapture`"]
 fn strap_port_against_direct_port() {
-    let o = loops::Opts { gap: 3 * MM, ..loops::default_opts() };
+    let gap = env_i("STRAP_GAP", 3 * MM);
+    let o = loops::Opts { gap, ..loops::default_opts() };
     let direct = loops::build(o);
     let strapped = loops::build(loops::Opts { strap: true, ..o });
     assert!(!strapped.model.straps.is_empty() && direct.model.straps.is_empty());
