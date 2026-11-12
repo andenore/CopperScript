@@ -702,7 +702,6 @@ struct Hand {
     /// Ramp time 0 to 100 %, s.
     ramp: f64,
     cap: HandCap,
-    loop_l: f64,
     filter: Option<HandFilter>,
 }
 
@@ -714,8 +713,9 @@ fn sinc(x: f64) -> f64 {
 ///
 /// 1. Peak harmonic current of the 0..`ipk` trapezoid with duty `D` at the 50 % points and ramp `t_r`
 ///    (both edges): `I_n = 2 ipk D sinc(n pi D) sinc(n pi f0 t_r)`.
-/// 2. The capacitor branch `Z_c = ESR + j w (ESL + L_loop) + 1 / (j w C)` shares `I_n` with the path through
-///    the two V-networks, which are in series for the differential current (through the ground node):
+/// 2. The capacitor branch `Z_c = ESR + j w ESL + 1 / (j w C)` shares `I_n` with the path through
+///    the two V-networks (the hot-loop inductance sits between the converter's current source and the node of
+///    the capacitor and the feed, so it is not in this branch), which are in series for the differential current (through the ground node):
 ///    `I_lisn = I_n Z_c / (Z_c + 2 Z_eut)`.
 /// 3. One V-network seen from the converter: `Z_a = j w 50 uH + 1 / (j w 1 uF)` (mains side) in parallel with
 ///    `Z_b = 1 / (j w 0.1 uF) + (1 kohm || 50 ohm)` (measurement side), `Z_eut = Z_a || Z_b`; the port voltage is
@@ -728,14 +728,21 @@ fn sinc(x: f64) -> f64 {
 fn hand_dbuv(h: &Hand, n: u32) -> f64 {
     let pi = std::f64::consts::PI;
     let f = f64::from(n) * h.f0;
-    let w = 2.0 * pi * f;
     let i_n = 2.0 * h.ipk * h.duty * sinc(f64::from(n) * pi * h.duty).abs() * sinc(pi * f * h.ramp).abs();
+    hand_level(h, n, i_n)
+}
+
+/// [`hand_dbuv`] for a source whose peak harmonic current `i_n` is given.
+fn hand_level(h: &Hand, n: u32, i_n: f64) -> f64 {
+    let pi = std::f64::consts::PI;
+    let f = f64::from(n) * h.f0;
+    let w = 2.0 * pi * f;
     let z_a = rlc(w, 0.0, 50e-6, 1e-6);
     let rp = 1000.0 * 50.0 / 1050.0;
     let z_b = Z(rp, -1.0 / (w * 0.1e-6));
     let z_eut = par(z_a, z_b);
     let z_t = z_eut * Z(rp, 0.0) / z_b;
-    let z_c = rlc(w, h.cap.esr, h.cap.esl + h.loop_l, h.cap.c);
+    let z_c = rlc(w, h.cap.esr, h.cap.esl, h.cap.c);
     let i_lisn = match &h.filter {
         None => Z(i_n, 0.0) * z_c / (z_c + z_eut + z_eut),
         Some(flt) => {
@@ -820,24 +827,34 @@ fn rows_of(finding: &EmiFinding) -> Vec<&copper_json::Object> {
         .collect()
 }
 
-/// The level offset of the operating-current band: 20 log10(0.4).
-const CURRENT_DB: f64 = -7.958800173440752;
-
 fn coverage<'a>(report: &'a EmiCheckReport, check: &str) -> &'a copper_drc::Coverage {
     report.coverage.iter().find(|c| c.check == check).unwrap_or_else(|| panic!("no coverage {check}"))
 }
 
+/// The `measures.capacitor_branches` entry of `component`.
+fn branch_of<'a>(finding: &'a EmiFinding, component: &str) -> &'a copper_json::Object {
+    finding
+        .measures
+        .get("capacitor_branches")
+        .and_then(Value::as_array)
+        .expect("capacitor_branches")
+        .iter()
+        .find_map(|item| match item {
+            Value::Object(item) if item.get("component").and_then(Value::as_str) == Some(component) => Some(item),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no branch {component}"))
+}
+
 /// The example's numbers: 12 V to 5 V (D = 5/12), 500 kHz, 5 ns edges (10-90 %, so a 6.25 ns ramp), 4.5 A,
-/// CIN 10 uF in an 0805 (defaults 5 mohm, 0.6 nH), and the hot-loop inductance the loop analysis measured.
-fn hand_for(report: &EmiCheckReport) -> Hand {
-    let hot = find(report, "EMI-HOT-LOOP").remove(0);
+/// CIN 10 uF in an 0805 (defaults 5 mohm, 0.6 nH). The report is only there to say which board it is.
+fn hand_for(_report: &EmiCheckReport) -> Hand {
     Hand {
         ipk: 4.5,
         duty: 5.0 / 12.0,
         f0: 500e3,
         ramp: 5e-9 / 0.8,
         cap: HandCap { c: 10e-6, esr: 5e-3, esl: 0.6e-9 },
-        loop_l: measure(hot, "loop_inductance_nh") * 1e-9,
         filter: None,
     }
 }
@@ -852,10 +869,10 @@ fn the_conducted_levels_match_the_hand_calculation() {
     let undated = hand_for(&report);
     let hand = derated(&undated, 0.5);
     // Fundamental by hand (see `hand_dbuv`), for the UN-derated 10 uF (the derated 5 uF level is higher): I_1 = 2 * 4.5 * 0.41667 * sinc(75 deg) * sinc(pi * 0.5e6 * 6.25e-9)
-    // = 3.75 * 0.7379 * 0.99998 = 2.767 A. The branch Z_c = 5 mohm + j (w 5.57 nH - 1 / (w 10 uF)) =
-    // 5 mohm - j 14 mohm; one V-network is Z_eut = 45.3 + j10.8 ohm at 500 kHz, so 2 Z_eut = 90.5 + j21.6 ohm and
-    // I_lisn = I_1 Z_c / (Z_c + 2 Z_eut) is about 0.4 mA; Z_t = Z_eut 47.6 / Z_b is about 46 ohm, so the peak
-    // port voltage is about 19 mV, 13 mV RMS, about 82 dBuV. The code carries the full precision.
+    // = 3.75 * 0.7379 * 0.99998 = 2.767 A. The branch Z_c = 5 mohm + j (w 0.6 nH - 1 / (w 10 uF)) =
+    // 5 mohm - j 29.9 mohm (the hot-loop inductance is not in this branch); one V-network is Z_eut = 45.3 + j10.8 ohm
+    // at 500 kHz, so 2 Z_eut = 90.5 + j21.6 ohm and I_lisn = I_1 Z_c / (Z_c + 2 Z_eut) is about 0.9 mA; Z_t = Z_eut 47.6 / Z_b
+    // is about 46 ohm, so the peak port voltage is about 41 mV, 29 mV RMS, about 89 dBuV. The code carries the full precision.
     let rows = harmonic_rows(finding);
     assert_eq!(rows.len(), 60, "500 kHz to 30 MHz");
     assert_eq!(rows[0].0, 500e3, "the fundamental is the first row");
@@ -866,7 +883,7 @@ fn the_conducted_levels_match_the_hand_calculation() {
     }
     let fundamental = hand_dbuv(&hand, 1);
     let fundamental_undated = hand_dbuv(&undated, 1);
-    assert!((80.0..86.0).contains(&fundamental_undated), "{fundamental_undated}");
+    assert!((87.0..92.0).contains(&fundamental_undated), "{fundamental_undated}");
     assert!(
         fundamental > fundamental_undated + 5.0,
         "half the capacitance: {fundamental} against {fundamental_undated}"
@@ -875,28 +892,32 @@ fn the_conducted_levels_match_the_hand_calculation() {
     let Some(Value::Object(f1)) = finding.measures.get("fundamental") else { panic!("fundamental") };
     assert_eq!(number(f1.get("frequency_hz").unwrap()), 500e3);
     assert!((number(f1.get("total_dbuv").unwrap()) - fundamental).abs() < 0.5);
-    // Band: the high end is the larger level over {un-derated, derated} at the limit, the low end the smaller one
-    // at 0.4 x the limit. The edge is declared, so it contributes nothing to the band.
+    // Band: the high end is the larger level over {un-derated, derated}, the low end the smaller one. The edge is
+    // declared and the current is the limit with no band of its own, so DC bias is the only thing in the band.
     let rows_json = rows_of(finding);
     for n in [1u32, 2, 3, 6, 11, 30, 59] {
         let (a, b) = (hand_dbuv(&undated, n), hand_dbuv(&hand, n));
         let (low, high) = band_of(rows_json[n as usize - 1]);
         assert!((high - a.max(b)).abs() < 0.5, "harmonic {n}: high {high}, hand {}", a.max(b));
-        assert!((low - (a.min(b) + CURRENT_DB)).abs() < 0.5, "harmonic {n}: low {low}, hand {}", a.min(b) + CURRENT_DB);
+        assert!((low - a.min(b)).abs() < 0.5, "harmonic {n}: low {low}, hand {}", a.min(b));
     }
     let (low1, high1) = band_of(rows_json[0]);
-    assert!((high1 - fundamental).abs() < 0.5 && (low1 - (fundamental_undated + CURRENT_DB)).abs() < 0.5);
+    assert!((high1 - fundamental).abs() < 0.5 && (low1 - fundamental_undated).abs() < 0.5);
     // Provenance and tags.
     for tag in [
         "worst_case_current",
+        "scenario_current_limit",
         "default_capacitor_parasitics",
         "placement_estimate",
         "differential_mode_only",
         "rule_of_thumb_dc_bias",
-        "rule_of_thumb_current",
+        "current_edge_from_voltage_edge",
     ] {
         assert!(finding.tags.contains(&tag.to_owned()), "{tag} in {:?}", finding.tags);
     }
+    // The 0.4 x rule of thumb is gone: it was a guess about use, not a parameter of the design.
+    assert!(!finding.tags.contains(&"rule_of_thumb_current".to_owned()));
+    assert_eq!(text(finding, "scenario"), "current_limit");
     // The edge is declared: no edge tag at all, and the old assumed-edge tag is gone.
     assert!(
         !finding
@@ -913,7 +934,7 @@ fn the_conducted_levels_match_the_hand_calculation() {
         "vout",
         "duty",
         "switching_frequency",
-        "rise_time_10_90",
+        "current_rise_time_10_90",
         "load_current",
         "hot_capacitor",
         "hot_capacitor_esr",
@@ -924,8 +945,9 @@ fn the_conducted_levels_match_the_hand_calculation() {
         assert!(inputs.contains_key(key), "input {key}");
     }
     let message = &finding.finding.message;
-    assert!(message.contains("current limit 4.5 A"), "{message}");
-    assert!(message.contains("0.4 x the limit"), "{message}");
+    assert!(message.contains("scenario current_limit") && message.contains("switch current limit 4.5 A"), "{message}");
+    assert!(message.contains("NOT a prediction") && message.contains("declare load_current on U1"), "{message}");
+    assert!(!message.contains("0.4 x the limit"), "{message}");
     assert!(message.contains("no input filter recognised"));
     assert!(message.contains("DC-bias loss a rule-of-thumb band"), "{message}");
     assert_eq!(text(finding, "input_filter"), "no input filter recognised");
@@ -963,7 +985,16 @@ fn the_conducted_levels_match_the_hand_calculation() {
 #[test]
 fn an_input_filter_lowers_the_fundamental_by_the_hand_calculated_amount() {
     let plain = run("no-filter", &[]);
-    let filtered = run_board("emi_buck_filter", "filter", &[], |_| {});
+    // The example declares `load_current`; the current-limit scenario of the unfiltered board is the reference here.
+    let filtered = run_board(
+        "emi_buck_filter",
+        "filter",
+        &[(
+            "component U1: p.Buck { footprint = \"QFN-5\"; load_current = 2A; }",
+            "component U1: p.Buck { footprint = \"QFN-5\"; }",
+        )],
+        |_| {},
+    );
     let (plain_finding, filtered_finding) = (conducted(&plain), conducted(&filtered));
     assert!(filtered_finding.tags.contains(&"input_filter_modelled".to_owned()), "{:?}", filtered_finding.tags);
     assert!(!plain_finding.tags.contains(&"input_filter_modelled".to_owned()));
@@ -973,7 +1004,16 @@ fn an_input_filter_lowers_the_fundamental_by_the_hand_calculated_amount() {
     // 10 uF in an 0805 (5 mohm, 0.6 nH defaults) from VIN_IN to ground. At 500 kHz the LC corner is 23 kHz,
     // so the second-order attenuation is about (500 / 23)^2 = 470, 53 dB, less the peaking of the divider.
     let cp = 1.0 / ((2.0 * std::f64::consts::PI * 40e6).powi(2) * 4.7e-6);
-    hand.filter = Some(HandFilter { l: 4.7e-6, dcr: 0.05, cp, cap: HandCap { c: 10e-6, esr: 5e-3, esl: 0.6e-9 } });
+    // CUP is its own branch with the connection inductance estimated from its distance to LF (reported per capacitor).
+    let cup = branch_of(filtered_finding, "CUP");
+    let cup_connection = number(cup.get("connection_inductance_nh").unwrap()) * 1e-9;
+    assert!(cup_connection > 0.0, "a capacitor 6 mm from the inductor has a connection inductance");
+    hand.filter = Some(HandFilter {
+        l: 4.7e-6,
+        dcr: 0.05,
+        cp,
+        cap: HandCap { c: 10e-6, esr: 5e-3, esl: 0.6e-9 + cup_connection },
+    });
     let hand = derated(&hand, 0.5);
     let with_filter = harmonic_rows(filtered_finding)[0].1;
     let without = harmonic_rows(plain_finding)[0].1;
@@ -994,6 +1034,7 @@ fn an_input_filter_lowers_the_fundamental_by_the_hand_calculated_amount() {
     let filter = coverage(&filtered, "EMI-CONDUCTED:U1:filter");
     assert_eq!(filter.status, CoverageStatus::Executed);
     assert!(filter.detail.contains("LF") && filter.detail.contains("CUP"), "{}", filter.detail);
+    assert_eq!(branch_of(filtered_finding, "CUP").get("role").and_then(Value::as_str), Some("supply_side"));
     assert!(filtered_finding.finding.objects.contains(&"LF".to_owned()));
 }
 
@@ -1030,7 +1071,8 @@ fn text_lines(finding: &EmiFinding) -> Vec<String> {
 }
 
 /// Part edits that remove the edge time from the switch pin (the current limit stays) and, with `declared`,
-/// give the capacitor part its parasitics so that the DC-bias rule does not apply.
+/// give the capacitor part its parasitics. The DC-bias rule is keyed to the capacitance, not to the parasitics, so
+/// [`with_edge`] also declares `capacitance_at_bias` on CIN in that case.
 fn part_edits(edge: &str, declared: bool) -> Vec<(&'static str, String, String)> {
     let mut edits = vec![("buck.copper", "rise_time = 5ns; ".to_owned(), edge.to_owned())];
     if declared {
@@ -1043,30 +1085,38 @@ fn part_edits(edge: &str, declared: bool) -> Vec<(&'static str, String, String)>
     edits
 }
 
-fn run_edits(name: &str, edits: &[(&str, String, String)]) -> EmiCheckReport {
-    let borrowed: Vec<(&str, &str, &str)> = edits.iter().map(|(f, a, b)| (*f, a.as_str(), b.as_str())).collect();
-    run_full("emi_buck", name, &[], &borrowed, |_| {})
-}
+/// CIN as the example declares it, and with its capacitance at bias declared (equal to the value: no loss).
+const CIN_DECLARATION: &str = "component CIN: p.Cap { value = 10uF;";
+const CIN_AT_BIAS: &str = "component CIN: p.Cap { value = 10uF; capacitance_at_bias = 10uF;";
 
-/// The board with the edge removed, or replaced by `rise_time = <ns>ns;` / `slew_rate = ...`.
+/// The board with the edge removed, or replaced by `rise_time = <ns>ns;` / `slew_rate = ...`. With
+/// `declared_parasitics` the capacitor declares ESR, ESL and its capacitance at bias: no rule of thumb is left
+/// for the capacitor.
 fn with_edge(name: &str, edge: &str, declared_parasitics: bool) -> EmiCheckReport {
-    run_edits(name, &part_edits(edge, declared_parasitics))
+    let edits = part_edits(edge, declared_parasitics);
+    let borrowed: Vec<(&str, &str, &str)> = edits.iter().map(|(f, a, b)| (*f, a.as_str(), b.as_str())).collect();
+    let board: Vec<(&str, &str)> = if declared_parasitics { vec![(CIN_DECLARATION, CIN_AT_BIAS)] } else { vec![] };
+    run_full("emi_buck", name, &board, &borrowed, |_| {})
 }
 
 #[test]
 fn a_missing_edge_time_becomes_a_default_band_over_all_harmonics() {
     let report = with_edge("default-edge", "", false);
     let finding = conducted(&report);
-    for tag in ["rule_of_thumb_edge", "rule_of_thumb_dc_bias", "rule_of_thumb_current"] {
+    for tag in ["rule_of_thumb_edge", "rule_of_thumb_dc_bias", "current_edge_from_voltage_edge"] {
         assert!(finding.tags.contains(&tag.to_owned()), "{tag} in {:?}", finding.tags);
     }
     assert!(!finding.tags.contains(&"assumed_edge_time".to_owned()), "the old tag is gone");
+    assert!(!finding.tags.contains(&"rule_of_thumb_current".to_owned()), "the 0.4 x limit band is gone");
     assert!(finding.measures.get("assumed_edge_frequency_limit_hz").is_none());
     assert!(finding.measures.get("edge_time_assumed").is_none());
-    assert_eq!(text(finding, "edge_basis"), "rule_of_thumb");
-    // 12 V at 3 / 10 / 1 V/ns: 3.2 ns nominal, 0.96 ns fast, 9.6 ns slow (10-90 %).
-    assert!((measure(finding, "rise_time_10_90_ns") - 3.2).abs() < 1e-3);
-    let band = finding.measures.get("edge_time_band_ns").and_then(Value::as_array).expect("edge band");
+    assert_eq!(text(finding, "voltage_edge_basis"), "rule_of_thumb");
+    assert_eq!(text(finding, "current_edge_basis"), "rule_of_thumb");
+    assert_eq!(text(finding, "current_edge_source"), "voltage_edge");
+    // 12 V at 3 / 10 / 1 V/ns: 3.2 ns nominal, 0.96 ns fast, 9.6 ns slow (10-90 %); the current edge follows it.
+    assert!((measure(finding, "voltage_rise_time_10_90_ns") - 3.2).abs() < 1e-3);
+    assert!((measure(finding, "current_rise_time_10_90_ns") - 3.2).abs() < 1e-3);
+    let band = finding.measures.get("current_edge_time_band_ns").and_then(Value::as_array).expect("edge band");
     assert!((number(&band[0]) - 0.96).abs() < 1e-3 && (number(&band[1]) - 9.6).abs() < 1e-3, "{band:?}");
     // No 3.183 MHz restriction any more: every harmonic to 30 MHz.
     assert_eq!(harmonic_rows(finding).len(), 60);
@@ -1076,6 +1126,10 @@ fn a_missing_edge_time_becomes_a_default_band_over_all_harmonics() {
             .iter()
             .any(|l| l.contains("rule of thumb:") && l.contains("declare slew_rate or rise_time to replace it")),
         "{inputs:?}"
+    );
+    assert!(
+        inputs.iter().any(|l| l.contains("current_rise_time and current_fall_time for the current edge")),
+        "the current edge says how to replace the assumption: {inputs:?}"
     );
     let detail = &coverage(&report, "EMI-CONDUCTED:U1").detail;
     assert!(detail.contains("rule of thumb") && !detail.contains("below 3.183 MHz"), "{detail}");
@@ -1145,29 +1199,29 @@ fn radiated_estimates_without_an_edge_time_are_a_band_that_matches_declared_edge
 
 #[test]
 fn the_conducted_band_collapses_below_the_edge_corner_and_opens_above_it() {
-    // Parasitics declared: the edge is the only band besides the operating current.
+    // Parasitics and capacitance at bias declared: the edge is the only band.
     let report = with_edge("edge-band", "", true);
     let finding = conducted(&report);
     assert!(!finding.tags.contains(&"rule_of_thumb_dc_bias".to_owned()), "{:?}", finding.tags);
     let rows = rows_of(finding);
     let spread = |row: &copper_json::Object| {
         let (low, high) = band_of(row);
-        high - (low - CURRENT_DB)
+        high - low
     };
     // Fundamental (500 kHz): ramps of 1.2 ns to 12 ns against a 2 us period are far below their corner, so the band
-    // is the operating-current offset alone.
+    // is closed.
     assert!(spread(rows[0]) < 0.2, "fundamental spread {}", spread(rows[0]));
     // The slow edge (12 ns ramp, corner 1 / (pi t) = 27 MHz) rolls off only near the top of the band: the band is
     // open at 29.5 MHz (sinc(1.1 rad) = -1.9 dB) and still shut at 10 MHz.
     assert!(spread(rows[58]) > 1.5, "29.5 MHz spread {}", spread(rows[58]));
     assert!(spread(rows[19]) < 0.5, "10 MHz spread {}", spread(rows[19]));
-    // The high end is the fast edge's level, the low end the slow edge's at 0.4 x the limit, as for boards declaring them.
+    // The high end is the fast edge's level, the low end the slow edge's, as for boards declaring them.
     let fast = harmonic_rows(conducted(&with_edge("edge-fast", "rise_time = 0.96ns; ", true)));
     let slow = harmonic_rows(conducted(&with_edge("edge-slow", "rise_time = 9.6ns; ", true)));
     for k in [0usize, 5, 20, 58] {
         let (low, high) = band_of(rows[k]);
         assert!((high - fast[k].1).abs() < 0.1, "harmonic {}: high {high}, fast {}", k + 1, fast[k].1);
-        assert!((low - (slow[k].1 + CURRENT_DB)).abs() < 0.1, "harmonic {}: low {low}, slow {}", k + 1, slow[k].1);
+        assert!((low - slow[k].1).abs() < 0.1, "harmonic {}: low {low}, slow {}", k + 1, slow[k].1);
     }
     // The nominal (3.2 ns) is the stem-less `total_dbuv` of every row.
     let nominal = harmonic_rows(conducted(&with_edge("edge-nominal", "rise_time = 3.2ns; ", true)));
@@ -1184,15 +1238,16 @@ fn a_declared_slew_rate_gives_an_exact_edge_and_no_band_from_it() {
     let finding = conducted(&slew);
     assert!(finding.tags.contains(&"edge_from_slew_rate".to_owned()), "{:?}", finding.tags);
     assert!(!finding.tags.contains(&"rule_of_thumb_edge".to_owned()));
-    assert_eq!(text(finding, "edge_basis"), "slew_rate");
-    assert!((measure(finding, "rise_time_10_90_ns") - 3.2).abs() < 1e-3);
-    assert_eq!(finding.measures.get("edge_time_band_ns"), Some(&Value::Null));
+    assert_eq!(text(finding, "voltage_edge_basis"), "slew_rate");
+    assert_eq!(text(finding, "current_edge_basis"), "slew_rate");
+    assert!((measure(finding, "current_rise_time_10_90_ns") - 3.2).abs() < 1e-3);
+    assert_eq!(finding.measures.get("current_edge_time_band_ns"), Some(&Value::Null));
     for (k, (a, b)) in harmonic_rows(finding).iter().zip(harmonic_rows(conducted(&declared))).enumerate() {
         assert!((a.1 - b.1).abs() < 1e-6, "harmonic {}", k + 1);
     }
     for row in rows_of(finding) {
         let (low, high) = band_of(row);
-        assert!((high - (low - CURRENT_DB)).abs() < 0.02, "no band from the edge");
+        assert!((high - low).abs() < 0.02, "no band from the edge");
     }
     // Radiated: an exact edge, no band, no rule-of-thumb basis.
     let hot = find(&slew, "EMI-HOT-LOOP").remove(0);
@@ -1223,7 +1278,7 @@ fn a_fast_declared_slew_rate_raises_the_high_frequency_levels_and_says_wide_band
     let wide = with_edge("slew-50", "slew_rate = 50V/ns; ", true);
     let finding = conducted(&wide);
     // 50 V/ns on 12 V is 0.192 ns, above the default nominal 3.2 ns: the 30 MHz harmonic is higher than the default's nominal.
-    assert!((measure(finding, "rise_time_10_90_ns") - 0.192).abs() < 1e-3);
+    assert!((measure(finding, "current_rise_time_10_90_ns") - 0.192).abs() < 1e-3);
     let (wide_top, nominal_top) =
         (harmonic_rows(finding)[58].1, number(rows_of(conducted(&default_band))[59].get("total_dbuv").unwrap()));
     assert!(wide_top > nominal_top + 6.0, "{wide_top} against {nominal_top}");
@@ -1242,7 +1297,8 @@ fn a_fast_declared_slew_rate_raises_the_high_frequency_levels_and_says_wide_band
 
 #[test]
 fn the_headline_never_becomes_more_favourable_than_the_old_behaviour() {
-    // Old behaviour on this board: the 10 ns edge assumed, harmonics below 3.18 MHz, no DC-bias loss, same current.
+    // Old behaviour on this board: the 10 ns edge assumed, harmonics below 3.18 MHz, no DC-bias loss, same current
+    // (the hot-loop inductance is not in the capacitor branch any more: the hand model has none).
     let report = with_edge("never-better", "", false);
     let finding = conducted(&report);
     let undated = hand_for(&report);
@@ -1256,16 +1312,14 @@ fn the_headline_never_becomes_more_favourable_than_the_old_behaviour() {
     let old_margin = (1..=6u32).map(|n| 46.0 - hand_dbuv(&old, n)).fold(f64::MAX, f64::min);
     let new_margin = finding.margin_db.expect("margin");
     assert!(new_margin <= old_margin + 0.1, "new {new_margin} against old {old_margin}");
-    // With a declared edge and declared parasitics the high end is the old number (current retained as the worst case),
-    // the operating current only lowers the low end.
+    // With a declared edge, declared parasitics and a declared capacitance at bias nothing is a rule of thumb: the
+    // band is closed and the level is the hand number (the current limit is the worst case, with no band of its own).
     let declared = with_edge("never-better-declared", "rise_time = 5ns; ", true);
     let rows = rows_of(conducted(&declared));
-    let hand =
-        Hand { loop_l: measure(find(&declared, "EMI-HOT-LOOP").remove(0), "loop_inductance_nh") * 1e-9, ..undated };
     for n in [1u32, 5, 20] {
         let (low, high) = band_of(rows[n as usize - 1]);
-        assert!((high - hand_dbuv(&hand, n)).abs() < 0.5, "harmonic {n}");
-        assert!((low - high - CURRENT_DB).abs() < 0.02, "only the current offset");
+        assert!((high - hand_dbuv(&undated, n)).abs() < 0.5, "harmonic {n}");
+        assert!((low - high).abs() < 0.02, "no band left: {low} {high}");
     }
 }
 
@@ -1293,23 +1347,95 @@ fn the_nominal_capacitance_is_not_derated_below_five_volts_and_the_band_still_sp
     let total = number(rows[0].get("total_dbuv").unwrap());
     assert!((total - hand_dbuv(&undated, 1)).abs() < 0.5, "nominal {total} against hand {}", hand_dbuv(&undated, 1));
     assert!((high - hand_dbuv(&derated, 1)).abs() < 0.5, "high {high} against hand {}", hand_dbuv(&derated, 1));
-    assert!((low - (hand_dbuv(&undated, 1) + CURRENT_DB)).abs() < 0.5);
+    assert!((low - hand_dbuv(&undated, 1)).abs() < 0.5, "the low end is the un-derated nominal");
     assert!(high - total > 5.0, "the derated capacitor raises the fundamental: {high} against {total}");
     assert_eq!(measure(finding, "dc_bias_loss"), 0.5);
 }
 
 #[test]
-fn declared_parasitics_suppress_the_dc_bias_band_and_keep_the_statement() {
+fn declared_parasitics_do_not_remove_the_dc_bias_band_and_the_wording_names_the_capacitance() {
+    // The part declares ESR and ESL: the capacitor is no longer "defaulted", but a ceramic 0805 still loses
+    // capacitance at bias, so the rule of thumb still applies (it used to be keyed to the parasitics defaults).
     let report = with_edge("declared-parasitics", "rise_time = 5ns; ", true);
+    let board_without_bias = {
+        let edits = part_edits("rise_time = 5ns; ", true);
+        let borrowed: Vec<(&str, &str, &str)> = edits.iter().map(|(f, a, b)| (*f, a.as_str(), b.as_str())).collect();
+        run_full("emi_buck", "declared-parasitics-no-bias", &[], &borrowed, |_| {})
+    };
+    let finding = conducted(&board_without_bias);
+    assert!(finding.tags.contains(&"rule_of_thumb_dc_bias".to_owned()), "{:?}", finding.tags);
+    assert!(!finding.tags.contains(&"default_capacitor_parasitics".to_owned()));
+    assert_eq!(text(finding, "dc_bias_derating"), "rule of thumb band; nominal derated");
+    let cin = branch_of(finding, "CIN");
+    let defaulted: Vec<&str> =
+        cin.get("defaulted").and_then(Value::as_array).unwrap().iter().filter_map(Value::as_str).collect();
+    assert_eq!(defaulted, ["dc_bias"], "ESR and ESL are declared, only the DC bias is a rule");
+    // The wording tells the user to declare the capacitance at bias, not ESR and ESL.
+    let lines = text_lines(finding);
+    let bias_line = lines.iter().find(|l| l.contains("DC-bias loss")).expect("a DC-bias line");
+    assert!(bias_line.contains("declare capacitance_at_bias on the component to replace it"), "{bias_line}");
+    assert!(!bias_line.contains("declare esr and esl"), "{bias_line}");
+    // With the capacitance at bias declared the band, the tag and the rule are gone.
     let finding = conducted(&report);
     assert!(!finding.tags.contains(&"rule_of_thumb_dc_bias".to_owned()));
-    assert!(!finding.tags.contains(&"default_capacitor_parasitics".to_owned()));
-    assert_eq!(text(finding, "dc_bias_derating"), "not applied");
+    assert_eq!(text(finding, "dc_bias_derating"), "no rule-of-thumb band");
     assert_eq!(finding.measures.get("hot_capacitor_band_uf"), Some(&Value::Null));
     assert!((measure(finding, "hot_capacitor_uf") - 10.0).abs() < 1e-9);
-    assert!(finding.finding.message.contains("no DC-bias derating"), "{}", finding.finding.message);
-    // The operating-current band is the only band left.
-    assert!(finding.tags.contains(&"rule_of_thumb_current".to_owned()));
+    assert!(finding.finding.message.contains("no DC-bias band"), "{}", finding.finding.message);
+}
+
+#[test]
+fn a_declared_capacitance_at_bias_replaces_the_rule_of_thumb() {
+    // DC-bias curve of the part at 12 V: 4.2 uF of the 10 uF.
+    let report =
+        run("bias-declared", &[(CIN_DECLARATION, "component CIN: p.Cap { value = 10uF; capacitance_at_bias = 4.2uF;")]);
+    let finding = conducted(&report);
+    assert!(!finding.tags.contains(&"rule_of_thumb_dc_bias".to_owned()), "{:?}", finding.tags);
+    assert!((measure(finding, "hot_capacitor_uf") - 4.2).abs() < 1e-9);
+    assert_eq!(finding.measures.get("hot_capacitor_band_uf"), Some(&Value::Null));
+    let cin = branch_of(finding, "CIN");
+    assert_eq!(cin.get("dc_bias_basis").and_then(Value::as_str), Some("declared"));
+    assert_eq!(
+        cin.get("defaulted").and_then(Value::as_array).map(<[Value]>::len),
+        Some(2),
+        "ESR and ESL still default"
+    );
+    assert!((number(cin.get("capacitance_used_uf").unwrap()) - 4.2).abs() < 1e-9);
+    assert!((number(cin.get("capacitance_value_uf").unwrap()) - 10.0).abs() < 1e-9);
+    // The level is the hand number for 4.2 uF, with no band from the capacitor.
+    let mut hand = hand_for(&report);
+    hand.cap.c = 4.2e-6;
+    let rows = rows_of(finding);
+    for n in [1u32, 3, 20] {
+        let (low, high) = band_of(rows[n as usize - 1]);
+        assert!((high - hand_dbuv(&hand, n)).abs() < 0.5 && (high - low).abs() < 0.02, "harmonic {n}: {low}..{high}");
+    }
+    assert!(text_lines(finding).iter().any(|l| l.contains("capacitance at bias 4.2 uF declared on the component")));
+}
+
+#[test]
+fn every_capacitor_reports_which_values_were_declared_and_which_defaulted() {
+    let report = run_board("emi_buck_filter", "branches-filter", &[], |_| {});
+    let finding = conducted(&report);
+    let branches = finding.measures.get("capacitor_branches").and_then(Value::as_array).expect("branches");
+    assert_eq!(branches.len(), 2, "CIN and CUP");
+    for component in ["CIN", "CUP"] {
+        let branch = branch_of(finding, component);
+        let declared = match branch.get("declared") {
+            Some(Value::Object(declared)) => declared,
+            other => panic!("declared {other:?}"),
+        };
+        assert_eq!(declared.get("esr"), Some(&Value::Bool(false)), "{component}");
+        assert_eq!(declared.get("esl"), Some(&Value::Bool(false)), "{component}");
+        assert_eq!(declared.get("capacitance_at_bias"), Some(&Value::Bool(false)), "{component}");
+        let defaulted: Vec<&str> =
+            branch.get("defaulted").and_then(Value::as_array).unwrap().iter().filter_map(Value::as_str).collect();
+        assert_eq!(defaulted, ["esr", "esl", "dc_bias"], "{component}");
+        assert_eq!(branch.get("esl_basis").and_then(Value::as_str), Some("package_default"));
+        assert!(branch.get("sources").and_then(Value::as_array).is_some_and(|s| !s.is_empty()));
+    }
+    assert!(text_lines(finding).iter().any(|l| l.starts_with("capacitor CUP (supply_side)")));
+    assert!(text_lines(finding).iter().any(|l| l.starts_with("capacitor CIN (hot)")));
 }
 
 #[test]
@@ -1403,7 +1529,12 @@ fn missing_inputs_skip_the_prediction_with_a_reason() {
             vec![],
             "declares no supply voltage (Vout)",
         ),
-        ("no-current", vec![], vec![("buck.copper", " current_peak = 4.5A;", "")], "no current_peak"),
+        (
+            "no-current",
+            vec![],
+            vec![("buck.copper", " current_peak = 4.5A;", "")],
+            "neither a load_current (the operating point, a component attribute) nor a switch pin current_peak",
+        ),
     ];
     for (name, edits, part_edits, reason) in cases {
         let report = run_full("emi_buck", name, &edits, &part_edits, |_| {});
@@ -1439,7 +1570,9 @@ fn declared_parasitics_and_self_resonance_replace_the_defaults() {
     assert!((measure(finding, "hot_capacitor_esl_nh") - 0.7).abs() < 1e-6);
     let mut hand = hand_for(&declared);
     hand.cap = HandCap { c: 10e-6, esr: 3e-3, esl: 0.7e-9 };
-    assert!((harmonic_rows(finding)[0].1 - hand_dbuv(&hand, 1)).abs() < 0.5);
+    // The declared parasitics do not remove the DC-bias rule: the nominal case is the derated capacitor.
+    assert!(finding.tags.contains(&"rule_of_thumb_dc_bias".to_owned()));
+    assert!((harmonic_rows(finding)[0].1 - hand_dbuv(&derated(&hand, 0.5), 1)).abs() < 0.5);
     // ESL from the self-resonance: 1 / ((2 pi 2 MHz)^2 10 uF) = 0.6333 nH.
     let srf = run_full(
         "emi_buck",
@@ -1467,28 +1600,108 @@ fn an_unrecognised_package_without_declared_parasitics_skips_the_prediction() {
     assert!(entry.detail.contains("not a recognised SMD package"), "{}", entry.detail);
 }
 
+/// CIN2, a second 10 uF capacitor 4 mm from CIN on the hot net (the example places CIN at x = 24.5 mm).
+fn with_second_capacitor() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (
+            "    component CBOOT:",
+            "    component CIN2: p.Cap { value = 10uF; footprint = \"C_0805\"; }\n    component CBOOT:",
+        ),
+        ("net VIN { U1.VIN; CIN.A; }", "net VIN { U1.VIN; CIN.A; CIN2.A; }"),
+        ("D1.A; COUT.B;", "D1.A; CIN2.B; COUT.B;"),
+        (
+            "    constraint fixed_placement(J1)",
+            "    constraint fixed_placement(CIN2) { x = 20.5mm; y = 29mm; rotation = 180; }\n    constraint fixed_placement(J1)",
+        ),
+    ]
+}
+
 #[test]
-fn parallel_hot_capacitors_are_listed_as_not_modelled() {
-    let report = run(
-        "parallel",
-        &[
-            (
-                "    component CBOOT:",
-                "    component CIN2: p.Cap { value = 10uF; footprint = \"C_0805\"; }\n    component CBOOT:",
-            ),
-            ("net VIN { U1.VIN; CIN.A; }", "net VIN { U1.VIN; CIN.A; CIN2.A; }"),
-            ("D1.A; COUT.B;", "D1.A; CIN2.B; COUT.B;"),
-            (
-                "    constraint fixed_placement(J1)",
-                "    constraint fixed_placement(CIN2) { x = 20.5mm; y = 29mm; rotation = 180; }\n    constraint fixed_placement(J1)",
-            ),
-        ],
-    );
+fn parallel_hot_capacitors_are_branches_of_their_own_with_a_stated_connection_inductance() {
+    let single = run("single", &[]);
+    let report = run("parallel", &with_second_capacitor());
     let finding = conducted(&report);
-    assert!(finding.tags.contains(&"parallel_capacitors_not_modelled".to_owned()), "{:?}", finding.tags);
-    let ignored = finding.measures.get("ignored_parallel_capacitors").and_then(Value::as_array).unwrap();
-    assert_eq!(ignored.iter().filter_map(Value::as_str).collect::<Vec<_>>(), ["CIN2"]);
+    // No longer lumped, ignored or "not modelled separately".
+    assert!(!finding.tags.contains(&"parallel_capacitors_not_modelled".to_owned()), "{:?}", finding.tags);
+    assert!(finding.measures.get("ignored_parallel_capacitors").is_none());
+    assert!(!report.lines().iter().any(|l| l.contains("not modelled separately")));
     assert_eq!(text(finding, "hot_capacitor"), "CIN");
+    let branches = finding.measures.get("capacitor_branches").and_then(Value::as_array).unwrap();
+    assert_eq!(branches.len(), 2);
+    let (cin, cin2) = (branch_of(finding, "CIN"), branch_of(finding, "CIN2"));
+    assert_eq!(cin.get("role").and_then(Value::as_str), Some("hot"));
+    assert_eq!(cin2.get("role").and_then(Value::as_str), Some("hot_net"));
+    assert_eq!(cin.get("connection_inductance_nh"), Some(&Value::Null), "the hot loop is in the converter's branch");
+    // The second capacitor's connection: 2 x 4 mm x (hot-loop inductance / hot-loop path length), tagged and explained.
+    let connection = number(cin2.get("connection_inductance_nh").unwrap());
+    assert!(connection > 0.5 && connection < 20.0, "{connection} nH");
+    let basis = cin2.get("connection_basis").and_then(Value::as_str).unwrap();
+    assert!(basis.starts_with("estimated: 2 x 4.00 mm"), "{basis}");
+    assert!(finding.tags.contains(&"estimated_connection_inductance".to_owned()));
+    // Current sharing at the fundamental, by hand: two derated 10 uF / 0.6 nH branches, the second behind its connection
+    // inductance, share the source current as their admittances (the LISN path is a thousand times higher in impedance).
+    // Below the branch resonance the extra inductance cancels part of the capacitive reactance, so the branch with the
+    // connection inductance carries MORE of the 500 kHz current: a lumped model cannot say so.
+    let w = 2.0 * std::f64::consts::PI * 500e3;
+    let (c, esr, esl) = (5e-6, 5e-3, 0.6e-9);
+    let y = |extra: f64| Z(1.0, 0.0) / rlc(w, esr, esl + extra, c);
+    let (y1, y2) = (y(0.0), y(connection * 1e-9));
+    let total = (y1 + y2).abs();
+    let share = |branch: &copper_json::Object, key: &str| number(branch.get(key).unwrap());
+    assert!((share(cin, "current_share_fundamental") - y1.abs() / total).abs() < 0.02);
+    assert!((share(cin2, "current_share_fundamental") - y2.abs() / total).abs() < 0.02);
+    assert!(share(cin2, "current_share_fundamental") > share(cin, "current_share_fundamental"));
+    let largest = finding.measures.get("largest_current_share_fundamental").unwrap();
+    let Value::Object(largest) = largest else { panic!("largest {largest:?}") };
+    assert_eq!(largest.get("component").and_then(Value::as_str), Some("CIN2"));
+    // Doubling the capacitance on the hot net lowers the fundamental: the lumped single-capacitor model cannot.
+    let fundamental = |report: &EmiCheckReport| harmonic_rows(conducted(report))[0].1;
+    assert!(
+        fundamental(&report) < fundamental(&single) - 3.0,
+        "{} against {}",
+        fundamental(&report),
+        fundamental(&single)
+    );
+}
+
+#[test]
+fn unlike_capacitors_on_the_hot_net_show_an_anti_resonance_in_the_report() {
+    // 10 uF in an 0805 (0.6 nH) beside 100 nF in an 0402 (0.4 nH), 4 mm apart: the inductive 10 uF and the capacitive
+    // 100 nF resonate with each other where L_total C_series = 1 / (2 pi f)^2, a few MHz up (inside the band).
+    let edits = [
+        (
+            "    component CBOOT:",
+            "    component CSMALL: p.Cap { value = 100nF; footprint = \"C_0402\"; }\n    component CBOOT:",
+        ),
+        ("net VIN { U1.VIN; CIN.A; }", "net VIN { U1.VIN; CIN.A; CSMALL.A; }"),
+        ("D1.A; COUT.B;", "D1.A; CSMALL.B; COUT.B;"),
+        (
+            "    constraint fixed_placement(J1)",
+            "    constraint fixed_placement(CSMALL) { x = 20.5mm; y = 29mm; rotation = 180; }\n    constraint fixed_placement(J1)",
+        ),
+    ];
+    let report = run("antiresonance", &edits);
+    let finding = conducted(&report);
+    assert!(finding.tags.contains(&"anti_resonance_in_band".to_owned()), "{:?}", finding.tags);
+    let peaks = finding.measures.get("anti_resonances").and_then(Value::as_array).unwrap();
+    assert!(!peaks.is_empty());
+    let Value::Object(peak) = &peaks[0] else { panic!("peak") };
+    let (f, z) = (number(peak.get("frequency_hz").unwrap()), number(peak.get("impedance_ohm").unwrap()));
+    assert!((150e3..30e6).contains(&f) && z > 0.0, "{f} Hz {z} ohm");
+    // The expected frequency from the reported branch values (nominal case: both derated by 50 %).
+    let (cin, small) = (branch_of(finding, "CIN"), branch_of(finding, "CSMALL"));
+    let c1 = number(cin.get("capacitance_used_uf").unwrap()) * 1e-6;
+    let c2 = number(small.get("capacitance_used_uf").unwrap()) * 1e-6;
+    let l1 = number(cin.get("esl_nh").unwrap()) * 1e-9;
+    let l2 = (number(small.get("esl_nh").unwrap()) + number(small.get("connection_inductance_nh").unwrap())) * 1e-9;
+    let expect = 1.0 / (2.0 * std::f64::consts::PI * ((l1 + l2) * (c1 * c2 / (c1 + c2))).sqrt());
+    assert!((f / expect - 1.0).abs() < 0.1, "peak {f} Hz against 1/(2 pi sqrt(L C)) = {expect} Hz");
+    let message = &finding.finding.message;
+    assert!(message.contains("anti-resonance of the input network at"), "{message}");
+    assert!(text_lines(finding).iter().any(|l| l.starts_with("anti-resonance of the input network at")));
+    // A single capacitor has none.
+    let single = conducted(&run("antiresonance-single", &[])).measures.get("anti_resonances").cloned();
+    assert_eq!(single, Some(Value::Array(Vec::new())));
 }
 
 #[test]
@@ -1665,7 +1878,6 @@ fn fuse_instead_of_inductor() -> Vec<(&'static str, &'static str)> {
 
 #[test]
 fn a_fuse_alone_on_the_feed_is_not_a_filter_and_the_message_names_it() {
-    let plain = run("fuse-plain", &[]);
     let fused = run_board("emi_buck_filter", "fuse-only", &fuse_instead_of_inductor(), |_| {});
     let finding = conducted(&fused);
     assert!(!finding.tags.contains(&"input_filter_modelled".to_owned()), "{:?}", finding.tags);
@@ -1682,10 +1894,24 @@ fn a_fuse_alone_on_the_feed_is_not_a_filter_and_the_message_names_it() {
         "{}",
         filter.detail
     );
-    // The capacitor behind the fuse is not a modelled filter capacitor: the prediction is the unfiltered one.
-    same_levels(conducted(&plain), finding, 0.01);
+    // The capacitor behind the fuse is not a filter capacitor but it is a capacitor of the hot net (a fuse is a short
+    // at these frequencies): a branch on the hot node, behind its connection inductance, in parallel with CIN.
+    let cup = branch_of(finding, "CUP");
+    assert_eq!(cup.get("role").and_then(Value::as_str), Some("behind_transparent_feed"));
+    assert!(number(cup.get("connection_inductance_nh").unwrap()) > 1.0);
+    assert!(finding.tags.contains(&"estimated_connection_inductance".to_owned()));
+    // The example declares load_current: the unfiltered reference is the declared point of the plain board.
+    let reference_report = run(
+        "fuse-plain-point",
+        &[(
+            "component U1: p.Buck { footprint = \"QFN-5\"; }",
+            "component U1: p.Buck { footprint = \"QFN-5\"; load_current = 2A; }",
+        )],
+    );
+    let reference = conducted(&reference_report);
+    assert!(harmonic_rows(finding)[0].1 < harmonic_rows(reference)[0].1 - 3.0, "10 uF more on the hot node");
     let text = finding.measures.get("input_filter").and_then(Value::as_str).unwrap_or_default();
-    assert!(text.contains("fuse F1"), "{text}");
+    assert!(text.contains("fuse F1") && text.contains("branches on the hot node"), "{text}");
 }
 
 #[test]
@@ -1904,4 +2130,318 @@ fn a_loop_longer_than_a_tenth_wavelength_truncates_the_radiated_band_and_says_so
     assert!(far.finding.message.contains("not covered"), "{}", far.finding.message);
     // Inside the evaluated band the formula's own conditions still hold.
     assert_eq!(validity.get("holds"), Some(&Value::Bool(true)), "{validity:?}");
+}
+
+// ---------------------------------------------------------------------------
+// The declared operating point, the current-limit scenario and the current edge.
+// ---------------------------------------------------------------------------
+
+const U1_DECLARATION: &str = "component U1: p.Buck { footprint = \"QFN-5\"; }";
+const L1_DECLARATION: &str = "component L1: p.Inductor { value = 4.7uH;";
+
+/// The example with `load_current` on U1 and, optionally, another value for the power inductor L1.
+fn with_load(name: &str, load: &str, inductor: Option<&str>) -> EmiCheckReport {
+    let mut edits = vec![(
+        U1_DECLARATION.to_owned(),
+        format!("component U1: p.Buck {{ footprint = \"QFN-5\"; load_current = {load}; }}"),
+    )];
+    if let Some(value) = inductor {
+        edits.push((L1_DECLARATION.to_owned(), format!("component L1: p.Inductor {{ value = {value};")));
+    }
+    let borrowed: Vec<(&str, &str)> = edits.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    run(name, &borrowed)
+}
+
+/// Peak amplitude of harmonic `n` of the ramp-on-pedestal pulse `valley -> peak` over the on-time `duty T` with ideal
+/// edges, by integration by parts (written here, independent of the library's piecewise-linear Fourier code).
+fn ramp_harmonic(n: u32, valley: f64, peak: f64, duty: f64, period: f64) -> f64 {
+    let t_on = duty * period;
+    let slope = (peak - valley) / t_on;
+    let w = 2.0 * std::f64::consts::PI * f64::from(n) / period;
+    let th = w * t_on;
+    let (er, ei) = (th.cos(), -th.sin());
+    let first = (valley * (-ei) / w, -valley * (1.0 - er) / w);
+    let (p, q) = (1.0 - (er - ei * th), -(ei + er * th));
+    let second = (-slope * p / (w * w), -slope * q / (w * w));
+    2.0 * ((first.0 + second.0) / period).hypot((first.1 + second.1) / period)
+}
+
+fn operating_point(finding: &EmiFinding) -> &copper_json::Object {
+    match finding.measures.get("operating_point") {
+        Some(Value::Object(point)) => point,
+        other => panic!("operating_point {other:?}"),
+    }
+}
+
+#[test]
+fn a_declared_operating_point_is_the_headline_and_the_current_limit_the_secondary_worst_case() {
+    let report = with_load("load", "2A", None);
+    let finding = conducted(&report);
+    assert_eq!(text(finding, "scenario"), "declared_operating_point");
+    for tag in ["scenario_declared_operating_point", "declared_operating_point", "rule_of_thumb_dc_bias"] {
+        assert!(finding.tags.contains(&tag.to_owned()), "{tag} in {:?}", finding.tags);
+    }
+    for tag in ["worst_case_current", "scenario_current_limit", "rule_of_thumb_current", "rule_of_thumb_ripple"] {
+        assert!(!finding.tags.contains(&tag.to_owned()), "{tag} in {:?}", finding.tags);
+    }
+    // The operating point: dI = (12 - 5) (5/12) / (4.7 uH x 500 kHz) = 1.2411 A, valley 1.3794 A, peak 2.6206 A.
+    let point = operating_point(finding);
+    assert_eq!(point.get("status").and_then(Value::as_str), Some("declared_ccm"));
+    assert_eq!(point.get("ripple_basis").and_then(Value::as_str), Some("computed_from_inductance"));
+    assert_eq!(point.get("inductor").and_then(Value::as_str), Some("L1"));
+    let ripple = 7.0 * (5.0 / 12.0) / (4.7e-6 * 500e3);
+    assert!((number(point.get("ripple_peak_to_peak_a").unwrap()) - ripple).abs() < 1e-5);
+    assert!((number(point.get("valley_a").unwrap()) - (2.0 - ripple / 2.0)).abs() < 1e-5);
+    assert!((number(point.get("peak_a").unwrap()) - (2.0 + ripple / 2.0)).abs() < 1e-5);
+    assert_eq!(point.get("continuous_conduction"), Some(&Value::Bool(true)));
+    // The harmonics against the independent analytic series, through the independent hand network (the 6.25 ns ramp
+    // costs under 0.01 dB below the fifth harmonic).
+    let undated = hand_for(&report);
+    let derated_hand = derated(&undated, 0.5);
+    let rows = rows_of(finding);
+    for n in 1..=5u32 {
+        let i_n = ramp_harmonic(n, 2.0 - ripple / 2.0, 2.0 + ripple / 2.0, 5.0 / 12.0, 2e-6);
+        let nominal = hand_level(&derated_hand, n, i_n);
+        let total = number(rows[n as usize - 1].get("total_dbuv").unwrap());
+        assert!((total - nominal).abs() < 0.1, "harmonic {n}: model {total} dBuV, hand {nominal} dBuV");
+        let (low, high) = band_of(rows[n as usize - 1]);
+        let (a, b) = (hand_level(&undated, n, i_n), nominal);
+        assert!((high - a.max(b)).abs() < 0.1 && (low - a.min(b)).abs() < 0.1, "harmonic {n}: band {low}..{high}");
+    }
+    // The current limit is reported as a secondary worst case, well above the declared point.
+    let Some(Value::Object(second)) = finding.measures.get("secondary_scenario") else { panic!("secondary_scenario") };
+    assert_eq!(second.get("scenario").and_then(Value::as_str), Some("current_limit"));
+    assert_eq!(number(second.get("current_limit_a").unwrap()), 4.5);
+    let Some(Value::Object(second_fundamental)) = second.get("fundamental") else { panic!("fundamental") };
+    let headline_fundamental = band_of(rows[0]).1;
+    assert!(
+        number(second_fundamental.get("high_dbuv").unwrap()) > headline_fundamental + 3.0,
+        "4.5 A flat top against a 2 A mean"
+    );
+    let message = &finding.finding.message;
+    assert!(message.contains("scenario declared_operating_point (load 2 A, ripple"), "{message}");
+    assert!(message.contains("secondary worst case, current limit 4.5 A"), "{message}");
+    // Without a declared point the same board reports the current limit as its only scenario.
+    let plain_report = run("load-none", &[]);
+    let plain = conducted(&plain_report);
+    assert_eq!(text(plain, "scenario"), "current_limit");
+    assert_eq!(plain.measures.get("secondary_scenario"), Some(&Value::Null));
+    let none = operating_point(plain);
+    assert_eq!(none.get("status").and_then(Value::as_str), Some("not_declared"));
+    assert!(none.get("how_to_declare").and_then(Value::as_str).unwrap().contains("load_current"));
+    assert!((band_of(rows_of(plain)[0]).1 - number(second_fundamental.get("high_dbuv").unwrap())).abs() < 1e-6);
+    // The radiated estimate and the field map stay at the current limit: a declared load changes nothing there.
+    let radiated = |report: &EmiCheckReport| find(report, "EMI-HOT-LOOP").remove(0).estimate.as_ref().unwrap().value;
+    assert_eq!(radiated(&report), radiated(&run("load-none-radiated", &[])));
+}
+
+#[test]
+fn the_ripple_follows_the_power_inductor_and_falls_back_to_a_stated_ratio() {
+    // Twice the inductance, half the ripple.
+    let low = with_load("ripple-low", "2A", Some("9.4uH"));
+    let finding = conducted(&low);
+    let point = operating_point(finding);
+    let ripple = 7.0 * (5.0 / 12.0) / (9.4e-6 * 500e3);
+    assert!((number(point.get("ripple_peak_to_peak_a").unwrap()) - ripple).abs() < 1e-5);
+    let undated = hand_for(&low);
+    let derated_hand = derated(&undated, 0.5);
+    for n in 1..=3u32 {
+        let i_n = ramp_harmonic(n, 2.0 - ripple / 2.0, 2.0 + ripple / 2.0, 5.0 / 12.0, 2e-6);
+        let total = number(rows_of(finding)[n as usize - 1].get("total_dbuv").unwrap());
+        assert!((total - hand_level(&derated_hand, n, i_n)).abs() < 0.1, "harmonic {n}");
+    }
+    // The power inductor's value is not a quantity: the ripple is the rule-of-thumb ratio band, tagged and said so.
+    let unresolved = with_load("ripple-rule", "2A", Some("\"4.7uH\""));
+    let finding = conducted(&unresolved);
+    let point = operating_point(finding);
+    assert_eq!(point.get("ripple_basis").and_then(Value::as_str), Some("rule_of_thumb_ratio"));
+    assert!((number(point.get("ripple_peak_to_peak_a").unwrap()) - 0.6).abs() < 1e-9, "0.3 x 2 A");
+    let Some(Value::Array(band)) = point.get("ripple_band_a") else { panic!("band") };
+    assert!((number(&band[0]) - 0.4).abs() < 1e-9 && (number(&band[1]) - 0.8).abs() < 1e-9, "{band:?}");
+    assert!(finding.tags.contains(&"rule_of_thumb_ripple".to_owned()), "{:?}", finding.tags);
+    assert!(finding.finding.message.contains("inductor ripple ratio"), "{}", finding.finding.message);
+    assert!(
+        text_lines(finding).iter().any(|l| l.contains("power inductor's value was not found") && l.contains("declare")),
+        "{:?}",
+        text_lines(finding)
+    );
+}
+
+#[test]
+fn the_ccm_boundary_decides_between_the_declared_point_and_the_current_limit() {
+    // 12 V to 5 V at 500 kHz, 2 A: dI / 2 = 2 A at L = 7 (5/12) / (2 x 2 A x 500 kHz) = 1.4583 uH.
+    let above = with_load("ccm-above", "2A", Some("1.46uH"));
+    let below = with_load("ccm-below", "2A", Some("1.45uH"));
+    let (above, below) = (conducted(&above), conducted(&below));
+    assert_eq!(text(above, "scenario"), "declared_operating_point");
+    assert_eq!(operating_point(above).get("status").and_then(Value::as_str), Some("declared_ccm"));
+    assert!(number(operating_point(above).get("valley_a").unwrap()) > 0.0);
+    // Just below: not continuous conduction, and the model says so instead of pretending.
+    assert_eq!(text(below, "scenario"), "current_limit");
+    let point = operating_point(below);
+    assert_eq!(point.get("status").and_then(Value::as_str), Some("outside_model"));
+    assert_eq!(point.get("continuous_conduction"), Some(&Value::Bool(false)));
+    assert!(number(point.get("valley_a").unwrap()) < 0.0);
+    assert!(point.get("reason").and_then(Value::as_str).unwrap().contains("discontinuous conduction"));
+    assert!(below.tags.contains(&"operating_point_outside_model".to_owned()), "{:?}", below.tags);
+    assert!(
+        below.tags.contains(&"scenario_current_limit".to_owned())
+            && below.tags.contains(&"worst_case_current".to_owned())
+    );
+    assert!(!below.tags.contains(&"declared_operating_point".to_owned()));
+    assert_eq!(below.measures.get("secondary_scenario"), Some(&Value::Null), "the current limit is the only scenario");
+    let message = &below.finding.message;
+    assert!(message.contains("NOT a prediction") && message.contains("discontinuous conduction"), "{message}");
+    assert!(text_lines(below).iter().any(|l| l.contains("OUTSIDE the supported model")));
+    // The current-limit levels are exactly those of a board that declares no operating point.
+    let plain = harmonic_rows(conducted(&run("ccm-plain", &[])));
+    for (a, b) in harmonic_rows(below).iter().zip(&plain) {
+        assert!((a.1 - b.1).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn a_declared_point_needs_no_current_limit_but_an_unsupported_point_does() {
+    let no_limit = [("buck.copper", " current_peak = 4.5A;", "")];
+    let board = [(U1_DECLARATION, "component U1: p.Buck { footprint = \"QFN-5\"; load_current = 2A; }")];
+    let report = run_full("emi_buck", "no-limit-declared", &board, &no_limit, |_| {});
+    let finding = conducted(&report);
+    assert_eq!(text(finding, "scenario"), "declared_operating_point");
+    assert_eq!(finding.measures.get("secondary_scenario"), Some(&Value::Null));
+    // DCM and no limit: nothing is left to report.
+    let both = [
+        (U1_DECLARATION, "component U1: p.Buck { footprint = \"QFN-5\"; load_current = 2A; }"),
+        (L1_DECLARATION, "component L1: p.Inductor { value = 1uH;"),
+    ];
+    let report = run_full("emi_buck", "no-limit-dcm", &both, &no_limit, |_| {});
+    assert!(find(&report, "EMI-CONDUCTED").is_empty());
+    let entry = coverage(&report, "EMI-CONDUCTED:U1");
+    assert_eq!(entry.status, CoverageStatus::NotApplicable);
+    assert!(entry.detail.contains("outside the supported model"), "{}", entry.detail);
+}
+
+#[test]
+fn a_declared_current_transition_drives_the_current_source_not_the_voltage_edge() {
+    let base = run("edge-base", &[]);
+    let declared = run_full(
+        "emi_buck",
+        "edge-current",
+        &[],
+        &[("buck.copper", "rise_time = 5ns;", "rise_time = 5ns; current_rise_time = 8ns; current_fall_time = 12ns;")],
+        |_| {},
+    );
+    let finding = conducted(&declared);
+    assert_eq!(text(finding, "current_edge_source"), "declared");
+    assert!((measure(finding, "current_rise_time_10_90_ns") - 8.0).abs() < 1e-9);
+    assert!((measure(finding, "current_fall_time_10_90_ns") - 12.0).abs() < 1e-9);
+    assert!((measure(finding, "voltage_rise_time_10_90_ns") - 5.0).abs() < 1e-9, "the voltage edge stays declared");
+    assert!(!finding.tags.contains(&"current_edge_from_voltage_edge".to_owned()), "{:?}", finding.tags);
+    assert!(conducted(&base).tags.contains(&"current_edge_from_voltage_edge".to_owned()));
+    // The source spectrum is the unequal-edge trapezoid (ramps 10 ns and 15 ns, 0-100 %), through the hand network.
+    let undated = hand_for(&declared);
+    let derated_hand = derated(&undated, 0.5);
+    let rows = harmonic_rows(finding);
+    for n in [1u32, 10, 30, 59] {
+        let i_n = copper_emi::estimate::trapezoid_harmonic(4.5, 5.0 / 12.0, 2e-6, 10e-9, 15e-9, n);
+        let expected = hand_level(&derated_hand, n, i_n);
+        assert!(
+            (rows[n as usize - 1].1 - expected).abs() < 0.5,
+            "harmonic {n}: {} against {expected}",
+            rows[n as usize - 1].1
+        );
+    }
+    // Slower than the declared voltage edge: the 29.5 MHz level is lower than with the voltage edge standing in
+    // (harmonic 60 is a null of the 5/12 duty cycle for equal edges, so harmonic 59 is compared).
+    let top = |report: &EmiCheckReport| harmonic_rows(conducted(report))[58].1;
+    assert!(top(&declared) < top(&base) - 1.0, "{} against {}", top(&declared), top(&base));
+    // The hot-loop radiated estimate is driven by the loop current: it follows the current edge ...
+    let radiated = |report: &EmiCheckReport| find(report, "EMI-HOT-LOOP").remove(0).estimate.as_ref().unwrap().value;
+    assert!(radiated(&declared) < radiated(&base) - 0.5, "{} against {}", radiated(&declared), radiated(&base));
+    let hot = find(&declared, "EMI-HOT-LOOP").remove(0);
+    assert!(
+        text_lines(hot).iter().any(|l| l.contains("switch pin current_rise_time/current_fall_time")),
+        "{:?}",
+        text_lines(hot)
+    );
+    assert!(find(&base, "EMI-HOT-LOOP").remove(0).tags.contains(&"current_edge_from_voltage_edge".to_owned()));
+    // ... and the switch-node common-mode score and the ringing keep the voltage edge.
+    let score = |report: &EmiCheckReport| find(report, "EMI-SWITCH-NODE").remove(0).estimate.as_ref().unwrap().value;
+    assert_eq!(score(&declared), score(&base));
+    assert!(!find(&base, "EMI-SWITCH-NODE").remove(0).tags.contains(&"current_edge_from_voltage_edge".to_owned()));
+    // One declared time stands for both.
+    let rise_only = run_full(
+        "emi_buck",
+        "edge-current-one",
+        &[],
+        &[("buck.copper", "rise_time = 5ns;", "rise_time = 5ns; current_rise_time = 8ns;")],
+        |_| {},
+    );
+    assert!((measure(conducted(&rise_only), "current_fall_time_10_90_ns") - 8.0).abs() < 1e-9);
+}
+
+#[test]
+fn the_hot_loop_inductance_no_longer_raises_the_lisn_level() {
+    let near = run("loop-near", &[]);
+    let far = run(
+        "loop-far",
+        &[(
+            "fixed_placement(CIN) { x = 24.5mm; y = 29mm; rotation = 180; }",
+            "fixed_placement(CIN) { x = 19.5mm; y = 29mm; rotation = 180; }",
+        )],
+    );
+    let (hot_near, hot_far) = (find(&near, "EMI-HOT-LOOP").remove(0), find(&far, "EMI-HOT-LOOP").remove(0));
+    let (l_near, l_far) = (measure(hot_near, "loop_inductance_nh"), measure(hot_far, "loop_inductance_nh"));
+    assert!(l_far > l_near + 1.0, "{l_far} nH against {l_near} nH");
+    assert!((measure(conducted(&far), "hot_loop_inductance_nh") - l_far).abs() < 1e-3);
+    // Every harmonic is unchanged (the inductance is in the converter's branch).
+    for (a, b) in harmonic_rows(conducted(&near)).iter().zip(harmonic_rows(conducted(&far))) {
+        assert!((a.1 - b.1).abs() < 1e-6, "{} Hz: {} against {}", a.0, a.1, b.1);
+    }
+    // The old placement (the loop inductance in series with the capacitor, the feed at the switch end) by hand:
+    // the high harmonics rose with it.
+    let undated = hand_for(&near);
+    let old = |l_nh: f64, n: u32| {
+        let mut hand = undated;
+        hand.cap.esl += l_nh * 1e-9;
+        hand_dbuv(&derated(&hand, 0.5), n)
+    };
+    let (rise_at_30, rise_at_1) = (old(l_far, 59) - old(l_near, 59), old(l_far, 1) - old(l_near, 1));
+    println!(
+        "old placement, L {l_near:.2} -> {l_far:.2} nH: harmonic 59 {:+.2} dB, harmonic 1 {:+.2} dB; new placement: 0.00 dB",
+        rise_at_30, rise_at_1
+    );
+    assert!(rise_at_30 > 1.0, "the series placement raised 29.5 MHz by {rise_at_30} dB");
+}
+
+#[test]
+fn the_filter_example_with_its_operating_point_matches_the_hand_calculation() {
+    // `examples/emi_buck_filter` declares load_current = 2A on U1: 4.7 uH LF, DCR 50 mohm, 40 MHz self-resonance, CUP 10 uF
+    // behind its connection inductance, CIN 10 uF, all derated by 50 % in the nominal case at 12 V.
+    let report = run_board("emi_buck_filter", "filter-point", &[], |_| {});
+    let finding = conducted(&report);
+    assert_eq!(text(finding, "scenario"), "declared_operating_point");
+    assert!(finding.tags.contains(&"input_filter_modelled".to_owned()));
+    let ripple = 7.0 * (5.0 / 12.0) / (4.7e-6 * 500e3);
+    let cup = branch_of(finding, "CUP");
+    let cup_connection = number(cup.get("connection_inductance_nh").unwrap()) * 1e-9;
+    let mut hand = hand_for(&report);
+    let cp = 1.0 / ((2.0 * std::f64::consts::PI * 40e6).powi(2) * 4.7e-6);
+    hand.filter = Some(HandFilter {
+        l: 4.7e-6,
+        dcr: 0.05,
+        cp,
+        cap: HandCap { c: 10e-6, esr: 5e-3, esl: 0.6e-9 + cup_connection },
+    });
+    let hand = derated(&hand, 0.5);
+    let rows = rows_of(finding);
+    for n in [1u32, 2, 3, 4, 5] {
+        let i_n = ramp_harmonic(n, 2.0 - ripple / 2.0, 2.0 + ripple / 2.0, 5.0 / 12.0, 2e-6);
+        let expected = hand_level(&hand, n, i_n);
+        let total = number(rows[n as usize - 1].get("total_dbuv").unwrap());
+        assert!((total - expected).abs() < 0.15, "harmonic {n}: model {total}, hand {expected}");
+    }
+    // The current limit is a secondary worst case, several decibels above the declared point at the fundamental.
+    let Some(Value::Object(second)) = finding.measures.get("secondary_scenario") else { panic!("secondary") };
+    let Some(Value::Object(f1)) = second.get("fundamental") else { panic!("fundamental") };
+    assert!(number(f1.get("high_dbuv").unwrap()) > band_of(rows[0]).1 + 3.0);
 }

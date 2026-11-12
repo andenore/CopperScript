@@ -239,6 +239,9 @@ pub struct EmiProfile {
     /// Switch-node dv/dt (datasheet or measured); classifies the device and gives the edge when no time is declared.
     pub slew_rate: Option<Quantity>,
     pub current_peak: Option<Quantity>,
+    /// 10-90 % time of the current commutation of the switch (di/dt), distinct from the voltage edge.
+    pub current_rise_time: Option<Quantity>,
+    pub current_fall_time: Option<Quantity>,
 }
 
 impl EmiProfile {
@@ -248,6 +251,8 @@ impl EmiProfile {
             && self.fall_time.is_none()
             && self.slew_rate.is_none()
             && self.current_peak.is_none()
+            && self.current_rise_time.is_none()
+            && self.current_fall_time.is_none()
     }
 
     /// The fall time, which defaults to the rise time.

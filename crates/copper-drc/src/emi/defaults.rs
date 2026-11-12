@@ -2,7 +2,7 @@
 //!
 //! A default fills a gap the language leaves open (an edge time the datasheet
 //! was not transcribed for, a device capacitance, a capacitor's DC-bias loss,
-//! the operating current). Declared values always win. A result that rests on a
+//! the inductor ripple when the inductance cannot be resolved). Declared values always win. A result that rests on a
 //! default is reported as a BAND (a fast and a slow, or a low and a high bound)
 //! next to the nominal value, carries a `rule_of_thumb_*` tag, and the value
 //! and the rule are printed like every other input.
@@ -25,8 +25,10 @@ pub const TAG_EDGE_FROM_SLEW: &str = "edge_from_slew_rate";
 pub const TAG_CAPACITANCE: &str = "rule_of_thumb_capacitance";
 /// A ceramic capacitor's DC-bias loss is a default band.
 pub const TAG_DC_BIAS: &str = "rule_of_thumb_dc_bias";
-/// The operating current is a default band below the declared current limit.
-pub const TAG_CURRENT: &str = "rule_of_thumb_current";
+/// The inductor current ripple ratio is a default band (the power inductor's value was not found).
+pub const TAG_RIPPLE: &str = "rule_of_thumb_ripple";
+/// No `current_rise_time`/`current_fall_time` is declared, so the voltage edge stands in for the current commutation.
+pub const TAG_CURRENT_EDGE_FROM_VOLTAGE: &str = "current_edge_from_voltage_edge";
 /// Capacitor ESR and ESL are package defaults.
 pub const TAG_PARASITICS: &str = "default_capacitor_parasitics";
 /// The `basis` of an estimate that carries a band.
@@ -35,13 +37,6 @@ pub const BASIS: &str = "rule_of_thumb";
 /// Whether a tag marks a result that rests on a rule of thumb.
 pub fn is_rule_tag(tag: &str) -> bool {
     tag.starts_with("rule_of_thumb_")
-}
-
-/// The wording for a default the language has no attribute to replace (the load current).
-pub fn rule_text_unreplaceable(rule: &str) -> String {
-    format!(
-        "(rule of thumb: {rule}; the language has no attribute for the load current, so this band cannot be replaced)"
-    )
 }
 
 /// The wording of an `input:` line for a defaulted input.
@@ -185,7 +180,11 @@ pub fn nominal_is_derated(hot_supply_v: f64) -> bool {
     hot_supply_v >= DC_BIAS_FROM
 }
 
-/// The rule behind [`dc_bias_loss`].
+/// The attribute that replaces the DC-bias rule: the capacitance at the bias the board applies, on the component.
+pub const DC_BIAS_ATTRIBUTE: &str = "capacitance_at_bias on the component";
+
+/// The rule behind [`dc_bias_loss`]. It applies to a capacitor in a ceramic SMD package whose component declares no
+/// `capacitance_at_bias`, whatever its declared ESR and ESL.
 pub fn dc_bias_rule(package: &str) -> String {
     format!(
         "ceramic DC-bias loss by package ({package}: {:.0} %; 0402, 0603, 0805 50 %, 1206 35 %, 1210 and larger 25 %); the band runs from no loss to this loss, \
@@ -195,25 +194,21 @@ pub fn dc_bias_rule(package: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Operating current
+// 4. Inductor ripple (only when the power inductor's value cannot be resolved)
 // ---------------------------------------------------------------------------
 
-/// Typical operating current as a fraction of the `current_peak` limit. Rule: the limit is
-/// about 1.5 x the rated output current and typical operation about 0.6 x the rating, so
-/// 0.6 / 1.5 = 0.4. Rule of thumb.
-pub const OPERATING_CURRENT_FRACTION: f64 = 0.4;
+/// Peak-to-peak inductor ripple as a fraction of the load current, nominal / low / high.
+/// Rule: inductors are commonly chosen for a ripple of 20 to 40 % of the output current,
+/// 30 % being the usual starting point. Used only when the power inductor's value cannot be
+/// read from the board; with the inductance, the ripple is computed. Rule of thumb.
+pub const RIPPLE_RATIO: (f64, f64, f64) = (0.3, 0.2, 0.4);
 
-/// The level offset in dB of the operating current against the limit (negative), about -8 dB.
-pub fn operating_current_offset_db() -> f64 {
-    20.0 * OPERATING_CURRENT_FRACTION.log10()
-}
-
-/// The rule behind [`OPERATING_CURRENT_FRACTION`].
-pub fn current_rule() -> String {
+/// The rule behind [`RIPPLE_RATIO`].
+pub fn ripple_rule() -> String {
     format!(
-        "current_peak is the current limit, typical operation is {OPERATING_CURRENT_FRACTION} x the limit (limit about 1.5 x rated output, operation about 0.6 x rated), \
-         {:.1} dB",
-        operating_current_offset_db()
+        "peak-to-peak inductor ripple {} x the load current (band {} to {}), the usual 20 to 40 % design range, \
+         used because the power inductor's value was not found",
+        RIPPLE_RATIO.0, RIPPLE_RATIO.1, RIPPLE_RATIO.2
     )
 }
 
@@ -283,8 +278,9 @@ mod tests {
     }
 
     #[test]
-    fn the_operating_current_is_eight_decibels_below_the_limit() {
-        assert!((operating_current_offset_db() + 7.9588).abs() < 1e-3);
+    fn the_ripple_band_brackets_the_nominal_and_the_rule_says_where_it_comes_from() {
+        assert!(RIPPLE_RATIO.1 < RIPPLE_RATIO.0 && RIPPLE_RATIO.0 < RIPPLE_RATIO.2);
+        assert!(ripple_rule().contains("power inductor"));
     }
 
     #[test]
@@ -293,8 +289,12 @@ mod tests {
             is_rule_tag(TAG_EDGE)
                 && is_rule_tag(TAG_CAPACITANCE)
                 && is_rule_tag(TAG_DC_BIAS)
-                && is_rule_tag(TAG_CURRENT)
+                && is_rule_tag(TAG_RIPPLE)
         );
-        assert!(!is_rule_tag(TAG_EDGE_FROM_SLEW) && !is_rule_tag(TAG_PARASITICS));
+        assert!(
+            !is_rule_tag(TAG_EDGE_FROM_SLEW)
+                && !is_rule_tag(TAG_PARASITICS)
+                && !is_rule_tag(TAG_CURRENT_EDGE_FROM_VOLTAGE)
+        );
     }
 }

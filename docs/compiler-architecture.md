@@ -95,7 +95,8 @@ checks from the remaining production-layout work.
 - EMI screening warnings on declared switching cells (`EMI_HOT_LOOP_NO_CAPACITOR`,
   `EMI_HOT_CAPACITOR_UNDECLARED`, `EMI_SWITCH_NODE_NO_MAGNETIC`,
   `EMI_BOOTSTRAP_NO_CAPACITOR`, `EMI_SENSITIVE_ON_SWITCH_NODE`,
-  `EMI_SWITCH_NODE_EXTERNAL`, `EMI_SWITCHING_FREQUENCY_UNKNOWN`); unannotated
+  `EMI_SWITCH_NODE_EXTERNAL`, `EMI_SWITCHING_FREQUENCY_UNKNOWN`,
+  `EMI_OPERATING_POINT_NO_CELL`); unannotated
   designs report none ([EMI analysis](emi-noise-analysis.md))
 
 `power-check` separately evaluates named rail states and warns when a driven net

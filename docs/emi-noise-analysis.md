@@ -32,6 +32,8 @@ Accepted on `pin` in a `part` and on `pad` in a `device`:
 | `fall_time` | time | 10-90 % fall time; defaults to `rise_time` when only one is given |
 | `slew_rate` | slew rate | Switch-node dv/dt, datasheet or measured (`50V/ns`); gives the edge time and classifies the device |
 | `current_peak` | current | Peak pulsed current through the pin (switch current limit or rated peak) |
+| `current_rise_time` | time | 10-90 % time in which the switch current commutates (turn-on, set by loop inductance and drive; not the voltage edge) |
+| `current_fall_time` | time | 10-90 % current commutation time at turn-off; defaults to `current_rise_time` when only one is given |
 
 `emi_role` values:
 
@@ -61,9 +63,9 @@ part TPS54360DDAR {
 ```
 
 Compile-time validation (new code `CMP130`): unknown `emi_role`; `rise_time`,
-`fall_time` not a positive time; `slew_rate` not a positive slew rate;
+`fall_time`, `current_rise_time`, `current_fall_time` not a positive time; `slew_rate` not a positive slew rate;
 `current_peak` not a positive current; `rise_time`/`fall_time`/`slew_rate`/
-`current_peak` given without `emi_role` being one of the aggressor roles is
+`current_peak`/`current_rise_time`/`current_fall_time` given without `emi_role` being one of the aggressor roles is
 allowed (a clock output may declare an edge rate).
 
 `slew_rate` is a quantity written with a slash unit: `V/ns`, `V/us` or `kV/us`
@@ -81,7 +83,7 @@ classifies the device. The compiler cannot know the swing, so it does nothing
 when they disagree; `emi-check` knows the hot-supply voltage and notes a
 disagreement of more than a factor 3 in the `input:` lines.
 
-IR: `profile.emi = { "role", "rise_time", "fall_time", "slew_rate", "current_peak" }`, each
+IR: `profile.emi = { "role", "rise_time", "fall_time", "slew_rate", "current_peak", "current_rise_time", "current_fall_time" }`, each
 key present only when declared; the whole object absent when nothing is. The
 `fall_time` default is applied by readers (`EmiProfile::fall`), not stored.
 The `emi_role` value is a bare name or a string; time attributes accept `s`,
@@ -127,6 +129,32 @@ component U7: TPS54360DDAR { switching_frequency = 500kHz; }
 (or equal its fixed value) when there is one (`CMP130` otherwise) and
 overrides the part's value. Serialized as
 `component.properties.switching_frequency`, as quantity text (`"500 kHz"`).
+
+A board also fixes how a converter is used and what a capacitor does at the
+bias the board applies:
+
+```copper
+component U7: TPS54360DDAR { switching_frequency = 500kHz; load_current = 2A; }
+component CIN: Cap { value = 10uF; capacitance_at_bias = 4.2uF; role = decoupling; decouples = U7.VIN; }
+```
+
+* `load_current`: the operating point of a switching converter, the mean inductor
+  current of a buck, a positive current (`A`, `mA`). One operating point per cell
+  (a second point would be a second declaration of a different kind; the supported
+  model has none). The input and output voltages are the declared `supply` voltages
+  of the hot-supply net and of the inductor's output net, so no voltage attributes
+  exist to disagree with them. `CMP133` when it is not a positive current, when the
+  part's topology (declared or implied by its category) is not `buck`, or when it
+  exceeds the `current_peak` of the part's switch pin. A component that declares it
+  without being a switching cell gets the warning `EMI_OPERATING_POINT_NO_CELL`.
+  Serialized as `component.properties.load_current` (`"2 A"`); the cell carries
+  `load_current` and `copper query BOARD emi` prints it.
+* `capacitance_at_bias`: the effective capacitance of a capacitor at the DC bias of
+  its rail (the datasheet curve at the board's voltage), a positive capacitance at
+  most the component's value (equal to it for a C0G part). It replaces the
+  DC-bias rule of thumb of section 10.1 for that capacitor. `CMP133` when it is not a
+  positive capacitance, when the component's value is not a capacitance or is above
+  the value. Serialized as `component.properties.capacitance_at_bias`.
 
 Hot-loop capacitors need no new syntax: the existing
 `role = decoupling; decouples = U7.VIN;` on a capacitor whose target pin has
@@ -198,8 +226,9 @@ findings and `EMI-ACCEPT-UNUSED` are implemented with phase 1.
 
 The Rust types (`copper_lang::emi::{EmiModel, SwitchingCell, ...}`) carry the
 component reference and `component.pin` endpoints of every role pin, magnetic,
-diode and capacitor, plus the first declared `rise_time`, `fall_time`, `slew_rate` and
-`current_peak` of the switch pins, so a layout checker needs no second lookup.
+diode and capacitor, plus the first declared `rise_time`, `fall_time`, `slew_rate`,
+`current_peak`, `current_rise_time` and `current_fall_time` of the switch pins and the component's `load_current`, so a
+layout checker needs no second lookup.
 `EmiModel::to_json` prints the cells and nets as
 `copperscript.emi-model/v0.1` (keys sorted, absent facts `null`).
 
@@ -256,6 +285,7 @@ warnings:
 | `EMI_SENSITIVE_ON_SWITCH_NODE` | a `feedback` or `sense` pin sits directly on a `switch_node` net |
 | `EMI_SWITCH_NODE_EXTERNAL` | a `switch_node` net is also `external` (leaves the board unfiltered) |
 | `EMI_SWITCHING_FREQUENCY_UNKNOWN` | a declared cell has no fixed frequency on part or component; estimates will use the range or be skipped |
+| `EMI_OPERATING_POINT_NO_CELL` | a component declares `load_current` but is not a switching cell (no `switch` pin, and the structural fallback found none), so the operating point is not used |
 
 All are warnings with the component reference, net or `component.pin` as the
 subject. `EMI_BOOTSTRAP_NO_CAPACITOR` also fires for an unconnected bootstrap
@@ -322,7 +352,7 @@ cluster: its geometry is fixed, the cluster's position is not).
 | `EMI-HOT-LOOP` | implemented; placement estimate, traced where copper joins the pads | Per cell (per `input loop` and `output loop` for a four-switch buck-boost), the loop capacitor -> hot-supply pad -> switch pad -> catch diode (switch side -> rail side) or, without a diode, hot-return pad -> capacitor return. The legs between pads of one net follow the shortest copper path when copper exists, else the straight pad-to-pad segment. Enclosed area (shoelace), path length, partial inductance over the nearest inner ground plane (free space without one), differential-mode field, ringing, ring energy; traced length, vias, layer changes, narrowest width | differential-mode field in dBuV/m, then loop area |
 | `EMI-SWITCH-NODE` | implemented, pads only unless copper exists | Per switch net: copper area of the pads (and of tracks, polygons, zones and macro copper when present), island capacitance to the nearest ground plane, distance to the board edge and to each cable connector, and the voltage-driven common-mode coupling-risk score (`cm_coupling_score`, a relative ranking score in dB, not a field; no margin) | common-mode coupling-risk score, then copper area; after the absolute estimates |
 | `EMI-PROXIMITY` | implemented | Inductor and switch-node pads against pads of `sensitive` nets and of cable connectors, closer than a threshold in units of the inductor size | threshold / distance |
-| `EMI-CONDUCTED` | implemented for `buck` cells (section 10) | Per buck cell: the conducted level at the input, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential mode only. Worst harmonic (frequency, level, quasi-peak and average margin with a `cispr32_class_a`/`cispr32_class_b` `emission` constraint, **only where the isolated-line detector assumption holds**: `measures.detector_applicability`), the fundamental, harmonics above each line, and every harmonic in `measures.harmonics`; where it does not hold the levels are line amplitudes with no limit or margin | margin when margins exist, else level; after the radiated findings (a different quantity, dBuV against dBuV/m) |
+| `EMI-CONDUCTED` | implemented for `buck` cells (section 10) | Per buck cell: the conducted level at the input, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential mode only, of a fixed-frequency buck in continuous conduction, for the scenario `declared_operating_point` (the component declares `load_current`; the current limit is a secondary worst case) or `current_limit` (a worst case, not a prediction), with every input capacitor as its own branch, the capacitor with the largest share of the ripple current and any anti-resonance of the input network. Worst harmonic (frequency, level, quasi-peak and average margin with a `cispr32_class_a`/`cispr32_class_b` `emission` constraint, **only where the isolated-line detector assumption holds**: `measures.detector_applicability`), the fundamental, harmonics above each line, and every harmonic in `measures.harmonics`; where it does not hold the levels are line amplitudes with no limit or margin | margin when margins exist, else level; after the radiated findings (a different quantity, dBuV against dBuV/m) |
 | `EMI-ACCEPT-UNUSED` | implemented | An `emi_accept` that matched no finding | listed last |
 | `EMI-RETURN-PATH` | coverage `unsupported` | needs filled copper and traced routed copper | - |
 | `EMI-DECOUPLING-PATH` | coverage `unsupported` | needs routed copper | - |
@@ -410,7 +440,10 @@ each with the missing input when skipped.
   path length. The pad chosen at each loop position is the one with the
   shortest pad-centre cycle, not re-optimised for the traced path.
 - **Radiated estimate.** Frequency: the fixed value, else the upper bound of
-  a declared range; edge: the faster of `rise_time`/`fall_time`, else the edge
+  a declared range; edge: the current commutation time (the loop current drives
+  the field), the faster of `current_rise_time`/`current_fall_time`, else the voltage
+  edge standing in for it (tag `current_edge_from_voltage_edge`): the faster of
+  `rise_time`/`fall_time`, else the edge
   from a declared `slew_rate` (`0.8 V_swing / slew`, exact), else the default
   slew band of section 10.1 (nominal, fast and slow, on the hot-supply voltage
   as the swing); amplitude:
@@ -589,8 +622,8 @@ harmonic (legend `band: rule-of-thumb inputs`), the quasi-peak and average
 lines as polylines through the per-harmonic `limit_qp`/`limit_avg` when an
 `emission` standard with a conducted table is declared **and the finding's levels are detector
 readings** (`measures.detector_applicability = isolated_lines`), harmonics above the
-average line in the warning colour, and the finding's tags (`worst_case_current`,
-`rule_of_thumb_edge`, `differential_mode_only`, ...) under the title. A panel whose detector
+average line in the warning colour, and the finding's tags (`scenario_declared_operating_point` or `scenario_current_limit` with
+`worst_case_current`, `rule_of_thumb_edge`, `differential_mode_only`, ...) under the title. A panel whose detector
 assumption fails (harmonic spacing inside the IF bandwidth, or a declared frequency range) is headed
 "conducted line amplitudes, NOT a detector reading", draws no limit line, no warning colour and no
 margin, and prints the reason; the panels of a frequency range are one per fixed-frequency
@@ -622,11 +655,10 @@ The field is computed by `copper_emi::field` from data the finding carries:
   (z of the nearest ground plane layer, null without one) and
   `measures.field_victims` (`[{kind, name, pads: ["R1.2", ...]}]`, names only:
   the map looks the pads up on the board it draws).
-- The amplitude is the cell's `current_peak` (the same worst case as
-  `EMI-CONDUCTED`, tag `worst_case_current`; the map stays at the limit and its
-  note states the typical operating current of 0.4 x the limit, a rule of thumb
-  that is not applied); without one the map is normalised to 1 A and says "per
-  ampere".
+- The amplitude is the cell's `current_peak` (the switch current limit, the same
+  worst case as the `current_limit` scenario of `EMI-CONDUCTED`, tag `worst_case_current`; the
+  map stays at the limit whatever `load_current` is declared, and its note says so); without
+  one the map is normalised to 1 A and says "per ampere".
 - Biot-Savart for each straight filament, `H = I/(4 pi d) (sin a2 - sin a1)`
   around the segment axis (zero on the axis, linear inside a 50 um core), summed
   over the loop; an ideal infinite ground plane at the reference plane's z by
@@ -667,21 +699,112 @@ Status: the linear-network prediction of `copper_emi::conducted` is wired into
 `crates/copper-drc/src/emi/conducted.rs`), one per `buck` cell; other
 topologies and cells whose inputs are missing get a `not_applicable` coverage
 entry with the reason (a four-switch buck-boost needs the operating mode, which
-the board does not declare). Inputs, each recorded with its source in
-`measures.inputs` and in the coverage detail:
+the board does not declare; boost, buck-boost, inverting and flyback cells are
+not predicted).
+
+**The one supported operating mode** is a fixed-frequency buck (asynchronous or
+synchronous) in continuous conduction. The converter is an ideal harmonic
+current source drawing the input current of the high-side switch; the network
+between it and the LISN is solved as one linear circuit
+(`copper_emi::circuit`, modified nodal analysis, one solve per harmonic):
+
+```text
+  converter        L_loop      K (hot capacitor pads, feed)                LISN
+  current   o-----[=====]-----+----------+------------+---[ L_f ]---+-----o  +
+  source                      |          |            |            |
+  (I_dm)                    === C_hot   [L_2]       [L_s1]       === C_s2 ...
+                             |           |            |            |
+                             |         === C_2     === C_s1        |
+                             |           |            |            |
+  return    o----------------+-----------+------------+------------+-----o  -
+```
+
+* Every capacitor is its own series R-L-C branch (`C` after its own DC-bias
+  derating, `ESR`, `ESL`) with its own connection inductance `L_i`: the hot
+  capacitor sits on node `K`, the other capacitors of the hot net (and those
+  behind a fuse or other transparent feed) hang on `K` through `L_i`, and the
+  capacitors on the supply side of the filter inductor hang on the supply-side
+  node through their `L_i`. Nothing is lumped, so current sharing and the
+  anti-resonances between unlike capacitors are in the result.
+* The hot loop (capacitor to the switch pins and back, `EMI-HOT-LOOP`, traced or
+  placement estimate) is the inductance `L_loop` between the converter's current
+  source and `K`. It is in the converter's own branch, not in the path from the
+  capacitor to the LISN: an ideal current source is not affected by a series
+  inductance, so the level at the LISN does not depend on `L_loop`. A feed attached
+  at the switch pins instead of the capacitor pads would put `L_loop` in series
+  with the capacitor as seen from the feed; that raises the high harmonics with
+  the loop inductance (and, near the capacitor's series resonance, lowers the
+  fundamental), and is not modelled.
+* The connection inductance of a capacitor other than the hot capacitor is an
+  estimate, tag `estimated_connection_inductance`, stated in
+  `measures.capacitor_branches[].connection_basis`:
+  `2 x d x (L_hotloop / path length of the hot loop)`, with `d` the distance
+  between the nearest pad centres of the capacitor and of its reference (the hot
+  capacitor for a hot-net capacitor, the filter inductor's terminal on the upstream net
+  for a supply-side capacitor). The per-length value is the board's own hot-loop
+  inductance (which includes the plane under it) over its closed path length, so the
+  go-and-return connection of length `d` is `2 d` of it. Mutual coupling between
+  branches is not modelled.
+* The result states which capacitor carries the largest share of the source
+  current at the fundamental and at the worst harmonic
+  (`measures.largest_current_share_fundamental`, `_worst_harmonic`; a share is the
+  peak branch current over the peak source current and can exceed 100 % when
+  branches circulate current) and the anti-resonances of the impedance seen at `K`
+  between 150 kHz and 30 MHz (`measures.anti_resonances`: local maxima of `|Z|`
+  with a prominence of 0.5 dB on both sides, frequency and impedance magnitude,
+  tag `anti_resonance_in_band`).
+
+**Scenarios.** `measures.scenario` names the one that is the headline.
+
+* `declared_operating_point`: the converter's component declares
+  `load_current` (section 4). With `D = Vout / Vin` (the ideal lossless buck),
+  the power inductor `L` found on the switch net and the switching frequency
+  `f`, the inductor current ripple is `dI = (Vin - Vout) D / (L f)` and the input
+  current is zero in the off-time and a ramp from `I_out - dI/2` to
+  `I_out + dI/2` during the on-time (`D T` between the 50 % points of the current
+  edges), with linear current edges of finite 0-100 % time. Its harmonics are
+  exact: the waveform is piecewise linear and each segment's Fourier integral is
+  closed form (`PeriodicSpectrum::piecewise_linear`, `buck_input_current`). If the inductance cannot
+  be resolved (the inductor's component value is not an inductance) the ripple is the
+  rule-of-thumb ratio band of section 10.1, tag `rule_of_thumb_ripple`. The switch pin's `current_peak`, when declared, is
+  reported as the secondary worst case, `measures.secondary_scenario`
+  (`scenario: current_limit`, the same `harmonics`, `worst_harmonic`,
+  `fundamental` keys).
+* Continuous conduction is checked: `I_out >= dI/2` (the valley of the ramp is not
+  negative). Otherwise (`measures.operating_point.status = outside_model`, tag
+  `operating_point_outside_model`; discontinuous conduction, pulse skipping and
+  forced-PWM light-load operation) the model does not apply and says so: the
+  declared point is not evaluated, the detector comparison is not touched, and the
+  current-limit scenario is the only one reported (without a `current_peak` the
+  prediction is skipped, coverage `not_applicable` with the reason).
+* `current_limit`: no operating point is declared (`operating_point.status =
+  not_declared`, which names how to declare one), or it is outside the model. The
+  switch pin's `current_peak`, the current LIMIT, is the amplitude of flat-top
+  pulses of the same duty and edges. This is a worst case that bounds operation, not
+  a prediction of it, and it carries no band for the operating current (how the
+  converter is used is not a parameter of the design, so no rule of thumb stands in
+  for it). Tag `worst_case_current`.
+
+The radiated estimates (`EMI-HOT-LOOP` field and the near-field map) stay at the
+current limit; a declared `load_current` is not applied to them.
+
+Inputs, each recorded with its source in `measures.inputs`, `measures.inputs_text`
+and the coverage detail:
 
 | Input | Source |
 | --- | --- |
 | Vin, Vout, duty | declared `supply` voltage of the hot-supply net and of the magnetic's output net; duty is Vout / Vin |
-| Frequency | the fixed value; for a range the upper bound, tagged `frequency_range_bound` |
-| Edge time | the switch pin `rise_time`/`fall_time` (10-90 %), else the edge of a declared `slew_rate` (`0.8 V_swing / slew`, tag `edge_from_slew_rate`), else the default slew band (section 10.1, tag `rule_of_thumb_edge`); divided by 0.8 for the 0-100 % ramp of the trapezoid. Every harmonic to 30 MHz is reported: with a default edge the level is evaluated at the fast and the slow edge and the band collapses below the edge corner (the former 3.183 MHz restriction and the tag `assumed_edge_time` are gone) |
-| Current | the switch pin `current_peak`, the current LIMIT used as the on-time amplitude (no load current exists in the language): a worst case, tag `worst_case_current`, the headline. The low end of every band is at 0.4 x the limit (about -8 dB, section 10.1, tag `rule_of_thumb_current`) |
-| Hot capacitor | the hot-loop analysis' selected capacitor: value from the component; `esr`, `esl`, `self_resonance` (ESL derived) from its part; otherwise 5 mohm and ESL by package from the footprint name (0402 0.4, 0603 0.5, 0805 0.6, 1206 0.8, 1210 0.9 nH), tag `default_capacitor_parasitics`; an unrecognised package without declared values skips the prediction. A capacitor that takes these package defaults also gets the ceramic DC-bias loss band of section 10.1 (tag `rule_of_thumb_dc_bias`); one whose part declares its parasitics gets no derating. Parallel hot capacitors are not modelled (`parallel_capacitors_not_modelled`, listed in `measures.ignored_parallel_capacitors`) |
-| Hot-loop inductance | `EMI-HOT-LOOP` (traced or placement estimate), in series with the capacitor with the supply feed at the switch end (pessimistic) |
-| Input filter | walks from the hot-supply net toward the supply (at most 4 series parts) through the elements that FEED it. A filter inductor is a `passive.inductor*` or `passive.ferrite*` part, or an uncategorized two-pin part whose value is an inductance; any other two-pin `dc_power_path` part (fuse, jumper, 0-ohm link, load switch) is a transparent DC feed that is followed through with its resistance unknown and taken as 0 (tag `feed_resistance_not_modelled`; "through fuse F_MAIN, resistance not modelled"). Direction comes from the far net: a declared `external` or sourced supply (or, failing that, a connector with no other load) means upstream; other loads there mean the element feeds them downstream and it is ignored (listed in the `:filter` note); if neither decides, the filter is left out and the note says the direction cannot be decided. Exactly one filter inductor may be on the path; its value, `esr` (DCR) and `self_resonance` (winding capacitance) plus the capacitors to the hot return beyond it are lumped in parallel. A path with fuses but no inductor reads "fed through fuse F1 from VIN_IN; no filter inductor on the feed path". Capacitors to the hot return on the hot-supply net count as hot capacitors; resistors above 1 kohm and diodes to the hot return (TVS, enable divider) are ignored with a note; anything else on the path nets (a load, a resistor of 1 kohm or less, a connector or source before the end of the path) leaves the filter out with a `:filter` coverage note. A filter inductor without `self_resonance` is ideal (`filter_inductor_ideal`: attenuation above its real resonance is overstated) |
+| Frequency | the fixed value; for a range the lower and the upper bound as two scenarios, tagged `frequency_range_bound` |
+| Current edge time | the switch pin `current_rise_time`/`current_fall_time` (10-90 %, `measures.current_edge_source = declared`); else the voltage edge stands in for it (`current_edge_source = voltage_edge`, tag `current_edge_from_voltage_edge`, an assumption: the two are different quantities). The voltage edge is the switch pin `rise_time`/`fall_time`, else the edge of a declared `slew_rate` (`0.8 V_swing / slew`, tag `edge_from_slew_rate`), else the default slew band (section 10.1, tag `rule_of_thumb_edge`); when the current edge stands in for the voltage edge it takes its band, no separate number is invented. Divided by 0.8 for the 0-100 % ramp. Every harmonic to 30 MHz is reported: with a default edge the level is evaluated at the fast and the slow edge and the band collapses below the edge corner. The switch-node voltage edge keeps driving the common-mode score and the ringing estimate |
+| Load current, ripple | the component's `load_current`; the inductor value from the magnetic found on the switch net; `measures.operating_point` (status, `load_current_a`, `current_limit_a`, `inductor`, `inductance_uh`, `ripple_peak_to_peak_a`, `ripple_basis`, `valley_a`, `peak_a`, `continuous_conduction`, `reason`, `how_to_declare`) |
+| Current limit | the switch pin `current_peak` (the `current_limit` scenario and the secondary worst case) |
+| Capacitors | each capacitor of the hot net (the hot-loop analysis' selected one is the hot capacitor, the others of `hot_capacitors`) and of the supply side of the filter is a branch: capacitance from the component value, or `capacitance_at_bias` when declared; `esr`, `esl`, `self_resonance` (ESL derived) from its part; otherwise 5 mohm and ESL by package from the footprint name (0402 0.4, 0603 0.5, 0805 0.6, 1206 0.8, 1210 0.9 nH), tag `default_capacitor_parasitics`; an unrecognised package without declared values leaves that capacitor out (hot capacitor: the prediction is skipped), listed in `measures.skipped_capacitors`, tag `capacitor_branch_skipped`. `measures.capacitor_branches[]` states per capacitor `declared` (`esr`, `esl`, `capacitance_at_bias`), `defaulted` (`esr`, `esl`, `dc_bias`), the bases, the values used, the connection inductance and the current shares |
+| DC bias | a ceramic capacitor (a recognised SMD package, not an electrolytic, tantalum, polymer or film category) whose component declares no `capacitance_at_bias` gets the package rule of thumb of section 10.1 (a band, tag `rule_of_thumb_dc_bias`) whatever its ESR and ESL; `capacitance_at_bias` (the datasheet DC-bias curve at the board's voltage, at most the component value; equal to it for a C0G part) replaces the rule and its band (`dc_bias_basis = declared`); any other capacitor has no derating applied, with the reason in `dc_bias_note` |
+| Hot-loop inductance | `EMI-HOT-LOOP` (traced or placement estimate), between the converter's current source and `K` |
+| Input filter | walks from the hot-supply net toward the supply (at most 4 series parts) through the elements that FEED it. A filter inductor is a `passive.inductor*` or `passive.ferrite*` part, or an uncategorized two-pin part whose value is an inductance; any other two-pin `dc_power_path` part (fuse, jumper, 0-ohm link, load switch) is a transparent DC feed that is followed through with its resistance unknown and taken as 0 (tag `feed_resistance_not_modelled`; "through fuse F_MAIN, resistance not modelled"). Direction comes from the far net: a declared `external` or sourced supply (or, failing that, a connector with no other load) means upstream; other loads there mean the element feeds them downstream and it is ignored (listed in the `:filter` note); if neither decides, the filter is left out and the note says the direction cannot be decided. Exactly one filter inductor may be on the path; its value, `esr` (DCR) and `self_resonance` (winding capacitance) give the inductor, each capacitor to the hot return beyond it is a supply-side branch, and each capacitor between the hot net and the inductor (behind a transparent feed) is a branch on `K`. Capacitors to the hot return behind a fuse with no inductor are branches on `K` as well; resistors above 1 kohm and diodes to the hot return (TVS, enable divider) are ignored with a note; anything else on the path nets (a load, a resistor of 1 kohm or less, a connector or source before the end of the path) leaves the filter out with a `:filter` coverage note. A filter inductor without `self_resonance` is ideal (`filter_inductor_ideal`: attenuation above its real resonance is overstated) |
 | Common mode | not modelled (`:common_mode` is `not_applicable`; the `EMI-SWITCH-NODE` common-mode coupling-risk score is a ranking and is not an input here). The island capacitance of `EMI-SWITCH-NODE` is to the board's own ground plane, which is the converter's return: its current closes without entering the LISN, so using it as the capacitance to the LISN reference would overstate common mode by the plane's shielding. The real path is board-to-reference capacitance (heat sink, chassis, cable), geometry outside the board model. Levels are differential mode only and tagged `differential_mode_only`; common mode often dominates above a few MHz |
 
-Upstream filter capacitors that take the package defaults are derated in the same corner as the hot capacitor.
+Upstream filter capacitors that take the package rule of thumb are derated in the same corner as the hot capacitor.
 
 Levels are RMS dBuV of each harmonic at the worst LISN port. **Detector applicability.**
 Peak, quasi-peak and average coincide with that RMS level only for an isolated line, and
@@ -715,14 +838,21 @@ comparison. The CISPR 32 mains-port quasi-peak and average lines are the referen
 Margins are never pass or fail. The conducted estimate lists its named omissions in
 `estimate.not_modelled` (common mode, spread spectrum and jitter, source impedance and control
 interaction, component models beyond ESR/ESL/self-resonance, the supply impedance behind the
-V-network, parallel hot capacitors or other resonances, zone fills, and an assumed stack-up).
+V-network, mutual inductance between the capacitor branches and the hot loop, the load-side network,
+inductor saturation and the switch's dead time, reverse recovery and ringing, operating modes other than a
+fixed-frequency buck in continuous conduction, capacitors that could not be modelled, zone fills, and an
+assumed stack-up).
 `measures.harmonics` lists `harmonic`, `frequency_hz`, `source_current_a`,
-`dm_dbuv`, `cm_dbuv` (null), `total_dbuv` (the nominal case at the current
-limit), `low_dbuv`, `high_dbuv`, `limit_qp`, `limit_avg`, `margin_qp_db`,
+`dm_dbuv`, `cm_dbuv` (null), `total_dbuv` (the nominal case), `low_dbuv`, `high_dbuv`, `limit_qp`, `limit_avg`, `margin_qp_db`,
 `margin_avg_db`, `margin_db` (from the high end); `measures.assumptions`
 holds the `predict` assumptions and the tool's. Tests:
-`crates/copper-drc/tests/emi_check.rs` against a hand calculation on
-`examples/emi_buck` and `examples/emi_buck_filter`.
+`crates/copper-emi/src/conducted.rs` (the circuit solution of a hot capacitor alone and of hot capacitor +
+bulk electrolytic + LC filter + damping branch against an independent ladder reduction to 0.1 dB; the anti-resonance of
+unlike capacitors against `1/(2 pi sqrt(L C))`; the independence of the LISN level from the hot-loop inductance; the
+CCM boundary), `crates/copper-emi/src/harmonic.rs` (the ramp-on-pedestal harmonics against an independent analytic
+Fourier series to 0.05 dB for 20 harmonics, against numerical integration with finite edges, and the edge roll-off), and
+`crates/copper-drc/tests/emi_check.rs` against hand calculations on `examples/emi_buck` and
+`examples/emi_buck_filter`.
 
 
 ### 10.1 Rule-of-thumb defaults and bands
@@ -750,31 +880,30 @@ a datasheet value. The rules of the output:
 4. The silicon or wide-bandgap distinction is not an enum: it is inferred from
    an optional declared `slew_rate` (20 V/ns or more is reported as
    wide-bandgap class in the `input:` lines, information only).
+5. The operating current of a converter is not a rule of thumb: it is declared
+   (`load_current`) or the scenario is the current limit, a worst case.
 
 | # | Rule | Nominal | Band | Tag | Replaced by |
 | --- | --- | --- | --- | --- | --- |
-| 1 | Edge time of an integrated silicon switch node, t(10-90 %) = 0.8 V_swing / slew with V_swing the hot-supply voltage; resolution order: declared `rise_time`/`fall_time`, then declared `slew_rate` (exact, tag `edge_from_slew_rate`, no band), then the default slew. Skipped when the swing is unknown | 3 V/ns (24 V: 6.4 ns) | 10 V/ns fast to 1 V/ns slow | `rule_of_thumb_edge` | `rise_time`, `fall_time` or `slew_rate` on the switch pin |
+| 1 | Edge time of an integrated silicon switch node, t(10-90 %) = 0.8 V_swing / slew with V_swing the hot-supply voltage; resolution order: declared `rise_time`/`fall_time`, then declared `slew_rate` (exact, tag `edge_from_slew_rate`, no band), then the default slew. Skipped when the swing is unknown. The current commutation edge takes this edge (and its band) when `current_rise_time`/`current_fall_time` are not declared (tag `current_edge_from_voltage_edge`) | 3 V/ns (24 V: 6.4 ns) | 10 V/ns fast to 1 V/ns slow | `rule_of_thumb_edge` | `rise_time`, `fall_time` or `slew_rate` on the switch pin; `current_rise_time`/`current_fall_time` for the current edge |
 | 2a | Switch-node capacitance of an integrated converter FET, for ringing, when the controller part declares no `output_capacitance` | 250 pF | 100 to 500 pF | `rule_of_thumb_capacitance` | `output_capacitance` on the controller part |
 | 2b | Switch-node capacitance of a Schottky catch diode, when the diode part declares no `output_capacitance`; the cell's `current_peak` stands in for the diode rating; times 1/3 when the reverse voltage (hot-supply voltage) is 12 V or more, and the band keeps the un-derated value as its high end | 75 pF per ampere | 50 to 100 pF per ampere | `rule_of_thumb_capacitance` | `output_capacitance` on the diode part |
-| 3 | Ceramic DC-bias loss of the hot capacitor (and upstream filter capacitors) whose part declares no parasitics: 0402, 0603 and 0805 lose 50 %, 1206 35 %, 1210 and larger 25 % | the derated value when the hot-supply voltage is 5 V or more, else the un-derated value | no loss to the package loss | `rule_of_thumb_dc_bias` | `esr` and `esl` (or `self_resonance`) on the capacitor part, which also removes the package defaults |
-| 4 | Operating current: `current_peak` is the current limit, about 1.5 x the rated output, and typical operation is about 0.6 x the rating | the limit (the headline) | 0.4 x the limit (-7.96 dB) to the limit | `rule_of_thumb_current` | nothing: the language has no load current |
-| 5 | Capacitor ESR 5 mohm and ESL by package (0402 0.4, 0603 0.5, 0805 0.6, 1206 0.8, 1210 0.9 nH) | as listed | none | `default_capacitor_parasitics` | `esr`, `esl`, `self_resonance` |
+| 3 | Ceramic DC-bias loss of every capacitor in a ceramic SMD package (hot, hot-net and filter capacitors) whose component declares no `capacitance_at_bias`, whatever its declared ESR and ESL: 0402, 0603 and 0805 lose 50 %, 1206 35 %, 1210 and larger 25 % | the derated value when the hot-supply voltage is 5 V or more, else the un-derated value | no loss to the package loss | `rule_of_thumb_dc_bias` | `capacitance_at_bias` on the component (equal to its value for a C0G part) |
+| 4 | Inductor current ripple when the power inductor's value cannot be read from the board: peak to peak, the usual 20 to 40 % design range | 0.3 x the load current | 0.2 to 0.4 x the load current | `rule_of_thumb_ripple` | an inductance as the value of the power inductor on the switch net |
+| 5 | Capacitor ESR 5 mohm and ESL by package (0402 0.4, 0603 0.5, 0805 0.6, 1206 0.8, 1210 0.9 nH) | as listed | none | `default_capacitor_parasitics` | `esr`, `esl`, `self_resonance` on the capacitor's part |
 
 Band semantics. The conducted band of each harmonic is the minimum and maximum
-over the corner cases {edge fast, slow} x {capacitance un-derated, derated}
-(only the corners whose input is a rule of thumb), plus the nominal case; the
-current scaling is analytic: the high end is evaluated at the current limit,
-the low end at 0.4 x the limit (20 log10 0.4 = -7.96 dB). `total_dbuv` is the
-nominal case at the limit. Below the edge corner the edge and DC-bias bands
-collapse (the level hardly depends on the edge) and only the current offset
-remains. The radiated estimate keeps the current at the limit (it is a
-declared `current_peak`); the typical operating current is stated in the
-`input:` line. The near-field map also stays at the limit.
+over the corner cases {current edge fast, slow} x {capacitance un-derated,
+derated} x {ripple ratio nominal, low, high} (only the corners whose input is a
+rule of thumb), plus the nominal case. `total_dbuv` is the nominal case. Below
+the edge corner the edge and DC-bias bands collapse (the level hardly depends on the edge) and a board that
+declares everything has a closed band. The radiated estimate keeps the current
+at the limit (it is a declared `current_peak`) and the near-field map stays at the
+limit as well.
 
-No default can make a headline number more favourable than the behaviour
-before the defaults existed: the high end includes the un-derated capacitance,
-the fast edge and the full limit, and a missing edge time no longer restricts
-the reported harmonics.
+No default can make a headline number more favourable than the physics allows:
+the high end includes the un-derated capacitance and the fast edge, and a
+missing edge time no longer restricts the reported harmonics.
 
 
 Module `copper_emi::spectrum`: trapezoid and sampled-waveform spectra;

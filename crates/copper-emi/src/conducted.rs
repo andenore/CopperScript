@@ -16,39 +16,54 @@
 //! # Model
 //!
 //! ```text
-//!  LISN (+)                                                   converter
-//!  terminal        CM choke      supply-side      filter        hot loop
-//!  T+ o---+--[W1]--+--------+-----------+--[ L_f ]--+----X----+-----------+
-//!         |   :K    |        |           |  (DCR,    |         |           |
-//!         |  [W2]   |       ===C_s       |   C_par)  |       === C_hot     v I_dm(t)
-//!  T- o---+--[ ]----+--------+-----------+-----------+----Y----+ (ESR,ESL,  |
-//!         |                                                      L_loop)    |
-//!   each LISN: T --50uH-- mains, mains --1uF-- gnd,            |            |
-//!              T --0.1uF-- P, P --1k||50-- gnd                 +------------+
+//!  LISN (+)                                           K (feed and capacitors)      converter
+//!  terminal        CM choke      supply-side      filter     |                       cell
+//!  T+ o---+--[W1]--+--------+-----------+--[ L_f ]--+--------+--------+-----[ L_loop ]--+
+//!         |   :K    |        |           |  (DCR,    |        |        |                |
+//!         |  [W2]   |       ===C_s1     ===C_s2      |      === C_hot [ L_i ]            v I_dm(t)
+//!  T- o---+--[ ]----+--------+-----------+-----------+------- Y ------+--+C_i---+--------+
+//!         |                                                  (ESR, ESL each; L_i = connection inductance)
+//!   each LISN: T --50uH-- mains, mains --1uF-- gnd,
+//!              T --0.1uF-- P, P --1k||50-- gnd
 //!   (P = measurement port, one per line)
 //!
-//!  common mode:       V_sw(t) o--[ C_par ]--- X      (V_sw referenced to ground)
+//!  common mode:       V_sw(t) o--[ C_par ]--- K
 //! ```
 //!
-//! * The converter draws a current `I_dm(t)` from node `X` and returns it to
-//!   node `Y`. For a buck stage it is a trapezoidal pulse train between 0 and
-//!   the output current `I_out`, duty `D = V_out / V_in` (measured between
-//!   50 % points) and edges equal to the switch current rise and fall times:
-//!   during the on-time the high-side switch carries the inductor current, and
-//!   the inductor ripple is neglected (flat top). A caller can pass any
-//!   harmonic source instead ([`ConductedInput::custom_current`]).
-//! * The hot capacitor `C_hot` (with its `ESR` and `ESL`) is in series with
-//!   the hot-loop inductance `L_loop`; this series branch sits between `X`
-//!   and `Y`. The supply feed attaches at `X`, the switch end of the loop, so
-//!   `L_loop` adds to the capacitor's `ESL` as seen by the switching current.
-//!   (If the supply feed attaches at the capacitor pads instead, set
-//!   `hot_loop_inductance = 0`: an ideal current source in series with an
-//!   inductor is not affected by it.)
+//! * The converter draws a current `I_dm(t)` out of the node `S` and returns
+//!   it into `Y`. [`ConductedInput::ripple_current`] selects the waveform: with
+//!   it, the input current of a buck in continuous conduction (zero in the
+//!   off-time, a ramp from `I_out - dI/2` to `I_out + dI/2` in the on-time,
+//!   duty `D = V_out / V_in` between the 50 % points, finite 0-100 % current
+//!   edges, [`PeriodicSpectrum::buck_input_current`]); without it a flat-top
+//!   trapezoid between 0 and `output_current` (the current-limit worst case,
+//!   [`PeriodicSpectrum::trapezoid`]). A caller can pass any harmonic source
+//!   instead ([`ConductedInput::custom_current`]).
+//! * Every capacitor on the input side is its own series R-L-C branch (C, ESR,
+//!   ESL) with its own connection inductance: the hot capacitor
+//!   ([`ConductedInput::hot_capacitor`]) sits directly on `K`, the other
+//!   capacitors of the hot net ([`ConductedInput::parallel_capacitors`]) hang
+//!   on `K` through their connection inductance `L_i`, and the capacitors on
+//!   the supply side of the filter inductor ([`InputFilter::supply_capacitors`])
+//!   hang on the supply-side node the same way. Nothing is lumped, so the
+//!   current sharing between unlike capacitors and the anti-resonances between
+//!   them (an inductive branch against a capacitive one) are in the result.
+//! * The supply feed (the filter inductor, or the LISN when there is none)
+//!   attaches at `K`, the pads of the hot capacitor. The hot loop, capacitor to
+//!   switch pins and back, is the inductance `L_loop` between the converter's
+//!   current source and `K`: it is in the converter's own branch, not in the
+//!   path from the capacitor to the LISN. An ideal current source is not
+//!   affected by an inductance in series with it, so the LISN level does not
+//!   depend on `L_loop`. A feed attached at the switch pins instead of the
+//!   capacitor pads would put `L_loop` in series with the capacitor as seen
+//!   from the feed and raise the high harmonics with it; that placement is not
+//!   modelled. `L_loop` stays in the network so the switch-pin node exists and
+//!   a source with an impedance can be added without a topology change.
 //! * Optional input filter: a series inductor `L_f` (with `DCR` and a parallel
-//!   winding capacitance, hence a self-resonance) in the positive line and an
-//!   optional capacitor `C_s` across the lines on the supply side of `L_f`.
-//!   `L_f` with `C_hot` alone is a first-order divider against the LISN
-//!   impedance; the second-order `40 dB/decade` roll-off needs `C_s`.
+//!   winding capacitance, hence a self-resonance) in the positive line and the
+//!   capacitors on the supply side of it. `L_f` with `C_hot` alone is a
+//!   first-order divider against the LISN impedance; the second-order
+//!   `40 dB/decade` roll-off needs the supply-side capacitors.
 //! * Optional common-mode choke: two windings `W1`, `W2` (one per line)
 //!   coupled with coefficient `k`. Equal currents in the same direction (CM)
 //!   see `L (1 + k)` per winding, opposite currents (DM) see the leakage
@@ -57,6 +72,10 @@
 //!   into the circuit by [`crate::circuit::Circuit::add_v_network`]); the supply
 //!   impedance behind the LISN is neglected. The measured voltage is the
 //!   voltage of port `P` on each line.
+//! * Not in the network: mutual inductance between capacitor branches or
+//!   between the loop and the branches, skin and proximity effect, the return
+//!   conductor's own impedance beyond the connection inductances, and any
+//!   impedance of the converter.
 //!
 //! The common-mode source is the switch-node voltage `V_sw(t)`: a trapezoid of
 //! amplitude `V_in`, the same duty, driving the parasitic capacitance
@@ -141,8 +160,34 @@ impl Capacitor {
     }
 }
 
-/// Series input-filter inductor with an optional supply-side capacitor.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A capacitor as its own branch of the network: its label, its R-L-C and the
+/// inductance of its connection to the node it hangs on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapacitorBranch {
+    /// Name used in reports (the component reference).
+    pub label: String,
+    /// The capacitor.
+    pub capacitor: Capacitor,
+    /// Inductance of the connection between the node and the capacitor body,
+    /// H (0 for none): trace, via and return path of this capacitor.
+    pub connection_inductance: f64,
+}
+
+impl CapacitorBranch {
+    /// A branch without connection inductance.
+    pub fn new(label: impl Into<String>, capacitor: Capacitor) -> Self {
+        Self { label: label.into(), capacitor, connection_inductance: 0.0 }
+    }
+
+    /// The same branch with a connection inductance.
+    pub fn with_connection(mut self, henries: f64) -> Self {
+        self.connection_inductance = henries;
+        self
+    }
+}
+
+/// Series input-filter inductor with the capacitors on its supply side.
+#[derive(Debug, Clone, PartialEq)]
 pub struct InputFilter {
     /// Series inductance in the positive line, H.
     pub inductance: f64,
@@ -151,8 +196,8 @@ pub struct InputFilter {
     /// Parallel winding capacitance, F (0 for none); sets the self-resonance
     /// `1 / (2 pi sqrt(L C))`.
     pub parallel_capacitance: f64,
-    /// Capacitor across the lines on the supply side of the inductor.
-    pub supply_capacitor: Option<Capacitor>,
+    /// Capacitors across the lines on the supply side of the inductor, each its own branch.
+    pub supply_capacitors: Vec<CapacitorBranch>,
 }
 
 /// Two-winding common-mode choke (one winding per line).
@@ -257,8 +302,16 @@ pub struct ConductedInput {
     pub input_voltage: f64,
     /// Output voltage, V (buck duty `D = V_out / V_in`).
     pub output_voltage: f64,
-    /// Output (inductor) current, A: the amplitude of the buck input current pulses.
+    /// Output (inductor) current, A: with [`Self::ripple_current`] the mean
+    /// of the inductor current, otherwise the amplitude of the flat-top input
+    /// current pulses.
     pub output_current: f64,
+    /// Peak-to-peak inductor current ripple `dI`, A: selects the input current
+    /// of a buck in continuous conduction, a ramp from `output_current - dI/2`
+    /// to `output_current + dI/2` during the on-time. Needs
+    /// `output_current >= dI/2` (otherwise the converter is in discontinuous
+    /// conduction and the waveform does not apply: an error).
+    pub ripple_current: Option<f64>,
     /// Switching frequency `f0`, Hz.
     pub switching_frequency: f64,
     /// Rise time (0-100 %) of the switch/input current, s.
@@ -270,9 +323,13 @@ pub struct ConductedInput {
     /// `switching_frequency`. The CM source still uses the duty and the
     /// `input_voltage`.
     pub custom_current: Option<PeriodicSpectrum>,
-    /// Hot input capacitor next to the switches.
+    /// Hot input capacitor next to the switches, on node `K`.
     pub hot_capacitor: Capacitor,
-    /// Hot-loop inductance in series with the hot capacitor, H (0 for none).
+    /// Report name of the hot capacitor.
+    pub hot_capacitor_label: String,
+    /// Other capacitors of the hot net, each a branch on `K` through its connection inductance.
+    pub parallel_capacitors: Vec<CapacitorBranch>,
+    /// Hot-loop inductance between the converter's current source and `K`, H (0 for none).
     pub hot_loop_inductance: f64,
     /// Optional input filter between the hot capacitor and the supply lines.
     pub filter: Option<InputFilter>,
@@ -298,6 +355,9 @@ pub struct ConductedInput {
     /// the source spectrum: the LISN model is not meaningful above 30 MHz and
     /// there is no limit there (margins read `None`).
     pub max_frequency: f64,
+    /// Scan the impedance at `K` for anti-resonances ([`ConductedReport::anti_resonances`]);
+    /// `false` skips the scan (the corner cases of a band do not need it).
+    pub anti_resonance_scan: bool,
 }
 
 impl ConductedInput {
@@ -316,11 +376,14 @@ impl ConductedInput {
             input_voltage,
             output_voltage,
             output_current,
+            ripple_current: None,
             switching_frequency,
             current_rise_time: edge_time,
             current_fall_time: edge_time,
             custom_current: None,
             hot_capacitor,
+            hot_capacitor_label: "hot capacitor".to_owned(),
+            parallel_capacitors: Vec::new(),
             hot_loop_inductance: 0.0,
             filter: None,
             common_mode_choke: None,
@@ -332,6 +395,7 @@ impl ConductedInput {
             limit_class: Class::B,
             min_frequency: 150e3,
             max_frequency: 30e6,
+            anti_resonance_scan: true,
         }
     }
 
@@ -388,6 +452,9 @@ pub struct HarmonicLevel {
     pub frequency: f64,
     /// Peak amplitude of the DM source current at this harmonic, A.
     pub source_current_peak: f64,
+    /// Peak current of each capacitor branch at this harmonic, A, in the order
+    /// of [`ConductedReport::branches`] (differential-mode solve).
+    pub branch_currents: Vec<f64>,
     /// Differential-mode level at the worst LISN port.
     pub dm_dbuv: f64,
     /// Common-mode level at the worst LISN port (`None` without a CM path).
@@ -427,11 +494,62 @@ pub struct WorstHarmonic {
     pub detector: Detector,
 }
 
+/// Where a capacitor branch hangs in the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BranchKind {
+    /// The hot capacitor, on `K`.
+    Hot,
+    /// Another capacitor of the hot net, on `K` through its connection inductance.
+    Parallel,
+    /// A capacitor on the supply side of the filter inductor.
+    Supply,
+}
+
+impl BranchKind {
+    /// Short name for reports.
+    pub fn name(self) -> &'static str {
+        match self {
+            BranchKind::Hot => "hot",
+            BranchKind::Parallel => "hot_net",
+            BranchKind::Supply => "supply_side",
+        }
+    }
+}
+
+/// One capacitor branch of the solved network.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BranchInfo {
+    /// Label (component reference).
+    pub label: String,
+    /// Where it hangs.
+    pub kind: BranchKind,
+    /// The capacitor as solved.
+    pub capacitor: Capacitor,
+    /// Its connection inductance, H.
+    pub connection_inductance: f64,
+}
+
+/// A peak of the input network's driving-point impedance (an anti-resonance).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AntiResonance {
+    /// Frequency of the peak, Hz.
+    pub frequency: f64,
+    /// Impedance magnitude at the peak, ohm.
+    pub impedance: f64,
+}
+
 /// Result of [`predict`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConductedReport {
     /// One entry per harmonic in the reported band.
     pub harmonics: Vec<HarmonicLevel>,
+    /// The capacitor branches, in the order of [`HarmonicLevel::branch_currents`].
+    pub branches: Vec<BranchInfo>,
+    /// Peaks of the impedance the converter sees at `K` (all capacitors, the
+    /// filter and the V-networks) between the lowest and highest reported
+    /// frequency, by increasing frequency. A peak needs a prominence of at
+    /// least 0.5 dB on both sides.
+    pub anti_resonances: Vec<AntiResonance>,
     /// Harmonic with the smallest margin to either limit (`None` if no
     /// harmonic has a limit).
     pub worst: Option<WorstHarmonic>,
@@ -459,6 +577,11 @@ struct Network {
     cm_source: Option<ElementId>,
     port_p: Node,
     port_n: Node,
+    /// The node of the hot capacitor and the feed (`K`) and the return node (`Y`).
+    k: Node,
+    y: Node,
+    /// Each capacitor branch and the element that carries its current.
+    branches: Vec<(BranchInfo, ElementId)>,
 }
 
 fn finite_pos(name: &str, x: f64) -> Result<(), ConductedError> {
@@ -477,6 +600,13 @@ fn finite_nonneg(name: &str, x: f64) -> Result<(), ConductedError> {
     }
 }
 
+fn validate_branch(what: &str, branch: &CapacitorBranch) -> Result<(), ConductedError> {
+    finite_pos(&format!("{what}[{}].capacitance", branch.label), branch.capacitor.capacitance)?;
+    finite_nonneg(&format!("{what}[{}].esr", branch.label), branch.capacitor.esr)?;
+    finite_nonneg(&format!("{what}[{}].esl", branch.label), branch.capacitor.esl)?;
+    finite_nonneg(&format!("{what}[{}].connection_inductance", branch.label), branch.connection_inductance)
+}
+
 fn validate(input: &ConductedInput) -> Result<(), ConductedError> {
     finite_pos("input_voltage", input.input_voltage)?;
     finite_pos("output_voltage", input.output_voltage)?;
@@ -488,6 +618,18 @@ fn validate(input: &ConductedInput) -> Result<(), ConductedError> {
     finite_nonneg("hot_capacitor.esr", input.hot_capacitor.esr)?;
     finite_nonneg("hot_capacitor.esl", input.hot_capacitor.esl)?;
     finite_nonneg("hot_loop_inductance", input.hot_loop_inductance)?;
+    for branch in &input.parallel_capacitors {
+        validate_branch("parallel_capacitors", branch)?;
+    }
+    if let Some(ripple) = input.ripple_current {
+        finite_nonneg("ripple_current", ripple)?;
+        if ripple / 2.0 > input.output_current * (1.0 + 1e-12) {
+            return Err(ConductedError::InvalidInput(format!(
+                "ripple current {ripple} A peak-to-peak exceeds twice the output current {} A: the inductor current reaches zero in the off-time (discontinuous conduction), which this model does not cover",
+                input.output_current
+            )));
+        }
+    }
     finite_pos("min_frequency", input.min_frequency)?;
     finite_pos("max_frequency", input.max_frequency)?;
     let d = input.duty();
@@ -498,10 +640,8 @@ fn validate(input: &ConductedInput) -> Result<(), ConductedError> {
         finite_pos("filter.inductance", f.inductance)?;
         finite_nonneg("filter.dcr", f.dcr)?;
         finite_nonneg("filter.parallel_capacitance", f.parallel_capacitance)?;
-        if let Some(c) = &f.supply_capacitor {
-            finite_pos("filter.supply_capacitor.capacitance", c.capacitance)?;
-            finite_nonneg("filter.supply_capacitor.esr", c.esr)?;
-            finite_nonneg("filter.supply_capacitor.esl", c.esl)?;
+        for branch in &f.supply_capacitors {
+            validate_branch("filter.supply_capacitors", branch)?;
         }
     }
     if let Some(c) = &input.common_mode_choke {
@@ -532,6 +672,18 @@ fn validate(input: &ConductedInput) -> Result<(), ConductedError> {
     Ok(())
 }
 
+/// A capacitor branch `top - L_connection - (ESL, ESR, C) - bottom`; returns the element carrying its current.
+fn add_branch(c: &mut Circuit, branch: &CapacitorBranch, top: Node, bottom: Node) -> ElementId {
+    let attach = if branch.connection_inductance > 0.0 {
+        let m = c.new_node();
+        c.inductor(top, m, branch.connection_inductance);
+        m
+    } else {
+        top
+    };
+    c.real_capacitor(attach, bottom, branch.capacitor.capacitance, branch.capacitor.esr, branch.capacitor.esl).capacitor
+}
+
 fn build(input: &ConductedInput) -> Network {
     let mut c = Circuit::new();
     let tp = c.node("lisn_p_terminal");
@@ -548,38 +700,97 @@ fn build(input: &ConductedInput) -> Network {
     } else {
         (tp, tn)
     };
-    // Filter.
-    let x = if let Some(f) = &input.filter {
-        if let Some(cs) = &f.supply_capacitor {
-            c.real_capacitor(ap, an, cs.capacitance, cs.esr, cs.esl);
+    let y = an;
+    let mut branches: Vec<(BranchInfo, ElementId)> = Vec::new();
+    let mut record = |c: &mut Circuit, branch: &CapacitorBranch, kind: BranchKind, top: Node| {
+        let id = add_branch(c, branch, top, y);
+        branches.push((
+            BranchInfo {
+                label: branch.label.clone(),
+                kind,
+                capacitor: branch.capacitor,
+                connection_inductance: branch.connection_inductance,
+            },
+            id,
+        ));
+    };
+    // Filter: the capacitors on its supply side, then the series inductor to K.
+    let k = if let Some(f) = &input.filter {
+        for branch in &f.supply_capacitors {
+            record(&mut c, branch, BranchKind::Supply, ap);
         }
-        let x = c.new_node();
-        c.real_inductor(ap, x, f.inductance, f.dcr, f.parallel_capacitance);
-        x
+        let k = c.new_node();
+        c.real_inductor(ap, k, f.inductance, f.dcr, f.parallel_capacitance);
+        k
     } else {
         ap
     };
-    let y = an;
-    // Hot capacitor branch: X - L_loop - (ESL, ESR, C) - Y.
-    let hc = &input.hot_capacitor;
-    let branch_top = if input.hot_loop_inductance > 0.0 {
-        let m = c.new_node();
-        c.inductor(x, m, input.hot_loop_inductance);
-        m
-    } else {
-        x
-    };
-    c.real_capacitor(branch_top, y, hc.capacitance, hc.esr, hc.esl);
-    // DM source: draws current from X, returns it into Y.
-    let dm_source = c.current_source(x, y, Complex::ZERO);
-    // CM source: V_sw (to ground) through C_par into X.
-    let cm_source = input.switch_node_capacitance.map(|cpar| {
+    // The hot capacitor on K, the other capacitors of the hot net on K through their own connection inductance.
+    let hot = CapacitorBranch::new(input.hot_capacitor_label.clone(), input.hot_capacitor);
+    record(&mut c, &hot, BranchKind::Hot, k);
+    for branch in &input.parallel_capacitors {
+        record(&mut c, branch, BranchKind::Parallel, k);
+    }
+    // DM source: draws current from S, returns it into Y. S is K behind the hot-loop inductance.
+    let s = if input.hot_loop_inductance > 0.0 {
         let s = c.new_node();
-        let src = c.voltage_source(s, 0, Complex::ZERO);
-        c.capacitor(s, x, cpar);
+        c.inductor(k, s, input.hot_loop_inductance);
+        s
+    } else {
+        k
+    };
+    let dm_source = c.current_source(s, y, Complex::ZERO);
+    // CM source: V_sw (to ground) through C_par into K.
+    let cm_source = input.switch_node_capacitance.map(|cpar| {
+        let node = c.new_node();
+        let src = c.voltage_source(node, 0, Complex::ZERO);
+        c.capacitor(node, k, cpar);
         src
     });
-    Network { circuit: c, dm_source, cm_source, port_p: lp.port, port_n: ln.port }
+    Network { circuit: c, dm_source, cm_source, port_p: lp.port, port_n: ln.port, k, y, branches }
+}
+
+/// Peaks of the driving-point impedance `|Z(K, Y)|` between `f_lo` and `f_hi` (all sources off): a log grid,
+/// local maxima with a prominence of at least 0.5 dB on both sides, each refined by a parabola through the
+/// logarithm of the three grid points around it and solved again at the refined frequency.
+fn anti_resonances(net: &Network, f_lo: f64, f_hi: f64) -> Vec<AntiResonance> {
+    const POINTS: usize = 1500;
+    const PROMINENCE_DB: f64 = 0.5;
+    let freqs = crate::circuit::log_space(f_lo, f_hi, POINTS);
+    let Ok(z) = net.circuit.impedance_sweep(net.k, net.y, &freqs) else { return Vec::new() };
+    let mag: Vec<f64> = z.iter().map(|z| z.abs()).collect();
+    let db = |a: f64, b: f64| 20.0 * (a / b).log10();
+    let mut out = Vec::new();
+    for i in 1..POINTS - 1 {
+        if !(mag[i] > mag[i - 1] && mag[i] >= mag[i + 1]) {
+            continue;
+        }
+        // Lowest point on each side before the curve climbs above the peak (or the band edge).
+        let side_min = |range: &mut dyn Iterator<Item = usize>| {
+            let mut low = mag[i];
+            for j in range {
+                if mag[j] > mag[i] {
+                    break;
+                }
+                low = low.min(mag[j]);
+            }
+            low
+        };
+        let left = side_min(&mut (0..i).rev());
+        let right = side_min(&mut (i + 1..POINTS));
+        if db(mag[i], left) < PROMINENCE_DB || db(mag[i], right) < PROMINENCE_DB {
+            continue;
+        }
+        let (a, b, c) = (mag[i - 1].ln(), mag[i].ln(), mag[i + 1].ln());
+        let denominator = a - 2.0 * b + c;
+        let shift = if denominator.abs() > 1e-300 { (0.5 * (a - c) / denominator).clamp(-1.0, 1.0) } else { 0.0 };
+        let step = (freqs[i + 1] / freqs[i]).ln();
+        let frequency = (freqs[i].ln() + shift * step).exp();
+        let impedance =
+            net.circuit.impedance(net.k, net.y, frequency).map_or(mag[i], |z| z.abs()).max(mag[i] * (1.0 - 1e-9));
+        out.push(AntiResonance { frequency, impedance });
+    }
+    out
 }
 
 /// Highest and lowest harmonic number in the reported band.
@@ -593,6 +804,17 @@ fn harmonic_range(input: &ConductedInput) -> (u32, u32) {
 fn dm_spectrum(input: &ConductedInput, n_max: u32) -> Result<PeriodicSpectrum, ConductedError> {
     if let Some(s) = &input.custom_current {
         return Ok(s.clone());
+    }
+    if let Some(ripple) = input.ripple_current {
+        return Ok(PeriodicSpectrum::buck_input_current(
+            (input.output_current - ripple / 2.0).max(0.0),
+            input.output_current + ripple / 2.0,
+            input.duty(),
+            1.0 / input.switching_frequency,
+            input.current_rise_time,
+            input.current_fall_time,
+            n_max,
+        )?);
     }
     Ok(PeriodicSpectrum::trapezoid(
         input.output_current,
@@ -671,6 +893,11 @@ pub fn predict(input: &ConductedInput) -> Result<ConductedReport, ConductedError
                 harmonic: n,
                 frequency: f,
                 source_current_peak: dm_spec.harmonic(n).abs(),
+                branch_currents: net
+                    .branches
+                    .iter()
+                    .map(|(_, id)| dm.harmonics[n as usize - 1].current(*id).abs())
+                    .collect(),
                 dm_dbuv: to_dbuv_rms(dm_peak),
                 cm_dbuv: cm_peak.map(to_dbuv_rms),
                 total_dbuv: total,
@@ -701,16 +928,28 @@ pub fn predict(input: &ConductedInput) -> Result<ConductedReport, ConductedError
             harmonics.push(level);
         }
     }
-    Ok(ConductedReport { harmonics, worst, assumptions: assumptions(input, &band_detectors), bands: band_detectors })
+    let anti_resonances = if input.anti_resonance_scan {
+        anti_resonances(&net, input.min_frequency, input.max_frequency)
+    } else {
+        Vec::new()
+    };
+    Ok(ConductedReport {
+        harmonics,
+        branches: net.branches.iter().map(|(info, _)| info.clone()).collect(),
+        anti_resonances,
+        worst,
+        assumptions: assumptions(input, &band_detectors),
+        bands: band_detectors,
+    })
 }
 
 fn assumptions(input: &ConductedInput, bands: &[BandDetector]) -> Vec<String> {
     let mut a = vec![
         "Results are screening evidence: the solver, source harmonics and LISN transfer are checked against hand calculations, but no prediction has been correlated with a measurement and no accuracy figure is claimed.".to_string(),
         "Linear time-invariant network: all passives are linear; capacitor and inductor parasitics are single-element ESR/ESL/parallel-C models with no frequency dependence (no skin or proximity effect, no ferrite or dielectric dispersion).".to_string(),
-        "No DC-bias or temperature derating of capacitance (MLCC capacitance can fall by more than half at rated bias; apply the derating to the inputs).".to_string(),
+        "The capacitances are used as given: DC-bias and temperature derating of an MLCC (more than half of the capacitance at rated bias) is the caller's input, not part of this model.".to_string(),
         "The converter is an ideal harmonic current source (infinite source impedance): no control-loop effects, no negative input resistance, no interaction with filter resonances beyond the linear network.".to_string(),
-        "Hot-loop inductance is in series with the hot capacitor, with the supply feed attached at the switch end of the loop.".to_string(),
+        "Every capacitor is its own R-L-C branch with its own connection inductance; the supply feed attaches at the hot capacitor's node K and the hot-loop inductance sits between the converter's current source and K, so it does not change the level at the LISN (an ideal current source is not affected by a series inductance). Mutual coupling between branches is not modelled.".to_string(),
         "Each line ends in one V-network model; the supply impedance behind the LISN is neglected. The LISN component values and topology are unverified against CISPR 16-1-2.".to_string(),
         "Limit lines (CISPR 32 / EN 55032 AC mains port, quasi-peak and average) are transcribed as remembered and are unverified against the standard.".to_string(),
         "Levels are RMS of each harmonic (peak / sqrt 2) in dBuV, as RMS-calibrated receivers read.".to_string(),
@@ -719,9 +958,20 @@ fn assumptions(input: &ConductedInput, bands: &[BandDetector]) -> Vec<String> {
     ];
     if input.custom_current.is_some() {
         a.push("Differential-mode source is the caller's harmonic spectrum, used as given.".to_string());
+    } else if let Some(ripple) = input.ripple_current {
+        a.push(format!(
+            "Differential-mode source is the input current of an ideal lossless buck in continuous conduction: zero in the off-time, a ramp from {:.4} A to {:.4} A (mean {} A, ripple {} A peak to peak) in the on-time, duty V_out/V_in = {:.4} between the 50 % points, current edges {} s / {} s (0-100 %); ringing, reverse-recovery spikes and the dead time of a synchronous stage are not included.",
+            input.output_current - ripple / 2.0,
+            input.output_current + ripple / 2.0,
+            input.output_current,
+            ripple,
+            input.duty(),
+            input.current_rise_time,
+            input.current_fall_time
+        ));
     } else {
         a.push(format!(
-            "Differential-mode source is an ideal piecewise-linear trapezoid 0 to {} A, duty V_out/V_in = {:.4} (ideal lossless buck, continuous conduction), edges {} s / {} s; inductor ripple, ringing and reverse-recovery spikes are not included.",
+            "Differential-mode source is an ideal piecewise-linear trapezoid 0 to {} A, duty V_out/V_in = {:.4} (ideal lossless buck, continuous conduction), edges {} s / {} s; inductor ripple (flat top), ringing and reverse-recovery spikes are not included.",
             input.output_current,
             input.duty(),
             input.current_rise_time,
@@ -738,7 +988,7 @@ fn assumptions(input: &ConductedInput, bands: &[BandDetector]) -> Vec<String> {
         a.push("No common-mode choke is modelled.".to_string());
     }
     if input.filter.is_none() {
-        a.push("No input filter: only the hot capacitor sits between the switch and the LISN.".to_string());
+        a.push("No input filter: only the capacitors of the hot net sit between the switch and the LISN.".to_string());
     }
     for band in bands {
         match &band.applicability {
@@ -934,7 +1184,7 @@ mod tests {
             inductance: 10e-6,
             dcr: 0.0,
             parallel_capacitance: 0.0,
-            supply_capacitor: Some(Capacitor::ideal(10e-6)),
+            supply_capacitors: vec![CapacitorBranch::new("C_s", Capacitor::ideal(10e-6))],
         });
         let rp = predict(&plain).unwrap();
         let rf = predict(&filtered).unwrap();
@@ -1046,7 +1296,10 @@ mod tests {
             inductance: 10e-6,
             dcr: 20e-3,
             parallel_capacitance: 5e-12,
-            supply_capacitor: Some(Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 }),
+            supply_capacitors: vec![CapacitorBranch::new(
+                "C_s",
+                Capacitor { capacitance: 10e-6, esr: 5e-3, esl: 0.5e-9 },
+            )],
         });
         let rf = predict(&filtered).unwrap();
         let hf = level(&rf, 1);
@@ -1072,7 +1325,7 @@ mod tests {
         // 94 ohm LISN pair. Hand value: |Z_c + Z_l| / |Z_c + Z_L + Z_l|.
         let mut l_only = buck(hot);
         l_only.filter =
-            Some(InputFilter { inductance: 10e-6, dcr: 0.0, parallel_capacitance: 0.0, supply_capacitor: None });
+            Some(InputFilter { inductance: 10e-6, dcr: 0.0, parallel_capacitance: 0.0, supply_capacitors: Vec::new() });
         let ro = predict(&l_only).unwrap();
         let f = 500e3;
         let zl_pair = buck(hot).lisn.eut_impedance(f).scale(2.0);
@@ -1338,5 +1591,217 @@ mod tests {
         let rc = predict(&custom).unwrap();
         assert!((level(&rc, 1).source_current_peak - 1e-3).abs() < 1e-15);
         assert!(level(&rc, 2).dm_dbuv == f64::NEG_INFINITY);
+    }
+
+    // ----- Independent reference for the circuit solution -------------------------------------------------------
+    //
+    // Closed-form ladder reduction in plain complex arithmetic, written without `circuit.rs` and without `lisn.rs`
+    // (the V-network is rebuilt here from its component values): the source current divides at K between the
+    // capacitor branches and the path through the filter, the part reaching the supply-side node divides between the
+    // supply-side branches and the two V-networks (the differential current returns through both), and the port
+    // voltage is the V-network's terminal voltage divided down to the receiver.
+
+    fn cx(re: f64, im: f64) -> Complex {
+        Complex::new(re, im)
+    }
+
+    fn par2(a: Complex, b: Complex) -> Complex {
+        a * b / (a + b)
+    }
+
+    /// `ESR + j w (ESL + L_connection) + 1 / (j w C)` of a branch.
+    fn branch_z(b: &CapacitorBranch, f: f64) -> Complex {
+        let w = w(f);
+        cx(b.capacitor.esr, w * (b.capacitor.esl + b.connection_inductance) - 1.0 / (w * b.capacitor.capacitance))
+    }
+
+    /// `(Z_eut, Z_transfer)` of the 50 uH V-network at `f`, from its component values.
+    fn vnetwork_by_hand(v: &VNetwork, f: f64) -> (Complex, Complex) {
+        let w = w(f);
+        let z_a = cx(v.mains_series_resistance, w * v.inductance - 1.0 / (w * v.mains_capacitance));
+        let r_port = v.bleed_resistance * v.measurement_resistance / (v.bleed_resistance + v.measurement_resistance);
+        let z_b = cx(r_port, -1.0 / (w * v.coupling_capacitance));
+        let z_eut = par2(z_a, z_b);
+        (z_eut, z_eut.scale(r_port) / z_b)
+    }
+
+    /// Level of the port in dBuV RMS for a source current `i` (peak) at harmonic frequency `f`.
+    fn reference_dbuv(input: &ConductedInput, i: f64, f: f64) -> f64 {
+        let (z_eut, z_t) = vnetwork_by_hand(&input.lisn, f);
+        let pair = z_eut.scale(2.0);
+        // The supply side: its capacitors in parallel with the V-network pair.
+        let mut node_a = pair;
+        let mut z_k_branches: Vec<Complex> = Vec::new();
+        let to_feed: Option<Complex>;
+        match &input.filter {
+            Some(flt) => {
+                for b in &flt.supply_capacitors {
+                    node_a = par2(node_a, branch_z(b, f));
+                }
+                let w = w(f);
+                let winding = cx(flt.dcr, w * flt.inductance);
+                let z_l = if flt.parallel_capacitance > 0.0 {
+                    par2(winding, cx(0.0, -1.0 / (w * flt.parallel_capacitance)))
+                } else {
+                    winding
+                };
+                to_feed = Some(z_l + node_a);
+                z_k_branches.push(to_feed.unwrap());
+            }
+            None => {
+                to_feed = None;
+                z_k_branches.push(pair);
+            }
+        }
+        let hot = CapacitorBranch::new("hot", input.hot_capacitor);
+        z_k_branches.push(branch_z(&hot, f));
+        for b in &input.parallel_capacitors {
+            z_k_branches.push(branch_z(b, f));
+        }
+        // Node K: the source current (any hot-loop inductance sits behind the ideal source) over all branches.
+        let mut y = Complex::ZERO;
+        for z in &z_k_branches {
+            y = y + z.recip();
+        }
+        let v_k = cx(i, 0.0) / y;
+        let i_feed = v_k / z_k_branches[0];
+        let v_port_terminal = match to_feed {
+            Some(_) => i_feed * node_a,
+            None => v_k,
+        };
+        let i_lisn = v_port_terminal / pair;
+        let v = (i_lisn * z_t).abs();
+        20.0 * (v / SQRT_2 / 1e-6).log10()
+    }
+
+    fn cap(c: f64, esr: f64, esl: f64) -> Capacitor {
+        Capacitor { capacitance: c, esr, esl }
+    }
+
+    #[test]
+    fn two_input_networks_match_an_independent_nodal_reference_to_a_tenth_of_a_decibel() {
+        // Network 1: the hot capacitor only, with a hot-loop inductance that must not matter.
+        let mut one = buck(cap(10e-6, 5e-3, 0.6e-9));
+        one.hot_loop_inductance = 5e-9;
+        // Network 2: hot ceramic + bulk electrolytic on the hot net (4 nH connection) + 4.7 uH filter inductor
+        // (DCR 20 mohm, 15 pF winding capacitance) + a ceramic on the supply side (3 nH connection) and an
+        // electrolytic damping branch with 0.5 ohm ESR.
+        let mut two = buck(cap(10e-6, 5e-3, 0.6e-9));
+        two.hot_loop_inductance = 5e-9;
+        two.parallel_capacitors = vec![CapacitorBranch::new("CB", cap(47e-6, 0.12, 8e-9)).with_connection(4e-9)];
+        two.filter = Some(InputFilter {
+            inductance: 4.7e-6,
+            dcr: 20e-3,
+            parallel_capacitance: 15e-12,
+            supply_capacitors: vec![
+                CapacitorBranch::new("CS", cap(10e-6, 4e-3, 0.7e-9)).with_connection(3e-9),
+                CapacitorBranch::new("CD", cap(47e-6, 0.5, 4e-9)),
+            ],
+        });
+        for (name, input) in [("hot capacitor only", &one), ("hot + bulk + LC filter + damping", &two)] {
+            let report = predict(input).unwrap();
+            let mut worst: f64 = 0.0;
+            for n in [1u32, 2, 3, 5, 9, 17, 30, 45, 60] {
+                let h = level(&report, n);
+                let expect = reference_dbuv(input, h.source_current_peak, h.frequency);
+                let diff = (h.dm_dbuv - expect).abs();
+                worst = worst.max(diff);
+                assert!(diff < 0.1, "{name}, harmonic {n}: model {} dBuV, reference {expect} dBuV", h.dm_dbuv);
+            }
+            println!("{name}: worst difference to the independent reference {worst:.2e} dB");
+        }
+    }
+
+    #[test]
+    fn unlike_capacitors_have_an_anti_resonance_that_a_lumped_capacitor_cannot_show() {
+        // A 10 uF ceramic (0.5 nH) beside a 100 uF electrolytic (5 nH): above the electrolytic's own resonance
+        // (225 kHz) it is an inductor of 5 nH, below the ceramic's (2.25 MHz) the ceramic is a capacitor, and the two
+        // resonate with each other where the loop L1 + L2 meets the series capacitance C1 C2 / (C1 + C2).
+        let ceramic = cap(10e-6, 5e-3, 0.5e-9);
+        let electrolytic = cap(100e-6, 5e-3, 5e-9);
+        let expect: f64 = 1.0 / (2.0 * PI * ((0.5e-9_f64 + 5e-9) * (10e-6_f64 * 100e-6 / 110e-6)).sqrt());
+        let mut per_branch = buck(ceramic);
+        per_branch.hot_capacitor_label = "C1".to_owned();
+        per_branch.parallel_capacitors = vec![CapacitorBranch::new("C2", electrolytic)];
+        let report = predict(&per_branch).unwrap();
+        assert_eq!(report.anti_resonances.len(), 1, "{:?}", report.anti_resonances);
+        let peak = report.anti_resonances[0];
+        println!(
+            "anti-resonance: model {:.1} kHz, 1/(2 pi sqrt(L C)) {:.1} kHz, |Z| {:.3} ohm",
+            peak.frequency / 1e3,
+            expect / 1e3,
+            peak.impedance
+        );
+        assert!((peak.frequency / expect - 1.0).abs() < 0.03, "{} Hz against {expect} Hz", peak.frequency);
+        // The impedance at the peak is far above that of either branch there (the parallel resonance).
+        let z1 = z_cap(&ceramic, peak.frequency).abs();
+        assert!(peak.impedance > z1 * 0.5 && peak.impedance < 1.0, "{}", peak.impedance);
+        // The same capacitors lumped into one branch (capacitance adds, ESR and ESL combine like resistances) have no peak.
+        let lumped = Capacitor {
+            capacitance: 110e-6,
+            esr: 1.0 / (1.0 / 5e-3 + 1.0 / 5e-3),
+            esl: 1.0 / (1.0 / 0.5e-9 + 1.0 / 5e-9),
+        };
+        let one = predict(&buck(lumped)).unwrap();
+        assert!(one.anti_resonances.is_empty(), "{:?}", one.anti_resonances);
+        // Current sharing the lumped model cannot show: with the fundamental at the anti-resonance the two branches
+        // circulate a current larger than the converter delivers.
+        let mut at_peak = per_branch.clone();
+        at_peak.switching_frequency = peak.frequency;
+        let report = predict(&at_peak).unwrap();
+        let first = &report.harmonics[0];
+        let source = first.source_current_peak;
+        let c1 = first.branch_currents[0];
+        let c2 = first.branch_currents[1];
+        println!("at the anti-resonance: source {source:.3} A, C1 {c1:.3} A, C2 {c2:.3} A");
+        assert!(c1 > 1.5 * source && c2 > 1.5 * source, "{c1} {c2} against {source}");
+        assert_eq!(report.branches[0].label, "C1");
+        assert_eq!(report.branches[1].kind, BranchKind::Parallel);
+    }
+
+    #[test]
+    fn the_hot_loop_inductance_does_not_raise_the_lisn_level() {
+        // The hot-loop inductance sits between the converter's current source and K. An ideal current source is not
+        // affected by a series inductance, so no harmonic moves. A placement with the inductance in series with
+        // the hot capacitor (the feed at the switch end) would raise the high harmonics with it: by hand, ESL 0.6 nH + 50 nH
+        // against 0.6 nH at 30 MHz is a factor |Z_c(50.6 nH)| / |Z_c(0.6 nH)| in the LISN current.
+        let base = predict(&buck(cap(10e-6, 5e-3, 0.6e-9))).unwrap();
+        for l in [1e-9, 5e-9, 50e-9] {
+            let mut input = buck(cap(10e-6, 5e-3, 0.6e-9));
+            input.hot_loop_inductance = l;
+            let report = predict(&input).unwrap();
+            for (a, b) in base.harmonics.iter().zip(&report.harmonics) {
+                assert!(
+                    (a.dm_dbuv - b.dm_dbuv).abs() < 1e-9,
+                    "L {l}: harmonic {} moved {} dB",
+                    a.harmonic,
+                    a.dm_dbuv - b.dm_dbuv
+                );
+            }
+        }
+        let f = 30e6;
+        let series = |l_loop: f64| z_cap(&cap(10e-6, 5e-3, 0.6e-9 + l_loop), f).abs();
+        let old_rise = 20.0 * (series(50e-9) / series(0.0)).log10();
+        assert!(old_rise > 30.0, "the series placement would have raised 30 MHz by {old_rise:.1} dB");
+    }
+
+    #[test]
+    fn the_ripple_current_selects_the_ramp_source_and_refuses_discontinuous_conduction() {
+        let hot = cap(10e-6, 5e-3, 0.6e-9);
+        let mut ccm = buck(hot);
+        ccm.output_current = 2.0;
+        ccm.ripple_current = Some(1.2);
+        let report = predict(&ccm).unwrap();
+        let spec = PeriodicSpectrum::buck_input_current(1.4, 2.6, 5.0 / 12.0, 2e-6, 5e-9, 5e-9, 60).unwrap();
+        assert!((level(&report, 1).source_current_peak - spec.harmonic(1).abs()).abs() < 1e-12);
+        assert!(report.assumptions.iter().any(|a| a.contains("continuous conduction") && a.contains("ramp")));
+        // Just above and just below the boundary I_out = dI / 2.
+        let mut edge = buck(hot);
+        edge.output_current = 0.6;
+        edge.ripple_current = Some(1.2 * (1.0 - 1e-9));
+        assert!(predict(&edge).is_ok(), "just inside continuous conduction");
+        edge.ripple_current = Some(1.2 * (1.0 + 1e-6));
+        let err = predict(&edge).unwrap_err();
+        assert!(matches!(&err, ConductedError::InvalidInput(m) if m.contains("discontinuous")), "{err}");
     }
 }

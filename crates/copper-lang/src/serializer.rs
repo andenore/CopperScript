@@ -103,6 +103,8 @@ fn emi_profile_value(emi: &EmiProfile) -> Value {
         ("fall_time", &emi.fall_time),
         ("slew_rate", &emi.slew_rate),
         ("current_peak", &emi.current_peak),
+        ("current_rise_time", &emi.current_rise_time),
+        ("current_fall_time", &emi.current_fall_time),
     ] {
         if let Some(quantity) = quantity {
             result.push((name, quantity_value(quantity)));

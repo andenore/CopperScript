@@ -404,16 +404,27 @@ pub fn electrical_profile(attributes: &Attributes, location: &Location) -> Resul
 
 /// A positive quantity of `dimension` for an EMI attribute (`CMP130`).
 fn emi_quantity(value: &Scalar, dimension: Dimension, label: &str, location: &Location) -> Result<Quantity> {
+    emi_quantity_coded("CMP130", value, dimension, label, location)
+}
+
+/// [`emi_quantity`] reporting under `code`.
+fn emi_quantity_coded(
+    code: &str,
+    value: &Scalar,
+    dimension: Dimension,
+    label: &str,
+    location: &Location,
+) -> Result<Quantity> {
     let units: Vec<&str> = dimension.units().iter().map(|(name, _)| *name).collect();
     let usage = format!("{label} must be a positive {} in {}", dimension.name().to_lowercase(), units.join(", "));
-    let Scalar::Quantity { value, unit } = value else { return Err(error("CMP130", usage, location)) };
+    let Scalar::Quantity { value, unit } = value else { return Err(error(code, usage, location)) };
     if !units.contains(&unit.as_str()) {
-        return Err(error("CMP130", usage, location));
+        return Err(error(code, usage, location));
     }
-    let Ok(number) = Decimal::parse(value) else { return Err(error("CMP130", usage, location)) };
-    let Ok(compiled) = Quantity::of(dimension, &number, unit) else { return Err(error("CMP130", usage, location)) };
+    let Ok(number) = Decimal::parse(value) else { return Err(error(code, usage, location)) };
+    let Ok(compiled) = Quantity::of(dimension, &number, unit) else { return Err(error(code, usage, location)) };
     if compiled.base_value() <= &Decimal::zero() {
-        return Err(error("CMP130", usage, location));
+        return Err(error(code, usage, location));
     }
     Ok(compiled)
 }
@@ -434,7 +445,8 @@ fn emi_name<T>(
     })
 }
 
-/// `emi_role`, `rise_time`, `fall_time`, `slew_rate` and `current_peak`; `None` when none is declared.
+/// `emi_role`, `rise_time`, `fall_time`, `slew_rate`, `current_peak`, `current_rise_time` and `current_fall_time`;
+/// `None` when none is declared.
 fn emi_profile(attributes: &Attributes, location: &Location) -> Result<Option<EmiProfile>> {
     let role = attributes
         .get("emi_role")
@@ -457,12 +469,18 @@ fn emi_profile(attributes: &Attributes, location: &Location) -> Result<Option<Em
         fall_time: quantity_of("fall_time", Dimension::Time)?,
         slew_rate: quantity_of("slew_rate", Dimension::SlewRate)?,
         current_peak: quantity_of("current_peak", Dimension::Current)?,
+        current_rise_time: quantity_of("current_rise_time", Dimension::Time)?,
+        current_fall_time: quantity_of("current_fall_time", Dimension::Time)?,
     };
     Ok((!profile.is_empty()).then_some(profile))
 }
 
 /// The component property holding a board-chosen switching frequency.
 pub const SWITCHING_FREQUENCY: &str = "switching_frequency";
+/// The component property holding the load current of a switching converter (its operating point).
+pub const LOAD_CURRENT: &str = "load_current";
+/// The component property holding a capacitor's effective capacitance at the DC bias the board applies.
+pub const CAPACITANCE_AT_BIAS: &str = "capacitance_at_bias";
 
 /// The part-level EMI attributes (`switching_frequency`, `topology`, ...); `None` when none is declared.
 fn part_emi(properties: &IndexMap<String, Scalar>, location: &Location) -> Result<Option<PartEmi>> {
@@ -567,6 +585,53 @@ pub fn check_component_frequency(
     Ok(())
 }
 
+/// A component's `load_current` (CMP133): a switching converter whose topology is a buck (the only
+/// operating mode the conducted model supports), at most the switch pin's declared `current_peak`.
+pub fn check_component_operating_point(
+    component: &ComponentInstance,
+    part: Option<&PartDefinition>,
+    location: &Location,
+) -> Result<()> {
+    let Some(text) = component.properties.get(LOAD_CURRENT) else { return Ok(()) };
+    let (Some(part), Some(current)) = (part, parse_quantity_text(text, Dimension::Current)) else { return Ok(()) };
+    let topology = part.emi.as_ref().and_then(|emi| emi.topology).or_else(|| {
+        let kind = part.category.strip_prefix("power.regulator.")?.split('.').next()?;
+        Topology::parse(kind)
+    });
+    if let Some(topology) = topology
+        && topology != Topology::Buck
+    {
+        return Err(error(
+            "CMP133",
+            format!(
+                "{LOAD_CURRENT} of {} is declared for a {} converter; the operating point is defined for buck converters only",
+                component.reference,
+                topology.value()
+            ),
+            location,
+        ));
+    }
+    let limit = part
+        .pins
+        .values()
+        .filter_map(|pin| pin.profile.as_ref().and_then(|profile| profile.emi.as_ref()))
+        .filter(|emi| emi.role == Some(EmiRole::Switch))
+        .find_map(|emi| emi.current_peak.clone());
+    if let Some(limit) = limit
+        && current.base_value() > limit.base_value()
+    {
+        return Err(error(
+            "CMP133",
+            format!(
+                "{LOAD_CURRENT} {current} of {} exceeds the switch current limit {limit} (current_peak) of its part",
+                component.reference
+            ),
+            location,
+        ));
+    }
+    Ok(())
+}
+
 /// `_profile_for_pin_type`.
 fn profile_for_pin_type(value: &str, location: &Location) -> Result<ElectricalProfile> {
     use {Direction as D, DriveMode as M, SignalDomain as S};
@@ -660,6 +725,8 @@ pub fn compile_device(document: &Document, qualified_name: &str) -> Result<Devic
                         "fall_time",
                         "slew_rate",
                         "current_peak",
+                        "current_rise_time",
+                        "current_fall_time",
                         "when",
                     ],
                     location,
@@ -1091,6 +1158,8 @@ pub fn compile_part(
                         "fall_time",
                         "slew_rate",
                         "current_peak",
+                        "current_rise_time",
+                        "current_fall_time",
                         "connection",
                         "required_net_traits",
                         "parallel_power_group",
@@ -1122,6 +1191,8 @@ pub fn compile_part(
                     "fall_time",
                     "slew_rate",
                     "current_peak",
+                    "current_rise_time",
+                    "current_fall_time",
                 ]
                 .iter()
                 .any(|name| attributes.contains_key(*name));
@@ -1415,7 +1486,7 @@ pub fn component(declaration: &ComponentDecl, part: &str) -> Result<ComponentIns
     let attributes = &declaration.attributes;
     reject_unknown(
         attributes.keys(),
-        &["value", "footprint", "modes", "role", "decouples", SWITCHING_FREQUENCY],
+        &["value", "footprint", "modes", "role", "decouples", SWITCHING_FREQUENCY, LOAD_CURRENT, CAPACITANCE_AT_BIAS],
         location,
     )?;
     let value = match attributes.get("value") {
@@ -1455,6 +1526,35 @@ pub fn component(declaration: &ComponentDecl, part: &str) -> Result<ComponentIns
     if let Some(frequency) = attributes.get(SWITCHING_FREQUENCY) {
         let frequency = emi_quantity(frequency, Dimension::Frequency, SWITCHING_FREQUENCY, location)?;
         properties.insert(SWITCHING_FREQUENCY.to_owned(), frequency.to_string());
+    }
+    if let Some(current) = attributes.get(LOAD_CURRENT) {
+        let current = emi_quantity_coded("CMP133", current, Dimension::Current, LOAD_CURRENT, location)?;
+        properties.insert(LOAD_CURRENT.to_owned(), current.to_string());
+    }
+    if let Some(capacitance) = attributes.get(CAPACITANCE_AT_BIAS) {
+        let capacitance =
+            emi_quantity_coded("CMP133", capacitance, Dimension::Capacitance, CAPACITANCE_AT_BIAS, location)?;
+        match &value {
+            Some(ComponentValue::Quantity(value)) if value.dimension() == Dimension::Capacitance => {
+                if capacitance.base_value() > value.base_value() {
+                    return Err(error(
+                        "CMP133",
+                        format!(
+                            "{CAPACITANCE_AT_BIAS} {capacitance} exceeds the component value {value}; DC bias only lowers the capacitance"
+                        ),
+                        location,
+                    ));
+                }
+            }
+            _ => {
+                return Err(error(
+                    "CMP133",
+                    format!("{CAPACITANCE_AT_BIAS} needs the component to declare a capacitance as its value"),
+                    location,
+                ));
+            }
+        }
+        properties.insert(CAPACITANCE_AT_BIAS.to_owned(), capacitance.to_string());
     }
     Ok(ComponentInstance {
         reference: declaration.reference.clone(),

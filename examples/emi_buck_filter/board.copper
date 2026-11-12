@@ -1,13 +1,16 @@
 // `examples/emi_buck` with an input filter: a 4.7 uH series inductor LF and a 10 uF capacitor CUP
 // from the upstream net VIN_IN to ground, so `copper emi-check` recognises the filter of the
-// conducted-emission prediction (EMI-CONDUCTED).
+// conducted-emission prediction (EMI-CONDUCTED), and with an operating point: U1 delivers 2 A
+// (`load_current`), so the prediction is the declared operating point (the input current of the buck
+// in continuous conduction, its ripple from the 4.7 uH inductor L1) and the switch current limit is a
+// secondary worst case. `examples/emi_buck` declares no load current and reports the current limit only.
 // Run: copper emi-check examples/emi_buck_filter/board.copper --allow-proxy-footprints
 // The input capacitor CIN, the catch diode D1 and the feedback divider are placed so that
 // the hot loop, the switch node and the inductor proximity all produce numbers.
 board EmiBuckFilter {
     import p "./parts";
 
-    component U1: p.Buck { footprint = "QFN-5"; }
+    component U1: p.Buck { footprint = "QFN-5"; load_current = 2A; }
     component L1: p.Inductor { value = 4.7uH; footprint = "L_1210"; }
     component D1: p.Diode { footprint = "SOD-123"; }
     component CIN: p.Cap { value = 10uF; footprint = "C_0805"; role = decoupling; decouples = U1.VIN; }

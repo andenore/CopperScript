@@ -130,8 +130,9 @@ pub fn parse_current(text: &str) -> Option<f64> {
     Some(value * scale).filter(|i| *i > 0.0)
 }
 
-/// The amplitude for a cell of an `emi` section: the conducted prediction's `current_amplitude_a`
-/// (the same worst-case `current_peak`), else the cell's `current_peak`.
+/// The amplitude for a cell of an `emi` section: the conducted prediction's `operating_point.current_limit_a`
+/// (the same worst-case `current_peak`; a declared load current is not applied to the map), else the cell's
+/// `current_peak`.
 pub fn cell_current(section: &Value, cell: &str) -> Option<f64> {
     let from_conducted = section
         .get("findings")
@@ -140,7 +141,7 @@ pub fn cell_current(section: &Value, cell: &str) -> Option<f64> {
         .iter()
         .filter(|f| f.get("code").and_then(Value::as_str) == Some("EMI-CONDUCTED"))
         .filter(|f| f.get("cell").and_then(Value::as_str) == Some(cell))
-        .find_map(|f| f.get("measures")?.get("current_amplitude_a").and_then(number));
+        .find_map(|f| f.get("measures")?.get("operating_point")?.get("current_limit_a").and_then(number));
     from_conducted.filter(|i| *i > 0.0).or_else(|| {
         section
             .get("cells")
@@ -414,9 +415,8 @@ pub fn field_picture(map: &FieldMap, scene_source: &str) -> FieldPicture {
     ));
     let amplitude = match map.current_a {
         Some(i) => format!(
-            "{} A (the cell's current_peak, the limit, worst case, tag worst_case_current; typical operation is about {} A, 0.4 x the limit, a rule of thumb that is not applied to the map)",
-            n(i),
-            n(i * 0.4)
+            "{} A (the cell's current_peak, the switch current limit, worst case, tag worst_case_current: not a load current, a declared load_current is not applied to the map)",
+            n(i)
         ),
         None => "1 A: the cell declares no current_peak, so levels are per ampere".to_owned(),
     };

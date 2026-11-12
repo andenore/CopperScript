@@ -620,6 +620,7 @@ fn lower_unit(
                 }
                 let instance = lower::component(component, &resolve_part(&component.part))?;
                 lower::check_component_frequency(&instance, library.get(&instance.part), &component.location)?;
+                lower::check_component_operating_point(&instance, library.get(&instance.part), &component.location)?;
                 board.components.push(instance);
                 board.sources.components.entry(component.reference.clone()).or_insert_with(|| at(&component.location));
             }

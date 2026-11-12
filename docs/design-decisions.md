@@ -1124,11 +1124,15 @@ carry them. See [arched routing](language-reference.md#arched-corners).
 
 Pins and device pads MAY declare `emi_role` (`switch`, `hot_supply`,
 `hot_return`, `bootstrap`, `gate_drive`, `feedback`, `sense`) with
-`rise_time`, `fall_time`, `slew_rate` and `current_peak`; parts MAY declare a fixed or
+`rise_time`, `fall_time`, `slew_rate`, `current_peak`, `current_rise_time` and
+`current_fall_time`; parts MAY declare a fixed or
 ranged `switching_frequency`, `topology`, `shielding`, `esl`, `esr`,
 `self_resonance`, `output_capacitance` and `external_cable`; a component MAY
-fix `switching_frequency` inside the part's range. Values are datasheet facts
-with units, never tool settings, and invalid ones are `CMP130`. The
+fix `switching_frequency` inside the part's range, declare `load_current`
+(the operating point of a buck cell) and, for a capacitor,
+`capacitance_at_bias`. Values are datasheet facts
+with units, never tool settings, and invalid ones are `CMP130`
+(`load_current` and `capacitance_at_bias`: `CMP133`). The
 constraints `emission` (cable connectors, a limit `standard`, an optional
 `cable_length`; at most one per board, `CMP131`) and `emi_accept` (one
 component or pin, a `code` and a nonempty `reason`, `CMP132`) are validated
@@ -1145,9 +1149,60 @@ class, information only). With a declared `rise_time`/`fall_time` the time wins
 for the timing; without one `emi-check` derives `0.8 V_swing / slew_rate`. The
 IR carries `profile.emi.slew_rate` only when declared, so unannotated libraries
 keep their IR. What `emi-check` assumes where the language says nothing (edge
-time, device capacitance, DC-bias loss, operating current) is a table of rule
+time, device capacitance, DC-bias loss, the inductor ripple when the power
+inductor's value cannot be read) is a table of rule
 of thumb defaults in one module, always tagged, printed with its rule and
-reported as a band; declared values replace it.
+reported as a band; declared values replace it. The load current is not one of
+them: how a converter is used is not a rule of thumb, so the conducted
+prediction without a declared operating point is named as a scenario
+(`current_limit`, the switch current limit as the pulse amplitude: a worst
+case, not a prediction) and carries no band for the operating current.
+
+**Operating point.** The load current is `load_current = 2A;` on the
+converter's component, next to `switching_frequency`, the other fact the
+board (not the datasheet) fixes about a cell. The alternative
+`constraint operating_point(U1) { load_current = 2A; }` was rejected: it is
+the right shape only for several operating points per cell, which the
+supported model does not use (one cell, one point; a second point would be a
+second constraint form), and a constraint form would need the same validation
+against the part (buck topology, the switch pin's `current_peak`) in a second
+place. `input_voltage` and `output_voltage` attributes were rejected as well:
+the board already declares them as `supply` voltages on the hot supply net and
+on the inductor's output net, the conducted check reads them there, and a
+second declaration could only disagree. Validation is `CMP133` at compile
+time (not a positive current, a part whose topology is not a buck, a value
+above the switch pin's `current_peak`) and the warning
+`EMI_OPERATING_POINT_NO_CELL` for a component that is not a switching cell.
+The IR carries it as `component.properties.load_current` and the cell as
+`load_current`; `copper query BOARD emi` prints it. `emi-check` evaluates a
+fixed-frequency buck in continuous conduction: the input current is a ramp
+from `I_out - dI/2` to `I_out + dI/2` in the on-time,
+`dI = (Vin - Vout) D / (L f)` with the power inductor's value (a stated
+ripple-ratio band when it cannot be read), and the declared point is the
+headline with the current limit as a secondary worst case. A point with
+`I_out < dI/2` (discontinuous conduction, pulse skipping, light-load forced
+PWM) is outside the model: it is reported as such and the current-limit
+scenario is the only one.
+
+**Current commutation time.** The current of a switching cell commutates
+between the switch and the diode or low-side FET in a time set by loop
+inductance and drive, not by the switch-node voltage edge. `current_rise_time`
+and `current_fall_time` (10-90 %, times) on the switch pin declare it; a new
+slew dimension (`A/ns`) was not added because the datasheet quantity is a
+time. They drive the conducted input-current spectrum and the hot-loop
+differential-mode radiated estimate; the voltage edge keeps the switch-node
+common-mode score and the ringing. Undeclared, the voltage edge (declared,
+from `slew_rate`, or the default band) stands in for it, tagged
+`current_edge_from_voltage_edge`, and its band is the voltage edge's band: no
+independent number is invented for the current.
+
+**Capacitors.** Every capacitor of the input network is its own branch with
+its own ESR, ESL and connection inductance. DC-bias loss is keyed to the
+capacitance, not to whether ESR and ESL were defaulted: a ceramic SMD
+capacitor gets the package rule of thumb (a band) unless its component
+declares `capacitance_at_bias` (the datasheet DC-bias curve at the board's
+voltage, at most the value; equal to it for a C0G part), which replaces the
+rule and the band.
 
 `copper_lang::emi::analyze` derives switching cells (controller, topology,
 frequency, role pins, switch nets, magnetic, catch diode, hot capacitors with

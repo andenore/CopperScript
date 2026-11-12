@@ -749,3 +749,164 @@ part Packaged {
     let cell = model(&compiled).cells.remove(0);
     assert_eq!(cell.slew_rate.as_ref().map(ToString::to_string).as_deref(), Some("2 V/ns"));
 }
+
+#[test]
+fn current_transition_times_reach_the_ir_the_cell_and_the_query() {
+    let parts =
+        PARTS.replace("rise_time = 5ns;", "rise_time = 5ns; current_rise_time = 8ns; current_fall_time = 12ns;");
+    let compiled = design("current-edges", &parts, BUCK);
+    let library: Vec<_> = compiled.electrical.library.values().collect();
+    let buck = library.iter().find(|part| part.name.ends_with("Buck")).expect("Buck");
+    let sw = buck.pins["SW"].profile.as_ref().unwrap().emi.clone().unwrap();
+    assert_eq!(sw.current_rise_time.as_ref().map(ToString::to_string).as_deref(), Some("8 ns"));
+    assert_eq!(sw.current_fall_time.as_ref().map(ToString::to_string).as_deref(), Some("12 ns"));
+    // The voltage edge is a different quantity and stays as declared.
+    assert_eq!(sw.rise_time.as_ref().map(ToString::to_string).as_deref(), Some("5 ns"));
+    let json = part_value(buck);
+    let pins = json.get("pins").and_then(|pins| pins.as_array()).expect("pins");
+    let pin = pins.iter().find(|pin| pin.get("name").and_then(|v| v.as_str()) == Some("SW")).unwrap();
+    let emi = pin.get("profile").and_then(|v| v.get("emi")).expect("emi");
+    assert_eq!(emi.get("current_rise_time").and_then(|v| v.get("unit")).and_then(|v| v.as_str()), Some("ns"));
+    assert_eq!(
+        emi.get("current_fall_time").and_then(|v| v.get("base_value")).and_then(|v| v.as_str()),
+        Some("0.000000012")
+    );
+    let cell = model(&compiled).cells.remove(0);
+    assert_eq!(cell.current_rise_time.as_ref().map(ToString::to_string).as_deref(), Some("8 ns"));
+    assert_eq!(cell.current_fall_time.as_ref().map(ToString::to_string).as_deref(), Some("12 ns"));
+    let view = elaborate(&compiled.electrical).expect("elaborates");
+    let result = copper_lang::query::run_query(view, "emi", None).expect("query");
+    let text = copper_lang::query::render_query(&result);
+    assert!(text.contains("\"current_rise_time\"") && text.contains("\"current_fall_time\""), "{text}");
+    assert!(emi_diagnostics(&compiled).is_empty());
+    // Undeclared, the keys are absent from the part IR and null in the cell.
+    let plain = design("current-edges-none", PARTS, BUCK);
+    let library: Vec<_> = plain.electrical.library.values().collect();
+    let buck = library.iter().find(|part| part.name.ends_with("Buck")).expect("Buck");
+    assert!(!copper_json::Dumps::new().dumps(&part_value(buck)).contains("current_rise_time"));
+    assert!(model(&plain).cells[0].current_rise_time.is_none());
+}
+
+#[test]
+fn current_transition_errors_are_cmp130() {
+    for (name, value) in [
+        ("zero-current-rise", "current_rise_time = 0ns;"),
+        ("negative-current-fall", "current_fall_time = -1ns;"),
+        ("voltage-current-rise", "current_rise_time = 5V;"),
+        ("bare-current-fall", "current_fall_time = 5;"),
+        ("slew-current-rise", "current_rise_time = 5V/ns;"),
+    ] {
+        expect_error(name, &PARTS.replace("rise_time = 5ns;", &format!("rise_time = 5ns; {value}")), BUCK, "CMP");
+    }
+    for (name, value) in [
+        ("zero-current-rise-code", "current_rise_time = 0ns;"),
+        ("voltage-current-fall-code", "current_fall_time = 5V;"),
+    ] {
+        expect_error(name, &PARTS.replace("rise_time = 5ns;", &format!("rise_time = 5ns; {value}")), BUCK, "CMP130");
+    }
+}
+
+fn with_load_current(body: &str, value: &str) -> String {
+    body.replace("component U1: p.Buck;", &format!("component U1: p.Buck {{ load_current = {value}; }}"))
+}
+
+#[test]
+fn load_current_is_a_component_attribute_that_reaches_the_ir_the_cell_and_the_query() {
+    let compiled = design("load-current", PARTS, &with_load_current(BUCK, "2A"));
+    let json = design_json(&compiled);
+    assert!(json.contains("\"load_current\": \"2 A\""), "{json}");
+    let cell = model(&compiled).cells.remove(0);
+    assert_eq!(cell.load_current.as_ref().map(ToString::to_string).as_deref(), Some("2 A"));
+    let view = elaborate(&compiled.electrical).expect("elaborates");
+    let text = copper_lang::query::render_query(&copper_lang::query::run_query(view, "emi", None).expect("query"));
+    assert!(text.contains("\"load_current\"") && text.contains("\"value\": \"2\""), "{text}");
+    assert!(emi_diagnostics(&compiled).is_empty());
+    // Milliamps, and an undeclared point leaves the IR unchanged.
+    let small = design("load-current-ma", PARTS, &with_load_current(BUCK, "1500mA"));
+    assert_eq!(model(&small).cells[0].load_current.as_ref().map(ToString::to_string).as_deref(), Some("1500 mA"));
+    let none = design("load-current-none", PARTS, BUCK);
+    assert!(!design_json(&none).contains("load_current"));
+    assert!(model(&none).cells[0].load_current.is_none());
+}
+
+#[test]
+fn load_current_errors_are_cmp133() {
+    for (name, value) in [
+        ("zero-load", "0A"),
+        ("negative-load", "-1A"),
+        ("voltage-load", "2V"),
+        ("bare-load", "2"),
+        ("name-load", "high"),
+        ("over-limit", "5A"),
+    ] {
+        expect_error(name, PARTS, &with_load_current(BUCK, value), "CMP133");
+    }
+    // The limit is the switch pin's current_peak (4.5 A): equal is allowed.
+    design("at-limit", PARTS, &with_load_current(BUCK, "4.5A"));
+    // The operating point is defined for a buck only.
+    for topology in ["boost", "buck_boost", "inverting"] {
+        let parts = PARTS.replacen("category = \"power.regulator.buck\";", &format!("topology = {topology};"), 1);
+        expect_error(topology, &parts, &with_load_current(BUCK, "2A"), "CMP133");
+    }
+    // A buck declared through the category is fine, and so is an explicit topology = buck.
+    let parts = PARTS.replacen("category = \"power.regulator.buck\";", "topology = buck;", 1);
+    design("explicit-buck", &parts, &with_load_current(BUCK, "2A"));
+}
+
+#[test]
+fn a_load_current_on_a_component_that_is_not_a_switching_cell_warns() {
+    let body = BUCK.replace(
+        "component R1: p.Res { value = 100kohm; }",
+        "component R1: p.Res { value = 100kohm; load_current = 1A; }",
+    );
+    let compiled = design("load-no-cell", PARTS, &body);
+    let found = emi_diagnostics(&compiled);
+    assert_eq!(codes(&found), ["EMI_OPERATING_POINT_NO_CELL"], "{found:?}");
+    assert_eq!(found[0].severity, Severity::Warning);
+}
+
+#[test]
+fn capacitance_at_bias_is_a_component_attribute_for_capacitors() {
+    let body = BUCK.replace(
+        "component CIN: p.Cap { value = 10uF;",
+        "component CIN: p.Cap { value = 10uF; capacitance_at_bias = 4.2uF;",
+    );
+    let compiled = design("bias", PARTS, &body);
+    assert!(design_json(&compiled).contains("\"capacitance_at_bias\": \"4.2 uF\""));
+    // Equal to the value is allowed (a C0G part loses nothing).
+    design(
+        "bias-equal",
+        PARTS,
+        &BUCK.replace(
+            "component CIN: p.Cap { value = 10uF;",
+            "component CIN: p.Cap { value = 10uF; capacitance_at_bias = 10uF;",
+        ),
+    );
+    for (name, from, to) in [
+        ("bias-above", "capacitance_at_bias = 4.2uF;", "capacitance_at_bias = 11uF;"),
+        ("bias-zero", "capacitance_at_bias = 4.2uF;", "capacitance_at_bias = 0uF;"),
+        ("bias-voltage", "capacitance_at_bias = 4.2uF;", "capacitance_at_bias = 4V;"),
+        ("bias-bare", "capacitance_at_bias = 4.2uF;", "capacitance_at_bias = 4;"),
+    ] {
+        expect_error(name, PARTS, &body.replace(from, to), "CMP133");
+    }
+    // On a component whose value is not a capacitance.
+    expect_error(
+        "bias-on-inductor",
+        PARTS,
+        &BUCK.replace(
+            "component L1: p.Inductor { value = 4.7uH;",
+            "component L1: p.Inductor { value = 4.7uH; capacitance_at_bias = 1uF;",
+        ),
+        "CMP133",
+    );
+    expect_error(
+        "bias-without-value",
+        PARTS,
+        &BUCK.replace(
+            "component CBOOT: p.Cap { value = 100nF; }",
+            "component CBOOT: p.Cap { capacitance_at_bias = 1uF; }",
+        ),
+        "CMP133",
+    );
+}

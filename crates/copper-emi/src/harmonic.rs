@@ -188,6 +188,128 @@ impl PeriodicSpectrum {
         Ok(Self { fundamental: 1.0 / period, dc: amplitude * duty, harmonics })
     }
 
+    /// One pulse of a piecewise-linear waveform, repeated every `period`: the
+    /// waveform is the straight line through consecutive `vertices` (time in
+    /// seconds from the start of the period, strictly non-decreasing, value in
+    /// the unit of the waveform) and zero outside the first and last vertex.
+    /// Two vertices at the same time make a jump (a zero transition time);
+    /// the pulse starts and ends with a jump unless its end values are 0.
+    ///
+    /// Derivation. For one segment from `(t_0, x_0)` to `(t_1, x_1)` let
+    /// `h = (t_1 - t_0)/2`, `t_m` its midpoint, `x_m` the mean and `d` half the
+    /// step of the value, `w = 2 pi n / T` and `theta = w h`. Splitting the
+    /// line into its value at the midpoint and its odd part,
+    ///
+    /// ```text
+    /// int x e^{-j w t} dt = 2h e^{-j w t_m} [ x_m sinc(theta) - j d g(theta) ],
+    /// g(theta) = (sin theta - theta cos theta) / theta^2   (-> theta/3 for small theta)
+    /// ```
+    ///
+    /// which is exact, has no division by a small number (a zero-length segment
+    /// is a jump and contributes nothing itself: its effect is the end values of
+    /// its neighbours), and sums over the segments to `X_n T`, `c_n = 2 X_n`.
+    /// The DC term is the sum of `2h x_m` over `T`.
+    pub fn piecewise_linear(period: f64, vertices: &[(f64, f64)], n_max: u32) -> Result<Self, HarmonicError> {
+        let ordered = vertices.windows(2).all(|w| w[1].0 >= w[0].0)
+            && vertices.iter().all(|v| v.0.is_finite() && v.1.is_finite())
+            && vertices.first().is_some_and(|v| v.0 >= 0.0)
+            && vertices.last().is_some_and(|v| v.0 <= period * (1.0 + 1e-12));
+        if !(period > 0.0 && period.is_finite() && vertices.len() >= 2 && ordered) {
+            return Err(HarmonicError::InvalidWaveform(format!(
+                "a piecewise-linear pulse needs at least two vertices in time order inside one period (period {period})"
+            )));
+        }
+        let g = |theta: f64| {
+            if theta.abs() < 1e-3 {
+                theta / 3.0 - theta.powi(3) / 30.0
+            } else {
+                (theta.sin() - theta * theta.cos()) / (theta * theta)
+            }
+        };
+        let mut dc = 0.0;
+        for w in vertices.windows(2) {
+            dc += (w[1].0 - w[0].0) * 0.5 * (w[0].1 + w[1].1);
+        }
+        let harmonics = (1..=n_max)
+            .map(|n| {
+                let omega = 2.0 * PI * f64::from(n) / period;
+                let mut sum = Complex::ZERO;
+                for w in vertices.windows(2) {
+                    let (t0, x0, t1, x1) = (w[0].0, w[0].1, w[1].0, w[1].1);
+                    let dt = t1 - t0;
+                    if dt <= 0.0 {
+                        continue;
+                    }
+                    let theta = omega * dt / 2.0;
+                    let (xm, d) = (0.5 * (x0 + x1), 0.5 * (x1 - x0));
+                    let bracket = Complex::new(xm * sinc(theta), -d * g(theta));
+                    sum = sum + Complex::from_polar(dt, -omega * 0.5 * (t0 + t1)) * bracket;
+                }
+                sum.scale(2.0 / period)
+            })
+            .collect();
+        Ok(Self { fundamental: 1.0 / period, dc: dc / period, harmonics })
+    }
+
+    /// The input (high-side switch) current of a buck converter in continuous
+    /// conduction: zero in the off-time, and during the on-time the inductor
+    /// current, a ramp from `valley` to `peak` (`I_out - dI/2` to `I_out + dI/2`).
+    ///
+    /// * `duty`: on-time between the 50 % points of the two current edges,
+    ///   divided by `period`.
+    /// * `rise_time`, `fall_time`: full 0-100 % durations of the current
+    ///   edges (may be 0 for an ideal jump). The rising edge starts at `t = 0`
+    ///   and goes from 0 to the ramp's value at its end; the falling edge goes
+    ///   from the ramp's value at its start to 0. `valley` and `peak` are the
+    ///   ramp's values at the centres of the two edges (the 50 % points), so
+    ///   with ideal edges they are the values just after the rise and just
+    ///   before the fall.
+    ///
+    /// The waveform is built as [`Self::piecewise_linear`]: rising edge, ramp,
+    /// falling edge, zero.
+    pub fn buck_input_current(
+        valley: f64,
+        peak: f64,
+        duty: f64,
+        period: f64,
+        rise_time: f64,
+        fall_time: f64,
+        n_max: u32,
+    ) -> Result<Self, HarmonicError> {
+        let t_on = duty * period;
+        let valid = period > 0.0
+            && period.is_finite()
+            && valley.is_finite()
+            && valley >= 0.0
+            && peak >= valley
+            && peak.is_finite()
+            && rise_time >= 0.0
+            && fall_time >= 0.0
+            && duty > 0.0
+            && t_on >= 0.5 * (rise_time + fall_time) * (1.0 - 1e-12)
+            && rise_time / 2.0 + t_on + fall_time / 2.0 <= period * (1.0 + 1e-12);
+        if !valid {
+            return Err(HarmonicError::InvalidWaveform(format!(
+                "a buck input current needs 0 <= valley <= peak, non-negative edges with t_on >= (t_r + t_f)/2 and the pulse inside the period \
+                 (valley {valley}, peak {peak}, duty {duty}, period {period}, rise {rise_time}, fall {fall_time})"
+            )));
+        }
+        let slope = (peak - valley) / t_on;
+        let at = |t: f64| valley + slope * (t - rise_time / 2.0);
+        let (t_fall_start, t_fall_end) =
+            (rise_time / 2.0 + t_on - fall_time / 2.0, rise_time / 2.0 + t_on + fall_time / 2.0);
+        let mut vertices = Vec::with_capacity(4);
+        if rise_time > 0.0 {
+            vertices.push((0.0, 0.0));
+        }
+        vertices.push((rise_time, at(rise_time)));
+        vertices.push((t_fall_start, at(t_fall_start)));
+        if fall_time > 0.0 {
+            vertices.push((t_fall_end, 0.0));
+        }
+        Self::piecewise_linear(period, &vertices, n_max)
+    }
+
     /// Zero-mean triangular ripple of `peak_to_peak` swing: rising linearly
     /// from `-pp/2` at `t = 0` to `+pp/2` at `t = d T`, falling back to `-pp/2`
     /// at `t = T` (the inductor-current ripple of a buck converter has
@@ -540,5 +662,138 @@ mod tests {
         let other = c.current_source(0, n, Complex::ZERO);
         assert_eq!(harmonic_steady_state(&c, &[(s1, &a), (other, &b)], 3), Err(HarmonicError::FundamentalMismatch));
         assert!(harmonic_steady_state(&c, &[(r, &a)], 3).is_err());
+    }
+
+    /// Peak amplitude `2 |X_n|` of the ramp-on-pedestal pulse `I_lo + s t` on `[0, T_on]` with ideal edges, from
+    /// first principles (integration by parts of `X_n = (1/T) int x e^{-j w t} dt`), written without the
+    /// piecewise-linear code under test:
+    /// `X_n T = I_lo (1 - e^{-j th}) / (j w) + s (1 - e^{-j th} (1 + j th)) / (j w)^2`, `th = w T_on`.
+    fn ramp_on_pedestal_analytic(n: u32, valley: f64, peak: f64, duty: f64, period: f64) -> f64 {
+        let t_on = duty * period;
+        let s = (peak - valley) / t_on;
+        let w = 2.0 * PI * f64::from(n) / period;
+        let th = w * t_on;
+        // e^{-j th} = er + j ei.
+        let (er, ei) = (th.cos(), -th.sin());
+        // 1 / (j w) = -j / w and (u + j v)(-j / w) = (v - j u) / w, with u + j v = 1 - e^{-j th}.
+        let (u, v) = (1.0 - er, -ei);
+        let first = (valley * v / w, -valley * u / w);
+        // 1 - e^{-j th} (1 + j th) = 1 - (er - ei th) - j (ei + er th); 1 / (j w)^2 = -1 / w^2.
+        let (p, q) = (1.0 - (er - ei * th), -(ei + er * th));
+        let second = (-s * p / (w * w), -s * q / (w * w));
+        let (re, im) = ((first.0 + second.0) / period, (first.1 + second.1) / period);
+        2.0 * re.hypot(im)
+    }
+
+    #[test]
+    fn the_buck_input_ramp_matches_the_analytic_fourier_series_for_ideal_edges() {
+        // Ripple on a 2 A load: 7 V x (5/12) / (4.7 uH x 500 kHz) = 1.2411 A peak to peak, at 500 kHz.
+        let (period, duty) = (2e-6, 5.0 / 12.0);
+        let ripple = (12.0 - 5.0) * duty / (4.7e-6 * 500e3);
+        let (valley, peak) = (2.0 - ripple / 2.0, 2.0 + ripple / 2.0);
+        let spec = PeriodicSpectrum::buck_input_current(valley, peak, duty, period, 0.0, 0.0, 20).unwrap();
+        // DC: the mean of the pulse train is I_out x D.
+        assert!((spec.dc - 2.0 * duty).abs() < 1e-12, "{}", spec.dc);
+        let mut worst: f64 = 0.0;
+        for n in 1..=20u32 {
+            let expect = ramp_on_pedestal_analytic(n, valley, peak, duty, period);
+            let got = spec.harmonic(n).abs();
+            let db = 20.0 * (got / expect).log10();
+            worst = worst.max(db.abs());
+            assert!(db.abs() < 0.05, "harmonic {n}: {got} against {expect} ({db:.4} dB)");
+        }
+        println!("ramp on pedestal, ideal edges: worst of 20 harmonics {worst:.2e} dB from the analytic series");
+        // Without ripple the same series is the rectangular pulse 2 A sinc(n pi D) (the textbook value).
+        let flat = PeriodicSpectrum::buck_input_current(2.0, 2.0, duty, period, 0.0, 0.0, 5).unwrap();
+        for n in 1..=5u32 {
+            let expect = 2.0 * 2.0 * duty * (f64::from(n) * PI * duty).sin().abs() / (f64::from(n) * PI * duty);
+            assert!((flat.harmonic(n).abs() - expect).abs() < 1e-12, "n {n}");
+        }
+        // The ripple matters: the fundamental differs from the flat top of the same mean by a measurable amount.
+        assert!((spec.harmonic(1).abs() - flat.harmonic(1).abs()).abs() > 0.01);
+    }
+
+    /// Value of the buck input current at `t`, the piecewise definition of [`PeriodicSpectrum::buck_input_current`]
+    /// written out directly (rising edge, ramp, falling edge, zero).
+    fn buck_value(valley: f64, peak: f64, duty: f64, period: f64, tr: f64, tf: f64, t: f64) -> f64 {
+        let t_on = duty * period;
+        let slope = (peak - valley) / t_on;
+        let ramp = |t: f64| valley + slope * (t - tr / 2.0);
+        let (fall_start, fall_end) = (tr / 2.0 + t_on - tf / 2.0, tr / 2.0 + t_on + tf / 2.0);
+        if t < tr {
+            ramp(tr) * t / tr
+        } else if t < fall_start {
+            ramp(t)
+        } else if t < fall_end {
+            ramp(fall_start) * (fall_end - t) / tf
+        } else {
+            0.0
+        }
+    }
+
+    #[test]
+    fn finite_current_edges_match_numerical_integration_of_the_waveform() {
+        let (period, duty, tr, tf) = (2e-6, 5.0 / 12.0, 40e-9, 25e-9);
+        let (valley, peak) = (1.4, 2.6);
+        let spec = PeriodicSpectrum::buck_input_current(valley, peak, duty, period, tr, tf, 60).unwrap();
+        let samples = 2_000_000usize;
+        let dt = period / samples as f64;
+        for n in [1u32, 2, 7, 20, 60] {
+            let w = 2.0 * PI * f64::from(n) / period;
+            let (mut re, mut im) = (0.0, 0.0);
+            for k in 0..samples {
+                let t = (k as f64 + 0.5) * dt;
+                let x = buck_value(valley, peak, duty, period, tr, tf, t);
+                re += x * (w * t).cos();
+                im -= x * (w * t).sin();
+            }
+            let expect = 2.0 * (re * dt / period).hypot(im * dt / period);
+            let got = spec.harmonic(n).abs();
+            assert!((20.0 * (got / expect).log10()).abs() < 0.01, "harmonic {n}: {got} against numerical {expect}");
+        }
+        let mean: f64 =
+            (0..samples).map(|k| buck_value(valley, peak, duty, period, tr, tf, (k as f64 + 0.5) * dt)).sum::<f64>()
+                / samples as f64;
+        assert!((spec.dc - mean).abs() < 1e-6, "{} against {mean}", spec.dc);
+    }
+
+    #[test]
+    fn a_finite_current_transition_rolls_the_spectrum_off_at_the_edge_corner() {
+        // 500 kHz, ramp edges of 50 ns (0-100 %): the corner 1 / (pi t_r) is 6.4 MHz (harmonic 12.7).
+        let (period, duty, tr) = (2e-6, 5.0 / 12.0, 50e-9);
+        let ideal = PeriodicSpectrum::buck_input_current(1.4, 2.6, duty, period, 0.0, 0.0, 60).unwrap();
+        let slow = PeriodicSpectrum::buck_input_current(1.4, 2.6, duty, period, tr, tr, 60).unwrap();
+        let ratio_db = |n: u32| 20.0 * (slow.harmonic(n).abs() / ideal.harmonic(n).abs()).log10();
+        let sinc_db = |n: u32| {
+            let x = PI * f64::from(n) / period * tr;
+            20.0 * (x.sin() / x).abs().log10()
+        };
+        // Below the corner the edge hardly matters; around and above it the equal-edge pulse is the ideal one times
+        // sinc(pi f t_r) (a convolution with a rectangle of the edge time), to within the ramp's small contribution.
+        assert!(ratio_db(2).abs() < 0.1, "{}", ratio_db(2));
+        for n in [6u32, 12, 25, 35, 55] {
+            println!("n {n}: ratio {:.2} dB, sinc {:.2} dB", ratio_db(n), sinc_db(n));
+            assert!(
+                (ratio_db(n) - sinc_db(n)).abs() < 0.5,
+                "n {n}: {:.2} dB against sinc {:.2} dB",
+                ratio_db(n),
+                sinc_db(n)
+            );
+        }
+        // Above the corner the envelope falls by 20 dB per decade; the slow-edge pulse falls faster than the ideal one.
+        let envelope_drop = |s: &PeriodicSpectrum| 20.0 * (s.harmonic(5).abs() / s.harmonic(50).abs()).log10();
+        assert!(envelope_drop(&slow) > envelope_drop(&ideal) + 10.0);
+    }
+
+    #[test]
+    fn invalid_buck_input_currents_are_rejected() {
+        let ok = |valley: f64, peak: f64, duty: f64, tr: f64, tf: f64| {
+            PeriodicSpectrum::buck_input_current(valley, peak, duty, 2e-6, tr, tf, 3).is_ok()
+        };
+        assert!(ok(1.0, 2.0, 0.4, 10e-9, 10e-9));
+        assert!(!ok(-0.1, 2.0, 0.4, 10e-9, 10e-9), "negative valley");
+        assert!(!ok(2.0, 1.0, 0.4, 10e-9, 10e-9), "peak below valley");
+        assert!(!ok(1.0, 2.0, 0.4, 1e-6, 1e-6), "edges longer than the on-time");
+        assert!(!ok(1.0, 2.0, 0.999, 10e-9, 10e-9), "no room for the off-time edges");
     }
 }

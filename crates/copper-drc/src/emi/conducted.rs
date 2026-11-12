@@ -2,13 +2,31 @@
 //! (`docs/emi-noise-analysis.md` sections 8 and 10).
 //!
 //! The harmonic currents of the converter's input pulse train are pushed
-//! through the hot capacitor branch (capacitor, its parasitics and the hot-loop
-//! inductance of `EMI-HOT-LOOP`), an input filter when one is recognised, and
-//! the 50 uH V-network of `copper_emi::conducted`. Every input has a recorded
-//! source; an input the board does not declare is either replaced by a loudly
-//! labelled assumption that cannot make the result look better than the
-//! physics allows (the differential-mode low harmonics are nearly independent
-//! of the edge time) or the prediction is skipped with the reason as coverage.
+//! through the input network, solved as one linear circuit: every capacitor on
+//! the hot net and on the supply side of an input filter is its own series
+//! R-L-C branch with its own connection inductance, an input filter when one is
+//! recognised, and the 50 uH V-network of `copper_emi::conducted`. The hot-loop
+//! inductance of `EMI-HOT-LOOP` sits in the converter's own branch, between the
+//! switch pins and the hot capacitor's node, not in the path from the capacitor
+//! to the LISN:
+//!
+//! ```text
+//!   switch      L_loop        K (hot capacitor pads, feed)          LISN
+//!    cell o-----[====]----+------+-----------+-----------[ L_f ]----+----o
+//!    (I_dm)               |      |           |                      |
+//!                       === C_hot  [L_2]--=== C_2    ...         === C_s (own branch each)
+//!                        |                  |                      |
+//!                        +------------------+----------------------+---- return
+//! ```
+//!
+//! Two operating scenarios exist. `declared_operating_point`: the cell's
+//! component declares `load_current`; for a buck in continuous conduction the
+//! input current is a ramp from `I_out - dI/2` to `I_out + dI/2` during the
+//! on-time (`dI = (Vin - Vout) D / (L f)` with the power inductor's value, or a
+//! rule-of-thumb ripple ratio when the value cannot be read), zero in the
+//! off-time. `current_limit`: no operating point is declared (or it is outside
+//! the model), and the switch current limit `current_peak` is used as the
+//! amplitude of a flat-top pulse: a worst case, not a prediction of operation.
 //!
 //! Differential mode only: the common-mode path is not modelled (see
 //! [`COMMON_MODE_REASON`]).
@@ -25,8 +43,9 @@
 
 use std::f64::consts::PI;
 
-use copper_emi::conducted::{self, Capacitor, ConductedInput, FrequencyMode, InputFilter};
+use copper_emi::conducted::{self, Capacitor, CapacitorBranch, ConductedInput, FrequencyMode, InputFilter};
 use copper_emi::estimate::limits::{Class, Detector};
+use copper_lang::lower::{CAPACITANCE_AT_BIAS, parse_quantity_text};
 use copper_lang::model::ComponentValue;
 use copper_units::Dimension;
 
@@ -34,12 +53,16 @@ use super::defaults::{DEFAULT_ESR, PACKAGE_ESL, RAMP_10_90};
 use super::*;
 
 /// Mechanisms the conducted prediction leaves out (the ones that depend on the cell are added where they apply).
-const NOT_MODELLED: [&str; 5] = [
+const NOT_MODELLED: [&str; 9] = [
     "common-mode noise path (differential mode only; common mode often dominates above a few MHz)",
     "spread-spectrum clocking, frequency modulation, jitter and burst or skip modes",
     "converter source impedance and control-loop interaction (the converter is an ideal harmonic current source)",
-    "frequency dependence of component models beyond ESR, ESL and self-resonance (DC-bias loss is a parameter band, not a model)",
+    "frequency dependence of component models beyond ESR, ESL and self-resonance (DC-bias loss is a parameter band or a declared capacitance, not a model)",
     "the supply impedance behind the V-network",
+    "mutual inductance between the capacitor branches and between the hot loop and the branches (each branch has self inductance only)",
+    "the load-side network (the output capacitor, the load and the inductor current's own harmonics are not in the input network; the converter is only an input-current source)",
+    "inductor saturation and the dead time, reverse recovery and ringing of the switch (the ramp uses the inductance as a constant)",
+    "operating modes other than a fixed-frequency buck in continuous conduction (discontinuous conduction, pulse skipping and forced-PWM light-load operation are outside the model)",
 ];
 
 /// Why the common-mode path is not modelled.
@@ -92,22 +115,87 @@ fn si(value: f64, unit: &str) -> String {
     format!("{} {prefix}{unit}", rounded(scaled, 3))
 }
 
+/// How a capacitor's ESL was obtained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EslBasis {
+    /// `esl` on the part.
+    Declared,
+    /// Derived from the part's `self_resonance` and the capacitance.
+    SelfResonance,
+    /// The package default (a rule of thumb).
+    PackageDefault,
+}
+
+impl EslBasis {
+    fn name(self) -> &'static str {
+        match self {
+            EslBasis::Declared => "declared",
+            EslBasis::SelfResonance => "from_self_resonance",
+            EslBasis::PackageDefault => "package_default",
+        }
+    }
+}
+
+/// How the capacitance of a capacitor is treated for DC bias. Keyed to the capacitance itself (a declared
+/// `capacitance_at_bias`, the package and the kind of capacitor), not to whether ESR and ESL were declared.
+#[derive(Clone, Debug, PartialEq)]
+enum Bias {
+    /// The component declares `capacitance_at_bias`; the capacitor's capacitance is that value, no band.
+    Declared,
+    /// A ceramic SMD package with nothing declared: the rule of thumb of the package (a band).
+    Rule(&'static str),
+    /// No derating is applied, and why.
+    NotApplied(String),
+}
+
+impl Bias {
+    fn name(&self) -> &'static str {
+        match self {
+            Bias::Declared => "declared",
+            Bias::Rule(_) => "rule_of_thumb",
+            Bias::NotApplied(_) => "not_applied",
+        }
+    }
+}
+
 /// One resolved capacitor: model values and where each came from.
+#[derive(Clone)]
 struct CapacitorModel {
     component: String,
+    /// The capacitor before any rule-of-thumb derating: the component value, or the declared capacitance at bias.
     capacitor: Capacitor,
+    /// The component's value, F.
+    nominal_capacitance: f64,
     sources: Vec<String>,
-    defaulted: bool,
-    /// The SMD package of a capacitor whose part declares no parasitics: the DC-bias rule of thumb applies.
-    package: Option<&'static str>,
+    esr_declared: bool,
+    esl: EslBasis,
+    bias: Bias,
 }
 
 impl CapacitorModel {
+    /// ESR or ESL took the package default.
+    fn defaulted(&self) -> bool {
+        !self.esr_declared || self.esl == EslBasis::PackageDefault
+    }
+
+    /// The SMD package whose DC-bias rule of thumb applies.
+    fn package(&self) -> Option<&'static str> {
+        match self.bias {
+            Bias::Rule(package) => Some(package),
+            _ => None,
+        }
+    }
+
     /// The capacitor after the DC-bias loss of its package (rule of thumb), when the rule applies.
     fn derated(&self) -> Option<Capacitor> {
-        let package = self.package?;
+        let package = self.package()?;
         let loss = defaults::dc_bias_loss(package);
         Some(Capacitor { capacitance: self.capacitor.capacitance * (1.0 - loss), ..self.capacitor })
+    }
+
+    /// The capacitor in the derated (`true`) or un-derated state of the rule-of-thumb band.
+    fn at(&self, derated: bool) -> Capacitor {
+        if derated { self.derated().unwrap_or(self.capacitor) } else { self.capacitor }
     }
 
     fn describe(&self) -> String {
@@ -119,6 +207,23 @@ impl CapacitorModel {
             si(self.capacitor.esl, "H"),
             self.sources.join("; ")
         )
+    }
+
+    /// The DC-bias statement of an `input:` line.
+    fn bias_text(&self, nominal_derated: bool) -> String {
+        match &self.bias {
+            Bias::Declared => format!(
+                "capacitance at bias {} declared on the component (value {}); no band",
+                si(self.capacitor.capacitance, "F"),
+                si(self.nominal_capacitance, "F")
+            ),
+            Bias::Rule(package) => format!(
+                "DC-bias loss {} (nominal {})",
+                defaults::rule_text(&defaults::dc_bias_rule(package), defaults::DC_BIAS_ATTRIBUTE),
+                if nominal_derated { "derated" } else { "not derated" }
+            ),
+            Bias::NotApplied(reason) => format!("no DC-bias derating applied: {reason}"),
+        }
     }
 }
 
@@ -144,7 +249,7 @@ fn capacitor_model(view: &FlatElectricalView, reference: &str) -> Result<Capacit
         )
     };
     let mut sources = vec![format!("{reference} value {}", si(capacitance, "F"))];
-    let mut defaulted = false;
+    let esr_declared = emi.and_then(|e| e.esr.as_ref()).is_some();
     let esr = match emi.and_then(|e| e.esr.as_ref()) {
         Some(esr) => {
             sources.push("ESR declared by the part".to_owned());
@@ -154,76 +259,88 @@ fn capacitor_model(view: &FlatElectricalView, reference: &str) -> Result<Capacit
             if package.is_none() {
                 return Err(unrecognised());
             }
-            defaulted = true;
             sources.push(format!("ESR {} default for a ceramic", si(DEFAULT_ESR, "ohm")));
             DEFAULT_ESR
         }
     };
-    let esl = if let Some(esl) = emi.and_then(|e| e.esl.as_ref()) {
+    let (esl, esl_basis) = if let Some(esl) = emi.and_then(|e| e.esl.as_ref()) {
         sources.push("ESL declared by the part".to_owned());
-        quantity(esl)
+        (quantity(esl), EslBasis::Declared)
     } else if let Some(srf) = emi.and_then(|e| e.self_resonance.as_ref()).map(quantity).filter(|f| *f > 0.0) {
         let esl = 1.0 / ((2.0 * PI * srf).powi(2) * capacitance);
         sources.push(format!("ESL derived from the declared self-resonance {}", si(srf, "Hz")));
-        esl
+        (esl, EslBasis::SelfResonance)
     } else {
         let Some((code, esl)) = package else { return Err(unrecognised()) };
-        defaulted = true;
         sources.push(format!("ESL {} default for package {code}", si(esl, "H")));
-        esl
+        (esl, EslBasis::PackageDefault)
     };
     if !(esr.is_finite() && esr >= 0.0 && esl.is_finite() && esl >= 0.0 && capacitance > 0.0) {
         return Err(format!("{reference}: capacitance, ESR and ESL must be positive finite numbers"));
     }
+    // DC bias: keyed to the capacitance, not to the parasitics.
+    let declared_bias = component
+        .properties
+        .get(CAPACITANCE_AT_BIAS)
+        .and_then(|text| parse_quantity_text(text, Dimension::Capacitance))
+        .map(|q| quantity(&q))
+        .filter(|c| *c > 0.0 && *c <= capacitance * (1.0 + 1e-12));
+    let category = part.map_or("", |p| p.category.as_str());
+    let non_ceramic = ["electrolytic", "tantalum", "polymer", "film", "supercap"].iter().any(|k| category.contains(k));
+    let (used, bias) = if let Some(effective) = declared_bias {
+        sources.push(format!("capacitance at bias {} declared on the component", si(effective, "F")));
+        (effective, Bias::Declared)
+    } else if non_ceramic {
+        (capacitance, Bias::NotApplied(format!("the part category {category} is not a ceramic capacitor")))
+    } else if let Some((code, _)) = package {
+        (capacitance, Bias::Rule(code))
+    } else {
+        (
+            capacitance,
+            Bias::NotApplied(format!(
+                "the footprint {} is not a recognised ceramic SMD package (0402, 0603, 0805, 1206, 1210)",
+                footprint.as_deref().unwrap_or("(none)")
+            )),
+        )
+    };
     Ok(CapacitorModel {
         component: reference.to_owned(),
-        capacitor: Capacitor { capacitance, esr, esl },
+        capacitor: Capacitor { capacitance: used, esr, esl },
+        nominal_capacitance: capacitance,
         sources,
-        defaulted,
-        package: if defaulted { package.map(|(code, _)| code) } else { None },
+        esr_declared,
+        esl: esl_basis,
+        bias,
     })
-}
-
-/// Parallel combination of identical-type branches: capacitance adds, ESR and ESL combine as resistances.
-fn parallel(models: &[CapacitorModel]) -> Capacitor {
-    parallel_of(&models.iter().map(|m| m.capacitor).collect::<Vec<_>>())
-}
-
-/// [`parallel`] of resolved capacitors.
-fn parallel_of(capacitors: &[Capacitor]) -> Capacitor {
-    let combine = |f: fn(&Capacitor) -> f64| {
-        if capacitors.iter().any(|c| f(c) == 0.0) {
-            0.0
-        } else {
-            1.0 / capacitors.iter().map(|c| 1.0 / f(c)).sum::<f64>()
-        }
-    };
-    Capacitor {
-        capacitance: capacitors.iter().map(|c| c.capacitance).sum(),
-        esr: combine(|c| c.esr),
-        esl: combine(|c| c.esl),
-    }
 }
 
 /// An input filter that was recognised and modelled.
 struct FilterModel {
     inductor: String,
     upstream_net: String,
-    filter: InputFilter,
-    /// The filter with the DC-bias loss rule of thumb applied to the upstream ceramic capacitors that
-    /// declare no parasitics; `None` when no upstream capacitor is subject to it.
-    derated: Option<InputFilter>,
+    inductance: f64,
+    dcr: f64,
+    parallel_capacitance: f64,
+    /// The capacitors on the supply side of the inductor, each with its terminal on the upstream net.
+    supply: Vec<(CapacitorModel, Endpoint)>,
+    /// The capacitors between the hot supply net and the inductor behind a transparent feed: branches on the hot node.
+    near: Vec<(CapacitorModel, Endpoint)>,
+    /// The inductor's terminal on the upstream net (the supply-side capacitors' connection estimate starts here).
+    far_pin: Endpoint,
     components: Vec<String>,
     description: String,
     tags: Vec<String>,
+    /// Capacitors that could not be modelled, with the reason.
+    skipped: Vec<String>,
 }
 
 enum FilterOutcome {
     Modelled(Box<FilterModel>),
     /// No series element on the feed path of the hot supply net (the note lists ignored downstream feeds).
     NoneRecognised(Option<String>),
-    /// The hot supply net is fed through transparent `dc_power_path` parts only: no filter inductor.
-    NoInductor(String),
+    /// The hot supply net is fed through transparent `dc_power_path` parts only: no filter inductor. The
+    /// capacitors to the return behind the transparent parts are branches on the hot node.
+    NoInductor(String, Vec<(String, Endpoint)>),
     /// Something is there but the model cannot represent it.
     NotModelled(String),
 }
@@ -370,7 +487,8 @@ fn direction(view: &FlatElectricalView, visited: &[String], ret: &str, start: &s
 /// The members of one net of the feed path, sorted by role.
 struct NetScan {
     candidates: Vec<(Endpoint, SeriesKind)>,
-    capacitors: Vec<String>,
+    /// Capacitors from the net to the return, with their terminal on it.
+    capacitors: Vec<(String, Endpoint)>,
     /// Connectors and declared source pins.
     ends: Vec<String>,
     strangers: Vec<String>,
@@ -412,12 +530,8 @@ fn scan_net(
         } else if is_capacitor_part(view, component) {
             if !to_ret {
                 scan.strangers.push(reference.clone());
-            } else if is_hot {
-                scan.notes.push(format!(
-                    "capacitor {reference} to {ret} on {net} is part of the hot capacitance, not modelled separately"
-                ));
             } else {
-                scan.capacitors.push(reference.clone());
+                scan.capacitors.push((reference.clone(), endpoint.clone()));
             }
         } else if !is_hot
             && (part.category.starts_with("connector")
@@ -437,10 +551,12 @@ fn scan_net(
             scan.strangers.push(reference.clone());
         }
     }
-    for list in [&mut scan.capacitors, &mut scan.ends, &mut scan.strangers, &mut scan.notes] {
+    for list in [&mut scan.ends, &mut scan.strangers, &mut scan.notes] {
         list.sort();
         list.dedup();
     }
+    scan.capacitors.sort_by(|a, b| a.0.cmp(&b.0));
+    scan.capacitors.dedup_by(|a, b| a.0 == b.0);
     scan
 }
 
@@ -451,6 +567,8 @@ struct Element {
     word: &'static str,
     near: String,
     far: String,
+    /// The element's terminal on the far net.
+    far_pin: Endpoint,
 }
 
 fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutcome {
@@ -488,7 +606,20 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
             }
             match direction(view, &path, ret, &far, &endpoint.component) {
                 Direction::Upstream => {
-                    up.push(Element { reference: endpoint.component.clone(), kind, word, near: net.clone(), far });
+                    let far_pin = part
+                        .pins
+                        .keys()
+                        .find(|pin| **pin != endpoint.pin)
+                        .map(|pin| Endpoint::new(&endpoint.component, pin))
+                        .expect("a two-pin series element has a second pin");
+                    up.push(Element {
+                        reference: endpoint.component.clone(),
+                        kind,
+                        word,
+                        near: net.clone(),
+                        far,
+                        far_pin,
+                    });
                 }
                 Direction::Downstream => downstream.push(format!("{} {}", word, endpoint.component)),
                 Direction::Unknown => {
@@ -547,11 +678,15 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
     let inductors: Vec<&Element> = elements.iter().filter(|e| e.kind == SeriesKind::Inductor).collect();
     if inductors.is_empty() {
         let tail = if notes.is_empty() { String::new() } else { format!("; {}", notes.join("; ")) };
-        return FilterOutcome::NoInductor(format!(
-            "fed through {} from {}; no filter inductor on the feed path (resistance not modelled, taken as 0){tail}",
-            through_parts.join(", "),
-            path.last().expect("path"),
-        ));
+        let behind: Vec<(String, Endpoint)> = scans.iter().flat_map(|scan| scan.capacitors.iter().cloned()).collect();
+        return FilterOutcome::NoInductor(
+            format!(
+                "fed through {} from {}; no filter inductor on the feed path (resistance not modelled, taken as 0){tail}",
+                through_parts.join(", "),
+                path.last().expect("path"),
+            ),
+            behind,
+        );
     }
     if inductors.len() > 1 {
         let names: Vec<&str> = inductors.iter().map(|e| e.reference.as_str()).collect();
@@ -599,34 +734,34 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
     let dcr = emi.and_then(|e| e.esr.as_ref()).map(quantity);
     let srf = emi.and_then(|e| e.self_resonance.as_ref()).map(quantity).filter(|f| *f > 0.0);
     let parallel_capacitance = srf.map_or(0.0, |f| 1.0 / ((2.0 * PI * f).powi(2) * inductance));
-    // Capacitors beyond the inductor form the supply capacitor; those between it and the hot net are parallel
-    // hot-side capacitance behind a transparent feed.
-    let mut capacitors: Vec<String> = Vec::new();
+    // Capacitors beyond the inductor are the supply-side branches; those between the hot net and the inductor
+    // (behind a transparent feed) hang on the same node K as the hot net's capacitors.
+    let mut supply_refs: Vec<(String, Endpoint)> = Vec::new();
+    let mut near_refs: Vec<(String, Endpoint)> = Vec::new();
     for (i, scan) in scans.iter().enumerate() {
         if i > k {
-            capacitors.extend(scan.capacitors.iter().cloned());
-        } else if !scan.capacitors.is_empty() {
-            notes.push(format!(
-                "{} on {} sit between the hot supply net and {} behind a transparent feed: hot-side capacitance, not modelled",
-                scan.capacitors.join(", "),
-                path[i],
-                s.reference
-            ));
+            supply_refs.extend(scan.capacitors.iter().cloned());
+        } else {
+            near_refs.extend(scan.capacitors.iter().cloned());
         }
     }
-    let mut series_notes: Vec<String> = Vec::new();
+    let mut skipped: Vec<String> = Vec::new();
     let mut tags = vec!["input_filter_modelled".to_owned()];
-    let mut models: Vec<CapacitorModel> = Vec::new();
-    for reference in &capacitors {
-        match capacitor_model(view, reference) {
-            Ok(model) => models.push(model),
-            Err(reason) => series_notes.push(format!("upstream capacitor skipped: {reason}")),
+    let mut resolve = |refs: &[(String, Endpoint)], what: &str| -> Vec<(CapacitorModel, Endpoint)> {
+        let mut models = Vec::new();
+        for (reference, endpoint) in refs {
+            match capacitor_model(view, reference) {
+                Ok(model) => models.push((model, endpoint.clone())),
+                Err(reason) => skipped.push(format!("{what} capacitor skipped: {reason}")),
+            }
         }
-    }
-    if models.iter().any(|m| m.defaulted) {
+        models
+    };
+    let supply = resolve(&supply_refs, "upstream");
+    let near = resolve(&near_refs, "hot-side");
+    if supply.iter().chain(&near).any(|(m, _)| m.defaulted()) {
         tags.push(defaults::TAG_PARASITICS.to_owned());
     }
-    let supply_capacitor = (!models.is_empty()).then(|| parallel(&models));
     let mut description = format!(
         "{} {} (DCR {}, {}) from {} to {upstream}",
         s.reference,
@@ -642,47 +777,53 @@ fn detect_filter(view: &FlatElectricalView, cell: &SwitchingCell) -> FilterOutco
     if srf.is_none() {
         tags.push("filter_inductor_ideal".to_owned());
     }
-    match (&supply_capacitor, models.len()) {
-        (Some(_), 1) => description.push_str(&format!("; upstream capacitor {}", models[0].describe())),
-        (Some(c), n) => description.push_str(&format!(
-            "; {n} upstream capacitors ({}) lumped in parallel: {} ESR {} ESL {} (mutual coupling and mounting inductance ignored)",
-            models.iter().map(|m| m.describe()).collect::<Vec<_>>().join(" | "),
-            si(c.capacitance, "F"),
-            si(c.esr, "ohm"),
-            si(c.esl, "H"),
-        )),
-        (None, _) => description.push_str(
-            "; no upstream capacitor to the hot return recognised, so the filter is a series inductor only (first order)",
-        ),
-    }
-    if models.iter().any(|m| m.package.is_some()) {
+    if supply.is_empty() {
         description.push_str(
-            "; the DC-bias loss rule of thumb applies to the upstream ceramic capacitors that declare no parasitics (band corner)",
+            "; no upstream capacitor to the hot return recognised, so the filter is a series inductor only (first order)",
+        );
+    } else {
+        description.push_str(&format!(
+            "; {} upstream capacitor(s), each its own branch: {}",
+            supply.len(),
+            supply.iter().map(|(m, _)| m.describe()).collect::<Vec<_>>().join(" | ")
+        ));
+    }
+    if !near.is_empty() {
+        description.push_str(&format!(
+            "; {} capacitor(s) between the hot supply net and {} behind a transparent feed, each its own branch on the hot node: {}",
+            near.len(),
+            s.reference,
+            near.iter().map(|(m, _)| m.describe()).collect::<Vec<_>>().join(" | ")
+        ));
+    }
+    if supply.iter().chain(&near).any(|(m, _)| m.package().is_some()) {
+        description.push_str(
+            "; the DC-bias loss rule of thumb applies to the ceramic capacitors that declare no capacitance_at_bias (band corner)",
         );
     }
     if !through.is_empty() {
         description.push_str(&format!("; {through}"));
         tags.push("feed_resistance_not_modelled".to_owned());
     }
-    for note in series_notes.into_iter().chain(notes) {
+    for note in skipped.iter().chain(notes.iter()) {
         description.push_str(&format!("; {note}"));
     }
     let mut components = vec![s.reference.clone()];
-    components.extend(models.iter().map(|m| m.component.clone()));
+    components.extend(supply.iter().chain(&near).map(|(m, _)| m.component.clone()));
     components.extend(transparent.iter().map(|e| e.reference.clone()));
-    let filter = InputFilter { inductance, dcr: dcr.unwrap_or(0.0), parallel_capacitance, supply_capacitor };
-    let derated = models.iter().any(|m| m.package.is_some()).then(|| {
-        let capacitors: Vec<Capacitor> = models.iter().map(|m| m.derated().unwrap_or(m.capacitor)).collect();
-        InputFilter { supply_capacitor: Some(parallel_of(&capacitors)), ..filter }
-    });
     FilterOutcome::Modelled(Box::new(FilterModel {
         inductor: s.reference.clone(),
         upstream_net: upstream,
-        filter,
-        derated,
+        inductance,
+        dcr: dcr.unwrap_or(0.0),
+        parallel_capacitance,
+        supply,
+        near,
+        far_pin: s.far_pin.clone(),
         components,
         description,
         tags,
+        skipped,
     }))
 }
 
@@ -769,6 +910,188 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     }
 }
 
+/// Which source spectrum a scenario uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// The buck's input current at the declared operating point (ramp on a pedestal, continuous conduction).
+    Declared,
+    /// The switch current limit as the amplitude of a flat-top pulse: a worst case, not a prediction.
+    CurrentLimit,
+}
+
+impl Kind {
+    fn name(self) -> &'static str {
+        match self {
+            Kind::Declared => "declared_operating_point",
+            Kind::CurrentLimit => "current_limit",
+        }
+    }
+}
+
+/// The inductor ripple of the declared operating point.
+#[derive(Clone, Copy, Debug)]
+enum Ripple {
+    /// Computed from the power inductor's value: `dI = (Vin - Vout) D / (L f)`, A peak to peak.
+    Computed(f64),
+    /// The power inductor's value was not found: the rule-of-thumb ratio band times the load current.
+    Rule { nominal: f64, low: f64, high: f64 },
+}
+
+/// The declared operating point of a cell, checked against continuous conduction.
+struct OperatingPoint {
+    load: f64,
+    /// The power inductor's reference and value, when found.
+    inductor: Option<(String, f64)>,
+    ripple: Ripple,
+    /// `I_out >= dI / 2`: the valley of the ramp is not below zero.
+    ccm: bool,
+}
+
+impl OperatingPoint {
+    fn nominal_ripple(&self) -> f64 {
+        match self.ripple {
+            Ripple::Computed(r) => r,
+            Ripple::Rule { nominal, .. } => nominal,
+        }
+    }
+}
+
+/// A capacitor of the hot net other than the hot capacitor, or one behind a transparent feed: a branch on node K.
+struct Extra {
+    model: CapacitorModel,
+    role: &'static str,
+    connection: Connection,
+}
+
+/// The estimated inductance of a capacitor's connection to the node it hangs on.
+struct Connection {
+    inductance: f64,
+    text: String,
+    estimated: bool,
+}
+
+/// `2 x distance x (hot-loop inductance / hot-loop path length)`: the inductance of the go-and-return connection
+/// between two pads, scaled from the board's own hot loop (which includes the plane under it).
+fn estimate_connection(cx: &Context, per_length: Option<f64>, from: &Endpoint, to: &Endpoint) -> Connection {
+    let (a, b) = (cx.layout.pads_of_endpoint(from), cx.layout.pads_of_endpoint(to));
+    let mut nearest: Option<f64> = None;
+    for pa in &a {
+        for pb in &b {
+            let d = dist(pa.shape.center(), pb.shape.center());
+            nearest = Some(nearest.map_or(d, |x: f64| x.min(d)));
+        }
+    }
+    match (nearest, per_length) {
+        (Some(d), Some(per)) => {
+            let inductance = 2.0 * d * per;
+            Connection {
+                inductance,
+                text: format!(
+                    "estimated: 2 x {:.2} mm (nearest pad centres, {from} to {to}) x {:.3} nH/mm (the inductance of EMI-HOT-LOOP over its path length) = {}",
+                    mm(d),
+                    per * 1e6,
+                    si(inductance, "H")
+                ),
+                estimated: true,
+            }
+        }
+        _ => Connection {
+            inductance: 0.0,
+            text: format!(
+                "not estimated ({from} or {to} has no placed pad, or the hot loop has no length): taken as 0"
+            ),
+            estimated: false,
+        },
+    }
+}
+
+/// The value of the inductor `reference`, H.
+fn inductance_of(view: &FlatElectricalView, reference: &str) -> Option<f64> {
+    match view.components.iter().find(|c| c.reference == reference)?.value.as_ref()? {
+        ComponentValue::Quantity(q) if q.dimension() == Dimension::Inductance => Some(quantity(q)).filter(|l| *l > 0.0),
+        _ => None,
+    }
+}
+
+/// One harmonic row of a scenario: the nominal case, and the band over the corner cases.
+struct Row {
+    n: u32,
+    f: f64,
+    source: f64,
+    dm: f64,
+    total: f64,
+    low: f64,
+    high: f64,
+    qp: Option<f64>,
+    avg: Option<f64>,
+    margin_qp: Option<f64>,
+    margin_avg: Option<f64>,
+    /// Peak branch currents of the nominal case over the source current, in the order of `Evaluation::labels`.
+    shares: Vec<f64>,
+}
+
+impl Row {
+    fn margin(&self) -> Option<f64> {
+        match (self.margin_qp, self.margin_avg) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    fn json(&self) -> Value {
+        let mut item = Object::new();
+        put(&mut item, "harmonic", Value::from(i64::from(self.n)));
+        put(&mut item, "frequency_hz", num(self.f, 0));
+        put(&mut item, "source_current_a", num(self.source, 6));
+        put(&mut item, "dm_dbuv", num(self.dm, 2));
+        put(&mut item, "cm_dbuv", Value::Null);
+        put(&mut item, "total_dbuv", num(self.total, 2));
+        put(&mut item, "low_dbuv", num(self.low, 2));
+        put(&mut item, "high_dbuv", num(self.high, 2));
+        put(&mut item, "limit_qp", self.qp.map_or(Value::Null, |v| num(v, 2)));
+        put(&mut item, "limit_avg", self.avg.map_or(Value::Null, |v| num(v, 2)));
+        put(&mut item, "margin_qp_db", self.margin_qp.map_or(Value::Null, |v| num(v, 2)));
+        put(&mut item, "margin_avg_db", self.margin_avg.map_or(Value::Null, |v| num(v, 2)));
+        put(&mut item, "margin_db", self.margin().map_or(Value::Null, |v| num(v, 2)));
+        Value::Object(item)
+    }
+}
+
+/// The result of one scenario: its rows, the nominal-case report and the cases behind the bands.
+struct Evaluation {
+    rows: Vec<Row>,
+    nominal: conducted::ConductedReport,
+    cases: usize,
+    dc_band: bool,
+    ripple_band: bool,
+}
+
+/// The index of the worst row: least margin when margins exist, else the highest level.
+fn worst_row(rows: &[Row]) -> usize {
+    if rows.iter().any(|r| r.margin().is_some()) {
+        rows.iter()
+            .enumerate()
+            .filter(|(_, r)| r.margin().is_some())
+            .min_by(|(_, a), (_, b)| a.margin().unwrap().total_cmp(&b.margin().unwrap()))
+            .map(|(i, _)| i)
+    } else {
+        rows.iter().enumerate().max_by(|(_, a), (_, b)| a.high.total_cmp(&b.high)).map(|(i, _)| i)
+    }
+    .unwrap_or(0)
+}
+
+/// A capacitor of the report: where it sits and how each of its values came about.
+struct Record<'a> {
+    model: &'a CapacitorModel,
+    role: &'static str,
+    connection: Option<&'a Connection>,
+}
+
+fn percent(share: f64) -> String {
+    if share >= 0.1 { format!("{:.0} %", share * 100.0) } else { format!("{:.2} %", share * 100.0) }
+}
+
+/// The prediction of one cell at one frequency scenario.
 fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&Scenario>) {
     let view = cx.layout.view;
     let check = match scenario.and_then(|s| s.suffix) {
@@ -830,18 +1153,22 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             None => "the cell has no magnetic with an output net (Vout)".to_owned(),
         });
     }
-    let current = cell.current_peak.as_ref().map(quantity).filter(|i| *i > 0.0);
-    if current.is_none() {
+    let limit_current = cell.current_peak.as_ref().map(quantity).filter(|i| *i > 0.0);
+    let load_declared = cell.load_current.as_ref().map(quantity).filter(|i| *i > 0.0);
+    if limit_current.is_none() && load_declared.is_none() {
         missing.push(
-            "the switch pin declares no current_peak (the amplitude of the input current pulses): no load current is declared anywhere"
+            "the cell declares neither a load_current (the operating point, a component attribute) nor a switch pin current_peak (the current limit used as the worst-case amplitude)"
                 .to_owned(),
         );
     }
-    let (Some(drive), Some((vin_name, vin)), Some((vout_name, vout)), Some(current)) = (drive, vin, vout, current)
-    else {
+    let (Some(drive), Some((vin_name, vin)), Some((vout_name, vout))) = (drive, vin, vout) else {
         na(cx, format!("prediction skipped: {}", missing.join("; ")));
         return;
     };
+    if !missing.is_empty() {
+        na(cx, format!("prediction skipped: {}", missing.join("; ")));
+        return;
+    }
     if !(vout > 0.0 && vin > vout) {
         na(
             cx,
@@ -873,14 +1200,15 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         }
     };
 
-    // Edge time: declared, derived from a declared slew rate, or the default slew band.
-    let Some(edge) = drive.edge.clone() else {
+    // The current commutation edge: declared, or the voltage edge standing in for it.
+    let Some(edge) = drive.current_edge.clone() else {
         na(cx, format!("prediction skipped: {}", drive.edge_missing));
         return;
     };
 
     // Input filter.
     let filter = detect_filter(view, cell);
+    let mut behind_feed: Vec<(String, Endpoint)> = Vec::new();
     let (filter_model, filter_text, filter_status) = match filter {
         FilterOutcome::Modelled(model) => {
             let text = model.description.clone();
@@ -894,159 +1222,263 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             },
             CoverageStatus::NotApplicable,
         ),
-        FilterOutcome::NoInductor(reason) => {
-            (None, format!("no input filter recognised: {reason}"), CoverageStatus::NotApplicable)
+        FilterOutcome::NoInductor(reason, behind) => {
+            let note = if behind.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "; the capacitor(s) to the return behind it ({}) are branches on the hot node, each with its own connection inductance",
+                    behind.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>().join(", ")
+                )
+            };
+            behind_feed = behind;
+            (None, format!("no input filter recognised: {reason}{note}"), CoverageStatus::NotApplicable)
         }
         FilterOutcome::NotModelled(reason) => {
             (None, format!("no input filter modelled: {reason}"), CoverageStatus::NotApplicable)
         }
     };
 
-    // Parallel hot capacitors are not modelled: the selected one carries the prediction.
-    let others: Vec<&HotCapacitor> = cell.hot_capacitors.iter().filter(|c| c.component != hot.component).collect();
-    let mut other_names = Vec::new();
-    let mut other_capacitance = 0.0;
-    for capacitor in &others {
-        other_names.push(capacitor.component.clone());
-        if let Some(ComponentInstance { value: Some(ComponentValue::Quantity(q)), .. }) =
-            view.components.iter().find(|c| c.reference == capacitor.component)
-            && q.dimension() == Dimension::Capacitance
-        {
-            other_capacitance += quantity(q);
+    // Every other capacitor of the hot net is its own branch on node K, through its own connection inductance.
+    let per_length = (summary.length > 0.0).then_some(loop_inductance / summary.length);
+    let hot_pin = cell.hot_capacitors.iter().find(|c| c.component == hot.component).map(|c| c.supply_pin.clone());
+    let mut skipped: Vec<String> = Vec::new();
+    let mut extras: Vec<Extra> = Vec::new();
+    for capacitor in cell.hot_capacitors.iter().filter(|c| c.component != hot.component) {
+        match capacitor_model(view, &capacitor.component) {
+            Ok(model) => {
+                let connection = match &hot_pin {
+                    Some(hot_pin) => estimate_connection(cx, per_length, hot_pin, &capacitor.supply_pin),
+                    None => Connection {
+                        inductance: 0.0,
+                        text: "not estimated (no hot capacitor pin)".to_owned(),
+                        estimated: false,
+                    },
+                };
+                extras.push(Extra { model, role: "hot_net", connection });
+            }
+            Err(reason) => skipped.push(format!("hot-net capacitor skipped: {reason}")),
         }
     }
+    let mut behind: Vec<(CapacitorModel, Endpoint)> = Vec::new();
+    if let Some(model) = &filter_model {
+        behind.extend(model.near.iter().cloned());
+        skipped.extend(model.skipped.iter().cloned());
+    }
+    for (reference, endpoint) in &behind_feed {
+        match capacitor_model(view, reference) {
+            Ok(model) => behind.push((model, endpoint.clone())),
+            Err(reason) => skipped.push(format!("capacitor behind the feed skipped: {reason}")),
+        }
+    }
+    for (model, endpoint) in behind {
+        let connection = match &hot_pin {
+            Some(hot_pin) => estimate_connection(cx, per_length, hot_pin, &endpoint),
+            None => Connection {
+                inductance: 0.0,
+                text: "not estimated (no hot capacitor pin)".to_owned(),
+                estimated: false,
+            },
+        };
+        extras.push(Extra { model, role: "behind_transparent_feed", connection });
+    }
+    let supply_connections: Vec<Connection> = filter_model
+        .as_ref()
+        .map(|model| {
+            model
+                .supply
+                .iter()
+                .map(|(_, endpoint)| estimate_connection(cx, per_length, &model.far_pin, endpoint))
+                .collect()
+        })
+        .unwrap_or_default();
 
-    // The prediction. The nominal case comes first; the corners of the rule-of-thumb bands follow:
-    // {fast, slow edge} x {capacitance un-derated, derated}. The operating-current band is analytic.
+    // The operating point.
+    let duty = vout / vin;
+    let point: Option<OperatingPoint> = load_declared.map(|load| {
+        let inductor =
+            cell.magnetic.as_ref().and_then(|m| inductance_of(view, &m.component).map(|l| (m.component.clone(), l)));
+        match inductor {
+            Some((name, l)) => {
+                let ripple = (vin - vout) * duty / (l * drive.frequency);
+                OperatingPoint {
+                    load,
+                    inductor: Some((name, l)),
+                    ripple: Ripple::Computed(ripple),
+                    ccm: ripple / 2.0 <= load * (1.0 + 1e-9),
+                }
+            }
+            None => {
+                let ratio = defaults::RIPPLE_RATIO;
+                OperatingPoint {
+                    load,
+                    inductor: None,
+                    ripple: Ripple::Rule { nominal: ratio.0 * load, low: ratio.1 * load, high: ratio.2 * load },
+                    ccm: true,
+                }
+            }
+        }
+    });
+    let declared_ok = point.as_ref().is_some_and(|p| p.ccm);
+    let headline = if declared_ok { Kind::Declared } else { Kind::CurrentLimit };
+    if headline == Kind::CurrentLimit && limit_current.is_none() {
+        let reason = match &point {
+            Some(p) => format!(
+                "the declared operating point (load_current {} A) is outside the supported model (continuous conduction of a fixed-frequency buck: it needs I_out >= dI/2, dI = {} A) and the cell declares no current_peak for the current-limit scenario",
+                rounded(p.load, 4),
+                rounded(p.nominal_ripple(), 4)
+            ),
+            None => "the switch pin declares no current_peak".to_owned(),
+        };
+        na(cx, format!("prediction skipped: {reason}"));
+        return;
+    }
+    let current_limit = limit_current.unwrap_or(0.0);
+
+    // The prediction of one scenario. The nominal case comes first; the corners of the rule-of-thumb bands follow:
+    // {fast, slow current edge} x {capacitance un-derated, derated} x {ripple ratio nominal, low, high}.
     let class = conducted_class(&cx.standard);
-    let dc_band = hot.package.is_some() || filter_model.as_ref().is_some_and(|f| f.derated.is_some());
+    let hot_package = hot.package().is_some();
+    let dc_band = hot_package
+        || extras.iter().any(|e| e.model.package().is_some())
+        || filter_model.as_ref().is_some_and(|f| f.supply.iter().chain(&f.near).any(|(m, _)| m.package().is_some()));
     let nominal_derated = dc_band && defaults::nominal_is_derated(vin);
     #[derive(Clone, Copy)]
     struct Case {
         edge: Corner,
         derated: bool,
+        ripple: f64,
     }
-    let mut cases = vec![Case { edge: Corner::Nominal, derated: nominal_derated }];
-    let edge_corners: &[Corner] = if edge.banded() { &[Corner::Fast, Corner::Slow] } else { &[Corner::Nominal] };
-    let capacitor_states: &[bool] = if dc_band { &[false, true] } else { &[false] };
-    for corner in edge_corners {
-        for derated in capacitor_states {
-            cases.push(Case { edge: *corner, derated: *derated });
-        }
-    }
-    let hot_at = |derated: bool| if derated { hot.derated().unwrap_or(hot.capacitor) } else { hot.capacitor };
-    let build = |case: Case| {
+    let build = |kind: Kind, case: Case, scan: bool| {
         let (rise_10_90, fall_10_90) = edge.rise_fall(case.edge);
         let (rise, fall) = (rise_10_90 / RAMP_10_90, fall_10_90 / RAMP_10_90);
-        let mut input = ConductedInput::buck(vin, vout, current, drive.frequency, rise, hot_at(case.derated));
+        let amplitude = match kind {
+            Kind::Declared => point.as_ref().map_or(0.0, |p| p.load),
+            Kind::CurrentLimit => current_limit,
+        };
+        let mut input = ConductedInput::buck(vin, vout, amplitude, drive.frequency, rise, hot.at(case.derated));
         input.current_rise_time = rise;
         input.current_fall_time = fall;
+        if kind == Kind::Declared {
+            input.ripple_current = Some(case.ripple);
+        }
+        input.hot_capacitor_label = hot.component.clone();
         input.hot_loop_inductance = loop_inductance;
-        input.filter =
-            filter_model.as_ref().map(|f| if case.derated { f.derated.unwrap_or(f.filter) } else { f.filter });
+        input.parallel_capacitors = extras
+            .iter()
+            .map(|e| {
+                CapacitorBranch::new(e.model.component.clone(), e.model.at(case.derated))
+                    .with_connection(e.connection.inductance)
+            })
+            .collect();
+        input.filter = filter_model.as_ref().map(|f| InputFilter {
+            inductance: f.inductance,
+            dcr: f.dcr,
+            parallel_capacitance: f.parallel_capacitance,
+            supply_capacitors: f
+                .supply
+                .iter()
+                .zip(&supply_connections)
+                .map(|((m, _), connection)| {
+                    CapacitorBranch::new(m.component.clone(), m.at(case.derated)).with_connection(connection.inductance)
+                })
+                .collect(),
+        });
         input.limit_class = class.unwrap_or(Class::B);
+        input.anti_resonance_scan = scan;
         if let Some(scenario) = scenario {
             input.frequency_mode = scenario.mode.clone();
         }
         input
     };
-    let input = build(cases[0]);
-    let report = match conducted::predict(&input) {
-        Ok(report) => report,
+    let evaluate = |kind: Kind| -> Result<Evaluation, String> {
+        let ripples: Vec<f64> = match (kind, point.as_ref().map(|p| p.ripple)) {
+            (Kind::Declared, Some(Ripple::Computed(r))) => vec![r],
+            (Kind::Declared, Some(Ripple::Rule { nominal, low, high })) => vec![nominal, low, high],
+            _ => vec![0.0],
+        };
+        let mut cases = vec![Case { edge: Corner::Nominal, derated: nominal_derated, ripple: ripples[0] }];
+        let edge_corners: &[Corner] = if edge.banded() { &[Corner::Fast, Corner::Slow] } else { &[Corner::Nominal] };
+        let capacitor_states: &[bool] = if dc_band { &[false, true] } else { &[false] };
+        for corner in edge_corners {
+            for derated in capacitor_states {
+                for ripple in &ripples {
+                    cases.push(Case { edge: *corner, derated: *derated, ripple: *ripple });
+                }
+            }
+        }
+        let nominal = conducted::predict(&build(kind, cases[0], true)).map_err(|e| e.to_string())?;
+        if nominal.harmonics.is_empty() {
+            return Err(format!(
+                "no harmonic of {} lies in {} to {}",
+                si(drive.frequency, "Hz"),
+                si(150e3, "Hz"),
+                si(30e6, "Hz")
+            ));
+        }
+        let mut corners = Vec::new();
+        for case in &cases[1..] {
+            corners.push(conducted::predict(&build(kind, *case, false)).map_err(|e| e.to_string())?);
+        }
+        let rows: Vec<Row> = nominal
+            .harmonics
+            .iter()
+            .map(|h| {
+                let on = class.is_some();
+                let mut levels = vec![h.total_dbuv];
+                for corner in &corners {
+                    if let Some(other) = corner.harmonics.iter().find(|o| o.harmonic == h.harmonic) {
+                        levels.push(other.total_dbuv);
+                    }
+                }
+                let high = levels.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let low = levels.iter().copied().fold(f64::INFINITY, f64::min);
+                let qp = h.limit_quasi_peak_dbuv.filter(|_| on);
+                let avg = h.limit_average_dbuv.filter(|_| on);
+                Row {
+                    n: h.harmonic,
+                    f: h.frequency,
+                    source: h.source_current_peak,
+                    dm: h.dm_dbuv,
+                    total: h.total_dbuv,
+                    low,
+                    high,
+                    qp,
+                    avg,
+                    margin_qp: qp.map(|limit| limit - high),
+                    margin_avg: avg.map(|limit| limit - high),
+                    shares: h.branch_currents.iter().map(|i| i / h.source_current_peak.max(1e-300)).collect(),
+                }
+            })
+            .collect();
+        Ok(Evaluation { rows, nominal, cases: cases.len(), dc_band, ripple_band: ripples.len() > 1 })
+    };
+    let main = match evaluate(headline) {
+        Ok(evaluation) => evaluation,
         Err(error) => {
             na(cx, format!("prediction skipped: {error}"));
             return;
         }
     };
-    if report.harmonics.is_empty() {
-        na(
-            cx,
-            format!(
-                "no harmonic of {} lies in {} to {}",
-                si(drive.frequency, "Hz"),
-                si(input.min_frequency, "Hz"),
-                si(input.max_frequency, "Hz")
-            ),
-        );
-        return;
-    }
-    let detector = report.detector_applicability();
-    let detector_ok = detector.is_applicable();
-    let mut corner_reports = Vec::new();
-    for case in &cases[1..] {
-        match conducted::predict(&build(*case)) {
-            Ok(corner) => corner_reports.push(corner),
+    let secondary: Option<Evaluation> = if headline == Kind::Declared && limit_current.is_some() {
+        match evaluate(Kind::CurrentLimit) {
+            Ok(evaluation) => Some(evaluation),
             Err(error) => {
-                na(cx, format!("prediction skipped: {error}"));
-                return;
+                skipped.push(format!("current-limit scenario skipped: {error}"));
+                None
             }
         }
-    }
-    let offset_db = defaults::operating_current_offset_db();
-
-    // Per-harmonic rows with margins only against a declared standard that has a conducted table.
-    // `total` is the nominal case at the current limit; `high` the largest level over the corner cases at the
-    // limit; `low` the smallest level over them at the typical operating current. The margin is the high end's.
-    struct Row {
-        n: u32,
-        f: f64,
-        source: f64,
-        dm: f64,
-        total: f64,
-        low: f64,
-        high: f64,
-        qp: Option<f64>,
-        avg: Option<f64>,
-        margin_qp: Option<f64>,
-        margin_avg: Option<f64>,
-    }
-    let rows: Vec<Row> = report
-        .harmonics
-        .iter()
-        .map(|h| {
-            let on = class.is_some();
-            let mut levels = vec![h.total_dbuv];
-            for corner in &corner_reports {
-                if let Some(other) = corner.harmonics.iter().find(|o| o.harmonic == h.harmonic) {
-                    levels.push(other.total_dbuv);
-                }
-            }
-            let high = levels.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            let low = levels.iter().copied().fold(f64::INFINITY, f64::min) + offset_db;
-            let qp = h.limit_quasi_peak_dbuv.filter(|_| on);
-            let avg = h.limit_average_dbuv.filter(|_| on);
-            Row {
-                n: h.harmonic,
-                f: h.frequency,
-                source: h.source_current_peak,
-                dm: h.dm_dbuv,
-                total: h.total_dbuv,
-                low,
-                high,
-                qp,
-                avg,
-                margin_qp: qp.map(|limit| limit - high),
-                margin_avg: avg.map(|limit| limit - high),
-            }
-        })
-        .collect();
-    let row_margin = |r: &Row| match (r.margin_qp, r.margin_avg) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    };
-    let has_margins = rows.iter().any(|r| row_margin(r).is_some());
-    let worst_index = if has_margins {
-        rows.iter()
-            .enumerate()
-            .filter(|(_, r)| row_margin(r).is_some())
-            .min_by(|(_, a), (_, b)| row_margin(a).unwrap().total_cmp(&row_margin(b).unwrap()))
-            .map(|(i, _)| i)
     } else {
-        rows.iter().enumerate().max_by(|(_, a), (_, b)| a.high.total_cmp(&b.high)).map(|(i, _)| i)
-    }
-    .unwrap_or(0);
+        None
+    };
+    let report = &main.nominal;
+    let rows = &main.rows;
+    let detector = report.detector_applicability();
+    let detector_ok = detector.is_applicable();
+    let has_margins = rows.iter().any(|r| r.margin().is_some());
+    let worst_index = worst_row(rows);
     let worst = &rows[worst_index];
-    let worst_margin = row_margin(worst);
+    let worst_margin = worst.margin();
     let worst_detector = match (worst.margin_qp, worst.margin_avg) {
         (Some(q), Some(a)) if a < q => Some(Detector::Average),
         (Some(_), _) => Some(Detector::QuasiPeak),
@@ -1061,27 +1493,68 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     let over_avg = rows.iter().filter(|r| r.margin_avg.is_some_and(|m| m < 0.0)).count();
     let fundamental = rows.iter().find(|r| r.n == 1);
 
-    // The edge and capacitance the nominal case used.
+    // The current edge the nominal case used.
     let (rise_10_90, fall_10_90) = edge.rise_fall(Corner::Nominal);
     let (rise, fall) = (rise_10_90 / RAMP_10_90, fall_10_90 / RAMP_10_90);
-    let hot_nominal = hot_at(nominal_derated);
+    let hot_nominal = hot.at(nominal_derated);
     let hot_derated = hot.derated();
-    let loss = hot.package.map(defaults::dc_bias_loss);
+    let loss = hot.package().map(defaults::dc_bias_loss);
+
+    // The capacitor branches, with their share of the ripple current in the nominal case.
+    let mut records: Vec<Record> = vec![Record { model: &hot, role: "hot", connection: None }];
+    records.extend(extras.iter().map(|e| Record { model: &e.model, role: e.role, connection: Some(&e.connection) }));
+    if let Some(model) = &filter_model {
+        records.extend(model.supply.iter().zip(&supply_connections).map(|((m, _), connection)| Record {
+            model: m,
+            role: "supply_side",
+            connection: Some(connection),
+        }));
+    }
+    let branch_index = |component: &str| report.branches.iter().position(|b| b.label == component);
+    let share_at = |row: &Row, component: &str| branch_index(component).and_then(|i| row.shares.get(i)).copied();
+    let largest = |row: &Row| {
+        records
+            .iter()
+            .filter_map(|r| share_at(row, &r.model.component).map(|s| (r.model.component.clone(), s)))
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+    };
+    let fundamental_row = fundamental.unwrap_or(&rows[0]);
+    let largest_fundamental = largest(fundamental_row);
+    let largest_worst = largest(worst);
+    let anti_resonances = &report.anti_resonances;
 
     // Tags.
     let mut tags: Vec<String> = Vec::new();
     tags.extend(summary.tags.iter().cloned());
-    tags.push("worst_case_current".to_owned());
+    tags.push(format!("scenario_{}", headline.name()));
+    match headline {
+        Kind::Declared => tags.push("declared_operating_point".to_owned()),
+        Kind::CurrentLimit => tags.push("worst_case_current".to_owned()),
+    }
+    if point.is_some() && !declared_ok {
+        tags.push("operating_point_outside_model".to_owned());
+    }
     tags.push("differential_mode_only".to_owned());
-    if let Some(tag) = edge.tag() {
+    for tag in edge.tags() {
         tags.push(tag.to_owned());
     }
-    tags.push(defaults::TAG_CURRENT.to_owned());
-    if dc_band {
+    if main.ripple_band {
+        tags.push(defaults::TAG_RIPPLE.to_owned());
+    }
+    if main.dc_band {
         tags.push(defaults::TAG_DC_BIAS.to_owned());
     }
-    if hot.defaulted {
+    if records.iter().any(|r| r.model.defaulted()) {
         tags.push(defaults::TAG_PARASITICS.to_owned());
+    }
+    if records.iter().any(|r| r.connection.is_some_and(|c| c.estimated)) {
+        tags.push("estimated_connection_inductance".to_owned());
+    }
+    if !skipped.is_empty() {
+        tags.push("capacitor_branch_skipped".to_owned());
+    }
+    if !anti_resonances.is_empty() {
+        tags.push("anti_resonance_in_band".to_owned());
     }
     if let Some(model) = &filter_model {
         for tag in &model.tags {
@@ -1089,9 +1562,6 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
                 tags.push(tag.clone());
             }
         }
-    }
-    if !others.is_empty() {
-        tags.push("parallel_capacitors_not_modelled".to_owned());
     }
     if drive.frequency_note != "fixed" {
         tags.push("frequency_range_bound".to_owned());
@@ -1122,7 +1592,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     put(
         &mut inputs,
         "duty",
-        input_entry(vout / vin, "", "Vout / Vin, ideal lossless buck in continuous conduction, 50 % points".to_owned()),
+        input_entry(duty, "", "Vout / Vin, ideal lossless buck in continuous conduction, 50 % points".to_owned()),
     );
     put(
         &mut inputs,
@@ -1141,59 +1611,119 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     let edge_source = format!(
         "{}; {}",
         edge.describe(Some(vin)),
-        match edge.basis {
-            EdgeBasis::Declared => "declared by the switch pin".to_owned(),
-            EdgeBasis::SlewRate => "exact: derived from the declared slew_rate".to_owned(),
-            EdgeBasis::RuleOfThumb => "a rule-of-thumb band, not a datasheet value".to_owned(),
+        match (edge.origin, edge.basis) {
+            (EdgeOrigin::CurrentDeclared, _) => "declared by the switch pin as the current commutation time".to_owned(),
+            (_, EdgeBasis::Declared) =>
+                "the declared voltage edge, assumed for the current (no current_rise_time/current_fall_time declared)"
+                    .to_owned(),
+            (_, EdgeBasis::SlewRate) => "derived from the declared slew_rate, assumed for the current".to_owned(),
+            (_, EdgeBasis::RuleOfThumb) =>
+                "a rule-of-thumb band, not a datasheet value, assumed for the current".to_owned(),
         }
     );
-    put(&mut inputs, "rise_time_10_90", input_entry(rise_10_90, "s", edge_source.clone()));
-    put(&mut inputs, "fall_time_10_90", input_entry(fall_10_90, "s", edge_source));
+    put(&mut inputs, "current_rise_time_10_90", input_entry(rise_10_90, "s", edge_source.clone()));
+    put(&mut inputs, "current_fall_time_10_90", input_entry(fall_10_90, "s", edge_source));
     put(
         &mut inputs,
-        "rise_time_0_100",
-        input_entry(rise, "s", "10-90 % time divided by 0.8 (linear ramp), the ramp time of the trapezoid".to_owned()),
+        "current_ramp_time_0_100",
+        input_entry(
+            rise,
+            "s",
+            "10-90 % time divided by 0.8 (linear ramp), the ramp time of the current edge".to_owned(),
+        ),
     );
-    let current_rule = defaults::current_rule();
+    // The operating point and the scenario.
+    let operating_point_text = match (&point, headline) {
+        (Some(p), Kind::Declared) => {
+            let ripple = p.nominal_ripple();
+            let how = match (&p.inductor, p.ripple) {
+                (Some((name, l)), _) => format!(
+                    "dI = (Vin - Vout) D / (L f) = {} peak to peak from {name} {} at {}",
+                    si(ripple, "A"),
+                    si(*l, "H"),
+                    si(drive.frequency, "Hz")
+                ),
+                (None, Ripple::Rule { low, high, .. }) => format!(
+                    "the power inductor's value was not found: dI = {} peak to peak, band {} to {} {}",
+                    si(ripple, "A"),
+                    si(low, "A"),
+                    si(high, "A"),
+                    defaults::rule_text(
+                        &defaults::ripple_rule(),
+                        "an inductance as the value of the power inductor on the switch node"
+                    )
+                ),
+                (None, Ripple::Computed(_)) => String::new(),
+            };
+            format!(
+                "load current {} declared on {} (component load_current); {how}; valley {} peak {}, continuous conduction",
+                si(p.load, "A"),
+                cell.controller,
+                si(p.load - ripple / 2.0, "A"),
+                si(p.load + ripple / 2.0, "A")
+            )
+        }
+        (Some(p), Kind::CurrentLimit) => format!(
+            "load current {} declared on {} is OUTSIDE the supported model: dI = {} peak to peak exceeds 2 x I_out (from {} at {}), so the inductor current reaches zero in the off-time (discontinuous conduction, pulse skipping or forced-PWM light-load operation); only the current-limit scenario is reported",
+            si(p.load, "A"),
+            cell.controller,
+            si(p.nominal_ripple(), "A"),
+            p.inductor.as_ref().map_or("the inductor".to_owned(), |(n, l)| format!("{n} {}", si(*l, "H"))),
+            si(drive.frequency, "Hz")
+        ),
+        (None, _) => format!(
+            "no load_current is declared on {}: the switch current limit {} is used as the pulse amplitude, a worst case and not a prediction of operation; declare `load_current = <current>;` on the component to give the cell an operating point",
+            cell.controller,
+            si(current_limit, "A")
+        ),
+    };
     put(
         &mut inputs,
         "load_current",
         input_entry(
-            current,
+            if headline == Kind::Declared { point.as_ref().map_or(0.0, |p| p.load) } else { current_limit },
             "A",
-            format!(
-                "switch pin current_peak, the current LIMIT used as the on-time current amplitude (worst case, the headline); no load current is declared; band low end {} A {}",
-                rounded(current * defaults::OPERATING_CURRENT_FRACTION, 4),
-                defaults::rule_text_unreplaceable(&current_rule)
-            ),
+            operating_point_text.clone(),
         ),
     );
-    let dc_text = if dc_band {
-        let package = hot.package.unwrap_or("");
-        format!(
-            "DC-bias loss {}",
-            defaults::rule_text(&defaults::dc_bias_rule(package), "esr and esl (or self_resonance) on the part")
-        )
-    } else {
-        "no DC-bias derating applied".to_owned()
-    };
+    if let Some(p) = &point {
+        put(
+            &mut inputs,
+            "ripple_current",
+            input_entry(
+                p.nominal_ripple(),
+                "A",
+                match &p.inductor {
+                    Some((name, l)) => format!("peak to peak, (Vin - Vout) D / (L f) with {name} = {}", si(*l, "H")),
+                    None => format!("peak to peak, rule of thumb: {}", defaults::ripple_rule()),
+                },
+            ),
+        );
+    }
     put(
         &mut inputs,
         "hot_capacitor",
-        input_entry(hot_nominal.capacitance, "F", format!("{}; {dc_text}", hot.describe())),
+        input_entry(hot_nominal.capacitance, "F", format!("{}; {}", hot.describe(), hot.bias_text(nominal_derated))),
     );
     put(&mut inputs, "hot_capacitor_esr", input_entry(hot.capacitor.esr, "ohm", hot.sources.join("; ")));
     put(&mut inputs, "hot_capacitor_esl", input_entry(hot.capacitor.esl, "H", hot.sources.join("; ")));
     put(
         &mut inputs,
         "hot_loop_inductance",
-        input_entry(loop_inductance, "H", format!("EMI-HOT-LOOP: {}", summary.basis)),
+        input_entry(
+            loop_inductance,
+            "H",
+            format!(
+                "EMI-HOT-LOOP: {}; placed between the converter's current source and the hot capacitor's node",
+                summary.basis
+            ),
+        ),
     );
     lines.push(format!(
         "Vin {} (supply {vin_name} on {hot_net}), Vout {} (supply {vout_name} on {out_net}), duty {:.4}",
         si(vin, "V"),
         si(vout, "V"),
-        vout / vin
+        duty
     ));
     lines.push(format!(
         "switching frequency {} ({})",
@@ -1207,72 +1737,71 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             )
         }
     ));
-    lines.push(match edge.basis {
-        EdgeBasis::Declared => format!(
-            "edge time rise {} / fall {} (10-90 %, switch pin), ramp {} / {} (0-100 %, divided by 0.8)",
+    lines.push(format!("scenario {}: {operating_point_text}", headline.name()));
+    lines.push(match (edge.origin, edge.basis) {
+        (EdgeOrigin::CurrentDeclared, _) => format!(
+            "current edge time rise {} / fall {} (10-90 %, switch pin current_rise_time/current_fall_time), ramp {} / {} (0-100 %, divided by 0.8)",
             si(rise_10_90, "s"),
             si(fall_10_90, "s"),
             si(rise, "s"),
             si(fall, "s")
         ),
-        _ => format!("{}; ramp {} (0-100 %, divided by 0.8)", edge.input_line(Some(vin)), si(rise, "s")),
+        _ => format!(
+            "current {}; ramp {} (0-100 %, divided by 0.8); an assumption: the voltage edge and the current commutation are different quantities",
+            edge.input_line(Some(vin)),
+            si(rise, "s")
+        ),
     });
     for note in &drive.edge_notes {
         lines.push(note.clone());
     }
-    lines.push(format!(
-        "load current {} = the switch current LIMIT (current_peak), worst case and the headline, no load current is declared; band low end {} = {} x the limit, {:.1} dB {}",
-        si(current, "A"),
-        si(current * defaults::OPERATING_CURRENT_FRACTION, "A"),
-        defaults::OPERATING_CURRENT_FRACTION,
-        offset_db,
-        defaults::rule_text_unreplaceable(&current_rule)
-    ));
-    lines.push(format!(
-        "hot capacitor {}{}; {}",
-        hot.describe(),
-        if others.is_empty() {
-            String::new()
-        } else {
-            format!(
-                "; parallel hot capacitors {} ({} total) are NOT modelled, the selected one carries the prediction",
-                other_names.join(", "),
-                si(other_capacitance, "F")
-            )
-        },
-        if dc_band {
-            let capacitance_text = match (hot_derated, loss) {
-                (Some(derated), Some(loss)) => format!(
-                    "nominal {} in a band of {} (derated by {:.0} %) to {} (no loss)",
-                    si(hot_nominal.capacitance, "F"),
-                    si(derated.capacitance, "F"),
-                    loss * 100.0,
-                    si(hot.capacitor.capacitance, "F")
+    for record in &records {
+        let share = |row: &Row| share_at(row, &record.model.component).map_or("n/a".to_owned(), percent);
+        lines.push(format!(
+            "capacitor {} ({}): {} nominal {}, ESR {} ({}), ESL {} ({}), {}; {}; share of the source current {} at the fundamental and {} at the worst harmonic",
+            record.model.component,
+            record.role,
+            si(record.model.nominal_capacitance, "F"),
+            si(record.model.at(nominal_derated).capacitance, "F"),
+            si(record.model.capacitor.esr, "ohm"),
+            if record.model.esr_declared { "declared" } else { "package default" },
+            si(record.model.capacitor.esl, "H"),
+            record.model.esl.name(),
+            record.model.bias_text(nominal_derated),
+            match record.connection {
+                None => format!(
+                    "connection: none, the hot-loop inductance {} ({}) is in the converter's branch",
+                    si(loop_inductance, "H"),
+                    summary.basis
                 ),
-                _ => "the hot capacitor declares its parasitics, only upstream capacitors are derated".to_owned(),
-            };
-            format!(
-                "{capacitance_text}; DC-bias loss {}{}",
-                defaults::rule_text(
-                    &defaults::dc_bias_rule(hot.package.unwrap_or("0805")),
-                    "esr and esl (or self_resonance) on the part"
-                ),
-                if filter_model.as_ref().is_some_and(|f| f.derated.is_some()) {
-                    "; upstream filter capacitors are derated in the same corner"
-                } else {
-                    ""
-                }
-            )
-        } else {
-            "DC-bias derating is not applied: the part declares its parasitics".to_owned()
-        }
-    ));
-    lines.push(format!(
-        "hot-loop inductance {} ({}), in series with the capacitor, supply feed assumed at the switch end (pessimistic)",
-        si(loop_inductance, "H"),
-        summary.basis
-    ));
+                Some(c) => format!("connection inductance {} ({})", si(c.inductance, "H"), c.text),
+            },
+            share(fundamental_row),
+            share(worst)
+        ));
+    }
+    for reason in &skipped {
+        lines.push(reason.clone());
+    }
+    lines.push(
+        "hot-loop inductance sits between the converter's current source and the hot capacitor's node K, where the capacitors and the feed attach: it does not change the level at the LISN (an ideal current source is not affected by a series inductance); a feed attached at the switch pins instead of the capacitor pads would put it in series with the capacitor"
+            .to_owned(),
+    );
     lines.push(filter_text.clone());
+    if anti_resonances.is_empty() {
+        lines.push(
+            "no anti-resonance of the input network between 150 kHz and 30 MHz (prominence of at least 0.5 dB)"
+                .to_owned(),
+        );
+    } else {
+        for peak in anti_resonances {
+            lines.push(format!(
+                "anti-resonance of the input network at {} with |Z| {} seen at the hot capacitor's node",
+                si(peak.frequency, "Hz"),
+                si(peak.impedance, "ohm")
+            ));
+        }
+    }
     lines.push(
         "common mode not modelled: the island capacitance to the board's ground plane is not a path to the LISN reference"
             .to_owned(),
@@ -1288,34 +1817,43 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
 
     // Assumptions.
     let mut assumptions: Vec<String> = report.assumptions.clone();
+    assumptions.push(match headline {
+        Kind::Declared => format!(
+            "scenario declared_operating_point: the input current of an ideal lossless buck in continuous conduction at the declared load current (a ramp on a pedestal, {}); the current limit is a second scenario",
+            if main.ripple_band { "the ripple from a rule-of-thumb ratio band" } else { "the ripple from the power inductor's value" }
+        ),
+        Kind::CurrentLimit => "scenario current_limit: the switch current limit (current_peak) is the amplitude of a flat-top pulse: a worst case that bounds operation, not a prediction of it. Declare load_current on the component for an operating point".to_owned(),
+    });
     assumptions.push(
-        "load current is the switch current limit (current_peak), not an operating current: the headline levels are the worst case; the low end of each band is at 0.4 x the limit (a rule of thumb: limit about 1.5 x rated output, operation about 0.6 x rated), about 8 dB lower".to_owned(),
-    );
-    assumptions.push(
-        "datasheet 10-90 % edge times are converted to the 0-100 % ramp of the trapezoid by dividing by 0.8 (linear ramp)".to_owned(),
+        "10-90 % edge times are converted to the 0-100 % ramp of the current edge by dividing by 0.8 (linear ramp); the current commutation time is the declared current_rise_time/current_fall_time, else the switch-node voltage edge (an assumption: the two are different quantities, the current commutates in a time set by loop inductance and drive)".to_owned(),
     );
     match edge.basis {
         EdgeBasis::RuleOfThumb => assumptions.push(format!(
-            "edge time not declared (no rise_time, fall_time or slew_rate): the default slew band applies, {}; every harmonic to 30 MHz is reported with its band, which collapses below the edge corner",
+            "edge time not declared (no current_rise_time, rise_time, fall_time or slew_rate): the default slew band applies, {}; every harmonic to 30 MHz is reported with its band, which collapses below the edge corner",
             defaults::edge_rule()
         )),
         EdgeBasis::SlewRate => assumptions
             .push("edge time derived from the declared slew_rate: t(10-90 %) = 0.8 V_swing / slew, exact for a linear ramp".to_owned()),
         EdgeBasis::Declared => {}
     }
-    if hot.defaulted {
+    if records.iter().any(|r| r.model.defaulted()) {
         assumptions.push(format!(
             "default capacitor parasitics ({}): ESR {} for a ceramic and ESL by package (0402 0.4 nH, 0603 0.5 nH, 0805 0.6 nH, 1206 0.8 nH, 1210 0.9 nH) where the part declares none",
-            hot.component,
+            records.iter().filter(|r| r.model.defaulted()).map(|r| r.model.component.as_str()).collect::<Vec<_>>().join(", "),
             si(DEFAULT_ESR, "ohm")
         ));
     }
-    if dc_band {
+    if main.dc_band {
         assumptions.push(format!(
-            "ceramic DC-bias loss is a rule of thumb ({}); the band takes the minimum and maximum level over the capacitance with and without it, the nominal is the {} value",
-            defaults::dc_bias_rule(hot.package.unwrap_or("0805")),
+            "ceramic DC-bias loss is a rule of thumb for the capacitors that declare no capacitance_at_bias ({}); the band takes the minimum and maximum level over the capacitance with and without it, the nominal is the {} value",
+            defaults::dc_bias_rule(hot.package().unwrap_or("0805")),
             if nominal_derated { "derated" } else { "un-derated" }
         ));
+    }
+    if records.iter().any(|r| r.connection.is_some_and(|c| c.estimated)) {
+        assumptions.push(
+            "the connection inductance of a capacitor other than the hot capacitor is an estimate: 2 x the nearest pad-centre distance to the hot capacitor (or to the filter inductor for a supply-side capacitor) x the EMI-HOT-LOOP inductance per unit of path length; mutual coupling between the branches is not modelled".to_owned(),
+        );
     }
     assumptions.push(format!("common mode is not modelled: {COMMON_MODE_REASON}"));
     if let Some(reason) = detector.reason() {
@@ -1335,18 +1873,12 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         );
     }
     assumptions.push(
-        "the hot capacitor is the one the hot-loop analysis selected; its loop inductance is the traced or placement-estimate value of EMI-HOT-LOOP".to_owned(),
+        "the hot capacitor is the one the hot-loop analysis selected; the hot-loop inductance is the traced or placement-estimate value of EMI-HOT-LOOP".to_owned(),
     );
-    if !others.is_empty() {
-        assumptions.push(format!(
-            "parallel hot capacitors {} are not modelled (one branch only): ignoring them overstates the impedance at the fundamental but can miss anti-resonances between branches",
-            other_names.join(", ")
-        ));
-    }
     assumptions.push(filter_text.clone());
     assumptions.push(format!(
-        "bands: each harmonic's high end is the largest level over {} case(s) (edge fast/slow x capacitance un-derated/derated where those are rule-of-thumb bands) at the current limit and drives the headline and margin; the low end is the smallest level over them at 0.4 x the limit",
-        cases.len()
+        "bands: each harmonic's high end is the largest level over {} case(s) (current edge fast/slow x capacitance un-derated/derated x ripple ratio low/nominal/high, where those are rule-of-thumb bands) and drives the headline and margin; the low end is the smallest",
+        main.cases
     ));
 
     // Message.
@@ -1365,9 +1897,26 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
             worst.high, worst.low, worst.high, worst.total
         ),
     };
+    let scenario_part = match (headline, &point) {
+        (Kind::Declared, Some(p)) => format!(
+            "scenario declared_operating_point (load {}, ripple {} peak to peak, continuous conduction)",
+            si(p.load, "A"),
+            si(p.nominal_ripple(), "A")
+        ),
+        (Kind::CurrentLimit, Some(_)) => format!(
+            "scenario current_limit (a worst case at the switch current limit {}, NOT a prediction: the declared operating point is outside the model, discontinuous conduction)",
+            si(current_limit, "A")
+        ),
+        (Kind::CurrentLimit, None) => format!(
+            "scenario current_limit (a worst case at the switch current limit {}, NOT a prediction of operation; declare load_current on {} for an operating point)",
+            si(current_limit, "A"),
+            cell.controller
+        ),
+        (Kind::Declared, None) => String::new(),
+    };
     let mut message = if detector_ok {
         format!(
-            "{}: conducted emission at the input (differential mode only, 50 uH V-network): {} {} {}",
+            "{}: conducted emission at the input (differential mode only, 50 uH V-network), {scenario_part}: {} {} {}",
             cell.controller,
             if has_margins { "worst harmonic" } else { "highest harmonic" },
             format_args!("{} at {}:", worst.n, si(worst.f, "Hz")),
@@ -1375,7 +1924,7 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         )
     } else {
         format!(
-            "{}: conducted line amplitudes at the input (differential mode only, 50 uH V-network), NOT a detector reading: highest line {} at {}: {}",
+            "{}: conducted line amplitudes at the input (differential mode only, 50 uH V-network), NOT a detector reading, {scenario_part}: highest line {} at {}: {}",
             cell.controller,
             worst.n,
             si(worst.f, "Hz"),
@@ -1403,38 +1952,65 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     } else {
         message.push_str("; levels only, no conducted limit applied");
     }
+    let mut banded: Vec<&str> = Vec::new();
+    if edge.banded() {
+        banded.push("current edge time");
+    }
+    if main.dc_band {
+        banded.push("ceramic DC-bias loss");
+    }
+    if main.ripple_band {
+        banded.push("inductor ripple ratio");
+    }
+    if !banded.is_empty() {
+        message.push_str(&format!("; the band rests on rule-of-thumb inputs ({})", banded.join(", ")));
+    }
+    if let (Some((fund_name, fund_share)), Some((worst_name, worst_share)), true) =
+        (&largest_fundamental, &largest_worst, records.len() > 1)
+    {
+        message.push_str(&format!(
+            "; largest ripple-current share: {fund_name} {} at the fundamental, {worst_name} {} at the worst harmonic",
+            percent(*fund_share),
+            percent(*worst_share)
+        ));
+    }
+    if !anti_resonances.is_empty() {
+        message.push_str(&format!(
+            "; anti-resonance of the input network at {}",
+            anti_resonances
+                .iter()
+                .map(|p| format!("{} (|Z| {})", si(p.frequency, "Hz"), si(p.impedance, "ohm")))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if let Some(second) = &secondary {
+        let w = &second.rows[worst_row(&second.rows)];
+        message.push_str(&format!(
+            "; secondary worst case, current limit {}: highest level {:.1} dBuV at {}{}",
+            si(current_limit, "A"),
+            w.high,
+            si(w.f, "Hz"),
+            w.margin().map_or(String::new(), |m| format!(" ({m:+.1} dB)"))
+        ));
+    }
     message.push_str(&format!(
-        "; the band rests on rule-of-thumb inputs ({}): the high end is the worst case at the current limit {}, the low end is at {} x the limit ({:.1} dB)",
-        {
-            let mut which = vec!["operating current"];
-            if edge.banded() {
-                which.insert(0, "edge time");
-            }
-            if dc_band {
-                which.push("ceramic DC-bias loss");
-            }
-            which.join(", ")
-        },
-        si(current, "A"),
-        defaults::OPERATING_CURRENT_FRACTION,
-        offset_db
-    ));
-    message.push_str(&format!(
-        "; Vin {} Vout {} duty {:.3}, {} {}, edge {}, hot capacitor {} ({} ESR, {} ESL{}), hot loop {} ({}), {}, {}, common mode not modelled",
+        "; Vin {} Vout {} duty {:.3}, {} {}, current edge {}, hot capacitor {} ({} ESR, {} ESL{}), {} capacitor branch(es), hot loop {} ({}), {}, {}, common mode not modelled",
         si(vin, "V"),
         si(vout, "V"),
-        vout / vin,
+        duty,
         si(drive.frequency, "Hz"),
         if drive.frequency_note == "fixed" { "fixed".to_owned() } else { format!("{} of the range", drive.frequency_note) },
         edge.describe(Some(vin)),
         si(hot_nominal.capacitance, "F"),
         si(hot.capacitor.esr, "ohm"),
         si(hot.capacitor.esl, "H"),
-        if hot.defaulted { ", package defaults" } else { "" },
+        if hot.defaulted() { ", package defaults" } else { "" },
+        records.len(),
         si(loop_inductance, "H"),
         summary.basis,
         filter_text,
-        if dc_band { "DC-bias loss a rule-of-thumb band" } else { "no DC-bias derating" }
+        if main.dc_band { "DC-bias loss a rule-of-thumb band" } else { "no DC-bias band" }
     ));
 
     let mut objects = vec![cell.controller.clone(), hot.component.clone()];
@@ -1443,6 +2019,10 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     subjects.extend(endpoint_names(&cell.switch_pins));
     subjects.extend(endpoint_names(&cell.hot_supply_pins));
     subjects.push(hot.component.clone());
+    for extra in &extras {
+        objects.push(extra.model.component.clone());
+        subjects.push(extra.model.component.clone());
+    }
     if let Some(model) = &filter_model {
         objects.extend(model.components.iter().cloned());
         subjects.extend(model.components.iter().cloned());
@@ -1457,11 +2037,22 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     dedup(&mut finding.subjects);
     finding.rank = worst.high;
     let method = format!(
-        "linear-network prediction (copper_emi::conducted): trapezoidal input-current harmonics of a buck, amplitude {} \
-         (current_peak, the switch current limit), through the hot capacitor branch with {} loop inductance{} into the 50 uH V-network; \
+        "linear-network prediction (copper_emi::conducted), scenario {}: {}, through {} capacitor branch(es), each its own R-L-C with its own connection inductance, with {} hot-loop inductance between the current source and the hot capacitor's node{} into the 50 uH V-network; \
          level is the RMS dBuV of the {} harmonic at the worst LISN port ({}); differential mode only; \
-         the value is the HIGH end of a band over rule-of-thumb inputs (largest level over {} corner case(s) at the current limit; the low end is at 0.4 x the limit){}",
-        si(current, "A"),
+         the value is the HIGH end of a band over rule-of-thumb inputs (largest level over {} case(s)){}",
+        headline.name(),
+        match headline {
+            Kind::Declared => format!(
+                "ramp-on-pedestal input current of a buck in continuous conduction, mean {} A, ripple {} A peak to peak, finite current edges",
+                rounded(point.as_ref().map_or(0.0, |p| p.load), 4),
+                rounded(point.as_ref().map_or(0.0, |p| p.nominal_ripple()), 4)
+            ),
+            Kind::CurrentLimit => format!(
+                "flat-top input-current pulses of amplitude {} A (current_peak, the switch current limit: a worst case, not a prediction)",
+                rounded(current_limit, 4)
+            ),
+        },
+        records.len(),
         si(loop_inductance, "H"),
         if filter_model.is_some() { " and the recognised input filter" } else { "" },
         if has_margins { "least-margin" } else { "highest-level" },
@@ -1470,17 +2061,12 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
         } else {
             "a line amplitude, not a detector reading".to_owned()
         },
-        cases.len(),
+        main.cases,
         if has_margins { ", the margin is the high end's" } else { "" }
     );
     let mut not_modelled: Vec<String> = NOT_MODELLED.iter().map(|m| (*m).to_owned()).collect();
-    if !others.is_empty() {
-        not_modelled.push(format!(
-            "parallel hot capacitors {} and anti-resonances between branches (one branch only)",
-            other_names.join(", ")
-        ));
-    } else {
-        not_modelled.push("other capacitors and board resonances beyond the one hot-capacitor branch".to_owned());
+    for reason in &skipped {
+        not_modelled.push(reason.clone());
     }
     not_modelled.push(
         "zone fills and plane cut-outs (the hot-loop inductance is from placed or traced copper over an idealised plane)"
@@ -1509,43 +2095,91 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     let m = &mut finding.measures;
     put(m, "inputs", Value::Object(inputs));
     put(m, "inputs_text", Value::Array(lines.iter().map(|l| Value::from(l.as_str())).collect()));
-    put(m, "vin_v", num(vin, 4));
-    put(m, "vout_v", num(vout, 4));
-    put(m, "duty", num(vout / vin, 6));
-    put(m, "switching_frequency_hz", num(drive.frequency, 0));
-    put(m, "frequency_basis", Value::from(drive.frequency_note));
+    put(m, "scenario", Value::from(headline.name()));
+    let mut operating = Object::new();
     put(
-        m,
-        "edge_basis",
-        Value::from(match edge.basis {
-            EdgeBasis::Declared => "declared",
-            EdgeBasis::SlewRate => "slew_rate",
-            EdgeBasis::RuleOfThumb => "rule_of_thumb",
+        &mut operating,
+        "status",
+        Value::from(match (&point, declared_ok) {
+            (None, _) => "not_declared",
+            (Some(_), true) => "declared_ccm",
+            (Some(_), false) => "outside_model",
         }),
     );
-    put(m, "rise_time_10_90_ns", num(rise_10_90 * 1e9, 4));
-    put(m, "fall_time_10_90_ns", num(fall_10_90 * 1e9, 4));
-    put(m, "ramp_time_0_100_ns", num(rise * 1e9, 4));
+    put(
+        &mut operating,
+        "how_to_declare",
+        Value::from(format!("component {} {{ load_current = <current>; }}", cell.controller)),
+    );
+    put(&mut operating, "load_current_a", point.as_ref().map_or(Value::Null, |p| num(p.load, 6)));
+    put(&mut operating, "current_limit_a", limit_current.map_or(Value::Null, |i| num(i, 6)));
+    if let Some(p) = &point {
+        put(&mut operating, "inductor", p.inductor.as_ref().map_or(Value::Null, |(n, _)| Value::from(n.as_str())));
+        put(&mut operating, "inductance_uh", p.inductor.as_ref().map_or(Value::Null, |(_, l)| num(l * 1e6, 6)));
+        put(&mut operating, "ripple_peak_to_peak_a", num(p.nominal_ripple(), 6));
+        put(
+            &mut operating,
+            "ripple_basis",
+            Value::from(match p.ripple {
+                Ripple::Computed(_) => "computed_from_inductance",
+                Ripple::Rule { .. } => "rule_of_thumb_ratio",
+            }),
+        );
+        put(
+            &mut operating,
+            "ripple_band_a",
+            match p.ripple {
+                Ripple::Rule { low, high, .. } => Value::Array(vec![num(low, 6), num(high, 6)]),
+                Ripple::Computed(_) => Value::Null,
+            },
+        );
+        put(&mut operating, "valley_a", num(p.load - p.nominal_ripple() / 2.0, 6));
+        put(&mut operating, "peak_a", num(p.load + p.nominal_ripple() / 2.0, 6));
+        put(&mut operating, "continuous_conduction", Value::Bool(p.ccm));
+        put(
+            &mut operating,
+            "reason",
+            if p.ccm {
+                Value::Null
+            } else {
+                Value::from(
+                    "I_out < dI/2: the inductor current reaches zero in the off-time; discontinuous conduction, pulse skipping and forced-PWM light-load operation are outside the supported model",
+                )
+            },
+        );
+    }
+    put(m, "operating_point", Value::Object(operating));
+    put(m, "vin_v", num(vin, 4));
+    put(m, "vout_v", num(vout, 4));
+    put(m, "duty", num(duty, 6));
+    put(m, "switching_frequency_hz", num(drive.frequency, 0));
+    put(m, "frequency_basis", Value::from(drive.frequency_note));
+    let basis_name = |basis: EdgeBasis| match basis {
+        EdgeBasis::Declared => "declared",
+        EdgeBasis::SlewRate => "slew_rate",
+        EdgeBasis::RuleOfThumb => "rule_of_thumb",
+    };
+    put(m, "current_edge_basis", Value::from(basis_name(edge.basis)));
     put(
         m,
-        "edge_time_band_ns",
+        "current_edge_source",
+        Value::from(if edge.origin == EdgeOrigin::CurrentDeclared { "declared" } else { "voltage_edge" }),
+    );
+    if let Some(voltage_edge) = &drive.edge {
+        put(m, "voltage_edge_basis", Value::from(basis_name(voltage_edge.basis)));
+        let (vr, vf) = voltage_edge.rise_fall(Corner::Nominal);
+        put(m, "voltage_rise_time_10_90_ns", num(vr * 1e9, 4));
+        put(m, "voltage_fall_time_10_90_ns", num(vf * 1e9, 4));
+    }
+    put(m, "current_rise_time_10_90_ns", num(rise_10_90 * 1e9, 4));
+    put(m, "current_fall_time_10_90_ns", num(fall_10_90 * 1e9, 4));
+    put(m, "current_ramp_time_0_100_ns", num(rise * 1e9, 4));
+    put(
+        m,
+        "current_edge_time_band_ns",
         if edge.banded() { Value::Array(vec![num(edge.fast * 1e9, 4), num(edge.slow * 1e9, 4)]) } else { Value::Null },
     );
-    put(m, "slew_rate_v_per_ns", edge.slew.map_or(Value::Null, |s| num(s, 4)));
-    put(m, "current_amplitude_a", num(current, 4));
-    put(
-        m,
-        "current_band_a",
-        Value::Array(vec![num(current * defaults::OPERATING_CURRENT_FRACTION, 4), num(current, 4)]),
-    );
-    put(m, "current_low_offset_db", num(offset_db, 3));
-    put(
-        m,
-        "current_basis",
-        Value::from(
-            "switch pin current_peak (current limit, worst case); band low end 0.4 x the limit (rule of thumb)",
-        ),
-    );
+    put(m, "slew_rate_v_per_ns", drive.edge.as_ref().and_then(|e| e.slew).map_or(Value::Null, |s| num(s, 4)));
     put(m, "hot_capacitor", Value::from(hot.component.as_str()));
     put(m, "hot_capacitor_uf", num(hot_nominal.capacitance * 1e6, 6));
     put(
@@ -1564,40 +2198,150 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     put(
         m,
         "dc_bias_derating",
-        Value::from(if dc_band {
+        Value::from(if main.dc_band {
             if nominal_derated {
                 "rule of thumb band; nominal derated"
             } else {
                 "rule of thumb band; nominal not derated"
             }
         } else {
-            "not applied"
+            "no rule-of-thumb band"
         }),
     );
     put(m, "dc_bias_loss", loss.map_or(Value::Null, |l| num(l, 3)));
-    put(m, "band_cases", Value::from(cases.len() as i64));
-    put(m, "ignored_parallel_capacitors", Value::Array(other_names.iter().map(|n| Value::from(n.as_str())).collect()));
+    put(m, "band_cases", Value::from(main.cases as i64));
+    // Per-capacitor record.
+    let capacitor_value = |record: &Record| {
+        let model = record.model;
+        let mut item = Object::new();
+        put(&mut item, "component", Value::from(model.component.as_str()));
+        put(&mut item, "role", Value::from(record.role));
+        put(&mut item, "capacitance_value_uf", num(model.nominal_capacitance * 1e6, 6));
+        put(&mut item, "capacitance_used_uf", num(model.at(nominal_derated).capacitance * 1e6, 6));
+        put(
+            &mut item,
+            "capacitance_band_uf",
+            match model.derated() {
+                Some(derated) => {
+                    Value::Array(vec![num(derated.capacitance * 1e6, 6), num(model.capacitor.capacitance * 1e6, 6)])
+                }
+                None => Value::Null,
+            },
+        );
+        put(&mut item, "esr_mohm", num(model.capacitor.esr * 1e3, 4));
+        put(&mut item, "esl_nh", num(model.capacitor.esl * 1e9, 4));
+        put(
+            &mut item,
+            "connection_inductance_nh",
+            record.connection.map_or(Value::Null, |c| num(c.inductance * 1e9, 4)),
+        );
+        put(
+            &mut item,
+            "connection_basis",
+            Value::from(match record.connection {
+                None => "none: the hot-loop inductance is in the converter's branch".to_owned(),
+                Some(c) => c.text.clone(),
+            }),
+        );
+        let mut declared = Object::new();
+        put(&mut declared, "esr", Value::Bool(model.esr_declared));
+        put(&mut declared, "esl", Value::Bool(model.esl != EslBasis::PackageDefault));
+        put(&mut declared, "capacitance_at_bias", Value::Bool(model.bias == Bias::Declared));
+        put(&mut item, "declared", Value::Object(declared));
+        let mut defaulted = Vec::new();
+        if !model.esr_declared {
+            defaulted.push(Value::from("esr"));
+        }
+        if model.esl == EslBasis::PackageDefault {
+            defaulted.push(Value::from("esl"));
+        }
+        if model.package().is_some() {
+            defaulted.push(Value::from("dc_bias"));
+        }
+        put(&mut item, "defaulted", Value::Array(defaulted));
+        put(&mut item, "esl_basis", Value::from(model.esl.name()));
+        put(&mut item, "dc_bias_basis", Value::from(model.bias.name()));
+        put(
+            &mut item,
+            "dc_bias_note",
+            match &model.bias {
+                Bias::NotApplied(reason) => Value::from(reason.as_str()),
+                _ => Value::Null,
+            },
+        );
+        put(&mut item, "sources", Value::Array(model.sources.iter().map(|s| Value::from(s.as_str())).collect()));
+        put(
+            &mut item,
+            "current_share_fundamental",
+            share_at(fundamental_row, &model.component).map_or(Value::Null, |s| num(s, 4)),
+        );
+        put(
+            &mut item,
+            "current_share_worst_harmonic",
+            share_at(worst, &model.component).map_or(Value::Null, |s| num(s, 4)),
+        );
+        Value::Object(item)
+    };
+    put(m, "capacitor_branches", Value::Array(records.iter().map(capacitor_value).collect()));
+    let largest_value = |row: &Row, found: &Option<(String, f64)>| match found {
+        Some((component, share)) => {
+            let mut item = Object::new();
+            put(&mut item, "component", Value::from(component.as_str()));
+            put(&mut item, "share", num(*share, 4));
+            put(&mut item, "harmonic", Value::from(i64::from(row.n)));
+            put(&mut item, "frequency_hz", num(row.f, 0));
+            put(
+                &mut item,
+                "definition",
+                Value::from(
+                    "peak branch current over the peak source current at that harmonic (circulating currents between branches can make a share exceed 100 %)",
+                ),
+            );
+            Value::Object(item)
+        }
+        None => Value::Null,
+    };
+    put(m, "largest_current_share_fundamental", largest_value(fundamental_row, &largest_fundamental));
+    put(m, "largest_current_share_worst_harmonic", largest_value(worst, &largest_worst));
+    put(
+        m,
+        "anti_resonances",
+        Value::Array(
+            anti_resonances
+                .iter()
+                .map(|p| {
+                    let mut item = Object::new();
+                    put(&mut item, "frequency_hz", num(p.frequency, 0));
+                    put(&mut item, "impedance_ohm", num(p.impedance, 6));
+                    Value::Object(item)
+                })
+                .collect(),
+        ),
+    );
+    put(m, "skipped_capacitors", Value::Array(skipped.iter().map(|s| Value::from(s.as_str())).collect()));
     put(m, "hot_loop_inductance_nh", num(loop_inductance * 1e9, 4));
     put(m, "hot_loop_inductance_basis", Value::from(summary.basis.as_str()));
+    put(
+        m,
+        "hot_loop_inductance_placement",
+        Value::from(
+            "between the converter's current source and the hot capacitor's node; does not change the level at the LISN",
+        ),
+    );
     put(m, "input_filter", Value::from(filter_text.as_str()));
     match &filter_model {
         Some(model) => {
             let mut item = Object::new();
             put(&mut item, "inductor", Value::from(model.inductor.as_str()));
             put(&mut item, "upstream_net", Value::from(model.upstream_net.as_str()));
-            put(&mut item, "inductance_uh", num(model.filter.inductance * 1e6, 6));
-            put(&mut item, "dcr_mohm", num(model.filter.dcr * 1e3, 4));
-            put(&mut item, "parallel_capacitance_pf", num(model.filter.parallel_capacitance * 1e12, 4));
-            match &model.filter.supply_capacitor {
-                Some(c) => {
-                    let mut cap = Object::new();
-                    put(&mut cap, "capacitance_uf", num(c.capacitance * 1e6, 6));
-                    put(&mut cap, "esr_mohm", num(c.esr * 1e3, 4));
-                    put(&mut cap, "esl_nh", num(c.esl * 1e9, 4));
-                    put(&mut item, "supply_capacitor", Value::Object(cap));
-                }
-                None => put(&mut item, "supply_capacitor", Value::Null),
-            }
+            put(&mut item, "inductance_uh", num(model.inductance * 1e6, 6));
+            put(&mut item, "dcr_mohm", num(model.dcr * 1e3, 4));
+            put(&mut item, "parallel_capacitance_pf", num(model.parallel_capacitance * 1e12, 4));
+            put(
+                &mut item,
+                "supply_capacitors",
+                Value::Array(model.supply.iter().map(|(c, _)| Value::from(c.component.as_str())).collect()),
+            );
             put(
                 &mut item,
                 "components",
@@ -1658,34 +2402,44 @@ fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&
     put(m, "harmonics_reported", Value::from(rows.len() as i64));
     put(m, "harmonics_over_quasi_peak", Value::from(over_qp as i64));
     put(m, "harmonics_over_average", Value::from(over_avg as i64));
-    let row_value = |r: &Row| {
-        let mut item = Object::new();
-        put(&mut item, "harmonic", Value::from(i64::from(r.n)));
-        put(&mut item, "frequency_hz", num(r.f, 0));
-        put(&mut item, "source_current_a", num(r.source, 6));
-        put(&mut item, "dm_dbuv", num(r.dm, 2));
-        put(&mut item, "cm_dbuv", Value::Null);
-        put(&mut item, "total_dbuv", num(r.total, 2));
-        put(&mut item, "low_dbuv", num(r.low, 2));
-        put(&mut item, "high_dbuv", num(r.high, 2));
-        put(&mut item, "limit_qp", r.qp.map_or(Value::Null, |v| num(v, 2)));
-        put(&mut item, "limit_avg", r.avg.map_or(Value::Null, |v| num(v, 2)));
-        put(&mut item, "margin_qp_db", r.margin_qp.map_or(Value::Null, |v| num(v, 2)));
-        put(&mut item, "margin_avg_db", r.margin_avg.map_or(Value::Null, |v| num(v, 2)));
-        put(&mut item, "margin_db", row_margin(r).map_or(Value::Null, |v| num(v, 2)));
-        Value::Object(item)
-    };
-    put(m, "worst_harmonic", row_value(worst));
-    put(m, "fundamental", fundamental.map_or(Value::Null, row_value));
-    put(m, "harmonics", Value::Array(rows.iter().map(row_value).collect()));
+    put(m, "worst_harmonic", worst.json());
+    put(m, "fundamental", fundamental.map_or(Value::Null, Row::json));
+    put(m, "harmonics", Value::Array(rows.iter().map(Row::json).collect()));
+    put(
+        m,
+        "secondary_scenario",
+        match &secondary {
+            Some(second) => {
+                let w = &second.rows[worst_row(&second.rows)];
+                let mut item = Object::new();
+                put(&mut item, "scenario", Value::from(Kind::CurrentLimit.name()));
+                put(&mut item, "current_limit_a", num(current_limit, 6));
+                put(
+                    &mut item,
+                    "definition",
+                    Value::from(
+                        "the switch current limit as the amplitude of a flat-top pulse: a worst case that bounds operation, not a prediction of it",
+                    ),
+                );
+                put(&mut item, "band_cases", Value::from(second.cases as i64));
+                put(&mut item, "worst_harmonic", w.json());
+                put(&mut item, "fundamental", second.rows.iter().find(|r| r.n == 1).map_or(Value::Null, Row::json));
+                put(&mut item, "margin_db", w.margin().map_or(Value::Null, |v| num(v, 2)));
+                put(&mut item, "harmonics", Value::Array(second.rows.iter().map(Row::json).collect()));
+                Value::Object(item)
+            }
+            None => Value::Null,
+        },
+    );
     put(m, "assumptions", Value::Array(assumptions.iter().map(|a| Value::from(a.as_str())).collect()));
     cx.findings.push(finding);
 
     // Coverage.
     let mut detail = lines.join("; ");
     detail.push_str(&format!(
-        "; {} harmonic(s) reported as bands (high end at the current limit, low end at 0.4 x the limit), screening evidence, never a pass or fail; {}",
+        "; {} harmonic(s) reported as bands over the rule-of-thumb inputs ({} case(s)), screening evidence, never a pass or fail; {}",
         rows.len(),
+        main.cases,
         match detector.reason() {
             None => "detector applicability: isolated lines (quasi-peak = average = line RMS)".to_owned(),
             Some(reason) => format!("detector reading NOT applicable, line amplitudes only, no margin: {reason}"),

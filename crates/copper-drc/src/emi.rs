@@ -879,9 +879,23 @@ enum Corner {
     Slow,
 }
 
-/// The 10-90 % edge of the switch node.
+/// Which physical transition an [`Edge`] describes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EdgeOrigin {
+    /// The switch-node voltage edge (dv/dt): drives the common-mode score and the ringing.
+    Voltage,
+    /// The current commutation time declared on the switch pin (`current_rise_time`/`current_fall_time`).
+    CurrentDeclared,
+    /// No current commutation time is declared: the voltage edge (declared, from a slew rate, or the default band)
+    /// stands in for it. The two are different quantities (the current commutates between the switch and the
+    /// diode or low-side FET in a time set by loop inductance and drive), so this is an assumption.
+    CurrentFromVoltage,
+}
+
+/// The 10-90 % edge of the switch node or of the switch current.
 #[derive(Clone, Debug)]
 struct Edge {
+    origin: EdgeOrigin,
     basis: EdgeBasis,
     /// The edge a single-number estimate uses, s (the faster of rise and fall when declared).
     nominal: f64,
@@ -920,15 +934,38 @@ impl Edge {
 
     /// The tag of a result that uses this edge.
     fn tag(&self) -> Option<&'static str> {
-        match self.basis {
-            EdgeBasis::Declared => None,
-            EdgeBasis::SlewRate => Some(defaults::TAG_EDGE_FROM_SLEW),
-            EdgeBasis::RuleOfThumb => Some(defaults::TAG_EDGE),
+        match (self.origin, self.basis) {
+            (EdgeOrigin::CurrentDeclared, _) | (_, EdgeBasis::Declared) => None,
+            (_, EdgeBasis::SlewRate) => Some(defaults::TAG_EDGE_FROM_SLEW),
+            (_, EdgeBasis::RuleOfThumb) => Some(defaults::TAG_EDGE),
         }
+    }
+
+    /// Every tag of a result that uses this edge (the edge basis, and the current-edge assumption).
+    fn tags(&self) -> Vec<&'static str> {
+        let mut tags: Vec<&'static str> = self.tag().into_iter().collect();
+        if self.origin == EdgeOrigin::CurrentFromVoltage {
+            tags.push(defaults::TAG_CURRENT_EDGE_FROM_VOLTAGE);
+        }
+        tags
     }
 
     /// One sentence for `input:` lines and coverage.
     fn describe(&self, swing: Option<f64>) -> String {
+        let ns = |t: f64| format!("{} ns", rounded(t * 1e9, 4));
+        if self.origin == EdgeOrigin::CurrentDeclared {
+            return format!("{} (10-90 %, switch pin current_rise_time/current_fall_time)", ns(self.nominal));
+        }
+        let text = self.describe_voltage(swing);
+        if self.origin == EdgeOrigin::CurrentFromVoltage {
+            return format!(
+                "{text}, used for the current commutation because no current_rise_time/current_fall_time is declared"
+            );
+        }
+        text
+    }
+
+    fn describe_voltage(&self, swing: Option<f64>) -> String {
         let ns = |t: f64| format!("{} ns", rounded(t * 1e9, 4));
         match self.basis {
             EdgeBasis::Declared => {
@@ -955,7 +992,16 @@ impl Edge {
 
     /// The rule behind a default edge, worded for an `input:` line; `None` for a declared edge.
     fn rule_note(&self) -> Option<String> {
-        self.banded().then(|| defaults::rule_text(&defaults::edge_rule(), "slew_rate or rise_time"))
+        self.banded().then(|| {
+            defaults::rule_text(
+                &defaults::edge_rule(),
+                if self.origin == EdgeOrigin::CurrentFromVoltage {
+                    "slew_rate or rise_time (or current_rise_time and current_fall_time for the current edge)"
+                } else {
+                    "slew_rate or rise_time"
+                },
+            )
+        })
     }
 
     /// The `input:` line of this edge.
@@ -970,7 +1016,11 @@ impl Edge {
 struct Drive {
     frequency: f64,
     frequency_note: &'static str,
+    /// The switch-node voltage edge (common-mode score, ringing).
     edge: Option<Edge>,
+    /// The current commutation edge (conducted differential mode, the hot-loop radiated estimate): the declared
+    /// `current_rise_time`/`current_fall_time`, else the voltage edge (tag `current_edge_from_voltage_edge`).
+    current_edge: Option<Edge>,
     /// Why there is no edge, when there is none.
     edge_missing: String,
     /// The hot-supply voltage: the switch-node swing, V.
@@ -1039,13 +1089,32 @@ fn drive_of(view: &FlatElectricalView, cell: &SwitchingCell) -> Result<Drive, St
             }
         }
         let nominal = rise.min(fall);
-        Some(Edge { basis: EdgeBasis::Declared, nominal, fast: nominal, slow: nominal, rise, fall, slew })
+        Some(Edge {
+            origin: EdgeOrigin::Voltage,
+            basis: EdgeBasis::Declared,
+            nominal,
+            fast: nominal,
+            slow: nominal,
+            rise,
+            fall,
+            slew,
+        })
     } else if let (Some(slew), Some(swing)) = (slew, swing) {
         let t = defaults::edge_10_90(swing, slew);
-        Some(Edge { basis: EdgeBasis::SlewRate, nominal: t, fast: t, slow: t, rise: t, fall: t, slew: Some(slew) })
+        Some(Edge {
+            origin: EdgeOrigin::Voltage,
+            basis: EdgeBasis::SlewRate,
+            nominal: t,
+            fast: t,
+            slow: t,
+            rise: t,
+            fall: t,
+            slew: Some(slew),
+        })
     } else if let Some(swing) = swing {
         let (nominal, fast, slow) = defaults::default_edge_band(swing);
         Some(Edge {
+            origin: EdgeOrigin::Voltage,
             basis: EdgeBasis::RuleOfThumb,
             nominal,
             fast,
@@ -1064,6 +1133,27 @@ fn drive_of(view: &FlatElectricalView, cell: &SwitchingCell) -> Result<Drive, St
         };
         None
     };
+    let current_declared = match (positive(&cell.current_rise_time), positive(&cell.current_fall_time)) {
+        (Some(r), Some(f)) => Some((r, f)),
+        (Some(t), None) | (None, Some(t)) => Some((t, t)),
+        (None, None) => None,
+    };
+    let current_edge = match current_declared {
+        Some((rise, fall)) => {
+            let nominal = rise.min(fall);
+            Some(Edge {
+                origin: EdgeOrigin::CurrentDeclared,
+                basis: EdgeBasis::Declared,
+                nominal,
+                fast: nominal,
+                slow: nominal,
+                rise,
+                fall,
+                slew: None,
+            })
+        }
+        None => edge.clone().map(|e| Edge { origin: EdgeOrigin::CurrentFromVoltage, ..e }),
+    };
     let current = cell.current_peak.as_ref().map(quantity).filter(|i| *i > 0.0);
     let vout = supply_voltage(view, cell.magnetic.as_ref().and_then(|m| m.output_net.as_ref()));
     let (duty, duty_note) = match (swing, vout) {
@@ -1072,7 +1162,18 @@ fn drive_of(view: &FlatElectricalView, cell: &SwitchingCell) -> Result<Drive, St
         }
         _ => (DEFAULT_DUTY, format!("duty {DEFAULT_DUTY} assumed (input and output voltage not both declared)")),
     };
-    Ok(Drive { frequency, frequency_note, edge, edge_missing, swing, edge_notes, current, duty, duty_note })
+    Ok(Drive {
+        frequency,
+        frequency_note,
+        edge,
+        current_edge,
+        edge_missing,
+        swing,
+        edge_notes,
+        current,
+        duty,
+        duty_note,
+    })
 }
 
 /// The result of sweeping an estimate over the edge band.
@@ -1135,6 +1236,8 @@ struct Context<'a> {
 struct LoopSummary {
     capacitor: String,
     inductance: Option<f64>,
+    /// Closed path length of the loop, m.
+    length: f64,
     /// `traced copper path`, `placement estimate (pad-centre polygon)` ...
     basis: String,
     /// The loop's trace and placement tags.
@@ -2010,6 +2113,7 @@ fn analyze_loop(cx: &mut Context, cell: &SwitchingCell, spec: &LoopSpec) {
             LoopSummary {
                 capacitor: best.capacitor.clone(),
                 inductance: best.inductance,
+                length: best.length,
                 basis: basis.to_owned(),
                 tags: tags.clone(),
                 layer: loop_side.value().to_owned(),
@@ -2279,7 +2383,7 @@ fn add_tag(finding: &mut EmiFinding, tag: &str) {
 
 /// The `input:` lines, tag and coverage text that describe the edge a finding used.
 fn record_edge(finding: &mut EmiFinding, drive: &Drive, edge: &Edge) {
-    if let Some(tag) = edge.tag() {
+    for tag in edge.tags() {
         add_tag(finding, tag);
     }
     push_input(finding, edge.input_line(drive.swing));
@@ -2310,9 +2414,9 @@ fn radiated_estimate(
             return;
         }
     };
-    let (Some(edge), Some(current)) = (drive.edge.as_ref(), drive.current) else {
+    let (Some(edge), Some(current)) = (drive.current_edge.as_ref(), drive.current) else {
         let mut missing: Vec<&str> = Vec::new();
-        if drive.edge.is_none() {
+        if drive.current_edge.is_none() {
             missing.push(&drive.edge_missing);
         }
         if drive.current.is_none() {
@@ -2383,7 +2487,7 @@ fn radiated_estimate(
     }
     let method = format!(
         "small-loop formula E = 1.316e-14 I f^2 A / r on the trapezoid envelope of the switch current \
-         (amplitude current_peak, {} Hz {}, edge {}, {}), worst point of 30 MHz to {:.0} MHz at {} m{}",
+         (amplitude current_peak, {} Hz {}, current edge {}, {}), worst point of 30 MHz to {:.0} MHz at {} m{}",
         rounded(drive.frequency, 0),
         drive.frequency_note,
         edge.describe(drive.swing),
@@ -2464,17 +2568,15 @@ fn radiated_estimate(
     push_input(
         finding,
         format!(
-            "current amplitude {} A = current_peak, the current limit (worst case); typical operation would be {} A, -8.0 dB, not applied to this estimate {}",
-            rounded(current, 4),
-            rounded(current * defaults::OPERATING_CURRENT_FRACTION, 4),
-            defaults::rule_text_unreplaceable(&defaults::current_rule())
+            "current amplitude {} A = current_peak, the current limit (worst case, not a load current); a declared load_current is not applied to this estimate",
+            rounded(current, 4)
         ),
     );
     cx.cover(
         check,
         CoverageStatus::Executed,
         format!(
-            "{}; edge time {}{}; free-space value, the +6 dB ground-plane reflection is not applied; small-loop validity {} (evaluated {:.0} .. {:.0} MHz, loop path {:.3} lambda at the worst point, {} m is {:.1} x lambda/(2 pi) at 30 MHz and {:.1} x the loop size){}",
+            "{}; current edge time {}{}; free-space value, the +6 dB ground-plane reflection is not applied; small-loop validity {} (evaluated {:.0} .. {:.0} MHz, loop path {:.3} lambda at the worst point, {} m is {:.1} x lambda/(2 pi) at 30 MHz and {:.1} x the loop size){}",
             drive.duty_note,
             edge.describe(drive.swing),
             edge.rule_note().map(|r| format!(" {r}")).unwrap_or_default(),
@@ -3363,7 +3465,7 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
     let on_rules = findings.iter().filter(|f| f.tags.iter().any(|t| defaults::is_rule_tag(t))).count();
     if on_rules > 0 {
         notes.push(format!(
-            "{on_rules} of {} finding(s) rest on rule-of-thumb defaults (tags rule_of_thumb_edge, rule_of_thumb_capacitance, rule_of_thumb_dc_bias, rule_of_thumb_current):              their levels are bands with the nominal or the unfavourable end stated, the defaults are listed as `input:` lines and none is a datasheet value;              declare the attribute named in each line to replace a default; the band covers the default inputs only, not the mechanisms listed in `not_modelled`",
+            "{on_rules} of {} finding(s) rest on rule-of-thumb defaults (tags rule_of_thumb_edge, rule_of_thumb_capacitance, rule_of_thumb_dc_bias, rule_of_thumb_ripple):              their levels are bands with the nominal or the unfavourable end stated, the defaults are listed as `input:` lines and none is a datasheet value;              declare the attribute named in each line to replace a default; the band covers the default inputs only, not the mechanisms listed in `not_modelled`",
             findings.len()
         ));
     }

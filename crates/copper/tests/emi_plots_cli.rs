@@ -82,7 +82,9 @@ fn the_spectrum_has_a_stem_per_harmonic_the_limit_lines_and_the_screening_footer
     assert_eq!(svg.matches("<polyline class=\"limit-qp\"").count(), 1);
     assert_eq!(svg.matches("<polyline class=\"limit-avg\"").count(), 1);
     assert!(svg.contains("screening estimate, not EMC qualification"));
-    assert!(svg.contains("worst_case_current") && svg.contains("differential_mode_only"));
+    // The example declares load_current: the panel is the declared operating point, not the current-limit worst case.
+    assert!(svg.contains("scenario_declared_operating_point") && svg.contains("differential_mode_only"));
+    assert!(!svg.contains("worst_case_current"));
     assert!(svg.contains(">150 kHz</text>") && svg.contains(">30 MHz</text>") && svg.contains("dBuV"));
     assert!(svg.contains("fill=\"#ffffff\""));
     // No accuracy figure, no uncertainty whisker; the common-mode ranking score of the switch node is not drawn.

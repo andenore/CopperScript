@@ -14,7 +14,7 @@ use copper_json::{Dumps, Object, Value};
 use copper_units::{Decimal, Dimension, Quantity};
 
 use crate::erc::{Context, Diagnostic, build_context};
-use crate::lower::{SWITCHING_FREQUENCY, parse_quantity_text};
+use crate::lower::{LOAD_CURRENT, SWITCHING_FREQUENCY, parse_quantity_text};
 use crate::model::*;
 use crate::modes::active_device_pads;
 use crate::serializer::quantity_value;
@@ -128,6 +128,11 @@ pub struct SwitchingCell {
     /// First declared switch-node slew rate (dv/dt) among the switch pins.
     pub slew_rate: Option<Quantity>,
     pub current_peak: Option<Quantity>,
+    /// First declared 10-90 % current commutation times among the switch pins (distinct from the voltage edge).
+    pub current_rise_time: Option<Quantity>,
+    pub current_fall_time: Option<Quantity>,
+    /// `load_current` on the component: the operating point of the cell (mean inductor current of a buck).
+    pub load_current: Option<Quantity>,
     pub switch_pins: Vec<Endpoint>,
     pub hot_supply_pins: Vec<Endpoint>,
     pub hot_return_pins: Vec<Endpoint>,
@@ -331,6 +336,9 @@ fn cell_value(cell: &SwitchingCell) -> Value {
         ("fall_time", optional_quantity(cell.fall_time.as_ref())),
         ("slew_rate", optional_quantity(cell.slew_rate.as_ref())),
         ("current_peak", optional_quantity(cell.current_peak.as_ref())),
+        ("current_rise_time", optional_quantity(cell.current_rise_time.as_ref())),
+        ("current_fall_time", optional_quantity(cell.current_fall_time.as_ref())),
+        ("load_current", optional_quantity(cell.load_current.as_ref())),
         ("switch_pins", endpoints_value(&cell.switch_pins)),
         ("hot_supply_pins", endpoints_value(&cell.hot_supply_pins)),
         ("hot_return_pins", endpoints_value(&cell.hot_return_pins)),
@@ -566,6 +574,8 @@ struct Roles {
     fall_time: Option<Quantity>,
     slew_rate: Option<Quantity>,
     current_peak: Option<Quantity>,
+    current_rise_time: Option<Quantity>,
+    current_fall_time: Option<Quantity>,
 }
 
 fn build_cell(context: &Context, component: &ComponentInstance, part: &PartDefinition, roles: Roles) -> SwitchingCell {
@@ -609,6 +619,12 @@ fn build_cell(context: &Context, component: &ComponentInstance, part: &PartDefin
         fall_time: roles.fall_time,
         slew_rate: roles.slew_rate,
         current_peak: roles.current_peak,
+        current_rise_time: roles.current_rise_time,
+        current_fall_time: roles.current_fall_time,
+        load_current: component
+            .properties
+            .get(LOAD_CURRENT)
+            .and_then(|text| parse_quantity_text(text, Dimension::Current)),
         switch_pins: roles.switch,
         hot_supply_pins: roles.supply,
         hot_return_pins: roles.ret,
@@ -659,6 +675,8 @@ fn declared_roles(context: &Context, component: &ComponentInstance, part: &PartD
         fall_time: None,
         slew_rate: None,
         current_peak: None,
+        current_rise_time: None,
+        current_fall_time: None,
     };
     for pin in part.pins.values() {
         let Some(emi) = pin_emi(context, component, pin) else { continue };
@@ -669,6 +687,8 @@ fn declared_roles(context: &Context, component: &ComponentInstance, part: &PartD
                 roles.fall_time = roles.fall_time.or_else(|| emi.fall_time.clone());
                 roles.slew_rate = roles.slew_rate.or_else(|| emi.slew_rate.clone());
                 roles.current_peak = roles.current_peak.or_else(|| emi.current_peak.clone());
+                roles.current_rise_time = roles.current_rise_time.or_else(|| emi.current_rise_time.clone());
+                roles.current_fall_time = roles.current_fall_time.or_else(|| emi.current_fall_time.clone());
                 roles.switch.push(endpoint);
             }
             Some(EmiRole::HotSupply) => roles.supply.push(endpoint),
@@ -700,6 +720,8 @@ fn inferred_roles(context: &Context, component: &ComponentInstance, part: &PartD
         fall_time: None,
         slew_rate: None,
         current_peak: None,
+        current_rise_time: None,
+        current_fall_time: None,
     };
     for pin in part.pins.values() {
         let Some(profile) = context.pin_profile(component, part, pin) else { continue };
@@ -1016,6 +1038,20 @@ pub fn check(context: &Context) -> Vec<Diagnostic> {
                     cell.controller
                 ),
                 cell.controller.clone(),
+            ));
+        }
+    }
+    for component in &context.board.components {
+        if component.properties.contains_key(LOAD_CURRENT)
+            && !model.cells.iter().any(|cell| cell.controller == component.reference)
+        {
+            diagnostics.push(Diagnostic::warning(
+                "EMI_OPERATING_POINT_NO_CELL",
+                format!(
+                    "{} declares load_current but is not a switching cell (no pin with emi_role = switch, and the structural fallback found none), so the operating point is not used",
+                    component.reference
+                ),
+                component.reference.clone(),
             ));
         }
     }
