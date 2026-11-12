@@ -80,6 +80,11 @@ fn every_emi_check_code_has_an_explanation() {
 /// The physical board of `examples/emi_buck` (proxy footprints) with tracks along the hot loop,
 /// saved the way `route-board --checkpoint-dir DIR` saves its final board.
 fn write_routed_run(name: &str) -> PathBuf {
+    write_routed_run_with(name, |_| {})
+}
+
+/// `write_routed_run` after `edit` changed the board, e.g. to swap a pad's net.
+fn write_routed_run_with(name: &str, edit: impl FnOnce(&mut copper_pcb::board::PhysicalBoard)) -> PathBuf {
     use copper_pcb::board::TrackSegment;
     use copper_physical::{CopperLayer, Point};
     let design = copper_lang::compiler::compile_design_file(&workspace().join(BOARD), false, false).expect("compiles");
@@ -109,6 +114,7 @@ fn write_routed_run(name: &str) -> PathBuf {
     track("SW", (25.0, 31.27), (25.0, 34.0));
     track("GND", (23.0, 34.0), (23.5, 34.0));
     track("GND", (23.5, 34.0), (23.5, 29.0));
+    edit(&mut board);
     let directory = match std::env::var("EMI_RUN_DIR") {
         Ok(fixed) if name == "manual" => PathBuf::from(fixed),
         _ => std::env::temp_dir().join(format!("copper-emi-run-{name}-{}", std::process::id())),
@@ -147,6 +153,65 @@ fn run_analyses_the_routed_board_of_a_route_board_run() {
     assert_eq!(output.status.code(), Some(2));
     assert!(stdout(&output).contains("no final-board.state.json"), "{}", stdout(&output));
     let _ = std::fs::remove_dir_all(&missing);
+}
+
+#[test]
+fn run_refuses_a_checkpoint_whose_pads_sit_on_other_nets_than_the_design() {
+    // D1's cathode (pad K) moved from SW to VOUT: same references, different topology.
+    let directory = write_routed_run_with("swapped", |board| {
+        let cathode = board
+            .nets
+            .iter()
+            .find(|net| net.name == "SW")
+            .and_then(|net| net.pads.iter().find(|pad| pad.component == "D1"))
+            .map(|pad| pad.pad.clone())
+            .expect("D1 sits on SW");
+        for net in &mut board.nets {
+            net.pads.retain(|pad| !(pad.component == "D1" && pad.pad == cathode));
+        }
+        board
+            .nets
+            .iter_mut()
+            .find(|net| net.name == "VOUT")
+            .unwrap()
+            .pads
+            .push(copper_pcb::board::PadReference::new("D1", &cathode));
+    });
+    let output = copper(&["emi-check", BOARD, "--run", directory.to_str().unwrap(), "--json"]);
+    let text = stdout(&output);
+    assert_eq!(output.status.code(), Some(2), "{text}");
+    assert!(text.contains("differently from the design"), "{text}");
+    assert!(text.contains("D1.K: SW vs VOUT"), "{text}");
+    assert!(!text.contains("traced_copper"), "{text}");
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn write_finds_the_route_report_above_a_checkpoint_file() {
+    let directory = write_routed_run("write-up");
+    let report = directory.join("route-report.json");
+    std::fs::write(
+        &report,
+        "{\"schema\": \"copperscript-route-board/v1\"}
+",
+    )
+    .unwrap();
+    let checkpoint = directory.join("checkpoint").join("final-board.state.json");
+    for run in [checkpoint.to_str().unwrap(), directory.join("checkpoint").to_str().unwrap()] {
+        let output = copper(&["emi-check", BOARD, "--run", run, "--write", "--json"]);
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        assert_eq!(output.status.code(), Some(0), "{run}: {}{stderr}", stdout(&output));
+        assert!(stderr.contains("emi section written to"), "{run}: {stderr}");
+        let written = std::fs::read_to_string(&report).unwrap();
+        assert!(written.contains("\"emi\""), "{run}: {written}");
+        std::fs::write(
+            &report,
+            "{\"schema\": \"copperscript-route-board/v1\"}
+",
+        )
+        .unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&directory);
 }
 
 #[test]

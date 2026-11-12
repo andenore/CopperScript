@@ -167,6 +167,17 @@ pub fn run(arguments: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8
         );
         return 2;
     }
+    if parsed.value("--run").is_some()
+        && let Some(differences) = net_mismatches(&physical, &view)
+    {
+        let _ = text::print(
+            out,
+            &format!(
+                "EMI CHECK ERROR: the routed board connects pads differently from the design ({differences}); --run must hold the board of this design"
+            ),
+        );
+        return 2;
+    }
     let model = copper_lang::emi::analyze(&view);
     let mut report = emi_check(&physical, &view, &model);
     if let Some(options) = &fullwave {
@@ -346,10 +357,19 @@ fn plot_field(
 /// say where.
 fn write_section(run: &str, section: copper_json::Value) -> Result<String, String> {
     let path = Path::new(run);
-    let directory = if path.is_dir() { path } else { path.parent().unwrap_or(Path::new(".")) };
-    let located = copper_report::issues::load_run(&pypath::display(&directory.to_string_lossy()))
-        .map_err(|error| error.message.clone())?;
-    let report = located.report_path.ok_or_else(|| {
+    let start = if path.is_dir() { path } else { path.parent().unwrap_or(Path::new(".")) };
+    // A checkpoint file or directory sits inside the run directory that holds the report: look in
+    // the starting directory and up to two levels above it, the way a run is resolved elsewhere.
+    let mut located = None;
+    for directory in start.ancestors().take(3).filter(|directory| !directory.as_os_str().is_empty()) {
+        let found = copper_report::issues::load_run(&pypath::display(&directory.to_string_lossy()))
+            .map_err(|error| error.message.clone())?;
+        if found.report_path.is_some() {
+            located = Some(found);
+            break;
+        }
+    }
+    let report = located.and_then(|run| run.report_path).ok_or_else(|| {
         format!("{run}: no route-report.json beside the run's board; --write needs the report of a finished run")
     })?;
     let written = crate::emi_section::write_into_report(Path::new(&report), section)?;
@@ -396,4 +416,84 @@ fn unknown_placements(
         .filter(|reference| !view.components.iter().any(|component| component.reference == *reference))
         .collect();
     (!unknown.is_empty()).then(|| unknown.join(", "))
+}
+
+/// Pads of `board` whose net differs from the design's, as `component.pin: source net vs checkpoint
+/// net` (the first few, then a count); `None` when every pad agrees.
+///
+/// The design's assignment is derived like `physicalize` does it: each net endpoint's package pad,
+/// widened over the footprint's internal pad groups. Net names go through the design's alias table
+/// on both sides. Pads the design leaves unconnected only differ when the checkpoint connects them,
+/// and components the checkpoint does not place are skipped (`unknown_placements` owns those).
+fn net_mismatches(
+    board: &copper_pcb::board::PhysicalBoard,
+    view: &copper_lang::model::FlatElectricalView,
+) -> Option<String> {
+    use std::collections::BTreeMap;
+    let canonical = |name: &str| view.net_aliases.get(name).cloned().unwrap_or_else(|| name.to_owned());
+    let components: BTreeMap<&str, &copper_lang::model::ComponentInstance> =
+        view.components.iter().map(|c| (c.reference.as_str(), c)).collect();
+    let placed: BTreeMap<&str, &copper_pcb::board::Placement> =
+        board.placements.iter().map(|p| (p.reference.as_str(), p)).collect();
+    // (component, pad number) -> (source net, label of the pin that names it)
+    let mut expected: BTreeMap<(String, String), (String, String)> = BTreeMap::new();
+    for net in &view.nets {
+        for endpoint in &net.endpoints {
+            let (Some(component), Some(placement)) =
+                (components.get(endpoint.component.as_str()), placed.get(endpoint.component.as_str()))
+            else {
+                continue;
+            };
+            let Some(part) = view.library.get(&component.part) else { continue };
+            let Some(number) =
+                copper_pcb::physicalize::physical_pin_number(component, part, &view.devices, &endpoint.pin)
+            else {
+                continue;
+            };
+            let label = format!("{}.{}", endpoint.component, endpoint.pin);
+            let mut pads = vec![number.clone()];
+            if let Some(footprint) = board.footprints.get(&placement.footprint) {
+                for group in &footprint.internal_pad_groups {
+                    if group.numbers.contains(&number) {
+                        pads.extend(group.numbers.iter().cloned());
+                    }
+                }
+            }
+            for pad in pads {
+                expected
+                    .entry((endpoint.component.clone(), pad))
+                    .or_insert_with(|| (canonical(&net.name), label.clone()));
+            }
+        }
+    }
+    let actual: BTreeMap<(String, String), String> = board
+        .nets
+        .iter()
+        .flat_map(|net| {
+            net.pads.iter().map(move |pad| ((pad.component.clone(), pad.pad.clone()), canonical(&net.name)))
+        })
+        .filter(|((component, _), _)| components.contains_key(component.as_str()))
+        .collect();
+    let mut differences: Vec<String> = Vec::new();
+    for (key, (source, label)) in &expected {
+        let found = actual.get(key);
+        if found != Some(source) {
+            differences.push(format!("{label}: {source} vs {}", found.map_or("no net", String::as_str)));
+        }
+    }
+    for (key, net) in &actual {
+        if !expected.contains_key(key) {
+            differences.push(format!("{}.{}: no net vs {net}", key.0, key.1));
+        }
+    }
+    if differences.is_empty() {
+        return None;
+    }
+    let total = differences.len();
+    differences.truncate(4);
+    let mut text = differences.join("; ");
+    if total > differences.len() {
+        text.push_str(&format!("; and {} more", total - differences.len()));
+    }
+    Some(format!("component.pin: source net vs checkpoint net: {text}"))
 }

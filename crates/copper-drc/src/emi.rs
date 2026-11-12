@@ -1691,6 +1691,12 @@ fn build_candidate(
             candidate.vias.len() - skipped,
             if skipped > 0 { format!(", {skipped} too short to model and omitted") } else { String::new() }
         );
+        if !use_plane {
+            // The inductance above is free space; the near-field map (`loop_reference_plane_z_mm`)
+            // must not image the path in a plane the method note says it does not use.
+            candidate.plane = None;
+            candidate.plane_z = None;
+        }
         candidate.inductance = Some(planar + via_total).filter(|l| l.is_finite() && *l > 0.0);
         return Ok(candidate);
     }

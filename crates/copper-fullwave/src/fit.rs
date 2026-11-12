@@ -238,6 +238,98 @@ fn future(model: &Model, t_last: f64, dt: f64, freqs: &[f64]) -> Vec<Complex64> 
         .collect()
 }
 
+/// The amplitudes of `x` (tail from sample `first`, block length `d`) on the poles `s` (1/s) and the
+/// model of the signal they give, with the relative residual of the block means (`None` when the
+/// least squares fails).
+fn model_on_poles(x: &[f64], first: usize, t0: f64, dt: f64, d: usize, s: &[Complex64]) -> Option<(Model, f64)> {
+    let block_dt = d as f64 * dt;
+    let z: Vec<Complex64> = s.iter().map(|sk| (*sk * block_dt).exp()).collect();
+    let y = blocks(x, first, d);
+    let a = amplitudes(&y, &z)?;
+    let (mut err, mut norm) = (0.0_f64, 0.0_f64);
+    let mut powers = vec![Complex64::ONE; z.len()];
+    for sample in &y {
+        let fitted: Complex64 = a.iter().zip(&powers).map(|(a, p)| *a * *p).sum();
+        err += (Complex64::new(*sample, 0.0) - fitted).norm_sqr();
+        norm += sample * sample;
+        for (p, zk) in powers.iter_mut().zip(&z) {
+            *p *= *zk;
+        }
+    }
+    // The block mean of exp(s t) over d samples is exp(s t_first_of_block) * gain.
+    let c = a
+        .iter()
+        .zip(s)
+        .map(|(a, s)| {
+            let gain: Complex64 = (0..d).map(|j| (*s * (j as f64 * dt)).exp()).sum::<Complex64>() / d as f64;
+            *a / gain
+        })
+        .collect();
+    let residual = (err / norm.max(1e-300)).sqrt();
+    (c_is_finite(&a) && residual.is_finite())
+        .then(|| (Model { s: s.to_vec(), c, t_first: t0 + first as f64 * dt }, residual))
+}
+
+fn c_is_finite(values: &[Complex64]) -> bool {
+    values.iter().all(|v| v.re.is_finite() && v.im.is_finite())
+}
+
+/// The transforms of a port's voltage and current records completed by the fitted ring-down, and
+/// what completed them (so that the other ports of the run can be completed with the same poles).
+#[derive(Clone, Debug)]
+pub struct Completed {
+    pub v: Vec<Complex64>,
+    pub i: Vec<Complex64>,
+    /// The natural frequencies `s_k` of the chosen order, 1/s.
+    pub poles: Vec<Complex64>,
+    /// Samples per block of the decimated tail the poles were fitted on.
+    pub decimation: usize,
+}
+
+impl Completed {
+    /// `V / I`.
+    pub fn z(&self) -> Vec<Complex64> {
+        self.v.iter().zip(&self.i).map(|(v, i)| *v / *i).collect()
+    }
+}
+
+/// Largest relative residual of a passive port's tail on the excited port's poles for which its
+/// completion is used.
+pub const PASSIVE_RESIDUAL_LIMIT: f64 = 0.2;
+
+impl Record {
+    /// This record's transforms completed with the poles of another port's fit (`poles`, tail blocks
+    /// of `decimation` samples from `tail_start`): the passive ports of a run ring at the natural
+    /// frequencies of the loop, so the same exponents describe their tail. `None` when the amplitudes
+    /// cannot be fitted or the tail is not described by those poles (relative residual above
+    /// [`PASSIVE_RESIDUAL_LIMIT`]): the caller falls back and says so.
+    pub fn complete_with(
+        &self,
+        freqs: &[f64],
+        tail_start: f64,
+        poles: &[Complex64],
+        decimation: usize,
+    ) -> Option<(Vec<Complex64>, Vec<Complex64>)> {
+        if self.i.len() < 8 || self.v.len() < 8 || poles.is_empty() {
+            return None;
+        }
+        let first_i = ((tail_start - self.t0_i) / self.dt).ceil().max(0.0) as usize;
+        let first_v = ((tail_start - self.t0_v) / self.dt).ceil().max(0.0) as usize;
+        let (mi, ri) = model_on_poles(&self.i, first_i, self.t0_i, self.dt, decimation, poles)?;
+        let (mv, rv) = model_on_poles(&self.v, first_v, self.t0_v, self.dt, decimation, poles)?;
+        if ri > PASSIVE_RESIDUAL_LIMIT || rv > PASSIVE_RESIDUAL_LIMIT {
+            return None;
+        }
+        let t_last_v = self.t0_v + (self.v.len() - 1) as f64 * self.dt;
+        let t_last_i = self.t0_i + (self.i.len() - 1) as f64 * self.dt;
+        let fv = ems::post::dft(self.t0_v, self.dt, &self.v, freqs);
+        let fi = ems::post::dft(self.t0_i, self.dt, &self.i, freqs);
+        let tv = future(&mv, t_last_v, self.dt, freqs);
+        let ti = future(&mi, t_last_i, self.dt, freqs);
+        Some((fv.iter().zip(&tv).map(|(a, b)| *a + *b).collect(), fi.iter().zip(&ti).map(|(a, b)| *a + *b).collect()))
+    }
+}
+
 impl Record {
     /// `Z(f)` from the recorded samples before `t_cut` (all if `None`) completed by the exponentials
     /// fitted to the tail from `tail_start` seconds on; `band` is the range over which the orders are
@@ -249,6 +341,18 @@ impl Record {
         tail_start: f64,
         band: (f64, f64),
     ) -> Option<(Vec<Complex64>, FitInfo)> {
+        self.completed(freqs, t_cut, tail_start, band).map(|(done, info)| (done.z(), info))
+    }
+
+    /// Like [`z_fitted`](Self::z_fitted), but the completed voltage and current transforms and the poles
+    /// of the order that gave the median inductance, not only their quotient.
+    pub fn completed(
+        &self,
+        freqs: &[f64],
+        t_cut: Option<f64>,
+        tail_start: f64,
+        band: (f64, f64),
+    ) -> Option<(Completed, FitInfo)> {
         let t_cut = t_cut.unwrap_or(f64::INFINITY);
         let n_i = self.i.iter().enumerate().take_while(|(k, _)| self.t0_i + *k as f64 * self.dt <= t_cut).count();
         let n_v = self.v.iter().enumerate().take_while(|(k, _)| self.t0_v + *k as f64 * self.dt <= t_cut).count();
@@ -268,40 +372,29 @@ impl Record {
         let t_last_i = self.t0_i + (ii.len() - 1) as f64 * self.dt;
         let block_dt = d as f64 * self.dt;
         let mut orders = Vec::new();
-        let mut best: Vec<(usize, f64, Vec<Complex64>, Vec<Complex64>)> = Vec::new();
+        let mut best: Vec<(usize, f64, Completed, Vec<Complex64>)> = Vec::new();
         let max_order = (yi.len() / 4).min(16);
         for p in (2..=max_order).step_by(2) {
             let result = (|| {
                 let z = poles_of(&yi, p)?;
                 let s: Vec<Complex64> = z.iter().map(|zk| zk.ln() / block_dt).collect();
-                let model_of = |x: &[f64], first: usize, t0: f64| -> Option<Model> {
-                    let y = blocks(x, first, d);
-                    let a = amplitudes(&y, &z)?;
-                    // The block mean of exp(s t) over d samples is exp(s t_first_of_block) * gain.
-                    let c = a
-                        .iter()
-                        .zip(&s)
-                        .map(|(a, s)| {
-                            let gain: Complex64 =
-                                (0..d).map(|j| (*s * (j as f64 * self.dt)).exp()).sum::<Complex64>() / d as f64;
-                            *a / gain
-                        })
-                        .collect();
-                    Some(Model { s: s.clone(), c, t_first: t0 + first as f64 * self.dt })
-                };
-                let mi = model_of(ii, first_i, self.t0_i)?;
-                let mv = model_of(vi, first_v, self.t0_v)?;
+                let mi = model_on_poles(ii, first_i, self.t0_i, self.dt, d, &s)?.0;
+                let mv = model_on_poles(vi, first_v, self.t0_v, self.dt, d, &s)?.0;
                 let tv = future(&mv, t_last_v, self.dt, freqs);
                 let ti = future(&mi, t_last_i, self.dt, freqs);
-                let zf: Vec<Complex64> =
-                    fv.iter().zip(&tv).zip(fi.iter().zip(&ti)).map(|((a, b), (c, d))| (*a + *b) / (*c + *d)).collect();
-                let (l, _) = crate::solve::inductance_of(freqs, &zf, band.0, band.1)?;
-                Some((l, zf, s, mi.c))
+                let done = Completed {
+                    v: fv.iter().zip(&tv).map(|(a, b)| *a + *b).collect(),
+                    i: fi.iter().zip(&ti).map(|(a, b)| *a + *b).collect(),
+                    poles: s.clone(),
+                    decimation: d,
+                };
+                let (l, _) = crate::solve::inductance_of(freqs, &done.z(), band.0, band.1)?;
+                Some((l, done, s, mi.c))
             })();
             match result {
-                Some((l, zf, s, c)) if l.is_finite() => {
+                Some((l, done, s, c)) if l.is_finite() => {
                     orders.push((p, Some(l)));
-                    best.push((p, l, zf, ring_of(&s, &c, 1e-3)));
+                    best.push((p, l, done, ring_of(&s, &c, 1e-3)));
                 }
                 _ => orders.push((p, None)),
             }
@@ -380,5 +473,78 @@ mod tests {
         assert!(err(&plain) > 5.0 * err(&fitted));
         let (f, qq) = info.ring_hz.expect("ring");
         assert!((f / f0 - 1.0).abs() < 0.01 && (qq / q - 1.0).abs() < 0.1, "{f} {qq}");
+    }
+
+    /// Three ports of one run: the excited one rings, the second rings on the same poles (a transfer
+    /// term), the third carries a tail the poles do not describe. Cut at 10 ns out of 400 ns.
+    fn three_port_records(n: usize) -> Vec<Record> {
+        let dt = 2e-12;
+        let (f0, q) = (400e6, 25.0);
+        let alpha = std::f64::consts::PI * f0 / q;
+        let w = 2.0 * std::f64::consts::PI * f0;
+        let record = |i_of: &dyn Fn(f64) -> f64, v_extra: &dyn Fn(f64) -> f64| {
+            let i: Vec<f64> = (0..n).map(|k| i_of(k as f64 * dt)).collect();
+            let v: Vec<f64> = i.iter().enumerate().map(|(k, x)| -50.0 * x + v_extra(k as f64 * dt)).collect();
+            Record { dt, t0_v: 0.0, t0_i: 0.0, v, i }
+        };
+        let pulse = |t: f64| 0.1 * (-((t - 0.4e-9) / 0.1e-9).powi(2)).exp();
+        vec![
+            record(&|t| 1e-3 * (-alpha * t).exp() * (w * t).cos() + 4e-4 * (-t / 0.4e-9).exp(), &pulse),
+            record(&|t| 5e-4 * (-alpha * t).exp() * (w * t + 0.7).cos() + 1e-4 * (-t / 0.5e-9).exp(), &|_| 0.0),
+            record(&|t| 1e-3 * (-t / 60e-9).exp() * (2.0 * std::f64::consts::PI * 233e6 * t).cos(), &|_| 0.0),
+        ]
+    }
+
+    #[test]
+    fn completed_responses_give_z_and_s_from_the_same_spectra() {
+        use crate::solve::port_responses;
+        let freqs: Vec<f64> = (1..=40).map(|k| k as f64 * 25e6).collect();
+        let z_refs = [50.0, 50.0, 50.0];
+        let completion = Some((1.0e-9, (50e6, 150e6)));
+        let full = port_responses(&three_port_records(200_000), &z_refs, 0, &freqs, None).expect("full");
+        let cut_records: Vec<Record> = three_port_records(200_000)
+            .into_iter()
+            .map(|r| Record { v: r.v[..5000].to_vec(), i: r.i[..5000].to_vec(), ..r })
+            .collect();
+        let plain = port_responses(&cut_records, &z_refs, 0, &freqs, None).expect("plain");
+        let done = port_responses(&cut_records, &z_refs, 0, &freqs, completion).expect("completed");
+        assert!(done.fit.is_some());
+        // S11 is the reflection of the returned Z.
+        for (z, s) in done.z_in.iter().zip(&done.s[0]) {
+            let want = (*z - 50.0) / (*z + 50.0);
+            assert!((*s - want).norm() < 1e-9, "{s} vs {want}");
+        }
+        // The plain transform does not satisfy it once Z alone is corrected: the old mixed result.
+        let mixed = done
+            .z_in
+            .iter()
+            .zip(&plain.s[0])
+            .map(|(z, s)| (*s - (*z - 50.0) / (*z + 50.0)).norm())
+            .fold(0.0_f64, f64::max);
+        assert!(mixed > 1e-3, "{mixed}");
+        // The transfer term of the passive port is completed too.
+        let err = |a: &[Complex64], b: &[Complex64]| {
+            a.iter().zip(b).map(|(x, y)| (*x - *y).norm() / y.norm().max(1e-12)).fold(0.0_f64, f64::max)
+        };
+        assert!(err(&done.s[1], &full.s[1]) < 0.02, "completed {}", err(&done.s[1], &full.s[1]));
+        assert!(err(&plain.s[1], &full.s[1]) > 5.0 * err(&done.s[1], &full.s[1]));
+        // The third port's tail is not on those poles: plain transform, flagged.
+        assert_eq!(done.uncorrected, vec![2]);
+        assert!(err(&done.s[2], &plain.s[2]) < 1e-12);
+    }
+
+    #[test]
+    fn without_a_usable_fit_nothing_is_completed() {
+        use crate::solve::port_responses;
+        let freqs: Vec<f64> = (1..=40).map(|k| k as f64 * 25e6).collect();
+        let cut: Vec<Record> = three_port_records(200_000)
+            .into_iter()
+            .map(|r| Record { v: r.v[..300].to_vec(), i: r.i[..300].to_vec(), ..r })
+            .collect();
+        let done = port_responses(&cut, &[50.0; 3], 0, &freqs, Some((1.0e-9, (50e6, 150e6)))).expect("responses");
+        assert!(done.fit.is_none() && done.uncorrected.is_empty());
+        for (z, s) in done.z_in.iter().zip(&done.s[0]) {
+            assert!((*s - (*z - 50.0) / (*z + 50.0)).norm() < 1e-9);
+        }
     }
 }

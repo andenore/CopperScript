@@ -362,6 +362,25 @@ fn ringing_loop(z_ref: f64, ring_fit: bool, cap_ns: Option<f64>) -> (copper_full
 /// times and completed by the fit, and from a run that the fit ended. Z = V/I does not depend on the port
 /// impedance, which sets the damping of the ring (the series resistance of the port: Q about 2.7 at 50 ohm,
 /// about 27 at 500 ohm).
+/// Z and S of a run completed by the ring-down fit come from the same completed spectra:
+/// `S11 = (Z - Z0)/(Z + Z0)` of the returned `Z`, also through `PortMatrix` and Touchstone.
+#[test]
+#[ignore = "about 65 s; run with `cargo test -p copper-fullwave --test shorted_line -- --ignored a_fit_completed_run`; the unit tests in fit.rs cover the same logic on synthetic records"]
+fn a_fit_completed_run_has_s_and_z_from_the_same_spectra() {
+    let (col, _) = ringing_loop(500.0, true, Some(12.0));
+    assert!(!col.stats.converged && col.fit.is_some(), "the run is cut and completed by the fit: {:?}", col.fit);
+    assert!(col.uncorrected_ports.is_empty());
+    let z0 = 500.0;
+    for (k, (z, s)) in col.z_in.iter().zip(&col.s[0]).enumerate() {
+        let want = (*z - z0) / (*z + z0);
+        assert!((*s - want).norm() < 1e-9 * (1.0 + want.norm()), "f[{k}]: S11 {s} vs {want} from Z {z}");
+    }
+    // The plain transform of the cut record is a different response: the fit changed Z.
+    let plain = col.record.z_at(&col.freqs, None, copper_fullwave::solve::Window::Rectangular);
+    let moved = plain.iter().zip(&col.z_in).map(|(a, b)| (*a - *b).norm() / b.norm()).fold(0.0_f64, f64::max);
+    assert!(moved > 1e-3, "the fit left Z unchanged ({moved})");
+}
+
 #[test]
 #[ignore = "about 10 minutes; run with `cargo test -p copper-fullwave --test shorted_line -- --ignored ring_fit_against_decayed_run --nocapture`"]
 fn ring_fit_against_decayed_run() {

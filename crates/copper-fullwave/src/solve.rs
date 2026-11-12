@@ -164,6 +164,10 @@ pub struct PortColumn {
     pub record: Record,
     /// The ring-down fit that completed `z_in` (the record had not decayed), if one was used.
     pub fit: Option<crate::fit::FitInfo>,
+    /// Ports whose spectra are the plain transform of the truncated record although `fit` completed the
+    /// excited port's (their tail was not described by its poles); empty without a fit or when every port
+    /// was completed. Also stated in `stats.warnings`.
+    pub uncorrected_ports: Vec<usize>,
 }
 
 /// All columns: the full S matrix over the grid.
@@ -452,26 +456,23 @@ impl RegionModel {
         let results = sim.results();
         let converged = decayed;
         let steps = total_steps;
-        let analysed: Vec<_> = ports
-            .iter()
-            .map(|p| {
-                p.analyze(&results, &freqs)
-                    .map_err(|e| Error::Solver(format!("{e}; solver setup warnings: {}", warnings.join(" | "))))
-            })
-            .collect::<Result<_>>()?;
-        let mut z_in = analysed[excited].z_in();
-        let s = analysed.iter().map(|out| ems::post::port::s_param(out, &analysed[excited])).collect();
-        let record = self.record_of(&results, &ports, excited)?;
-        // A record that has not decayed is completed by the fitted ring-down.
-        let mut fit = None;
-        if !converged
-            && self.spec.ring_fit
-            && let Some((zf, info)) = record.z_fitted(&freqs, None, tail_start, band)
-            && info.spread < 0.05
-        {
-            z_in = zf;
-            fit = Some(info);
+        let mut records = Vec::new();
+        for k in 0..ports.len() {
+            records.push(self.record_of(&results, &ports, k)?);
         }
+        let z_refs: Vec<f64> = self.ports.iter().map(|p| p.spec.z_ref).collect();
+        // A record that has not decayed is completed by the fitted ring-down.
+        let completion = (!converged && self.spec.ring_fit).then_some((tail_start, band));
+        let responses = port_responses(&records, &z_refs, excited, &freqs, completion)?;
+        let mut warnings = warnings;
+        if !responses.uncorrected.is_empty() {
+            warnings.push(format!(
+                "ring-down completion: the tail of port(s) {} is not described by the poles fitted to port {excited}; their spectra are the uncorrected transform of the truncated record",
+                responses.uncorrected.iter().map(|k| self.ports[*k].spec.name.clone()).collect::<Vec<_>>().join(", ")
+            ));
+        }
+        let Responses { z_in, s, fit, uncorrected } = responses;
+        let record = records.swap_remove(excited);
         let keep = (trace.len() / 400).max(1);
         let trace: Vec<(f64, f64)> = trace.into_iter().step_by(keep).collect();
         Ok(PortColumn {
@@ -496,6 +497,7 @@ impl RegionModel {
             },
             record,
             fit,
+            uncorrected_ports: uncorrected,
         })
     }
 
@@ -533,6 +535,69 @@ impl RegionModel {
             stats: columns.into_iter().map(|c| c.stats).collect(),
         })
     }
+}
+
+/// The frequency responses of one run: `Z` of the excited port and its column of `S`, from one set of
+/// spectra.
+#[derive(Debug)]
+pub(crate) struct Responses {
+    pub z_in: Vec<Complex64>,
+    /// `s[i][f]` = `S_{i,excited}`.
+    pub s: Vec<Vec<Complex64>>,
+    pub fit: Option<crate::fit::FitInfo>,
+    /// Ports whose spectra stayed the plain transform of the truncated record.
+    pub uncorrected: Vec<usize>,
+}
+
+/// `Z` and the `S` column of the run that excited `excited`, from the voltage and current `records` of
+/// every port. With `completion` (tail start, band) the records are completed by the ring-down fitted to
+/// the excited port's tail and the *completed* spectra give both `Z` and `S`; the other ports' tails are
+/// fitted on the same poles. A passive port whose tail those poles do not describe (or when the fit of
+/// the excited port is unusable) keeps the plain transform and is listed in `uncorrected`; when the
+/// excited port has no usable fit nothing is completed, so Z and S still come from the same data.
+pub(crate) fn port_responses(
+    records: &[Record],
+    z_refs: &[f64],
+    excited: usize,
+    freqs: &[f64],
+    completion: Option<(f64, (f64, f64))>,
+) -> Result<Responses> {
+    let plain = |k: usize| {
+        let r = &records[k];
+        (ems::post::dft(r.t0_v, r.dt, &r.v, freqs), ems::post::dft(r.t0_i, r.dt, &r.i, freqs))
+    };
+    let mut spectra: Vec<(Vec<Complex64>, Vec<Complex64>)> = (0..records.len()).map(plain).collect();
+    let mut fit = None;
+    let mut uncorrected = Vec::new();
+    if let Some((tail_start, band)) = completion
+        && let Some((done, info)) = records[excited].completed(freqs, None, tail_start, band)
+        && info.spread < 0.05
+    {
+        for (k, record) in records.iter().enumerate() {
+            if k == excited {
+                spectra[k] = (done.v.clone(), done.i.clone());
+            } else if let Some(pair) = record.complete_with(freqs, tail_start, &done.poles, done.decimation) {
+                spectra[k] = pair;
+            } else {
+                uncorrected.push(k);
+            }
+        }
+        fit = Some(info);
+    }
+    let analysed: Vec<ems::post::port::PortResult> = spectra
+        .into_iter()
+        .zip(z_refs)
+        .map(|((v, i), z0)| {
+            ems::post::port::PortResult::new(freqs.to_vec(), v, i, Complex64::new(*z0, 0.0))
+                .map_err(|e| Error::Solver(e.to_string()))
+        })
+        .collect::<Result<_>>()?;
+    Ok(Responses {
+        z_in: analysed[excited].z_in(),
+        s: analysed.iter().map(|out| ems::post::port::s_param(out, &analysed[excited])).collect(),
+        fit,
+        uncorrected,
+    })
 }
 
 type Matrix = Vec<Vec<Complex64>>;

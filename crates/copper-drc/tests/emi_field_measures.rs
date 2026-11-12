@@ -122,6 +122,36 @@ fn a_traced_path_through_vias_changes_z_with_the_layer() {
 }
 
 #[test]
+fn a_loop_that_crosses_to_the_far_side_of_the_plane_has_no_reference_plane_for_the_field() {
+    // The same back-layer detour: the inductance falls back to free space (stated in the method),
+    // so the near-field map must not image the path in the plane either.
+    let tracks = [
+        track((23.0, 34.0), (23.0, 31.0), CopperLayer::Front),
+        track((23.0, 31.0), (23.5, 31.0), CopperLayer::Back),
+        track((23.5, 31.0), (23.5, 29.0), CopperLayer::Front),
+    ];
+    let via = |x: f64| Via {
+        net: "GND".to_owned(),
+        position: mm_point(x, 31.0),
+        size_nm: 600_000,
+        drill_nm: 300_000,
+        from_layer: CopperLayer::Front,
+        to_layer: CopperLayer::Back,
+        technology: None,
+        finish: "standard".to_owned(),
+    };
+    let report = run(|board| {
+        board.tracks.extend(tracks);
+        board.vias.extend([via(23.0), via(23.5)]);
+    });
+    let hot = report.findings.iter().find(|f| f.finding.code == "EMI-HOT-LOOP").unwrap();
+    let method = hot.measures.get("inductance_method").and_then(Value::as_str).expect("method");
+    assert!(method.contains("free space") && method.contains("far side"), "{method}");
+    assert_eq!(hot.measures.get("loop_reference_plane_z_mm"), Some(&Value::Null));
+    assert_eq!(hot.measures.get("reference_plane"), Some(&Value::Null));
+}
+
+#[test]
 fn the_inductor_field_is_listed_as_unsupported_coverage() {
     let report = run(|_| {});
     let entry = report.coverage.iter().find(|c| c.check == "EMI-FIELD:inductor").expect("a coverage entry");

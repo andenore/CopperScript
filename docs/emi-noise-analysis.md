@@ -291,7 +291,11 @@ directory holding `final-board.state.json` (or `checkpoint/final-board.state.jso
 which `route-board --checkpoint-dir DIR` writes for its final board. The board
 is decoded with `copper_route::state_codec::physical_board`; the electrical view
 still comes from compiling `BOARD`, and the command stops with exit 2 when the
-routed board places a reference the design does not have. A run directory that
+routed board places a reference the design does not have, or connects a pad to a
+different net than the design does (the message names the first few pins as
+`component.pin: source net vs checkpoint net`; net aliases, pads inside a
+footprint's internal pad group and pads the design leaves unconnected are not
+differences). A run directory that
 holds only `board.kicad_pcb` (and `route-report.json`) is rejected with a
 message: `copper_cam::board::Board` and the report scene (`copper issues`,
 `copper view`) are drawing models, and no converter from them to a
@@ -397,7 +401,8 @@ each with the missing input when skipped.
   its real width and the layer's copper thickness at its layer's centre height
   over the reference plane (bars on the plane layer or beyond it make the
   whole loop fall back to free space at the true layer heights, stated in
-  `inductance_method`); via barrels are added in series with
+  `inductance_method`; `reference_plane` and `loop_reference_plane_z_mm` are
+  then null, so the near-field map images nothing in a plane either); via barrels are added in series with
   `via_inductance(height, drill)` (no mutual terms with the bars; a barrel with
   height under a quarter of its diameter is omitted and counted). Plane
   shortcuts get a bar width of the straight length clamped to 1 to 5 mm. An
@@ -508,8 +513,9 @@ stays the single file of a run (there is no sidecar):
   switching cell gets no `emi` key, so its report is byte-identical to what it
   was before.
 - *`copper emi-check BOARD --run RUN --write`* adds or replaces the section of an
-  existing run. `RUN` is the run directory (or a state file in it) and must hold
-  the `route-report.json` of a finished run next to `final-board.state.json`
+  existing run. `RUN` is the run directory (or a state file in it, or its
+  `checkpoint/` directory) and must hold the `route-report.json` of a finished run
+  in the run directory, next to or up to two levels above `final-board.state.json`
   (`route-board --checkpoint-dir`); the report is rewritten in the format
   `route-board` uses (sorted keys, indent 2) through a temporary file and a
   rename, and `report_sha256` of `route-report.summary.json`, the only place the
@@ -1178,8 +1184,12 @@ transform of the record as a geometric series per pole. Z is the ratio. The indu
 reported. The run stops when, at two successive checks, the orders agree to 1 %, L has changed by less than 0.3 %
 and the tail covers two periods of the lowest ring pole carrying amplitude (at least 2 ns); a run that reaches the
 time cap undecayed is completed by the same fit when the orders agree to 5 %. The result carries the flag
-`ring_fitted` and a note with the ring's frequency and Q, in place of `energy_not_converged`; S parameters stay
-those of the cut record. Validation (`ring_fit_against_decayed_run`): a 10 x 6 mm loop 0.2 mm over a plane with
+`ring_fitted` and a note with the ring's frequency and Q, in place of `energy_not_converged`. The completed
+spectra are the single source of Z and S: the voltage and current of every port are completed (the passive ports'
+tails on the poles of the excited port's fit), so `S11 = (Z - Z0)/(Z + Z0)` of the returned Z, and `solve_all` and
+Touchstone carry the completed responses. A passive port whose tail those poles do not describe (relative residual
+above 0.2) keeps the plain transform of its truncated record; it is listed in `PortColumn::uncorrected_ports` and in
+the run's warnings. Validation (`ring_fit_against_decayed_run`): a 10 x 6 mm loop 0.2 mm over a plane with
 two 10 x 20 mm pads on both sides of a 1 mm gap, port across the gap; the pads are about 19 pF across the port by area and resonate
 with the loop at 443 MHz. The Q of the ring is set by the port's series resistance (Z = V/I does not depend on the
 port's reference impedance): 50 ohm gives a Q of 2.7 that decays in 11 ns (7.198 nH over 50-150 MHz), 500 ohm gives a Q of 27 that takes
