@@ -12,10 +12,20 @@
 //!
 //! Differential mode only: the common-mode path is not modelled (see
 //! [`COMMON_MODE_REASON`]).
+//!
+//! A harmonic level is a detector reading, and is compared with the quasi-peak
+//! and average lines, only where the isolated-line assumption holds
+//! (`copper_emi::conducted::DetectorApplicability`): one constant switching
+//! frequency whose harmonic spacing exceeds twice the receiver bandwidth. A part
+//! that declares a switching-frequency range (adjustable or spread spectrum: the
+//! part does not say) is evaluated as two fixed-frequency scenarios, its lower and
+//! its upper bound, each reported as line amplitudes only; the swept or modulated
+//! case is not modelled. Declaring `switching_frequency` on the component fixes
+//! the frequency and restores the detector comparison.
 
 use std::f64::consts::PI;
 
-use copper_emi::conducted::{self, Capacitor, ConductedInput, InputFilter};
+use copper_emi::conducted::{self, Capacitor, ConductedInput, FrequencyMode, InputFilter};
 use copper_emi::estimate::limits::{Class, Detector};
 use copper_lang::model::ComponentValue;
 use copper_units::Dimension;
@@ -23,10 +33,14 @@ use copper_units::Dimension;
 use super::defaults::{DEFAULT_ESR, PACKAGE_ESL, RAMP_10_90};
 use super::*;
 
-/// Uncertainty below and from this frequency (literature envelope: 5 dB at low MHz, 7 to 12 dB above).
-const UNCERTAINTY_SPLIT: f64 = 5e6;
-const UNCERTAINTY_LOW_DB: f64 = 6.0;
-const UNCERTAINTY_HIGH_DB: f64 = 10.0;
+/// Mechanisms the conducted prediction leaves out (the ones that depend on the cell are added where they apply).
+const NOT_MODELLED: [&str; 5] = [
+    "common-mode noise path (differential mode only; common mode often dominates above a few MHz)",
+    "spread-spectrum clocking, frequency modulation, jitter and burst or skip modes",
+    "converter source impedance and control-loop interaction (the converter is an ideal harmonic current source)",
+    "frequency dependence of component models beyond ESR, ESL and self-resonance (DC-bias loss is a parameter band, not a model)",
+    "the supply impedance behind the V-network",
+];
 
 /// Why the common-mode path is not modelled.
 pub const COMMON_MODE_REASON: &str = "the only capacitance the board model knows for the switch node is its island capacitance to the board's own \
@@ -694,10 +708,73 @@ fn input_entry(value: f64, unit: &str, source: String) -> Value {
     Value::Object(item)
 }
 
-/// The prediction of one cell; pushes the finding and the coverage entries.
+/// One fixed-frequency operating point that is evaluated.
+struct Scenario {
+    frequency: f64,
+    /// `fixed`, `range lower bound` or `range upper bound`.
+    note: &'static str,
+    /// `min` or `max` for the scenarios of a declared range (suffix of the coverage check and of the tag).
+    suffix: Option<&'static str>,
+    mode: FrequencyMode,
+}
+
+/// The operating points of a cell: its fixed frequency, or both ends of a declared range as separate
+/// fixed-frequency scenarios (the part does not say whether the range is adjustable or modulated, so the
+/// detector reading is withheld for them).
+fn scenarios(cell: &SwitchingCell) -> Vec<Scenario> {
+    match cell.frequency.as_ref().map(|f| &f.spec) {
+        Some(SwitchingFrequency::Fixed(value)) => {
+            vec![Scenario { frequency: quantity(value), note: "fixed", suffix: None, mode: FrequencyMode::Fixed }]
+        }
+        Some(SwitchingFrequency::Range { minimum, maximum }) => {
+            let describe = |q: &Option<copper_units::Quantity>| {
+                q.as_ref().map_or("(no bound)".to_owned(), |q| si(quantity(q), "Hz"))
+            };
+            let reason = format!(
+                "the part declares the switching-frequency range {} to {}, and whether it is set to one constant frequency or swept or modulated across it is not declared; declare switching_frequency on the component to fix it",
+                describe(minimum),
+                describe(maximum)
+            );
+            let mut out = Vec::new();
+            if let Some(value) = minimum {
+                out.push(Scenario {
+                    frequency: quantity(value),
+                    note: "range lower bound",
+                    suffix: Some("min"),
+                    mode: FrequencyMode::NotFixed(reason.clone()),
+                });
+            }
+            if let Some(value) = maximum {
+                out.push(Scenario {
+                    frequency: quantity(value),
+                    note: "range upper bound",
+                    suffix: Some("max"),
+                    mode: FrequencyMode::NotFixed(reason),
+                });
+            }
+            out
+        }
+        None => Vec::new(),
+    }
+}
+
+/// The prediction of one cell; pushes the finding and the coverage entries of every frequency scenario.
 pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
+    let all = scenarios(cell);
+    if all.is_empty() {
+        conducted_scenario(cx, cell, None);
+    }
+    for scenario in &all {
+        conducted_scenario(cx, cell, Some(scenario));
+    }
+}
+
+fn conducted_scenario(cx: &mut Context, cell: &SwitchingCell, scenario: Option<&Scenario>) {
     let view = cx.layout.view;
-    let check = format!("EMI-CONDUCTED:{}", cell.controller);
+    let check = match scenario.and_then(|s| s.suffix) {
+        Some(suffix) => format!("EMI-CONDUCTED:{}@{suffix}", cell.controller),
+        None => format!("EMI-CONDUCTED:{}", cell.controller),
+    };
     let na = |cx: &mut Context, reason: String| cx.cover(check.clone(), CoverageStatus::NotApplicable, reason);
 
     match cell.topology {
@@ -726,7 +803,13 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     // Inputs, collecting everything that is missing.
     let mut missing: Vec<String> = Vec::new();
     let drive = match drive_of(view, cell) {
-        Ok(drive) => Some(drive),
+        Ok(mut drive) => {
+            if let Some(scenario) = scenario {
+                drive.frequency = scenario.frequency;
+                drive.frequency_note = scenario.note;
+            }
+            Some(drive)
+        }
         Err(reason) => {
             missing.push(reason);
             None
@@ -862,6 +945,9 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         input.filter =
             filter_model.as_ref().map(|f| if case.derated { f.derated.unwrap_or(f.filter) } else { f.filter });
         input.limit_class = class.unwrap_or(Class::B);
+        if let Some(scenario) = scenario {
+            input.frequency_mode = scenario.mode.clone();
+        }
         input
     };
     let input = build(cases[0]);
@@ -884,6 +970,8 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         );
         return;
     }
+    let detector = report.detector_applicability();
+    let detector_ok = detector.is_applicable();
     let mut corner_reports = Vec::new();
     for case in &cases[1..] {
         match conducted::predict(&build(*case)) {
@@ -971,7 +1059,6 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     };
     let over_qp = rows.iter().filter(|r| r.margin_qp.is_some_and(|m| m < 0.0)).count();
     let over_avg = rows.iter().filter(|r| r.margin_avg.is_some_and(|m| m < 0.0)).count();
-    let uncertainty = |f: f64| if f < UNCERTAINTY_SPLIT { UNCERTAINTY_LOW_DB } else { UNCERTAINTY_HIGH_DB };
     let fundamental = rows.iter().find(|r| r.n == 1);
 
     // The edge and capacitance the nominal case used.
@@ -1009,6 +1096,13 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     if drive.frequency_note != "fixed" {
         tags.push("frequency_range_bound".to_owned());
     }
+    if let Some(suffix) = scenario.and_then(|s| s.suffix) {
+        tags.push(format!("frequency_scenario_{suffix}"));
+    }
+    if !detector_ok {
+        tags.push("detector_not_applicable".to_owned());
+        tags.push("line_amplitudes_only".to_owned());
+    }
 
     // Provenance lines.
     let mut inputs = Object::new();
@@ -1038,7 +1132,9 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
             "Hz",
             match drive.frequency_note {
                 "fixed" => "fixed switching frequency (part or component)".to_owned(),
-                note => format!("{note} of the declared range: evaluated at that frequency only"),
+                note => format!(
+                    "{note} of the declared range, evaluated as a separate fixed-frequency scenario; the swept or modulated case is not modelled"
+                ),
             },
         ),
     );
@@ -1105,7 +1201,10 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         if drive.frequency_note == "fixed" {
             "fixed".to_owned()
         } else {
-            format!("{} of the declared range, evaluated there only", drive.frequency_note)
+            format!(
+                "{} of the declared range, a fixed-frequency scenario; the swept or modulated case is not modelled",
+                drive.frequency_note
+            )
         }
     ));
     lines.push(match edge.basis {
@@ -1219,8 +1318,14 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         ));
     }
     assumptions.push(format!("common mode is not modelled: {COMMON_MODE_REASON}"));
+    if let Some(reason) = detector.reason() {
+        assumptions.push(format!(
+            "detector reading NOT applicable: {reason}. The levels are line amplitudes (RMS of one harmonic), not quasi-peak or average readings, and no limit or margin is attached to them"
+        ));
+    }
     if !has_margins {
         assumptions.push(match (&cx.standard.name, class) {
+            _ if !detector_ok => "line amplitudes only: no limit comparison".to_owned(),
             (Some(name), None) => format!("no conducted limit table for {name}: levels only, no margins"),
             _ => "no emission constraint: levels only, no margins".to_owned(),
         });
@@ -1247,31 +1352,36 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     // Message.
     let level_part = match worst_margin {
         Some(m) => format!(
-            "{:.1} dBuV (band [{:.1} .. {:.1}] dBuV, nominal {:.1}; {:+.1} dB to the {} line from the high end, uncertainty {} dB)",
+            "{:.1} dBuV (band [{:.1} .. {:.1}] dBuV, nominal {:.1}; {:+.1} dB to the {} line from the high end)",
             worst.high,
             worst.low,
             worst.high,
             worst.total,
             m,
-            detector_text(worst_detector),
-            uncertainty(worst.f)
+            detector_text(worst_detector)
         ),
         None => format!(
-            "{:.1} dBuV (band [{:.1} .. {:.1}] dBuV, nominal {:.1}; uncertainty {} dB)",
-            worst.high,
-            worst.low,
-            worst.high,
-            worst.total,
-            uncertainty(worst.f)
+            "{:.1} dBuV (band [{:.1} .. {:.1}] dBuV, nominal {:.1})",
+            worst.high, worst.low, worst.high, worst.total
         ),
     };
-    let mut message = format!(
-        "{}: conducted emission at the input (differential mode only, 50 uH V-network): {} {} {}",
-        cell.controller,
-        if has_margins { "worst harmonic" } else { "highest harmonic" },
-        format_args!("{} at {}:", worst.n, si(worst.f, "Hz")),
-        level_part
-    );
+    let mut message = if detector_ok {
+        format!(
+            "{}: conducted emission at the input (differential mode only, 50 uH V-network): {} {} {}",
+            cell.controller,
+            if has_margins { "worst harmonic" } else { "highest harmonic" },
+            format_args!("{} at {}:", worst.n, si(worst.f, "Hz")),
+            level_part
+        )
+    } else {
+        format!(
+            "{}: conducted line amplitudes at the input (differential mode only, 50 uH V-network), NOT a detector reading: highest line {} at {}: {}",
+            cell.controller,
+            worst.n,
+            si(worst.f, "Hz"),
+            level_part
+        )
+    };
     if let Some(f) = fundamental {
         message.push_str(&format!(
             "; fundamental {} {:.1} dBuV (band [{:.1} .. {:.1}])",
@@ -1288,6 +1398,8 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
             "; {over_qp} of {} harmonics above the quasi-peak line, {over_avg} above the average line (high ends)",
             rows.len()
         ));
+    } else if let Some(reason) = detector.reason() {
+        message.push_str(&format!("; no quasi-peak or average margin is stated: {reason}"));
     } else {
         message.push_str("; levels only, no conducted limit applied");
     }
@@ -1347,21 +1459,46 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     let method = format!(
         "linear-network prediction (copper_emi::conducted): trapezoidal input-current harmonics of a buck, amplitude {} \
          (current_peak, the switch current limit), through the hot capacitor branch with {} loop inductance{} into the 50 uH V-network; \
-         level is the RMS dBuV of the {} harmonic at the worst LISN port (peak = quasi-peak = average for isolated lines); differential mode only; \
-         the value is the HIGH end of a band over rule-of-thumb inputs (largest level over {} corner case(s) at the current limit; the low end is at 0.4 x the limit), the margin is the high end's; \
-         uncertainty 6 dB below 5 MHz, 10 dB above, on top of the band",
+         level is the RMS dBuV of the {} harmonic at the worst LISN port ({}); differential mode only; \
+         the value is the HIGH end of a band over rule-of-thumb inputs (largest level over {} corner case(s) at the current limit; the low end is at 0.4 x the limit){}",
         si(current, "A"),
         si(loop_inductance, "H"),
         if filter_model.is_some() { " and the recognised input filter" } else { "" },
         if has_margins { "least-margin" } else { "highest-level" },
-        cases.len()
+        if detector_ok {
+            "peak = quasi-peak = average for isolated lines".to_owned()
+        } else {
+            "a line amplitude, not a detector reading".to_owned()
+        },
+        cases.len(),
+        if has_margins { ", the margin is the high end's" } else { "" }
     );
+    let mut not_modelled: Vec<String> = NOT_MODELLED.iter().map(|m| (*m).to_owned()).collect();
+    if !others.is_empty() {
+        not_modelled.push(format!(
+            "parallel hot capacitors {} and anti-resonances between branches (one branch only)",
+            other_names.join(", ")
+        ));
+    } else {
+        not_modelled.push("other capacitors and board resonances beyond the one hot-capacitor branch".to_owned());
+    }
+    not_modelled.push(
+        "zone fills and plane cut-outs (the hot-loop inductance is from placed or traced copper over an idealised plane)"
+            .to_owned(),
+    );
+    if !cx.stack.declared() {
+        not_modelled.push(
+            "the real stack-up (none is declared; FR-4 spread evenly over the board thickness is assumed)".to_owned(),
+        );
+    }
     finding.estimate = Some(Estimate {
-        quantity: "conducted_emission".to_owned(),
+        quantity: if detector_ok { "conducted_emission" } else { "conducted_line_amplitude" }.to_owned(),
         value: rounded(worst.high, 2),
         unit: "dBuV".to_owned(),
         method,
-        uncertainty_db: uncertainty(worst.f),
+        kind: EstimateKind::Absolute,
+        definition: None,
+        not_modelled,
         frequency_hz: Some(rounded(worst.f, 0)),
         band_db: Some([rounded(worst.low, 2), rounded(worst.high, 2)]),
         basis: Some(defaults::BASIS.to_owned()),
@@ -1483,6 +1620,41 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         },
     );
     put(m, "margins_available", Value::Bool(has_margins));
+    put(m, "detector_applicability", Value::from(if detector_ok { "isolated_lines" } else { "not_applicable" }));
+    put(m, "detector_reason", detector.reason().map_or(Value::Null, Value::from));
+    put(
+        m,
+        "detector_bands",
+        Value::Array(
+            report
+                .bands
+                .iter()
+                .map(|b| {
+                    let mut item = Object::new();
+                    put(&mut item, "band", Value::from(format!("{:?}", b.band)));
+                    put(&mut item, "rbw_hz", num(b.rbw_hz, 0));
+                    put(&mut item, "harmonic_spacing_hz", num(b.spacing_hz, 0));
+                    put(&mut item, "harmonics", Value::from(b.harmonics as i64));
+                    put(
+                        &mut item,
+                        "status",
+                        Value::from(if b.applicability.is_applicable() { "isolated_lines" } else { "not_applicable" }),
+                    );
+                    put(&mut item, "reason", b.applicability.reason().map_or(Value::Null, Value::from));
+                    Value::Object(item)
+                })
+                .collect(),
+        ),
+    );
+    put(
+        m,
+        "frequency_scenario",
+        Value::from(match scenario.and_then(|s| s.suffix) {
+            Some("min") => "range lower bound (fixed-frequency scenario; swept or modulated case not modelled)",
+            Some(_) => "range upper bound (fixed-frequency scenario; swept or modulated case not modelled)",
+            None => "fixed",
+        }),
+    );
     put(m, "harmonics_reported", Value::from(rows.len() as i64));
     put(m, "harmonics_over_quasi_peak", Value::from(over_qp as i64));
     put(m, "harmonics_over_average", Value::from(over_avg as i64));
@@ -1501,7 +1673,6 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
         put(&mut item, "margin_qp_db", r.margin_qp.map_or(Value::Null, |v| num(v, 2)));
         put(&mut item, "margin_avg_db", r.margin_avg.map_or(Value::Null, |v| num(v, 2)));
         put(&mut item, "margin_db", row_margin(r).map_or(Value::Null, |v| num(v, 2)));
-        put(&mut item, "uncertainty_db", Value::from(uncertainty(r.f)));
         Value::Object(item)
     };
     put(m, "worst_harmonic", row_value(worst));
@@ -1513,8 +1684,12 @@ pub(super) fn conducted(cx: &mut Context, cell: &SwitchingCell) {
     // Coverage.
     let mut detail = lines.join("; ");
     detail.push_str(&format!(
-        "; {} harmonic(s) reported as bands (high end at the current limit, low end at 0.4 x the limit), screening evidence with {UNCERTAINTY_LOW_DB} dB uncertainty below 5 MHz and {UNCERTAINTY_HIGH_DB} dB above on top of the band, never a pass or fail",
-        rows.len()
+        "; {} harmonic(s) reported as bands (high end at the current limit, low end at 0.4 x the limit), screening evidence, never a pass or fail; {}",
+        rows.len(),
+        match detector.reason() {
+            None => "detector applicability: isolated lines (quasi-peak = average = line RMS)".to_owned(),
+            Some(reason) => format!("detector reading NOT applicable, line amplitudes only, no margin: {reason}"),
+        }
     ));
     cx.cover(check.clone(), CoverageStatus::Executed, detail);
     cx.cover(format!("{check}:common_mode"), CoverageStatus::NotApplicable, COMMON_MODE_REASON);

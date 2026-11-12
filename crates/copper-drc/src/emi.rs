@@ -14,10 +14,14 @@
 //!   cable connectors, in units of the inductor size.
 //! * `emi_accept` handling and `EMI-ACCEPT-UNUSED`.
 //!
-//! Every number is screening evidence with the stated uncertainty
-//! ([`UNCERTAINTY_DB`]); nothing is a pass or a fail, and a check that cannot
-//! run on the given input says so in the coverage list. The geometry is `f64`
-//! metres converted from the board's integer nanometres at the boundary.
+//! Every number is screening evidence; nothing is a pass or a fail, and a check
+//! that cannot run on the given input says so in the coverage list. What each
+//! estimate leaves out is stated with it, in three separate parts: its numerical
+//! sensitivity (none for a closed form), the parameter bands that rule-of-thumb
+//! defaults open, and the named mechanisms it does not model
+//! ([`Estimate::not_modelled`]). What has been validated is in [`VALIDATION`].
+//! The geometry is `f64` metres converted from the board's integer nanometres at
+//! the boundary.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::PI;
@@ -47,10 +51,29 @@ mod field;
 /// The `schema` of [`EmiCheckReport::json`].
 pub const SCHEMA: &str = "copperscript-emi-check/v0.1";
 
-/// Stated uncertainty of every absolute level, dB. The closed-form radiation
-/// estimators are good to 10 to 20 dB; the middle of that range is used for
-/// every margin.
-pub const UNCERTAINTY_DB: f64 = 15.0;
+/// What has and has not been validated. Printed in the text banner and in `limits.validation`; it replaces
+/// any accuracy figure.
+pub const VALIDATION: &str = "validated: the closed forms, the circuit solver and the receiver emulation against hand calculations and analytic cases (unit tests); not validated: no estimate has been correlated with a measurement, so no accuracy, confidence interval or bound is claimed";
+
+/// Mechanisms the differential-mode loop field leaves out.
+const DM_FIELD_NOT_MODELLED: [&str; 4] = [
+    "common-mode currents on cables and attached conductors (the hot loop is the only radiator)",
+    "ground-plane reflection and enclosure effects (free-space value)",
+    "the field of the power inductor and of currents outside the hot loop",
+    "current waveform details beyond the trapezoid envelope (ringing is reported separately and not added to the spectrum)",
+];
+
+/// Mechanisms the voltage-driven common-mode score leaves out, and so what an absolute prediction would need.
+const CM_NOT_MODELLED: [&str; 5] = [
+    "cable and attached-conductor geometry (length, routing, which conductors the displacement current reaches)",
+    "board-to-environment coupling (capacitance of the board to chassis, earth or a heat sink)",
+    "return impedance of the common-mode path (the plane under the island is the converter's own return)",
+    "radiation efficiency of the structure that carries the current",
+    "frequency dependence of the island capacitance (a quasi-static plate-and-fringe estimate)",
+];
+
+/// Definition of the common-mode coupling-risk score, printed with every score.
+const CM_SCORE_DEFINITION: &str = "20 log10(f C V / (100 MHz * 1 pF * 1 V)), maximised over 30 MHz to 1 GHz: f the frequency, C the island capacitance to the nearest ground plane, V the amplitude of the switch-node trapezoid envelope at f. The displacement current 2 pi f C V is the driver; no field-per-current constant and no distance enter, so the score ranks cells and boards by drive and is neither a field nor comparable with an emission limit. Relative to the reference product only";
 
 /// Relative permittivity assumed when the stack-up declares none (FR-4).
 const DEFAULT_ER: f64 = 4.5;
@@ -89,14 +112,39 @@ fn quantity(value: &Quantity) -> f64 {
 // Report types
 // ---------------------------------------------------------------------------
 
-/// The primary numeric estimate of a finding.
+/// What kind of number an [`Estimate`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EstimateKind {
+    /// An absolute screening estimate in the unit stated (a margin against a limit may be formed from it).
+    Absolute,
+    /// A relative ranking score: not a field, never compared with a limit, never given a margin.
+    RankingScore,
+}
+
+impl EstimateKind {
+    fn value(self) -> &'static str {
+        match self {
+            EstimateKind::Absolute => "absolute_screening",
+            EstimateKind::RankingScore => "ranking_score",
+        }
+    }
+}
+
+/// The primary numeric estimate of a finding. Its uncertainty is reported as three separate things: the
+/// numerical sensitivity (none for a closed form: the JSON field is `null`), the parameter band that
+/// rule-of-thumb defaults open (`band_db`, `basis`), and the named mechanisms it does not model
+/// (`not_modelled`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Estimate {
     pub quantity: String,
     pub value: f64,
     pub unit: String,
     pub method: String,
-    pub uncertainty_db: f64,
+    pub kind: EstimateKind,
+    /// For a [`EstimateKind::RankingScore`]: how the score is defined and what it is relative to.
+    pub definition: Option<String>,
+    /// Named mechanisms this estimate does not model.
+    pub not_modelled: Vec<String>,
     /// The frequency the level was evaluated at, Hz.
     pub frequency_hz: Option<f64>,
     /// `[low, high]` level in the estimate's unit when an input is a rule of thumb: `value` is the
@@ -141,7 +189,8 @@ pub struct CellSummary {
 /// Standard, band and caveats of the estimates.
 #[derive(Clone, Debug)]
 pub struct Limits {
-    pub uncertainty_db: f64,
+    /// What has and has not been validated ([`VALIDATION`]).
+    pub validation: String,
     pub standard: Option<String>,
     pub limit_source: Option<String>,
     pub distance_m: f64,
@@ -2294,6 +2343,44 @@ fn radiated_estimate(
         return;
     };
     let worst = banded.nominal;
+    // Validity of the small-loop formula where it was used: electrically small at the worst point (the sweep
+    // stops at c / (10 path)), far field at the lowest frequency swept, the loop small against the distance.
+    let (mut min_p, mut max_p) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for point in &best.points {
+        for axis in 0..2 {
+            min_p[axis] = min_p[axis].min(point[axis]);
+            max_p[axis] = max_p[axis].max(point[axis]);
+        }
+    }
+    let loop_dimension = dist(min_p, max_p);
+    let at_worst = estimate::dm_field_validity(best.length, loop_dimension, worst.frequency, cx.standard.distance);
+    let at_low = estimate::dm_field_validity(best.length, loop_dimension, BAND.0, cx.standard.distance);
+    let (small, far, point_source) = (at_worst.electrically_small(), at_low.far_field(), at_worst.point_source());
+    let truncated = high < BAND.1 * (1.0 - 1e-9);
+    let mut validity = Object::new();
+    put(&mut validity, "electrically_small", Value::Bool(small));
+    put(&mut validity, "loop_path_over_wavelength_at_worst_point", num(at_worst.loop_length_over_wavelength, 4));
+    put(&mut validity, "far_field", Value::Bool(far));
+    put(&mut validity, "distance_over_lambda_2pi_at_30_mhz", num(at_low.distance_over_near_field_radius, 3));
+    put(&mut validity, "point_source", Value::Bool(point_source));
+    put(&mut validity, "distance_over_loop_size", num(at_worst.distance_over_loop_size, 2));
+    put(&mut validity, "evaluated_band_mhz", Value::Array(vec![num(BAND.0 * 1e-6, 1), num(high * 1e-6, 1)]));
+    put(&mut validity, "band_truncated_by_loop_size", Value::Bool(truncated));
+    put(&mut validity, "holds", Value::Bool(small && far && point_source));
+    put(
+        &mut validity,
+        "conditions",
+        Value::from(
+            "free-space small-loop formula: loop path at most lambda / 10 at the evaluated frequency, observation distance beyond lambda / (2 pi), distance at least 3 x the loop's longest dimension",
+        ),
+    );
+    put(&mut finding.measures, "radiated_validity", Value::Object(validity));
+    if !(small && far && point_source) {
+        add_tag(finding, "small_loop_validity_failed");
+    }
+    if truncated {
+        add_tag(finding, "radiated_band_truncated");
+    }
     let method = format!(
         "small-loop formula E = 1.316e-14 I f^2 A / r on the trapezoid envelope of the switch current \
          (amplitude current_peak, {} Hz {}, edge {}, {}), worst point of 30 MHz to {:.0} MHz at {} m{}",
@@ -2314,7 +2401,9 @@ fn radiated_estimate(
         value: rounded(worst.level_dbuvpm, 2),
         unit: "dBuV/m".to_owned(),
         method,
-        uncertainty_db: UNCERTAINTY_DB,
+        kind: EstimateKind::Absolute,
+        definition: None,
+        not_modelled: DM_FIELD_NOT_MODELLED.iter().map(|m| (*m).to_owned()).collect(),
         frequency_hz: Some(rounded(worst.frequency, 0)),
         band_db: banded.band.map(|b| [rounded(b[0], 2), rounded(b[1], 2)]),
         basis: banded.band.map(|_| defaults::BASIS.to_owned()),
@@ -2334,11 +2423,42 @@ fn radiated_estimate(
     }
     if let Some(margin) = banded.margin_db {
         finding.finding.message.push_str(&format!(
-            " ({:+.1} dB to the {} line{}, uncertainty {UNCERTAINTY_DB} dB on top of the band)",
+            " ({:+.1} dB to the {} line{}; a screening margin, never a pass or fail)",
             margin,
             cx.standard.name.as_deref().unwrap_or(""),
             if banded.band.is_some() { " at the fast bound" } else { "" }
         ));
+    }
+    if truncated {
+        finding.finding.message.push_str(&format!(
+            " [evaluated 30 .. {:.0} MHz only: above it the {:.0} mm loop path exceeds lambda/10 and the small-loop formula does not apply, so emission up to 1 GHz is not covered]",
+            high * 1e-6,
+            mm(best.length)
+        ));
+    }
+    if !(small && far && point_source) {
+        let mut failed: Vec<String> = Vec::new();
+        if !small {
+            failed.push(format!(
+                "loop path {:.2} lambda at the worst point (above lambda/10)",
+                at_worst.loop_length_over_wavelength
+            ));
+        }
+        if !far {
+            failed.push(format!(
+                "{} m is {:.2} x lambda/(2 pi) at 30 MHz (near field)",
+                cx.standard.distance, at_low.distance_over_near_field_radius
+            ));
+        }
+        if !point_source {
+            failed.push(format!(
+                "{} m is only {:.1} x the {:.0} mm loop dimension (not a point source)",
+                cx.standard.distance,
+                at_worst.distance_over_loop_size,
+                mm(loop_dimension)
+            ));
+        }
+        finding.finding.message.push_str(&format!(" [small-loop validity fails: {}]", failed.join("; ")));
     }
     record_edge(finding, drive, edge);
     push_input(
@@ -2354,10 +2474,17 @@ fn radiated_estimate(
         check,
         CoverageStatus::Executed,
         format!(
-            "{}; edge time {}{}; free-space value, the +6 dB ground-plane reflection is not applied{}",
+            "{}; edge time {}{}; free-space value, the +6 dB ground-plane reflection is not applied; small-loop validity {} (evaluated {:.0} .. {:.0} MHz, loop path {:.3} lambda at the worst point, {} m is {:.1} x lambda/(2 pi) at 30 MHz and {:.1} x the loop size){}",
             drive.duty_note,
             edge.describe(drive.swing),
             edge.rule_note().map(|r| format!(" {r}")).unwrap_or_default(),
+            if small && far && point_source { "holds" } else { "FAILS" },
+            BAND.0 * 1e-6,
+            high * 1e-6,
+            at_worst.loop_length_over_wavelength,
+            cx.standard.distance,
+            at_low.distance_over_near_field_radius,
+            at_worst.distance_over_loop_size,
             drive.edge_notes.iter().map(|n| format!("; {n}")).collect::<String>()
         ),
     );
@@ -2677,86 +2804,93 @@ fn switch_node(cx: &mut Context, cell: &SwitchingCell) {
         };
         cx.cover(check.clone(), CoverageStatus::Executed, format!("{covered}; distances are pad and track clearances"));
 
-        // Voltage-driven common mode.
+        // Voltage-driven common mode: a coupling-risk score for ranking, never a field, a level on a limit
+        // line or a margin (the board model has no cable, chassis or return structure to make it absolute).
         let cm_check = format!("EMI-SWITCH-NODE:{net}:common_mode");
         match (&drive, supply_voltage(cx.layout.view, cell.hot_supply_net.as_ref())) {
             (_, _) if !have_c => cx.cover(
                 cm_check,
                 CoverageStatus::NotApplicable,
-                "voltage-driven common mode skipped: no ground copper_zone on another layer to take the capacitance to",
+                "voltage-driven common-mode score skipped: no ground copper_zone on another layer to take the capacitance to",
             ),
             (Err(reason), _) => cx.cover(
                 cm_check,
                 CoverageStatus::NotApplicable,
-                format!("voltage-driven common mode skipped: {reason}"),
+                format!("voltage-driven common-mode score skipped: {reason}"),
             ),
             (Ok(drive), swing) => match (drive.edge.as_ref(), swing) {
                 (Some(edge), Some(swing)) if swing > 0.0 => {
                     let period = 1.0 / drive.frequency;
-                    let scale = 3.0 / cx.standard.distance;
-                    let field = |f: f64, t: f64| {
+                    // The score through the level grid of `sweep`: dBuV of the number `dbuv_to_volts(score)` is the
+                    // score itself, and no limit line is passed, so no margin can come out.
+                    let score = |f: f64, t: f64| {
                         let amplitude = estimate::trapezoid_envelope(swing, drive.duty, period, t, f);
-                        scale
-                            * estimate::voltage_driven_cm_field(
-                                f,
-                                capacitance,
-                                amplitude,
-                                estimate::VOLTAGE_CM_COEFFICIENT_3M,
-                            )
+                        estimate::dbuv_to_volts(estimate::voltage_driven_cm_score_db(
+                            estimate::voltage_driven_cm_drive(f, capacitance, amplitude),
+                        ))
                     };
-                    if let Some(banded) = sweep_edge(edge, BAND.0, BAND.1, cx.standard.line.as_ref(), field) {
+                    if let Some(banded) = sweep_edge(edge, BAND.0, BAND.1, None, score) {
                         let worst = banded.nominal;
                         finding.estimate = Some(Estimate {
-                            quantity: "voltage_driven_cm_field".to_owned(),
+                            quantity: "cm_coupling_score".to_owned(),
                             value: rounded(worst.level_dbuvpm, 2),
-                            unit: "dBuV/m".to_owned(),
+                            unit: "dB".to_owned(),
                             method: format!(
-                                "E = 115 f C V at 3 m scaled to {} m, V the trapezoid envelope of a {swing} V swing \
-                                 ({} Hz {}, edge {}, {}), C the island capacitance to the ground plane; the constant is \
-                                 not independently verified, use for ranking{}",
-                                cx.standard.distance,
+                                "ranking score 20 log10(f C V / (100 MHz * 1 pF * 1 V)), V the trapezoid envelope of a {swing} V swing \
+                                 ({} Hz {}, edge {}, {}), C the island capacitance to the ground plane, worst point of 30 MHz to 1 GHz; \
+                                 relative, not a field, no distance, no limit{}",
                                 rounded(drive.frequency, 0),
                                 drive.frequency_note,
                                 edge.describe(drive.swing),
                                 drive.duty_note,
                                 if banded.band.is_some() {
-                                    "; the value is the nominal edge, the band covers the fast and slow bound and the margin is the fast bound's"
+                                    "; the value is the nominal edge, the band covers the fast and slow bound"
                                 } else {
                                     ""
                                 }
                             ),
-                            uncertainty_db: UNCERTAINTY_DB,
+                            kind: EstimateKind::RankingScore,
+                            definition: Some(CM_SCORE_DEFINITION.to_owned()),
+                            not_modelled: CM_NOT_MODELLED.iter().map(|m| (*m).to_owned()).collect(),
                             frequency_hz: Some(rounded(worst.frequency, 0)),
                             band_db: banded.band.map(|b| [rounded(b[0], 2), rounded(b[1], 2)]),
                             basis: banded.band.map(|_| defaults::BASIS.to_owned()),
                         });
-                        finding.margin_db = banded.margin_db.map(|m| rounded(m, 2));
+                        finding.margin_db = None;
+                        add_tag(&mut finding, "ranking_only");
                         finding.finding.message.push_str(&format!(
-                            "; voltage-driven common-mode field about {:.1} dBuV/m at {:.0} MHz, {} m",
-                            worst.level_dbuvpm,
-                            worst.frequency * 1e-6,
-                            cx.standard.distance
+                            "; voltage-driven common-mode coupling-risk score {:+.1} dB (ranking only: relative to f C V = 100 MHz x 1 pF x 1 V, \
+                             not a field and not comparable with an emission limit)",
+                            worst.level_dbuvpm
                         ));
                         if let Some(band) = banded.band {
                             finding.finding.message.push_str(&format!(
                                 " (band {} for the slow .. fast edge of a rule-of-thumb slew rate, nominal shown)",
-                                band_text(band, "dBuV/m")
+                                band_text(band, "dB")
                             ));
                         }
-                        if let Some(margin) = banded.margin_db {
-                            finding.finding.message.push_str(&format!(
-                                " ({:+.1} dB to the {} line{}, uncertainty {UNCERTAINTY_DB} dB on top of the band)",
-                                margin,
-                                cx.standard.name.as_deref().unwrap_or(""),
-                                if banded.band.is_some() { " at the fast bound" } else { "" }
-                            ));
-                        }
+                        finding.finding.message.push_str(
+                            "; an absolute prediction would need the cable and attached-conductor geometry, the board-to-environment coupling and the return impedance, none of which the board model has",
+                        );
+                        let mut drivers = Object::new();
+                        put(&mut drivers, "island_area_mm2", num(area * 1e6, 4));
+                        put(&mut drivers, "capacitance_to_plane_pf", num(capacitance * 1e12, 4));
+                        put(&mut drivers, "swing_v", num(swing, 4));
+                        put(&mut drivers, "edge_time_10_90_ns", num(edge.time(Corner::Nominal) * 1e9, 4));
+                        put(&mut drivers, "switching_frequency_hz", num(drive.frequency, 0));
+                        put(&mut drivers, "duty", num(drive.duty, 4));
+                        put(&mut finding.measures, "cm_drivers", Value::Object(drivers));
+                        put(
+                            &mut finding.measures,
+                            "missing_for_absolute_prediction",
+                            Value::Array(CM_NOT_MODELLED.iter().map(|m| Value::from(*m)).collect()),
+                        );
                         record_edge(&mut finding, drive, edge);
                         cx.cover(
                             cm_check,
                             CoverageStatus::Executed,
                             format!(
-                                "island capacitance to the nearest ground plane; edge time {}{}; the constant 115 is unverified{}",
+                                "coupling-risk score, ranking only (no field, no margin, never drawn against a limit); island capacitance to the nearest ground plane; edge time {}{}{}",
                                 edge.describe(drive.swing),
                                 edge.rule_note().map(|r| format!(" {r}")).unwrap_or_default(),
                                 drive.edge_notes.iter().map(|n| format!("; {n}")).collect::<String>()
@@ -2767,12 +2901,12 @@ fn switch_node(cx: &mut Context, cell: &SwitchingCell) {
                 (None, _) => cx.cover(
                     cm_check,
                     CoverageStatus::NotApplicable,
-                    format!("voltage-driven common mode skipped: {}", drive.edge_missing),
+                    format!("voltage-driven common-mode score skipped: {}", drive.edge_missing),
                 ),
                 (_, _) => cx.cover(
                     cm_check,
                     CoverageStatus::NotApplicable,
-                    "voltage-driven common mode skipped: the hot supply net declares no supply voltage for the swing",
+                    "voltage-driven common-mode score skipped: the hot supply net declares no supply voltage for the swing",
                 ),
             },
         }
@@ -3146,7 +3280,7 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
                 "EMI-MARGIN".to_owned(),
                 CoverageStatus::Executed,
                 format!(
-                    "margin against the {name} radiated line ({source}) at {} m, uncertainty {UNCERTAINTY_DB} dB, never a pass or fail; EMI-CONDUCTED margins (dBuV at the LISN, uncertainty 6 dB below 5 MHz and 10 dB above) use the CISPR 32 mains-port quasi-peak and average lines for cispr32_class_a and cispr32_class_b only",
+                    "margin against the {name} radiated line ({source}) at {} m for the differential-mode hot-loop field only, never a pass or fail; the common-mode coupling-risk score of EMI-SWITCH-NODE is a ranking score and gets no margin; EMI-CONDUCTED margins (dBuV at the LISN) use the CISPR 32 mains-port quasi-peak and average lines for cispr32_class_a and cispr32_class_b only and only where the isolated-line detector assumption holds",
                     cx.standard.distance
                 ),
             );
@@ -3190,19 +3324,24 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
     cx.cover(
         "EMI-CABLE-COMMON-MODE".to_owned(),
         CoverageStatus::Unsupported,
-        format!("current-driven common mode on cables (cable_length {} m) is not estimated", cx.standard.cable_length),
+        format!(
+            "common-mode radiation from cables and attached conductors (cable_length {} m) is not estimated: the board model has no cable, chassis or return structure, so EMI-SWITCH-NODE reports a coupling-risk score, not a field",
+            cx.standard.cable_length
+        ),
     );
 
     let mut findings = std::mem::take(&mut cx.findings);
     findings.sort_by(|a, b| {
-        // Radiated estimates (dBuV/m) by level, then conducted estimates (dBuV at a LISN, a different
-        // quantity that is never compared with them) by margin when margins exist, else by level.
+        // Absolute radiated estimates (dBuV/m) by level, then conducted estimates (dBuV at a LISN, a different
+        // quantity that is never compared with them) by margin when margins exist, else by level, then the
+        // ranking scores (dB, relative: compared only with each other) by score.
         let key = |f: &EmiFinding| {
             if f.finding.code == "EMI-ACCEPT-UNUSED" {
-                (3, 0.0)
+                (4, 0.0)
             } else {
                 match f.estimate.as_ref() {
-                    None => (2, 0.0),
+                    None => (3, 0.0),
+                    Some(e) if e.kind == EstimateKind::RankingScore => (2, -e.value),
                     Some(e) if e.unit == "dBuV" => (1, f.margin_db.unwrap_or(-e.value)),
                     Some(e) => (0, -e.value),
                 }
@@ -3214,7 +3353,9 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
 
     let mut notes = vec![
         "screening evidence: ranks likely noise sources, never establishes EMC qualification".to_owned(),
-        format!("every absolute level carries about {UNCERTAINTY_DB} dB of uncertainty; margins are not pass or fail"),
+        format!("{VALIDATION}; margins are screening margins, not pass or fail"),
+        "uncertainty is reported as three separate things per estimate: numerical sensitivity (null for closed forms), parameter bands from rule-of-thumb defaults (band_db), and the named mechanisms not modelled (not_modelled)".to_owned(),
+        "common-mode radiation is a relative coupling-risk score (ranking only): it has no distance, no field value and no margin, and is never compared with an emission limit".to_owned(),
         "hot-loop geometry is the traced copper path where routed copper joins the loop pads (traced_copper, partially_traced) and the pad-centre polygon elsewhere (placement_estimate)".to_owned(),
         "differential-mode loop field is free space; the radiated sweep is the upper envelope of the trapezoid, peak against quasi-peak limits".to_owned(),
         "limit tables are transcribed from the published numbers and must be verified against the standards".to_owned(),
@@ -3222,7 +3363,7 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
     let on_rules = findings.iter().filter(|f| f.tags.iter().any(|t| defaults::is_rule_tag(t))).count();
     if on_rules > 0 {
         notes.push(format!(
-            "{on_rules} of {} finding(s) rest on rule-of-thumb defaults (tags rule_of_thumb_edge, rule_of_thumb_capacitance, rule_of_thumb_dc_bias, rule_of_thumb_current):              their levels are bands with the nominal or the unfavourable end stated, the defaults are listed as `input:` lines and none is a datasheet value;              declare the attribute named in each line to replace a default, and the uncertainty of {UNCERTAINTY_DB} dB stays on top of every band",
+            "{on_rules} of {} finding(s) rest on rule-of-thumb defaults (tags rule_of_thumb_edge, rule_of_thumb_capacitance, rule_of_thumb_dc_bias, rule_of_thumb_current):              their levels are bands with the nominal or the unfavourable end stated, the defaults are listed as `input:` lines and none is a datasheet value;              declare the attribute named in each line to replace a default; the band covers the default inputs only, not the mechanisms listed in `not_modelled`",
             findings.len()
         ));
     }
@@ -3230,7 +3371,7 @@ pub fn emi_check(board: &PhysicalBoard, view: &FlatElectricalView, model: &EmiMo
         notes.push(format!("no stack-up is declared: copper layers are spread evenly over the board thickness, relative permittivity {DEFAULT_ER} assumed"));
     }
     let limits = Limits {
-        uncertainty_db: UNCERTAINTY_DB,
+        validation: VALIDATION.to_owned(),
         standard: cx.standard.name.clone(),
         limit_source: cx.standard.line.as_ref().map(|line| line.source.to_owned()),
         distance_m: cx.standard.distance,
@@ -3281,7 +3422,14 @@ impl EmiFinding {
                 put(&mut estimate, "value", Value::from(e.value));
                 put(&mut estimate, "unit", Value::from(e.unit.as_str()));
                 put(&mut estimate, "method", Value::from(e.method.as_str()));
-                put(&mut estimate, "uncertainty_db", Value::from(e.uncertainty_db));
+                put(&mut estimate, "kind", Value::from(e.kind.value()));
+                if let Some(definition) = &e.definition {
+                    put(&mut estimate, "definition", Value::from(definition.as_str()));
+                }
+                // The three kinds of uncertainty are separate fields. A closed form has no numerical solve and so
+                // no numerical sensitivity; the parameter band is `band_db`/`basis`; the omissions are listed.
+                put(&mut estimate, "numerical_sensitivity", Value::Null);
+                put(&mut estimate, "not_modelled", strings(&e.not_modelled));
                 put(&mut estimate, "frequency_hz", e.frequency_hz.map_or(Value::Null, Value::from));
                 if let Some([low, high]) = e.band_db {
                     put(&mut estimate, "band_db", Value::Array(vec![Value::from(low), Value::from(high)]));
@@ -3360,7 +3508,7 @@ impl EmiCheckReport {
             ),
         );
         let mut limits = Object::new();
-        put(&mut limits, "uncertainty_db", Value::from(self.limits.uncertainty_db));
+        put(&mut limits, "validation", Value::from(self.limits.validation.as_str()));
         put(&mut limits, "standard", self.limits.standard.as_ref().map_or(Value::Null, |s| Value::from(s.as_str())));
         put(
             &mut limits,
@@ -3399,10 +3547,8 @@ impl EmiCheckReport {
 
     /// The human-readable report, one line each.
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec![format!(
-            "EMI screening for {}: screening evidence, not EMC qualification; absolute levels carry about {UNCERTAINTY_DB} dB of uncertainty",
-            self.board
-        )];
+        let mut lines =
+            vec![format!("EMI screening for {}: screening evidence, not EMC qualification; {VALIDATION}", self.board)];
         match &self.limits.standard {
             Some(name) => lines.push(format!(
                 "Standard {name}: levels at {} m, margin is limit minus level (positive below the line), never pass or fail",
@@ -3429,6 +3575,12 @@ impl EmiCheckReport {
                         "     estimate: {} {} {} ({})",
                         estimate.quantity, estimate.value, estimate.unit, estimate.method
                     ));
+                    if let Some(definition) = &estimate.definition {
+                        lines.push(format!("     ranking score, defined as: {definition}"));
+                    }
+                    if !estimate.not_modelled.is_empty() {
+                        lines.push(format!("     not modelled: {}", estimate.not_modelled.join("; ")));
+                    }
                 }
                 if let Some(Value::Array(inputs)) = finding.measures.get("inputs_text") {
                     for input in inputs.iter().filter_map(Value::as_str) {
@@ -3469,7 +3621,7 @@ impl EmiCheckReport {
         }
         if conducted > 0 {
             summary.push_str(&format!(
-                "; {conducted} conducted estimate(s) are dBuV at a LISN, the other estimates are dBuV/m and not comparable with them"
+                "; {conducted} conducted estimate(s) are dBuV at a LISN (line amplitudes where the detector assumption fails), the radiated estimates are dBuV/m and the common-mode scores are relative dB: none is comparable with another"
             ));
         }
         lines.push(summary);

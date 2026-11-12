@@ -18,17 +18,23 @@
 //!    quasi-peak (charge / discharge / meter time constants of
 //!    [`QpTimeConstants`]).
 //!
-//! The record is treated as ONE PERIOD of a periodic signal: its length is
-//! zero-padded to a power of two (exact for power-of-two records holding an
-//! integer number of periods; otherwise the padding is a dead time that lowers
-//! the average and quasi-peak readings), and the detector is run over repeated
-//! copies of the envelope until it settles, as a real receiver would see a
-//! repetitive emission.
+//! The record is treated as ONE PERIOD of a periodic signal: it is transformed
+//! at its own length (an arbitrary-length DFT, [`crate::spectrum::dft`], so a
+//! record of 24 000 samples is not padded to 32 768), the IF filter acts on that
+//! periodic spectrum, and the detector is run over repeated copies of the
+//! envelope until it settles, as a real receiver would see a repetitive
+//! emission. The caller must supply a record that holds an integer number of
+//! periods of the waveform (the record's end must join its start); a record
+//! that does not is a waveform with a discontinuity, and a record that contains
+//! zeros appended to reach some length is a waveform with a dead time, which the
+//! detectors read as such. Not modelled: jitter, spread-spectrum clocking and
+//! burst modes (each needs a record long enough to contain the modulation
+//! period, and the receiver's sweep dwell time is not modelled).
 //!
 //! All results are screening evidence and not a substitute for measurements
 //! with a calibrated CISPR 16-1-1 receiver.
 
-use crate::spectrum::{Complex, fft, ifft};
+use crate::spectrum::{Complex, dft, ifft};
 
 /// CISPR frequency bands for receiver bandwidth and detector constants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -168,8 +174,8 @@ fn to_dbuv(v: f64) -> f64 {
 /// applied over the bins within four half-bandwidths of the tuned frequency
 /// (Gaussian response down more than 90 dB beyond that); the record length sets
 /// the bin spacing `fs/N` and should be longer than a few `1/B` so the filter
-/// is resolved (Band B: at least 0.5 ms). See the module docs for the
-/// periodic-record convention.
+/// is resolved (Band B: at least 0.5 ms). The record may have any length; it is
+/// taken as exactly one period of a periodic signal (see the module docs).
 pub fn scan(signal: &[f64], sample_rate: f64, frequencies: &[f64], band: Band) -> Vec<Reading> {
     let silent = |f: f64| Reading {
         frequency: f,
@@ -180,12 +186,13 @@ pub fn scan(signal: &[f64], sample_rate: f64, frequencies: &[f64], band: Band) -
     if signal.is_empty() {
         return frequencies.iter().map(|&f| silent(f)).collect();
     }
-    let n = signal.len().next_power_of_two().max(2);
+    // The record itself is the period: no padding (a padded record would read as dead time).
+    let n = signal.len().max(2);
     let mut spectrum = vec![Complex::ZERO; n];
     for (s, &x) in spectrum.iter_mut().zip(signal) {
         s.re = x;
     }
-    fft(&mut spectrum).expect("power-of-two length");
+    dft(&mut spectrum).expect("non-empty record");
     let df = sample_rate / n as f64;
     let half_bw = band.rbw() / 2.0;
     let kspan = ((4.0 * half_bw / df).ceil() as i64).max(1);
@@ -356,6 +363,88 @@ mod tests {
         assert!((c.quasi_peak - 2.0).abs() < 1e-3 && c.peak == 2.0 && c.average == 2.0);
         // Out-of-range tuning is silent.
         assert!(scan(&[0.0; 16], 1e6, &[6e5], Band::B)[0].peak.is_infinite());
+    }
+
+    /// A pulsed carrier: `a sin(2 pi fc t)` gated on for `on` samples of every `period` samples.
+    fn pulsed_carrier(a: f64, fc: f64, fs: f64, period: usize, on: usize, n: usize) -> Vec<f64> {
+        (0..n).map(|i| if i % period < on { a * (2.0 * PI * fc * i as f64 / fs).sin() } else { 0.0 }).collect()
+    }
+
+    /// Independent time-domain reference for the envelope at `f0`: mix down, circular convolution
+    /// with the Gaussian impulse response `h(t) = a sqrt(pi) exp(-(pi a t)^2)`, `a = (B/2)/sqrt(ln 2)`
+    /// (the inverse transform of `H(f) = exp(-ln 2 (f/(B/2))^2)`, unit gain at DC), magnitude, x2 for
+    /// the single-sided scale and 1/sqrt 2 for RMS. No FFT is involved.
+    fn brute_force_envelope(x: &[f64], fs: f64, f0: f64, band: Band) -> Vec<f64> {
+        let n = x.len();
+        let a = (band.rbw() / 2.0) / std::f64::consts::LN_2.sqrt();
+        let sigma = 1.0 / (PI * a * 2f64.sqrt());
+        let half = (5.0 * sigma * fs).ceil() as i64;
+        let kernel: Vec<f64> =
+            (-half..=half).map(|j| a * PI.sqrt() * (-(PI * a * j as f64 / fs).powi(2)).exp() / fs).collect();
+        let mixed: Vec<Complex> =
+            x.iter().enumerate().map(|(i, &v)| Complex::from_polar(v, -2.0 * PI * f0 * i as f64 / fs)).collect();
+        (0..n)
+            .map(|i| {
+                let mut acc = Complex::ZERO;
+                for (j, h) in (-half..=half).zip(&kernel) {
+                    acc = acc + mixed[(i as i64 - j).rem_euclid(n as i64) as usize].scale(*h);
+                }
+                acc.abs() * 2.0 * std::f64::consts::FRAC_1_SQRT_2
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_cw_line_in_a_record_that_is_not_a_power_of_two_reads_rms_on_every_detector() {
+        // 5 ms and 10 ms records (12 000 and 24 000 samples at 2.4 MHz) holding 2 500 and 5 000 cycles.
+        // Zero-padded to 16 384 / 32 768 samples the old code read the average 2.7 dB (and the 12 000
+        // sample record 1.3 dB) low; the record is now transformed at its own length.
+        let fs = 2.4e6;
+        let want = to_dbuv(1.0 / 2f64.sqrt());
+        for n in [12_000usize, 24_000, 20_000] {
+            let x = sine(1.0, 500e3, fs, n);
+            let r = scan(&x, fs, &[500e3], Band::B)[0];
+            for (name, v) in [("peak", r.peak), ("qp", r.quasi_peak), ("avg", r.average)] {
+                assert!((v - want).abs() < 0.05, "n={n} {name}: {v} vs {want}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_pulsed_carrier_matches_its_analytic_peak_and_average_and_a_time_domain_quasi_peak() {
+        // 500 kHz carrier gated for 2 ms of every 10 ms (duty 0.2), 24 000 samples at 2.4 MHz:
+        // the pulse is long against the 9 kHz IF response (sigma_t 41.6 us), so the IF output is the
+        // gated envelope smoothed by the Gaussian. Peak = A/sqrt 2 (the smoothed pulse reaches its
+        // top); average = duty A/sqrt 2 exactly (the IF filter has unit gain at the carrier, so it
+        // preserves the area of the complex envelope).
+        let (fs, n) = (2.4e6, 24_000usize);
+        let (a, duty) = (1.0, 0.2);
+        let x = pulsed_carrier(a, 500e3, fs, n, (duty * n as f64) as usize, n);
+        let r = scan(&x, fs, &[500e3], Band::B)[0];
+        let rms = a / 2f64.sqrt();
+        assert!((r.peak - to_dbuv(rms)).abs() < 0.05, "peak {} vs {}", r.peak, to_dbuv(rms));
+        assert!((r.average - to_dbuv(duty * rms)).abs() < 0.05, "avg {} vs {}", r.average, to_dbuv(duty * rms));
+        // Quasi-peak against the time-domain reference envelope through the same detector.
+        let env = brute_force_envelope(&x, fs, 500e3, Band::B);
+        let d = detect_envelope(&env, 1.0 / fs, Band::B);
+        assert!((r.peak - to_dbuv(d.peak)).abs() < 0.1, "peak {} vs {}", r.peak, to_dbuv(d.peak));
+        assert!((r.average - to_dbuv(d.average)).abs() < 0.05, "avg {} vs {}", r.average, to_dbuv(d.average));
+        assert!((r.quasi_peak - to_dbuv(d.quasi_peak)).abs() < 0.2, "qp {} vs {}", r.quasi_peak, to_dbuv(d.quasi_peak));
+        assert!(r.peak > r.quasi_peak && r.quasi_peak > r.average, "{r:?}");
+    }
+
+    #[test]
+    fn appended_zeros_are_a_dead_time_that_the_detectors_read() {
+        // What the old zero-padding to a power of two did to every record: 24 000 samples of a CW line
+        // followed by 8 768 zeros read 20 log10(24000 / 32768) = -2.7 dB low on the average.
+        let fs = 2.4e6;
+        let mut x = sine(1.0, 500e3, fs, 24_000);
+        let proper = scan(&x, fs, &[500e3], Band::B)[0];
+        x.resize(32_768, 0.0);
+        let padded = scan(&x, fs, &[500e3], Band::B)[0];
+        let loss = 20.0 * (24_000f64 / 32_768.0).log10();
+        assert!((padded.average - proper.average - loss).abs() < 0.15, "{} vs {}", padded.average, proper.average);
+        assert!(proper.average - padded.average > 2.0);
     }
 
     #[test]

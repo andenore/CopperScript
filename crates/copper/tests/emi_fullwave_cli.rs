@@ -92,8 +92,11 @@ fn the_buck_cell_gets_a_fullwave_inductance() {
         "seconds",
         "flags",
         "solver",
-        "mesh_error_estimate_pct",
-        "inductance_uncertainty_pct",
+        "mesh_difference_pct",
+        "mesh_sensitivity_pct",
+        "mesh_sensitivity_unavailable",
+        "not_modelled",
+        "status",
         "meshes",
         "port_strap_nh",
     ] {
@@ -102,10 +105,11 @@ fn the_buck_cell_gets_a_fullwave_inductance() {
     // Two meshes ran, so the error estimate is a number and the single-mesh flag is absent.
     let flags: Vec<&str> =
         fullwave.get("flags").and_then(Value::as_array).unwrap().iter().filter_map(Value::as_str).collect();
-    assert!(matches!(fullwave.get("mesh_error_estimate_pct"), Some(Value::Float(_))), "{flags:?}");
+    assert!(matches!(fullwave.get("mesh_difference_pct"), Some(Value::Float(_))), "{flags:?}");
+    assert!(fullwave.get("inductance_uncertainty_pct").is_none() && fullwave.get("mesh_error_estimate_pct").is_none());
     assert!(!flags.contains(&"single_mesh"), "{flags:?}");
-    // The stated uncertainty is never below the floor, whatever the two meshes say.
-    assert!(matches!(fullwave.get("inductance_uncertainty_pct"), Some(Value::Float(u)) if *u >= 4.0), "{flags:?}");
+    // The mesh sensitivity is never below the observed-scatter floor, whatever the two meshes say.
+    assert!(matches!(fullwave.get("mesh_sensitivity_pct"), Some(Value::Float(u)) if *u >= 4.0), "{flags:?}");
     assert_eq!(fullwave.get("meshes").and_then(Value::as_array).map(<[Value]>::len), Some(2));
 }
 
@@ -123,8 +127,8 @@ fn a_single_mesh_run_says_so() {
         .expect("a hot-loop finding");
     let fullwave =
         hot.get("measures").and_then(|m| m.get("fullwave")).and_then(Value::as_object).expect("measures.fullwave");
-    assert!(matches!(fullwave.get("mesh_error_estimate_pct"), Some(Value::Null)));
-    assert!(matches!(fullwave.get("inductance_uncertainty_pct"), Some(Value::Float(u)) if (*u - 4.0).abs() < 1e-9));
+    assert!(matches!(fullwave.get("mesh_difference_pct"), Some(Value::Null)));
+    assert!(matches!(fullwave.get("mesh_sensitivity_pct"), Some(Value::Float(u)) if (*u - 4.0).abs() < 1e-9));
     let flags: Vec<&str> =
         fullwave.get("flags").and_then(Value::as_array).unwrap().iter().filter_map(Value::as_str).collect();
     assert!(flags.contains(&"single_mesh"), "{flags:?}");

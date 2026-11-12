@@ -152,6 +152,53 @@ pub fn ifft(data: &mut [Complex]) -> Result<(), SpectrumError> {
     Ok(())
 }
 
+/// In-place forward DFT of any length, `X[k] = sum_n x[n] e^{-j 2 pi k n / N}`
+/// (no normalisation): the radix-2 [`fft`] for a power of two, otherwise
+/// Bluestein's chirp-z algorithm,
+/// `X[k] = w_k sum_n (x[n] w_n) conj(w_{k-n})` with `w_n = e^{-j pi n^2 / N}`,
+/// whose sum is a linear convolution evaluated by three radix-2 FFTs of the
+/// next power of two at or above `2N - 1`. Exact (to rounding) for the `N`
+/// samples given: nothing is padded into the record, so a periodic record keeps
+/// its period.
+///
+/// `n^2 mod 2N` is used for the chirp angle so the phase stays accurate for
+/// long records.
+pub fn dft(data: &mut [Complex]) -> Result<(), SpectrumError> {
+    let n = data.len();
+    if n == 0 {
+        return Err(SpectrumError::Empty);
+    }
+    if n.is_power_of_two() {
+        return fft(data);
+    }
+    let chirp: Vec<Complex> = (0..n)
+        .map(|i| {
+            let angle = PI * ((i as u128 * i as u128) % (2 * n as u128)) as f64 / n as f64;
+            Complex::from_polar(1.0, -angle)
+        })
+        .collect();
+    let m = (2 * n - 1).next_power_of_two();
+    let mut a = vec![Complex::ZERO; m];
+    let mut b = vec![Complex::ZERO; m];
+    for i in 0..n {
+        a[i] = data[i] * chirp[i];
+        b[i] = chirp[i].conj();
+        if i > 0 {
+            b[m - i] = chirp[i].conj();
+        }
+    }
+    fft(&mut a)?;
+    fft(&mut b)?;
+    for (x, y) in a.iter_mut().zip(&b) {
+        *x = *x * *y;
+    }
+    ifft(&mut a)?;
+    for (k, out) in data.iter_mut().enumerate() {
+        *out = a[k] * chirp[k];
+    }
+    Ok(())
+}
+
 /// Analysis window.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Window {
@@ -275,6 +322,21 @@ mod tests {
                 Complex::new((0.3 * t).sin() + 0.5 * (1.7 * t).cos() + 0.1 * t, (0.11 * t).cos() - 0.2)
             })
             .collect()
+    }
+
+    #[test]
+    fn bluestein_dft_matches_the_definition_at_any_length() {
+        for n in [1usize, 2, 3, 5, 7, 12, 100, 127, 1000] {
+            let x = test_signal(n);
+            let want = naive_dft(&x);
+            let mut got = x.clone();
+            dft(&mut got).expect("any length");
+            let scale = want.iter().map(|c| c.abs()).fold(1.0, f64::max);
+            for (k, (a, b)) in got.iter().zip(&want).enumerate() {
+                assert!((*a - *b).abs() < 1e-9 * scale, "n={n} k={k}: {a:?} vs {b:?}");
+            }
+        }
+        assert_eq!(dft(&mut []), Err(SpectrumError::Empty));
     }
 
     #[test]

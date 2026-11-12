@@ -309,8 +309,8 @@ hard macro contributes copper.
 
 A finding is the `copper_drc::Finding` shape (code, severity, message,
 objects, nets, layers, `required_nm`, `measured_nm`) plus
-`{ cell, provenance, tags, estimate: { quantity, value, unit, method, uncertainty_db, frequency_hz, band_db?, basis? } | null, margin_db?, accepted?: { reason }, measures }`.
-`band_db` (`[low, high]`) and `basis` (`rule_of_thumb`) are present only when the estimate rests on a rule-of-thumb default (section 10.1). `measures` holds the further numbers of the finding by name, and `measures.inputs_text` the `input:` lines printed with the finding. `tags` carry
+`{ cell, provenance, tags, estimate: { quantity, value, unit, method, kind, definition?, numerical_sensitivity, not_modelled, frequency_hz, band_db?, basis? } | null, margin_db?, accepted?: { reason }, measures }`.
+`kind` is `absolute_screening` or `ranking_score`; `definition` (what a score is relative to) is present only for a score. The uncertainty of an estimate is three separate things: `numerical_sensitivity` (the estimate's sensitivity to a numerical choice; `null` for every closed-form estimate of `emi-check`, since nothing is meshed or fitted; the full-wave inductance has its own in `measures.fullwave`), the parameter band `band_db` (`[low, high]`) with `basis` (`rule_of_thumb`), present only when the estimate rests on a rule-of-thumb default (section 10.1), and `not_modelled`, the list of named mechanisms the estimate does not contain. `limits.validation` states what has and has not been validated: the closed forms, the circuit solver and the receiver emulation against hand calculations and analytic cases (yes), correlation with a measurement (none). No accuracy figure, confidence interval or bound is claimed anywhere. `measures` holds the further numbers of the finding by name, and `measures.inputs_text` the `input:` lines printed with the finding. `tags` carry
 `placement_estimate`, `traced_copper`, `partially_traced`, `unrouted_leg`, `plane_shortcut`, `pads_only`, `inferred` (the cell comes from the
 structural fallback), `provisional_placement` (a position involved is the
 prototype placement, not fixed by a `fixed_placement` constraint or a fixed
@@ -320,9 +320,9 @@ cluster: its geometry is fixed, the cluster's position is not).
 | Code | Status | What is measured | Ranked by |
 | --- | --- | --- | --- |
 | `EMI-HOT-LOOP` | implemented; placement estimate, traced where copper joins the pads | Per cell (per `input loop` and `output loop` for a four-switch buck-boost), the loop capacitor -> hot-supply pad -> switch pad -> catch diode (switch side -> rail side) or, without a diode, hot-return pad -> capacitor return. The legs between pads of one net follow the shortest copper path when copper exists, else the straight pad-to-pad segment. Enclosed area (shoelace), path length, partial inductance over the nearest inner ground plane (free space without one), differential-mode field, ringing, ring energy; traced length, vias, layer changes, narrowest width | differential-mode field in dBuV/m, then loop area |
-| `EMI-SWITCH-NODE` | implemented, pads only unless copper exists | Per switch net: copper area of the pads (and of tracks, polygons, zones and macro copper when present), island capacitance to the nearest ground plane, distance to the board edge and to each cable connector, voltage-driven common-mode field | voltage-driven common-mode field in dBuV/m, then copper area |
+| `EMI-SWITCH-NODE` | implemented, pads only unless copper exists | Per switch net: copper area of the pads (and of tracks, polygons, zones and macro copper when present), island capacitance to the nearest ground plane, distance to the board edge and to each cable connector, and the voltage-driven common-mode coupling-risk score (`cm_coupling_score`, a relative ranking score in dB, not a field; no margin) | common-mode coupling-risk score, then copper area; after the absolute estimates |
 | `EMI-PROXIMITY` | implemented | Inductor and switch-node pads against pads of `sensitive` nets and of cable connectors, closer than a threshold in units of the inductor size | threshold / distance |
-| `EMI-CONDUCTED` | implemented for `buck` cells (section 10) | Per buck cell: the conducted level at the input, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential mode only. Worst harmonic (frequency, level, quasi-peak and average margin with a `cispr32_class_a`/`cispr32_class_b` `emission` constraint), the fundamental, harmonics above each line, and every harmonic in `measures.harmonics` | margin when margins exist, else level; after the radiated findings (a different quantity, dBuV against dBuV/m) |
+| `EMI-CONDUCTED` | implemented for `buck` cells (section 10) | Per buck cell: the conducted level at the input, 150 kHz to 30 MHz, dBuV at a 50 uH V-network, differential mode only. Worst harmonic (frequency, level, quasi-peak and average margin with a `cispr32_class_a`/`cispr32_class_b` `emission` constraint, **only where the isolated-line detector assumption holds**: `measures.detector_applicability`), the fundamental, harmonics above each line, and every harmonic in `measures.harmonics`; where it does not hold the levels are line amplitudes with no limit or margin | margin when margins exist, else level; after the radiated findings (a different quantity, dBuV against dBuV/m) |
 | `EMI-ACCEPT-UNUSED` | implemented | An `emi_accept` that matched no finding | listed last |
 | `EMI-RETURN-PATH` | coverage `unsupported` | needs filled copper and traced routed copper | - |
 | `EMI-DECOUPLING-PATH` | coverage `unsupported` | needs routed copper | - |
@@ -332,7 +332,7 @@ status (`executed`, `not_applicable`, `unsupported`) and reason; nothing is
 reported as a pass for what was not measured. Standing entries:
 `EMI-RETURN-PATH` and `EMI-DECOUPLING-PATH` (unsupported),
 `EMI-COPPER-TRACE` (traced copper path: `executed` when at least one copper leg of a hot loop is traced, else `unsupported` with the reason), `EMI-CABLE-COMMON-MODE`
-(current-driven common mode on cables, unsupported), `EMI-MARGIN` (whether an
+(common-mode radiation from cables and attached conductors, unsupported: the board model has no cable, chassis or return structure), `EMI-MARGIN` (whether an
 `emission` constraint with a limit table gave margins). Per cell or net:
 `EMI-HOT-LOOP:<cell>` (and `:radiated`, `:ringing`, `:copper`),
 `EMI-SWITCH-NODE:<net>` (and `:common_mode`), `EMI-PROXIMITY:<cell>` and
@@ -427,10 +427,20 @@ each with the missing input when skipped.
   edge the sweep is made at the nominal, fast and slow edge: the finding reports
   the nominal level, `estimate.band_db = [low, high]` (slow to fast) and
   `estimate.basis = "rule_of_thumb"`, and the margin is the one at the fast
-  bound, the unfavourable end; the stated uncertainty of 15 dB stays on top of
-  the band. The voltage-driven common-mode field of `EMI-SWITCH-NODE` is banded
-  the same way (it is flat in frequency above the edge corner, so its band
-  collapses when the least-margin point lies below every corner).
+  bound, the unfavourable end. The band covers the defaulted inputs only; the
+  mechanisms the estimate does not contain are `estimate.not_modelled` (common-mode
+  currents on cables, ground-plane reflection and enclosure, the inductor's field,
+  waveform detail beyond the trapezoid envelope). The voltage-driven common-mode
+  score of `EMI-SWITCH-NODE` is banded the same way (it is flat in frequency above the
+  edge corner, so its band collapses when the worst point lies below every corner).
+  **Validity of the small-loop formula** (`measures.radiated_validity`): the loop path
+  is at most a tenth of a wavelength at the evaluated frequency (the sweep stops at
+  `c / (10 path)`; when that is below 1 GHz the tag `radiated_band_truncated` and a
+  sentence in the message say that emission above it is not covered), the observation
+  distance is beyond `lambda / 2 pi` (checked at 30 MHz, the lowest frequency swept) and
+  at least three times the loop's longest dimension (a point source). `holds`
+  is their conjunction; when one fails the tag `small_loop_validity_failed` and the
+  message name it.
 - **Ringing.** With a computed inductance: `ring_frequency`, `ring_overshoot`
   (needs `current_peak`); ring energy `0.5 L I^2` needs only the inductance and
   `current_peak`. The capacitance is the sum of the controller's and the catch
@@ -442,10 +452,24 @@ each with the missing input when skipped.
 - **Switch node.** Per switch net: pads, tracks (arcs by chord), polygons and
   zones summed; capacitance is the sum of `island_capacitance` of each element
   over its own layer's nearest ground plane (dielectric height from the
-  stack-up, relative permittivity 4.5 when undeclared). The common-mode field is
-  `voltage_driven_cm_field` (constant 115, unverified) with the envelope of
-  the hot supply's declared voltage as swing, scaled from 3 m to the standard's
-  distance, swept like the loop. `pads_only` is set when the net has no tracks,
+  stack-up, relative permittivity 4.5 when undeclared). The voltage-driven common
+  mode is a **coupling-risk score**, `cm_coupling_score = 20 log10(f C V / (100 MHz x 1 pF x 1 V))`
+  maximised over 30 MHz to 1 GHz, with `V` the trapezoid envelope of the hot supply's
+  declared voltage as swing and `C` the island capacitance, swept like the loop. The
+  displacement current `2 pi f C V` is the physical driver; the score keeps it and
+  drops everything the board model cannot supply: the earlier field form
+  `E = 115 f C V` needed an unverified field-per-current constant and a distance, and a
+  field or margin in dBuV/m would imply a cable, chassis and return path the model does not
+  have. The score is monotonic in each driver (a doubled swing or capacitance adds 6.02 dB),
+  so the ranking between switch nets of one board and between boards stays meaningful, but its
+  absolute value has no physical unit: it carries no distance, no margin against an emission
+  limit, is never drawn on a limit-line plot, and is sorted after the absolute estimates (tag
+  `ranking_only`, `estimate.kind = ranking_score`). `measures.cm_drivers` lists the
+  island capacitance, swing, 10-90 % edge, frequency and duty it comes from. What an absolute
+  prediction would need, and what the score omits, is `estimate.not_modelled` and
+  `measures.missing_for_absolute_prediction`: cable and attached-conductor geometry,
+  board-to-environment coupling, the return impedance of the common-mode path, the radiation
+  efficiency of the carrying structure and the frequency dependence of the island capacitance. `pads_only` is set when the net has no tracks,
   arcs, vias, polygons or zones.
 - **Proximity.** Reference size: the larger of the inductor's body and pad
   extent (the controller's when there is no magnetic). Magnetic source: 3x for
@@ -466,8 +490,9 @@ each with the missing input when skipped.
 - **Margin.** With an `emission` standard that has a table (the two CISPR 32
   classes and the two FCC 15 classes; `cispr25_class_5` has none: coverage
   `unsupported`), `margin_db` is limit minus level at the evaluated
-  frequency. Every absolute level carries `uncertainty_db = 15`. Nothing is
-  printed as pass or fail. The `cable_length` of the constraint is read but no
+  frequency, for the absolute estimates only (`EMI-HOT-LOOP` differential mode,
+  `EMI-CONDUCTED` where the detector assumption holds); the common-mode score has none.
+  Nothing is printed as pass or fail. The `cable_length` of the constraint is read but no
   cable estimate uses it yet.
 
 Estimators (module `copper_emi::estimate`, all SI, all documented with their
@@ -476,16 +501,19 @@ source):
 - Trapezoid envelope: corners at `1/(pi*t_on)` and `1/(pi*t_r)`; harmonic
   amplitude bound `2*A*d*|sinc(n*pi*d)|*|sinc(n*pi*t_r/T)|`.
 - Differential-mode loop at distance r: `E = 1.316e-14 * I * f^2 * A / r`.
-- Voltage-driven common mode at 3 m: `E = 115 * f * C * V` (V/m, f in Hz, C in F) per the
-  Clemson voltage-driven summary; verify the constant against the source
-  before relying on absolute values.
-- Current-driven common mode: `V_cm = 2*pi*f*L_return*I`, `E ~= 0.365 * V_cm` at 3 m
-  (not used by `emi-check` yet).
+- Voltage-driven common-mode coupling-risk score (`voltage_driven_cm_drive`,
+  `voltage_driven_cm_score_db`): `20 log10(f C V / (100 MHz x 1 pF x 1 V))`, a relative ranking
+  score with no field constant and no distance.
+- Current-driven common-mode score (`current_driven_cm_voltage`, `current_driven_cm_score_db`):
+  `V_cm = 2*pi*f*L_return*I`, scored in dB re 1 V; not used by `emi-check` yet.
+- Validity of the small-loop formula (`dm_field_validity`): loop path over wavelength, distance
+  over `lambda / 2 pi`, distance over loop size.
 - Ringing: `f_ring = 1/(2*pi*sqrt(L_loop*C_oss))`.
 - Limit lines for the `emission` standards, as tables.
 
-Stated uncertainty of every absolute level: 10 to 20 dB (15 dB is used).
-Margins are reported with that figure and never as pass/fail.
+No accuracy is stated for an absolute level: the estimators are checked against hand
+calculations and published closed forms, not against measurements. Margins are screening
+margins and never pass/fail.
 
 Not implemented from the original plan: the routed-board reader for a
 `.kicad_pcb` (see `--run` above), traced copper beyond the hot loop (switch
@@ -527,7 +555,7 @@ stays the single file of a run (there is no sidecar):
 - *`copper issues RUN`* lists the section as stage `emi`, ids `M1`, `M2`, ...,
   findings grouped by cell and in the report's ranking inside a cell. The title
   starts with `screening estimate`, the details carry the estimate with its
-  uncertainty, margin, tags and the scalar measures, and the text output ends
+  `numerical_sensitivity`, parameter band, `not_modelled` list, margin, tags and the scalar measures, and the text output ends
   with a line saying the issues are screening estimates, not EMC qualification.
   An accepted finding (`emi_accept`) is listed as `ACCEPTED (reason)` with
   count 0, so it does not add to `finding_counts`. Windows: `EMI-HOT-LOOP` the
@@ -559,10 +587,16 @@ is not modelled; with common mode present DM and CM are added as markers), a
 translucent whisker from the low to the high end behind each stem for a banded
 harmonic (legend `band: rule-of-thumb inputs`), the quasi-peak and average
 lines as polylines through the per-harmonic `limit_qp`/`limit_avg` when an
-`emission` standard with a conducted table is declared, harmonics above the
-average line in the warning colour, a band and whisker for the stated
-uncertainty of the worst harmonic, and the finding's tags (`worst_case_current`,
-`rule_of_thumb_edge`, `differential_mode_only`, ...) under the title. A board
+`emission` standard with a conducted table is declared **and the finding's levels are detector
+readings** (`measures.detector_applicability = isolated_lines`), harmonics above the
+average line in the warning colour, and the finding's tags (`worst_case_current`,
+`rule_of_thumb_edge`, `differential_mode_only`, ...) under the title. A panel whose detector
+assumption fails (harmonic spacing inside the IF bandwidth, or a declared frequency range) is headed
+"conducted line amplitudes, NOT a detector reading", draws no limit line, no warning colour and no
+margin, and prints the reason; the panels of a frequency range are one per fixed-frequency
+scenario, titled with the scenario. A report that does not state the status is drawn the same way.
+There is no accuracy whisker. The common-mode coupling-risk score of `EMI-SWITCH-NODE` is a
+relative ranking and is never drawn here. A board
 without an `EMI-CONDUCTED` finding writes nothing and exits 2 with the reason.
 
 **Magnetic near field.** `copper emi-check BOARD [--run RUN] --plot-field OUT.svg
@@ -645,20 +679,47 @@ the board does not declare). Inputs, each recorded with its source in
 | Hot capacitor | the hot-loop analysis' selected capacitor: value from the component; `esr`, `esl`, `self_resonance` (ESL derived) from its part; otherwise 5 mohm and ESL by package from the footprint name (0402 0.4, 0603 0.5, 0805 0.6, 1206 0.8, 1210 0.9 nH), tag `default_capacitor_parasitics`; an unrecognised package without declared values skips the prediction. A capacitor that takes these package defaults also gets the ceramic DC-bias loss band of section 10.1 (tag `rule_of_thumb_dc_bias`); one whose part declares its parasitics gets no derating. Parallel hot capacitors are not modelled (`parallel_capacitors_not_modelled`, listed in `measures.ignored_parallel_capacitors`) |
 | Hot-loop inductance | `EMI-HOT-LOOP` (traced or placement estimate), in series with the capacitor with the supply feed at the switch end (pessimistic) |
 | Input filter | walks from the hot-supply net toward the supply (at most 4 series parts) through the elements that FEED it. A filter inductor is a `passive.inductor*` or `passive.ferrite*` part, or an uncategorized two-pin part whose value is an inductance; any other two-pin `dc_power_path` part (fuse, jumper, 0-ohm link, load switch) is a transparent DC feed that is followed through with its resistance unknown and taken as 0 (tag `feed_resistance_not_modelled`; "through fuse F_MAIN, resistance not modelled"). Direction comes from the far net: a declared `external` or sourced supply (or, failing that, a connector with no other load) means upstream; other loads there mean the element feeds them downstream and it is ignored (listed in the `:filter` note); if neither decides, the filter is left out and the note says the direction cannot be decided. Exactly one filter inductor may be on the path; its value, `esr` (DCR) and `self_resonance` (winding capacitance) plus the capacitors to the hot return beyond it are lumped in parallel. A path with fuses but no inductor reads "fed through fuse F1 from VIN_IN; no filter inductor on the feed path". Capacitors to the hot return on the hot-supply net count as hot capacitors; resistors above 1 kohm and diodes to the hot return (TVS, enable divider) are ignored with a note; anything else on the path nets (a load, a resistor of 1 kohm or less, a connector or source before the end of the path) leaves the filter out with a `:filter` coverage note. A filter inductor without `self_resonance` is ideal (`filter_inductor_ideal`: attenuation above its real resonance is overstated) |
-| Common mode | not modelled (`:common_mode` is `not_applicable`). The island capacitance of `EMI-SWITCH-NODE` is to the board's own ground plane, which is the converter's return: its current closes without entering the LISN, so using it as the capacitance to the LISN reference would overstate common mode by the plane's shielding. The real path is board-to-reference capacitance (heat sink, chassis, cable), geometry outside the board model. Levels are differential mode only and tagged `differential_mode_only`; common mode often dominates above a few MHz |
+| Common mode | not modelled (`:common_mode` is `not_applicable`; the `EMI-SWITCH-NODE` common-mode coupling-risk score is a ranking and is not an input here). The island capacitance of `EMI-SWITCH-NODE` is to the board's own ground plane, which is the converter's return: its current closes without entering the LISN, so using it as the capacitance to the LISN reference would overstate common mode by the plane's shielding. The real path is board-to-reference capacitance (heat sink, chassis, cable), geometry outside the board model. Levels are differential mode only and tagged `differential_mode_only`; common mode often dominates above a few MHz |
 
 Upstream filter capacitors that take the package defaults are derated in the same corner as the hot capacitor.
 
-Levels are RMS dBuV of each harmonic at the worst LISN port; for a fixed
-frequency above twice the 9 kHz RBW peak, quasi-peak and average coincide. The
-CISPR 32 mains-port quasi-peak and average lines are the reference limit
-(`cispr32_class_a`, `cispr32_class_b` only; other standards and no constraint
-give levels only). Uncertainty: 6 dB below 5 MHz, 10 dB above (literature
-envelope 5 dB at low MHz, 7 to 12 dB above); margins are never pass or fail.
+Levels are RMS dBuV of each harmonic at the worst LISN port. **Detector applicability.**
+Peak, quasi-peak and average coincide with that RMS level only for an isolated line, and
+`copper_emi::conducted::DetectorApplicability` decides that explicitly, per CISPR band (A:
+200 Hz, B: 9 kHz, C and D: 120 kHz receiver bandwidth), as `measures.detector_applicability`
+(`isolated_lines` or `not_applicable`), `detector_reason` and `detector_bands`
+(`band`, `rbw_hz`, `harmonic_spacing_hz`, `harmonics`, `status`, `reason`). It is `isolated_lines`
+when the switching frequency is one constant value and the harmonic spacing (the switching frequency)
+exceeds twice the band's bandwidth. It is `not_applicable` when
+(a) the spacing is at most twice the bandwidth (several lines inside the IF filter; 18 kHz in
+Band B), or (b) the frequency is not known to be one constant value: the part declares
+`switching_frequency_min`/`_max` and the component does not fix the frequency (whether the range
+is an adjustable setting or a spread-spectrum or modulated sweep is not declared). Then the levels
+are **line amplitudes, not detector readings**: `limit_qp`, `limit_avg` and every margin are `null`,
+`margins_available` is false, the finding is `conducted_line_amplitude` (tags `detector_not_applicable`,
+`line_amplitudes_only`), its message says "NOT a detector reading" and states no margin, the coverage
+detail says the same, and every consumer (text, JSON, plot, issues, the route-report `emi` section)
+carries the status. The time-domain receiver (`copper_emi::receiver`, `receiver_check`) is valid for
+a strictly periodic waveform with several lines inside the bandwidth, so case (a) could be routed
+through it; `emi-check` does not (a full scan of thousands of lines of a low-frequency converter is
+not a screening-cost computation) and withholds instead. Jitter, spread-spectrum clocking,
+frequency modulation and burst or skip modes are not modelled by anything: they need a record
+long enough to contain the modulation, and the receiver's sweep dwell time is not modelled.
+**A declared range is two fixed-frequency scenarios**: the lower and the upper bound each give one
+`EMI-CONDUCTED` finding (coverage `EMI-CONDUCTED:<cell>@min` and `@max`, tags
+`frequency_range_bound` and `frequency_scenario_min`/`_max`, `measures.frequency_scenario`), both
+with the status `not_applicable`; the swept or modulated case between them is not modelled. A
+declared `switching_frequency` on the component fixes the frequency and restores the detector
+comparison. The CISPR 32 mains-port quasi-peak and average lines are the reference limit
+(`cispr32_class_a`, `cispr32_class_b` only; other standards and no constraint give levels only).
+Margins are never pass or fail. The conducted estimate lists its named omissions in
+`estimate.not_modelled` (common mode, spread spectrum and jitter, source impedance and control
+interaction, component models beyond ESR/ESL/self-resonance, the supply impedance behind the
+V-network, parallel hot capacitors or other resonances, zone fills, and an assumed stack-up).
 `measures.harmonics` lists `harmonic`, `frequency_hz`, `source_current_a`,
 `dm_dbuv`, `cm_dbuv` (null), `total_dbuv` (the nominal case at the current
 limit), `low_dbuv`, `high_dbuv`, `limit_qp`, `limit_avg`, `margin_qp_db`,
-`margin_avg_db`, `margin_db` (from the high end), `uncertainty_db`; `measures.assumptions`
+`margin_avg_db`, `margin_db` (from the high end); `measures.assumptions`
 holds the `predict` assumptions and the tool's. Tests:
 `crates/copper-drc/tests/emi_check.rs` against a hand calculation on
 `examples/emi_buck` and `examples/emi_buck_filter`.
@@ -683,8 +744,9 @@ a datasheet value. The rules of the output:
    (radiated: slow to fast edge; conducted: `low_dbuv`/`high_dbuv` per
    harmonic). The unfavourable end drives the margin: the fast bound for the
    radiated estimates, the high end for the conducted headline and margin. The
-   stated uncertainty (15 dB radiated; 6 dB below 5 MHz and 10 dB above for
-   conducted) stays on top of the band.
+   band spans the defaulted inputs only; it is a parameter sensitivity, not a
+   confidence interval, and it does not cover the mechanisms listed in
+   `estimate.not_modelled`.
 4. The silicon or wide-bandgap distinction is not an enum: it is inferred from
    an optional declared `slew_rate` (20 V/ns or more is reported as
    wide-bandgap class in the `input:` lines, information only).
@@ -719,7 +781,14 @@ Module `copper_emi::spectrum`: trapezoid and sampled-waveform spectra;
 `copper_emi::lisn`: 50 uH / 5 uH LISN transfer; `copper_emi::receiver`:
 CISPR 16-1-1 style peak, quasi-peak and average detection of a sampled
 waveform by short-time FFT (bands A-D, 200 Hz / 9 kHz / 120 kHz RBW; detector
-time constants are taken from the standard and cited in code). A linear MNA
+time constants are taken from the standard and cited in code). The record is taken as
+exactly one period of a periodic signal and transformed at its own length
+(`copper_emi::spectrum::dft`: the radix-2 FFT for a power of two, Bluestein's chirp-z
+algorithm otherwise), so it is never zero-padded: a padded record would be a dead time that
+lowers the average and quasi-peak readings. The caller supplies a whole number of periods;
+the tests check a CW line and a gated carrier at 12 000, 20 000 and 24 000 samples
+against their analytic peak (A/sqrt 2) and average (duty A/sqrt 2) and the quasi-peak against a
+time-domain reference (direct convolution with the Gaussian IF response, no FFT). A linear MNA
 solver for the extracted network plus LISN follows; nonlinear device models go
 to ngspice as an optional external process.
 
@@ -728,7 +797,7 @@ to ngspice as an optional external process.
 Status: fourth iteration implemented in `crates/copper-fullwave`. Screening
 evidence only: nothing here qualifies a design. Iteration 3 found where the cell dependence of the
 loop inductance came from (the rule that moves copper edges, not the port), replaced the rule, completes
-the records of loops that ring instead of waiting for them to decay, and states an uncertainty next to
+the records of loops that ring instead of waiting for them to decay, and states a mesh sensitivity next to
 the inductance. Iteration 4 puts a floor under the cells that dense copper forces on the time step
 (a third fewer steps and half the run time on the TPS62130A), runs the validation models on the default edge
 rule, and found that the strap bias is not what its validation test measures (below).
@@ -868,7 +937,7 @@ dielectric; cells grow by 1.3 outside the fine zone, at most 1 mm in the window 
   | 1.00 | 1.71 M | 27,751 | 177 s | 2.822 nH (-1.5 %) |
   | 1.00 with merge 0.5 of the cell | 1.31 M | 23,251 | 114 s | 2.796 nH (-2.4 %) |
 
-  The mesh uncertainty of this loop (4 % floor) is larger than any of these moves. 0.92 was chosen as the smallest step
+  The mesh sensitivity of this loop (4 % floor) is larger than any of these moves. 0.92 was chosen as the smallest step
   count whose L stayed inside the 1.5 % set as the limit (-1.47 %: the margin is thin, and 1.00 sits at -1.50 %); a value of
   0.70 or less gives the sub-0.05 mm cells and most of the old step count back (estimated 45 k steps).
 - Before the solver starts the model reports cells, the time step, the expected steps and the
@@ -906,18 +975,24 @@ against the steps expected, the simulated time, the energy level and the seconds
 (`measures.fullwave.status = "budget_exceeded"`, coverage `failed` with the same
 text); the check on the estimate before the run is unchanged.
 
-**Convergence estimate and stated uncertainty.** `extract_hot_loop` runs the standard mesh and, unless
+**Convergence estimate and mesh sensitivity.** `extract_hot_loop` runs the standard mesh and, unless
 `convergence` is off or the budget is short, a second one with the refinement cells divided by
 1.5 (or, if that does not fit what is left of the budget at the update rate measured by the first run,
 multiplied by 1.5, which is cheaper; a mesh identical to the standard one is not run). `inductance_nh` is the
-finer mesh's; `mesh_error_estimate_pct` is |L2 - L1| / L(finer) in percent; `meshes` lists both runs; a single
-mesh gives `mesh_error_estimate_pct: null` and the flag `single_mesh`. Iteration 2 also reported a first-order
+finer mesh's; `mesh_difference_pct` is |L2 - L1| / L(finer) in percent (a measured difference, not an error bound); `meshes` lists both runs; a single
+mesh gives `mesh_difference_pct: null` and the flag `single_mesh`. Iteration 2 also reported a first-order
 extrapolation; with the new edge rule the curve is no longer first order (below) and the field is removed. What is
-reported instead is `inductance_uncertainty_pct`, the larger of the difference of the two meshes and a floor of 4 %
-(`MESH_UNCERTAINTY_FLOOR_PCT`): on the placed emi_buck the two meshes of the pair differ by 0.6 % while eleven meshes of
+reported instead is `mesh_sensitivity_pct`, the numerical sensitivity of the inductance to the mesh: the larger of the difference of the two meshes and a floor of 4 %
+(`MESH_SENSITIVITY_FLOOR_PCT`, `mesh_sensitivity_floor_pct`): on the placed emi_buck the two meshes of the pair differ by 0.6 % while eleven meshes of
 the same loop (cells of 0.10 to 0.25 mm, merge distances of 0.1 to 0.4 of the cell) span 4.62 to 4.90 nH, a half range of
-3 %, so a difference of two meshes alone would claim more than was measured. The uncertainty is the mesh's only: the
-assumed stack-up, the zone outlines, the bridged components and the strap bias are not in it.
+3 %, so a difference of two meshes alone would understate how far the number moves with mesh decisions. The floor is that
+observed scatter, reported as a sensitivity (`mesh_sensitivity_basis` says so); it is not an accuracy. The assumed stack-up,
+the zone outlines, the bridged components and the strap bias are not in it: they are listed by name in
+`measures.fullwave.not_modelled`. **When the record did not decay and the ring-down fit did not
+stabilise** (`energy_not_converged` without `ring_fitted`), `status` is `indicative`,
+`mesh_sensitivity_pct` is `null` and `mesh_sensitivity_unavailable` gives the reason, because a sensitivity of
+a number that is not a converged result would read as a validity it does not have; the CopperOrgan run
+below is that case. The fit's own spread of orders (`fit.rs`) is likewise a numerical sensitivity, not an error bound.
 
 **Validation** (synthetic boards, `crates/copper-fullwave/tests/validation.rs` and `tests/shorted_line.rs`;
 debug build with the optimised solver, 6 threads; every number measured). Until iteration 3 the meshes of cases 3a-3e
@@ -1096,13 +1171,13 @@ mesh decisions (merge distance of 0.4, 0.2 and 0.1 of the cell: 4.841 / 4.904 / 
 rule) move L by 1 to 4 %, as much as the cell does. Interpretation: what remains on emi_buck is not
 discretisation of smooth copper but small geometry (legs crossing foreign pads, clearances of 0.05 to 0.1 mm) that
 a finer cell resolves differently and that the merging of lines within 0.4 of the cell moves by up to 0.057 mm;
-the curve cannot be extrapolated, which is why the field `inductance_extrapolated_nh` is gone and an
-uncertainty with a floor replaced it (below).
+the curve cannot be extrapolated, which is why the field `inductance_extrapolated_nh` is gone and a
+mesh sensitivity with a floor replaced it (below).
 
 **Hot loops** (`copper emi-check --fullwave`, default two meshes; the reported L is the finer mesh's, read at
 50-150 MHz; every row of the first two made on the final code):
 
-| Board | Meshes (cell in the refinement zones) | Cells | Steps (expected) | Run | L | Mesh error estimate; stated uncertainty | Closed form | Ratio |
+| Board | Meshes (cell in the refinement zones) | Cells | Steps (expected) | Run | L | Mesh difference; mesh sensitivity | Closed form | Ratio |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `examples/emi_buck` placed (straight legs) | standard 0.25 mm: 4.841 nH; refined 0.167 mm: 4.813 nH | 320 k; 422 k | 12,801 (15,009); 15,901 (18,685) | 12 s + 23 s | 4.813 nH, flat to 0.06 % | 0.6 %; 4 % | 4.973 nH | 0.97 |
 | `emi_buck` routed (three 0.4 mm legs, `write_routed_run`) | standard 0.2 mm: 6.067 nH; refined 0.133 mm: 5.974 nH | 720 k; 1.02 M | 15,101 (17,711); 19,951 (23,473) | 59 s + 79 s | 5.974 nH, flat to 0.07 % | 1.55 %; 4 % | 6.712 nH | 0.89 |
@@ -1113,9 +1188,9 @@ The TPS62130A row of the iteration before (2.817 / 2.832 nH, 1.78 M and 2.78 M c
 the mesh of iteration 2; on the code of iteration 3 (before the cell floor) one mesh of 0.15 mm was 2.371 M cells, 45,751 steps, 397 s, 2.865 nH.
 
 On the earlier rule the placed emi_buck read 4.920 / 4.695 nH (mesh error 4.78 %, extrapolation 4.245 nH) and the routed
-one 6.049 / 5.969 nH (1.3 %); the standard-mesh values moved -1.6 % and +0.3 % and the finer-mesh values +2.5 % and +0.1 %. The stated
-uncertainty of the reported value is now 4 % on all three boards that have two meshes or one (the floor, see the
-convergence estimate). The TPS62130A and CopperOrgan rows are on the final code (the two meshes of the TPS62130A,
+one 6.049 / 5.969 nH (1.3 %); the standard-mesh values moved -1.6 % and +0.3 % and the finer-mesh values +2.5 % and +0.1 %. The mesh
+sensitivity of the reported value is now 4 % on the three boards whose records decayed (the floor, see the
+convergence estimate; the CopperOrgan row has none, being indicative). The TPS62130A and CopperOrgan rows are on the final code (the two meshes of the TPS62130A,
 one mesh of CopperOrgan, below).
 
 **The TPS62130A** loads (87 s) with its hard macro: 6 copper layers (an assumed stack-up, flag
@@ -1161,7 +1236,7 @@ ring fit: the flags are `energy_not_converged`, `inductance_not_flat`, `band_nea
 only to 51.7 %** (the first resonance is now 314 MHz, was 348 MHz on the mesh of iteration 2, so a 10 % change of the
 resonance from a change of the mesh), static inductance 6.462 nH (resonance factor removed; the earlier estimate
 was about 6.6 nH from 7.317 nH), flatness of the static curve 46.5 %, 5.558 nH at 500 MHz, port strap 1.784 nH (closed form), ratio to the
-closed form 0.74, uncertainty reported 4 % (the floor, which does not cover an undecayed record). The band mean moved -0.4 %
+closed form 0.74, no mesh sensitivity stated (the record is undecayed and the fit did not stabilise: status `indicative`; the earlier output reported the 4 % floor here). The band mean moved -0.4 %
 against iteration 2's 7.317 nH and the static value -2 %, which is inside what the
 mesh moves L on every other board, but a curve that is not flat to 51.7 % against a resonance factor that explains 27 % is not a
 loop inductance: the fit did not accept the record (its orders disagree by more than 5 %), the cause was not diagnosed (a loop with several close modes is the case the fit was
@@ -1220,8 +1295,8 @@ strip of 3a: -0.12, -0.02, -1.05 %; the geometries of the coarse table below, -1
 strip is two cells wide (the rule of a third: 2.3 %). The shorted lines are within 3 % of the closed form at the standard mesh and
 carry 0.05 to 0.2 nH of end effect, a stated 1.5 to 2.7 % excess that is real physics of the vertical
 transition and not a model error, but it means that a 5 nH loop with a 4 mm port gap is not known better
-than a few percent from this test alone. For a placed loop the mesh uncertainty is not below 4 %
-(`inductance_uncertainty_pct` floor) however well two meshes agree, because mesh decisions on small
+than a few percent from this test alone. For a placed loop the mesh sensitivity is not below 4 %
+(`mesh_sensitivity_floor_pct`) however well two meshes agree, because mesh decisions on small
 geometry move L by as much as the cell does; the closed form of the placed example (4.973 nH) is within
 3.2 % of the model (4.813 nH), but that is not independent evidence for either: the closed form of the 6 x 4 mm loop
 (4.987 nH) is 1.7 to 4 % above the default-rule series and 4 to 10 % above the earlier rule's limit. FDTD is slow: the

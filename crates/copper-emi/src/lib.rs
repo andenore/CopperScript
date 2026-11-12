@@ -15,15 +15,18 @@
 //! | [`harmonic`] | periodic steady state of a circuit from Fourier coefficients; complex Fourier series of trapezoidal pulse trains and triangular ripple; waveform reconstruction |
 //! | [`conducted`] | conducted-emission (CISPR Band B) prediction for a switching cell's input side: DM and CM paths, input filter, LISN, limits and margins |
 //!
-//! **Every result is screening evidence, not EMC qualification.** Absolute
-//! radiated levels from the closed-form estimators carry 10 to 20 dB of
-//! uncertainty; limit-line tables are transcribed from the published numbers
-//! as remembered and MUST be verified against the purchased standards before
-//! any compliance use. Compare estimates by rank and margin, never as
-//! pass/fail. The conducted-emission pipeline ([`conducted`]) has a literature
-//! accuracy envelope of about 5 dB at low MHz and 7 to 12 dB above, limited by
-//! the component and source models, and its LISN component values and limit
-//! tables are likewise unverified against CISPR 16-1-2 and CISPR 32.
+//! **Every result is screening evidence, not EMC qualification.** The solvers
+//! and closed forms are checked against hand calculations and published closed
+//! forms in the unit tests; no result has been correlated with a measurement, so
+//! no accuracy figure is claimed. Limit-line tables are transcribed from the
+//! published numbers as remembered and MUST be verified against the purchased
+//! standards before any compliance use. Compare estimates by rank and margin,
+//! never as pass/fail. Of the radiation estimators only the differential-mode
+//! loop field is an absolute estimate; the common-mode helpers are relative
+//! coupling-risk scores. The conducted-emission pipeline ([`conducted`]) states
+//! per band whether its line amplitudes may be read as detector readings; its
+//! LISN component values and limit tables are unverified against CISPR 16-1-2
+//! and CISPR 32.
 
 #![forbid(unsafe_code)]
 

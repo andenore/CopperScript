@@ -1,8 +1,13 @@
 //! The conducted-emission spectrum of `copper emi-check` as an SVG
 //! (`--plot-spectrum`): one panel per switching cell with an `EMI-CONDUCTED`
 //! finding, harmonic stems on a log-frequency axis from 150 kHz to 30 MHz,
-//! the quasi-peak and average limit lines, the stated uncertainty of the worst
-//! harmonic and the assumptions that qualify the numbers.
+//! the quasi-peak and average limit lines and the assumptions that qualify the
+//! numbers. Limit lines and margins are drawn only where the finding says its
+//! levels are detector readings (`detector_applicability = isolated_lines`);
+//! otherwise the panel is headed "line amplitudes, NOT a detector reading" and
+//! shows no limit. Only the conducted spectrum is plotted: the common-mode
+//! coupling-risk score of `EMI-SWITCH-NODE` is a relative ranking score and is
+//! never drawn against a limit.
 //!
 //! The renderer takes plain data ([`SpectrumPanel`]); [`panels_from_report`]
 //! reads it from the `copperscript-emi-check/v0.1` document. The output is
@@ -26,7 +31,6 @@ const CM: &str = "#8e44ad";
 const WARNING: &str = "#d4380d";
 const LIMIT_QP: &str = "#111827";
 const LIMIT_AVG: &str = "#6b7280";
-const BAND_FILL: &str = "#f2a900";
 
 /// One harmonic of the input current spectrum, levels in dBuV at the LISN.
 #[derive(Clone, Debug, PartialEq)]
@@ -43,7 +47,6 @@ pub struct Harmonic {
     pub limit_qp: Option<f64>,
     pub limit_avg: Option<f64>,
     pub margin_db: Option<f64>,
-    pub uncertainty_db: f64,
 }
 
 impl Harmonic {
@@ -71,7 +74,18 @@ pub struct SpectrumPanel {
     pub standard: Option<String>,
     /// The finding's tags (`worst_case_current`, `rule_of_thumb_edge`, `differential_mode_only`, ...).
     pub tags: Vec<String>,
+    /// `None` when the levels are detector readings (isolated lines); else why they are only line amplitudes.
+    /// Limit lines and margins are not drawn for a panel that has a reason.
+    pub detector_reason: Option<String>,
+    /// The frequency scenario of a declared range (`range lower bound` ...), when the finding is one.
+    pub scenario: Option<String>,
     pub harmonics: Vec<Harmonic>,
+}
+
+impl SpectrumPanel {
+    fn detector_ok(&self) -> bool {
+        self.detector_reason.is_none()
+    }
 }
 
 fn number(value: &Value) -> Option<f64> {
@@ -113,7 +127,6 @@ pub fn panels_from_report(report: &Value) -> Vec<SpectrumPanel> {
                     limit_qp: field(h, "limit_qp"),
                     limit_avg: field(h, "limit_avg"),
                     margin_db: field(h, "margin_db"),
-                    uncertainty_db: field(h, "uncertainty_db").unwrap_or(0.0),
                 })
             })
             .collect();
@@ -126,9 +139,27 @@ pub fn panels_from_report(report: &Value) -> Vec<SpectrumPanel> {
             .find(|c| c.get("controller").and_then(Value::as_str) == Some(cell.as_str()))
             .and_then(|c| field(c, "frequency_hz"))
             .or_else(|| field(measures, "switching_frequency_hz"));
+        // A report that does not state the status is not taken to hold detector readings.
+        let detector_reason = match measures.get("detector_applicability").and_then(Value::as_str) {
+            Some("isolated_lines") => None,
+            _ => Some(
+                measures
+                    .get("detector_reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("the report does not state that the isolated-line detector assumption holds")
+                    .to_owned(),
+            ),
+        };
+        let scenario = measures
+            .get("frequency_scenario")
+            .and_then(Value::as_str)
+            .filter(|s| *s != "fixed")
+            .map(|s| s.split(" (").next().unwrap_or(s).to_owned());
         panels.push(SpectrumPanel {
             cell,
             frequency_hz,
+            detector_reason,
+            scenario,
             standard: measures.get("limit_standard").and_then(Value::as_str).map(str::to_owned),
             tags: finding
                 .get("tags")
@@ -191,11 +222,11 @@ fn ceil10(value: f64) -> f64 {
 }
 
 /// The worst harmonic: the least margin when margins exist, else the highest level.
-fn worst(harmonics: &[Harmonic]) -> Option<usize> {
+fn worst(harmonics: &[Harmonic], detector_ok: bool) -> Option<usize> {
     let by_margin = harmonics
         .iter()
         .enumerate()
-        .filter_map(|(i, h)| h.margin_db.map(|m| (i, m)))
+        .filter_map(|(i, h)| h.margin_db.filter(|_| detector_ok).map(|m| (i, m)))
         .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)));
     by_margin.map(|(i, _)| i).or_else(|| {
         harmonics
@@ -222,6 +253,7 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) {
+    let ok = panel.detector_ok();
     let plot_w = WIDTH - LEFT - RIGHT;
     let (x0, y0) = (LEFT, top + TOP);
     let (lo_f, hi_f) = (BAND_HZ.0.log10(), BAND_HZ.1.log10());
@@ -232,17 +264,22 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
     for h in &panel.harmonics {
         values.push(h.level());
         values.extend(h.band().map(|b| b.0));
-        values.extend(h.limit_qp);
-        values.extend(h.limit_avg);
+        values.extend(h.limit_qp.filter(|_| ok));
+        values.extend(h.limit_avg.filter(|_| ok));
     }
     let (data_lo, data_hi) = values.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |a, v| (a.0.min(*v), a.1.max(*v)));
     let hi = ceil10(data_hi + 5.0);
     let lo = floor10(data_lo).max(hi - 90.0).min(hi - 30.0);
     let py = |v: f64| y0 + PLOT_HEIGHT - (v - lo) / (hi - lo) * PLOT_HEIGHT;
 
-    let title = match panel.frequency_hz {
-        Some(f) => format!("{}: conducted emission at the input, switching at {}", panel.cell, frequency_text(f)),
-        None => format!("{}: conducted emission at the input", panel.cell),
+    let what = if ok { "conducted emission" } else { "conducted line amplitudes, NOT a detector reading" };
+    let title = match (panel.frequency_hz, &panel.scenario) {
+        (Some(f), Some(scenario)) => {
+            format!("{}: {what} at the input, switching at {} ({scenario})", panel.cell, frequency_text(f))
+        }
+        (Some(f), None) => format!("{}: {what} at the input, switching at {}", panel.cell, frequency_text(f)),
+        (None, Some(scenario)) => format!("{}: {what} at the input ({scenario})", panel.cell),
+        (None, None) => format!("{}: {what} at the input", panel.cell),
     };
     out.push(format!("<g class=\"panel\" data-cell=\"{}\">", escape(&panel.cell)));
     out.push(format!(
@@ -251,17 +288,22 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         n(top + 26.0),
         escape(&title)
     ));
-    let standard = panel.standard.as_deref().map_or_else(
-        || "no emission standard with a conducted table is declared: levels only, no limit lines".to_owned(),
-        |s| format!("limit lines: {s}, CISPR 32 mains-port quasi-peak and average (reference for a DC input)"),
-    );
+    let standard = match (&panel.detector_reason, panel.standard.as_deref()) {
+        (Some(reason), _) => format!("no limit lines and no margin, the isolated-line assumption fails: {reason}"),
+        (None, None) => {
+            "no emission standard with a conducted table is declared: levels only, no limit lines".to_owned()
+        }
+        (None, Some(s)) => {
+            format!("limit lines: {s}, CISPR 32 mains-port quasi-peak and average (reference for a DC input)")
+        }
+    };
     let assumptions = if panel.tags.is_empty() {
         "assumptions: none tagged".to_owned()
     } else {
         format!("assumptions: {}", panel.tags.join(", "))
     };
     let subtitle = format!("dBuV at a 50 uH V-network, RMS per harmonic, 150 kHz to 30 MHz; {standard}");
-    let lines: Vec<String> = wrap(&subtitle, 112).into_iter().chain(wrap(&assumptions, 112)).take(5).collect();
+    let lines: Vec<String> = wrap(&subtitle, 112).into_iter().chain(wrap(&assumptions, 112)).take(6).collect();
     for (i, line) in lines.iter().enumerate() {
         out.push(format!(
             "<text x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{MUTED}\">{}</text>",
@@ -342,8 +384,10 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         ("limit-qp", LIMIT_QP, "", (|h: &Harmonic| h.limit_qp) as fn(&Harmonic) -> Option<f64>),
         ("limit-avg", LIMIT_AVG, " stroke-dasharray=\"6 4\"", |h: &Harmonic| h.limit_avg),
     ] {
-        let points: Vec<String> =
-            sorted.iter().filter_map(|h| pick(h).map(|l| format!("{},{}", n(px(h.frequency_hz)), n(py(l))))).collect();
+        let points: Vec<String> = sorted
+            .iter()
+            .filter_map(|h| pick(h).filter(|_| ok).map(|l| format!("{},{}", n(px(h.frequency_hz)), n(py(l)))))
+            .collect();
         if points.len() >= 2 {
             out.push(format!(
                 "<polyline class=\"{class}\" points=\"{}\" fill=\"none\" stroke=\"{color}\" stroke-width=\"2\"{dash}/>",
@@ -351,36 +395,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
             ));
         }
     }
-    // Uncertainty band and whisker of the worst harmonic.
-    let worst_index = worst(&panel.harmonics);
-    if let Some(i) = worst_index {
-        let h = &panel.harmonics[i];
-        if h.uncertainty_db > 0.0 {
-            let x = px(h.frequency_hz);
-            let (top_y, bottom_y) = (py(h.level() + h.uncertainty_db), py(h.level() - h.uncertainty_db));
-            out.push(format!(
-                "<rect class=\"uncertainty-band\" x=\"{}\" y=\"{}\" width=\"14\" height=\"{}\" fill=\"{BAND_FILL}\" fill-opacity=\"0.30\"/>",
-                n(x - 7.0),
-                n(top_y),
-                n(bottom_y - top_y)
-            ));
-            out.push(format!(
-                "<path class=\"uncertainty-whisker\" d=\"M {} {} L {} {} M {} {} L {} {} M {} {} L {} {}\" fill=\"none\" stroke=\"{BAND_FILL}\" stroke-width=\"2\"/>",
-                n(x),
-                n(top_y),
-                n(x),
-                n(bottom_y),
-                n(x - 6.0),
-                n(top_y),
-                n(x + 6.0),
-                n(top_y),
-                n(x - 6.0),
-                n(bottom_y),
-                n(x + 6.0),
-                n(bottom_y)
-            ));
-        }
-    }
+    let worst_index = worst(&panel.harmonics, ok);
     // Bands of the rule-of-thumb inputs: a whisker from the low to the high end behind each stem.
     for h in &panel.harmonics {
         if let Some((low, high)) = h.band() {
@@ -408,7 +423,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
     // Stems, at the high end of the band.
     let baseline = y0 + PLOT_HEIGHT;
     for h in &panel.harmonics {
-        let over_avg = h.limit_avg.is_some_and(|l| h.level() > l);
+        let over_avg = ok && h.limit_avg.is_some_and(|l| h.level() > l);
         let color = if over_avg { WARNING } else { LEVEL };
         let (x, y) = (px(h.frequency_hz), py(h.level()));
         out.push(format!(
@@ -450,14 +465,21 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
     // Worst-harmonic label.
     if let Some(i) = worst_index {
         let h = &panel.harmonics[i];
-        let margin = h.margin_db.map_or(String::new(), |m| format!(", {:+} dB to the average line", n(m)));
+        let label = if ok {
+            let margin = h.margin_db.map_or(String::new(), |m| format!(", {:+} dB to the average line", n(m)));
+            format!("worst harmonic: {} at {} dBuV{margin}", frequency_text(h.frequency_hz), n(h.level()))
+        } else {
+            format!(
+                "highest line amplitude: {} at {} dBuV (not a detector reading, no limit)",
+                frequency_text(h.frequency_hz),
+                n(h.level())
+            )
+        };
         out.push(format!(
-            "<text class=\"worst\" x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{INK}\">worst harmonic: {} at {} dBuV{margin}; band: stated uncertainty +/-{} dB</text>",
+            "<text class=\"worst\" x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"{INK}\">{}</text>",
             n(x0 + 8.0),
             n(y0 + 16.0),
-            frequency_text(h.frequency_hz),
-            n(h.level()),
-            n(h.uncertainty_db)
+            escape(&label)
         ));
     }
 
@@ -467,10 +489,11 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         format!(
             "<line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"-9\" stroke=\"{LEVEL}\" stroke-width=\"1.5\"/><circle cx=\"0\" cy=\"-9\" r=\"3\" fill=\"{LEVEL}\"/>"
         ),
-        match (has_cm, panel.harmonics.iter().any(|h| h.band().is_some())) {
-            (true, _) => "harmonic, total level",
-            (false, false) => "harmonic, differential mode only",
-            (false, true) => "harmonic at the high end of its band, differential mode only",
+        match (has_cm, panel.harmonics.iter().any(|h| h.band().is_some()), ok) {
+            (_, _, false) => "harmonic line amplitude, not a detector reading",
+            (true, _, _) => "harmonic, total level",
+            (false, false, _) => "harmonic, differential mode only",
+            (false, true, _) => "harmonic at the high end of its band, differential mode only",
         }
         .to_owned(),
     )];
@@ -482,7 +505,7 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
             "band: rule-of-thumb inputs".to_owned(),
         ));
     }
-    if panel.harmonics.iter().any(|h| h.limit_avg.is_some_and(|l| h.level() > l)) {
+    if ok && panel.harmonics.iter().any(|h| h.limit_avg.is_some_and(|l| h.level() > l)) {
         entries.push((
             format!(
                 "<line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"-9\" stroke=\"{WARNING}\" stroke-width=\"1.5\"/><circle cx=\"0\" cy=\"-9\" r=\"3\" fill=\"{WARNING}\"/>"
@@ -497,16 +520,15 @@ fn panel_svg(panel: &SpectrumPanel, top: f64, out: &mut Vec<String>, id: usize) 
         ));
         entries.push((format!("<rect x=\"-3\" y=\"-7\" width=\"6\" height=\"6\" fill=\"{BACKGROUND}\" stroke=\"{CM}\" stroke-width=\"1.5\"/>"), "common mode".to_owned()));
     }
-    if panel.harmonics.iter().any(|h| h.limit_qp.is_some()) {
+    if ok && panel.harmonics.iter().any(|h| h.limit_qp.is_some()) {
         entries.push((
             format!("<line x1=\"-8\" y1=\"-4\" x2=\"8\" y2=\"-4\" stroke=\"{LIMIT_QP}\" stroke-width=\"2\"/>"),
             "quasi-peak limit".to_owned(),
         ));
     }
-    if panel.harmonics.iter().any(|h| h.limit_avg.is_some()) {
+    if ok && panel.harmonics.iter().any(|h| h.limit_avg.is_some()) {
         entries.push((format!("<line x1=\"-8\" y1=\"-4\" x2=\"8\" y2=\"-4\" stroke=\"{LIMIT_AVG}\" stroke-width=\"2\" stroke-dasharray=\"6 4\"/>"), "average limit".to_owned()));
     }
-    entries.push((format!("<rect x=\"-6\" y=\"-9\" width=\"12\" height=\"10\" fill=\"{BAND_FILL}\" fill-opacity=\"0.30\" stroke=\"{BAND_FILL}\"/>"), "uncertainty of the worst harmonic".to_owned()));
     let mut x = LEFT + 10.0;
     for (glyph, label) in entries {
         out.push(format!("<g transform=\"translate({},{})\">{glyph}</g>", n(x), n(ly)));
@@ -545,7 +567,7 @@ pub fn spectrum_svg(title: &str, panels: &[SpectrumPanel]) -> String {
     ));
     for (i, line) in [
         format!("{title}: harmonics of a trapezoidal switch current through the hot capacitor, the input filter and a 50 uH V-network."),
-        "Typical accuracy 5 dB at low MHz, 7 to 12 dB above, from the component models; the limit tables are unverified against the standards.".to_owned(),
+        "Validated against analytic cases only, not correlated with measurements: no accuracy is claimed. The limit tables are unverified against the standards.".to_owned(),
     ]
     .iter()
     .enumerate()
@@ -576,7 +598,6 @@ mod tests {
             limit_qp: qp,
             limit_avg: avg,
             margin_db: avg.map(|a| a - level),
-            uncertainty_db: 6.0,
         }
     }
 
@@ -591,6 +612,8 @@ mod tests {
                 "rule_of_thumb_edge".to_owned(),
                 "differential_mode_only".to_owned(),
             ],
+            detector_reason: None,
+            scenario: None,
             harmonics: vec![
                 harmonic(1, 60.0, limit(56.0), limit(46.0)),
                 harmonic(2, 31.0, limit(56.0), limit(46.0)),
@@ -639,11 +662,12 @@ mod tests {
     }
 
     #[test]
-    fn the_worst_harmonic_carries_the_uncertainty_and_the_footer_says_screening() {
+    fn the_worst_harmonic_is_labelled_without_an_accuracy_claim_and_the_footer_says_screening() {
         let svg = spectrum_svg("EmiBuck", &[panel(true)]);
-        assert_eq!(svg.matches("class=\"uncertainty-band\"").count(), 1);
-        assert_eq!(svg.matches("class=\"uncertainty-whisker\"").count(), 1);
+        // No accuracy band or whisker: the plot makes no claim of a stated uncertainty.
+        assert!(!svg.contains("uncertainty") && !svg.contains("accuracy 5 dB") && !svg.contains("+/-"), "{svg}");
         assert!(svg.contains("worst harmonic: 500 kHz at 60 dBuV, -14 dB to the average line"), "{svg}");
+        assert!(svg.contains("not correlated with measurements"));
         assert!(svg.contains("screening estimate, not EMC qualification"));
         assert!(svg.contains("worst_case_current, rule_of_thumb_edge, differential_mode_only"));
         // Explicit background, fixed palette: no CSS variables or currentColor.
@@ -695,8 +719,8 @@ mod tests {
     fn the_band_is_read_from_the_report_harmonics() {
         let report = copper_json::parse(
             r#"{"findings":[{"code":"EMI-CONDUCTED","cell":"U1","tags":[],"measures":{"harmonics":[
-               {"frequency_hz":500000.0,"total_dbuv":40.0,"low_dbuv":32.0,"high_dbuv":44.5,"uncertainty_db":6.0},
-               {"frequency_hz":1000000.0,"total_dbuv":30.0,"uncertainty_db":6.0}]}}]}"#,
+               {"frequency_hz":500000.0,"total_dbuv":40.0,"low_dbuv":32.0,"high_dbuv":44.5},
+               {"frequency_hz":1000000.0,"total_dbuv":30.0}]}}]}"#,
         )
         .unwrap();
         let panels = panels_from_report(&report);
@@ -710,9 +734,9 @@ mod tests {
         let report = copper_json::parse(
             r#"{"cells":[{"controller":"U1","frequency_hz":500000.0}],"findings":[
               {"code":"EMI-HOT-LOOP","cell":"U1","measures":{}},
-              {"code":"EMI-CONDUCTED","cell":"U1","tags":["worst_case_current"],"measures":{"limit_standard":"cispr32_class_b",
-               "harmonics":[{"frequency_hz":500000.0,"total_dbuv":29.7,"dm_dbuv":29.7,"cm_dbuv":null,"limit_qp":56.0,"limit_avg":46.0,"margin_db":16.3,"uncertainty_db":6.0},
-                            {"frequency_hz":1000000,"total_dbuv":7,"dm_dbuv":7,"cm_dbuv":null,"limit_qp":null,"limit_avg":null,"margin_db":null,"uncertainty_db":6}]}}]}"#,
+              {"code":"EMI-CONDUCTED","cell":"U1","tags":["worst_case_current"],"measures":{"limit_standard":"cispr32_class_b","detector_applicability":"isolated_lines",
+               "harmonics":[{"frequency_hz":500000.0,"total_dbuv":29.7,"dm_dbuv":29.7,"cm_dbuv":null,"limit_qp":56.0,"limit_avg":46.0,"margin_db":16.3},
+                            {"frequency_hz":1000000,"total_dbuv":7,"dm_dbuv":7,"cm_dbuv":null,"limit_qp":null,"limit_avg":null,"margin_db":null}]}}]}"#,
         )
         .unwrap();
         let panels = panels_from_report(&report);
@@ -726,5 +750,49 @@ mod tests {
         assert_eq!(p.harmonics[1].limit_qp, None);
         assert_eq!(p.harmonics[0].margin_db, Some(16.3));
         assert!(panels_from_report(&copper_json::parse(r#"{"findings":[]}"#).unwrap()).is_empty());
+        assert!(p.detector_reason.is_none() && p.scenario.is_none());
+    }
+
+    #[test]
+    fn a_panel_without_detector_readings_shows_no_limit_line_and_no_margin() {
+        // The report carries limits and margins (as an older or hand-made report might); the status wins.
+        let mut p = panel(true);
+        p.detector_reason =
+            Some("the harmonic spacing 15000 Hz is not above twice the Band B resolution bandwidth".to_owned());
+        let svg = spectrum_svg("EmiBuck", &[p.clone()]);
+        assert!(!svg.contains("<polyline"), "no limit line: {svg}");
+        assert_eq!(svg.matches("over-average").count(), 0, "no warning colour");
+        assert!(
+            !svg.contains("above the average line")
+                && !svg.contains("quasi-peak limit")
+                && !svg.contains("average limit")
+        );
+        assert!(!svg.contains("dB to the average line"), "no margin text");
+        assert!(svg.contains("conducted line amplitudes, NOT a detector reading"), "{svg}");
+        assert!(svg.contains("highest line amplitude: 500 kHz at 60 dBuV (not a detector reading, no limit)"), "{svg}");
+        assert!(svg.contains("no limit lines and no margin, the isolated-line"));
+        assert!(svg.contains("harmonic line amplitude, not a detector reading"));
+        // The same panel with the status "isolated lines" draws them.
+        p.detector_reason = None;
+        assert!(spectrum_svg("EmiBuck", &[p]).contains("<polyline class=\"limit-qp\""));
+    }
+
+    #[test]
+    fn the_detector_status_and_the_scenario_are_read_from_the_report() {
+        let report = copper_json::parse(
+            r#"{"findings":[
+              {"code":"EMI-CONDUCTED","cell":"U1","tags":[],"measures":{"detector_applicability":"not_applicable",
+               "detector_reason":"range declared","frequency_scenario":"range lower bound (fixed-frequency scenario; swept or modulated case not modelled)",
+               "harmonics":[{"frequency_hz":400000.0,"total_dbuv":30.0,"limit_qp":null,"limit_avg":null,"margin_db":null}]}},
+              {"code":"EMI-CONDUCTED","cell":"U2","tags":[],"measures":{"harmonics":[{"frequency_hz":400000.0,"total_dbuv":30.0}]}}]}"#,
+        )
+        .unwrap();
+        let panels = panels_from_report(&report);
+        assert_eq!(panels[0].detector_reason.as_deref(), Some("range declared"));
+        assert_eq!(panels[0].scenario.as_deref(), Some("range lower bound"));
+        // A report that does not state the status is not taken to hold detector readings.
+        assert!(panels[1].detector_reason.is_some());
+        let svg = spectrum_svg("b", &panels);
+        assert!(svg.contains("(range lower bound)"), "{svg}");
     }
 }

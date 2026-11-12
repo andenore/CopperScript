@@ -1,15 +1,17 @@
 //! Conducted-emission prediction for the input side of a switching converter
 //! (CISPR Band B, 150 kHz to 30 MHz).
 //!
-//! **Screening evidence only.** The literature accuracy envelope of this kind
-//! of linear-network prediction is about 5 dB at low MHz and 7 to 12 dB above,
-//! and it is limited by the component and source models (parasitics, layout
-//! coupling, non-ideal edges), not by the solver. The LISN component values
-//! ([`crate::lisn`]) and the limit tables ([`crate::estimate::limits`]) are
-//! transcribed as remembered and are UNVERIFIED against CISPR 16-1-2 and
-//! CISPR 32. Use the numbers to rank design choices and to see how far a
-//! design is from a limit, never as a compliance statement. Every
-//! simplification is also returned in [`ConductedReport::assumptions`].
+//! **Screening evidence only.** What has been validated: the solver, the
+//! trapezoid harmonics and the LISN transfer against hand calculations, and the
+//! receiver emulation against analytic detector readings (this module's and
+//! [`crate::receiver`]'s unit tests). What has not: no prediction of this module
+//! has been correlated with a measurement, so no accuracy figure is claimed.
+//! The LISN component values ([`crate::lisn`]) and the limit tables
+//! ([`crate::estimate::limits`]) are transcribed as remembered and are
+//! UNVERIFIED against CISPR 16-1-2 and CISPR 32. Use the numbers to rank design
+//! choices and to see how far a design is from a limit, never as a compliance
+//! statement. Every simplification is also returned in
+//! [`ConductedReport::assumptions`].
 //!
 //! # Model
 //!
@@ -87,16 +89,30 @@
 //!
 //! # Detector handling
 //!
-//! For a fixed-frequency converter whose harmonic spacing `f0` exceeds the
-//! receiver resolution bandwidth (9 kHz in Band B; this module requires
-//! `f0 > 2 RBW` for the claim below, and warns in the assumptions otherwise),
-//! each harmonic is an isolated narrowband line: the IF envelope is constant,
-//! so peak = quasi-peak = average = the RMS level of that harmonic. The fast
-//! path therefore compares the one RMS level with both the quasi-peak and the
-//! average limit. [`receiver_check`] verifies the claim by reconstructing the
+//! A level is a detector reading only when the isolated-line assumption holds,
+//! and the assumption is decided explicitly, per CISPR band, as
+//! [`DetectorApplicability`] (see [`ConductedReport::bands`]):
+//!
+//! * **Isolated lines.** The switching frequency is one constant value and the
+//!   harmonic spacing `f0` exceeds twice the band's resolution bandwidth (9 kHz
+//!   in Band B, 200 Hz in Band A, 120 kHz in Bands C and D). Each harmonic is
+//!   then an isolated narrowband line: the IF envelope is constant, so peak =
+//!   quasi-peak = average = the RMS level of that harmonic, and the one RMS level
+//!   is compared with both the quasi-peak and the average limit.
+//! * **Not applicable.** Several lines fall inside the IF filter (`f0` is at most
+//!   twice the bandwidth), or the frequency is not one constant value
+//!   ([`FrequencyMode::NotFixed`]: spread-spectrum clocking, frequency
+//!   modulation, burst or skip modes, or a declared range whose operating mode is
+//!   unknown). The per-harmonic levels are then only *line amplitudes*: no limit
+//!   and no margin is attached to them. For a strictly periodic waveform with
+//!   several lines inside the bandwidth the time-domain receiver of
+//!   [`crate::receiver`] is valid ([`receiver_check`] reconstructs the port
+//!   waveform over whole periods); jitter, spread spectrum, frequency modulation
+//!   and burst modes are not modelled by anything in this crate.
+//!
+//! [`receiver_check`] verifies the isolated-line claim by reconstructing the
 //! LISN port waveform over many periods and running it through
-//! [`crate::receiver::scan`]. Spread-spectrum clocking or jitter, which break
-//! the claim, are not modelled.
+//! [`crate::receiver::scan`].
 
 use crate::circuit::{Circuit, CircuitError, ElementId, Node};
 use crate::estimate::limits::{Class, Detector, LimitLine, cispr32_conducted};
@@ -152,6 +168,88 @@ pub struct CommonModeChoke {
     pub winding_capacitance: f64,
 }
 
+/// How the switching frequency of the converter behaves in operation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FrequencyMode {
+    /// One constant switching frequency.
+    Fixed,
+    /// Not known to be one constant frequency: spread-spectrum clocking,
+    /// frequency modulation, burst or skip modes, or an adjustable range whose
+    /// operating mode is unknown. The reason is printed.
+    NotFixed(String),
+}
+
+/// Whether the per-harmonic level of a band may be read as a detector reading.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DetectorApplicability {
+    /// Every harmonic is an isolated line: peak = quasi-peak = average = the
+    /// harmonic's RMS level, and limits apply.
+    IsolatedLines,
+    /// The isolated-line assumption fails (the reason is printed): the level is a
+    /// line amplitude, not a detector reading, and no limit or margin is attached.
+    NotApplicable(String),
+}
+
+impl DetectorApplicability {
+    /// `true` for [`DetectorApplicability::IsolatedLines`].
+    pub fn is_applicable(&self) -> bool {
+        matches!(self, DetectorApplicability::IsolatedLines)
+    }
+
+    /// The reason of a [`DetectorApplicability::NotApplicable`].
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            DetectorApplicability::IsolatedLines => None,
+            DetectorApplicability::NotApplicable(reason) => Some(reason),
+        }
+    }
+}
+
+/// The detector applicability of one CISPR band that holds reported harmonics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BandDetector {
+    /// The band.
+    pub band: Band,
+    /// The band's 6 dB resolution bandwidth, Hz.
+    pub rbw_hz: f64,
+    /// Harmonic spacing (the switching frequency), Hz.
+    pub spacing_hz: f64,
+    /// Number of reported harmonics in the band.
+    pub harmonics: usize,
+    /// Decision for the band.
+    pub applicability: DetectorApplicability,
+}
+
+/// The CISPR band a frequency belongs to (A below 150 kHz, B from 150 kHz to 30 MHz inclusive, C to 300 MHz inclusive, else D).
+pub fn band_of(frequency: f64) -> Band {
+    if frequency < 150e3 {
+        Band::A
+    } else if frequency <= 30e6 {
+        Band::B
+    } else if frequency <= 300e6 {
+        Band::C
+    } else {
+        Band::D
+    }
+}
+
+/// Decide [`DetectorApplicability`] for harmonics of `spacing` Hz in `band`.
+pub fn detector_applicability(band: Band, spacing: f64, mode: &FrequencyMode) -> DetectorApplicability {
+    if let FrequencyMode::NotFixed(reason) = mode {
+        return DetectorApplicability::NotApplicable(format!(
+            "the switching frequency is not known to be one constant value ({reason}); spread spectrum, frequency modulation and burst modes are not modelled, so the per-harmonic line amplitudes are not detector readings"
+        ));
+    }
+    let rbw = band.rbw();
+    if spacing <= 2.0 * rbw {
+        return DetectorApplicability::NotApplicable(format!(
+            "the harmonic spacing {spacing} Hz is not above twice the Band {band:?} resolution bandwidth ({} Hz): adjacent harmonics fall inside the IF filter, so peak, quasi-peak and average differ from the line RMS values; a strictly periodic waveform can be run through the time-domain receiver (receiver_check), jitter and spread spectrum cannot",
+            2.0 * rbw
+        ));
+    }
+    DetectorApplicability::IsolatedLines
+}
+
 /// Inputs of [`predict`]. All fields are plain SI units.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConductedInput {
@@ -189,6 +287,9 @@ pub struct ConductedInput {
     pub switch_node_rise_time: Option<f64>,
     /// Switch-node voltage fall time, s (`None`: `current_fall_time`).
     pub switch_node_fall_time: Option<f64>,
+    /// Whether the converter runs at one constant switching frequency; decides
+    /// [`DetectorApplicability`] together with the harmonic spacing.
+    pub frequency_mode: FrequencyMode,
     /// Limit class used for the margins.
     pub limit_class: Class,
     /// Lowest reported frequency, Hz (CISPR Band B starts at 150 kHz).
@@ -227,6 +328,7 @@ impl ConductedInput {
             switch_node_capacitance: None,
             switch_node_rise_time: None,
             switch_node_fall_time: None,
+            frequency_mode: FrequencyMode::Fixed,
             limit_class: Class::B,
             min_frequency: 150e3,
             max_frequency: 30e6,
@@ -274,7 +376,10 @@ impl From<CircuitError> for ConductedError {
 }
 
 /// Predicted level of one harmonic (all levels RMS, dBuV; margins in dB,
-/// limit minus level, positive = below the limit).
+/// limit minus level, positive = below the limit). The level is the RMS
+/// amplitude of the line; it is a detector reading only where
+/// [`HarmonicLevel::detector_applicable`] is `true`, and otherwise the limits and
+/// margins are `None`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HarmonicLevel {
     /// Harmonic number `n`.
@@ -289,7 +394,11 @@ pub struct HarmonicLevel {
     pub cm_dbuv: Option<f64>,
     /// DM + CM added as magnitudes (worst case), dBuV.
     pub total_dbuv: f64,
-    /// Quasi-peak limit, dBuV (`None` outside 150 kHz to 30 MHz).
+    /// `true` when the isolated-line assumption holds in this harmonic's band, so
+    /// `total_dbuv` is a detector reading and the limits below apply.
+    pub detector_applicable: bool,
+    /// Quasi-peak limit, dBuV (`None` outside 150 kHz to 30 MHz, and `None`
+    /// when the detector reading is not applicable).
     pub limit_quasi_peak_dbuv: Option<f64>,
     /// Average limit, dBuV.
     pub limit_average_dbuv: Option<f64>,
@@ -328,6 +437,19 @@ pub struct ConductedReport {
     pub worst: Option<WorstHarmonic>,
     /// Every simplification behind the numbers, for printing.
     pub assumptions: Vec<String>,
+    /// The detector applicability of every band that holds a reported harmonic.
+    pub bands: Vec<BandDetector>,
+}
+
+impl ConductedReport {
+    /// [`DetectorApplicability::IsolatedLines`] when every band holds isolated
+    /// lines, otherwise the first band's [`DetectorApplicability::NotApplicable`].
+    pub fn detector_applicability(&self) -> DetectorApplicability {
+        self.bands
+            .iter()
+            .find(|b| !b.applicability.is_applicable())
+            .map_or(DetectorApplicability::IsolatedLines, |b| b.applicability.clone())
+    }
 }
 
 /// The assembled network and its handles.
@@ -510,7 +632,21 @@ pub fn predict(input: &ConductedInput) -> Result<ConductedReport, ConductedError
     let net = build(input);
     let mut harmonics = Vec::new();
     let mut worst: Option<WorstHarmonic> = None;
+    let mut band_detectors: Vec<BandDetector> = Vec::new();
     if n_hi >= n_lo {
+        for n in n_lo..=n_hi {
+            let band = band_of(f64::from(n) * input.switching_frequency);
+            match band_detectors.iter_mut().find(|b| b.band == band) {
+                Some(entry) => entry.harmonics += 1,
+                None => band_detectors.push(BandDetector {
+                    band,
+                    rbw_hz: band.rbw(),
+                    spacing_hz: input.switching_frequency,
+                    harmonics: 1,
+                    applicability: detector_applicability(band, input.switching_frequency, &input.frequency_mode),
+                }),
+            }
+        }
         let dm_spec = dm_spectrum(input, n_hi)?;
         let dm = harmonic_steady_state(&net.circuit, &[(net.dm_source, &dm_spec)], n_hi)?;
         let cm = match net.cm_source {
@@ -524,11 +660,13 @@ pub fn predict(input: &ConductedInput) -> Result<ConductedReport, ConductedError
         let avg: Option<LimitLine> = cispr32_conducted(input.limit_class, Detector::Average);
         for n in n_lo..=n_hi {
             let f = f64::from(n) * input.switching_frequency;
+            let applicable =
+                band_detectors.iter().find(|b| b.band == band_of(f)).is_some_and(|b| b.applicability.is_applicable());
             let dm_peak = worst_port_peak(&dm, &net, n);
             let cm_peak = cm.as_ref().map(|r| worst_port_peak(r, &net, n));
             let total = to_dbuv_rms(dm_peak + cm_peak.unwrap_or(0.0));
-            let lim_qp = qp.as_ref().and_then(|l| l.at(f));
-            let lim_avg = avg.as_ref().and_then(|l| l.at(f));
+            let lim_qp = qp.as_ref().and_then(|l| l.at(f)).filter(|_| applicable);
+            let lim_avg = avg.as_ref().and_then(|l| l.at(f)).filter(|_| applicable);
             let level = HarmonicLevel {
                 harmonic: n,
                 frequency: f,
@@ -536,6 +674,7 @@ pub fn predict(input: &ConductedInput) -> Result<ConductedReport, ConductedError
                 dm_dbuv: to_dbuv_rms(dm_peak),
                 cm_dbuv: cm_peak.map(to_dbuv_rms),
                 total_dbuv: total,
+                detector_applicable: applicable,
                 limit_quasi_peak_dbuv: lim_qp,
                 limit_average_dbuv: lim_avg,
                 margin_quasi_peak_db: lim_qp.map(|l| l - total),
@@ -562,12 +701,12 @@ pub fn predict(input: &ConductedInput) -> Result<ConductedReport, ConductedError
             harmonics.push(level);
         }
     }
-    Ok(ConductedReport { harmonics, worst, assumptions: assumptions(input) })
+    Ok(ConductedReport { harmonics, worst, assumptions: assumptions(input, &band_detectors), bands: band_detectors })
 }
 
-fn assumptions(input: &ConductedInput) -> Vec<String> {
+fn assumptions(input: &ConductedInput, bands: &[BandDetector]) -> Vec<String> {
     let mut a = vec![
-        "Results are screening evidence: literature accuracy of this kind of prediction is about 5 dB at low MHz and 7-12 dB above, limited by component and source models.".to_string(),
+        "Results are screening evidence: the solver, source harmonics and LISN transfer are checked against hand calculations, but no prediction has been correlated with a measurement and no accuracy figure is claimed.".to_string(),
         "Linear time-invariant network: all passives are linear; capacitor and inductor parasitics are single-element ESR/ESL/parallel-C models with no frequency dependence (no skin or proximity effect, no ferrite or dielectric dispersion).".to_string(),
         "No DC-bias or temperature derating of capacitance (MLCC capacitance can fall by more than half at rated bias; apply the derating to the inputs).".to_string(),
         "The converter is an ideal harmonic current source (infinite source impedance): no control-loop effects, no negative input resistance, no interaction with filter resonances beyond the linear network.".to_string(),
@@ -575,7 +714,7 @@ fn assumptions(input: &ConductedInput) -> Vec<String> {
         "Each line ends in one V-network model; the supply impedance behind the LISN is neglected. The LISN component values and topology are unverified against CISPR 16-1-2.".to_string(),
         "Limit lines (CISPR 32 / EN 55032 AC mains port, quasi-peak and average) are transcribed as remembered and are unverified against the standard.".to_string(),
         "Levels are RMS of each harmonic (peak / sqrt 2) in dBuV, as RMS-calibrated receivers read.".to_string(),
-        "Detector model: fixed switching frequency with harmonic spacing above twice the 9 kHz Band B RBW, so each harmonic is an isolated line and peak = quasi-peak = average = its RMS level. Spread-spectrum clocking, jitter and burst modes are not modelled.".to_string(),
+        "Detector model: where the switching frequency is one constant value and the harmonic spacing is above twice the band's RBW (9 kHz in Band B), each harmonic is an isolated line and peak = quasi-peak = average = its RMS level. Otherwise the levels are line amplitudes and no limit is applied (see the detector entries). Spread-spectrum clocking, jitter and burst modes are not modelled.".to_string(),
         "Total = DM + CM added as magnitudes (worst case over their unknown relative phase); DM and CM are computed on the worst of the two LISN ports.".to_string(),
     ];
     if input.custom_current.is_some() {
@@ -601,13 +740,17 @@ fn assumptions(input: &ConductedInput) -> Vec<String> {
     if input.filter.is_none() {
         a.push("No input filter: only the hot capacitor sits between the switch and the LISN.".to_string());
     }
-    let rbw = Band::B.rbw();
-    if input.switching_frequency <= 2.0 * rbw {
-        a.push(format!(
-            "WARNING: switching frequency {} Hz is not above twice the Band B RBW ({} Hz): adjacent harmonics fall inside the IF filter, the isolated-line detector assumption does not hold and the reported levels are line RMS values, not detector readings.",
-            input.switching_frequency,
-            2.0 * rbw
-        ));
+    for band in bands {
+        match &band.applicability {
+            DetectorApplicability::IsolatedLines => a.push(format!(
+                "Detector reading applicable in Band {:?}: harmonic spacing {} Hz exceeds twice the {} Hz resolution bandwidth, so each of the {} harmonic(s) is an isolated line.",
+                band.band, band.spacing_hz, band.rbw_hz, band.harmonics
+            )),
+            DetectorApplicability::NotApplicable(reason) => a.push(format!(
+                "Detector reading NOT applicable in Band {:?} ({} harmonic(s)): {reason}. Levels there are line amplitudes and carry no limit or margin.",
+                band.band, band.harmonics
+            )),
+        }
     }
     if input.max_frequency > 30e6 {
         a.push("max_frequency exceeds 30 MHz: the LISN model and the limits are not valid there.".to_string());
@@ -687,8 +830,9 @@ pub struct ReceiverCheck {
 /// equal `analytic_dbuv` within a small fraction of a dB.
 ///
 /// `samples_per_period` must be a power of two larger than twice the highest
-/// harmonic requested, and `periods * samples_per_period` should be a power
-/// of two holding a record of at least 0.5 ms (see [`scan`]).
+/// harmonic requested, and `periods * samples_per_period` samples should hold a
+/// record of at least 0.5 ms (see [`scan`]; the record may have any length, but
+/// it must hold a whole number of periods).
 pub fn receiver_check(
     input: &ConductedInput,
     harmonics: &[u32],
@@ -1103,6 +1247,70 @@ mod tests {
     }
 
     #[test]
+    fn the_isolated_line_decision_is_made_per_band_from_the_spacing_and_the_rbw() {
+        use DetectorApplicability::{IsolatedLines, NotApplicable};
+        let fixed = FrequencyMode::Fixed;
+        // Band A 200 Hz, B 9 kHz, C and D 120 kHz: the boundary is twice the RBW.
+        assert!(matches!(detector_applicability(Band::A, 400.0, &fixed), NotApplicable(_)));
+        assert_eq!(detector_applicability(Band::A, 401.0, &fixed), IsolatedLines);
+        assert!(matches!(detector_applicability(Band::B, 18_000.0, &fixed), NotApplicable(_)));
+        assert_eq!(detector_applicability(Band::B, 18_001.0, &fixed), IsolatedLines);
+        assert!(matches!(detector_applicability(Band::C, 240_000.0, &fixed), NotApplicable(_)));
+        assert_eq!(detector_applicability(Band::D, 240_001.0, &fixed), IsolatedLines);
+        // The same spacing is isolated in Band A and not in Band B.
+        assert_eq!(detector_applicability(Band::A, 10_000.0, &fixed), IsolatedLines);
+        assert!(matches!(detector_applicability(Band::B, 10_000.0, &fixed), NotApplicable(_)));
+        assert_eq!(band_of(149_999.0), Band::A);
+        assert_eq!(band_of(150_000.0), Band::B);
+        assert_eq!(band_of(30e6), Band::B);
+        assert_eq!(band_of(30.001e6), Band::C);
+        assert_eq!(band_of(300e6), Band::C);
+        assert_eq!(band_of(300.001e6), Band::D);
+    }
+
+    #[test]
+    fn harmonics_inside_the_if_bandwidth_are_line_amplitudes_without_limit_or_margin() {
+        // 10 kHz switching: 15 harmonics per 150 kHz, spacing 10 kHz < 2 x 9 kHz in Band B.
+        let hot = Capacitor::ideal(10e-6);
+        let mut slow = buck(hot);
+        slow.switching_frequency = 10e3;
+        let r = predict(&slow).unwrap();
+        let band_b: Vec<&BandDetector> = r.bands.iter().filter(|b| b.band == Band::B).collect();
+        assert_eq!(band_b.len(), 1);
+        assert!(!band_b[0].applicability.is_applicable());
+        assert!(r.harmonics.iter().all(|h| !h.detector_applicable));
+        assert!(r.harmonics.iter().all(|h| {
+            h.limit_quasi_peak_dbuv.is_none()
+                && h.limit_average_dbuv.is_none()
+                && h.margin_quasi_peak_db.is_none()
+                && h.margin_average_db.is_none()
+        }));
+        assert!(r.worst.is_none(), "no margin, so no least-margin harmonic");
+        assert!(r.harmonics.iter().all(|h| h.total_dbuv.is_finite()), "the line amplitudes are still reported");
+        // The same converter at 500 kHz does get limits and margins.
+        let ok = predict(&buck(hot)).unwrap();
+        assert!(ok.harmonics.iter().all(|h| h.detector_applicable && h.margin_quasi_peak_db.is_some()));
+        assert!(ok.worst.is_some());
+    }
+
+    #[test]
+    fn a_frequency_that_is_not_one_constant_value_withholds_the_detector_reading() {
+        let hot = Capacitor::ideal(10e-6);
+        let mut spread = buck(hot);
+        spread.frequency_mode = FrequencyMode::NotFixed("declared range 400 kHz to 600 kHz".to_owned());
+        let r = predict(&spread).unwrap();
+        let status = r.detector_applicability();
+        assert!(!status.is_applicable());
+        assert!(status.reason().is_some_and(|reason| reason.contains("declared range 400 kHz to 600 kHz")));
+        assert!(r.harmonics.iter().all(|h| h.margin_average_db.is_none() && h.limit_average_dbuv.is_none()));
+        assert!(r.worst.is_none());
+        // Spacing is far above 2 x RBW here, so only the mode decided it: the levels equal the fixed case.
+        let fixed = predict(&buck(hot)).unwrap();
+        assert_eq!(r.harmonics.len(), fixed.harmonics.len());
+        assert!((r.harmonics[0].total_dbuv - fixed.harmonics[0].total_dbuv).abs() < 1e-12);
+    }
+
+    #[test]
     fn invalid_inputs_are_rejected_and_assumptions_are_listed() {
         let hot = Capacitor::ideal(10e-6);
         let mut bad = buck(hot);
@@ -1117,9 +1325,10 @@ mod tests {
         let mut slow = buck(hot);
         slow.switching_frequency = 10e3;
         let r = predict(&slow).unwrap();
-        assert!(r.assumptions.iter().any(|a| a.starts_with("WARNING")));
+        assert!(r.assumptions.iter().any(|a| a.starts_with("Detector reading NOT applicable")));
         let ok = predict(&buck(hot)).unwrap();
-        assert!(ok.assumptions.len() >= 10 && !ok.assumptions.iter().any(|a| a.starts_with("WARNING")));
+        assert!(ok.assumptions.len() >= 10 && !ok.assumptions.iter().any(|a| a.contains("NOT applicable")));
+        assert!(ok.detector_applicability().is_applicable());
         assert_eq!(ok.harmonics.first().unwrap().harmonic, 1);
         assert_eq!(ok.harmonics.last().unwrap().harmonic, 60);
         // Custom source: a 1 mA sine at the fundamental only.

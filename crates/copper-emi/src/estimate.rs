@@ -1,8 +1,12 @@
 //! Closed-form EMI estimators.
 //!
-//! All quantities are SI. Absolute radiated levels from these formulas carry
-//! 10 to 20 dB of uncertainty (geometry, cable layout, ground reflections,
-//! measurement site); use them to rank design choices, never as pass/fail.
+//! All quantities are SI. The formulas are checked against hand calculations
+//! and published closed forms in this module's tests; none has been correlated
+//! with a measurement, and the measurement site, cable layout and ground
+//! reflections that dominate a real result are not part of them. Use them to
+//! rank design choices, never as pass/fail. Only the differential-mode loop
+//! formula is an absolute field estimate; the common-mode helpers are
+//! *coupling-risk scores* (relative, see [`voltage_driven_cm_score_db`]).
 //!
 //! Limit lines live in [`limits`].
 
@@ -106,39 +110,84 @@ pub const DM_FIELD_CONSTANT: f64 = 1.316e-14;
 /// small loop (dimensions `<< lambda`), uniform current. A conducting ground
 /// plane doubles the field (+6 dB) for a loop above it. `current` is the
 /// peak amplitude of the harmonic at `frequency`, `loop_area` in m^2.
-/// Uncertainty 10-20 dB in practice.
+/// [`dm_field_validity`] states whether those conditions hold.
 pub fn differential_mode_field(current: f64, frequency: f64, loop_area: f64, distance: f64) -> f64 {
     DM_FIELD_CONSTANT * current * frequency * frequency * loop_area / distance
 }
 
-/// Default coefficient of [`voltage_driven_cm_field`] at 3 m, V/m per
-/// (Hz F V). Value taken from the project specification
-/// (docs/emi-noise-analysis.md section 8, "Clemson voltage-driven summary").
-///
-/// NOT independently verified: the product `f C V` is a current, so the
-/// coefficient absorbs the antenna length and distance, and a physical short
-/// monopole would give a field growing as `f^2 C V`, not `f C V`. Treat the
-/// result as a rank metric only, and check the constant against its source
-/// before relying on absolute values.
-pub const VOLTAGE_CM_COEFFICIENT_3M: f64 = 115.0;
-
-/// Voltage-driven common-mode field estimate (switch-node copper island or
-/// heat sink acting as the antenna): `E = k * f * C * V` in V/m at the
-/// distance `k` was derived for (3 m for [`VOLTAGE_CM_COEFFICIENT_3M`]).
-///
-/// `capacitance` is the island-to-reference capacitance (see
-/// [`island_capacitance`]), `voltage` the harmonic amplitude of the switching
-/// voltage. Absolute levels carry 10-20 dB uncertainty; see the note on the
-/// constant.
-pub fn voltage_driven_cm_field(frequency: f64, capacitance: f64, voltage: f64, k: f64) -> f64 {
-    k * frequency * capacitance * voltage
+/// Whether the conditions of [`differential_mode_field`] hold at one frequency.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DmFieldValidity {
+    /// Loop path length over the wavelength; electrically small below `0.1`.
+    pub loop_length_over_wavelength: f64,
+    /// Observation distance over `lambda / (2 pi)`; far field above `1`.
+    pub distance_over_near_field_radius: f64,
+    /// Observation distance over the loop's longest dimension; the small-loop
+    /// field assumes a point-like source, so this should be well above `1`.
+    pub distance_over_loop_size: f64,
 }
 
-/// Default field-per-volt factor of [`current_driven_cm_field`] at 3 m, 1/m
-/// (project specification, docs/emi-noise-analysis.md section 8). NOT
-/// independently verified; it folds cable length and wavelength dependence
-/// into one number.
-pub const CURRENT_CM_FIELD_PER_VOLT_3M: f64 = 0.365;
+impl DmFieldValidity {
+    /// The loop path is at most a tenth of a wavelength.
+    pub fn electrically_small(&self) -> bool {
+        self.loop_length_over_wavelength <= 0.1 + 1e-9
+    }
+
+    /// The distance is beyond the radian sphere `lambda / (2 pi)`.
+    pub fn far_field(&self) -> bool {
+        self.distance_over_near_field_radius > 1.0
+    }
+
+    /// The distance is at least three times the loop's longest dimension.
+    pub fn point_source(&self) -> bool {
+        self.distance_over_loop_size >= 3.0
+    }
+
+    /// All three conditions.
+    pub fn holds(&self) -> bool {
+        self.electrically_small() && self.far_field() && self.point_source()
+    }
+}
+
+/// The validity conditions of [`differential_mode_field`] for a loop whose
+/// closed path is `path_length` long and whose longest dimension is
+/// `max_dimension` (both m), observed at `distance` m and `frequency` Hz.
+pub fn dm_field_validity(path_length: f64, max_dimension: f64, frequency: f64, distance: f64) -> DmFieldValidity {
+    let wavelength = C0 / frequency;
+    DmFieldValidity {
+        loop_length_over_wavelength: path_length / wavelength,
+        distance_over_near_field_radius: distance / (wavelength / (2.0 * PI)),
+        distance_over_loop_size: distance / max_dimension,
+    }
+}
+
+/// Reference of the voltage-driven common-mode coupling-risk score: the
+/// product `f * C * V` of 100 MHz, 1 pF and 1 V, in Hz F V.
+pub const VOLTAGE_CM_SCORE_REFERENCE: f64 = 100e6 * 1e-12 * 1.0;
+
+/// The drive product `f * C * V` of the voltage-driven common-mode mechanism
+/// (a switch-node copper island of capacitance `capacitance` against a
+/// reference, swinging by the harmonic amplitude `voltage` at `frequency`), in
+/// Hz F V. It is `1 / (2 pi)` of the displacement current amplitude `2 pi f C V`
+/// the island pushes into whatever it couples to.
+pub fn voltage_driven_cm_drive(frequency: f64, capacitance: f64, voltage: f64) -> f64 {
+    frequency * capacitance * voltage
+}
+
+/// Voltage-driven common-mode **coupling-risk score**, dB:
+/// `20 log10(f C V / (100 MHz * 1 pF * 1 V))` ([`VOLTAGE_CM_SCORE_REFERENCE`]).
+///
+/// This is a ranking score, not a field. The displacement current `2 pi f C V` is
+/// the physical driver; how much of it reaches a cable or chassis and radiates
+/// depends on the attached conductors, the board-to-environment capacitance and
+/// the return impedance, none of which a board model contains, so no
+/// field-per-current constant and no distance enter. The score is monotonic in
+/// each driver (island capacitance, swing, edge corner, frequency), which keeps
+/// the ranking between cells and boards meaningful; its absolute value has no
+/// physical unit and must not be compared with an emission limit.
+pub fn voltage_driven_cm_score_db(drive: f64) -> f64 {
+    20.0 * (drive / VOLTAGE_CM_SCORE_REFERENCE).log10()
+}
 
 /// Common-mode voltage developed across a return-path inductance,
 /// `V_cm = 2 pi f L_return I`.
@@ -146,16 +195,19 @@ pub fn current_driven_cm_voltage(frequency: f64, return_inductance: f64, current
     2.0 * PI * frequency * return_inductance * current
 }
 
-/// Current-driven common-mode field estimate, `E ~= k * V_cm` (V/m) with `k`
-/// defaulting to [`CURRENT_CM_FIELD_PER_VOLT_3M`]. 10-20 dB uncertainty.
-pub fn current_driven_cm_field(v_cm: f64, k: f64) -> f64 {
-    k * v_cm
+/// Current-driven common-mode **coupling-risk score**, dB re 1 V of
+/// [`current_driven_cm_voltage`]. A ranking score only: the field a common-mode
+/// voltage drives depends on the cable or chassis it excites, which is not
+/// modelled, so no field constant is applied.
+pub fn current_driven_cm_score_db(v_cm: f64) -> f64 {
+    20.0 * v_cm.log10()
 }
 
 /// Field of a common-mode current `i_cm` on a cable of length `cable_length`:
 /// `E = mu0 f l I / r` = `1.257e-6 f l I / r` (Paul Sec. 8.2; Ott Sec. 15).
 /// Includes the factor 2 from the ground-plane reflection; valid for
-/// `l << lambda`, far field, 10-20 dB uncertainty.
+/// `l << lambda` and the far field. It needs the common-mode current `i_cm`,
+/// which the board model does not provide.
 pub fn cable_common_mode_field(i_cm: f64, frequency: f64, cable_length: f64, distance: f64) -> f64 {
     MU0 * frequency * cable_length * i_cm / distance
 }
@@ -336,14 +388,34 @@ mod tests {
 
     #[test]
     fn cm_helpers_hand_values() {
-        let e = voltage_driven_cm_field(100e6, 5e-12, 10.0, VOLTAGE_CM_COEFFICIENT_3M);
-        assert!((e - 115.0 * 100e6 * 5e-12 * 10.0).abs() < 1e-9);
+        // f C V of 100 MHz, 5 pF, 10 V is 50 x the reference product: +33.98 dB.
+        let drive = voltage_driven_cm_drive(100e6, 5e-12, 10.0);
+        assert!((drive - 100e6 * 5e-12 * 10.0).abs() < 1e-18);
+        assert!((voltage_driven_cm_score_db(drive) - 20.0 * 50f64.log10()).abs() < 1e-9);
+        // The reference product itself scores 0 dB, and doubling any driver adds 6.02 dB.
+        assert!(voltage_driven_cm_score_db(VOLTAGE_CM_SCORE_REFERENCE).abs() < 1e-12);
+        let doubled = voltage_driven_cm_score_db(voltage_driven_cm_drive(100e6, 10e-12, 10.0));
+        assert!((doubled - voltage_driven_cm_score_db(drive) - 6.0206).abs() < 1e-3);
         let v = current_driven_cm_voltage(100e6, 10e-9, 1e-3);
         assert!((v - 2.0 * PI * 1e8 * 1e-8 * 1e-3).abs() < 1e-12);
-        assert!((current_driven_cm_field(v, CURRENT_CM_FIELD_PER_VOLT_3M) - 0.365 * v).abs() < 1e-15);
+        assert!((current_driven_cm_score_db(v) - 20.0 * v.log10()).abs() < 1e-12);
         // mu0 = 1.257e-6 form: 5 uA at 100 MHz on 1 m, at 3 m.
         let e = cable_common_mode_field(5e-6, 100e6, 1.0, 3.0);
         assert!((e - 1.257e-6 * 1e8 * 5e-6 / 3.0).abs() / e < 1e-3);
+    }
+
+    #[test]
+    fn dm_field_validity_conditions() {
+        // 30 MHz: lambda 9.993 m; a 6 cm loop path, 2 cm across, observed at 3 m.
+        let ok = dm_field_validity(0.06, 0.02, 30e6, 3.0);
+        assert!(ok.electrically_small() && ok.far_field() && ok.point_source() && ok.holds());
+        assert!((ok.distance_over_near_field_radius - 3.0 / (C0 / 30e6 / (2.0 * PI))).abs() < 1e-12);
+        // 1 m: inside lambda / 2 pi = 1.59 m at 30 MHz, not far field.
+        assert!(!dm_field_validity(0.06, 0.02, 30e6, 1.0).far_field());
+        // 1 GHz: lambda 0.3 m, a 6 cm path is 0.2 lambda, not electrically small.
+        assert!(!dm_field_validity(0.06, 0.02, 1e9, 3.0).electrically_small());
+        // A 2 m long loop seen from 3 m is not a point source.
+        assert!(!dm_field_validity(0.06, 2.0, 30e6, 3.0).point_source());
     }
 
     #[test]

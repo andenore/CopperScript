@@ -7,7 +7,9 @@ use std::io::Write;
 
 use copper_drc::emi::{EmiCheckReport, EmiFinding};
 use copper_drc::{Coverage, CoverageStatus};
-use copper_fullwave::hotloop::{HotLoopInput, HotLoopOptions, HotLoopResult, extract_hot_loop, find_switch_pad};
+use copper_fullwave::hotloop::{
+    HotLoopInput, HotLoopOptions, HotLoopResult, MESH_SENSITIVITY_FLOOR_PCT, extract_hot_loop, find_switch_pad,
+};
 use copper_fullwave::solve::PartialRun;
 use copper_fullwave::{Budget, Fidelity};
 use copper_json::{Object, Value};
@@ -61,8 +63,26 @@ fn result_value(r: &HotLoopResult) -> Value {
     put(&mut o, "notes", strings(&r.notes));
     let model: Vec<String> = r.description.lines().map(str::to_owned).collect();
     put(&mut o, "model", strings(&model));
-    put(&mut o, "mesh_error_estimate_pct", r.mesh_error_estimate_pct.map_or(Value::Null, |v| Value::from(round(v, 2))));
-    put(&mut o, "inductance_uncertainty_pct", Value::from(round(r.inductance_uncertainty_pct, 1)));
+    // Numerical sensitivity (mesh), named as such: the difference between the two meshes run, and the sensitivity
+    // built from it and the observed scatter floor. The sensitivity is null, with the reason, for a record that did
+    // not decay and was not completed by a stable fit. The model's own omissions are `not_modelled`.
+    put(&mut o, "status", Value::from(r.status.name()));
+    put(&mut o, "mesh_difference_pct", r.mesh_difference_pct.map_or(Value::Null, |v| Value::from(round(v, 2))));
+    put(&mut o, "mesh_sensitivity_pct", r.mesh_sensitivity_pct.map_or(Value::Null, |v| Value::from(round(v, 1))));
+    put(
+        &mut o,
+        "mesh_sensitivity_unavailable",
+        r.mesh_sensitivity_unavailable.as_deref().map_or(Value::Null, Value::from),
+    );
+    put(&mut o, "mesh_sensitivity_floor_pct", Value::from(MESH_SENSITIVITY_FLOOR_PCT));
+    put(
+        &mut o,
+        "mesh_sensitivity_basis",
+        Value::from(
+            "larger of the difference between the two meshes run and the floor, the scatter of L over eleven mesh variants of the placed emi_buck loop; a sensitivity of the number to the discretisation, not an accuracy",
+        ),
+    );
+    put(&mut o, "not_modelled", strings(&r.not_modelled));
     put(&mut o, "inductance_static_nh", r.inductance_static_nh.map_or(Value::Null, |v| Value::from(round(v, 3))));
     put(&mut o, "flatness_static", r.flatness_static.map_or(Value::Null, |v| Value::from(round(v, 4))));
     put(&mut o, "port_strap_nh", r.port_strap_nh.map_or(Value::Null, |v| Value::from(round(v, 3))));
@@ -107,16 +127,24 @@ fn exceeded_value(p: &PartialRun) -> Value {
 
 fn text_line(r: &HotLoopResult) -> String {
     let mut text = format!(
-        "hot-loop inductance {:.2} nH +-{:.0} % over {:.0}-{:.0} MHz (flat to {:.1} %)",
+        "hot-loop inductance {:.2} nH over {:.0}-{:.0} MHz (flat to {:.1} %)",
         r.inductance_nh,
-        r.inductance_uncertainty_pct,
         r.band_mhz[0],
         r.band_mhz[1],
         100.0 * r.flatness
     );
-    match r.mesh_error_estimate_pct {
-        Some(e) => text.push_str(&format!(" (mesh error estimate {e:.1} %, from {} meshes)", r.meshes.len())),
-        None => text.push_str(" (single mesh: no mesh error estimate)"),
+    match r.mesh_sensitivity_pct {
+        Some(s) => text.push_str(&format!(
+            ", mesh sensitivity {s:.0} % (a sensitivity to the mesh, not an accuracy; the omissions are listed in not_modelled)"
+        )),
+        None => text.push_str(&format!(
+            ", INDICATIVE only: {}",
+            r.mesh_sensitivity_unavailable.as_deref().unwrap_or("no mesh sensitivity is stated")
+        )),
+    }
+    match r.mesh_difference_pct {
+        Some(e) => text.push_str(&format!(" (two meshes differ by {e:.1} %, from {} meshes)", r.meshes.len())),
+        None => text.push_str(" (single mesh: no mesh difference)"),
     }
     if let Some(l) = r.inductance_static_nh {
         text.push_str(&format!(", static inductance (resonance factor removed) {l:.2} nH"));
@@ -260,4 +288,78 @@ pub fn apply(board: &PhysicalBoard, report: &mut EmiCheckReport, options: &Optio
 fn attach(finding: &mut EmiFinding, result: &HotLoopResult) {
     finding.measures.insert("fullwave".to_owned(), result_value(result));
     finding.measures.insert("fullwave_text".to_owned(), Value::from(text_line(result)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use copper_fullwave::hotloop::HotLoopStatus;
+
+    fn result(record_failed: bool, difference: Option<f64>) -> HotLoopResult {
+        let (sensitivity, unavailable) = copper_fullwave::hotloop::mesh_sensitivity(difference, record_failed);
+        HotLoopResult {
+            cell: "U1".to_owned(),
+            inductance_nh: 7.289,
+            closed_form_nh: Some(9.889),
+            ratio: Some(0.737),
+            band_mhz: [50.0, 150.0],
+            flatness: 0.517,
+            inductance_500mhz_nh: None,
+            resonance_mhz: Some(314.0),
+            resistance_ohm: None,
+            cells: 5_190_000,
+            steps: 114_982,
+            seconds: 1879.0,
+            converged: !record_failed,
+            fidelity: Fidelity::Coarse,
+            margin_mm: 5.0,
+            flags: vec!["energy_not_converged".to_owned(), "assumed_stackup".to_owned()],
+            notes: Vec::new(),
+            solver: "ems".to_owned(),
+            description: String::new(),
+            port: String::new(),
+            mesh_difference_pct: difference,
+            meshes: Vec::new(),
+            smallest_cell_mm: 0.05,
+            max_grading_ratio: 1.4,
+            ratio_violations: 0,
+            port_strap_nh: Some(1.78),
+            inductance_static_nh: None,
+            flatness_static: None,
+            mesh_sensitivity_pct: sensitivity,
+            mesh_sensitivity_unavailable: unavailable,
+            status: if record_failed { HotLoopStatus::Indicative } else { HotLoopStatus::Ok },
+            not_modelled: copper_fullwave::hotloop::not_modelled(&["assumed_stackup".to_owned()], Some(1.78)),
+        }
+    }
+
+    #[test]
+    fn a_converged_result_states_its_mesh_sensitivity_and_its_omissions_separately() {
+        let value = result_value(&result(false, Some(0.6)));
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("ok"));
+        assert_eq!(value.get("mesh_difference_pct"), Some(&Value::Float(0.6)));
+        assert_eq!(value.get("mesh_sensitivity_pct"), Some(&Value::Float(4.0)));
+        assert_eq!(value.get("mesh_sensitivity_unavailable"), Some(&Value::Null));
+        let omissions = value.get("not_modelled").and_then(Value::as_array).expect("not_modelled");
+        assert!(omissions.iter().filter_map(Value::as_str).any(|m| m.contains("zone fills")));
+        // The renamed keys are gone: nothing presents the floor as an uncertainty or the difference as an error.
+        assert!(value.get("inductance_uncertainty_pct").is_none() && value.get("mesh_error_estimate_pct").is_none());
+        let text = text_line(&result(false, Some(0.6)));
+        assert!(
+            text.contains("mesh sensitivity 4 %") && text.contains("not an accuracy") && !text.contains("+-"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_undecayed_unfitted_record_is_indicative_with_a_null_sensitivity_and_the_reason() {
+        let r = result(true, Some(0.4));
+        let value = result_value(&r);
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("indicative"));
+        assert_eq!(value.get("mesh_sensitivity_pct"), Some(&Value::Null), "the old code reported 4 % here");
+        let reason = value.get("mesh_sensitivity_unavailable").and_then(Value::as_str).expect("reason");
+        assert!(reason.contains("energy_not_converged") && reason.contains("ring_fitted"), "{reason}");
+        let text = text_line(&r);
+        assert!(text.contains("INDICATIVE only") && !text.contains("mesh sensitivity 4"), "{text}");
+    }
 }

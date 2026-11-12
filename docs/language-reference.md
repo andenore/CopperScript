@@ -2112,9 +2112,15 @@ for `EMI-HOT-LOOP`, `EMI-SWITCH-NODE` and `EMI-PROXIMITY`, applies `emi_accept`
 constraints (`EMI-ACCEPT-UNUSED` for a stale one) and lists what it could not
 measure as coverage. It prints one block per cell with ranked findings and the
 measured numbers, or JSON (`copperscript-emi-check/v0.1`), and always exits 0
-when the board loads. Every result is screening evidence; absolute levels
-carry about 15 dB of uncertainty and margins against an `emission` standard
-are never a pass or a fail. Cells whose roles come from the structural
+when the board loads. Every result is screening evidence, and margins against an
+`emission` standard are never a pass or a fail. No accuracy figure is claimed:
+the closed forms, the circuit solver and the receiver emulation are checked against
+hand calculations and analytic cases, and no estimate has been correlated with a
+measurement (`limits.validation`). What an estimate leaves out is stated with it in
+three separate parts: `estimate.numerical_sensitivity` (`null` for a closed form;
+the full-wave model reports its mesh sensitivity in `measures.fullwave`),
+the parameter band that rule-of-thumb defaults open (`band_db`, `basis`), and
+`estimate.not_modelled`, the named mechanisms the estimate does not contain. Cells whose roles come from the structural
 fallback are marked `inferred`. A four-switch buck-boost cell
 (`topology = buck_boost`) gets an `input loop` and an `output loop` finding;
 the output pins are the controller's `VOUT*` pins. Among a cell's hot
@@ -2141,13 +2147,43 @@ the same band: the nominal level with `band_db` `[slow, fast]` and the margin
 from the fast bound. Other missing inputs skip the prediction with the reason
 as coverage. With a `cispr32_class_a` or `cispr32_class_b` `emission`
 constraint the worst harmonic carries a margin to the quasi-peak and average
-lines; uncertainty is 6 dB below 5 MHz and 10 dB above, and conducted
-levels (dBuV) are not comparable with the radiated ones (dBuV/m).
+lines, but only where the levels are detector readings: `measures.detector_applicability`
+is `isolated_lines` when the switching frequency is one constant value and the harmonic
+spacing exceeds twice the receiver bandwidth (9 kHz in Band B), each harmonic then being an
+isolated line with peak = quasi-peak = average. Otherwise it is `not_applicable` (with
+`detector_reason` and the per-band `detector_bands`): the spacing is too small, or the part
+declares `switching_frequency_min`/`_max` without the component fixing the frequency. The
+finding is then `conducted_line_amplitude` instead of `conducted_emission`, tagged
+`detector_not_applicable` and `line_amplitudes_only`, the levels are line amplitudes and are
+not detector readings, and no limit, margin or `EMI-CONDUCTED` wording about a limit is
+produced (`limit_qp`, `limit_avg` and the margins are `null`; `--plot-spectrum` draws the
+panel without limit lines). A declared frequency range is evaluated as two separate
+fixed-frequency scenarios, its lower and its upper bound (one `EMI-CONDUCTED` finding each,
+coverage `EMI-CONDUCTED:<cell>@min` and `@max`, tags `frequency_scenario_min`/`_max`); the swept
+or modulated case is not modelled. Declare `switching_frequency` on the component to fix the
+frequency and get the detector comparison. Conducted levels (dBuV) are not comparable with the
+radiated ones (dBuV/m).
+
+`EMI-HOT-LOOP` is the only absolute radiated estimate (the differential-mode small-loop field,
+`kind = absolute_screening`). `measures.radiated_validity` states its conditions at the frequency
+and distance used: the loop path at most a tenth of a wavelength (the sweep stops at that
+frequency, tag `radiated_band_truncated` and a sentence in the message when it is below 1 GHz),
+the distance beyond lambda/2pi at 30 MHz, and the distance at least three times the loop's
+longest dimension; the tag `small_loop_validity_failed` and the message say which fails.
+`EMI-SWITCH-NODE` reports the voltage-driven common mode as a coupling-risk SCORE
+(`cm_coupling_score`, `kind = ranking_score`, unit dB, tag `ranking_only`):
+`20 log10(f C V / (100 MHz x 1 pF x 1 V))` at its worst point, with `measures.cm_drivers`
+giving the island capacitance, swing, edge time, frequency and duty it comes from. It is
+relative, not a field: it has no distance, no field-per-current constant, no margin, never
+appears against a limit line, and ranks after the absolute estimates. An absolute prediction
+needs the cable and attached-conductor geometry, the board-to-environment coupling and the
+return impedance of the common-mode path (`estimate.not_modelled`,
+`measures.missing_for_absolute_prediction`).
 
 `--fullwave` adds, for each `buck` cell (asynchronous or synchronous), the hot-loop
 inductance from a region full-wave (FDTD) model of the loop on the pinned `ems`
 solver (`copper-fullwave`): the finding gains a `fullwave:` line and
-`measures.fullwave` (`inductance_nh`, `inductance_uncertainty_pct`, `mesh_error_estimate_pct`,
+`measures.fullwave` (`inductance_nh`, `status`, `mesh_sensitivity_pct`, `mesh_difference_pct`, `not_modelled`,
 `meshes`, `closed_form_nh`, `ratio`, `port_strap_nh`,
 `inductance_static_nh`, `band_mhz`, `flatness`, `cells`, `steps`, `seconds`, `flags`,
 `solver`, `model`, ...), and coverage `EMI-FULLWAVE:<cell>` says `executed`,
@@ -2158,15 +2194,18 @@ as `budget_exceeded` with its partial statistics, `measures.fullwave.status`). T
 mesh is refined (about 0.2 to 0.25 mm) around the loop and coarser elsewhere. Unless
 the budget is short, two meshes are run, the standard one and one with the refined
 cell divided by 1.5 (or, when that does not fit, multiplied by 1.5): the reported
-`inductance_nh` is that of the finer of the two and `mesh_error_estimate_pct` is their
-relative difference, a screening estimate of the discretisation error, not a bound.
-`inductance_uncertainty_pct` is the stated uncertainty of `inductance_nh` from the mesh: the larger of that
-difference and a floor of 4 %, the scatter of L over meshes of one loop that two meshes cannot see
-(the placed example reads 4.62 to 4.90 nH over eleven meshes while its standard and refined meshes differ
-by 0.5 %); it leaves out the model's approximations (assumed stack-up, zone outlines, bridged
-components, strap bias). `--fullwave-single-mesh`, or a budget that
-fits one mesh only, gives one mesh: `mesh_error_estimate_pct` is `null`, the uncertainty is the floor and the flag
-`single_mesh` is set. A loop whose record has not decayed (it rings) is completed by a fit of its
+`inductance_nh` is that of the finer of the two and `mesh_difference_pct` is their
+relative difference, a measured difference between two discretisations, not an error bound.
+`mesh_sensitivity_pct` is the numerical sensitivity of `inductance_nh` to the mesh: the larger of that
+difference and a floor of 4 % (`mesh_sensitivity_floor_pct`), the scatter of L over meshes of one loop that
+two meshes cannot see (the placed example reads 4.62 to 4.90 nH over eleven meshes while its standard and
+refined meshes differ by 0.5 %); it is a sensitivity, not an accuracy, and it leaves out the model's
+omissions, which `not_modelled` names (components, copper loss, zone fills, via barrels, the window's cut nets,
+the assumed stack-up and the strap bias where they apply). When the record did not decay and the ring-down
+fit did not stabilise (`energy_not_converged` without `ring_fitted`), `status` is `indicative`,
+`mesh_sensitivity_pct` is `null` and `mesh_sensitivity_unavailable` gives the reason. `--fullwave-single-mesh`,
+or a budget that fits one mesh only, gives one mesh: `mesh_difference_pct` is `null`, the sensitivity is the
+floor and the flag `single_mesh` is set. A loop whose record has not decayed (it rings) is completed by a fit of its
 ring-down, ends when the fit is stable instead of at the 3x time cap, and gets the flag `ring_fitted` (and a
 note with the ring frequency and Q) instead of `energy_not_converged`. A port whose pads do not face each other across free space is
 joined to them by short copper straps (`port_strap`; in the air above a package's
@@ -2193,7 +2232,9 @@ marked `provisional_placement`.
 `--plot-spectrum OUT.svg` writes the conducted spectrum of every cell with an
 `EMI-CONDUCTED` finding as an SVG (harmonic stems 150 kHz to 30 MHz in dBuV, the
 quasi-peak and average limit lines when a conducted `emission` standard is
-declared, the uncertainty of the worst harmonic and the assumption tags).
+declared and the levels are detector readings, and the assumption tags; a panel whose levels are only line
+amplitudes is headed "NOT a detector reading" and draws no limit line or margin). The common-mode score is
+a ranking and is never plotted.
 `--plot-field OUT.svg [--field-height 1mm]` (and `copper view RUN --issue ID
 --emi-field` for an `EMI-HOT-LOOP` issue of a run) draws the quasi-static
 magnetic near field `|H|` of the hot-loop current path, in dB(uA/m) in a plane

@@ -2133,7 +2133,7 @@ pub fn render_issues(document: &IssuesDocument) -> Py<String> {
     }
     if document.issues.iter().any(|issue| py::eq_str(py::at(issue, "stage"), "emi")) {
         lines.push(
-            "emi: screening estimates with a stated uncertainty (about 15 dB), not EMC qualification; ACCEPTED findings are emi_accept acknowledgements and count as 0"
+            "emi: screening estimates (checked against hand calculations, not against measurements), not EMC qualification; common-mode scores are rankings and conducted line amplitudes carry no margin unless the finding says its levels are detector readings; ACCEPTED findings are emi_accept acknowledgements and count as 0"
                 .to_owned(),
         );
     }

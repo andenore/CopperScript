@@ -647,7 +647,7 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--plot-spectrum PLOT_SPECTRUM",
-                help: "write the conducted-emission spectrum as a self-contained SVG: one panel per cell with an EMI-CONDUCTED finding, harmonic stems 150 kHz to 30 MHz, quasi-peak and average limit lines when an emission standard is declared, the uncertainty of the worst harmonic; a screening estimate",
+                help: "write the conducted-emission spectrum as a self-contained SVG: one panel per cell with an EMI-CONDUCTED finding, harmonic stems 150 kHz to 30 MHz, quasi-peak and average limit lines when an emission standard is declared and the levels are detector readings (a panel whose isolated-line assumption fails, or a declared switching-frequency range, shows line amplitudes only, no limit); the common-mode score is a ranking and is never plotted; a screening estimate",
             },
             Opt {
                 flag: "--plot-field PLOT_FIELD",
@@ -659,7 +659,7 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--fullwave",
-                help: "add, per buck cell, the hot-loop inductance from a region full-wave (FDTD) model of the loop on the pinned ems solver (measures.fullwave, an EMI-FULLWAVE:<cell> coverage entry); two meshes when the budget allows, giving mesh_error_estimate_pct; slow (minutes per cell), never part of the default run; screening evidence",
+                help: "add, per buck cell, the hot-loop inductance from a region full-wave (FDTD) model of the loop on the pinned ems solver (measures.fullwave, an EMI-FULLWAVE:<cell> coverage entry); two meshes when the budget allows, giving mesh_difference_pct and mesh_sensitivity_pct; slow (minutes per cell), never part of the default run; screening evidence",
             },
             Opt {
                 flag: "--fullwave-fidelity {coarse,fine}",
@@ -671,7 +671,7 @@ pub const COMMANDS: &[Command] = &[
             },
             Opt {
                 flag: "--fullwave-single-mesh",
-                help: "with --fullwave: run the standard mesh only (no second mesh, so no mesh_error_estimate_pct; flag single_mesh)",
+                help: "with --fullwave: run the standard mesh only (no second mesh, so no mesh_difference_pct; flag single_mesh)",
             },
             Opt {
                 flag: "--fullwave-margin FULLWAVE_MARGIN",

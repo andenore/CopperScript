@@ -69,6 +69,62 @@ fn usage_errors_exit_two_and_help_names_the_command() {
 }
 
 #[test]
+fn the_common_mode_finding_is_a_ranking_score_and_no_old_key_or_blanket_claim_remains() {
+    let output = copper(&["emi-check", BOARD, "--allow-proxy-footprints", "--json"]);
+    let text = stdout(&output);
+    let Ok(Value::Object(report)) = copper_json::parse(&text) else { panic!("an object") };
+    let findings = report.get("findings").and_then(Value::as_array).unwrap();
+    let node = findings
+        .iter()
+        .filter_map(Value::as_object)
+        .find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-SWITCH-NODE"))
+        .expect("a switch-node finding");
+    let estimate = node.get("estimate").and_then(Value::as_object).expect("estimate");
+    assert_eq!(estimate.get("quantity").and_then(Value::as_str), Some("cm_coupling_score"));
+    assert_eq!(estimate.get("kind").and_then(Value::as_str), Some("ranking_score"));
+    assert_eq!(estimate.get("unit").and_then(Value::as_str), Some("dB"));
+    assert!(estimate.get("definition").and_then(Value::as_str).is_some_and(|d| d.contains("100 MHz")));
+    assert!(!node.contains_key("margin_db"), "a ranking score has no margin");
+    assert!(estimate.get("not_modelled").and_then(Value::as_array).is_some_and(|l| !l.is_empty()));
+    assert_eq!(estimate.get("numerical_sensitivity"), Some(&Value::Null));
+    // The differential-mode loop keeps an absolute estimate and its margin.
+    let hot = findings
+        .iter()
+        .filter_map(Value::as_object)
+        .find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-HOT-LOOP"))
+        .expect("a hot-loop finding");
+    assert_eq!(hot.get("estimate").and_then(|e| e.get("kind")).and_then(Value::as_str), Some("absolute_screening"));
+    assert!(hot.contains_key("margin_db"));
+    for gone in ["uncertainty_db", "voltage_driven_cm_field", "about 15 dB"] {
+        assert!(!text.contains(gone), "{gone} is still in the JSON");
+    }
+    assert!(report.get("limits").and_then(|l| l.get("validation")).and_then(Value::as_str).is_some());
+    // The conducted finding states its detector applicability.
+    let conducted = findings
+        .iter()
+        .filter_map(Value::as_object)
+        .find(|f| f.get("code").and_then(Value::as_str) == Some("EMI-CONDUCTED"))
+        .expect("a conducted finding");
+    let measures = conducted.get("measures").and_then(Value::as_object).unwrap();
+    assert_eq!(measures.get("detector_applicability").and_then(Value::as_str), Some("isolated_lines"));
+}
+
+#[test]
+fn the_explanations_name_the_ranking_score_and_the_detector_condition_and_claim_no_accuracy() {
+    let node = stdout(&copper(&["explain", "EMI-SWITCH-NODE"]));
+    assert!(node.contains("coupling-risk SCORE") && node.contains("never compared with an emission limit"), "{node}");
+    let conducted = stdout(&copper(&["explain", "EMI-CONDUCTED"]));
+    assert!(
+        conducted.contains("isolated-line detector assumption") && conducted.contains("line amplitudes"),
+        "{conducted}"
+    );
+    for code in ["EMI-HOT-LOOP", "EMI-SWITCH-NODE", "EMI-CONDUCTED"] {
+        let text = stdout(&copper(&["explain", code]));
+        assert!(!text.contains("15 dB") && !text.contains("6 dB below 5 MHz"), "{code}: {text}");
+    }
+}
+
+#[test]
 fn every_emi_check_code_has_an_explanation() {
     for code in ["EMI-HOT-LOOP", "EMI-SWITCH-NODE", "EMI-PROXIMITY", "EMI-ACCEPT-UNUSED"] {
         let output = copper(&["explain", code]);

@@ -1,7 +1,8 @@
 //! The `emi` stage: the screening findings of the run report's `emi` section
 //! (`copper emi-check --run RUN --write`, or `route-board` itself) as located
-//! issues. Findings are screening estimates with a stated uncertainty, not EMC
-//! qualification; accepted findings (`emi_accept`) are listed as accepted and
+//! issues. Findings are screening estimates, not EMC qualification, and carry
+//! their uncertainty as three separate parts (numerical sensitivity, parameter
+//! band, named omissions) in their `estimate`; accepted findings (`emi_accept`) are listed as accepted and
 //! count as zero findings.
 
 use copper_json::{Object, Value};
@@ -170,7 +171,7 @@ pub(super) fn emi_issues(report: &Value, scene: Option<&Scene>) -> Vec<RunIssue>
         details.insert(
             "evidence".to_owned(),
             Value::from(
-                "screening estimate from the placed or routed layout; stated uncertainty, not EMC qualification",
+                "screening estimate from the placed or routed layout; see estimate.not_modelled for what it leaves out, not EMC qualification",
             ),
         );
         details.insert("source".to_owned(), Value::from("route-report.json emi"));

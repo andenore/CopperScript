@@ -206,8 +206,9 @@ pub struct HotLoopResult {
     pub solver: String,
     pub description: String,
     pub port: String,
-    /// Relative difference of the inductances of the two meshes, percent; `None` for a single mesh.
-    pub mesh_error_estimate_pct: Option<f64>,
+    /// Relative difference of the inductances of the two meshes, percent; `None` for a single mesh. A
+    /// measured difference between two discretisations, not an error bound.
+    pub mesh_difference_pct: Option<f64>,
     /// The meshes that were run, standard first.
     pub meshes: Vec<MeshRun>,
     /// Smallest cell (mm, over the three axes), largest ratio of neighbouring cells and the number of
@@ -221,21 +222,84 @@ pub struct HotLoopResult {
     /// inductance of a loop that resonates not far above the band; `None` without a resonance below 1 GHz.
     pub inductance_static_nh: Option<f64>,
     pub flatness_static: Option<f64>,
-    /// The stated uncertainty of `inductance_nh` from the mesh, percent: the larger of the difference of the
-    /// two meshes (`mesh_error_estimate_pct`) and [`MESH_UNCERTAINTY_FLOOR_PCT`], the scatter of L over
-    /// meshes of one loop that the difference of two meshes cannot see (mesh decisions: which lines merge,
-    /// which small gaps a cell resolves). It leaves out the model's own approximations (assumed stack-up,
-    /// zone outlines, bridged components, strap bias).
-    pub inductance_uncertainty_pct: f64,
+    /// The numerical (mesh) sensitivity of `inductance_nh`, percent: the larger of the difference of the two
+    /// meshes (`mesh_difference_pct`) and [`MESH_SENSITIVITY_FLOOR_PCT`], the scatter of L over meshes of one
+    /// reference loop that the difference of two meshes cannot see (mesh decisions: which lines merge, which
+    /// small gaps a cell resolves). A sensitivity of the number to the discretisation, not an accuracy: the
+    /// model's own approximations (`not_modelled`) are not in it. `None`, with the reason in
+    /// `mesh_sensitivity_unavailable`, when the record did not decay and the ring-down fit did not stabilise.
+    pub mesh_sensitivity_pct: Option<f64>,
+    /// Why `mesh_sensitivity_pct` is `None`.
+    pub mesh_sensitivity_unavailable: Option<String>,
+    /// [`HotLoopStatus::Indicative`] when the record did not decay and the fit did not stabilise.
+    pub status: HotLoopStatus,
+    /// Named omissions of the model that no mesh refinement can remove.
+    pub not_modelled: Vec<String>,
 }
 
-/// The least mesh uncertainty stated for a hot-loop inductance, percent. Measured on the placed `emi_buck`
+/// How far a hot-loop inductance can be taken as a result of the model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotLoopStatus {
+    /// The record decayed, or the ring-down fit completed it and its orders agreed.
+    Ok,
+    /// The record did not decay and the fit did not stabilise (`energy_not_converged` without `ring_fitted`):
+    /// the value is indicative only and no mesh sensitivity is stated for it.
+    Indicative,
+}
+
+impl HotLoopStatus {
+    /// The name used in the output.
+    pub fn name(self) -> &'static str {
+        match self {
+            HotLoopStatus::Ok => "ok",
+            HotLoopStatus::Indicative => "indicative",
+        }
+    }
+}
+
+/// The least mesh sensitivity stated for a hot-loop inductance, percent. Measured on the placed `emi_buck`
 /// loop: 11 meshes with refinement cells of 0.10 to 0.25 mm and merge distances of 0.1 to 0.4 of the cell
 /// gave 4.62 to 4.90 nH (a half range of 3 %), the standard and the refined mesh of the pair differing by
 /// only 0.5 % while the 0.10 mm mesh is 4.6 % below the standard one; the 6 x 4 mm loop drifts 2.2 % between a
 /// 0.25 and a 0.083 mm cell, and the shorted lines of the validation are within 3 % of their closed form
-/// at the standard mesh.
-pub const MESH_UNCERTAINTY_FLOOR_PCT: f64 = 4.0;
+/// at the standard mesh. It is the observed scatter of L over mesh decisions on those loops, reported as a
+/// sensitivity of the number to the mesh; it is not an accuracy of the inductance.
+pub const MESH_SENSITIVITY_FLOOR_PCT: f64 = 4.0;
+
+/// Mesh sensitivity of a result: the larger of the two-mesh difference and the floor, or `None` with the reason
+/// when the record did not decay and the fit did not stabilise.
+pub fn mesh_sensitivity(difference_pct: Option<f64>, record_failed: bool) -> (Option<f64>, Option<String>) {
+    if record_failed {
+        return (
+            None,
+            Some("the record did not decay and the ring-down fit did not stabilise (energy_not_converged without ring_fitted): the inductance is indicative only, and a mesh sensitivity of a number that is not a converged result would be misleading".to_owned()),
+        );
+    }
+    (Some(difference_pct.unwrap_or(0.0).max(MESH_SENSITIVITY_FLOOR_PCT)), None)
+}
+
+/// The omissions of the hot-loop model, named, for the flags it raised.
+pub fn not_modelled(flags: &[String], strap_nh: Option<f64>) -> Vec<String> {
+    let mut list = vec![
+        "components: the capacitor and diode are copper bridges (no ESL, ESR or package) and the switch is a port (no die, bond wires or lead frame)".to_owned(),
+        "copper and dielectric loss (the copper is lossless PEC)".to_owned(),
+        "zone fills (the pour is its outline minus clearances: no thermal reliefs, minimum widths or islands)".to_owned(),
+        "via barrels and annular rings (vias are wires without radius)".to_owned(),
+        "everything outside the window (the window cuts every net; no enclosure, cable or other board)".to_owned(),
+    ];
+    if flags.iter().any(|f| f == "assumed_stackup") {
+        list.push(
+            "the real stack-up (the board declares none: copper layers spread over the board thickness with FR-4)"
+                .to_owned(),
+        );
+    }
+    if let Some(nh) = strap_nh {
+        list.push(format!(
+            "the real current path through the package (the port is joined by a strap of about {nh:.2} nH that the real loop lacks; the bias is included, not removed)"
+        ));
+    }
+    list
+}
 
 fn invalid(m: &str) -> Error {
     Error::Invalid(m.to_owned())
@@ -486,7 +550,7 @@ pub fn strap_inductance_nh(board: &PhysicalBoard, model: &RegionModel) -> Option
 /// Build the region of the loop and extract its inductance. With `options.convergence` and
 /// refinement zones, a second mesh follows when the budget allows: the refinement cells divided by
 /// 1.5, or if that does not fit, multiplied by 1.5 (cheaper). The inductance reported is that of the
-/// finer of the two meshes, with their relative difference as `mesh_error_estimate_pct`.
+/// finer of the two meshes, with their relative difference as `mesh_difference_pct`.
 pub fn extract_hot_loop(
     board: &PhysicalBoard,
     input: &HotLoopInput,
@@ -595,9 +659,9 @@ pub fn extract_hot_loop(
         if let Some(n) = &pair_note {
             notes.push(n.clone());
         } else if !options.convergence {
-            notes.push("the convergence estimate was switched off: one mesh, no mesh error estimate".to_owned());
+            notes.push("the convergence estimate was switched off: one mesh, no mesh difference".to_owned());
         } else if spec.refine.is_empty() {
-            notes.push("no refinement zones: one mesh, no mesh error estimate".to_owned());
+            notes.push("no refinement zones: one mesh, no mesh difference".to_owned());
         }
     }
     flags.push("components_bridged".to_owned());
@@ -605,6 +669,13 @@ pub fn extract_hot_loop(
         flags.push("placement_estimate".to_owned());
     }
     let port_strap_nh = strap_inductance_nh(board, &model);
+    // A record that neither decayed nor was completed by a stable fit is not a converged result.
+    let record_failed = column.fit.is_none() && !column.stats.converged;
+    let sensitivity = mesh_sensitivity(error_pct, record_failed);
+    let omissions = not_modelled(&flags, port_strap_nh);
+    if record_failed {
+        notes.push("indicative only: the record did not decay and the ring-down fit did not stabilise, so no mesh sensitivity is stated".to_owned());
+    }
     if let Some(l) = port_strap_nh {
         notes.push(format!(
             "the port is joined to its pads by straps of about {l:.2} nH (closed form): a known bias that the inductance includes"
@@ -634,13 +705,16 @@ pub fn extract_hot_loop(
         solver: crate::solve::SOLVER.to_owned(),
         description: model.describe(),
         port: model.ports.first().map(|p| p.description.clone()).unwrap_or_default(),
-        mesh_error_estimate_pct: error_pct,
+        mesh_difference_pct: error_pct,
         meshes: runs,
         smallest_cell_mm: model.mesh.smallest.iter().copied().fold(f64::INFINITY, f64::min),
         max_grading_ratio: model.mesh.max_ratio,
         ratio_violations: model.mesh.ratio_violations,
         port_strap_nh,
-        inductance_uncertainty_pct: error_pct.unwrap_or(0.0).max(MESH_UNCERTAINTY_FLOOR_PCT),
+        mesh_sensitivity_pct: sensitivity.0,
+        mesh_sensitivity_unavailable: sensitivity.1,
+        status: if record_failed { HotLoopStatus::Indicative } else { HotLoopStatus::Ok },
+        not_modelled: omissions,
         inductance_static_nh: static_l.map(|v| v.0 * 1e9),
         flatness_static: static_l.map(|v| v.1),
     })
@@ -672,4 +746,40 @@ pub fn find_switch_pad(
         })
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(p, _)| (p.component.clone(), p.number.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_mesh_sensitivity_is_the_larger_of_the_two_mesh_difference_and_the_observed_scatter() {
+        // Two meshes agreeing to 0.6 %: the floor (4 %) is the sensitivity; a 7 % difference wins over it.
+        assert_eq!(mesh_sensitivity(Some(0.6), false), (Some(MESH_SENSITIVITY_FLOOR_PCT), None));
+        assert_eq!(mesh_sensitivity(Some(7.0), false), (Some(7.0), None));
+        // One mesh: the floor alone.
+        assert_eq!(mesh_sensitivity(None, false), (Some(MESH_SENSITIVITY_FLOOR_PCT), None));
+    }
+
+    #[test]
+    fn a_record_that_did_not_decay_and_was_not_fitted_has_no_sensitivity_and_says_why() {
+        // The old code reported max(difference, 4 %) here, as if the number were a converged result.
+        let (value, reason) = mesh_sensitivity(Some(0.4), true);
+        assert_eq!(value, None);
+        let reason = reason.expect("a reason");
+        assert!(reason.contains("energy_not_converged") && reason.contains("ring_fitted"), "{reason}");
+        assert_eq!(mesh_sensitivity(None, true).0, None);
+    }
+
+    #[test]
+    fn the_status_names_and_the_omissions_follow_the_flags() {
+        assert_eq!(HotLoopStatus::Ok.name(), "ok");
+        assert_eq!(HotLoopStatus::Indicative.name(), "indicative");
+        let plain = not_modelled(&[], None);
+        assert!(plain.iter().any(|m| m.contains("components")) && plain.iter().any(|m| m.contains("zone fills")));
+        assert!(!plain.iter().any(|m| m.contains("stack-up")) && !plain.iter().any(|m| m.contains("strap")));
+        let full = not_modelled(&["assumed_stackup".to_owned()], Some(0.95));
+        assert!(full.iter().any(|m| m.contains("stack-up")), "{full:?}");
+        assert!(full.iter().any(|m| m.contains("0.95 nH")), "{full:?}");
+    }
 }

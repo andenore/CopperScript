@@ -147,8 +147,16 @@ fn area_length_and_inductance_are_within_hand_bounds() {
     // Estimates attached: differential-mode field with a margin, ringing, ring energy.
     let estimate = hot.estimate.as_ref().expect("a differential-mode estimate");
     assert_eq!(estimate.unit, "dBuV/m");
-    assert!(estimate.uncertainty_db >= 10.0);
+    assert_eq!(estimate.kind, copper_drc::emi::EstimateKind::Absolute);
+    assert!(!estimate.not_modelled.is_empty(), "the omissions are named with the estimate");
     assert!(hot.margin_db.is_some(), "the emission constraint gives a margin");
+    // The small-loop validity conditions are stated and hold for this 17 mm loop at 10 m.
+    let Some(Value::Object(validity)) = hot.measures.get("radiated_validity") else { panic!("radiated_validity") };
+    assert_eq!(validity.get("holds"), Some(&Value::Bool(true)), "{validity:?}");
+    assert_eq!(validity.get("electrically_small"), Some(&Value::Bool(true)));
+    assert_eq!(validity.get("far_field"), Some(&Value::Bool(true)));
+    assert_eq!(validity.get("point_source"), Some(&Value::Bool(true)));
+    assert!(!hot.tags.contains(&"small_loop_validity_failed".to_owned()));
     assert!(measure(hot, "ring_frequency_mhz") > 10.0);
     let energy = measure(hot, "ring_energy_nj");
     assert!((energy - 0.5 * inductance * 4.5 * 4.5).abs() < 0.05, "energy {energy} nJ");
@@ -193,7 +201,8 @@ fn the_switch_node_reports_pad_copper_and_distances() {
     // U1 is 30 mm from the left edge, 25 from the top: the nearest SW pad (CBOOT.2 at x = 25) is 24.5 mm in.
     let edge = measure(node, "distance_to_board_edge_mm");
     assert!((edge - 24.5).abs() < 0.6, "edge {edge}");
-    assert!(node.estimate.as_ref().is_some_and(|e| e.quantity == "voltage_driven_cm_field"));
+    let score = node.estimate.as_ref().expect("a common-mode score");
+    assert_eq!(score.quantity, "cm_coupling_score");
     let cables = node.measures.get("distance_to_cable_connectors_mm").and_then(Value::as_array).expect("cables");
     assert_eq!(cables.len(), 1, "J1 declares external_cable");
 }
@@ -315,14 +324,30 @@ fn findings_are_ranked_by_level_and_the_json_has_the_schema() {
     assert!(radiated.windows(2).all(|pair| pair[0] >= pair[1]), "{radiated:?}");
     let units: Vec<&str> =
         report.findings.iter().filter_map(|f| f.estimate.as_ref().map(|e| e.unit.as_str())).collect();
-    assert_eq!(units.iter().position(|u| *u == "dBuV"), Some(units.len() - 1), "{units:?}");
+    // Absolute radiated (dBuV/m), then conducted (dBuV), then the relative ranking scores (dB).
+    let first = |unit: &str| units.iter().position(|u| *u == unit).expect(unit);
+    assert!(first("dBuV/m") < first("dBuV") && first("dBuV") < first("dB"), "{units:?}");
+    assert_eq!(units.last(), Some(&"dB"), "{units:?}");
     let first_without = report.findings.iter().position(|f| f.estimate.is_none()).expect("proximity findings");
     assert!(report.findings[..first_without].iter().all(|f| f.estimate.is_some()));
     let json = report.json();
     assert!(json.contains("\"schema\": \"copperscript-emi-check/v0.1\""));
-    for key in ["\"cells\"", "\"findings\"", "\"coverage\"", "\"limits\"", "\"uncertainty_db\": 15.0"] {
+    for key in [
+        "\"cells\"",
+        "\"findings\"",
+        "\"coverage\"",
+        "\"limits\"",
+        "\"validation\"",
+        "\"numerical_sensitivity\": null",
+        "\"not_modelled\"",
+    ] {
         assert!(json.contains(key), "{key} in {json}");
     }
+    // The blanket allowance and the absolute common-mode field are gone from every key and text.
+    for gone in ["uncertainty_db", "voltage_driven_cm_field", "about 15 dB", "115 f C V"] {
+        assert!(!json.contains(gone), "{gone} still in the JSON");
+    }
+    assert!(report.lines().iter().all(|l| !l.contains("15 dB")), "no fixed 15 dB claim in the text");
     assert!(report.lines().iter().any(|l| l.contains("screening evidence")));
 }
 
@@ -908,7 +933,10 @@ fn the_conducted_levels_match_the_hand_calculation() {
     let estimate = finding.estimate.as_ref().expect("estimate");
     assert_eq!(estimate.quantity, "conducted_emission");
     assert_eq!(estimate.unit, "dBuV");
-    assert!(estimate.uncertainty_db == 6.0 || estimate.uncertainty_db == 10.0);
+    assert!(estimate.not_modelled.iter().any(|m| m.contains("common-mode")), "{:?}", estimate.not_modelled);
+    assert!(estimate.not_modelled.iter().any(|m| m.contains("spread-spectrum")), "{:?}", estimate.not_modelled);
+    assert_eq!(text(finding, "detector_applicability"), "isolated_lines");
+    assert_eq!(finding.measures.get("detector_reason"), Some(&Value::Null));
     assert!(finding.margin_db.is_some(), "the emission constraint (cispr32_class_b) gives a margin");
     // The headline is the HIGH end of the band, and so is the margin.
     assert!(
@@ -1073,7 +1101,7 @@ fn radiated_estimates_without_an_edge_time_are_a_band_that_matches_declared_edge
         "{}",
         hot.finding.message
     );
-    assert_eq!(estimate.uncertainty_db, 15.0);
+    assert!(!estimate.not_modelled.is_empty());
     let inputs = text_lines(hot);
     assert!(inputs.iter().any(|l| l.starts_with("edge time ") && l.contains("rule of thumb:")), "{inputs:?}");
     // Independent recomputation: the same board with rise_time declared equal to each bound.
@@ -1093,11 +1121,13 @@ fn radiated_estimates_without_an_edge_time_are_a_band_that_matches_declared_edge
             assert!((a - b).abs() < 0.1, "fast-bound margin {a} against reported {b}");
         }
     }
-    // Voltage-driven common mode of the switch node, the same way.
+    // Voltage-driven common-mode score of the switch node, the same way: a ranking score, never a margin.
     let node = find(&report, "EMI-SWITCH-NODE").remove(0);
-    let cm = node.estimate.as_ref().expect("common-mode estimate");
+    let cm = node.estimate.as_ref().expect("common-mode score");
+    assert_eq!(cm.kind, copper_drc::emi::EstimateKind::RankingScore);
+    assert!(node.margin_db.is_none(), "a ranking score has no margin");
     let [cm_low, cm_high] = cm.band_db.expect("band");
-    // The voltage-driven level is flat in frequency above the edge corner and the least margin is at 30 MHz,
+    // The score is flat in frequency above the edge corner and the worst point is at 30 MHz,
     // below every corner of this band: the band is allowed to collapse to a point.
     assert!(cm_low <= cm.value && cm.value <= cm_high, "{cm_low} {} {cm_high}", cm.value);
     for (edge, expected) in [("rise_time = 0.96ns; ", cm_high), ("rise_time = 9.6ns; ", cm_low)] {
@@ -1462,7 +1492,7 @@ fn parallel_hot_capacitors_are_listed_as_not_modelled() {
 }
 
 #[test]
-fn a_frequency_range_is_evaluated_at_its_upper_bound() {
+fn a_frequency_range_is_two_fixed_scenarios_whose_line_amplitudes_get_no_margin() {
     let report = run_full(
         "emi_buck",
         "range",
@@ -1474,11 +1504,88 @@ fn a_frequency_range_is_evaluated_at_its_upper_bound() {
         )],
         |_| {},
     );
+    let scenarios = find(&report, "EMI-CONDUCTED");
+    assert_eq!(scenarios.len(), 2, "both ends of the range are evaluated");
+    let (low, high) = (scenarios[0], scenarios[1]);
+    assert_eq!(harmonic_rows(low)[0].0, 400e3);
+    assert_eq!(harmonic_rows(high)[0].0, 600e3);
+    assert_eq!(text(low, "frequency_basis"), "range lower bound");
+    assert_eq!(text(high, "frequency_basis"), "range upper bound");
+    for (finding, suffix) in [(low, "min"), (high, "max")] {
+        assert!(finding.tags.contains(&"frequency_range_bound".to_owned()));
+        assert!(finding.tags.contains(&format!("frequency_scenario_{suffix}")), "{:?}", finding.tags);
+        // The part does not say whether the range is adjustable or modulated: no detector reading.
+        assert!(finding.tags.contains(&"detector_not_applicable".to_owned()), "{:?}", finding.tags);
+        assert_eq!(text(finding, "detector_applicability"), "not_applicable");
+        assert!(text(finding, "detector_reason").contains("range"), "{}", text(finding, "detector_reason"));
+        assert!(text(finding, "frequency_scenario").contains("not modelled"));
+        assert!(finding.margin_db.is_none(), "no margin without a detector reading");
+        assert_eq!(finding.measures.get("margins_available"), Some(&Value::Bool(false)));
+        assert_eq!(finding.estimate.as_ref().unwrap().quantity, "conducted_line_amplitude");
+        let message = &finding.finding.message;
+        assert!(message.contains("NOT a detector reading") && !message.contains("dB to the"), "{message}");
+        assert!(message.contains("no quasi-peak or average margin"), "{message}");
+        for row in finding.measures.get("harmonics").and_then(Value::as_array).unwrap() {
+            let Value::Object(row) = row else { panic!("row") };
+            for key in ["limit_qp", "limit_avg", "margin_qp_db", "margin_avg_db", "margin_db"] {
+                assert_eq!(row.get(key), Some(&Value::Null), "{key} withheld");
+            }
+            assert!(number(row.get("total_dbuv").unwrap()).is_finite(), "the line amplitude is still reported");
+        }
+        assert_eq!(coverage(&report, &format!("EMI-CONDUCTED:U1@{suffix}")).status, CoverageStatus::Executed);
+    }
+    assert!(coverage(&report, "EMI-CONDUCTED:U1@min").detail.contains("NOT applicable"));
+    assert_eq!(report.coverage.iter().filter(|c| c.check == "EMI-CONDUCTED:U1").count(), 0);
+}
+
+#[test]
+fn declaring_the_frequency_on_the_component_restores_the_detector_comparison() {
+    let report = run_full(
+        "emi_buck",
+        "range-fixed",
+        &[(
+            "component U1: p.Buck { footprint = \"QFN-5\"; }",
+            "component U1: p.Buck { footprint = \"QFN-5\"; switching_frequency = 500kHz; }",
+        )],
+        &[(
+            "buck.copper",
+            "switching_frequency = 500kHz;",
+            "switching_frequency_min = 400kHz; switching_frequency_max = 600kHz;",
+        )],
+        |_| {},
+    );
     let finding = conducted(&report);
-    assert!(finding.tags.contains(&"frequency_range_bound".to_owned()));
-    assert_eq!(harmonic_rows(finding)[0].0, 600e3);
-    assert_eq!(text(finding, "frequency_basis"), "range upper bound");
-    assert!(finding.finding.message.contains("range upper bound of the range"), "{}", finding.finding.message);
+    assert_eq!(text(finding, "detector_applicability"), "isolated_lines");
+    assert!(finding.margin_db.is_some());
+    assert_eq!(finding.estimate.as_ref().unwrap().quantity, "conducted_emission");
+    assert!(!finding.tags.contains(&"detector_not_applicable".to_owned()));
+}
+
+#[test]
+fn harmonics_closer_than_the_if_bandwidth_are_line_amplitudes_with_no_margin() {
+    // 15 kHz switching: the harmonic spacing is below twice the 9 kHz Band B bandwidth, so several lines share
+    // the IF filter and the per-line RMS level is not a quasi-peak or average reading.
+    let report = run_full(
+        "emi_buck",
+        "slow",
+        &[],
+        &[("buck.copper", "switching_frequency = 500kHz;", "switching_frequency = 15kHz;")],
+        |_| {},
+    );
+    let finding = conducted(&report);
+    assert_eq!(text(finding, "detector_applicability"), "not_applicable");
+    assert!(text(finding, "detector_reason").contains("resolution bandwidth"), "{}", text(finding, "detector_reason"));
+    let Some(Value::Array(bands)) = finding.measures.get("detector_bands") else { panic!("bands") };
+    assert_eq!(bands.len(), 1, "only Band B holds harmonics of 150 kHz to 30 MHz");
+    assert!(finding.margin_db.is_none() && finding.measures.get("margins_available") == Some(&Value::Bool(false)));
+    assert!(finding.finding.message.contains("NOT a detector reading"), "{}", finding.finding.message);
+    assert!(finding.tags.contains(&"line_amplitudes_only".to_owned()));
+    let row = first_row(finding);
+    assert_eq!(row.get("limit_qp"), Some(&Value::Null));
+    assert_eq!(row.get("margin_avg_db"), Some(&Value::Null));
+    // Everything that reads the finding sees the status: the JSON and the coverage entry.
+    assert!(report.json().contains("\"detector_applicability\": \"not_applicable\""));
+    assert!(coverage(&report, "EMI-CONDUCTED:U1").detail.contains("NOT applicable"));
 }
 
 #[test]
@@ -1727,4 +1834,74 @@ fn a_tvs_diode_and_an_enable_divider_on_the_hot_supply_net_do_not_disable_the_fi
     let filter = coverage(&strict, "EMI-CONDUCTED:U1:filter");
     assert_eq!(filter.status, CoverageStatus::NotApplicable);
     assert!(filter.detail.contains("RX"), "{}", filter.detail);
+}
+
+#[test]
+fn common_mode_is_a_ranking_score_without_a_field_a_limit_or_a_margin() {
+    // The default board has an emission constraint (cispr32_class_b): the differential-mode loop gets a margin,
+    // the common-mode score must not.
+    let report = run("cm-score", &[]);
+    let node = find(&report, "EMI-SWITCH-NODE").remove(0);
+    let score = node.estimate.as_ref().expect("a common-mode score");
+    assert_eq!(score.quantity, "cm_coupling_score");
+    assert_eq!(score.unit, "dB");
+    assert_eq!(score.kind, copper_drc::emi::EstimateKind::RankingScore);
+    assert!(node.margin_db.is_none(), "no margin against an emission limit");
+    assert!(find(&report, "EMI-HOT-LOOP")[0].margin_db.is_some(), "the differential-mode loop keeps its margin");
+    assert!(node.tags.contains(&"ranking_only".to_owned()), "{:?}", node.tags);
+    let message = &node.finding.message;
+    assert!(message.contains("coupling-risk score") && message.contains("ranking only"), "{message}");
+    assert!(!message.contains("dBuV/m") && !message.contains("cispr32") && !message.contains("dB to the"), "{message}");
+    for missing in ["cable", "board-to-environment", "return impedance"] {
+        assert!(message.contains(missing), "{missing} in {message}");
+    }
+    assert!(
+        score.definition.as_deref().is_some_and(|d| d.contains("neither a field nor comparable")),
+        "{:?}",
+        score.definition
+    );
+    assert!(score.not_modelled.iter().any(|m| m.contains("cable")), "{:?}", score.not_modelled);
+    // Independent recomputation of the score at the frequency it was evaluated at, from the stated drivers.
+    let Some(Value::Object(drivers)) = node.measures.get("cm_drivers") else { panic!("cm_drivers") };
+    let get = |key: &str| number(drivers.get(key).unwrap_or_else(|| panic!("{key}")));
+    let (swing, edge, duty) = (get("swing_v"), get("edge_time_10_90_ns") * 1e-9, get("duty"));
+    let (capacitance, fsw) = (get("capacitance_to_plane_pf") * 1e-12, get("switching_frequency_hz"));
+    let f = score.frequency_hz.expect("frequency");
+    let envelope = copper_emi::estimate::trapezoid_envelope(swing, duty, 1.0 / fsw, edge, f);
+    let want = 20.0 * (f * capacitance * envelope / (100e6 * 1e-12 * 1.0)).log10();
+    assert!((score.value - want).abs() < 0.05, "score {} against {want}", score.value);
+    // The coverage entry says ranking only, and EMI-MARGIN says where margins do and do not apply.
+    assert!(coverage(&report, "EMI-SWITCH-NODE:SW:common_mode").detail.contains("ranking only"));
+    let margin = &coverage(&report, "EMI-MARGIN").detail;
+    assert!(margin.contains("differential-mode hot-loop field only") && margin.contains("ranking score"), "{margin}");
+    // The old absolute field and its constant are gone from every output.
+    let json = report.json();
+    assert!(
+        !json.contains("voltage_driven_cm_field") && !json.contains("115 f C V") && !json.contains("constant 115"),
+        "old key or constant present"
+    );
+}
+
+#[test]
+fn the_common_mode_score_ranks_by_its_drivers() {
+    // Doubling the switch-node swing (the hot-supply voltage) adds 20 log10 2 = 6.02 dB: the envelope is linear in V.
+    let low = run("cm-12v", &[]);
+    let high = run("cm-24v", &[("supply VIN { net = VIN; voltage = 12V;", "supply VIN { net = VIN; voltage = 24V;")]);
+    let value = |r: &EmiCheckReport| find(r, "EMI-SWITCH-NODE")[0].estimate.as_ref().unwrap().value;
+    assert!((value(&high) - value(&low) - 6.0206).abs() < 0.05, "{} vs {}", value(&high), value(&low));
+}
+
+#[test]
+fn a_loop_longer_than_a_tenth_wavelength_truncates_the_radiated_band_and_says_so() {
+    let near = run("trunc-near", &[]);
+    let far = run("trunc-far", &[("x = 24.5mm; y = 29mm; rotation = 180;", "x = 14.5mm; y = 29mm; rotation = 180;")]);
+    let (near, far) = (find(&near, "EMI-HOT-LOOP").remove(0), find(&far, "EMI-HOT-LOOP").remove(0));
+    assert!(!near.tags.contains(&"radiated_band_truncated".to_owned()), "{:?}", near.tags);
+    assert!(far.tags.contains(&"radiated_band_truncated".to_owned()), "{:?}", far.tags);
+    let Some(Value::Object(validity)) = far.measures.get("radiated_validity") else { panic!("validity") };
+    assert_eq!(validity.get("band_truncated_by_loop_size"), Some(&Value::Bool(true)));
+    assert!(far.finding.message.contains("does not apply"), "{}", far.finding.message);
+    assert!(far.finding.message.contains("not covered"), "{}", far.finding.message);
+    // Inside the evaluated band the formula's own conditions still hold.
+    assert_eq!(validity.get("holds"), Some(&Value::Bool(true)), "{validity:?}");
 }

@@ -84,7 +84,10 @@ fn the_spectrum_has_a_stem_per_harmonic_the_limit_lines_and_the_screening_footer
     assert!(svg.contains("screening estimate, not EMC qualification"));
     assert!(svg.contains("worst_case_current") && svg.contains("differential_mode_only"));
     assert!(svg.contains(">150 kHz</text>") && svg.contains(">30 MHz</text>") && svg.contains("dBuV"));
-    assert!(svg.contains("uncertainty-band") && svg.contains("fill=\"#ffffff\""));
+    assert!(svg.contains("fill=\"#ffffff\""));
+    // No accuracy figure, no uncertainty whisker; the common-mode ranking score of the switch node is not drawn.
+    assert!(!svg.contains("uncertainty") && !svg.contains("accuracy 5 dB") && !svg.contains("cm_coupling"));
+    assert!(!svg.contains("dBuV/m"), "the spectrum plots the conducted quantity only");
     // Deterministic.
     let again = directory.join("again.svg");
     let second = copper(&["emi-check", FILTER, "--allow-proxy-footprints", "--plot-spectrum", again.to_str().unwrap()]);
@@ -236,4 +239,53 @@ fn a_routed_run_gives_the_map_through_view_and_emi_check() {
     let direct = std::fs::read_to_string(&direct_path).expect("the SVG");
     assert!(direct.contains("<g class=\"colorbar\">") && direct.contains("routed board"));
     let _ = std::fs::remove_dir_all(&run);
+}
+
+/// A copy of `examples/emi_buck_filter` whose controller part declares the switching-frequency range
+/// `range`, in the scratch directory `name`; returns the board path.
+fn board_with_part_edit(name: &str, from: &str, to: &str) -> PathBuf {
+    let directory = scratch(name);
+    let source = workspace().join("examples/emi_buck_filter");
+    std::fs::create_dir_all(directory.join("parts")).unwrap();
+    std::fs::copy(source.join("board.copper"), directory.join("board.copper")).unwrap();
+    for entry in std::fs::read_dir(source.join("parts")).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), directory.join("parts").join(entry.file_name())).unwrap();
+    }
+    let part = directory.join("parts/buck.copper");
+    let text = std::fs::read_to_string(&part).unwrap();
+    assert!(text.contains(from), "the example part has no {from:?}");
+    std::fs::write(&part, text.replace(from, to)).unwrap();
+    directory.join("board.copper")
+}
+
+#[test]
+fn a_frequency_range_plots_line_amplitudes_without_limit_lines_for_both_ends() {
+    let board = board_with_part_edit(
+        "emi-plots-range",
+        "switching_frequency = 500kHz;",
+        "switching_frequency_min = 400kHz; switching_frequency_max = 600kHz;",
+    );
+    let path = board.parent().unwrap().join("range.svg");
+    let result = copper(&[
+        "emi-check",
+        board.to_str().unwrap(),
+        "--allow-proxy-footprints",
+        "--plot-spectrum",
+        path.to_str().unwrap(),
+    ]);
+    assert_eq!(result.status.code(), Some(0), "{}{}", stdout(&result), stderr(&result));
+    assert!(stdout(&result).contains("conducted spectrum of 2 cell(s)"), "{}", stdout(&result));
+    let svg = std::fs::read_to_string(&path).expect("the SVG");
+    assert_eq!(svg.matches("<g class=\"panel\"").count(), 2, "one panel per frequency scenario");
+    assert!(svg.contains("(range lower bound)") && svg.contains("(range upper bound)"), "{svg}");
+    assert!(svg.matches("NOT a detector reading").count() >= 2);
+    assert!(!svg.contains("<polyline"), "no limit line for line amplitudes");
+    assert!(!svg.contains("over-average") && !svg.contains("dB to the average line"));
+    assert!(svg.contains("no limit lines and no margin"), "{svg}");
+    // The text report states the same: no margin on the conducted findings.
+    let text = stdout(&copper(&["emi-check", board.to_str().unwrap(), "--allow-proxy-footprints"]));
+    assert!(text.contains("NOT a detector reading") && text.contains("no quasi-peak or average margin"), "{text}");
+    assert!(text.contains("EMI-CONDUCTED:U1@min") && text.contains("EMI-CONDUCTED:U1@max"), "{text}");
+    let _ = std::fs::remove_dir_all(board.parent().unwrap());
 }

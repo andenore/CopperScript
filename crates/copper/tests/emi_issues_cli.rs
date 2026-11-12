@@ -112,6 +112,22 @@ fn route_board_embeds_the_section_and_issues_and_view_read_it() {
     let hot = issues.iter().find(|i| i.get("code").and_then(Value::as_str) == Some("EMI-HOT-LOOP")).unwrap();
     assert!(hot.get("details").and_then(|d| d.get("evidence")).and_then(Value::as_str).unwrap().contains("screening"));
     let id = hot.get("id").and_then(Value::as_str).unwrap();
+    // The common-mode finding reaches the issue as a ranking score with no margin; the route-report section carries
+    // the new keys and none of the removed ones; no text claims a fixed accuracy.
+    let node = issues.iter().find(|i| i.get("code").and_then(Value::as_str) == Some("EMI-SWITCH-NODE")).unwrap();
+    let details = node.get("details").unwrap();
+    assert_eq!(details.get("estimate").and_then(|e| e.get("kind")).and_then(Value::as_str), Some("ranking_score"));
+    assert_eq!(
+        details.get("estimate").and_then(|e| e.get("quantity")).and_then(Value::as_str),
+        Some("cm_coupling_score")
+    );
+    assert_eq!(details.get("margin_db"), Some(&Value::Null));
+    let raw = std::fs::read_to_string(&report).unwrap();
+    assert!(raw.contains("\"not_modelled\"") && raw.contains("\"numerical_sensitivity\""), "new keys in the section");
+    for gone in ["uncertainty_db", "voltage_driven_cm_field"] {
+        assert!(!raw.contains(gone), "{gone} still in route-report.json");
+    }
+    assert!(!all.contains("about 15 dB"), "{all}");
 
     // The hot loop's polygon is drawn.
     let svg_path = run.join("hot-loop.svg");

@@ -9,7 +9,7 @@
 //! of the current and of the voltage by complex least squares on the same poles, and the transform of the
 //! unrecorded future is added analytically (a geometric series per pole). The result is the transform of the
 //! full ring-down, which is what a run to decay would give. The fit is tried at several model orders and the
-//! median taken; the spread of the orders is the fit's uncertainty.
+//! median taken; the spread of the orders is the fit's numerical sensitivity, not an error bound.
 
 use ems::Complex64;
 
